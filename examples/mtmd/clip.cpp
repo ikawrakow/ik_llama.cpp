@@ -1406,6 +1406,75 @@ struct clip_graph {
         return gf;
     }
 
+    ggml_cgraph * build_kimik25() {
+        ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_h, "pos_h");
+        ggml_set_input(pos_h);
+
+        ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_w, "pos_w");
+        ggml_set_input(pos_w);
+
+        ggml_tensor * learned_pos_embd = resize_position_embeddings_3d(GGML_SCALE_MODE_BICUBIC);
+
+        // Kimi-K2.5 uses interleaved 2D RoPE pattern natively, but
+        // Q / K are permuted during conversion to use split format.
+        auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+            cur = build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
+            return cur;
+        };
+
+        ggml_tensor * inp = build_inp();
+
+        // I don't know why, but doing this in the build_vit lead to the ggml_add not occurring?
+        // Doing it manually here does work.
+        inp = ggml_add(ctx0, inp, learned_pos_embd);
+
+        ggml_tensor * cur = build_vit(
+                                inp, n_patches,
+                                NORM_TYPE_NORMAL,
+                                hparams.ffn_op,
+                                nullptr,
+                                add_pos);
+
+        cb(cur, "vit_out", -1);
+
+        {
+            // patch_merger
+            const int scale_factor = model.hparams.n_merge;
+            cur = build_patch_merge_permute(cur, scale_factor);
+
+            // projection norm
+            int proj_inp_dim = cur->ne[0];
+            int n_merged_patches = cur->ne[1];
+            cur = ggml_view_2d(ctx0, cur,
+                n_embd, n_merged_patches * scale_factor * scale_factor,
+                ggml_row_size(cur->type, n_embd), 0);
+            cur = ggml_norm(ctx0, cur, hparams.eps);
+            cur = ggml_mul(ctx0, cur, model.mm_input_norm_w);
+            cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
+            cur = ggml_view_2d(ctx0, cur,
+                proj_inp_dim, n_merged_patches,
+                ggml_row_size(cur->type, proj_inp_dim), 0);
+            cb(cur, "proj_inp_normed", -1);
+
+            // projection mlp
+            cur = build_ffn(cur,
+                model.mm_1_w, model.mm_1_b,
+                nullptr, nullptr,
+                model.mm_2_w, model.mm_2_b,
+                FFN_GELU,
+                -1);
+
+            cb(cur, "proj_out", -1);
+        }
+
+        // build the graph
+        ggml_build_forward_expand(gf, cur);
+
+        return gf;
+    }
+
     // this graph is used by llava, granite and glm
     // due to having embedding_stack (used by granite), we cannot reuse build_vit
     ggml_cgraph * build_llava() {
@@ -2383,8 +2452,8 @@ private:
         {
             first = ggml_view_3d(ctx0, cur,
                 n_dim/2, n_head, n_pos,
-                ggml_row_size(cur->type, n_dim),
-                ggml_row_size(cur->type, n_dim*n_head),
+                cur->nb[1],
+                cur->nb[2],
                 0);
             first = ggml_rope_ext(
                 ctx0,
@@ -2402,8 +2471,8 @@ private:
         {
             second = ggml_view_3d(ctx0, cur,
                 n_dim/2, n_head, n_pos,
-                ggml_row_size(cur->type, n_dim),
-                ggml_row_size(cur->type, n_dim*n_head),
+                cur->nb[1],
+                cur->nb[2],
                 n_dim/2 * ggml_element_size(cur));
             second = ggml_rope_ext(
                 ctx0,
@@ -2454,6 +2523,34 @@ private:
         return cur;
     }
 
+    // note: this is similar to resize_position_embeddings, major difference is having
+    // the w/h in ne[1] and ne[2] instead of assuming with sqrt. Could try storing the tensor in 2D instead
+    // with a w*h? Also the permute is a bit different at (2, 1, 0, 3) instead of (2, 0, 1, 3).
+    ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode) {
+        ggml_tensor * pos_embd = model.position_embeddings;
+        const int height       = img.ny / patch_size;
+        const int width        = img.nx / patch_size;
+        const uint32_t mode    = interpolation_mode;
+
+        GGML_ASSERT(pos_embd);
+
+        const int64_t stored_c = pos_embd->ne[0];  // C = 1152
+        const int64_t orig_w = pos_embd->ne[1];    // W = 64
+        const int64_t orig_h = pos_embd->ne[2];    // H = 64
+
+        GGML_ASSERT(stored_c == n_embd);
+
+        if (height == (int)orig_h && width == (int)orig_w) {
+            // No interpolation needed, just flatten to [C, H*W]
+            return ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);
+        }
+
+        pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
+        pos_embd = ggml_interpolate(ctx0, pos_embd, height, width, n_embd, 1, mode);
+        pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
+        pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);
+        return pos_embd;
+    }
 };
 
 static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
@@ -2504,6 +2601,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_KIMIVL:
             {
                 res = graph.build_kimivl();
+            } break;
+        case PROJECTOR_TYPE_KIMIK25:
+            {
+                res = graph.build_kimik25();
             } break;
         case PROJECTOR_TYPE_JANUS_PRO:
             {
@@ -2795,6 +2896,23 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // TODO: check kimivl preprocessor for exact values
                         hparams.set_limit_image_tokens(8, 1024);
+                        hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_KIMIK25:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+
+                        int min_pixels = 0, max_pixels = 0;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, min_pixels, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, max_pixels, false);
+                        if (min_pixels > 0 && max_pixels > 0) {
+                            hparams.image_min_pixels = min_pixels;
+                            hparams.image_max_pixels = max_pixels;
+                            hparams.warmup_image_size = static_cast<int>(std::sqrt(max_pixels));
+                        } else {
+                        hparams.set_limit_image_tokens(2, 4096);
+                        }
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_GEMMA3:
@@ -3154,6 +3272,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_LFM2:
             case PROJECTOR_TYPE_KIMIVL:
+            case PROJECTOR_TYPE_KIMIK25:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
@@ -4370,6 +4489,23 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->entries.push_back(std::move(res));
             } break;
 
+        case PROJECTOR_TYPE_KIMIK25:
+            {
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
+                const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
+                    original_size,
+                    params.patch_size * params.n_merge,
+                    params.image_min_pixels,
+                    params.image_max_pixels);
+                const std::array<uint8_t, 3> pad_color = {0, 0, 0};
+
+                clip_image_u8 resized_img;
+                img_tool::resize(*img, resized_img, target_size, img_tool::RESIZE_ALGO_BICUBIC, true, pad_color);
+                clip_image_f32_ptr res(clip_image_f32_init());
+                normalize_image_u8_to_f32(resized_img, *res, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(res));
+            } break;
+
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -4551,6 +4687,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_KIMIK25:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * ctx->model.hparams.n_merge;
@@ -4951,6 +5088,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 // set the 2D positions
@@ -5119,6 +5257,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_KIMIK25:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];

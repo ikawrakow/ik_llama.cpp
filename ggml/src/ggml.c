@@ -20993,6 +20993,26 @@ static void ggml_compute_forward_pool_2d(
 
 // ggml_compute_forward_upscale
 
+#ifndef GGML_CLAMP
+#define GGML_CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
+#endif
+
+static inline float ggml_bicubic_weight1(float x, float a) {
+    return ((a + 2.0f) * x - (a + 3.0f)) * x * x + 1.0f;
+}
+
+static inline float ggml_bicubic_weight2(float x, float a) {
+    return ((a * x - 5.0f * a) * x + 8.0f * a) * x - 4.0f * a;
+}
+
+static inline float ggml_bicubic_interp(float p0, float p1, float p2, float p3, float x, float a) {
+    const float w0 = ggml_bicubic_weight2(x + 1.0f, a);
+    const float w1 = ggml_bicubic_weight1(x + 0.0f, a);
+    const float w2 = ggml_bicubic_weight1(1.0f - x, a);
+    const float w3 = ggml_bicubic_weight2(2.0f - x, a);
+    return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
+}
+
 static void ggml_compute_forward_upscale_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
@@ -21006,29 +21026,78 @@ static void ggml_compute_forward_upscale_f32(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    const float sf0 = (float)ne0/src0->ne[0];
-    const float sf1 = (float)ne1/src0->ne[1];
-    const float sf2 = (float)ne2/src0->ne[2];
-    const float sf3 = (float)ne3/src0->ne[3];
+    float sf0 = (float)ne0/src0->ne[0];
+    float sf1 = (float)ne1/src0->ne[1];
+    float sf2 = (float)ne2/src0->ne[2];
+    float sf3 = (float)ne3/src0->ne[3];
+    float pixel_offset = 0.5f;
 
-    // TODO: optimize
+    const int32_t mode_flags = ((int32_t *)dst->op_params)[0];
+    const int32_t mode = (mode_flags & 0xFF);
 
-    for (int64_t i3 = 0; i3 < ne3; i3++) {
-        const int64_t i03 = i3 / sf3;
-        for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
-            const int64_t i02 = i2 / sf2;
-            for (int64_t i1 = 0; i1 < ne1; i1++) {
-                const int64_t i01 = i1 / sf1;
-                for (int64_t i0 = 0; i0 < ne0; i0++) {
-                    const int64_t i00 = i0 / sf0;
+    if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+        pixel_offset = 0.0f;
+        sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
+        sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
+    }
 
-                    const float * x = (float *)((char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
-                          float * y = (float *)((char *)  dst->data +  i0*nb0  +  i1*nb1  +  i2*nb2  +  i3*nb3);
+    if (mode == GGML_SCALE_MODE_NEAREST || mode == GGML_SCALE_MODE_BILINEAR) {
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = i3 / sf3;
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = i2 / sf2;
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const int64_t i01 = i1 / sf1;
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const int64_t i00 = i0 / sf0;
 
-                    *y = *x;
+                        const float * x = (float *)((char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
+                              float * y = (float *)((char *)  dst->data +  i0*nb0  +  i1*nb1  +  i2*nb2  +  i3*nb3);
+
+                        *y = *x;
+                    }
                 }
             }
         }
+    } else if (mode == GGML_SCALE_MODE_BICUBIC) {
+        // https://en.wikipedia.org/wiki/Bicubic_interpolation#Bicubic_convolution_algorithm
+        const float a = -0.75f; // use alpha = -0.75 (same as PyTorch)
+
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = i3 / sf3;
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = i2 / sf2;
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const float y = ((float)i1 + pixel_offset) / sf1 - pixel_offset;
+                    const int64_t y0 = (int64_t)floorf(y);
+                    const float dy = y - (float)y0;
+
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const float x = ((float)i0 + pixel_offset) / sf0 - pixel_offset;
+                        const int64_t x0 = (int64_t)floorf(x);
+                        const float dx = x - (float)x0;
+                        float p_vals[4];
+
+                        for (int iy = -1; iy <= 2; iy++) {
+                            float row_vals[4];
+                            for (int ix = -1; ix <= 2; ix++) {
+                                int64_t idx_x = GGML_CLAMP(x0 + ix, 0, ne00 - 1);
+                                int64_t idx_y = GGML_CLAMP(y0 + iy, 0, ne01 - 1);
+
+                                row_vals[ix + 1] = *(const float *)((const char *)src0->data + idx_x*nb00 + idx_y*nb01 + i02*nb02 + i03*nb03);
+                            }
+                            p_vals[iy + 1] = ggml_bicubic_interp(row_vals[0], row_vals[1], row_vals[2], row_vals[3], dx, a);
+                        }
+                        const float val = ggml_bicubic_interp(p_vals[0], p_vals[1], p_vals[2], p_vals[3], dy, a);
+
+                        float * y_dst = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+                        *y_dst = val;
+                    }
+                }
+            }
+        }
+    } else {
+        GGML_ABORT("unsupported upscale mode");
     }
 }
 
