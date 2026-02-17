@@ -1,26 +1,23 @@
-# docker-bake.hcl
-
-variable "SHA_SHORT" { default = "latest" }
-variable "VARIANT" { default = "cpu" }
-variable "CUDA_VERSION" { default = "none" }
-variable "CUDA_DOCKER_ARCH" { default = "" }
+variable "REPO_OWNER" {}
+variable "VARIANT" {}
+variable "SHA_SHORT" {}
+variable "CUDA_VERSION" {}
+variable "CUDA_DOCKER_ARCH" { default = "86;90" }
 
 group "default" {
   targets = ["full", "swap"]
 }
 
-target "base-settings" {
+target "settings" {
   context = "."
-  dockerfile = "./docker/ik_llama-cuda.Containerfile" # or cpu, they share logic
   args = {
     CUDA_VERSION = "${CUDA_VERSION}"
     CUDA_DOCKER_ARCH = "${CUDA_DOCKER_ARCH}"
   }
-  platforms = ["linux/amd64"]
 }
 
 target "full" {
-  inherits = ["base-settings"]
+  inherits = ["settings"]
   target = "full"
   tags = [
     "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full-${SHA_SHORT}",
@@ -29,7 +26,7 @@ target "full" {
 }
 
 target "swap" {
-  inherits = ["base-settings"]
+  inherits = ["settings"]
   target = "swap"
   tags = [
     "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap-${SHA_SHORT}",

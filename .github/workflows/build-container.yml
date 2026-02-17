@@ -48,13 +48,15 @@ jobs:
           set: |
             *.args.REPO_OWNER=${{ github.repository_owner }}
             *.args.VARIANT=${{ matrix.variant }}
-            *.args.SHA_SHORT=$(git rev-parse --short HEAD)
+            *.args.SHA_SHORT=${{ github.sha }}
             *.args.CUDA_VERSION=${{ matrix.cuda_version }}
             *.dockerfile=./docker/${{ matrix.containerfile }}
 
   cleanup:
     runs-on: ubuntu-latest
     needs: build-and-push
+    # Only run cleanup if the build actually succeeded
+    if: success()
     steps:
       - name: Delete untagged images
         uses: vlaurin/action-ghcr-prune@v0.6.0
