@@ -14661,6 +14661,18 @@ static void ggml_compute_forward_concat_f32(
         return;
     }
 
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) && dim == 2 && dst->ne[3] > 1 && src1->ne[2] == 1) {
+        for (int i3 = ith; i3 < (int)dst->ne[3]; i3 += nth) {
+            char * dst_ptr = (char *)dst->data  + i3*dst->nb[3];
+            char * src_ptr = (char *)src0->data + i3*src0->nb[3];
+            memcpy(dst_ptr, src_ptr, src0->nb[3]);
+            dst_ptr += src0->nb[3];
+            src_ptr = (char *)src1->data + i3*src1->nb[3];
+            memcpy(dst_ptr, src_ptr, src1->nb[3]);
+        }
+        return;
+    }
+
     int64_t o[4] = {0, 0, 0, 0};
     o[dim] = src0->ne[dim];
 
