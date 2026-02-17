@@ -1,0 +1,94 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: build-container
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        containerfile:
+          - ik_llama-cuda.Containerfile
+          - ik_llama-cpu.Containerfile
+        build_target:
+          - full
+          - swap
+        include:
+          - containerfile: ik_llama-cuda.Containerfile
+            cuda_version: 12.6.2
+          - containerfile: ik_llama-cuda.Containerfile
+            cuda_version: 13.1.1
+          - containerfile: ik_llama-cpu.Containerfile
+            cuda_version: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Environment
+        id: prep
+        run: |
+          # 1. Generate Short SHA
+          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          
+          # 2. Determine Version String
+          if [[ "${{ matrix.containerfile }}" == *"cuda"* ]]; then
+            # Validate that cuda_version is not empty or "none"
+            if [[ -z "${{ matrix.cuda_version }}" || "${{ matrix.cuda_version }}" == "none" ]]; then
+              echo "Error: CUDA version is missing for a CUDA build."
+              exit 1
+            fi
+
+            # Extract major version (e.g., 12.6.2 -> 12)
+            MAJOR_VERSION=$(echo "${{ matrix.cuda_version }}" | cut -d'.' -f1)
+            echo "VARIANT=cu${MAJOR_VERSION}" >> $GITHUB_ENV
+          else
+            # CPU Build
+            echo "VARIANT=cpu" >> $GITHUB_ENV
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ik-llama-cpp
+          tags: |
+            type=raw,value=${{ env.VARIANT }}-${{ matrix.build_target }}-${{ env.SHA_SHORT }}
+            type=raw,value=${{ env.VARIANT }}-${{ matrix.build_target }}
+
+      - name: Build - (${{ matrix.containerfile == 'ik_llama-cuda.Containerfile' && 'ik_llama-cuda' || 'ik_llama-cpu' }}:${{ matrix.build_target }})
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker/
+          file: ./docker/${{ matrix.containerfile }}
+          target: ${{ matrix.build_target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CUDA_VERSION=${{ matrix.cuda_version }}
+            CUDA_DOCKER_ARCH=${{ matrix.containerfile == 'ik_llama-cuda.Containerfile' && 'all' || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
