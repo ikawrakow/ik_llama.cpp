@@ -104,6 +104,10 @@ Check the details [here](./speculative.md).
 | `-ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model | - | For draft model, see: `-ctk` |
 | `-ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model | - | For draft model, see: `-ctk` |
 | `-draft, --draft-params` | Comma-separated list of draft model parameters | - |  |
+| `--spec-ngram-size-n N` | ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram| 12 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
+| `--spec-ngram-size-m N` | ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram | 48 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
+| `--spec-ngram-min-hits N` | minimum hits for ngram-map speculative decoding | 1 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
+| `--spec-type Name` | Comma-separated list of draft model parameters | - | none / ngram - cache / ngram - simple / ngram - map - k / ngram - map - k4v / ngram - mod [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
 
 ## Cache Prompt to Host Memory
 
@@ -127,6 +131,8 @@ Good overview on [kalomaze/llm_samplers_explained.md](https://gist.github.com/ka
 | - | - | - | - |
 | `--samplers SAMPLERS` | Samplers used for generation in order, separated by `;` | dry;top_k;tfs_z;typical_p;top_p;min_p;xtc;top_n_sigma;temperature;adaptive_p | Powerful option to customize samplers. Try to keep the default order otherwise effects will be minimized. Example to use only min_p and temperature: `--samplers min_p;temperature` |
 | `--sampling-seq SEQUENCE` | Simplified sequence for samplers | dkfypmxntw | Same as `--samplers` , just shorter format. |
+| --banned-string-file | File path of the list of banned strings on each line |  |  |
+| --banned-n | Number of tokens banned in the phrase during rewind. | -1 | -1 means all tokens [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) |
 
 ## Prompt Template
 
