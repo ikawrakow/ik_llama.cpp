@@ -4466,23 +4466,31 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(decay_mask, "decay_mask", il);
 
         decay_mask = ggml_mul(ctx0, decay_mask, diag_mask);
+        cb(decay_mask, "decay_mask_1", il);
         decay_mask = ggml_exp(ctx0, decay_mask);
+        cb(decay_mask, "decay_mask_exp", il);
         decay_mask = ggml_mul(ctx0, decay_mask, diag_mask);
+        cb(decay_mask, "decay_mask_2", il);
 
         ggml_tensor * kmulkbeta = ggml_mul_mat(ctx0, k, k_beta);
         cb(kmulkbeta, "kk_beta", il);
 
         ggml_tensor * k_decay = ggml_mul(ctx0, kmulkbeta, decay_mask);
-        ggml_tensor * attn    = ggml_neg(ctx0, ggml_mul(ctx0, k_decay, causal_mask));
+        cb(k_decay, "k_decay_1", il);
+        k_decay = ggml_mul(ctx0, k_decay, causal_mask);
+        cb(k_decay, "k_decay_2", il);
+        ggml_tensor * attn    = ggml_neg(ctx0, k_decay);
         cb(attn, "attn_pre_solve", il);
 
         ggml_tensor * attn_lower = ggml_mul(ctx0, attn, causal_mask);
+        cb(attn_lower, "attn_lower", il);
         ggml_tensor * identity_repeat =
             ggml_repeat_4d(ctx0, identity, attn_lower->ne[0], attn_lower->ne[1], attn_lower->ne[2], attn_lower->ne[3]);
         ggml_tensor * lhs        = ggml_neg(ctx0, ggml_sub(ctx0, attn_lower, identity_repeat));
 
         ggml_tensor * lin_solve  = ggml_solve_tri(ctx0, lhs, attn, true, true, false);
         attn                     = ggml_mul(ctx0, lin_solve, causal_mask);
+        cb(attn, "attn_mul", il);
         attn                     = ggml_add(ctx0, attn, identity);
         cb(attn, "attn_solved", il);
 
@@ -4505,6 +4513,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * attn_kq = ggml_mul_mat(ctx0, k, q);
         cb(attn_kq, "attn_kq_pre", il);
         attn_kq = ggml_mul(ctx0, decay_mask, attn_kq);
+        cb(attn_kq, "attn_kq_0", il);
         attn_kq = ggml_mul(ctx0, attn_kq,    diag_mask);
         cb(attn_kq, "attn_kq", il);
 
@@ -4523,6 +4532,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(g_diff, "g_diff", il);
 
         ggml_tensor * g_diff_exp = ggml_exp(ctx0, g_diff);
+        cb(g_diff_exp, "g_diff_exp", il);
         ggml_tensor * g_diff_exp_t = ggml_reshape_4d(ctx0, g_diff_exp, 1, chunk_size, n_chunks, g_diff_exp->ne[3]);
 
         ggml_tensor * key_gdiff = ggml_mul(ctx0, ggml_repeat_4d(ctx0, g_diff_exp_t, k->ne[0], g_diff_exp_t->ne[1], g_diff_exp_t->ne[2], g_diff_exp_t->ne[3]), k);
@@ -4555,6 +4565,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             cb(v_new, "v_new_chunk", il);
 
             ggml_tensor * q_g_exp    = ggml_mul(ctx0, ggml_repeat_4d(ctx0, gexp_chunk, q_chunk->ne[0], gexp_chunk->ne[1], gexp_chunk->ne[2], gexp_chunk->ne[3]), q_chunk);
+            cb(q_g_exp, "q_g_exp", il);
             ggml_tensor * attn_inter = ggml_mul_mat(ctx0, state_t, q_g_exp);
             cb(attn_inter, "attn_inter_chunk", il);
 
@@ -4577,9 +4588,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             cb(kgdmulvnew, "kgdmulvnew", il);
 
             ggml_tensor * gexp_last_chunk = ggml_cont(ctx0, get_slice_2d(g_last_exp, chunk));
-            state = ggml_add(ctx0,
-                ggml_mul(ctx0, state, ggml_reshape_4d(ctx0, gexp_last_chunk, gexp_last_chunk->ne[0], gexp_last_chunk->ne[1], H_v, n_seqs)),
-                ggml_reshape_4d(ctx0, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
+            auto s_mul = ggml_mul(ctx0, state, ggml_reshape_4d(ctx0, gexp_last_chunk, gexp_last_chunk->ne[0], gexp_last_chunk->ne[1], H_v, n_seqs));
+            cb(s_mul, "s_mul", il);
+            state = ggml_add(ctx0, s_mul, ggml_reshape_4d(ctx0, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
         }
 
         ggml_tensor * output_tokens = ggml_view_4d(ctx0, core_attn_out,
@@ -4629,10 +4640,13 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * beta_t = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, beta), 1, 1, H_k, n_seqs);
 
         g_t = ggml_exp(ctx0, g_t);
+        cb(g_t, "g_t", il);
         state = ggml_mul(ctx0, state, g_t);
+        cb(state, "state", il);
 
         ggml_tensor * k_t_unsqueezed = ggml_reshape_4d(ctx0, k, 1, S_v, H_v, n_seqs);
         ggml_tensor * kv_mem         = ggml_mul(ctx0, state, k_t_unsqueezed);
+        cb(kv_mem, "kv_mem", il);
         kv_mem = ggml_cont(ctx0, ggml_transpose(ctx0, kv_mem));
         cb(kv_mem, "kv_mem_t_cont", il);
         kv_mem = ggml_transpose(ctx0, ggml_sum_rows(ctx0, kv_mem));
@@ -4641,12 +4655,15 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * v_diff = ggml_sub(ctx0, v_t, kv_mem);
         cb(v_diff, "v_diff", il);
         ggml_tensor * delta  = ggml_mul(ctx0, v_diff, beta_t);
+        cb(delta, "delta", il);
 
         ggml_tensor * k_t_delta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, k_t_unsqueezed, S_v, S_v, H_v, n_seqs), delta);
+        cb(k_t_delta, "k_t_delta", il);
         state                   = ggml_add(ctx0, state, k_t_delta);
 
         ggml_tensor * q_t_unsqueezed = ggml_reshape_4d(ctx0, q, 1, S_v, H_v, n_seqs);
         ggml_tensor * state_q        = ggml_mul(ctx0, state, q_t_unsqueezed);
+        cb(state_q, "state_q", il);
         state_q = ggml_cont(ctx0, ggml_transpose(ctx0, state_q));
         cb(state_q, "state_q_t_cont", il);
         ggml_tensor * core_attn_out = ggml_transpose(ctx0, ggml_sum_rows(ctx0, state_q));
@@ -4998,7 +5015,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         ggml_tensor * attn_out_norm = llm_build_norm(ctx0, attn_out_2d, hparams, model.layers[il].ssm_norm, nullptr, LLM_NORM_RMS, cb, il);
         ggml_tensor * gated_silu    = ggml_silu(ctx0, z_2d);
+        cb(gated_silu, "gated_silu", il);
         attn_out_norm = ggml_mul(ctx0, attn_out_norm, gated_silu);
+        cb(attn_out_norm, "attn_out_norm", il);
 
         ggml_tensor * final_output = ggml_reshape_2d(ctx0, attn_out_norm, value_dim, n_tok);
         cb(final_output, "final_output", il);
@@ -6703,6 +6722,7 @@ ggml_cgraph * llm_build_context::build_mamba() {
             // {d_inner, n_tokens} * {d_inner} => {d_inner, n_tokens}
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
             y = ggml_mul(ctx0, y, ggml_silu(ctx0, z));
+            cb(y, "y", il);
 
             // {d_inner, n_embd} * {d_inner, n_tokens} => {n_embd, n_tokens}
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_out, y);
