@@ -89,6 +89,10 @@ struct llama_hparams {
     uint32_t ssm_d_inner = 0;
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
+    uint32_t ssm_n_group = 0;
+
+    // for hybrid state-space models (e.g. qwen3next)
+    std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
     float f_clamp_kqv      = 0.0f;
     float f_max_alibi_bias = 0.0f;
@@ -169,6 +173,8 @@ struct llama_hparams {
         if (this->ssm_d_inner != other.ssm_d_inner) return true;
         if (this->ssm_d_state != other.ssm_d_state) return true;
         if (this->ssm_dt_rank != other.ssm_dt_rank) return true;
+        if (this->ssm_n_group != other.ssm_n_group) return true;
+        if (this->recurrent_layer_arr != other.recurrent_layer_arr) return true;
 
         if (this->dec_start_token_id != other.dec_start_token_id) return true;
 
@@ -246,6 +252,10 @@ struct llama_hparams {
     }
 
     uint32_t n_embd_k_s() const { // dimension of the rolling state embeddings
+        if (ssm_n_group > 0) {
+            // qwen3next keeps all recurrent state in the V-cache tail
+            return 0;
+        }
         // corresponds to Mamba's conv_states size
         // TODO: maybe support other convolution strides than 1
         // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
@@ -253,8 +263,24 @@ struct llama_hparams {
     }
 
     uint32_t n_embd_v_s() const { // dimension of the recurrent state embeddings
+        if (ssm_n_group > 0) {
+            // qwen3next recurrent state packs:
+            // 1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
+            // 2) delta-net state: head_v_dim * head_v_dim * num_v_heads
+            const uint32_t key_dim        = ssm_d_state * ssm_n_group;
+            const uint32_t value_dim      = ssm_d_inner;
+            const uint32_t conv_dim       = 2 * key_dim + value_dim;
+            const uint32_t conv_state_dim = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * conv_dim;
+            const uint32_t head_v_dim     = ssm_dt_rank > 0 ? ssm_d_inner / ssm_dt_rank : 0;
+            const uint32_t ssm_state_dim  = head_v_dim * head_v_dim * ssm_dt_rank;
+            return conv_state_dim + ssm_state_dim;
+        }
         // corresponds to Mamba's ssm_states size
         return ssm_d_state * ssm_d_inner;
+    }
+
+    bool is_recurrent(uint32_t il) const {
+        return il < n_layer ? recurrent_layer_arr[il] : false;
     }
 
     static bool is_float_close(float a, float b, float abs_tol) {

@@ -107,6 +107,7 @@ enum e_model {
     MODEL_16B_A1B,
     MODEL_21B_A3B, // Ernie MoE small
     MODEL_30B_A3B,
+    MODEL_80B_A3B, // Qwen3-Next
     MODEL_80B_A13B,
     MODEL_100B_A6B,
     MODEL_106B_A12B,
@@ -289,6 +290,8 @@ struct llama_layer {
     struct ggml_tensor * ssm_x = nullptr;
     struct ggml_tensor * ssm_dt = nullptr;
     struct ggml_tensor * ssm_out = nullptr;
+    struct ggml_tensor * ssm_norm = nullptr;
+    struct ggml_tensor * ssm_beta_alpha = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;
@@ -415,7 +418,7 @@ struct llama_model {
     ~llama_model();
 
     // Not actually needed, but left in place for now
-    size_t max_nodes() const { return 65536; }
+    size_t max_nodes() const { return 65536 * 2; }
 
     bool has_tensor_overrides() const {
         return tensor_overrides;

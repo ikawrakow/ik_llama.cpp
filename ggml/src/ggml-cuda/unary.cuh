@@ -53,6 +53,8 @@ void ggml_cuda_op_hardsigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
 void ggml_cuda_op_exp(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
+void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
 void ggml_cuda_op_hardswish(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_leaky_relu(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
@@ -93,3 +95,7 @@ void ggml_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_unary_op op,
         int64_t nelements,int64_t ne0,  const float * x, float * z, float limit = 0);
 
 void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+void ggml_cuda_fused_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+void ggml_cuda_fused_mul_exp_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
