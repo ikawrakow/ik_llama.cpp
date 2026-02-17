@@ -418,7 +418,7 @@ struct llama_model {
     ~llama_model();
 
     // Not actually needed, but left in place for now
-    size_t max_nodes() const { return 65536; }
+    size_t max_nodes() const { return 65536 * 2; }
 
     bool has_tensor_overrides() const {
         return tensor_overrides;
