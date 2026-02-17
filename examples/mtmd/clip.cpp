@@ -35,6 +35,8 @@
 #include <array>
 #include <functional>
 
+#define DEFAULT_INTERPOLATION_MODE (GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ALIGN_CORNERS)
+
 // TODO: allow to pass callback from user code
 struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callback_default, NULL};
 
@@ -510,6 +512,10 @@ struct clip_ctx {
         return model.proj_type;
     }
 };
+
+//
+// clip_graph
+//
 
 struct clip_graph {
     clip_ctx * ctx;
@@ -2054,23 +2060,20 @@ private:
     // utility functions
     //
 
-    void cb(ggml_tensor * cur0, const char * name, int il) const {
-        if (ctx->debug_graph) {
-            ggml_tensor * cur = ggml_cpy(ctx0, cur0, ggml_dup_tensor(ctx0, cur0));
-            std::string cur_name = il >= 0 ? std::string(name) + "_" + std::to_string(il) : name;
-            ggml_set_name(cur, cur_name.c_str());
-            ggml_set_output(cur);
-            ggml_build_forward_expand(gf, cur);
-            ctx->debug_print_tensors.push_back(cur);
+    void cb(ggml_tensor * cur, const char * name, int il) const {
+        if (il >= 0) {
+            ggml_format_name(cur, "%s-%d", name, il);
+        } else {
+            ggml_set_name(cur, name);
         }
     }
 
     // siglip2 naflex
-    ggml_tensor * resize_position_embeddings() {
+    ggml_tensor * resize_position_embeddings(uint32_t interpolation_mode = DEFAULT_INTERPOLATION_MODE) {
         ggml_tensor * pos_embd = model.position_embeddings;
         const int height       = img.ny / patch_size;
         const int width        = img.nx / patch_size;
-        const uint32_t mode    = GGML_SCALE_MODE_BILINEAR;
+        const uint32_t mode    = interpolation_mode;
         const int n_per_side   = (int)std::sqrt(pos_embd->ne[1]);
 
         GGML_ASSERT(pos_embd);
@@ -2123,34 +2126,66 @@ private:
 
             // self-attention
             {
-                ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.q_w, cur);
-                if (layer.q_b) {
-                    Qcur = ggml_add(ctx0, Qcur, layer.q_b);
-                }
+                ggml_tensor * Qcur = nullptr;
+                ggml_tensor * Kcur = nullptr;
+                ggml_tensor * Vcur = nullptr;
+                if (layer.qkv_w != nullptr) {
+                    // fused qkv
+                    cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
+                    if (layer.qkv_b != nullptr) {
+                        cur = ggml_add(ctx0, cur, layer.qkv_b);
+                    }
 
-                ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.k_w, cur);
-                if (layer.k_b) {
-                    Kcur = ggml_add(ctx0, Kcur, layer.k_b);
-                }
+                    Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ 0);
 
-                ggml_tensor * Vcur = ggml_mul_mat(ctx0, layer.v_w, cur);
-                if (layer.v_b) {
-                    Vcur = ggml_add(ctx0, Vcur, layer.v_b);
-                }
+                    Kcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ ggml_row_size(cur->type, n_embd));
 
-                if (layer.q_norm) {
-                    Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
-                    cb(Qcur, "Qcur_norm", il);
-                }
+                    Vcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ ggml_row_size(cur->type, 2 * n_embd));
 
-                if (layer.k_norm) {
-                    Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
-                    cb(Kcur, "Kcur_norm", il);
-                }
+                    // TODO: q/k norm requires row size == n_embd, while here it's d_head
+                    // we can add support in the future if needed
+                    GGML_ASSERT(layer.q_norm == nullptr && layer.k_norm == nullptr);
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+                } else {
+                    // separate q, k, v
+                    Qcur = ggml_mul_mat(ctx0, layer.q_w, cur);
+                    if (layer.q_b) {
+                        Qcur = ggml_add(ctx0, Qcur, layer.q_b);
+                    }
+
+                    Kcur = ggml_mul_mat(ctx0, layer.k_w, cur);
+                    if (layer.k_b) {
+                        Kcur = ggml_add(ctx0, Kcur, layer.k_b);
+                    }
+
+                    Vcur = ggml_mul_mat(ctx0, layer.v_w, cur);
+                    if (layer.v_b) {
+                        Vcur = ggml_add(ctx0, Vcur, layer.v_b);
+                    }
+
+                    if (layer.q_norm) {
+                        Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                        cb(Qcur, "Qcur_norm", il);
+                    }
+
+                    if (layer.k_norm) {
+                        Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                        cb(Kcur, "Kcur_norm", il);
+                    }
+
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
+                    Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+                }
 
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
@@ -2255,19 +2290,14 @@ private:
             ? ggml_rms_norm(ctx0, cur, norm_eps)
             : ggml_norm(ctx0, cur, norm_eps);
 
-        if (mw || mb) {
-            cb(cur, "norm", il);
-        }
-
         if (mw) {
             cur = ggml_mul(ctx0, cur, mw);
-            if (mb) {
-                cb(cur, "norm_w", il);
-            }
+            cb(cur, "norm_w", il);
         }
 
         if (mb) {
             cur = ggml_add(ctx0, cur, mb);
+            cb(cur, "norm_b", il);
         }
 
         return cur;
@@ -2911,7 +2941,7 @@ struct clip_model_loader {
                             hparams.image_max_pixels = max_pixels;
                             hparams.warmup_image_size = static_cast<int>(std::sqrt(max_pixels));
                         } else {
-                        hparams.set_limit_image_tokens(2, 4096);
+                            hparams.set_limit_image_tokens(2, 4096);
                         }
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
@@ -3062,21 +3092,11 @@ struct clip_model_loader {
         model.layers.resize(hparams.n_layer);
         for (int il = 0; il < hparams.n_layer; ++il) {
             auto & layer = model.layers[il];
-            //layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
-            //layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
-            //layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"), false);
-            // try combined qkv weight first; if absent, require separate k/q/v weights
-            layer.qkv_w = get_tensor(string_format(TN_ATTN_QKV, prefix, il, "weight"), false);
-            if (!layer.qkv_w) {
-                // combined not present => require separate tensors (no 'false' argument because tensors always required)
-                layer.k_w = get_tensor(string_format(TN_ATTN_K, prefix, il, "weight"));
-                layer.q_w = get_tensor(string_format(TN_ATTN_Q, prefix, il, "weight"));
-                layer.v_w = get_tensor(string_format(TN_ATTN_V, prefix, il, "weight"));
-            }
-
-            // other attention tensors (output / norms / ln) left as-is
+            layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
+            layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
+            layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"), false);
             layer.o_w    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
-            //layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
+            layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
             layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
             layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
             layer.ln_1_w = get_tensor(string_format(TN_LN_1,        prefix, il, "weight"), false);
@@ -3084,18 +3104,11 @@ struct clip_model_loader {
             layer.ls_1_w = get_tensor(string_format(TN_LS_1,        prefix, il, "weight"), false); // no bias
             layer.ls_2_w = get_tensor(string_format(TN_LS_2,        prefix, il, "weight"), false); // no bias
 
-            // try combined qkv bias first; if absent, require separate k/q/v biases
-            layer.qkv_b = get_tensor(string_format(TN_ATTN_QKV, prefix, il, "bias"), false);
-            if (!layer.qkv_b) {
-                // combined not present => require separate biases ('false' because tensors not required)
-                layer.k_b = get_tensor(string_format(TN_ATTN_K, prefix, il, "bias"), false);
-                layer.q_b = get_tensor(string_format(TN_ATTN_Q, prefix, il, "bias"), false);
-                layer.v_b = get_tensor(string_format(TN_ATTN_V, prefix, il, "bias"), false);
-            }
-
-            // keep other optional biases as before
+            layer.k_b    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "bias"), false);
+            layer.q_b    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "bias"), false);
+            layer.v_b    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "bias"), false);
             layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
-            //layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
+            layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
             layer.ln_1_b = get_tensor(string_format(TN_LN_1,        prefix, il, "bias"), false);
             layer.ln_2_b = get_tensor(string_format(TN_LN_2,        prefix, il, "bias"), false);
 
@@ -3421,12 +3434,30 @@ struct clip_model_loader {
     };
 
     static void warmup(clip_ctx & ctx_clip) {
+        // create a fake batch
+        const auto & hparams = ctx_clip.model.hparams;
+        clip_image_f32_batch batch;
+        clip_image_f32_ptr img(clip_image_f32_init());
+        if (ctx_clip.model.modality == CLIP_MODALITY_VISION) {
+            img->nx = hparams.warmup_image_size;
+            img->ny = hparams.warmup_image_size;
+            LOG_INF("%s: warmup with image size = %d x %d\n", __func__, img->nx, img->ny);
+        } else {
+            img->nx = hparams.warmup_audio_size;
+            img->ny = hparams.n_mel_bins;
+            LOG_INF("%s: warmup with audio size = %d\n", __func__, img->nx);
+        }
+        batch.entries.push_back(std::move(img));
+        warmup(ctx_clip, batch);
+    }
+
+    static void warmup(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
         support_info_graph info;
 
         if (ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_AUTO) {
             // try to enable flash attention to see if it's supported
             ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_ENABLED;
-            info = alloc_compute_meta(ctx_clip);
+            info = alloc_compute_meta(ctx_clip, batch);
             if (!info.fattn && info.fattn_op) {
                 auto op = info.fattn_op;
                 LOG_WRN("%s: *****************************************************************\n", __func__);
@@ -3445,10 +3476,10 @@ struct clip_model_loader {
                 LOG_WRN("%s: please report this on github as an issue\n", __func__);
                 LOG_WRN("%s: *****************************************************************\n", __func__);
                 ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_DISABLED;
-                alloc_compute_meta(ctx_clip);
+                alloc_compute_meta(ctx_clip, batch);
             }
         } else {
-            info = alloc_compute_meta(ctx_clip);
+            info = alloc_compute_meta(ctx_clip, batch);
             if (!info.fattn && ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
                 LOG_WRN("%s: flash attention is not supported by the current backend; falling back to CPU (performance will be degraded)\n", __func__);
             }
@@ -3485,23 +3516,8 @@ struct clip_model_loader {
         }
     }
 
-    static support_info_graph alloc_compute_meta(clip_ctx & ctx_clip) {
-        const auto & hparams = ctx_clip.model.hparams;
+    static support_info_graph alloc_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
         ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
-
-        // create a fake batch
-        clip_image_f32_batch batch;
-        clip_image_f32_ptr img(clip_image_f32_init());
-        if (ctx_clip.model.modality == CLIP_MODALITY_VISION) {
-            img->nx = hparams.warmup_image_size;
-            img->ny = hparams.warmup_image_size;
-            LOG_INF("%s: warmup with image size = %d x %d\n", __func__, img->nx, img->ny);
-        } else {
-            img->nx = hparams.warmup_audio_size;
-            img->ny = hparams.n_mel_bins;
-            LOG_INF("%s: warmup with audio size = %d\n", __func__, img->nx);
-        }
-        batch.entries.push_back(std::move(img));
 
         ggml_cgraph * gf = clip_image_build_graph(&ctx_clip, batch);
         ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
@@ -3863,12 +3879,13 @@ struct img_tool {
         const int width  = inp_size.width;
         const int height = inp_size.height;
 
+        auto round_by_factor = [f = align_size](float x) { return static_cast<int>(std::round(x / static_cast<float>(f))) * f; };
         auto ceil_by_factor  = [f = align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
         auto floor_by_factor = [f = align_size](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
 
         // always align up first
-        int h_bar = std::max(align_size, ceil_by_factor(height));
-        int w_bar = std::max(align_size, ceil_by_factor(width));
+        int h_bar = std::max(align_size, round_by_factor(height));
+        int w_bar = std::max(align_size, round_by_factor(width));
 
         if (h_bar * w_bar > max_pixels) {
             const auto beta = std::sqrt(static_cast<float>(height * width) / max_pixels);
@@ -4051,7 +4068,14 @@ struct llava_uhd {
         clip_image_size refined_size;  // size of image right before slicing (must be multiple of slice size)
         clip_image_size grid_size;     // grid_size.width * grid_size.height = number of slices
         std::vector<slice_coordinates> slices;
+
+        img_tool::resize_algo interpolation_overview = img_tool::RESIZE_ALGO_BILINEAR;
+        bool padding_overview = false;  // if true, refine image will be padded to the grid size (e.g. llava-1.6)
+        std::array<uint8_t, 3> pad_color_overview = {0, 0, 0};
+
+        img_tool::resize_algo interpolation_refined = img_tool::RESIZE_ALGO_BICUBIC;
         bool padding_refined = false;  // if true, refine image will be padded to the grid size (e.g. llava-1.6)
+        std::array<uint8_t, 3> pad_color_refined = {0, 0, 0};
     };
 
     static slice_instructions get_slice_instructions(struct clip_ctx * ctx, const clip_image_size & original_size) {
@@ -4078,10 +4102,11 @@ struct llava_uhd {
             auto refine_size = llava_uhd::select_best_resolution(
                 original_size,
                 ctx->model.hparams.image_res_candidates);
-            res.overview_size   = clip_image_size{slice_size, slice_size};
-            res.refined_size    = refine_size;
-            res.grid_size       = clip_image_size{0, 0};
-            res.padding_refined = true;
+            res.overview_size         = clip_image_size{slice_size, slice_size};
+            res.refined_size          = refine_size;
+            res.grid_size             = clip_image_size{0, 0};
+            res.padding_refined       = true;
+            res.interpolation_refined = img_tool::RESIZE_ALGO_BILINEAR;  // preserve old behavior when padding
 
             LOG_DBG("%s: using pinpoints for slicing\n", __func__);
             LOG_DBG("%s: original size: %d x %d, overview size: %d x %d, refined size: %d x %d\n",
@@ -4160,12 +4185,13 @@ struct llava_uhd {
 
     static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst) {
         std::vector<clip_image_u8_ptr> output;
-        img_tool::resize_algo interpolation = img_tool::RESIZE_ALGO_BILINEAR; // TODO: make it configurable
 
         // resize to overview size
         clip_image_u8_ptr resized_img(clip_image_u8_init());
-        img_tool::resize(*img, *resized_img, inst.overview_size, interpolation);
+        img_tool::resize(*img, *resized_img, inst.overview_size, inst.interpolation_overview,
+                         inst.padding_overview, inst.pad_color_overview);
         output.push_back(std::move(resized_img));
+
         if (inst.slices.empty()) {
             // no slices, just return the resized image
             return output;
@@ -4173,13 +4199,8 @@ struct llava_uhd {
 
         // resize to refined size
         clip_image_u8_ptr refined_img(clip_image_u8_init());
-        if (inst.padding_refined) {
-            img_tool::resize(*img, *refined_img, inst.refined_size, interpolation);
-        } else {
-            // only algo bicubic preserves the ratio; old models rely on this behavior
-            // TODO: do we need to support other algos here?
-            img_tool::resize(*img, *refined_img, inst.refined_size, img_tool::RESIZE_ALGO_BICUBIC, false);
-        }
+        img_tool::resize(*img, *refined_img, inst.refined_size, inst.interpolation_refined,
+                         inst.padding_refined, inst.pad_color_refined);
 
         // create slices
         for (const auto & slice : inst.slices) {
@@ -4846,7 +4867,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // build the inference graph
-    ctx->debug_print_tensors.clear();
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
     ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
@@ -5188,22 +5208,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return false;
     }
 
-    // print debug nodes
-    if (ctx->debug_graph) {
-        LOG_INF("\n\n---\n\n");
-        LOG_INF("\n\nDebug graph:\n\n");
-        for (ggml_tensor * t : ctx->debug_print_tensors) {
-            std::vector<uint8_t> data(ggml_nbytes(t));
-            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
-            print_tensor_shape(t);
-            print_tensor_data(t, data.data(), 3);
-        }
-    }
-
     // the last node is the embedding tensor
-    //ggml_tensor * embeddings = ggml_graph_node(gf, -1);
-    GGML_ASSERT(gf->n_nodes > 0);
-    ggml_tensor * embeddings = gf->nodes[gf->n_nodes-1];
+    ggml_tensor * embeddings = ggml_graph_node(gf, -1);
 
     // sanity check (only support batch size of 1 for now)
     const int n_tokens_out = embeddings->ne[1];
@@ -5214,7 +5220,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // copy the embeddings to the location passed by the user
-    ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
+    if (vec != nullptr) {
+        ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
+    }
 
     return true;
 }
