@@ -40,22 +40,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare Environment
+        id: prep
+        run: |
+          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Build and Push
         uses: docker/bake-action@v5
         with:
           push: true
           files: ./docker-bake.hcl
+          # Using env variables here is much more reliable
           set: |
-            *.args.REPO_OWNER=${{ github.repository_owner }}
+            *.args.REPO_OWNER=${{ env.REPO_LOWER }}
             *.args.VARIANT=${{ matrix.variant }}
-            *.args.SHA_SHORT=${{ github.sha }}
+            *.args.SHA_SHORT=${{ env.SHA_SHORT }}
             *.args.CUDA_VERSION=${{ matrix.cuda_version }}
             *.dockerfile=./docker/${{ matrix.containerfile }}
 
   cleanup:
     runs-on: ubuntu-latest
     needs: build-and-push
-    # Only run cleanup if the build actually succeeded
     if: success()
     steps:
       - name: Delete untagged images
