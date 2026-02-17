@@ -4494,7 +4494,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         attn                     = ggml_add(ctx0, attn, identity);
         cb(attn, "attn_solved", il);
 
-        v = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)), attn);
+        auto v_beta_t = ggml_cont(ctx0, ggml_transpose(ctx0, v_beta));
+        cb(v_beta_t, "v_beta_t", il);
+        v = ggml_mul_mat(ctx0, v_beta_t, attn);
         cb(v, "v_beta", il);
 
         ggml_tensor * g_cumsum_t = ggml_cont(ctx0, ggml_transpose(ctx0, g_cumsum));
@@ -4505,7 +4507,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * kbeta_gexp = ggml_mul(ctx0, k_beta, gexp);
         cb(kbeta_gexp, "kbeta_gexp", il);
 
-        auto attn_kbeta = ggml_mul_mat(ctx0, attn, ggml_cont(ctx0, ggml_transpose(ctx0, kbeta_gexp)));
+        auto kbeta_gexp_t = ggml_cont(ctx0, ggml_transpose(ctx0, kbeta_gexp));
+        cb(kbeta_gexp_t, "kbeta_gexp_t", il);
+        auto attn_kbeta = ggml_mul_mat(ctx0, attn, kbeta_gexp_t);
         cb(attn_kbeta, "attn_kbeta", il);
         ggml_tensor * k_cumdecay = ggml_cont(ctx0, ggml_transpose(ctx0, attn_kbeta));
         cb(k_cumdecay, "k_cumdecay", il);
@@ -4554,6 +4558,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             cb(attn_chunk, "attn_chunk", il);
 
             ggml_tensor * state_t = ggml_cont_4d(ctx0, ggml_permute(ctx0, state, 1, 0, 2, 3), S_v, S_v, 1, H_v * n_seqs);
+            cb(state_t, "state_t", il);
 
             //printf("v_prime_chunk: %ld x %ld x %ld x %ld, %s x %ld x %ld x %ld x %ld, %s\n", state_t->ne[0], state_t->ne[1], state_t->ne[2], state_t->ne[3], ggml_type_name(state_t->type),
             //        k_cumdecay_chunk->ne[0], k_cumdecay_chunk->ne[1], k_cumdecay_chunk->ne[2], k_cumdecay_chunk->ne[3], ggml_type_name(k_cumdecay_chunk->type));
@@ -4588,6 +4593,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             cb(kgdmulvnew, "kgdmulvnew", il);
 
             ggml_tensor * gexp_last_chunk = ggml_cont(ctx0, get_slice_2d(g_last_exp, chunk));
+            cb(gexp_last_chunk, "gexp_last_chunk", il);
             auto s_mul = ggml_mul(ctx0, state, ggml_reshape_4d(ctx0, gexp_last_chunk, gexp_last_chunk->ne[0], gexp_last_chunk->ne[1], H_v, n_seqs));
             cb(s_mul, "s_mul", il);
             state = ggml_add(ctx0, s_mul, ggml_reshape_4d(ctx0, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
@@ -4602,6 +4608,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         output_tokens = ggml_permute(ctx0, output_tokens, 0, 2, 1, 3);
         output_tokens = ggml_cont(ctx0, output_tokens);
+        cb(output_tokens, "output_tokens", il);
 
         return {output_tokens, state};
     };
@@ -4893,6 +4900,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         ggml_tensor * beta  = ggml_cont_4d(ctx0, b, num_v_heads, 1, n_tok, 1);
         ggml_tensor * alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_tok, 1);
+        cb(beta, "beta", il);
+        cb(alpha, "alpha", il);
 
         ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
         ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
@@ -5000,7 +5009,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * new_conv_states = ggml_view_2d(ctx0, conv_output_raw, hparams.ssm_d_conv - 1, conv_dim,
                 hparams.ssm_d_conv * ggml_element_size(conv_output_raw),
                 (1 + conv_dim * n_tok) * ggml_element_size(conv_output_raw));
-        ggml_tensor * new_conv_flat = ggml_reshape_2d(ctx0, ggml_cont(ctx0, new_conv_states), conv_state_dim, 1);
+        auto new_conv_states_cont = ggml_cont(ctx0, new_conv_states);
+        cb(new_conv_states_cont, "new_conv_states_cont", il);
+        ggml_tensor * new_conv_flat = ggml_reshape_2d(ctx0, new_conv_states_cont, conv_state_dim, 1);
         ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, new_state, ssm_state_dim, 1);
         ggml_tensor * new_state_flat = ggml_concat(ctx0, new_conv_flat, new_ssm_flat, 0);
 

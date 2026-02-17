@@ -979,3 +979,30 @@ void ggml_cuda_fused_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     k_fused_softplus<<<nblock, kBlockSize, 0, ctx.stream()>>>(a->src[0]->ne[0], nelem,
             (const float *)a->src[0]->data, (const float *)a->src[1]->data, (const float *)m->src[1]->data, (float *)dst->data);
 }
+
+static __global__ void k_fused_mul_exp_mul(int ne0, int nelem, const float * x, const float * y, float * dst) {
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    int i0 = i % ne0;
+    dst[i] = y[i0] * expf(x[i] * y[i0]);
+}
+
+void ggml_cuda_fused_mul_exp_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    constexpr int kBlockSize = 256;
+    auto m2 = dst;
+    auto u  = dst->src[0];
+    auto m1 = u->src[0];
+    GGML_ASSERT(m1->src[0]->type == GGML_TYPE_F32 && m1->src[1]->type == GGML_TYPE_F32 && m2->type == GGML_TYPE_F32);
+    GGML_ASSERT(m1->src[1] == m2->src[1]);
+    GGML_ASSERT(ggml_is_contiguous(m1->src[0]) && ggml_is_contiguous(m1->src[1]));
+    GGML_ASSERT(u->op == GGML_OP_UNARY && (ggml_unary_op)u->op_params[0] == GGML_UNARY_OP_EXP);
+
+    auto nelem = ggml_nelements(m1->src[0]);
+    auto ne0   = ggml_nelements(m1->src[1]);
+    int nblock = (nelem + kBlockSize - 1)/kBlockSize;
+
+    k_fused_mul_exp_mul<<<nblock, kBlockSize, 0, ctx.stream()>>>(ne0, nelem,
+            (const float *)m1->src[0]->data, (const float *)m1->src[1]->data, (float *)dst->data);
+}
