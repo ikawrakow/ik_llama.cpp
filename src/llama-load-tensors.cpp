@@ -1328,6 +1328,7 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
 
         layer.attn_norm      = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd});
         layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd});
+        layer.ffn_norm = layer.attn_post_norm;
 
         if (!hparams.is_recurrent(i)) {
             // Full-attention layer

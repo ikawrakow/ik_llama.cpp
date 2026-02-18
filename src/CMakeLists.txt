@@ -55,6 +55,8 @@ add_library(llama
             llama-arch.cpp
             llama-hparams.h
             llama-hparams.cpp
+            llama-delta-net.h
+            llama-delta-net.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp
