@@ -1053,6 +1053,14 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
+void llama_update_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx) {
+    struct llama_sampler_adaptive_p * ctx = adapt_p_ctx;
+    if (ctx->update_prob > 0) {
+        ctx->weighted_sum = ctx->decay * ctx->weighted_sum + ctx->update_prob;
+        ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
+    }
+}
+
 llama_token llama_sample_token_adaptive_p_impl(
               struct llama_sampling * smpl,
              llama_token_data_array * candidates,
@@ -1080,14 +1088,10 @@ llama_token llama_sample_token_adaptive_p_impl(
     llama_token id = candidates->data[idx].id;
     GGML_ASSERT(id < int(ctx->orig_prob.size()));
 
-    // update history
-    const float update_prob = ctx->updt_w_cur
-    ? candidates->data[idx].p / ctx->cum_cur_p
-    : ctx->orig_prob[id] / ctx->cum_orig_prob;
-    if (update_prob > 0) {
-        ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
-        ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
-    }
+    // save update probability
+    ctx->update_prob = ctx->updt_w_cur
+        ? candidates->data[idx].p / ctx->cum_cur_p
+        : ctx->orig_prob[id] / ctx->cum_orig_prob;
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
@@ -1186,17 +1190,18 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
     GGML_ASSERT(n_vocab > 0);
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
     auto result = new llama_sampler_adaptive_p {
-        /* .target          = */ target,
-        /* .decay           = */ clamped_decay,
-        /* .updt_w_cur      = */ updt_w_cur,
-        /* .rng             = */ std::mt19937(seed),
-        /* .weighted_sum    = */ target / (1.0f - clamped_decay),
-        /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
-        /* .orig_prob       = */ {},
-        /* .cum_orig_prob   = */ 1.0f,
-        /* .cum_cur_p       = */ 1.0f,
-        /* .max_xform_logit = */ -INFINITY,
-        /* .cum_probs       = */ {},
+        /* .target            = */ target,
+        /* .decay             = */ clamped_decay,
+        /* .updt_w_cur        = */ updt_w_cur,
+        /* .rng               = */ std::mt19937(seed),
+        /* .weighted_sum      = */ target / (1.0f - clamped_decay),
+        /* .total_weight      = */ 1.0f / (1.0f - clamped_decay),
+        /* .orig_prob         = */ {},
+        /* .cum_orig_prob     = */ 1.0f,
+        /* .cum_cur_p         = */ 1.0f,
+        /* .max_xform_logit   = */ -INFINITY,
+        /* .cum_probs         = */ {},
+        /* .update_prob       = */ target,
     };
     result->orig_prob.resize(n_vocab);
     return result;

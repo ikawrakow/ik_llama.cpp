@@ -83,6 +83,7 @@ struct llama_sampler_adaptive_p {
 
     // first referenced in sample_token
     std::vector<float> cum_probs;   // cumulative probability distribution
+    float update_prob;
 };
 
 struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
@@ -100,6 +101,8 @@ void llama_sample_adaptive_p_impl(
               struct llama_sampling * smpl,
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx);
+
+void llama_update_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx);
 
 
 void llama_sample_repetition_penalties_impl(

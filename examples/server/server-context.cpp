@@ -3252,6 +3252,10 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 buffer_and_check_string_ban(slot, result);
             }
 
+            if (!slot.rewind_status) {
+                common_sampler_update(slot.ctx_sampling);
+            }
+
             slot.i_batch = -1;
         }
 
