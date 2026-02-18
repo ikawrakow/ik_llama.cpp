@@ -11961,6 +11961,29 @@ static void ggml_compute_forward_dup_bytes(
     const int ith = params->ith; // thread index
     const int nth = params->nth; // number of threads
 
+    if (src0->op == GGML_OP_TRANSPOSE && src0->ne[2]*src0->ne[3] >= nth/2 && src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        int elem_size = ggml_element_size(src0);
+        if ((size_t)src0->ne[0]*src0->ne[1]*elem_size == src0->nb[2] &&
+            (size_t)src0->ne[0]*src0->ne[1]*src0->ne[2]*elem_size == src0->nb[3]) {
+            int counter = 0;
+            for (int i3 = 0; i3 < src0->ne[3]; ++i3) {
+                for (int i2 = 0; i2 < src0->ne[2]; ++i2) {
+                    if (counter++ % nth == ith) {
+                        const char * x = (const char *)src0->data + i2*src0->nb[2] + i3*src0->nb[3];
+                        float * y = (float *)((char *)dst->data + i2*dst->nb[2] + i3*dst->nb[3]);
+                        for (int i1 = 0; i1 < dst->ne[1]; ++i1) {
+                            for (int i0 = 0; i0 < dst->ne[0]; ++i0) {
+                                memcpy(y, x + i0*src0->nb[0] + i1*src0->nb[1], sizeof(float));
+                                ++y;
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+    }
+
     // parallelize by rows
     const int nr = ne01;
     // number of rows per thread
@@ -15434,6 +15457,20 @@ static void ggml_compute_forward_silu_f32(
 
     const int ith = params->ith;
     const int nth = params->nth;
+
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
+        const int k_block_size = 1024;
+        int nelem = ggml_nelements(src0);
+        int nblock = (nelem + k_block_size - 1)/k_block_size;
+        for (int ib = ith; ib < nblock; ib += nth) {
+            int first = ib*k_block_size;
+            const float * x = (const float *)src0->data + first;
+                  float * y = (      float *) dst->data + first;
+            int n = first + k_block_size <= nelem ? k_block_size : nelem - first;
+            ggml_vec_silu_f32(n, y, x);
+        }
+        return;
+    }
 
     const int nc = src0->ne[0];
     const int nr = ggml_nrows(src0);
