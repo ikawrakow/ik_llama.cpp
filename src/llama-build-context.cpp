@@ -1237,7 +1237,8 @@ ggml_tensor * llm_build_context::llm_build_std_moe_ffn(ggml_context * ctx, llama
 llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
-         ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b) {
+         ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b,
+         ggml_tensor * shexp_gate) {
 
     auto split_up_exps    = (ggml_split_tensor_t *)up_exps->extra;
     auto split_gate_exps  = (ggml_split_tensor_t *)gate_exps->extra;
@@ -1327,6 +1328,18 @@ llm_expert_gating_func_type   gating_op,
                         down_shexp, down_b_shexp, nullptr,
                         nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
                 cb(shared_out, "ffn_shexp_out", il);
+                if (shexp_gate) {
+                    auto shared_gate = llm_build_lora_mm(lctx, ctx, shexp_gate, cur);
+                    cb(shared_gate, "shared_expert_gate", il);
+                    if (shared_gate->ne[1] == 1) {
+                        shared_out = ggml_fused_mul_unary(ctx, shared_gate, shared_out, GGML_UNARY_OP_SIGMOID);
+                    } else {
+                        shared_gate = ggml_sigmoid(ctx, shared_gate);
+                        cb(shared_gate, "shared_expert_gate_sigmoid", il);
+                        shared_out = ggml_mul(ctx, shared_out, shared_gate);
+                    }
+                    cb(shared_out, "ffn_shexp_gated", il);
+                }
                 cur = ggml_add(ctx, routed_out, shared_out);
                 cb(cur, "ffn_out", il);
             }
@@ -4379,68 +4392,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         return attn;
     };
 
-    auto build_layer_ffn = [&](ggml_tensor * cur, int il) -> ggml_tensor * {
-        const bool has_moe   = model.layers[il].ffn_gate_inp != nullptr;
-        const bool has_dense = model.layers[il].ffn_gate != nullptr && model.layers[il].ffn_up != nullptr && model.layers[il].ffn_down != nullptr;
-
-        if (has_moe) {
-            ggml_tensor * moe_out =
-                llm_build_moe_ffn(ctx0, lctx, cur,
-                        model.layers[il].ffn_gate_inp,
-                        model.layers[il].ffn_up_exps,
-                        model.layers[il].ffn_gate_exps,
-                        model.layers[il].ffn_down_exps,
-                        nullptr,
-                        n_expert, n_expert_used, LLM_FFN_SILU,
-                        true, false, 0.0f, LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                        cb, il, gf, false);
-            cb(moe_out, "ffn_moe_out", il);
-
-            const bool has_shexp = model.layers[il].ffn_up_shexp != nullptr &&
-                                   model.layers[il].ffn_gate_shexp != nullptr &&
-                                   model.layers[il].ffn_down_shexp != nullptr &&
-                                   model.layers[il].ffn_gate_inp_shexp != nullptr;
-            if (has_shexp) {
-                ggml_tensor * ffn_shexp =
-                    llm_build_ffn(ctx0, lctx, nullptr, cur,
-                            model.layers[il].ffn_up_shexp,   NULL, NULL,
-                            model.layers[il].ffn_gate_shexp, NULL, NULL,
-                            model.layers[il].ffn_down_shexp, NULL, NULL,
-                            NULL,
-                            LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-                cb(ffn_shexp, "ffn_shexp", il);
-
-                ggml_tensor * shared_gate = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_gate_inp_shexp, cur);
-                cb(shared_gate, "shared_expert_gate", il);
-
-                if (shared_gate->ne[1] == 1) {
-                    ffn_shexp = ggml_fused_mul_unary(ctx0, shared_gate, ffn_shexp, GGML_UNARY_OP_SIGMOID);
-                } else {
-                    shared_gate = ggml_sigmoid(ctx0, shared_gate);
-                    cb(shared_gate, "shared_expert_gate_sigmoid", il);
-                    ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
-                }
-                cb(ffn_shexp, "ffn_shexp_gated", il);
-
-                cur = ggml_add(ctx0, moe_out, ffn_shexp);
-            } else {
-                cur = moe_out;
-            }
-            cb(cur, "ffn_out", il);
-            return cur;
-        }
-
-        GGML_ASSERT(has_dense);
-        cur = llm_build_ffn(ctx0, lctx, nullptr, cur,
-                model.layers[il].ffn_up,   NULL, NULL,
-                model.layers[il].ffn_gate, NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-        cb(cur, "ffn_out", il);
-        return cur;
-    };
-
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
@@ -4487,12 +4438,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         if (hparams.is_recurrent(il)) {
             cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
         } else {
-            GGML_ASSERT(model.layers[il].wq != nullptr);
-            GGML_ASSERT(model.layers[il].wk != nullptr);
-            GGML_ASSERT(model.layers[il].wv != nullptr);
-            GGML_ASSERT(model.layers[il].wo != nullptr);
-            GGML_ASSERT(model.layers[il].attn_q_norm != nullptr);
-            GGML_ASSERT(model.layers[il].attn_k_norm != nullptr);
             cur = build_layer_attn(cur, inp_pos, KQ_mask, il);
         }
 
@@ -4504,24 +4449,38 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cur = ggml_add(ctx0, cur, inpSA);
         cb(cur, "attn_residual", il);
 
-        ggml_tensor * ffn_residual = cur;
-        ggml_tensor * attn_post_norm = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
-        cb(attn_post_norm, "attn_post_norm", il);
+        if (!model.layers[il].ffn_gate_inp) {
+            // dense FFN
+            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                    model.layers[il].ffn_up,   nullptr, nullptr,
+                    model.layers[il].ffn_gate, nullptr, nullptr,
+                    model.layers[il].ffn_down, nullptr, nullptr,
+                    nullptr,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
+            cb(cur, "ffn_out", il);
+        } else {
+            cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                    model.layers[il].ffn_gate_inp,  nullptr,
+                    model.layers[il].ffn_up_exps,   nullptr,
+                    model.layers[il].ffn_gate_exps, nullptr,
+                    model.layers[il].ffn_down_exps, nullptr,
+                    nullptr,
+                    model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
+                    model.layers[il].ffn_gate_shexp,  nullptr,
+                    model.layers[il].ffn_down_shexp,  nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true, false, 0.0f,
+                    LLM_EXPERT_GATING_FUNC_SOFTMAX,
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp);
+        }
 
-        cur = build_layer_ffn(attn_post_norm, il);
-        cb(cur, "ffn_out", il);
-
-        cur = ggml_add(ctx0, cur, ffn_residual);
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
         inpL = cur;
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
-    cb(cur, "result_norm", -1);
-
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
