@@ -6,9 +6,73 @@
 
 #include "ggml.h"
 
+#include <algorithm>
+#include <unordered_set>
+
 #define QWEN3NEXT_CHUNK_SIZE 64
 
-delta_net::delta_net(llama_context & _lctx) : lctx(_lctx) {}
+delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_lctx), batch(_batch) {
+    auto & model = lctx.model;
+    auto & hparams = model.hparams;
+
+    GGML_ASSERT(batch.n_tokens > 0);
+    GGML_ASSERT(hparams.ssm_n_group > 0);
+    GGML_ASSERT(hparams.ssm_dt_rank > 0);
+    GGML_ASSERT(hparams.ssm_d_conv > 0);
+    GGML_ASSERT(hparams.ssm_d_inner % hparams.ssm_dt_rank == 0);
+
+    const int64_t head_k_dim     = hparams.ssm_d_state;
+    const int64_t num_k_heads    = hparams.ssm_n_group;
+    const int64_t num_v_heads    = hparams.ssm_dt_rank;
+    const int64_t head_v_dim     = hparams.ssm_d_inner / num_v_heads;
+    const int64_t key_dim        = head_k_dim * num_k_heads;
+    const int64_t value_dim      = head_v_dim * num_v_heads;
+    const int64_t ssm_state_dim  = head_v_dim * head_v_dim * num_v_heads;
+    const int64_t conv_dim       = key_dim * 2 + value_dim;
+    const int64_t conv_state_dim = (hparams.ssm_d_conv - 1) * conv_dim;
+    const int64_t state_dim      = conv_state_dim + ssm_state_dim;
+    GGML_ASSERT(hparams.n_embd_v_s() == (uint32_t) state_dim);
+
+    const bool has_explicit_seq_info = batch.n_seq_id != nullptr && batch.seq_id != nullptr;
+    token_seq_ids.resize(batch.n_tokens, 0);
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (has_explicit_seq_info) {
+            GGML_ASSERT(batch.n_seq_id[i] > 0 && "qwen3next expects each token to belong to at least one sequence");
+            GGML_ASSERT(batch.n_seq_id[i] == 1 && "qwen3next does not support multi-sequence tokens yet");
+            token_seq_ids[i] = batch.seq_id[i][0];
+        } else {
+            token_seq_ids[i] = 0;
+        }
+    }
+
+    auto seq_id = token_seq_ids[0];
+    all_same_seq = std::all_of(token_seq_ids.begin(), token_seq_ids.end(), [seq_id](llama_seq_id s) { return s == seq_id; });
+
+    has_unique_seq_ids = true;
+    if (!all_same_seq) {
+        std::unordered_set<llama_seq_id> seen;
+        seen.reserve(token_seq_ids.size());
+        for (auto s : token_seq_ids) {
+            if (!seen.insert(s).second) {
+                has_unique_seq_ids = false;
+                break;
+            }
+        }
+    }
+
+    const uint32_t qnext_state_slots = llm_build_context::llama_kv_qnext_state_slots(lctx.kv_self);
+    GGML_ASSERT(qnext_state_slots > 0);
+
+    // Reserve-graph builds may not carry explicit sequence IDs, in which case
+    // the fallback sequence slot is 0.
+    for (llama_seq_id s : token_seq_ids) {
+        GGML_ASSERT(s >= 0);
+        GGML_ASSERT((uint32_t) s < qnext_state_slots);
+    }
+
+}
+
+delta_net::~delta_net() = default;
 
 std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_delta_net_chunking(ggml_context * ctx0,
                       ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
@@ -569,13 +633,26 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
 
 }
 
-ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf, const llama_batch & batch, const std::vector<llama_seq_id> & token_seq_ids,
-        bool all_same_seq, bool has_unique_seq_ids, bool reset_state,
+ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf,
         ggml_tensor * cur, ggml_tensor * causal_mask, ggml_tensor * identity,
         ggml_tensor * diag_mask, int il, const llm_build_cb & cb) const {
     GGML_ASSERT(lctx.inp_s_seq_qnext != nullptr);
 
+    auto & model = lctx.model;
+    auto & hparams = model.hparams;
+    GGML_ASSERT(hparams.is_recurrent(il));
+
+    GGML_ASSERT(model.layers[il].ssm_conv1d != nullptr);
+    GGML_ASSERT(model.layers[il].ssm_dt != nullptr);
+    GGML_ASSERT(model.layers[il].ssm_a != nullptr);
+    GGML_ASSERT(model.layers[il].ssm_beta_alpha != nullptr);
+    GGML_ASSERT(model.layers[il].ssm_norm != nullptr);
+    GGML_ASSERT(model.layers[il].ssm_out != nullptr);
+    GGML_ASSERT(model.layers[il].wqkv != nullptr || model.layers[il].ssm_in != nullptr);
+    GGML_ASSERT(model.layers[il].wqkv_gate != nullptr || model.layers[il].ssm_in != nullptr);
+
     if (all_same_seq) {
+        bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
         return build_layer_attn_linear_core(ctx0, gf, cur, causal_mask, identity, diag_mask, lctx.inp_s_seq_qnext, token_seq_ids.front(), reset_state, il, cb);
     }
 
