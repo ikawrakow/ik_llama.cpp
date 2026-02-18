@@ -4330,66 +4330,56 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
     auto build_layer_attn = [&](ggml_tensor * cur, ggml_tensor * inp_pos, ggml_tensor * KQ_mask, int il) -> ggml_tensor * {
-        ggml_tensor * Qcur_full = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
-        cb(Qcur_full, "Qcur_full", il);
 
-        Qcur_full = ggml_reshape_4d(ctx0, Qcur_full, n_embd_head * 2, n_head, n_tokens, 1);
+        auto Qaux = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+        auto Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+        auto Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+        cb(Qaux, "Qaux", il);
+        cb(Kcur, "Kcur", il);
+        cb(Vcur, "Vcur", il);
+        ggml_build_forward_expand(gf, Qaux);
+        ggml_build_forward_expand(gf, Kcur);
+        ggml_build_forward_expand(gf, Vcur);
 
-        ggml_tensor * Qcur = ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1,
-                Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], 0);
-        ggml_tensor * gate = ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1,
-                Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], n_embd_head * ggml_element_size(Qcur_full));
+        Qaux = ggml_reshape_3d(ctx0, Qaux, n_embd_head * 2, n_head, n_tokens);
+        auto Qcur = ggml_cont(ctx0, ggml_view_3d(ctx0, Qaux, n_embd_head, n_head, n_tokens, Qaux->nb[1], Qaux->nb[2], 0));
+        auto gate = ggml_cont_2d(ctx0, ggml_view_3d(ctx0, Qaux, n_embd_head, n_head, n_tokens, Qaux->nb[1], Qaux->nb[2], n_embd_head*ggml_element_size(Qaux)), n_embd_head*n_head, n_tokens);
         cb(Qcur, "Qcur", il);
         cb(gate, "gate", il);
 
-        Qcur = ggml_cont_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-        cb(Qcur, "Qcur_reshaped", il);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
         Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(Qcur, "Qcur_normed", il);
 
-        ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
-        cb(Kcur, "Kcur", il);
-
-        ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
-        cb(Vcur, "Vcur", il);
-        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(Kcur, "Kcur_normed", il);
 
-        gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
-        cb(gate, "gate_reshaped", il);
-
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
+                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
 
         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
+                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
 
-        cb(Qcur, "Qcur", il);
-        cb(Kcur, "Kcur", il);
+        cb(Qcur, "Qcur_roped", il);
+        cb(Kcur, "Kcur_roped", il);
 
-        ggml_tensor * attn = llm_build_kv(ctx0, lctx, kv_self, gf,
-                nullptr, nullptr,
+        ggml_tensor * attn = llm_build_kv(ctx0, lctx, kv_self, gf, nullptr, nullptr,
                 Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv,
-                hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale,
-                cb, il);
+                hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale, cb, il);
         cb(attn, "attn_pregate", il);
 
-        ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
-        cb(gate_sigmoid, "gate_sigmoid", il);
-
-        attn = ggml_mul(ctx0, attn, gate_sigmoid);
+        gate = ggml_sigmoid(ctx0, gate);
+        cb(gate, "gate_sigmoid", il);
+        attn = ggml_mul(ctx0, attn, gate);
         cb(attn, "attn_gated", il);
 
         attn = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, attn);
         cb(attn, "attn_output", il);
 
         return attn;
+
     };
 
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
