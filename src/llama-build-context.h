@@ -426,4 +426,5 @@ llm_expert_gating_func_type   gating_op,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
             bool is_multi = false);
 
+    static uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self);
 };
