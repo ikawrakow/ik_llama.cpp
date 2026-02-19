@@ -96,6 +96,8 @@ struct server_slot {
     float ban_phrases_bias = 0;
     int32_t banned_n = 1;
 
+    bool rewind_samplers = false;
+
     server_prompt server_cached_prompt;
 
     void prompt_save(server_prompt_cache& prompt_cache) const;

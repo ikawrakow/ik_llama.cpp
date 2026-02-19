@@ -148,8 +148,8 @@ void common_sampler_free(struct common_sampler * ctx);
 // - reset grammar
 void common_sampler_reset(common_sampler * ctx);
 
-// Update stateful samplers
-void common_sampler_update(common_sampler * ctx);
+// Rewind stateful samplers
+void common_sampler_rewind(common_sampler * ctx);
 
 // Set the sampler seed
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed);

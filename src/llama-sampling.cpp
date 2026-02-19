@@ -1053,18 +1053,15 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
-void llama_update_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx) {
-    struct llama_sampler_adaptive_p * ctx = adapt_p_ctx;
-    if (ctx->update_prob > 0) {
-        ctx->weighted_sum = ctx->decay * ctx->weighted_sum + ctx->update_prob;
-        ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
-    }
+void llama_rewind_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx) {
+    adapt_p_ctx->weighted_sum = adapt_p_ctx->last_weighted_sum;
+    adapt_p_ctx->total_weight = adapt_p_ctx->last_total_weight;
 }
 
 llama_token llama_sample_token_adaptive_p_impl(
-              struct llama_sampling * smpl,
-             llama_token_data_array * candidates,
-    struct llama_sampler_adaptive_p * adapt_p_ctx) {
+                  struct llama_sampling * smpl,
+                 llama_token_data_array * candidates,
+        struct llama_sampler_adaptive_p * adapt_p_ctx) {
     GGML_ASSERT(candidates->size > 0);
     const int64_t t_start_sample_us = ggml_time_us();
 
@@ -1089,9 +1086,15 @@ llama_token llama_sample_token_adaptive_p_impl(
     GGML_ASSERT(id < int(ctx->orig_prob.size()));
 
     // save update probability
-    ctx->update_prob = ctx->updt_w_cur
+    const float update_prob = ctx->updt_w_cur
         ? candidates->data[idx].p / ctx->cum_cur_p
         : ctx->orig_prob[id] / ctx->cum_orig_prob;
+    if (update_prob > 0) {
+        ctx->last_weighted_sum = ctx->weighted_sum;
+        ctx->last_total_weight = ctx->total_weight;
+        ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
+        ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
+    }
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
@@ -1201,7 +1204,8 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
         /* .cum_cur_p         = */ 1.0f,
         /* .max_xform_logit   = */ -INFINITY,
         /* .cum_probs         = */ {},
-        /* .update_prob       = */ target,
+        /* .last_weighted_sum = */ target / (1.0f - clamped_decay),
+        /* .last_total_weight = */ 1.0f / (1.0f - clamped_decay),
     };
     result->orig_prob.resize(n_vocab);
     return result;

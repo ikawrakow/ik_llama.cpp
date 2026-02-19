@@ -142,8 +142,8 @@ void common_sampler_reset(common_sampler * ctx) {
     llama_sampler_dry_reset(ctx->smpl);
 }
 
-void common_sampler_update(common_sampler * ctx) {
-    llama_update_adaptive_p(ctx->adapt_p_ctx);
+void common_sampler_rewind(common_sampler * ctx) {
+    llama_rewind_adaptive_p(ctx->adapt_p_ctx);
 }
 
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed) {
