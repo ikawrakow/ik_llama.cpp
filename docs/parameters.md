@@ -28,6 +28,8 @@ Overview of the most common command-line parameters in `ik_llama.cpp` and some i
 
 - [Other Tools](#other-tools)
 
+- [Unique parameters](unique-parameters)
+
 ## LLM Jargon
 
 Some often used terms.
@@ -131,8 +133,8 @@ Good overview on [kalomaze/llm_samplers_explained.md](https://gist.github.com/ka
 | - | - | - | - |
 | `--samplers SAMPLERS` | Samplers used for generation in order, separated by `;` | dry;top_k;tfs_z;typical_p;top_p;min_p;xtc;top_n_sigma;temperature;adaptive_p | Powerful option to customize samplers. Try to keep the default order otherwise effects will be minimized. Example to use only min_p and temperature: `--samplers min_p;temperature` |
 | `--sampling-seq SEQUENCE` | Simplified sequence for samplers | dkfypmxntw | Same as `--samplers` , just shorter format. |
-| --banned-string-file | File path of the list of banned strings on each line |  |  |
-| --banned-n | Number of tokens banned in the phrase during rewind. | -1 | -1 means all tokens [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) |
+| `--banned-string-file` | File path of the list of banned strings on each line |  |  |
+| `--banned-n` | Number of tokens banned in the phrase during rewind. | -1 | -1 means all tokens [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) |
 
 ## Prompt Template
 
@@ -153,6 +155,8 @@ Incorrect prompt template or it's format may break the model output.
 KV cache improves speed and efficiency especially at long context by reusing [past calculations](https://huggingface.co/blog/not-lain/kv-caching).
 
 SWA keeps a sliding window of the prompt when prompt is longer than the context size and shift the kv cache accordingly to avoid reprocessing the whole prompt.
+
+The context (a.k.a. KV cache) is stored on the device where the associated attention tensors are.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
@@ -247,7 +251,7 @@ llama_new_context_with_model: KV self size  =   59.50 MiB, K (q8_0):   29.75 MiB
 
 3. Offload less to the GPU. Try to find a mix of parameters that better suits your system that default.
 
-- Use `--no-kv-offload` to keep KV cache on CPU.
+- Use `--no-kv-offload` to keep KV cache on CPU. This is provided for flexibility, and practically not desired as reduces the prompt processing speed.
 
 - Identify tensors, how many layers (also shape and more metadata) by opening the GGUF model file on browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. For the split models, look to each file part.
 
@@ -256,20 +260,26 @@ Or, if you already have the quant locally you can just run `gguf_dump.py`:
 python3 gguf-py/scripts/gguf_dump.py /models/Qwen_Qwen3-0.6B-IQ4_NL.gguf
 ```
 
-- `-ngl`, `-ot`, `--cpu-moe`, `--n-cpu-moe N`, `-ooae`
+- `-ngl`, `-ot`, `--cpu-moe`, `--n-cpu-moe N`
+   - For MoE models, use a number greater than the number of model layers with `-ngl`. If unsure, use a large number like `-ngl 999`.
    - It's good to explicitly put up/down/gate onto the GPU for speedups. 
    - Up/Gate shouldn't be on separate GPU devices because it might cause a bit of a deadlock.
    - For models with shared experts (like GPT-OSS), they should end up on GPU.
    - In some quants the layers aren't uniform so it can be better to skip larger layers if more smaller blocks will fit without empty space where nothing fits.
    - You put anything that says "exps" in your slowest memory, and anything else in your fastest memory (VRAM). Those ffn "exps" are the sparse experts tensors, the ones that get actually used only 2-5% of the times (depending on the model). If then you have extra VRAM to spare, you start putting some of the exps into VRAM too, for some improvements.
    - Some layers (layers are called blk.n in gguf), are different in some models. For example [GLM5](https://huggingface.co/ubergarm/GLM-5-GGUF/blob/main/IQ3_KS/GLM-5-IQ3_KS-00002-of-00008.gguf) the first three layers are different (blk.0(14), blk.1(14), blk.2(14) vs. blk.10(19), blk.11(19),...), they don't have exps, they have dense ffn, so they should all go in VRAM. Dense layers are very good to speed up mixed inference systems, as a much larger share of active parameters is fixed, and hence you know which to put in faster VRAM. Also the layers from the 4th onwards have shared exps, "shexp", those too go to VRAM as they are always active.
-   - For MoE models you can play with `--cpu-moe`, `--n-cpu-moe N`, `-ooae` before moving to `-ot`.
+   - For MoE models you can play with `--cpu-moe`, `--n-cpu-moe N`, `-ooae`/`-no-ooae` before moving to `-ot`.
    - In general, in a single GPU + CPU system, you just do something like this:
 
    `-ngl 999` To put all layers in vram by default
    
    `-ot "blk.(?:[0-9]|[1-7][0-9]|[8][0-7]).ffn._exps.=CPU"` To create exceptions and put back in ram anything that has "ffn" and "_exps" in its name, and that sits in layers called "blk.n", where "n" (the lawyer number) is any match between 0 and 9, or between 1 to 7 + 0 to 9 (aka a number between 10 and 79), or 8 + 0 to 7 (aka a number between 80 and 87).
    Basically a complicated way of saying put all experts from layer 0 to 87 in ram. Experts from layer 88 to 93 (there's 93 layers in qwen3vl 235b) can sit in VRAM still. (Thats all I can load on a 5090).
+
+### Common GPU configurations and popular models 
+
+WIP
+
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
@@ -285,7 +295,8 @@ python3 gguf-py/scripts/gguf_dump.py /models/Qwen_Qwen3-0.6B-IQ4_NL.gguf
 | `-cuda fa-offset=value` | FP16 precision offset for FA calculation | 0 | Rarely, fp16 precision is inadequate, at least for some models, when computing FA for very long contexts. Value must be a valid floating point number in the interval [0...3] (this is checked and if the supplied value is outside this interval it is ignored). By the default the offset is zero. If you find that a model works up to a given context length but then starts producing gibberish/incoherent output/endless repetitions, it is very likely it is due to f16 overflow in the FA calculation, and using this command line option is likely to solve it. [PR 1198](https://github.com/ikawrakow/ik_llama.cpp/pull/1198) |
 | `-ot or --override-tensor` | Override where model weights are stored | - | Override where model weights are stored using regular expressions. This allows for example to keep the MoE experts on the CPU and to offload only the attention and not repeating layers to the GPU. Example: `\.ffn_.*_exps\.=CPU` [PR 232](https://github.com/ikawrakow/ik_llama.cpp/pull/232) |
 | `-op or --offload-policy a,b` | Manually define the offload policy | - | a and b are integers. One can have multiple pairs following the -op or --offload-policy argument (i.e., -op a1,b1,a2,b2,a3,b3...). The first integer defines the op (see below). The second integer is 0 or 1 and defines if the op should be offloaded (1) or not offloaded (0) to the GPU. The first integer is simply the `enum` value in the `ggml_op enum`. If the op is set to -1, then all op offloads are set to enabled or disabled.  Examples: `-op -1,0`: disable all offload to the GPU `-op 26,0`: disable offload of matrix multiplications to the GPU `-op 27,0`: disable offload of indirect matrix multiplications to the GPU (used for the experts in a MoE model) `-op 29,0`: disable fused up-gate-unary op offload to the GPU (applied to MoE models with `-fmoe`) [PR 405](https://github.com/ikawrakow/ik_llama.cpp/pull/405) |
-| `--offload-only-active-experts or -ooae` | On MOE offload only active experts | - | [PR 698](https://github.com/ikawrakow/ik_llama.cpp/pull/698) |
+| `--offload-only-active-experts or -ooae` | On MOE offload only active experts | ON | `-ooae` is not related to where the model weights get stored. Instead, once we have some MoE tensors (ffn_(up|gate|down)_exps.weight) on the CPU, and during batch processing the scheduler decides to copy them to a GPU to perform the corresponding matrix multiplications, `-ooae` tells the scheduler to offload only the activated experts. Offloading only the activated experts is useful for some models, where often the number of activated experts is much smaller than the total number of experts, so `-ooae` reduces the amount of `RAM -> VRAM` data transfer. A model where this makes a significant difference for hybrid CPU/GPU inference is GPT-OSS-120B. For many MoE models and large batches basically all experts are activated, so this option makes no difference (or can even slightly lower performance because it costs some time to determine which experts are active, but if all experts turn out to be active, this time was spent for nothing). [PR 698](https://github.com/ikawrakow/ik_llama.cpp/pull/698) |
+| `-no-ooae` | Disable offload only active experts | - | See `-ooae` |
 | `-smf16, --split-mode-f16` | Use f16 for data exchange between GPUs | 1 | [PR 1087](https://github.com/ikawrakow/ik_llama.cpp/pull/1087) |
 | `-smf32, --split-mode-f32` | Use f32 for data exchange between GPUs | 0 | [PR 1087](https://github.com/ikawrakow/ik_llama.cpp/pull/1087) |
 | `-grt, --graph-reduce-type` | Type for data exchange between GPUs | f32 | q8_0 / bf16 / f16 / f32 Reduce the data transferred between GPUs [PR 1154](https://github.com/ikawrakow/ik_llama.cpp/pull/1154) |
@@ -321,6 +332,8 @@ python3 gguf-py/scripts/gguf_dump.py /models/Qwen_Qwen3-0.6B-IQ4_NL.gguf
 
 Benchmark utility that performs a series of prompt processing batches followed by TG.
 The KV cache is not cleared, so the N_KV columns tells you how many tokens were in the KV cache when the PP/TG was processed.
+
+`llama-sweep-bench` understands all parameters that one would use in `llama-server` or `llama-cli` (but obviously not all get used, only those that are related to loading the model, setting up the context parameters, and running the benchmark).
 
 ```
 llama-sweep-bench -m /models/model.gguf -c 12288 -ub 512 -rtr -fa -ctk q8_0 -ctv q8_0
@@ -408,3 +421,10 @@ CUDA_VISIBLE_DEVICES=0,2 llama-server -m /models/model-bf16.gguf
 | - | - |
 | CUDA_VISIBLE_DEVICES | Use only specified GPUs. Example: Use first and 3rd `CUDA_VISIBLE_DEVICES=0,2` |
 
+## Unique parameters
+
+WIP
+
+|  | `ik_llama.cpp` exclusive | Not available on `ik_llama.cpp` |
+| - | - | - |
+| Parameter | `-rtr` |  |
