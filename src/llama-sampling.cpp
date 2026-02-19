@@ -1085,7 +1085,7 @@ llama_token llama_sample_token_adaptive_p_impl(
     llama_token id = candidates->data[idx].id;
     GGML_ASSERT(id < int(ctx->orig_prob.size()));
 
-    // save update probability
+    // update history
     const float update_prob = ctx->updt_w_cur
         ? candidates->data[idx].p / ctx->cum_cur_p
         : ctx->orig_prob[id] / ctx->cum_orig_prob;
