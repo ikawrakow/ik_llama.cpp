@@ -3009,7 +3009,7 @@ void server_context::speculative_decoding_accept() {
                 buffer_and_check_string_ban(slot, result);
             }
 
-            if (!slot.rewind_samplers) {
+            if (slot.rewind_samplers) {
                 // rewind stateful samplers
                 common_sampler_rewind(slot.ctx_sampling);
                 slot.rewind_samplers = false;
@@ -3259,7 +3259,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 buffer_and_check_string_ban(slot, result);
             }
 
-            if (!slot.rewind_samplers) {
+            if (slot.rewind_samplers) {
                 // rewind stateful samplers
                 common_sampler_rewind(slot.ctx_sampling);
                 slot.rewind_samplers = false;
