@@ -330,6 +330,9 @@ void server_slot::reset() {
 
     generated_token_probs.clear();
     positional_bans.clear();
+    ban_phrases.clear();
+    ban_regex.clear();
+    ban_regex_ci.clear();
 
     // Reset speculative decoding stats
     n_draft_total = 0;
