@@ -16,7 +16,7 @@ git clone https://github.com/ikawrakow/ik_llama.cpp
 cd ik_llama.cpp
 ```
 
-On Linux, install the required packages:
+On Debian/Ubuntu Linux, install the required packages (if using another Linux distro, you need to find the corresponding packages and adapt):
 
 ```
 apt-get update && apt-get install build-essential git libcurl4-openssl-dev curl libgomp1 cmake
