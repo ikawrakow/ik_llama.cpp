@@ -1053,9 +1053,21 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
-void llama_rewind_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx) {
-    adapt_p_ctx->weighted_sum = adapt_p_ctx->last_weighted_sum;
-    adapt_p_ctx->total_weight = adapt_p_ctx->last_total_weight;
+void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const bool record, const bool rewind) {
+    if (record && rewind) {
+        LLAMA_LOG_WARN("%s: record AND rewind is invalid\n", __func__);
+        return;
+    }
+    if (record) {
+        adapt_p_ctx->recd_weighted_sum = adapt_p_ctx->weighted_sum;
+        adapt_p_ctx->recd_total_weight = adapt_p_ctx->total_weight;
+        return;
+    }
+    if (rewind) {
+        adapt_p_ctx->weighted_sum = adapt_p_ctx->recd_weighted_sum;
+        adapt_p_ctx->total_weight = adapt_p_ctx->recd_total_weight;
+        return;
+    }
 }
 
 llama_token llama_sample_token_adaptive_p_impl(
@@ -1090,8 +1102,6 @@ llama_token llama_sample_token_adaptive_p_impl(
         ? candidates->data[idx].p / ctx->cum_cur_p
         : ctx->orig_prob[id] / ctx->cum_orig_prob;
     if (update_prob > 0) {
-        ctx->last_weighted_sum = ctx->weighted_sum;
-        ctx->last_total_weight = ctx->total_weight;
         ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
         ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
     }
@@ -1204,8 +1214,8 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
         /* .cum_cur_p         = */ 1.0f,
         /* .max_xform_logit   = */ -INFINITY,
         /* .cum_probs         = */ {},
-        /* .last_weighted_sum = */ target / (1.0f - clamped_decay),
-        /* .last_total_weight = */ 1.0f / (1.0f - clamped_decay),
+        /* .recd_weighted_sum = */ target / (1.0f - clamped_decay),
+        /* .recd_total_weight = */ 1.0f / (1.0f - clamped_decay),
     };
     result->orig_prob.resize(n_vocab);
     return result;

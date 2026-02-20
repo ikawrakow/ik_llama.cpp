@@ -134,6 +134,9 @@ struct common_sampler {
     llama_token_data_array cur_p; // current candidates
 
     std::mt19937 rng;
+
+    bool record_samplers = false;   // record current state for stateful samplers
+    bool rewind_samplers = false;   // rewind stateful samplers to last recorded
 };
 
 
@@ -149,7 +152,7 @@ void common_sampler_free(struct common_sampler * ctx);
 void common_sampler_reset(common_sampler * ctx);
 
 // Rewind stateful samplers
-void common_sampler_rewind(common_sampler * ctx);
+void common_sampler_review(common_sampler * ctx);
 
 // Set the sampler seed
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed);

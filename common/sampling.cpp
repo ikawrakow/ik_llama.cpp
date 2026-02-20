@@ -142,8 +142,14 @@ void common_sampler_reset(common_sampler * ctx) {
     llama_sampler_dry_reset(ctx->smpl);
 }
 
-void common_sampler_rewind(common_sampler * ctx) {
-    llama_rewind_adaptive_p(ctx->adapt_p_ctx);
+void common_sampler_review(common_sampler * ctx) {
+    const bool record = ctx->record_samplers;
+    const bool rewind = ctx->rewind_samplers;
+
+    llama_review_adaptive_p(ctx->adapt_p_ctx, record, rewind);
+
+    ctx->record_samplers = false;
+    ctx->rewind_samplers = false;
 }
 
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed) {

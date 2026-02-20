@@ -3021,11 +3021,7 @@ void server_context::speculative_decoding_accept() {
                 buffer_and_check_string_ban(slot, result);
             }
 
-            if (slot.rewind_samplers) {
-                // rewind stateful samplers
-                common_sampler_rewind(slot.ctx_sampling);
-                slot.rewind_samplers = false;
-            }
+            common_sampler_review(slot.ctx_sampling);
         }
         SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int)ids.size() - 1, (int)slot.drafted.size(), slot.n_past);
         LOG_VERBOSE("speculative decoding result", {
@@ -3141,7 +3137,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     if (n_rewind > 0 && (slot.rewind_count <20 || slot.rewind_count <= 2 * slot.ban_phrases.size())) {
         rewind_context(slot, n_rewind);
         slot.rewind_status = true;
-        slot.rewind_samplers = true;    // rewind updated stateful samplers
+        slot.ctx_sampling->rewind_samplers = true;
     }
     else if (send_result) {
         slot.rewind_status = false;
@@ -3154,6 +3150,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // send 1 token
             send_token_results(slot.token_buffer, slot, 1);
         }
+        slot.ctx_sampling->record_samplers = true;
     }
     else {
         // buffer the result
@@ -3271,11 +3268,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 buffer_and_check_string_ban(slot, result);
             }
 
-            if (slot.rewind_samplers) {
-                // rewind stateful samplers
-                common_sampler_rewind(slot.ctx_sampling);
-                slot.rewind_samplers = false;
-            }
+            common_sampler_review(slot.ctx_sampling);
 
             slot.i_batch = -1;
         }

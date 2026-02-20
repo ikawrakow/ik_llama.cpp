@@ -8160,8 +8160,8 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float
     return llama_init_adaptive_p_impl(n_vocab, target, decay, updt_w_cur, seed);
 }
 
-void llama_rewind_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    llama_rewind_adaptive_p_impl(adapt_p_ctx);
+void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const bool record, const bool rewind) {
+    llama_review_adaptive_p_impl(adapt_p_ctx, record, rewind);
 }
 
 
