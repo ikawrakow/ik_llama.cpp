@@ -3536,6 +3536,10 @@ bool create_tensors_helper::create_tensors() {
             }
             if (layer.wo && layer.wq && layer.wk && layer.wv) {
                 auto granularity_kq = hparams.n_embd_head_k * gqa_ratio;
+                int wq_ne1 = layer.wq->ne[1];
+                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) {
+                    granularity_kq *= 2; wq_ne1 /= 2;
+                }
                 auto granularity_vo = hparams.n_embd_head_v * gqa_ratio;
                 if (ggml_is_quantized(layer.wo->type)) {
                     auto tt = ggml_internal_get_type_traits(layer.wo->type);
@@ -3549,7 +3553,7 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_DEBUG("  split_kq:"); for ([[maybe_unused]] auto s : split_kq) LLAMA_LOG_DEBUG(" %d", s);
                 LLAMA_LOG_DEBUG("\n");
 
-                if (layer.attn_q_norm && layer.attn_q_norm->ne[0] == layer.wq->ne[1]) {
+                if (layer.attn_q_norm && layer.attn_q_norm->ne[0] == wq_ne1) {
                     // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
                     // entire Q tensor (e.g., MiniMax-2), we need to have a copy of the entire wq and attn_q_norm tensors
                     // on each participating GPU.
@@ -3589,7 +3593,11 @@ bool create_tensors_helper::create_tensors() {
                     LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(1, ctx_split, layer.wqkv_gate, layer.split_wqkv_gate, wqkv_gate_split, mem_used);
                 }
-                for (auto & s : split_kq) s /= gqa_ratio;
+                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) {
+                    for (auto & s : split_kq) s /= 2*gqa_ratio;
+                } else {
+                    for (auto & s : split_kq) s /= gqa_ratio;
+                }
                 for (auto & s : split_vo) s /= gqa_ratio;
                 if (layer.attn_k_norm && layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
                     // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the

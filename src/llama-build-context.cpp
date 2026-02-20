@@ -692,9 +692,6 @@ static inline ggml_tensor * do_split_norm(ggml_context * ctx, ggml_tensor * cur,
     if (the_norm && the_norm->extra) {
         auto norm = (ggml_split_tensor_t *)the_norm->extra;
         GGML_ASSERT(norm->splits[id]);
-        //if (cur->type != GGML_TYPE_F16 && cur->type != GGML_TYPE_F32) {
-        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        //}
         if (is_norm) {
             cur = ggml_fused_norm(ctx, cur, norm->splits[id], hparams.f_norm_eps);
         } else {
@@ -749,6 +746,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             if (!split_u) continue;
             auto cur = get_input_tensor_sm_graph(ctx, input, id);
             cur = do_split_norm(ctx, cur, ffn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
+            if (input->op != GGML_OP_REDUCE) {
+                cur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+            }
             cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
             cb(cur, "ffn_up_gate", il_cb);
             if (lctx.model.arch == LLM_ARCH_STEP35) {
@@ -1390,6 +1390,9 @@ llm_expert_gating_func_type   gating_op,
         int il_cb = 1000*(id + 1) + il;
         auto cur = get_input_tensor_sm_graph(ctx, input, id);
         cur = do_split_norm(ctx, cur, ffn_norm, lctx.model.hparams, cb, id, il_cb, false);
+        if (cur->op != GGML_OP_REDUCE) {
+            cur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+        }
         GGML_ASSERT(!split_gate_inp_b  || split_gate_inp_b->splits[id]);
         GGML_ASSERT(!split_exps_down_b || split_exps_down_b->splits[id]);
         GGML_ASSERT(!split_exps_gate_b || split_exps_gate_b->splits[id]);
@@ -4433,7 +4436,13 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
 
         if (hparams.is_recurrent(il)) {
-            cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
+            if (inpL->op == GGML_OP_REDUCE && inpL->src[model.default_layer_device[il]]) {
+                inpL->view_src = inpL->src[model.default_layer_device[il]];
+                //printf("Using reduce result on device %d\n", model.default_layer_device[il]);
+                //inpL = inpL->src[model.default_layer_device[il]];
+            }
+            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[model.default_layer_device[il]] : model.layers[il].attn_norm;
+            cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
             cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
             if (il == n_layer - 1 && inp_out_ids) {
@@ -9936,11 +9945,19 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     ((ggml_split_tensor_t *)model.layers[il].attn_q_norm->extra)->splits[id] : model.layers[il].attn_q_norm : nullptr;
                 auto the_k_norm = model.layers[il].attn_k_norm ? model.layers[il].attn_k_norm->extra ?
                     ((ggml_split_tensor_t *)model.layers[il].attn_k_norm->extra)->splits[id] : model.layers[il].attn_k_norm : nullptr;
-                auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, nullptr, nullptr, nullptr, nullptr,
-                        split_wq, bq ? bq->splits[id] : nullptr,
-                        split_wk, bk ? bk->splits[id] : nullptr,
-                        split_wv, bv ? bv->splits[id] : nullptr,
-                        the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split);
+                ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
+                if (model.arch == LLM_ARCH_QWEN3NEXT) {
+                    auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, split_wq, split_wk, split_wv,
+                            the_q_norm, the_k_norm, il);
+                    Qcur = Q; Kcur = K; Vcur = V; gate = G;
+                } else {
+                    auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, nullptr, nullptr, nullptr, nullptr,
+                            split_wq, bq ? bq->splits[id] : nullptr,
+                            split_wk, bk ? bk->splits[id] : nullptr,
+                            split_wv, bv ? bv->splits[id] : nullptr,
+                            the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split);
+                    Qcur = Q; Kcur = K; Vcur = V;
+                }
                 auto rope_factors = rope_factors_in;
                 if (rope_factors) {
                     GGML_ASSERT(rope_factors->extra);
@@ -10067,6 +10084,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
                 cur = ggml_reshape_2d(ctx0, cur, split_wo->ne[0], n_tokens);
                 cb(cur, "flash_attn_reshaped", il_cb);
+                if (gate) {
+                    cur = ggml_mul(ctx0, cur, gate);
+                    cb(cur, "qkv_gated", il_cb);
+                }
 
                 if (inp_out_ids) {
                     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
