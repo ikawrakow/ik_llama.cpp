@@ -267,6 +267,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_up_shexp;
     llama_split_tensor split_ffn_gate_shexp;
     llama_split_tensor split_ffn_down_shexp;
+    llama_split_tensor split_ffn_gate_inp_shexp;
 
     llama_split_tensor split_ffn_gate_inp_b;
     llama_split_tensor split_ffn_gate_exps_b;
