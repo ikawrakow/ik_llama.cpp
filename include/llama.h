@@ -1382,6 +1382,8 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
                                llama_token_data_array * candidates,
                       struct llama_sampler_adaptive_p * adapt_p_ctx);
 
+    void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const bool record, const bool rewind);
+
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
     /// @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.
