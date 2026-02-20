@@ -82,8 +82,6 @@ struct llama_kv_cache {
     }
 };
 
-struct llama_context_kv_cache_data;
-
 struct llama_control_vector {
     std::vector<struct ggml_tensor *> tensors; // per layer
     std::vector<struct ggml_context *> ctxs;
@@ -193,8 +191,6 @@ struct llama_context {
     void *              abort_callback_data = nullptr;
 
     const float * draft_input_hidden_state = nullptr;
-
-    void * kv_cache_data = nullptr; 
 
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
