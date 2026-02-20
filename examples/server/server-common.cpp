@@ -1,5 +1,7 @@
 #include "server-common.h"
 
+#include <algorithm>
+
 using raw_buffer = std::vector<uint8_t>;
 
 
@@ -372,8 +374,8 @@ common_prefix find_common_text_token_prefix(const llama_context* ctx, const llam
     llama_tokens a_sub(a.begin() + start, a.end());
     llama_tokens b_sub(b.begin() + start, b.end());
 
-    std::string a_str = common_token_to_piece(ctx, a_sub, true);
-    std::string b_str = common_token_to_piece(ctx, b_sub, true);
+    std::string a_str = common_detokenize(ctx, a_sub, true);
+    std::string b_str = common_detokenize(ctx, b_sub, true);
     common_prefix string_prefix;
 
     std::vector<size_t> a_list;
@@ -486,6 +488,30 @@ bool server_sent_event(httplib::DataSink& sink, const json& data) {
             "data: " +
             data.dump(-1, ' ', false, json::error_handler_t::replace) +
             "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+
+        LOG_DBG("data stream, to_send: %s", str.c_str());
+        return sink.write(str.c_str(), str.size());
+    };
+
+    if (data.is_array()) {
+        for (const auto& item : data) {
+            if (!send_single(sink, item)) {
+                return false;
+            }
+        }
+    }
+    else {
+        return send_single(sink, data);
+    }
+
+    return true;
+}
+
+bool server_sent_oai_resp_event(httplib::DataSink& sink, const json& data) {
+    static auto send_single = [](httplib::DataSink& sink, const json& data) -> bool {
+        const std::string str =
+            "event: " + data.at("event").get<std::string>() + "\n" +
+            "data: " + data.at("data").dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n";
 
         LOG_DBG("data stream, to_send: %s", str.c_str());
         return sink.write(str.c_str(), str.size());
@@ -872,6 +898,250 @@ json oaicompat_chat_params_parse(
     }
 
     return llama_params;
+}
+
+json convert_responses_to_chatcmpl(const json& response_body) {
+    if (!response_body.contains("input")) {
+        throw std::runtime_error("'input' is required");
+    }
+    if (!json_value(response_body, "previous_response_id", std::string{}).empty()) {
+        throw std::runtime_error("ik_llama.cpp does not support 'previous_response_id'.");
+    }
+
+    const json input_value = response_body.at("input");
+    json chatcmpl_body = response_body;
+    chatcmpl_body.erase("input");
+    std::vector<json> chatcmpl_messages;
+
+    if (response_body.contains("instructions")) {
+        chatcmpl_messages.push_back({
+            {"role",    "system"},
+            {"content", json_value(response_body, "instructions", std::string())},
+        });
+        chatcmpl_body.erase("instructions");
+    }
+
+    if (input_value.is_string()) {
+        chatcmpl_messages.push_back({
+            {"role",    "user"},
+            {"content", input_value},
+        });
+    }
+    else if (input_value.is_array()) {
+        static auto exists_and_is_array = [](const json& j, const char* key) -> bool {
+            return j.contains(key) && j.at(key).is_array();
+        };
+        static auto exists_and_is_string = [](const json& j, const char* key) -> bool {
+            return j.contains(key) && j.at(key).is_string();
+        };
+
+        for (json item : input_value) {
+            if (exists_and_is_string(item, "content")) {
+                item["content"] = json::array({
+                    json{
+                        {"text", item.at("content")},
+                        {"type", "input_text"},
+                    }
+                });
+            }
+
+            if (exists_and_is_array(item, "content") &&
+                exists_and_is_string(item, "role") &&
+                (item.at("role") == "user" || item.at("role") == "system" || item.at("role") == "developer")
+            ) {
+                std::vector<json> chatcmpl_content;
+
+                for (const json& input_item : item.at("content")) {
+                    const std::string type = json_value(input_item, "type", std::string());
+
+                    if (type == "input_text") {
+                        if (!input_item.contains("text")) {
+                            throw std::runtime_error("'Input text' requires 'text'");
+                        }
+                        chatcmpl_content.push_back({
+                            {"text", input_item.at("text")},
+                            {"type", "text"},
+                        });
+                    }
+                    else if (type == "input_image") {
+                        if (!input_item.contains("image_url")) {
+                            throw std::runtime_error("'image_url' is required");
+                        }
+                        chatcmpl_content.push_back({
+                            {"image_url", json{
+                                {"url", input_item.at("image_url")},
+                            }},
+                            {"type", "image_url"},
+                        });
+                    }
+                    else if (type == "input_file") {
+                        throw std::runtime_error("'input_file' is not supported by ik_llama.cpp at this moment");
+                    }
+                    else {
+                        throw std::runtime_error("'type' must be one of 'input_text', 'input_image', or 'input_file'");
+                    }
+                }
+
+                if (item.contains("type")) {
+                    item.erase("type");
+                }
+                if (item.contains("status")) {
+                    item.erase("status");
+                }
+                item["content"] = chatcmpl_content;
+
+                chatcmpl_messages.push_back(item);
+            }
+            else if (exists_and_is_array(item, "content") &&
+                exists_and_is_string(item, "role") &&
+                item.at("role") == "assistant" &&
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "message"
+            ) {
+                std::vector<json> chatcmpl_content;
+
+                for (const auto& output_text : item.at("content")) {
+                    const std::string type = json_value(output_text, "type", std::string());
+                    if (type != "output_text") {
+                        throw std::runtime_error("'type' must be 'output_text'");
+                    }
+                    if (!exists_and_is_string(output_text, "text")) {
+                        throw std::runtime_error("'Output text' requires 'text'");
+                    }
+                    chatcmpl_content.push_back({
+                        {"text", output_text.at("text")},
+                        {"type", "text"},
+                    });
+                }
+
+                item.erase("status");
+                item.erase("type");
+                item["content"] = chatcmpl_content;
+                chatcmpl_messages.push_back(item);
+            }
+            else if (exists_and_is_string(item, "arguments") &&
+                exists_and_is_string(item, "call_id") &&
+                exists_and_is_string(item, "name") &&
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "function_call"
+            ) {
+                json msg = json{
+                    {"role", "assistant"},
+                    {"tool_calls", json::array({json{
+                        {"function", json{
+                            {"arguments", item.at("arguments")},
+                            {"name",      item.at("name")},
+                        }},
+                        {"id",   item.at("call_id")},
+                        {"type", "function"},
+                    }})},
+                };
+
+                if (!chatcmpl_messages.empty() && chatcmpl_messages.back().contains("reasoning_content")) {
+                    msg["reasoning_content"] = chatcmpl_messages.back().at("reasoning_content");
+                    chatcmpl_messages.pop_back();
+                }
+                chatcmpl_messages.push_back(msg);
+            }
+            else if (exists_and_is_string(item, "call_id") &&
+                (exists_and_is_string(item, "output") || exists_and_is_array(item, "output")) &&
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "function_call_output"
+            ) {
+                if (item.at("output").is_string()) {
+                    chatcmpl_messages.push_back(json{
+                        {"content",      item.at("output")},
+                        {"role",         "tool"},
+                        {"tool_call_id", item.at("call_id")},
+                    });
+                }
+                else {
+                    json chatcmpl_outputs = item.at("output");
+                    for (json& chatcmpl_output : chatcmpl_outputs) {
+                        if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
+                            throw std::runtime_error("Output of tool call should be 'Input text'");
+                        }
+                        chatcmpl_output["type"] = "text";
+                    }
+                    chatcmpl_messages.push_back(json{
+                        {"content",      chatcmpl_outputs},
+                        {"role",         "tool"},
+                        {"tool_call_id", item.at("call_id")},
+                    });
+                }
+            }
+            else if (exists_and_is_array(item, "summary") &&
+                exists_and_is_string(item, "type") &&
+                item.at("type") == "reasoning") {
+                if (!exists_and_is_array(item, "content")) {
+                    throw std::runtime_error("item['content'] is not an array");
+                }
+                if (item.at("content").empty()) {
+                    throw std::runtime_error("item['content'] is empty");
+                }
+                if (!exists_and_is_string(item.at("content")[0], "text")) {
+                    throw std::runtime_error("item['content']['text'] is not a string");
+                }
+
+                chatcmpl_messages.push_back(json{
+                    {"role", "assistant"},
+                    {"content", json::array()},
+                    {"reasoning_content", item.at("content")[0].at("text")},
+                });
+            }
+            else {
+                throw std::runtime_error("Cannot determine type of 'item'");
+            }
+        }
+    }
+    else {
+        throw std::runtime_error("'input' must be a string or array of objects");
+    }
+
+    chatcmpl_messages.erase(std::remove_if(
+        chatcmpl_messages.begin(),
+        chatcmpl_messages.end(),
+        [](const json& x) {
+            return x.contains("role") &&
+                x.at("role") == "assistant" &&
+                x.contains("content") &&
+                x.at("content") == json::array() &&
+                x.contains("reasoning_content");
+        }),
+        chatcmpl_messages.end());
+
+    chatcmpl_body["messages"] = chatcmpl_messages;
+
+    if (response_body.contains("tools")) {
+        if (!response_body.at("tools").is_array()) {
+            throw std::runtime_error("'tools' must be an array of objects");
+        }
+        std::vector<json> chatcmpl_tools;
+        for (json resp_tool : response_body.at("tools")) {
+            json chatcmpl_tool;
+
+            if (json_value(resp_tool, "type", std::string()) != "function") {
+                throw std::runtime_error("'type' of tool must be 'function'");
+            }
+            resp_tool.erase("type");
+            chatcmpl_tool["type"] = "function";
+
+            if (!resp_tool.contains("strict")) {
+                resp_tool["strict"] = true;
+            }
+            chatcmpl_tool["function"] = resp_tool;
+            chatcmpl_tools.push_back(chatcmpl_tool);
+        }
+        chatcmpl_body.erase("tools");
+        chatcmpl_body["tools"] = chatcmpl_tools;
+    }
+
+    if (response_body.contains("max_output_tokens")) {
+        chatcmpl_body.erase("max_output_tokens");
+        chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
+    }
+
+    return chatcmpl_body;
 }
 
 json anthropic_params_from_json(
@@ -1722,7 +1992,7 @@ server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mt
                 text_tokens.push_back(t);
             }
         }
-        return common_token_to_piece(ctx, text_tokens, special);
+        return common_detokenize(ctx, text_tokens, special);
     }
 
     std::string server_tokens::detokenize(const llama_context* ctx, bool special, size_t start, size_t length) const {
@@ -1744,7 +2014,7 @@ server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mt
             }
             ++i;
         }
-        return common_token_to_piece(ctx, text_tokens, special);
+        return common_detokenize(ctx, text_tokens, special);
     }
 
     size_t server_tokens::find_n_from_tokens(const llama_context* ctx, const server_tokens& b, bool special,
@@ -1812,7 +2082,7 @@ server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mt
         std::string endStr = think_token.end;
 
         llama_tokens tokens = get_text_tokens();
-        std::string str = common_token_to_piece(ctx, tokens, true);
+        std::string str = common_detokenize(ctx, tokens, true);
 
         std::vector<std::pair<size_t, size_t>> results;
         // Find all positions of start and end

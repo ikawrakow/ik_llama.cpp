@@ -2119,7 +2119,7 @@ int main(int argc, char ** argv) {
                 llama_free_model(lmodel);
             }
 
-            lmodel = llama_load_model_from_file(inst.model.c_str(), inst.to_llama_mparams());
+            lmodel = llama_model_load_from_file(inst.model.c_str(), inst.to_llama_mparams());
             if (lmodel == NULL) {
                 fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
                 return 1;
@@ -2127,7 +2127,7 @@ int main(int argc, char ** argv) {
             prev_inst = &inst;
         }
 
-        llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
+        llama_context * ctx = llama_init_from_model(lmodel, inst.to_llama_cparams());
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_free_model(lmodel);

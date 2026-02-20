@@ -47,10 +47,10 @@
 #define LLAMA_FILE_MAGIC_GGSQ 0x67677371u // 'ggsq'
 
 #define LLAMA_SESSION_MAGIC   LLAMA_FILE_MAGIC_GGSN
-#define LLAMA_SESSION_VERSION 8
+#define LLAMA_SESSION_VERSION 9
 
 #define LLAMA_STATE_SEQ_MAGIC   LLAMA_FILE_MAGIC_GGSQ
-#define LLAMA_STATE_SEQ_VERSION 2
+#define LLAMA_STATE_SEQ_VERSION 3
 
 #ifdef __cplusplus
 extern "C" {
@@ -295,6 +295,7 @@ extern "C" {
     typedef struct llama_token_data_array {
         llama_token_data * data;
         size_t size;
+        int64_t selected; // this is the index in the data array (i.e. not the token id)
         bool sorted;
     } llama_token_data_array;
 
@@ -539,13 +540,13 @@ extern "C" {
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
 
-    LLAMA_API struct llama_model * llama_load_model_from_file(
+    LLAMA_API struct llama_model * llama_model_load_from_file(
                              const char * path_model,
             struct llama_model_params     params);
 
     LLAMA_API void llama_free_model(struct llama_model * model);
 
-    LLAMA_API struct llama_context * llama_new_context_with_model(
+    LLAMA_API struct llama_context * llama_init_from_model(
                      struct llama_model * model,
             struct llama_context_params   params);
 
@@ -572,13 +573,14 @@ extern "C" {
 
     LLAMA_API enum llama_pooling_type llama_pooling_type(const struct llama_context * ctx);
 
-    LLAMA_API enum llama_vocab_type   llama_vocab_type  (const struct llama_model * model);
+    LLAMA_API enum llama_vocab_type   llama_vocab_type(const struct llama_vocab * vocab);
     LLAMA_API enum llama_rope_type    llama_rope_type   (const struct llama_model * model);
 
     LLAMA_API const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model);
     LLAMA_API const char* llama_model_chat_template(const struct llama_model* model, const char* name);
     LLAMA_API int32_t llama_n_vocab    (const struct llama_model * model);
     LLAMA_API const struct llama_vocab* llama_get_model_vocab(const struct llama_model* model);
+    LLAMA_API const char * llama_vocab_get_text(const struct llama_vocab * vocab, llama_token token);
     LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp(const struct llama_model* model);
@@ -1094,7 +1096,7 @@ extern "C" {
                                int32_t   length,
                                int32_t   lstrip,
                                   bool   special);
-    LLAMA_API int32_t llama_vocab_token_to_piece(
+    LLAMA_API int32_t llama_token_to_piece_vocab(
               const struct llama_vocab * vocab,
                            llama_token   token,
                                   char * buf,
@@ -1108,14 +1110,23 @@ extern "C" {
     /// @return Returns a negative number on failure - the number of chars/bytes that would have been returned.
     /// @param remove_special Allow to remove BOS and EOS tokens if model is configured to do so.
     /// @param unparse_special If true, special tokens are rendered in the output.
+    //LLAMA_API int32_t llama_detokenize(
+    //    const struct llama_model * model,
+    //           const llama_token * tokens,
+    //                     int32_t   n_tokens,
+    //                        char * text,
+    //                     int32_t   text_len_max,
+    //                        bool   remove_special,
+    //                        bool   unparse_special);
+
     LLAMA_API int32_t llama_detokenize(
-        const struct llama_model * model,
-               const llama_token * tokens,
-                         int32_t   n_tokens,
-                            char * text,
-                         int32_t   text_len_max,
-                            bool   remove_special,
-                            bool   unparse_special);
+        const struct llama_vocab * vocab,
+        const llama_token * tokens,
+        int32_t   n_tokens,
+        char * text,
+        int32_t   text_len_max,
+        bool   remove_special,
+        bool   unparse_special);
 
     //
     // Chat templates
@@ -1232,6 +1243,10 @@ extern "C" {
     LLAMA_API void llama_sample_softmax(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
+
+    LLAMA_API void llama_sample_dist(
+        struct llama_context * ctx,
+        llama_token_data_array * candidates);
 
     /// @details Top-K sampling described in academic paper "The Curious Case of Neural Text Degeneration" https://arxiv.org/abs/1904.09751
     LLAMA_API void llama_sample_top_k(

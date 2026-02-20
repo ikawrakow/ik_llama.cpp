@@ -107,6 +107,7 @@ enum e_model {
     MODEL_16B_A1B,
     MODEL_21B_A3B, // Ernie MoE small
     MODEL_30B_A3B,
+    MODEL_80B_A3B, // Qwen3-Next
     MODEL_80B_A13B,
     MODEL_100B_A6B,
     MODEL_106B_A12B,
@@ -115,6 +116,7 @@ enum e_model {
     MODEL_310B_A15B,
     MODEL_300B_A47B, // Ernie MoE big
     MODEL_355B_A32B,
+    MODEL_744B_A40B,
     MODEL_E2B,
     MODEL_E4B,
 };
@@ -204,6 +206,7 @@ struct llama_layer {
     llama_split_tensor split_q_norm;
     llama_split_tensor split_k_norm;
     llama_split_tensor split_sinks;
+    llama_split_tensor split_wqkv_gate;
 
     // relative position bias
     struct ggml_tensor * attn_rel_b = nullptr;
@@ -287,6 +290,8 @@ struct llama_layer {
     struct ggml_tensor * ssm_x = nullptr;
     struct ggml_tensor * ssm_dt = nullptr;
     struct ggml_tensor * ssm_out = nullptr;
+    struct ggml_tensor * ssm_norm = nullptr;
+    struct ggml_tensor * ssm_beta_alpha = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;
@@ -296,6 +301,13 @@ struct llama_layer {
     // mamba bias
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b = nullptr;
+
+    // DSA (deepseek sparse attention)
+    struct ggml_tensor * indexer_k_norm   = nullptr;
+    struct ggml_tensor * indexer_k_norm_b = nullptr;
+    struct ggml_tensor * indexer_proj     = nullptr;
+    struct ggml_tensor * indexer_attn_k   = nullptr;
+    struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
     // long rope factors
     struct ggml_tensor * rope_long  = nullptr;
@@ -408,7 +420,7 @@ struct llama_model {
     ~llama_model();
 
     // Not actually needed, but left in place for now
-    size_t max_nodes() const { return 65536; }
+    size_t max_nodes() const { return 65536 * 2; }
 
     bool has_tensor_overrides() const {
         return tensor_overrides;

@@ -206,6 +206,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_qwen3vlmoe();
 
+    ggml_cgraph * build_qwen3next();
+
     ggml_cgraph * build_phi2();
 
     ggml_cgraph * build_phi3();
@@ -410,7 +412,8 @@ llm_expert_gating_func_type   gating_op,
 llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input = false,
-         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr);
+         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr,
+         ggml_tensor * shexp_gate = nullptr);
 
     static ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids);
 
@@ -426,6 +429,7 @@ llm_expert_gating_func_type   gating_op,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
             bool is_multi = false);
 
+    static uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self);
     struct ggml_tensor * build_mtp_tail(
         const struct llama_layer & mtp_layer, 
         struct ggml_tensor * prev_embeddings, 

@@ -44,6 +44,15 @@
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
 
+struct common_time_meas {
+    common_time_meas(int64_t & t_acc, bool disable = false);
+    ~common_time_meas();
+
+    const int64_t t_start_us;
+
+    int64_t & t_acc;
+};
+
 struct llama_lora_adapter_info {
     std::string path;
     float scale;
@@ -127,8 +136,20 @@ struct thinking_tokens {
 
 thinking_tokens thinking_tokens_from_string(const std::string& format);
 
+enum common_speculative_type {
+    COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
+    COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
+    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
+    COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
+};
 
-struct model_paths {
+
+struct common_params_model {
     std::string path        = ""; // model local path                                       // NOLINT
     std::string url         = ""; // model url to download                                  // NOLINT
     std::string hf_repo     = ""; // HF repo                                                // NOLINT
@@ -136,32 +157,71 @@ struct model_paths {
     std::string docker_repo = ""; // Docker repo                                            // NOLINT
 };
 
+struct common_ngram_mod;
+
+struct common_params_speculative {
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding
+
+    std::string devices;
+    std::string params;
+    int32_t n_threads = -1;
+    int32_t n_threads_batch = -1;
+
+    int32_t n_max = 16; // number of tokens to draft during speculative decoding
+    int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
+
+    float   p_split = 0.1f; // speculative decoding split probability
+    float   p_min = 0.75f; // minimum speculative decoding probability (greedy)
+
+    // ngram-based speculative decoding
+
+    uint16_t ngram_size_n = 12; // ngram size for lookup
+    uint16_t ngram_size_m = 48; // mgram size for speculative tokens
+    uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
+
+    std::shared_ptr<common_ngram_mod> ngram_mod;
+
+    std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT
+    std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding          // NOLINT
+
+    // draft-model speculative decoding
+    struct common_params_model mparams_dft;
+
+    llama_model * model_dft = nullptr; // a llama_model that can be shared by multiple speculative contexts
+
+    llama_context_params cparams_dft; // these are the parameters for the draft llama_context
+
+    int32_t n_ctx = 0;  // draft context size
+    int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
+
+    std::string model = ""; // draft model for speculative decoding
+    std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
+    std::string cache_type_k = ""; // KV cache data type for K for the draft model
+    std::string cache_type_v = ""; // KV cache data type for V for the draft model
+
+    bool has_dft() const {
+        return !model.empty() || !params.empty();
+        //return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();
+    }
+
+};
+
 struct gpt_params {
     std::string devices;
-    std::string devices_draft;
-    std::string draft_params;
-
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
     int32_t n_threads             = cpu_get_num_math();
-    int32_t n_threads_draft       =      -1;
     int32_t n_threads_batch       =      -1; // number of threads to use for batch processing (-1 = use n_threads)
-    int32_t n_threads_batch_draft =      -1;
     int32_t n_predict             =      -1; // new tokens to predict
     int32_t n_ctx                 =       0; // context size
-    int32_t n_ctx_draft           =       0; // context size for draft model
     int32_t n_batch               =    2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =     512; // physical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_keep                =       0; // number of tokens to keep from initial prompt
-    int32_t n_draft               =      16; // number of tokens to draft during speculative decoding
-    int32_t n_draft_min           =       1; // minimum number of tokens to draft during speculative decoding
-    float   p_draft_min           =    0.8f; // minimum speculative decoding probability (greedy)
     int32_t n_chunks              =      -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =       1; // number of parallel sequences to decode
     int32_t n_sequences           =       1; // number of sequences to decode
     float   p_split               =    0.1f; // speculative decoding split probability
     int32_t n_gpu_layers          =      -1; // number of layers to store in VRAM (-1 - use default)
-    int32_t n_gpu_layers_draft    =      -1; // number of layers to store in VRAM for the draft model (-1 - use default)
     int32_t main_gpu              =       0; // the GPU that is used for scratch and small tensors
     int32_t max_gpu               =       0; // max number of GPUs to use at a time for split mode "graph"
     float   tensor_split[128]     =     {0}; // how split tensors should be distributed across GPUs
@@ -191,10 +251,10 @@ struct gpt_params {
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
 
     // // sampling parameters
-    struct llama_sampling_params sparams;
+    struct common_params_sampling sparams;
+    struct common_params_speculative speculative;
 
     std::string model                = ""; // model path
-    std::string model_draft          = ""; // draft model for speculative decoding
     std::string model_alias          = "unknown"; // model alias
     std::string model_url            = ""; // model url to download
     std::string hf_token             = ""; // HF token
@@ -223,8 +283,6 @@ struct gpt_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;
-
-    std::vector<std::pair<std::string, std::string>> replacements_draft; // main to speculative model replacements
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
     std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
@@ -302,13 +360,11 @@ struct gpt_params {
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
-    std::string cache_type_k_draft = ""; // KV cache data type for K for the draft model
-    std::string cache_type_v_draft = ""; // KV cache data type for V for the draft model
 
     std::string reduce_type = "f16";
 
     // multimodal models (see examples/mtmd)
-    model_paths mmproj;
+    common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
@@ -510,8 +566,8 @@ struct llama_init_result {
 
 struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
 
-struct llama_model_params   llama_model_params_from_gpt_params  (const gpt_params & params);
-struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params);
+struct llama_model_params   common_model_params_to_llama  (const gpt_params & params);
+struct llama_context_params common_context_params_to_llama(const gpt_params & params);
 
 struct llama_model * llama_load_model_from_url(const char * model_url, const char * path_model, const char * hf_token, const struct llama_model_params & params);
 struct llama_model * llama_load_model_from_hf(const char * repo, const char * file, const char * path_model, const char * hf_token, const struct llama_model_params & params);
@@ -536,7 +592,7 @@ void common_batch_add(
 
 // tokenizes a string into a vector of tokens
 // should work similar to Python's `tokenizer.encode`
-std::vector<llama_token> llama_tokenize(
+std::vector<llama_token> common_tokenize(
   const struct llama_context * ctx,
            const std::string & text,
                         bool   add_special,
@@ -569,11 +625,20 @@ std::string llama_token_to_piece(
 // detokenizes a vector of tokens into a string
 // should work similar to Python's `tokenizer.decode`
 // optionally renders special/control tokens
-std::string common_token_to_piece(
+std::string common_detokenize(
         const llama_context * ctx,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
 
+std::string common_detokenize(
+    const struct llama_vocab * vocab,
+    const std::vector<llama_token> & tokens,
+                                    bool special = true);
+
+std::string common_token_to_piece(
+        const struct llama_vocab * vocab,
+        llama_token token,
+        bool special = true);
 
 // Uses the value from the model metadata if possible, otherwise
 // defaults to true when model type is SPM, otherwise false.

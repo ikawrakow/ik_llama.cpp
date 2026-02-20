@@ -1070,7 +1070,12 @@ int main(int argc, char ** argv) {
                     // Everything else, including multimodal completions.
                     inputs = tokenize_input_prompts(llama_get_vocab(ctx_server.ctx), ctx_server.mctx, prompt, true, true);
                 }
-                tasks.reserve(inputs.size());              
+                tasks.reserve(inputs.size());
+                const std::string requested_model_name = json_value(data, "model", std::string());
+                const std::string fallback_model_name = get_model_name(ctx_server.params_base.model);
+                const std::string oaicompat_model_name = requested_model_name.empty()
+                    ? fallback_model_name
+                    : requested_model_name;
                 for (size_t i = 0; i < inputs.size(); i++) {
                     server_task task = server_task(type);
 
@@ -1088,7 +1093,7 @@ int main(int argc, char ** argv) {
                     // OAI-compat
                     task.params.oaicompat = oaicompat;
                     task.params.oaicompat_cmpl_id = completion_id;
-                    task.params.oaicompat_model = get_model_name(ctx_server.params_base.model);
+                    task.params.oaicompat_model = oaicompat_model_name;
                     tasks.push_back(std::move(task));
                 }
 
@@ -1146,6 +1151,9 @@ int main(int argc, char ** argv) {
                         if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
                             return server_sent_anthropic_event(sink, res);
                         }
+                        else if (oaicompat == OAICOMPAT_TYPE_RESP) {
+                            return server_sent_oai_resp_event(sink, res);
+                        }
                         else {
                             return server_sent_event(sink, res);
                         }
@@ -1170,7 +1178,7 @@ int main(int argc, char ** argv) {
                     json res_json = result->to_json();
                     bool ok = false;
                     if (result->is_error()) {
-                        ok = sse(json{ { "error", result->to_json() } });
+                        ok = server_sent_event(sink, json{ { "error", result->to_json() } });
                         sink.done();
                         return false; // go to on_complete()
                     }
@@ -1189,7 +1197,7 @@ int main(int argc, char ** argv) {
 
                     // check if there is more data
                     if (!rd->has_next()) {
-                        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
+                        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE && oaicompat != OAICOMPAT_TYPE_RESP) {
                             static const std::string ev_done = "data: [DONE]\n\n";
                             sink.write(ev_done.data(), ev_done.size());
                         }
@@ -1263,6 +1271,20 @@ int main(int argc, char ** argv) {
             req.is_connection_closed,
             res,
             OAICOMPAT_TYPE_CHAT);
+    };
+
+    const auto handle_responses = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        auto body = json::parse(req.body);
+        std::vector<raw_buffer> files;
+        json body_parsed = convert_responses_to_chatcmpl(body);
+        json data = oaicompat_chat_params_parse(ctx_server.model, body_parsed, ctx_server.oai_parser_opt, files);
+        handle_completions_impl(
+            SERVER_TASK_TYPE_COMPLETION,
+            data,
+            files,
+            req.is_connection_closed,
+            res,
+            OAICOMPAT_TYPE_RESP);
     };
 
     const auto handle_anthropic_messages = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
@@ -2008,6 +2030,7 @@ int main(int argc, char ** argv) {
     svr->Post("/v1/completions",     handle_completions_oai);
     svr->Post("/chat/completions",    handle_chat_completions);
     svr->Post("/v1/chat/completions", handle_chat_completions);
+    svr->Post("/v1/responses",        handle_responses);
     svr->Post("/v1/messages",         handle_anthropic_messages);
     svr->Post("/v1/messages/count_tokens", handle_anthropic_count_tokens);
     svr->Post("/infill",              handle_infill);

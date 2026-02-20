@@ -673,6 +673,12 @@ extern "C" {
         GGML_OP_ADD_REL_POS,
         GGML_OP_UNARY,
 
+        GGML_OP_CUMSUM,
+        GGML_OP_L2_NORM,
+        GGML_OP_TRI,
+        GGML_OP_FILL,
+        GGML_OP_SOLVE_TRI,
+
         GGML_OP_MAP_UNARY,
         GGML_OP_MAP_BINARY,
 
@@ -713,6 +719,8 @@ extern "C" {
         GGML_UNARY_OP_SWIGLU,
         GGML_UNARY_OP_SWIGLU_OAI,
         GGML_UNARY_OP_GELU,
+        GGML_UNARY_OP_EXP,
+        GGML_UNARY_OP_SOFTPLUS,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -737,6 +745,13 @@ extern "C" {
         GGML_TENSOR_FLAG_OUTPUT = 2,
         GGML_TENSOR_FLAG_PARAM  = 4,
         GGML_TENSOR_FLAG_LOSS   = 8, // ...defines loss for numerical optimization (multiple loss tensors add up)
+    };
+
+    enum ggml_tri_type {
+        GGML_TRI_TYPE_LOWER,
+        GGML_TRI_TYPE_UPPER,
+        GGML_TRI_TYPE_LOWER_DIAG,
+        GGML_TRI_TYPE_UPPER_DIAG,
     };
 
     // ggml object
@@ -1189,6 +1204,14 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_softplus(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_softplus_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     // return scalar
     GGML_API struct ggml_tensor * ggml_sum(
             struct ggml_context * ctx,
@@ -1196,6 +1219,10 @@ extern "C" {
 
     // sums along rows, with input shape [a,b,c,d] return shape [1,b,c,d]
     GGML_API struct ggml_tensor * ggml_sum_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_cumsum(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -1216,6 +1243,15 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // repeat a to specified shape
+    GGML_API struct ggml_tensor * ggml_repeat_4d(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+                       int64_t    ne0,
+                       int64_t    ne1,
+                       int64_t    ne2,
+                       int64_t    ne3);
 
     // sums repetitions in a into shape of b
     GGML_API struct ggml_tensor * ggml_repeat_back(
@@ -1455,6 +1491,14 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_exp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_exp_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     // normalize along rows
     GGML_API struct ggml_tensor * ggml_norm(
             struct ggml_context * ctx,
@@ -1512,6 +1556,17 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n_groups,
+            float                 eps);
+
+    // l2 normalize along rows
+    GGML_API struct ggml_tensor * ggml_l2_norm(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 eps);
+
+    GGML_API struct ggml_tensor * ggml_l2_norm_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
             float                 eps);
 
     // a - x
@@ -2224,6 +2279,7 @@ extern "C" {
     enum ggml_scale_mode {
         GGML_SCALE_MODE_NEAREST  = 0,
         GGML_SCALE_MODE_BILINEAR = 1,
+        GGML_SCALE_MODE_BICUBIC  = 2,
 
         GGML_SCALE_MODE_COUNT
     };
@@ -2282,6 +2338,23 @@ extern "C" {
             struct ggml_tensor  * timesteps,
             int                   dim,
             int                   max_period);
+
+    // convert matrix to triangular form by zeroing values outside selected half
+    GGML_API struct ggml_tensor * ggml_tri(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum ggml_tri_type    type);
+
+    // fill tensor with constant c
+    GGML_API struct ggml_tensor * ggml_fill(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 c);
+
+    GGML_API struct ggml_tensor * ggml_fill_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 c);
 
     // sort rows
     enum ggml_sort_order {
@@ -2425,6 +2498,15 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * pw,
             struct ggml_tensor  * ph);
+
+    // Solve Ax = B where A is triangular
+    GGML_API struct ggml_tensor * ggml_solve_tri(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            bool                  left,
+            bool                  lower,
+            bool                  uni);
 
     // custom operators
 

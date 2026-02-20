@@ -72,6 +72,38 @@ static __global__ void fused_mul_silu_f32(const float * x, const float * y, floa
     dst[i] = g * max(-limit, min(limit, y[i]));
 }
 
+static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    int row = i / ne0;
+    dst[i] = x[row] * y[i] / (1.0f + expf(-x[row]));
+}
+
+static __global__ void fused_mul_sigmoid_f32(int ne0, const float * x, const float * y, float * dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    int row = i / ne0;
+    dst[i] = y[i] / (1.0f + expf(-x[row]));
+}
+
+static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, float limit) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    int row = i / ne0;
+    float g = x[row] / (1.0f + expf(-x[row]));
+    g = min(g, limit);
+    dst[i] = g * max(-limit, min(limit, y[i]));
+}
+
 static __global__ void fused_mul_silu_f32(const float * x, float * dst, const int k, const int ne0) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -257,6 +289,20 @@ static void fused_mul_silu_f32_cuda(const float * x, const float * y, float * ds
     }
 }
 
+static void fused_mul_silu_f32_cuda(int ne0, const float * x, const float * y, float * dst, const int k, float limit, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
+    if (limit < 1e-6f) {
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k);
+    } else {
+        fused_mul_silu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k, limit);
+    }
+}
+
+static void fused_mul_sigmoid_f32_cuda(int ne0, const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_SILU_BLOCK_SIZE - 1) / CUDA_SILU_BLOCK_SIZE;
+    fused_mul_sigmoid_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(ne0, x, y, dst, k);
+}
+
 static void fused_mul_relu_f32_cuda(const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_RELU_BLOCK_SIZE - 1) / CUDA_RELU_BLOCK_SIZE;
     fused_mul_relu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
@@ -410,7 +456,21 @@ void ggml_cuda_op_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_tensor *
     GGML_ASSERT(ggml_is_contiguous(src0));
 
     if (src1) {
-        GGML_ASSERT(ggml_are_same_shape(src0, dst));
+        GGML_ASSERT(ggml_are_same_shape(src1, dst));
+        if (!ggml_are_same_shape(src0, src1)) {
+            GGML_ASSERT(src0->ne[0] == 1 && src0->ne[1] == src1->ne[1] && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3]);
+            if (op == GGML_UNARY_OP_SILU) {
+                fused_mul_silu_f32_cuda(src1->ne[0], (const float *)src0->data, (const float *)src1->data, (float *)dst->data,
+                        ggml_nelements(dst), limit, ctx.stream());
+            }
+            else if (op == GGML_UNARY_OP_SIGMOID) {
+                fused_mul_sigmoid_f32_cuda(src1->ne[0], (const float *)src0->data, (const float *)src1->data, (float *)dst->data,
+                        ggml_nelements(dst), ctx.stream());
+            } else {
+                GGML_ABORT("Fatal error");
+            }
+            return;
+        }
         GGML_ASSERT(ggml_are_same_shape(src0, src1));
         ggml_fused_mul_unary(ctx, op, ggml_nelements(dst), (const float *)src0->data, (const float *)src1->data, (float *)dst->data, limit);
     } else {
@@ -675,6 +735,10 @@ static __device__ __forceinline__ float op_exp(float x) {
     return expf(x);
 }
 
+static __device__ __forceinline__ float op_softplus(float x) {
+    return (x > 20.0f) ? x : logf(1.0f + expf(x));
+}
+
 static __device__ __forceinline__ float op_sin(float x) {
     return sinf(x);
 }
@@ -769,6 +833,10 @@ void ggml_cuda_op_gelu_erf(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_exp(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_exp>(ctx, dst);
+}
+
+void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_softplus>(ctx, dst);
 }
 
 // === gated ops
@@ -883,3 +951,58 @@ void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_elu>(ctx, dst);
 }
 
+static __global__ void k_fused_softplus(int ne0, int nelem, const float * a, const float * b, const float * c, float * dst) {
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    int i0 = i % ne0;
+    dst[i] = c[i0] * op_softplus(a[i] + b[i0]);
+}
+
+void ggml_cuda_fused_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    constexpr int kBlockSize = 256;
+    auto m = dst;
+    auto u = dst->src[0];
+    auto a = u->src[0];
+    GGML_ASSERT(m->op == GGML_OP_MUL);
+    GGML_ASSERT(a->op == GGML_OP_ADD);
+    GGML_ASSERT(u->op == GGML_OP_UNARY && (ggml_unary_op)u->op_params[0] == GGML_UNARY_OP_SOFTPLUS);
+    GGML_ASSERT(ggml_nrows(m->src[1]) == 1 && m->src[1]->ne[0] == m->src[0]->ne[0]);
+    GGML_ASSERT(ggml_nrows(a->src[1]) == 1 && a->src[1]->ne[0] == a->src[0]->ne[0]);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && u->type == GGML_TYPE_F32 && m->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->src[0]->type == GGML_TYPE_F32 && a->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(a->src[0]));
+
+    int nelem = ggml_nelements(a->src[0]);
+    int nblock = (nelem + kBlockSize - 1)/kBlockSize;
+    k_fused_softplus<<<nblock, kBlockSize, 0, ctx.stream()>>>(a->src[0]->ne[0], nelem,
+            (const float *)a->src[0]->data, (const float *)a->src[1]->data, (const float *)m->src[1]->data, (float *)dst->data);
+}
+
+static __global__ void k_fused_mul_exp_mul(int ne0, int nelem, const float * x, const float * y, float * dst) {
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    int i0 = i % ne0;
+    dst[i] = y[i0] * expf(x[i] * y[i0]);
+}
+
+void ggml_cuda_fused_mul_exp_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    constexpr int kBlockSize = 256;
+    auto m2 = dst;
+    auto u  = dst->src[0];
+    auto m1 = u->src[0];
+    GGML_ASSERT(m1->src[0]->type == GGML_TYPE_F32 && m1->src[1]->type == GGML_TYPE_F32 && m2->type == GGML_TYPE_F32);
+    GGML_ASSERT(m1->src[1] == m2->src[1]);
+    GGML_ASSERT(ggml_is_contiguous(m1->src[0]) && ggml_is_contiguous(m1->src[1]));
+    GGML_ASSERT(u->op == GGML_OP_UNARY && (ggml_unary_op)u->op_params[0] == GGML_UNARY_OP_EXP);
+
+    auto nelem = ggml_nelements(m1->src[0]);
+    auto ne0   = ggml_nelements(m1->src[1]);
+    int nblock = (nelem + kBlockSize - 1)/kBlockSize;
+
+    k_fused_mul_exp_mul<<<nblock, kBlockSize, 0, ctx.stream()>>>(ne0, nelem,
+            (const float *)m1->src[0]->data, (const float *)m1->src[1]->data, (float *)dst->data);
+}

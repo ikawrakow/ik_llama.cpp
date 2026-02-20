@@ -1,17 +1,9 @@
 #pragma once
 
 #include "llama.h"
+#include "common.h"
 
-#include <vector>
-
-struct llama_speculative;
-
-struct llama_speculative_params {
-    int n_draft = 16;  // max drafted tokens
-    int n_reuse = 256;
-
-    float p_min = 0.75f; // min probability required to accept a token in the draft
-};
+struct common_speculative;
 
 struct mtp_kv_update_data {
     llama_token id;
@@ -19,27 +11,40 @@ struct mtp_kv_update_data {
     int32_t tok_idx;
 };
 
-struct llama_speculative * llama_speculative_init(
-        struct llama_context * ctx_tgt,
-        struct llama_context * ctx_dft
-);
+// comma separated list of all types
+std::string common_speculative_type_name_str();
 
-void llama_speculative_free(struct llama_speculative * spec);
+// convert string to type
+enum common_speculative_type common_speculative_type_from_name(const std::string & name);
 
-void llama_speculative_add_replacement_tgt_dft(
-        struct llama_speculative * spec,
-        const char *source, const char *dest);
+// convert type to string
+std::string common_speculative_type_to_str(enum common_speculative_type type);
 
-bool llama_speculative_are_compatible(
-        const struct llama_context * ctx_tgt,
-        const struct llama_context * ctx_dft);
+// check if the llama_context is compatible for speculative decoding
+// note: clears the memory of the context
+bool common_speculative_is_compat(llama_context * ctx_tgt);
+
+common_speculative * common_speculative_init(
+        common_params_speculative & params,
+        llama_context             * ctx_tgt);
+
+void common_speculative_free(common_speculative * spec);
+
+// optionally call once at the beginning of a new generation
+void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt);
 
 // sample up to n_draft tokens and add them to the batch using the draft model
-std::vector<llama_token> llama_speculative_gen_draft(
-                struct llama_speculative * spec,
-         struct llama_speculative_params   params,
-          const std::vector<llama_token> & prompt,
-                             llama_token   id_last);
+llama_tokens common_speculative_draft(
+                     common_speculative * spec,
+        const common_params_speculative & params,
+                     const llama_tokens & prompt,
+                            llama_token   id_last);
+
+// informs the speculative decoder that n_accepted tokens were accepted by the target model
+void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
+
+// print statistics about the speculative decoding
+void common_speculative_print_stats(const common_speculative * spec);
 
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
 std::vector<llama_token> mtp_speculative_gen_draft(
