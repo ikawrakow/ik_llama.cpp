@@ -79,7 +79,7 @@ struct server_slot {
     bool stopped_eos = false;
     bool stopped_word = false;
     bool stopped_limit = false;
-
+    bool saturate_predict = false;
     bool oaicompat = false;
 
     std::string oaicompat_model;
@@ -89,6 +89,7 @@ struct server_slot {
     // For context rewind/ token buffer
     size_t n_buffer = 0;
     int32_t rewind_count = 0;
+    int32_t rewind_count_max = -1;
     bool rewind_status = false;
     std::unordered_map<llama_token, float> logit_bias;
     std::vector<std::string> ban_phrases;

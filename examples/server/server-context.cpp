@@ -823,6 +823,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.params.include_usage = json_value(stream_opt, "include_usage", false);
     slot.params.cache_prompt = json_value(data, "cache_prompt", true);
     slot.params.n_predict = json_value(data, "n_predict", json_value(data, "max_tokens", defaults.n_predict));
+    slot.saturate_predict = json_value(data, "saturate_predict", false);
     slot.sparams.top_k = json_value(data, "top_k", default_sparams.top_k);
     slot.sparams.top_p = json_value(data, "top_p", default_sparams.top_p);
     slot.sparams.min_p = json_value(data, "min_p", default_sparams.min_p);
@@ -1172,6 +1173,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         // ban string
         int32_t banbuffer_size = json_value(data, "banbuffer_size", 0);
         slot.n_buffer = 0; // Ensure buffer calculation starts fresh for this slot
+        slot.rewind_count_max = json_value(data, "rewind_count_max", -1);
         
         const auto& banned_strings = data.find("banned_strings");
         if (banned_strings != data.end() && banned_strings->is_array()) {
@@ -3095,7 +3097,6 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
     return params_base.special || slot.sparams.preserved_tokens.find(token) != slot.sparams.preserved_tokens.end();
 }
 
-
 void server_context::send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n) {
     int count = 0;
     bool released = false;
@@ -3107,7 +3108,17 @@ void server_context::send_token_results(completion_token_outputs& results, serve
         bool has_next = process_token(it, slot);
         
         // Clean up positional bans for the token we just confirmed/sent
-        slot.positional_bans.erase(start_pos + count);
+        auto pos_ban_it = slot.positional_bans.find(start_pos + count);
+        if (pos_ban_it != slot.positional_bans.end()) {
+            for (llama_token banned_tok : pos_ban_it->second) {
+                if (slot.logit_bias.count(banned_tok)) {
+                    slot.ctx_sampling->params.logit_bias[banned_tok] = slot.logit_bias[banned_tok];
+                } else {
+                    slot.ctx_sampling->params.logit_bias.erase(banned_tok);
+                }
+            }
+            slot.positional_bans.erase(pos_ban_it);
+        }
         
         count++;
         if (!has_next) {
@@ -3259,8 +3270,17 @@ inline void rewind_context(server_slot& slot, int32_t n_rewind) {
     slot.token_buffer.resize(n_keep_buffer);
 
     // Adjust decoded count
-    slot.n_decoded -= n_rewind;
-    if (slot.n_decoded < 0) slot.n_decoded = 0;
+    if (slot.saturate_predict) {
+        slot.n_decoded -= n_rewind;
+        if (slot.n_decoded < 0) slot.n_decoded = 0;
+    }
+
+    auto pos_ban_it = slot.positional_bans.find(slot.n_past + 1);
+    if (pos_ban_it != slot.positional_bans.end()) {
+        for (llama_token banned_tok : pos_ban_it->second) {
+             slot.ctx_sampling->params.logit_bias[banned_tok] += slot.ban_phrases_bias;
+        }
+    }
 }
 
 void server_context::buffer_and_check_string_ban(server_slot & slot, completion_token_output & result) {
@@ -3276,7 +3296,30 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
         n_rewind = check_ban_phrase(slot);
     }
 
+    bool allow_rewind = true;
+
     if (n_rewind > 0) {
+        if (slot.rewind_count_max == -1) {
+            // Automatic / Heuristic logic
+            // Account for strings + regex + regex_ci
+            size_t total_bans = slot.ban_phrases.size() + slot.ban_regex.size() + slot.ban_regex_ci.size();
+            
+            // Heuristic: Allow if under 20 OR under 2 * total_bans
+            // Conversely: Stop if >= 20 AND > 2 * total_bans
+            if (slot.rewind_count >= 20 && slot.rewind_count > 2 * total_bans) {
+                allow_rewind = false;
+            }
+        } 
+        else if (slot.rewind_count_max > 0) {
+            // Strict limit logic
+            if (slot.rewind_count >= slot.rewind_count_max) {
+                allow_rewind = false;
+            }
+        }
+        // If slot.rewind_count_max == 0, allow_rewind remains true (Infinite)
+    }
+
+    if (n_rewind > 0 && allow_rewind) {
         rewind_context(slot, n_rewind);
         slot.rewind_status = true;
     }
@@ -3379,36 +3422,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
 
-            // --- START POSITIONAL BAN LOGIC ---
-            // Check if we have specific bans for this exact position (slot.n_past)
-            // Note: slot.n_past is the index of the token we are about to generate.
-            auto pos_ban_it = slot.positional_bans.find(slot.n_past);
-            std::vector<llama_token> temp_banned;
-            
-            if (pos_ban_it != slot.positional_bans.end()) {
-                for (llama_token banned_tok : pos_ban_it->second) {
-                    // Only ban if not already banned by user to avoid overwriting -INF
-                    if (slot.ctx_sampling->params.logit_bias.find(banned_tok) == slot.ctx_sampling->params.logit_bias.end() ||
-                        slot.ctx_sampling->params.logit_bias[banned_tok] > -1000.0f) {
-                        
-                        slot.ctx_sampling->params.logit_bias[banned_tok] = -INFINITY;
-                        temp_banned.push_back(banned_tok);
-                    }
-                }
-            }
-            // --- END POSITIONAL BAN LOGIC ---
-
             const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, tok_idx);
-
-            // --- RESTORE LOGIT BIAS ---
-            for (llama_token banned_tok : temp_banned) {
-                if (slot.logit_bias.count(banned_tok)) {
-                    slot.ctx_sampling->params.logit_bias[banned_tok] = slot.logit_bias[banned_tok];
-                } else {
-                    slot.ctx_sampling->params.logit_bias.erase(banned_tok);
-                }
-            }
-            // --- END RESTORE ---
 
             common_sampler_accept(slot.ctx_sampling, ctx, id, true);
 
