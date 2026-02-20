@@ -5,12 +5,6 @@
 
 struct common_speculative;
 
-struct mtp_kv_update_data {
-    llama_token id;
-    int32_t n_past;
-    int32_t tok_idx;
-};
-
 // comma separated list of all types
 std::string common_speculative_type_name_str();
 
@@ -48,9 +42,10 @@ void common_speculative_print_stats(const common_speculative * spec);
 
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
 std::vector<llama_token> mtp_speculative_gen_draft(
-    struct llama_sampling_context * smpl,
+    struct common_sampler * smpl,
     struct llama_context * ctx,
-    struct llama_speculative_params params,
+    int n_draft,
+    float p_min,
     llama_token id_last,
     int32_t n_past,
     llama_seq_id seq_id);

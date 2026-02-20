@@ -161,8 +161,6 @@ struct server_slot {
 
     bool is_processing() const;
 
-    bool can_speculate() const;
-
     void add_token_string(const completion_token_output& token);
 
     bool can_speculate() const;

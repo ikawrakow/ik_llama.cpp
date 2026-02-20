@@ -214,12 +214,33 @@ void server_context::init() {
 
         slot.sparams = params_base.sparams;
 
+        if (params_base.has_mtp && llama_model_n_nextn_layer(model) > 0) {
+            SRV_INF("%s\n", "MTP detected, configuring for speculative decoding...");
+
+            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+
+            slot.has_mtp = true;
+            slot.params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+            slot.params.speculative.n_min = 0;
+
+            slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
+            SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
+
+            SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
+            llama_set_embeddings(ctx, true);
+        }
+        else {
+            SRV_WRN("%s\n", "MTP selected via --spec-type, but model has 0 NextN layers. Falling back to NONE.");
+            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+            slot.has_mtp = false;
+        }
+
         const bool can_spec = common_speculative_is_compat(ctx);
         if (!can_spec) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
         // try speculative decoding
-        if (can_spec){
+        if (can_spec) {
             slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
             if (slot.spec) {
                 if (mctx) {
@@ -228,19 +249,12 @@ void server_context::init() {
                 }
                 SLT_INF(slot, "%s", "speculative decoding context initialized\n");
             } else {
-                SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
+                if (slot.has_mtp) {
+                    SRV_ERR("%s", "failed to initialize MTP speculative context\n");
+                } else {
+                    SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
+                }
             }
-        }
-        else if (params_base.has_mtp && llama_model_n_nextn_layer(model) > 0) {
-            slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
-            SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
-
-            slot.params.speculative.n_min = 0;
-
-            SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
-            llama_set_embeddings(ctx, true);
-
-            slot.has_mtp = true;
         }
 
         slot.reset();
@@ -389,10 +403,6 @@ bool server_slot::is_processing() const {
     return (state == SLOT_STATE_IDLE && command == SLOT_COMMAND_LOAD_PROMPT) || state == SLOT_STATE_PROCESSING;
 }
 
-bool server_slot::can_speculate() const {
-    return (ctx_dft || has_mtp);
-}
-
 void server_slot::add_token_string(const completion_token_output& token) {
     if (command == SLOT_COMMAND_RELEASE) {
         return;
@@ -401,7 +411,7 @@ void server_slot::add_token_string(const completion_token_output& token) {
 }
 
 bool server_slot::can_speculate() const {
-    return !!spec;
+    return (!!spec || has_mtp);
 }
 
 int server_slot::get_n_draft_max() const {
@@ -2550,27 +2560,10 @@ void server_context::add_sampled_tokens() {
                 GGML_ABORT("not supported by multimodal");
             }
 
-            llama_tokens draft;
             const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
 
             const auto & params_spec = slot.params.speculative;
 
-            llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
-
-            if (draft.size() > (size_t)n_draft_max) {
-                SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
-                draft.resize(n_draft_max);
-            }
-
-            /*struct llama_speculative_params params_spec;
-            params_spec.n_draft = n_draft_max;
-            params_spec.p_min = slot.params.speculative.p_min;
-
-            if (slot.ctx_dft) {
-                params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
-            } else {
-                params_spec.n_reuse = 0;
-            }
             if (slot.has_mtp) {
                 if (!slot.mtp_hidden_state.empty()) {
                     llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
@@ -2578,19 +2571,13 @@ void server_context::add_sampled_tokens() {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
                     llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
                 }
-
-                draft = mtp_speculative_gen_draft(
-                    slot.ctx_sampling, 
-                    ctx,
-                    params_spec,
-                    slot.sampled, 
-                    slot.n_past,
-                    slot.id
-                );
             }
-            else {
-                const llama_tokens& cached_text_tokens = slot.cache_tokens.get_text_tokens();
-                draft = llama_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);*/
+
+            llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+
+            if (draft.size() > (size_t)n_draft_max) {
+                SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                draft.resize(n_draft_max);
             }
 
             // add the sampled token to the batch

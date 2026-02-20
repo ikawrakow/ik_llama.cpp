@@ -20,6 +20,7 @@
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
+    COMMON_SPECULATIVE_TYPE_MTP,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
@@ -31,6 +32,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
 const std::map<std::string, enum common_speculative_type> common_speculative_type_from_name_map = {
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
+    {"mtp",           COMMON_SPECULATIVE_TYPE_MTP},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
@@ -143,6 +145,58 @@ struct common_speculative_state {
 
     virtual void accept(uint16_t n_accepted) = 0;
 };
+
+struct common_speculative_state_mtp : public common_speculative_state {
+    llama_context * ctx_tgt;
+    common_sampler * smpl;
+
+    common_speculative_state_mtp(
+            enum common_speculative_type type,
+            llama_context * ctx_tgt)
+        : common_speculative_state(type)
+        , ctx_tgt(ctx_tgt)
+    {
+        struct common_params_sampling params;
+        params.samplers_sequence = {
+            llama_sampler_type::DIST,
+        };
+        smpl = common_sampler_init(llama_get_model(ctx_tgt), params);
+    }
+
+    ~common_speculative_state_mtp() override {
+        common_sampler_free(smpl);
+    }
+
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+
+        int32_t n_past = (int32_t)prompt_tgt.size();
+
+        llama_seq_id seq_id = 0;
+
+        result = mtp_speculative_gen_draft(
+            smpl,
+            ctx_tgt,
+            params.n_max,
+            params.p_min,
+            id_last,
+            n_past,
+            seq_id
+        );
+    }
+
+    void accept(uint16_t n_accepted) override {
+        GGML_UNUSED(n_accepted);
+    }
+};
+
 
 struct common_speculative_state_draft : public common_speculative_state {
     llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
@@ -760,6 +814,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
     switch (type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
+        case COMMON_SPECULATIVE_TYPE_MTP:           return "mtp";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
@@ -828,6 +883,7 @@ common_speculative * common_speculative_init(
     {
         bool has_draft = !params.mparams_dft.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
+        bool has_mtp = (params.type == COMMON_SPECULATIVE_TYPE_MTP); 
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
         bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
@@ -867,6 +923,9 @@ common_speculative * common_speculative_init(
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
+        if (has_mtp) {
+             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_MTP, params));
+        }
         if (has_draft) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT, params));
         }
@@ -887,6 +946,12 @@ common_speculative * common_speculative_init(
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .ctx_dft      = */ ctx_dft,
                     /* .replacements = */ params.replacements
+                ));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_MTP: {
+                impls.push_back(std::make_unique<common_speculative_state_mtp>(config.type,
+                    /* .ctx_tgt      = */ ctx_tgt
                 ));
                 break;
             }
@@ -1047,20 +1112,25 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 str_perf.c_str());
     }
 }
+
+// ----------------------------------------------------------------------------
+// MTP
+// ----------------------------------------------------------------------------
 std::vector<llama_token> mtp_speculative_gen_draft(
-    struct llama_sampling_context * smpl,
+    struct common_sampler * smpl,
     struct llama_context * ctx,
-    struct llama_speculative_params params,
+    int n_draft,
+    float p_min,
     llama_token id_last,
     int32_t n_past,
     llama_seq_id seq_id) {
-
-    int n_draft = params.n_draft; 
     
     llama_tokens drafts;
     drafts.reserve(n_draft);
 
     if (!smpl) return drafts;
+
+    common_sampler_reset(smpl);
 
     llama_batch mtp_batch = llama_batch_init(1, 0, 1);
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
@@ -1076,29 +1146,21 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             break;
         }
 
-        float * logits = llama_get_logits_ith(ctx, 0);
-        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+        common_sampler_sample(smpl, ctx, 0, true); 
 
-        int id_next = 0;
-        float max_val = logits[0];
-
-        for (int i = 1; i < n_vocab; ++i) {
-            if (logits[i] > max_val) {
-                max_val = logits[i];
-                id_next = i;
-            }
+        const auto * cur_p = common_sampler_get_candidates(smpl, true);
+        
+        if (!cur_p || cur_p->size == 0) {
+            break;
         }
 
-        // Only collect very high-confidence draft tokens
-        const auto * cur_p = common_sampler_get_candidates(smpl);
-        if (cur_p && cur_p->size > 0) {
-            float prob = cur_p->data[0].p;
+        const llama_token id_next = cur_p->data[0].id;
+        const float prob = cur_p->data[0].p;
 
-            if (prob < params.p_min) {
-                drafts.push_back(id_next);
-                current_n_past++; 
-                break;
-            }
+        common_sampler_accept(smpl, nullptr, id_next, true);
+
+        if (prob < p_min) {
+            break;
         }
 
         drafts.push_back(id_next);

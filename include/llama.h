@@ -280,10 +280,10 @@ extern "C" {
     };
 
     enum llama_mtp_op_type {
-        MTP_OP_NONE,
-        MTP_OP_WARMUP,
-        MTP_OP_UPDATE_ACCEPTED,
-        MTP_OP_DRAFT_GEN,
+        MTP_OP_NONE             = 0,
+        MTP_OP_WARMUP           = 1,
+        MTP_OP_UPDATE_ACCEPTED  = 2,
+        MTP_OP_DRAFT_GEN        = 3,
     };
 
     typedef struct llama_token_data {
