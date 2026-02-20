@@ -151,7 +151,9 @@ void common_sampler_free(struct common_sampler * ctx);
 // - reset grammar
 void common_sampler_reset(common_sampler * ctx);
 
-// Rewind stateful samplers
+// Review stateful samplers
+// | record current state for rewinding
+// | rewind to last recorded state
 void common_sampler_review(common_sampler * ctx);
 
 // Set the sampler seed
