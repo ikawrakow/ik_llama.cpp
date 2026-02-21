@@ -214,25 +214,27 @@ void server_context::init() {
 
         slot.sparams = params_base.sparams;
 
-        if (params_base.has_mtp && llama_model_n_nextn_layer(model) > 0) {
-            SRV_INF("%s\n", "MTP detected, configuring for speculative decoding...");
+        if (params_base.has_mtp) {
+            if (llama_model_n_nextn_layer(model) > 0) {
+                SRV_INF("%s\n", "MTP detected, configuring for speculative decoding...");
 
-            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+                params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
 
-            slot.has_mtp = true;
-            slot.params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
-            slot.params.speculative.n_min = 0;
+                slot.has_mtp = true;
+                slot.params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+                slot.params.speculative.n_min = 0;
 
-            slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
-            SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
+                slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
+                SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
 
-            SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
-            llama_set_embeddings(ctx, true);
-        }
-        else {
-            SRV_WRN("%s\n", "MTP selected via --spec-type, but model has 0 NextN layers. Falling back to NONE.");
-            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
-            slot.has_mtp = false;
+                SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
+                llama_set_embeddings(ctx, true);
+            }
+            else {
+                SRV_WRN("%s\n", "MTP enabled via flag, but model has 0 NextN layers. Disabling speculative.");
+                params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+                slot.has_mtp = false;
+            }
         }
 
         const bool can_spec = common_speculative_is_compat(ctx);
