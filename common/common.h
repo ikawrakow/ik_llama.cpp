@@ -414,6 +414,8 @@ struct gpt_params {
     std::string sqlite_zstd_ext_file;
 
     float slot_prompt_similarity = 0.1f;
+
+    int32_t n_ctx_checkpoints = 8;            // max number of context checkpoints per slot
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens
