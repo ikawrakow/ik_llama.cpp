@@ -721,7 +721,8 @@ static bool llama_kv_cache_init(
     cache.has_shift = false;
 
     // TODO: find a nicer way to add other recurrent model architectures
-    cache.recurrent = model.arch == LLM_ARCH_MAMBA;
+    cache.recurrent = llm_arch_is_recurrent(model.arch);
+    cache.hybrid = llm_arch_is_hybrid(model.arch);
     // qwen3next uses hybrid recurrent+attention cache semantics. Keep V rows in
     // standard layout to match the mainline hybrid path when flash attention is off.
     cache.v_trans   = !cache.recurrent && !cparams.flash_attn && model.arch != LLM_ARCH_QWEN3NEXT && model.arch != LLM_ARCH_QWEN35MOE;
