@@ -134,6 +134,9 @@ struct server_slot {
     struct common_params_sampling sparams;
     common_sampler * ctx_sampling = nullptr;
 
+    bool has_mtp = false;
+    std::vector<float> mtp_hidden_state;
+
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted

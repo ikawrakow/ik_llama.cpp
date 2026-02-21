@@ -903,6 +903,12 @@ void llm_load_hparams(
                 }
 
                 // NextN/MTP parameters
+                if (model.mtp) {
+                    hparams.n_layer_kv_from_start = hparams.n_layer;
+                }
+                else {
+                    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                }
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
 
                 switch (hparams.n_layer) {

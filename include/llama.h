@@ -279,6 +279,12 @@ extern "C" {
         LLAMA_SPLIT_MODE_GRAPH   = 3, // splits computations across GPUs
     };
 
+    enum llama_mtp_op_type {
+        MTP_OP_NONE             = 0,
+        MTP_OP_WARMUP           = 1,
+        MTP_OP_UPDATE_ACCEPTED  = 2,
+        MTP_OP_DRAFT_GEN        = 3,
+    };
 
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -394,6 +400,7 @@ extern "C" {
         bool validate_quants; // if true, check for NaNs while loading the model
         bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
+        bool mtp;           // if true, load MTP layers if present
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -449,6 +456,8 @@ extern "C" {
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
+        bool mtp;   // Activate MTP if supported
+        enum llama_mtp_op_type mtp_op_type;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -1462,6 +1471,17 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API void llama_log_set(ggml_log_callback log_callback, void * user_data);
 
     LLAMA_API void llama_dump_timing_info_yaml(FILE * stream, const struct llama_context * ctx);
+
+    //
+    // MTP
+    //
+
+    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
+
+    // Set which, if any, MTP operation the context will use
+    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
+
+    LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
 #ifdef __cplusplus
 }
