@@ -420,8 +420,15 @@ struct llama_model {
 
     ~llama_model();
 
-    // Not actually needed, but left in place for now
-    size_t max_nodes() const { return 65536 * 2; }
+    size_t max_nodes(int n_tokens) const {
+        auto n_tensors = tensors_by_name.size();
+        if (split_mode == LLAMA_SPLIT_MODE_GRAPH) n_tensors *= devices.size();
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE) {
+            return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
+        }
+        return std::max<size_t>(1024, 8*n_tensors);
+        //return 65536 * 2;
+    }
 
     bool has_tensor_overrides() const {
         return tensor_overrides;
