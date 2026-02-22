@@ -1256,8 +1256,8 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
         /* form.tool_sep    = */ ">\n",
         /* form.key_start   = */ "<parameter=",
         /* form.key_val_sep = */ ">\n",
-        /* form.val_end     = */ "\n</parameter>",
-        /* form.tool_end    = */ "\n</function>\n</tool_call>",
+        /* form.val_end     = */ "\n</parameter>\n",
+        /* form.tool_end    = */ "</function>\n</tool_call>",
         /* form.scope_end   = */ "",
     };
     build_grammar_xml_tool_call(data, params.tools, form);
