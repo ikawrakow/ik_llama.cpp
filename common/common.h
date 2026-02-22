@@ -337,6 +337,7 @@ struct gpt_params {
     bool ignore_eos        = false; // ignore generated EOS tokens
     bool logits_all        = false; // return logits for all tokens in the batch
     bool use_mmap          = true;  // use mmap for faster loads
+    bool use_direct_io     = false; // read from disk without buffering
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation

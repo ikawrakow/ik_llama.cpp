@@ -667,7 +667,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M && (i_layer < n_layer/8 ||
                     (qs.model.hparams.n_expert >= 4 && use_more_bits(i_layer, n_layer)))) {
-            new_type = GGML_TYPE_IQ4_K;
+            new_type = GGML_TYPE_IQllama_model_loader ml(fname_inp, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /* repack_tensors */ false,4_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) {
             new_type = arch == LLM_ARCH_FALCON ? GGML_TYPE_Q4_K : GGML_TYPE_Q5_K;
@@ -1008,7 +1008,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         auto v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
         kv_overrides = v->data();
     }
-    llama_model_loader ml(fname_inp, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
+    llama_model_loader ml(fname_inp, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /* repack_tensors */ false,
             /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
