@@ -1225,6 +1225,17 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
 
+    // Qwen3.5 and Step-3.5-Flash use the Qwen3 Coder tool calling with thinking
+    bool supports_reasoning = (tmpl.source().find("<think>") != std::string::npos);
+
+    if (supports_reasoning && string_ends_with(data.prompt, "<think>\n")) {
+        if (!params.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+
     data.preserved_tokens = {
         "<tool_call>",
         "</tool_call>",
@@ -1234,16 +1245,20 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
         "</parameter>",
     };
 
+    if (supports_reasoning) {
+        data.preserved_tokens.insert(data.preserved_tokens.end(), {"<think>", "</think>"});
+    }
+
     // build grammar for tool call
     static const xml_tool_call_format form {
-        /* form.scope_start = */ "<tool_call>\n",
-        /* form.tool_start  = */ "<function=",
+        /* form.scope_start = */ "",
+        /* form.tool_start  = */ "\n<tool_call>\n<function=",
         /* form.tool_sep    = */ ">\n",
         /* form.key_start   = */ "<parameter=",
         /* form.key_val_sep = */ ">\n",
-        /* form.val_end     = */ "\n</parameter>\n",
-        /* form.tool_end    = */ "</function>\n",
-        /* form.scope_end   = */ "</tool_call>",
+        /* form.val_end     = */ "\n</parameter>",
+        /* form.tool_end    = */ "\n</function>\n</tool_call>",
+        /* form.scope_end   = */ "",
     };
     build_grammar_xml_tool_call(data, params.tools, form);
 
@@ -2064,9 +2079,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
     // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
     if (src.find("<tool_call>") != std::string::npos &&
-        src.find("<function>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
-        src.find("<parameters>") != std::string::npos &&
         src.find("<parameter=") != std::string::npos) {
         return common_chat_params_init_qwen3_coder_xml(tmpl, params);
     }
