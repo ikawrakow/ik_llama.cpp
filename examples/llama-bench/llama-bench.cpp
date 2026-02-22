@@ -254,6 +254,7 @@ struct cmd_params {
     std::vector<bool> reuse;
     std::vector<std::vector<float>> tensor_split;
     std::vector<bool> use_mmap;
+    std::vector<bool> use_direct_io;
     std::vector<bool> embeddings;
     std::vector<llama_model_tensor_buft_override> buft_overrides;
     ggml_numa_strategy numa;
@@ -299,6 +300,7 @@ static const cmd_params cmd_params_defaults = {
     /* reuse                */ {true},
     /* tensor_split         */ {std::vector<float>(llama_max_devices(), 0.0f)},
     /* use_mmap             */ {true},
+    /* use_direct_io        */ {false},
     /* embeddings           */ {false},
     /* buft_overrides       */ {},
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
@@ -349,6 +351,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ser, --smart-expert-reduction <i,f>(default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -gr, --graph-reuse <0|1>            (default: %s)\n", join(cmd_params_defaults.reuse, ",").c_str());
     printf("  -mmp, --mmap <0|1>                  (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
+    printf("  -dio, --direct-io <0|1>             (default: %s)\n", join(cmd_params_defaults.use_direct_io, ",").c_str());
     printf("  --numa <distribute|isolate|numactl> (default: disabled)\n");
     printf("  -embd, --embeddings <0|1>           (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>    (default: 0)\n");
@@ -725,6 +728,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<bool>(argv[i], split_delim);
             params.use_mmap.insert(params.use_mmap.end(), p.begin(), p.end());
+        } else if (arg == "-dio" || arg == "--direct-io") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.use_direct_io.insert(params.use_direct_io.end(), p.begin(), p.end());
         } else if (arg == "-embd" || arg == "--embeddings") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -904,6 +914,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.ser.empty())          { params.ser = cmd_params_defaults.ser; }
     if (params.tensor_split.empty()) { params.tensor_split = cmd_params_defaults.tensor_split; }
     if (params.use_mmap.empty())     { params.use_mmap = cmd_params_defaults.use_mmap; }
+    if (params.use_direct_io.empty()) { params.use_direct_io = cmd_params_defaults.use_direct_io; }
     if (params.embeddings.empty())   { params.embeddings = cmd_params_defaults.embeddings; }
     if (params.n_threads.empty())    { params.n_threads = cmd_params_defaults.n_threads; }
     if (!params.buft_overrides.empty()) params.buft_overrides.emplace_back(llama_model_tensor_buft_override{nullptr, nullptr});
@@ -945,6 +956,7 @@ struct cmd_params_instance {
     std::vector<float> tensor_split;
     std::string cuda_params;
     bool use_mmap;
+    bool use_direct_io = false;
     bool embeddings;
     bool repack = false;
     bool fmoe = true;
@@ -969,6 +981,7 @@ struct cmd_params_instance {
         mparams.main_gpu = main_gpu;
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap = use_mmap;
+        mparams.use_direct_io = use_direct_io;
         mparams.repack_tensors = repack;
         mparams.use_thp = use_thp;
         mparams.merge_qkv = mqkv;
@@ -986,6 +999,7 @@ struct cmd_params_instance {
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu &&
                use_mmap == other.use_mmap &&
+               use_direct_io == other.use_direct_io &&
                repack == other.repack &&
                mqkv == other.mqkv &&
                muge == other.muge &&
@@ -1032,6 +1046,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & mg : params.main_gpu)
     for (const auto & ts : params.tensor_split)
     for (const auto & mmp : params.use_mmap)
+    for (const auto & dio : params.use_direct_io)
     for (const auto & embd : params.embeddings)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
@@ -1071,6 +1086,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
+                /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
@@ -1114,6 +1130,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
+                /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
@@ -1157,6 +1174,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
+                /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
@@ -1200,6 +1218,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
+                /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
@@ -1254,6 +1273,7 @@ struct test {
     std::vector<float> tensor_split;
     std::string cuda_params;
     bool use_mmap;
+    bool use_direct_io = false;
     bool embeddings;
     bool repack = false;
     bool fmoe = false;
@@ -1298,6 +1318,7 @@ struct test {
         tensor_split = inst.tensor_split;
         cuda_params = inst.cuda_params;
         use_mmap = inst.use_mmap;
+        use_direct_io  = inst.use_direct_io;
         embeddings = inst.embeddings;
         repack = inst.repack;
         mqkv = inst.mqkv;
@@ -1415,8 +1436,9 @@ struct test {
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
-            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
-            field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
+            field == "flash_attn" || field == "use_mmap" ||  field == "use_direct_io" || field == "embeddings" ||
+            field == "repack" || field == "use_thp" || field == "fused_moe" || field == "grouped_er" ||
+            field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse" || field == "muge" || field == "sas") {
             return BOOL;
         }
@@ -1459,7 +1481,7 @@ struct test {
             std::to_string(n_gpu_layers), split_mode_str(split_mode),
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
-            tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
+            tensor_split_str, std::to_string(use_mmap), std::to_string(use_direct_io), std::to_string(embeddings),
             std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             cuda_params, override_tensor,
@@ -1481,7 +1503,8 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
-            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "fused_moe", "grouped_er",
+            "tensor_split", "use_mmap", "use_direct_io", "embeddings",
+            "repack", "mqkv", "muge", "fused_moe", "grouped_er",
             "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
@@ -1660,6 +1683,9 @@ struct markdown_printer : public printer {
         if (field == "use_mmap") {
             return 4;
         }
+        if (field == "use_direct_io") {
+            return 3;
+        }
         if (field == "repack") {
             return 3;
         }
@@ -1732,6 +1758,9 @@ struct markdown_printer : public printer {
         }
         if (field == "use_mmap") {
             return "mmap";
+        }
+        if (field == "use_direct_io") {
+            return "dio";
         }
         if (field == "repack") {
             return "rtr";
@@ -1832,6 +1861,9 @@ struct markdown_printer : public printer {
         }
         if (params.use_mmap.size() > 1 || params.use_mmap != cmd_params_defaults.use_mmap) {
             fields.emplace_back("use_mmap");
+        }
+        if (params.use_direct_io.size() > 1 || params.use_direct_io != cmd_params_defaults.use_direct_io) {
+            fields.emplace_back("use_direct_io");
         }
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
             fields.emplace_back("embeddings");
