@@ -1,0 +1,76 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: "cu12"
+            cuda_version: "12.6.2"
+            containerfile: "ik_llama-cuda.Containerfile"
+          - variant: "cu13"
+            cuda_version: "13.1.1"
+            containerfile: "ik_llama-cuda.Containerfile"
+          - variant: "cpu"
+            cuda_version: "none"
+            containerfile: "ik_llama-cpu.Containerfile"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Environment
+        id: prep
+        run: |
+          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Build and Push
+        uses: docker/bake-action@v5
+        env:
+          # This maps the shell/github variables to the HCL variables
+          REPO_OWNER: ${{ env.REPO_LOWER }}
+          VARIANT: ${{ matrix.variant }}
+          SHA_SHORT: ${{ env.SHA_SHORT }}
+          CUDA_VERSION: ${{ matrix.cuda_version }}
+        with:
+          push: true
+          files: ./docker-bake.hcl
+          set: |
+            *.dockerfile=./docker/${{ matrix.containerfile }}
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: success()
+    steps:
+      - name: Delete untagged images
+        uses: vlaurin/action-ghcr-prune@v0.6.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          organization: ${{ github.repository_owner }}
+          container: ik-llama-cpp
+          keep-younger-than: 0
+          untagged-only: true
