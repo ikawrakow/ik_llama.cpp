@@ -3792,7 +3792,7 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     //   - x2 for keys and values
     //const uint32_t max_moves = model.max_nodes()/(6*n_layer);
     // TODO: tmp fix https://github.com/ggerganov/llama.cpp/issues/6685#issuecomment-2057579516
-    const uint32_t max_moves = (lctx.model.max_nodes() - 2*n_layer)/(6*n_layer);
+    const uint32_t max_moves = (lctx.model.max_nodes(1) - 2*n_layer)/(6*n_layer);
 
     // determine which KV cells to move where
     //
@@ -5112,7 +5112,8 @@ struct llama_context * llama_init_from_model(
                 }
             }
 
-            const size_t max_nodes = model->max_nodes();
+            int n_tokens = (int)std::min(cparams.n_ctx, cparams.n_ubatch);
+            const size_t max_nodes = model->max_nodes(n_tokens);
 
             // buffer used to store the computation graph and the tensor meta data
             ctx->buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
@@ -5137,7 +5138,6 @@ struct llama_context * llama_init_from_model(
             llama_repack_up_gate_exps(*ctx);
 
             // build worst-case graph
-            int n_tokens = (int)std::min(cparams.n_ctx, cparams.n_ubatch);
             int n_past = cparams.n_ctx - n_tokens;
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
             ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true);
