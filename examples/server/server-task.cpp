@@ -1117,7 +1117,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
     if (it_best != states.end()) {
         LLAMA_LOG_INFO(" - found better prompt with f_keep = %.3f, sim = %.3f, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, it_best->n_kept_prompt, it_best->n_discarded_prompt);
         const size_t size = it_best->data.size();
-        const size_t n = llama_state_seq_set_data(ctx, it_best->data.data(), size, id_slot);
+        const size_t n = llama_state_seq_set_data(ctx, it_best->data.data(), size, id_slot, 0);
         if (n != size) {
             LLAMA_LOG_INFO("failed to restore state with size %zu\n", size);
             return false;
