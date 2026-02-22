@@ -139,6 +139,7 @@ thinking_tokens thinking_tokens_from_string(const std::string& format);
 enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
+    COMMON_SPECULATIVE_TYPE_MTP,           // MTP model 
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
@@ -356,6 +357,7 @@ struct gpt_params {
     bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
     //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
+    bool has_mtp           = false; // enable MTP if supported by the model
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
