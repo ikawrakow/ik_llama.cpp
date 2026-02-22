@@ -1380,7 +1380,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
         const uint32_t seed);
 
     void llama_prep_adaptive_p(struct llama_context * ctx,
-                 llama_token_data_array * candidates,
+                                  float * logits,
         struct llama_sampler_adaptive_p * adapt_p_ctx);
 
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/adaptive-p-docs/blob/main/README.md

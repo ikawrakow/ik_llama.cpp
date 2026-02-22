@@ -1169,7 +1169,7 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
 
 void llama_prep_adaptive_p_impl(
               struct llama_sampling * smpl,
-             llama_token_data_array * candidates,
+                              float * logits,
     struct llama_sampler_adaptive_p * adapt_p_ctx) {
     if (adapt_p_ctx->updt_w_cur) {
         // update with current probability, original not needed
@@ -1178,16 +1178,11 @@ void llama_prep_adaptive_p_impl(
     constexpr float kDelta = 30.0f; //16.6f;
     auto t_start = ggml_time_us();
     auto & orig_prob = adapt_p_ctx->orig_prob;
-    if (candidates->size != orig_prob.size() || candidates->sorted) {
-        LLAMA_LOG_ERROR("%s: this function must be called before any other sampler has been applied\n", __func__);
-        LLAMA_LOG_ERROR("%s: the sampler has been initialized with a vocabulary of %zu, but is being called with %zu candidates\n",
-                __func__, orig_prob.size(), candidates->size);
-        GGML_ABORT("Bad candidates in adaptive_p sampler");
-    }
+
+    std::copy(logits, logits + orig_prob.size(), orig_prob.begin());
 
     float max_logit = -INFINITY;
-    for (int j = 0; j < int(candidates->size); ++j) {
-        orig_prob[j] = candidates->data[j].logit;
+    for (int j = 0; j < int(orig_prob.size()); ++j) {
         max_logit = std::max(max_logit, orig_prob[j]);
     }
     adapt_p_ctx->cum_orig_prob = iqk_exp_with_thresh(orig_prob.size(), orig_prob.data(), max_logit, max_logit - kDelta);
