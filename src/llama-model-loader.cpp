@@ -1033,9 +1033,10 @@ bool llama_model_loader::load_all_data(
 
                     while (bytes_read < read_end - read_start) {
                         size_t read_size = std::min<size_t>(buffer_size, read_end - read_start - bytes_read);
+
                         // Align the destination pointer within the pinned buffer
                         uintptr_t ptr_dest_aligned = (reinterpret_cast<uintptr_t>(host_ptrs[buffer_idx]) + alignment - 1) & ~(alignment - 1);
- 
+
                         // Wait for previous upload to complete before reusing buffer
                         ggml_backend_event_synchronize(events[buffer_idx]);
 
