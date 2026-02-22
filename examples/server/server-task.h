@@ -368,6 +368,7 @@ struct server_prompt {
     int n_tokens() const {
         return tokens.size();
     }
+
 };
 
 struct server_prompt_cache {

@@ -29,6 +29,7 @@ enum llm_arch {
     LLM_ARCH_QWEN3NEXT,
     LLM_ARCH_QWEN3VL,
     LLM_ARCH_QWEN3VLMOE,
+    LLM_ARCH_QWEN35MOE,
     LLM_ARCH_PHI2,
     LLM_ARCH_PHI3,
     LLM_ARCH_PLAMO,
@@ -152,7 +153,7 @@ enum llm_kv {
     LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,
     LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
     LLM_KV_ATTENTION_INDEXER_TOP_K,
-
+    LLM_KV_FULL_ATTENTION_INTERVAL,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER,
@@ -285,6 +286,8 @@ enum llm_tensor {
     LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
     LLM_TENSOR_SSM_BETA_ALPHA,
+    LLM_TENSOR_SSM_ALPHA,
+    LLM_TENSOR_SSM_BETA,
     LLM_TENSOR_ATTN_Q_A,
     LLM_TENSOR_ATTN_Q_B,
     LLM_TENSOR_ATTN_KV_A_MQA,
@@ -339,3 +342,6 @@ enum llm_tensor {
 llm_arch llm_arch_from_string(const std::string & name);
 
 const char * llama_model_arch_name(llm_arch arch);
+
+bool llm_arch_is_recurrent(const llm_arch & arch);
+bool llm_arch_is_hybrid(const llm_arch & arch);

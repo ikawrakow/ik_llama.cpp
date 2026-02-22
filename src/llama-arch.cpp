@@ -30,6 +30,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN3NEXT,       "qwen3next"    },
     { LLM_ARCH_QWEN3VL,         "qwen3vl"      },
     { LLM_ARCH_QWEN3VLMOE,      "qwen3vlmoe"   },
+    { LLM_ARCH_QWEN35MOE,       "qwen35moe"    },
     { LLM_ARCH_PHI2,            "phi2"         },
     { LLM_ARCH_PHI3,            "phi3"         },
     { LLM_ARCH_PLAMO,           "plamo"        },
@@ -159,6 +160,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,     "%s.attention.indexer.head_count"     },
     { LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,     "%s.attention.indexer.key_length"     },
     { LLM_KV_ATTENTION_INDEXER_TOP_K,          "%s.attention.indexer.top_k"          },
+    { LLM_KV_FULL_ATTENTION_INTERVAL,          "%s.full_attention_interval"          },
 
 
     { LLM_KV_ROPE_DIMENSION_COUNT,          "%s.rope.dimension_count"                 },
@@ -244,3 +246,23 @@ const char * llama_model_arch_name(llm_arch arch) {
     }
     return it->second;
 }
+
+bool llm_arch_is_recurrent(const llm_arch & arch) {
+    switch (arch) {
+    case LLM_ARCH_MAMBA:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool llm_arch_is_hybrid(const llm_arch & arch) {
+    switch (arch) {
+    case LLM_ARCH_QWEN3NEXT:
+    case LLM_ARCH_QWEN3MOE: 
+        return true;
+    default:
+        return false;
+    }
+}
+

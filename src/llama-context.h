@@ -37,6 +37,7 @@ struct llama_kv_cache {
     bool do_defrag = false;
     bool do_copy   = false;
     bool recurrent = false; // with recurrent state models, a cell can hold the state for more than one past token
+    bool hybrid    = false;
     bool v_trans   = true;  // the value tensor is transposed
 
     // Note: The value of head isn't only used to optimize searching

@@ -569,7 +569,7 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
 bool llama_context::update_cache_copies() {
     int n_layer = model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     auto layer_has_attention_kv = [&](int il) {
-        return !(model.arch == LLM_ARCH_QWEN3NEXT && model.hparams.is_recurrent(il));
+        return !((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && model.hparams.is_recurrent(il));
     };
     if ((int)kv_self.k_l.size() != n_layer) return false;
     if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
@@ -656,7 +656,7 @@ static inline bool llama_qwen3next_is_recurrent_layer(
         const llama_model &   model,
         const llama_hparams & hparams,
         uint32_t              il) {
-    return model.arch == LLM_ARCH_QWEN3NEXT && hparams.is_recurrent(il);
+    return (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && hparams.is_recurrent(il);
 }
 
 static inline uint32_t llama_kv_v_row_embd(
@@ -665,7 +665,7 @@ static inline uint32_t llama_kv_v_row_embd(
         uint32_t              il) {
     // qwen3next recurrent state is stored in a dedicated V-cache tail (per sequence),
     // so per-token V rows include only attention values.
-    if (model.arch == LLM_ARCH_QWEN3NEXT) {
+    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) {
         return hparams.n_embd_v_gqa(il);
     }
 
@@ -721,10 +721,11 @@ static bool llama_kv_cache_init(
     cache.has_shift = false;
 
     // TODO: find a nicer way to add other recurrent model architectures
-    cache.recurrent = model.arch == LLM_ARCH_MAMBA;
+    cache.recurrent = llm_arch_is_recurrent(model.arch);
+    cache.hybrid = llm_arch_is_hybrid(model.arch);
     // qwen3next uses hybrid recurrent+attention cache semantics. Keep V rows in
     // standard layout to match the mainline hybrid path when flash attention is off.
-    cache.v_trans   = !cache.recurrent && !cparams.flash_attn && model.arch != LLM_ARCH_QWEN3NEXT;
+    cache.v_trans   = !cache.recurrent && !cparams.flash_attn && model.arch != LLM_ARCH_QWEN3NEXT && model.arch != LLM_ARCH_QWEN35MOE;
 
     cache.head = 0;
     cache.size = kv_size;
@@ -736,7 +737,7 @@ static bool llama_kv_cache_init(
     cache.cells.clear();
     cache.cells.resize(kv_size);
 
-    if (cache.recurrent || model.arch == LLM_ARCH_QWEN3NEXT) {
+    if (cache.recurrent || model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) {
         // init state copy sources
         for (uint32_t i = 0; i < cache.size; ++i) {
             cache.cells[i].src = i;
@@ -821,7 +822,7 @@ static bool llama_kv_cache_init(
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
     const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
-    if (model.arch == LLM_ARCH_QWEN3NEXT && qnext_state_slots < std::max<uint32_t>(1, cparams.n_seq_max)) {
+    if ((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && qnext_state_slots < std::max<uint32_t>(1, cparams.n_seq_max)) {
         LLAMA_LOG_WARN("%s: reducing qwen3next state slots from %u to %u to fit KV cache size\n",
                 __func__, std::max<uint32_t>(1, cparams.n_seq_max), qnext_state_slots);
     }
@@ -3144,7 +3145,7 @@ static int llama_decode_internal(
         auto tim1 = ggml_time_us();
 #endif
         uint32_t n_tokens = std::min(n_ubatch, n_tokens_all - cur_token);
-        if (model.arch == LLM_ARCH_QWEN3NEXT &&
+        if ((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) &&
                 n_tokens > 1 &&
                 batch_all.n_seq_id != nullptr &&
                 batch_all.seq_id != nullptr) {
@@ -5227,6 +5228,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
 
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_QWEN3VLMOE:
+        case LLM_ARCH_QWEN35MOE:
             return LLAMA_ROPE_TYPE_IMROPE;
 
         // all model arches should be listed explicitly here

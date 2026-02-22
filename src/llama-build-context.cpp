@@ -142,7 +142,7 @@ ggml_cgraph * llm_build_context::build_k_shift() {
     ggml_set_input(lctx.inp_K_shift);
 
     for (int il = 0; il < n_layer; ++il) {
-        if (model.arch == LLM_ARCH_QWEN3NEXT && hparams.is_recurrent(il)) {
+        if ((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && hparams.is_recurrent(il)) {
             continue;
         }
         if (kv_self.k_l[il] == nullptr) {
@@ -241,7 +241,7 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
         }
 
         for (int il = 0; il < n_layer; ++il) {
-            if (model.arch == LLM_ARCH_QWEN3NEXT && hparams.is_recurrent(il)) {
+            if ((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && hparams.is_recurrent(il)) {
                 continue;
             }
             if (kv_self.k_l[il] == nullptr) {
@@ -4463,6 +4463,143 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
                     LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp);
         }
+
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+
+        inpL = cur;
+    }
+
+    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+    cb(cur, "result_output", -1);
+
+    ggml_build_forward_expand(gf, cur);
+
+    return gf;
+}
+
+ggml_cgraph * llm_build_context::build_qwen35moe() {
+    static constexpr int QWEN3NEXT_CHUNK_SIZE = 64;
+
+    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model), false);
+
+    delta_net delta(lctx, batch);
+
+    const int64_t n_embd_head = hparams.n_embd_head_v;
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+
+    int sections[4];
+    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+
+    auto build_layer_attn = [&](ggml_tensor * cur, ggml_tensor * inp_pos, ggml_tensor * KQ_mask, int il) -> ggml_tensor * {
+
+        auto Qaux = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+        auto Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+        auto Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+        cb(Qaux, "Qaux", il);
+        cb(Kcur, "Kcur", il);
+        cb(Vcur, "Vcur", il);
+        ggml_build_forward_expand(gf, Qaux);
+        ggml_build_forward_expand(gf, Kcur);
+        ggml_build_forward_expand(gf, Vcur);
+
+        Qaux = ggml_reshape_3d(ctx0, Qaux, n_embd_head * 2, n_head, n_tokens);
+        auto Qcur = ggml_cont(ctx0, ggml_view_3d(ctx0, Qaux, n_embd_head, n_head, n_tokens, Qaux->nb[1], Qaux->nb[2], 0));
+        auto gate = ggml_cont_2d(ctx0, ggml_view_3d(ctx0, Qaux, n_embd_head, n_head, n_tokens, Qaux->nb[1], Qaux->nb[2], n_embd_head*ggml_element_size(Qaux)), n_embd_head*n_head, n_tokens);
+        cb(Qcur, "Qcur", il);
+        cb(gate, "gate", il);
+
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+        Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cb(Qcur, "Qcur_normed", il);
+
+        Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cb(Kcur, "Kcur_normed", il);
+
+        Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr,
+            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+
+        Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr,
+            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+
+        cb(Qcur, "Qcur_roped", il);
+        cb(Kcur, "Kcur_roped", il);
+
+        ggml_tensor * attn = llm_build_kv(ctx0, lctx, kv_self, gf, nullptr, nullptr,
+                Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv,
+                hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale, cb, il);
+        cb(attn, "attn_pregate", il);
+
+        gate = ggml_sigmoid(ctx0, gate);
+        cb(gate, "gate_sigmoid", il);
+        attn = ggml_mul(ctx0, attn, gate);
+        cb(attn, "attn_gated", il);
+
+        attn = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, attn);
+        cb(attn, "attn_output", il);
+
+        return attn;
+
+    };
+
+    ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+    ggml_tensor * inp_pos = build_inp_pos();
+    ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+    ggml_tensor * KQ_mask = build_inp_KQ_mask();
+
+    lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
+    cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
+    ggml_set_input(lctx.inp_s_seq_qnext);
+
+    ggml_tensor * causal_mask = nullptr;
+    ggml_tensor * identity    = nullptr;
+    ggml_tensor * diag_mask   = nullptr;
+    causal_mask = ggml_tri(ctx0,
+            ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE, QWEN3NEXT_CHUNK_SIZE), 1.0f),
+            GGML_TRI_TYPE_LOWER);
+    identity  = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE), 1.0f));
+    diag_mask = ggml_add(ctx0, causal_mask, identity);
+    ggml_build_forward_expand(gf, causal_mask);
+    ggml_build_forward_expand(gf, identity);
+    ggml_build_forward_expand(gf, diag_mask);
+
+    ggml_tensor * cur = nullptr;
+
+    for (int il = 0; il < n_layer; ++il) {
+        ggml_tensor * inpSA = inpL;
+
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
+
+        if (hparams.is_recurrent(il)) {
+            cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
+        } else {
+            cur = build_layer_attn(cur, inp_pos, KQ_mask, il);
+        }
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+        }
+
+        cur = ggml_add(ctx0, cur, inpSA);
+        cb(cur, "attn_residual", il);
+
+        cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                model.layers[il].ffn_gate_inp,  nullptr,
+                model.layers[il].ffn_up_exps,   nullptr,
+                model.layers[il].ffn_gate_exps, nullptr,
+                model.layers[il].ffn_down_exps, nullptr,
+                nullptr,
+                model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
+                model.layers[il].ffn_gate_shexp,  nullptr,
+                model.layers[il].ffn_down_shexp,  nullptr,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, true, false, 0.0f,
+                LLM_EXPERT_GATING_FUNC_SOFTMAX,
+                LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
@@ -9507,6 +9644,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_QWEN3NEXT:
             {
                 result = llm.build_qwen3next();
+            } break;
+        case LLM_ARCH_QWEN35MOE:
+            {
+                result = llm.build_qwen35moe();
             } break;
         case LLM_ARCH_QWEN3VL:
             {
