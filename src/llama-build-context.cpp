@@ -1986,9 +1986,12 @@ static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml
             }
         }
     } else {
-        if (cur->op == GGML_OP_REDUCE && cur->src[lctx.model.main_gpu]) {
+        int idx = lctx.model.default_layer_device[lctx.model.hparams.n_layer];
+        int idx_out = ggml_backend_sched_get_backend_idx(lctx.sched, lctx.model.output->buffer);
+        if (idx_out >= 0) idx = idx_out;
+        if (cur->op == GGML_OP_REDUCE && cur->src[idx]) {
             // avoid copy to main GPU
-            cur->view_src = cur->src[lctx.model.main_gpu];
+            cur->view_src = cur->src[idx];
         }
         if (output_norm) {
             cur = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, output_norm, NULL, LLM_NORM_RMS, cb, -1);
@@ -4458,12 +4461,33 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
 
         if (hparams.is_recurrent(il)) {
-            if (inpL->op == GGML_OP_REDUCE && inpL->src[model.default_layer_device[il]]) {
-                inpL->view_src = inpL->src[model.default_layer_device[il]];
-                //printf("Using reduce result on device %d\n", model.default_layer_device[il]);
-                //inpL = inpL->src[model.default_layer_device[il]];
+            int idx = model.default_layer_device[il];
+            if (inpL->op == GGML_OP_REDUCE) {
+                if (model.layers[il].wqkv) {
+                    int idx_wqkv = ggml_backend_sched_get_backend_idx(lctx.sched, model.layers[il].wqkv->buffer);
+                    //int idx_s_l = -1;
+                    //if (kv_self.s_l[il]) idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
+                    //printf("Layer %2d: %d, %d, %d\n", il, idx, idx_wqkv, idx_s_l);
+                    if (idx_wqkv >= 0) idx = idx_wqkv;
+                }
+                if (inpL->src[idx]) {
+                    inpL->view_src = inpL->src[idx];
+                }
             }
-            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[model.default_layer_device[il]] : model.layers[il].attn_norm;
+            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
+            //if (inpL->op == GGML_OP_REDUCE && inpL->src[model.default_layer_device[il]]) {
+            //    if (model.layers[il].wqkv) {
+            //        int idx = ggml_backend_sched_get_backend_idx(lctx.sched, model.layers[il].wqkv->buffer);
+            //        printf("Layer %2d wqkv backend is %d\n", il, idx);
+            //        //auto backend = ggml_backend_sched_get_tensor_backend(lctx.sched, model.layers[il].wqkv);
+            //        //if (backend) printf("Layer %2d wqkv backend is %s\n", il, ggml_backend_name(backend));
+            //        //else printf("Backend for wqkv in layer %2d is not known\n", il);
+            //    }
+            //    inpL->view_src = inpL->src[model.default_layer_device[il]];
+            //    //printf("Using reduce result on device %d\n", model.default_layer_device[il]);
+            //    //inpL = inpL->src[model.default_layer_device[il]];
+            //}
+            //auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[model.default_layer_device[il]] : model.layers[il].attn_norm;
             cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
             cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
