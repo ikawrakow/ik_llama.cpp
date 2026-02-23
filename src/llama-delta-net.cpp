@@ -636,9 +636,8 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * z_2d        = ggml_reshape_2d(ctx0, z,      head_v_dim, num_v_heads * n_tok);
 
     ggml_tensor * attn_out_norm = llm_build_context::llm_build_norm(ctx0, attn_out_2d, hparams, model.layers[il].ssm_norm, nullptr, LLM_NORM_RMS, cb, il);
-    ggml_tensor * gated_silu    = ggml_silu(ctx0, z_2d);
-    cb(gated_silu, "gated_silu", il);
-    attn_out_norm = ggml_mul(ctx0, attn_out_norm, gated_silu);
+    cb(attn_out_norm, "attn_rms_norm", il);
+    attn_out_norm = ggml_fused_mul_unary(ctx0, z_2d, attn_out_norm, GGML_UNARY_OP_SILU);
     cb(attn_out_norm, "attn_out_norm", il);
 
     ggml_tensor * final_output = ggml_reshape_2d(ctx0, attn_out_norm, value_dim, n_tok);

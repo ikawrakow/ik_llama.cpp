@@ -3263,8 +3263,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_sum_rows_nc(ctx, cgraph->nodes[i+1]);
                 i += 2;
             } else {
-                //auto src = dst->src[0];
-                //printf("cont(%s -> %s): %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu\n", src->name, dst->name, src->ne[0], src->ne[1], src->ne[2], src->ne[3], src->nb[0], src->nb[1], src->nb[2], src->nb[3]);
                 ggml_cuda_dup(ctx, dst);
             }
             break;
