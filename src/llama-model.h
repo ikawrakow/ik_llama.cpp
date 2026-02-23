@@ -430,8 +430,8 @@ struct llama_model {
         if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
-        return std::max<size_t>(1024, 8*n_tensors);
-        //return 65536 * 2;
+        //return std::max<size_t>(1024, 8*n_tensors);
+        return 65536;
     }
 
     bool has_tensor_overrides() const {
