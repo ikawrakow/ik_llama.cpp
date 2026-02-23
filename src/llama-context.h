@@ -191,6 +191,8 @@ struct llama_context {
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
 
+    const float * draft_input_hidden_state = nullptr;
+
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
@@ -209,6 +211,7 @@ struct llama_context {
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
+    struct ggml_tensor * inp_mtp_states = nullptr;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
@@ -225,5 +228,7 @@ struct llama_context {
     std::vector<CacheCopy> cache_copies;
 
     bool update_cache_copies();
-
+    bool prepare_mtp_graph_inputs(
+        struct llama_context & lctx);
+    void set_mtp_op_type(llama_mtp_op_type value);
 };

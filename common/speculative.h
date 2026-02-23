@@ -39,3 +39,22 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
+
+// Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
+std::vector<llama_token> mtp_speculative_gen_draft(
+    struct common_sampler * smpl,
+    struct llama_context * ctx,
+    int n_draft,
+    float p_min,
+    llama_token id_last,
+    int32_t n_past,
+    llama_seq_id seq_id);
+
+void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup);
+
+void mtp_accept_tokens(
+    struct llama_context * ctx,
+    const std::vector<llama_token> & ids,
+    int32_t n_past_base,
+    llama_seq_id seq_id
+);
