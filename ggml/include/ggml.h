@@ -678,6 +678,7 @@ extern "C" {
         GGML_OP_TRI,
         GGML_OP_FILL,
         GGML_OP_SOLVE_TRI,
+        GGML_OP_DELTA_NET,
 
         GGML_OP_MAP_UNARY,
         GGML_OP_MAP_BINARY,
@@ -2507,6 +2508,15 @@ extern "C" {
             bool                  left,
             bool                  lower,
             bool                  uni);
+
+    GGML_API struct ggml_tensor * ggml_delta_net(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state);
 
     // custom operators
 
