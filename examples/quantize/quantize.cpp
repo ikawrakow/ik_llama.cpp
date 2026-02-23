@@ -355,6 +355,8 @@ int main(int argc, char ** argv) {
             params.quantize_output_tensor = false;
         } else if (strcmp(argv[arg_idx], "--ignore-imatrix-rules") == 0) {
             params.ignore_imatrix_rules = true;
+        } else if (strcmp(argv[arg_idx], "--dry-run") == 0) {
+            params.dry_run = true;
         } else if (strcmp(argv[arg_idx], "--repack") == 0) {
             params.only_repack = true;
         } else if (strcmp(argv[arg_idx], "--repack-pattern") == 0) {
