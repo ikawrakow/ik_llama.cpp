@@ -504,6 +504,8 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     }
     cb(beta, "beta", il);
     cb(alpha, "alpha", il);
+    ggml_build_forward_expand(gf, beta);
+    ggml_build_forward_expand(gf, alpha);
 
     ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
     ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
@@ -529,6 +531,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     }
     if (reset_state_local) {
         state_f32 = ggml_scale(ctx0, state_f32, 0.0f);
+        cb(state_f32, "state_reset", il);
     }
 
     ggml_tensor * conv_state_flat = ggml_view_2d(ctx0, state_f32, conv_state_dim, 1, state_f32->nb[1], 0);
@@ -539,6 +542,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * state       = ggml_reshape_4d(ctx0, ssm_state_flat, head_v_dim, head_v_dim, num_v_heads, 1);
     cb(conv_states, "conv_states", il);
     cb(state, "state_predelta", il);
+    ggml_build_forward_expand(gf, state);
 
     ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, model.layers[il].ssm_conv1d, inp_s_seq_qnext);
     cb(conv_output_raw, "conv_output_raw", il);

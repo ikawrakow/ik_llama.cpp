@@ -572,7 +572,7 @@ bool llama_context::update_cache_copies() {
     const int n_layer = model.mtp ? model.hparams.n_layer
                                   : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     auto layer_has_attention_kv = [&](int il) {
-        return !((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && model.hparams.is_recurrent(il));
+        return !model.hparams.is_recurrent(il);
     };
     if ((int)kv_self.k_l.size() != n_layer) return false;
     if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
@@ -661,11 +661,8 @@ llama_context::~llama_context() {
 // kv cache helpers
 //
 
-static inline bool llama_qwen3next_is_recurrent_layer(
-        const llama_model &   model,
-        const llama_hparams & hparams,
-        uint32_t              il) {
-    return (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && hparams.is_recurrent(il);
+static inline bool llama_qwen3next_is_recurrent_layer(const llama_hparams & hparams, uint32_t il) {
+    return hparams.is_recurrent(il);
 }
 
 static inline uint32_t llama_kv_v_row_embd(
@@ -767,7 +764,7 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
         for (int64_t i = 0; i < n_layer; ++i) {
-            if (split_cache) {
+            if (split_cache && !hparams.is_recurrent(i)) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
             } else {
                 buft_layer_count[model.buft_layer[i].buft]++;
@@ -827,7 +824,7 @@ static bool llama_kv_cache_init(
         needs_v_cache = cparams.mla_attn == 1 && !cparams.flash_attn;
     }
     if (needs_v_cache) cache.v_l.reserve(n_layer);
-    cache.s_l.reserve(n_layer);
+    cache.s_l.resize(n_layer, nullptr);
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
@@ -839,12 +836,12 @@ static bool llama_kv_cache_init(
 
     int n_mla = 0;
     for (int i = 0; i < (int) n_layer; i++) {
-        const bool qnext_recurrent = llama_qwen3next_is_recurrent_layer(model, hparams, i);
+        const bool qnext_recurrent = llama_qwen3next_is_recurrent_layer(hparams, i);
         const uint32_t n_embd_v_row = llama_kv_v_row_embd(model, hparams, i);
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
-        struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -871,15 +868,20 @@ static bool llama_kv_cache_init(
             n_mla++;
         }
         else {
+            if (qnext_recurrent) {
+                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
+                auto s_name = std::string{"cache_s_l"} + std::to_string(i);
+                ggml_set_name(s, s_name.c_str());
+                cache.s_l[i] = s;
+                cache.k_l.push_back(nullptr);
+                cache.v_l.push_back(nullptr);
+                continue;
+            }
             bool split_cache_i = split_cache;
             auto K = model.layers[i].wk;
             auto V = model.layers[i].wv;
             if (split_cache && (!K || !V || !K->extra || !V->extra)) {
                 ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-                split_cache_i = false;
-            }
-            if (qnext_recurrent) {
-                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
                 split_cache_i = false;
             } else {
                 int n_embd_head_v = hparams.n_embd_head_v;
@@ -934,14 +936,9 @@ static bool llama_kv_cache_init(
                     v->extra = (void *)&split_v_l.ggml;
                 }
             }
-            if (s) {
-                auto s_name = std::string{"cache_s_l"} + std::to_string(i);
-                ggml_set_name(s, s_name.c_str());
-            }
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
         }
-        cache.s_l.push_back(s);
     }
     if (is_mla_attn && cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
@@ -1926,6 +1923,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MINIMAX_M2,
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
+        LLM_ARCH_QWEN3NEXT,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -2015,18 +2013,30 @@ static bool llm_load_tensors(
     }
 
     int device_count = model.splits.size();
-    // assign the repeating layers to the devices according to the splits
+    model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
     int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
-    if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
-
+    if (device_count > 1) {
         for (int i = i_gpu_start; i < n_layer; ++i) {
             int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
-            model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
+            model.default_layer_device[i] = model.devices[layer_gpu];
+        }
+        if (n_gpu_layers > n_layer) {
+            int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - model.splits.begin();
+            model.default_layer_device[n_layer] = model.devices[layer_gpu];
+        }
+    }
+    // assign the repeating layers to the devices according to the splits
+    if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
+        for (int i = i_gpu_start; i < n_layer; ++i) {
+            model.buft_layer[i] = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
+            //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
+            //model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
-            int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - model.splits.begin();
-            model.buft_output = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
+            //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - model.splits.begin();
+            //model.buft_output = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
+            model.buft_output = llama_default_buffer_type_offload(model, model.default_layer_device[n_layer]);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }

@@ -267,6 +267,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_up_shexp;
     llama_split_tensor split_ffn_gate_shexp;
     llama_split_tensor split_ffn_down_shexp;
+    llama_split_tensor split_ffn_gate_inp_shexp;
 
     llama_split_tensor split_ffn_gate_inp_b;
     llama_split_tensor split_ffn_gate_exps_b;
@@ -378,6 +379,7 @@ struct llama_model {
 
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
+    std::vector<int32_t> default_layer_device;
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
