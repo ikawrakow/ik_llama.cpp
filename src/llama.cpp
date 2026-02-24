@@ -4414,6 +4414,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.ignore_imatrix_rules        =*/ false,
         /*.only_repack                 =*/ false,
         /*.dry_run                     =*/ false,
+        /*.partial_requant             =*/ false,
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.custom_quants               =*/ nullptr,

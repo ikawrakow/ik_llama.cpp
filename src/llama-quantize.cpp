@@ -1041,6 +1041,16 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     const size_t align = GGUF_DEFAULT_ALIGNMENT;
     struct gguf_context * ctx_out = gguf_init_empty();
 
+    // Early exit if partial_requant is enabled and output file already exists
+    if (params->partial_requant && !params->keep_split) {
+        std::ifstream test_file(fname_out);
+        if (test_file) {
+            LLAMA_LOG_INFO("%s: output file %s exists, skipping\n", __func__, fname_out.c_str());
+            gguf_free(ctx_out);
+            return;
+        }
+    }
+
     // copy the KV pairs from the input file
     gguf_set_kv     (ctx_out, ml.meta);
     gguf_set_val_u32(ctx_out, "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
@@ -1179,6 +1189,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     int cur_split = -1;
     std::ofstream fout;
+    std::vector<bool> split_skipped(n_split, false);
     auto close_ofstream = [&]() {
         // Write metadata and close file handler
         if (fout.is_open()) {
@@ -1202,6 +1213,16 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             fname = std::string(split_path);
         }
 
+        if (params->partial_requant) {
+            std::ifstream test_file(fname);
+            if (test_file) {
+                LLAMA_LOG_INFO("%s: split file %s exists, skipping\n", __func__, fname.c_str());
+                split_skipped[cur_split] = true;
+                fout = std::ofstream();
+                return;
+            }
+        }
+
         fout = std::ofstream(fname, std::ios::binary);
         fout.exceptions(std::ofstream::failbit); // fail fast on write errors
         const size_t meta_size = gguf_get_meta_size(ctx_outs[cur_split]);
@@ -1217,6 +1238,13 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         if (weight->idx != cur_split && params->keep_split) {
             close_ofstream();
             new_ofstream(weight->idx);
+        }
+
+        if (params->partial_requant && split_skipped[cur_split]) {
+            const std::string name = ggml_get_name(tensor);
+            gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), tensor->type);
+            gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), tensor->data, ggml_nbytes(tensor));
+            continue;
         }
 
         const std::string name = ggml_get_name(tensor);
@@ -1511,7 +1539,7 @@ QuantizationDone:;
         total_size_org += ggml_nbytes(tensor);
         total_size_new += new_size;
 
-        if (!params->dry_run) {
+        if (!params->dry_run && !split_skipped[cur_split]) {
             // update the gguf meta data as we go
             gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), new_type);
             gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), new_data, new_size);
