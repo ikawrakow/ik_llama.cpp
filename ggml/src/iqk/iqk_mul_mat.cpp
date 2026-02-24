@@ -1397,7 +1397,7 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
     static_assert(head_dim % 8 == 0);
 #endif
 
-    const float eps = 1e-12f;
+    const float eps = 1e-6f;
     const float scale = 1.0f / sqrtf((float) head_dim);
 
     float v_new_buf[head_dim];
