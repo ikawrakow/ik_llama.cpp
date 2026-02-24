@@ -43,6 +43,7 @@ struct llama_cparams {
     bool split_mode_graph_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
+    bool fused_delta_net;
     int  min_experts;
     float thresh_experts;
     bool mtp;

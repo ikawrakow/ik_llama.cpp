@@ -357,6 +357,7 @@ struct gpt_params {
     bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
     //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
+    bool fused_delta_net   = false; // if true, use fused delta-net for TG with hybrid/recurrent models
     bool has_mtp           = false; // enable MTP if supported by the model
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
