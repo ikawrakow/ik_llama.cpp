@@ -323,7 +323,6 @@ struct split_strategy {
             char split_path[PATH_MAX] = {0};
             llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
 
-// ensure output directory exists
             ensure_output_directory(split_path);
 
             // open the output file
@@ -417,7 +416,6 @@ static void gguf_merge(const split_params & split_params) {
     int n_split = 1;
     int total_tensors = 0;
 
-// ensure output directory exists
     ensure_output_directory(split_params.output);
 
     // avoid overwriting existing output file
