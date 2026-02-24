@@ -574,10 +574,14 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_tok, 1);
     } else {
         beta = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_beta, cur);
+        cb(beta, "beta", il);
         beta = ggml_reshape_4d(ctx0, beta, num_v_heads, 1, n_tok, 1);
+        cb(beta, "beta_reshaped", il);
         alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_alpha, cur);
-        // Why???
+        cb(alpha, "alpha", il);
+        // Why? Don't think this ggml_cont_3d is needed, but lets leave it in for now just in case.
         alpha = ggml_cont_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
+        cb(alpha, "alpha_cont", il);
     }
     cb(beta, "beta", il);
     cb(alpha, "alpha", il);
