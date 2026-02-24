@@ -1515,7 +1515,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.merge_qkv = true;
         return true;
     }
-    if (arg == "-muge" || arg == "--merge-up-gate-expsrts") {
+    if (arg == "-muge" || arg == "--merge-up-gate-experts") {
         params.merge_up_gate_exps = true;
         return true;
     }
