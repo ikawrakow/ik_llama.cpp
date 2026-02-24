@@ -52,7 +52,9 @@ static void ensure_output_directory(const std::string & filepath) {
             if (len > 0) {
                 std::wstring wdirpath(len, 0);
                 MultiByteToWideChar(CP_UTF8, 0, dirpath.c_str(), -1, &wdirpath[0], len);
-                CreateDirectoryW(wdirpath.c_str(), NULL);
+                if (!CreateDirectoryW(wdirpath.c_str(), NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+                    throw std::runtime_error(format("Failed to create directory '%s': Win32 error %lu", dirpath.c_str(), GetLastError()));
+                }
             }
 #else
             struct stat st;
