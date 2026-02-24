@@ -1986,9 +1986,12 @@ static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml
             }
         }
     } else {
-        if (cur->op == GGML_OP_REDUCE && cur->src[lctx.model.main_gpu]) {
+        int idx = lctx.model.default_layer_device[lctx.model.hparams.n_layer];
+        int idx_out = ggml_backend_sched_get_backend_idx(lctx.sched, lctx.model.output->buffer);
+        if (idx_out >= 0) idx = idx_out;
+        if (cur->op == GGML_OP_REDUCE && cur->src[idx]) {
             // avoid copy to main GPU
-            cur->view_src = cur->src[lctx.model.main_gpu];
+            cur->view_src = cur->src[idx];
         }
         if (output_norm) {
             cur = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, output_norm, NULL, LLM_NORM_RMS, cb, -1);
@@ -4458,12 +4461,18 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
 
         if (hparams.is_recurrent(il)) {
-            if (inpL->op == GGML_OP_REDUCE && inpL->src[model.default_layer_device[il]]) {
-                inpL->view_src = inpL->src[model.default_layer_device[il]];
-                //printf("Using reduce result on device %d\n", model.default_layer_device[il]);
-                //inpL = inpL->src[model.default_layer_device[il]];
+            int idx = model.default_layer_device[il];
+            if (inpL->op == GGML_OP_REDUCE) {
+                if (kv_self.s_l[il]) {
+                    // This shouldn't be necessary, but just in case.
+                    int idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
+                    if (idx_s_l >= 0) idx = idx_s_l;
+                }
+                if (inpL->src[idx]) {
+                    inpL->view_src = inpL->src[idx];
+                }
             }
-            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[model.default_layer_device[il]] : model.layers[il].attn_norm;
+            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
             cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
             cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
@@ -4474,7 +4483,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             cur = ggml_add(ctx0, cur, inpSA);
             cb(cur, "attn_residual", il);
         } else {
-            //cur = build_layer_attn(cur, inp_pos, KQ_mask, il);
             cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
                     KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, false);
         }
