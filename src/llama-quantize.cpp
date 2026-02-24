@@ -11,6 +11,8 @@
 #include <regex>
 #include <mutex>
 #include <fstream>
+#include <sys/stat.h>
+#include <errno.h>
 
 //
 // quantization
@@ -36,6 +38,31 @@ static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
         file.write(&zero, 1);
+    }
+}
+
+static void ensure_output_directory(const std::string & filepath) {
+    size_t pos = filepath.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        std::string dirpath = filepath.substr(0, pos);
+        if (!dirpath.empty()) {
+#if defined(_WIN32)
+            // Convert to wide string for Windows API
+            int len = MultiByteToWideChar(CP_UTF8, 0, dirpath.c_str(), -1, NULL, 0);
+            if (len > 0) {
+                std::wstring wdirpath(len, 0);
+                MultiByteToWideChar(CP_UTF8, 0, dirpath.c_str(), -1, &wdirpath[0], len);
+                CreateDirectoryW(wdirpath.c_str(), NULL);
+            }
+#else
+            struct stat st;
+            if (stat(dirpath.c_str(), &st) != 0) {
+                if (mkdir(dirpath.c_str(), 0755) != 0 && errno != EEXIST) {
+                    throw std::runtime_error(format("Failed to create directory '%s': %s", dirpath.c_str(), strerror(errno)));
+                }
+            }
+#endif
+        }
     }
 }
 
@@ -1039,6 +1066,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     }
 
     const size_t align = GGUF_DEFAULT_ALIGNMENT;
+
+    ensure_output_directory(fname_out);
+
     struct gguf_context * ctx_out = gguf_init_empty();
 
     // Early exit if partial_requant is enabled and output file already exists
@@ -1223,6 +1253,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
         }
 
+        ensure_output_directory(fname);
         fout = std::ofstream(fname, std::ios::binary);
         fout.exceptions(std::ofstream::failbit); // fail fast on write errors
         const size_t meta_size = gguf_get_meta_size(ctx_outs[cur_split]);
