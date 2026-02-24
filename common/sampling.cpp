@@ -143,6 +143,9 @@ void common_sampler_reset(common_sampler * ctx) {
 }
 
 void common_sampler_review(common_sampler * ctx) {
+    if (!ctx->adapt_p_ctx) {
+        return;
+    }
     const bool record = ctx->record_samplers;
     const bool rewind = ctx->rewind_samplers;
 
