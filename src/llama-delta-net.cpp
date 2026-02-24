@@ -406,7 +406,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
     g = ggml_permute(ctx0, g, 2, 0, 3, 1);
     beta = ggml_permute(ctx0, beta, 2, 0, 1, 3);
-    if (n_seqs > 1) {
+    if (n_seqs > 1 || n_tokens > 1) {
         q = ggml_cont_4d(ctx0, q, S_k, n_tokens, H_k, n_seqs);
         k = ggml_cont_4d(ctx0, k, S_k, n_tokens, H_k, n_seqs);
         v = ggml_cont_4d(ctx0, v, S_v, n_tokens, H_v, n_seqs);
@@ -680,15 +680,16 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    std::pair<ggml_tensor *, ggml_tensor *> attn_out;
-
     GGML_ASSERT(causal_mask != nullptr);
     GGML_ASSERT(identity    != nullptr);
     GGML_ASSERT(diag_mask   != nullptr);
 
-    attn_out = n_tok == 1 ? lctx.cparams.fused_delta_net ? build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb)
-                                                         : build_delta_net_autoregressive(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb)
-                                                         : build_delta_net_chunking(ctx0, q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il, cb);
+    std::pair<ggml_tensor *, ggml_tensor *> attn_out;
+    // The fused delta-net implementation is only faster than chunked for n_tok <= 8, so use it only in that case
+    attn_out = lctx.cparams.fused_delta_net && n_tok <= 8 ? build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb) :
+        n_tok == 1 ? build_delta_net_autoregressive(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb)
+                   : build_delta_net_chunking(ctx0, q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il, cb);
+
     ggml_tensor * output    = attn_out.first;
     ggml_tensor * new_state = attn_out.second;
     cb(output, "attn_output", il);

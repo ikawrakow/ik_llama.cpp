@@ -22562,6 +22562,11 @@ static void ggml_compute_forward_delta_net_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    if (iqk_fused_delta_net(head_dim, n_heads, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
+                out_data, state_out, ith, nth)) {
+        return;
+    }
+
     const int64_t total_heads = n_heads * n_seqs;
     const int64_t heads_per_thread = (total_heads + nth - 1) / nth;
     const int64_t h_start = ith * heads_per_thread;
@@ -22571,9 +22576,7 @@ static void ggml_compute_forward_delta_net_f32(
     const float scale = 1.0f / sqrtf((float) head_dim);
 
     float * v_new_buf = (float *) malloc(head_dim * sizeof(float));
-    if (!v_new_buf) {
-        return;
-    }
+    GGML_ASSERT(v_new_buf);
 
     for (int64_t h_idx = h_start; h_idx < h_end; ++h_idx) {
         const int64_t batch_idx = h_idx / n_heads;
@@ -22624,17 +22627,17 @@ static void ggml_compute_forward_delta_net_f32(
                 float out_val = 0.0f;
 
                 for (int64_t col = 0; col < head_dim; ++col) {
-                    const float k_col = k_t[col] * k_norm_inv;
-                    const float q_col = q_t[col] * q_norm_inv * scale;
+                    const float k_col = k_t[col];
+                    const float q_col = q_t[col];
                     const float s = state[row + col * head_dim];
 
-                    v_prime += s * k_col * beta_val * decay;
-                    out_val += s * q_col * decay;
+                    v_prime += s * k_col;
+                    out_val += s * q_col;
                 }
 
-                const float v_new = v_t[row] * beta_val - v_prime;
+                const float v_new = v_t[row] * beta_val - v_prime * beta_val * decay * k_norm_inv;
                 v_new_buf[row] = v_new;
-                out_t[row] = out_val + v_new * attn_score;
+                out_t[row] = out_val * decay * q_norm_inv * scale + v_new * attn_score;
             }
 
             for (int64_t col = 0; col < head_dim; ++col) {
