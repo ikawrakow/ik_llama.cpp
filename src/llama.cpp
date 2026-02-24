@@ -4380,7 +4380,7 @@ struct llama_context_params llama_context_default_params() {
         /*.split_mode_graph_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
-        /*.fused_delta_net             =*/ false,
+        /*.fused_delta_net             =*/ 0,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,

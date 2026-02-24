@@ -686,7 +686,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
 
     std::pair<ggml_tensor *, ggml_tensor *> attn_out;
     // The fused delta-net implementation is only faster than chunked for n_tok <= 8, so use it only in that case
-    attn_out = lctx.cparams.fused_delta_net && n_tok <= 8 ? build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb) :
+    attn_out = n_tok <= lctx.cparams.fused_delta_net ? build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb) :
         n_tok == 1 ? build_delta_net_autoregressive(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb)
                    : build_delta_net_chunking(ctx0, q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il, cb);
 

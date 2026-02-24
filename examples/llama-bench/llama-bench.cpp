@@ -271,7 +271,7 @@ struct cmd_params {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
-    bool fdn = false; // fdn = fused delta net
+    int  fdn = 0; // fdn = fused delta net
     bool print_overrides = false;
     output_formats output_format;
     output_formats output_format_stderr;
@@ -317,7 +317,7 @@ static const cmd_params cmd_params_defaults = {
     /* muge                 */ false,
     /* rcache               */ false,
     /* sas                  */ false,
-    /* fdn                  */ false,
+    /* fdn                  */ 0,
     /* print_overrides      */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
@@ -371,7 +371,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -no-fug, --no-fused-up-gate <0|1>   (default: %s)\n", cmd_params_defaults.no_fug? "1" : "0");
     printf("  -no-ooae, --no-offload-only-active-experts <0|1>   (default: %s)\n", cmd_params_defaults.no_ooae? "1" : "0");
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
-    printf("  -fdn, --fused-delta-net <0|1>       (default: %s)\n", cmd_params_defaults.fdn ? "1" : "0");
+    printf("  -fdn, --fused-delta-net <n>         (default: %d)\n", cmd_params_defaults.fdn);
     printf("        --print-overrides <0|1>       (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
@@ -965,7 +965,7 @@ struct cmd_params_instance {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
-    bool fdn = false;
+    int fdn = 0;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -1282,7 +1282,7 @@ struct test {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
-    bool fdn = false;
+    int fdn = 0;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
@@ -1429,14 +1429,14 @@ struct test {
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
             field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
-            field == "avg_ns" || field == "stddev_ns") {
+            field == "avg_ns" || field == "stddev_ns" || field == "fdn") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
-            field == "rcache" || field == "reuse" || field == "muge" || field == "sas" || field == "fnd") {
+            field == "rcache" || field == "reuse" || field == "muge" || field == "sas") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1692,7 +1692,7 @@ struct markdown_printer : public printer {
             return 3;
         }
         if (field == "fdn") {
-            return 3;
+            return 4;
         }
         if (field == "use_thp") {
             return 3;
