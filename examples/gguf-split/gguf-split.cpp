@@ -12,6 +12,8 @@
 #include <string.h>
 #include <climits>
 #include <stdexcept>
+#include <sys/stat.h>
+#include <errno.h>
 
 #if defined(_WIN32)
     #include <windows.h>
@@ -190,6 +192,31 @@ static void zeros(std::ofstream & file, size_t n) {
     }
 }
 
+static void ensure_output_directory(const std::string & filepath) {
+    size_t pos = filepath.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        std::string dirpath = filepath.substr(0, pos);
+        if (!dirpath.empty()) {
+#if defined(_WIN32)
+            int len = MultiByteToWideChar(CP_UTF8, 0, dirpath.c_str(), -1, NULL, 0);
+            if (len > 0) {
+                std::wstring wdirpath(len, 0);
+                MultiByteToWideChar(CP_UTF8, 0, dirpath.c_str(), -1, &wdirpath[0], len);
+                CreateDirectoryW(wdirpath.c_str(), NULL);
+            }
+#else
+            struct stat st;
+            if (stat(dirpath.c_str(), &st) != 0) {
+                if (mkdir(dirpath.c_str(), 0755) != 0 && errno != EEXIST) {
+                    fprintf(stderr, "Failed to create directory '%s': %s\n", dirpath.c_str(), strerror(errno));
+                    exit(EXIT_FAILURE);
+                }
+            }
+#endif
+        }
+    }
+}
+
 struct split_strategy {
     const split_params params;
     std::ifstream & f_input;
@@ -310,6 +337,9 @@ struct split_strategy {
             char split_path[PATH_MAX] = {0};
             llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
 
+// ensure output directory exists
+            ensure_output_directory(split_path);
+
             // open the output file
             printf("Writing file %s ... ", split_path);
             fflush(stdout);
@@ -400,6 +430,9 @@ static void gguf_merge(const split_params & split_params) {
             split_params.output.c_str());
     int n_split = 1;
     int total_tensors = 0;
+
+// ensure output directory exists
+    ensure_output_directory(split_params.output);
 
     // avoid overwriting existing output file
     if (std::ifstream(split_params.output.c_str())) {
