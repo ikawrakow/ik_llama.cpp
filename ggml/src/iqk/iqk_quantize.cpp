@@ -1053,9 +1053,16 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
                 for (int j = 0; j < kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
             }
             sw[ib] = 0;
+            float amax = 0;
             for (int j = 0; j < kBlockSize; ++j) {
                 sw[ib] += weight[j];
                 pairs[j] = {xb[j], j};
+                float ax = std::abs(xb[j]);
+                amax = std::max(amax, ax);
+            }
+            if (amax < 1e-16f) {
+                scales[ib] = 0;
+                continue;
             }
             std::sort(pairs.begin(), pairs.end());
             sumx[0] = sumw[0] = 0;
@@ -1269,9 +1276,16 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
                 for (int j = 0; j < kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
             }
             sw[ib] = 0;
+            float amax = 0;
             for (int j = 0; j < kBlockSize; ++j) {
                 sw[ib] += weight[j];
                 pairs[j] = {xb[j], j};
+                float ax = std::abs(xb[j]);
+                amax = std::max(amax, ax);
+            }
+            if (amax < 1e-16f) {
+                scales[ib] = 0;
+                continue;
             }
             //float amax = 0, max = 0;
             //for (int j = 0; j < kBlockSize; ++j) {
@@ -1678,7 +1692,7 @@ void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const f
                     amax = ax; max = xb[j];
                 }
             }
-            if (!amax) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -1929,7 +1943,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
                     amax = ax; max = xb[j];
                 }
             }
-            if (amax < 1e-9f) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -2216,7 +2230,7 @@ static void quantize_row_iq3_ks_impl(const int super_block_size, const int block
                     amax = ax; max = xb[j];
                 }
             }
-            if (amax < 1e-9f) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -2544,7 +2558,7 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
                 amax = ax; max = xb[j];
             }
         }
-        if (!amax) {
+        if (amax < 1e-16f) {
             scales[ib] = 0;
             continue;
         }
@@ -2862,7 +2876,7 @@ void quantize_row_iq5_k_impl(const float * x, void * vy, int n_per_row, const fl
                     amax = ax; max = xb[j];
                 }
             }
-            if (!amax) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -3216,7 +3230,7 @@ void quantize_row_iq6_k_impl(const float * x, void * vy, int n_per_row, const fl
                     amax = ax; max = xb[j];
                 }
             }
-            if (!amax) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -3918,7 +3932,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
                     amax = ax; max = xb[j];
                 }
             }
-            if (!amax) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -4167,7 +4181,7 @@ static void quantize_row_iq5_ks_impl(const int super_block_size, const int block
                     amax = ax; max = xb[j];
                 }
             }
-            if (amax < 1e-15f) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -4470,7 +4484,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                     amax = ax; max = xb[j];
                 }
             }
-            if (!amax) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -8733,6 +8747,11 @@ void quantize_row_iq1_kt_impl(const float * x, void * vy, int n_per_row, const f
                 float ax = std::abs(xb[j]);
                 amax = std::max(amax, ax);
             }
+            if (amax < 1e-16f) {
+                scales[ib] = 0.0f;
+                for (int ig = 0; ig < Q::kNg; ++ig) all_idx[(ibl*Q::kSuperBlockSize + ib*Q::kBlockSize)/Q::kGroupSize + ig] = 0;
+                continue;
+            }
             float scale_0 = std::max(90.f, 124.f*amax/amax_row);
             quantizer.find_best_match( amax/scale_0, xb, weight, best_idx);
             auto [dp, score_p] = quantizer.find_best_scale(xb, weight, best_idx);
@@ -8997,6 +9016,11 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
             for (int j = 0; j < Q::kBlockSize; ++j) {
                 float ax = std::abs(xb[j]);
                 amax = std::max(amax, ax);
+            }
+            if (amax < 1e-16f) {
+                scales[ib] = 0.0f;
+                for (int ig = 0; ig < Q::kNg; ++ig) all_idx[(ibl*Q::kSuperBlockSize + ib*Q::kBlockSize)/Q::kGroupSize + ig] = 0;
+                continue;
             }
             float scale_0 = std::max(90.f, 124.f*amax/amax_row);
             quantizer.find_best_match( amax/scale_0, xb, weight, best_idx);
@@ -9289,8 +9313,10 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
                 xaux[j] = ax;
                 amax = std::max(amax, ax);
             }
-            scales[ib] = 0;
-            if (!amax) continue;
+            if (amax < 1e-16f) {
+                scales[ib] = 0.0f;
+                continue;
+            }
 
             //quantizer.find_best_match(amax/96.f, xaux, weight, best_idx+Q::kNg);
             //scales[ib] = quantizer.find_best_scale(xaux, weight, best_idx+Q::kNg).first;
@@ -9577,7 +9603,7 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
                 float ax = std::abs(xaux[j]);
                 amax = std::max(amax, ax);
             }
-            if (!amax) {
+            if (amax < 1e-16f) {
                 scales[ib] = 0;
                 continue;
             }
