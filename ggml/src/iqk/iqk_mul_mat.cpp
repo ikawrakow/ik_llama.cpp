@@ -1435,7 +1435,7 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
                 auto vk = _mm256_loadu_ps(k_t + i);
                 vqksum = _mm256_fmadd_ps(vk, vq, vqksum);
             }
-            kq_sum    = hsum_float_8(vqksum);
+            kq_sum = hsum_float_8(vqksum);
 #else
             for (int i = 0; i < head_dim; ++i) {
                 kq_sum += k_t[i] * q_t[i];
