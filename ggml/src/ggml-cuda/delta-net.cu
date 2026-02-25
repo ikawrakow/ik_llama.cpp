@@ -84,55 +84,34 @@ __global__ void delta_net_recurrent_f32(
     float * sQ = smem;                          // HEAD_DIM
     float * sK = sQ + HEAD_DIM;                 // HEAD_DIM
     float * sV = sK + HEAD_DIM;                 // HEAD_DIM
-    float * sKBeta = sV + HEAD_DIM;             // HEAD_DIM (plain k for state update)
-    float * sVBeta = sKBeta + HEAD_DIM;         // HEAD_DIM (v * sigmoid(beta))
-    float * sOut = sVBeta + HEAD_DIM;           // HEAD_DIM
-    float * sKCumdecay = sOut + HEAD_DIM;       // HEAD_DIM (k * sigmoid(beta) * exp(g))
-    float * sVNew = sKCumdecay + HEAD_DIM;      // HEAD_DIM (v_beta - v_prime)
+    float * sVNew = sV + HEAD_DIM;              // HEAD_DIM
 
     const float scale = rsqrtf((float)HEAD_DIM);
 
     __shared__ float sum_helper[block_size/WARP_SIZE];
 
     // Copy initial state to output buffer (will be updated in place)
-    for (int i = tid; i < HEAD_DIM * HEAD_DIM; i += blockDim.x) {
+    for (int i = tid; i < HEAD_DIM * HEAD_DIM; i += block_size) {
         state_dst[i] = state_src[i];
     }
-    __syncthreads();
 
     // Process each token sequentially
     for (int64_t t = 0; t < n_tokens; t++) {
 
-        float q_sq = 0.0f;
-        float k_sq = 0.0f;
-        for (int i = tid; i < HEAD_DIM; i += blockDim.x) {
+        float sum_kq = 0.0f;
+        for (int i = tid; i < HEAD_DIM; i += block_size) {
             sQ[i] = q_ptr[t * qkv_stride_token + i];
             sK[i] = k_ptr[t * qkv_stride_token + i];
             sV[i] = v_ptr[t * qkv_stride_token + i];
-            q_sq += sQ[i] * sQ[i];
-            k_sq += sK[i] * sK[i];
+            sum_kq += sK[i] * sQ[i];
         }
 
-        q_sq = reduce_sum<block_size>(q_sq, sum_helper);
-        k_sq = reduce_sum<block_size>(k_sq, sum_helper);
-
-        float q_norm = rsqrtf(q_sq + eps);
-        float k_norm = rsqrtf(k_sq + eps);
+        sum_kq = reduce_sum<block_size>(sum_kq, sum_helper);
 
         float beta_val = sigmoid_f(beta_ptr[t]);
         float decay    = expf(fminf(g_ptr[t], 50.0f));
 
-        float sum = 0;
-        for (int i = tid; i < HEAD_DIM; i += blockDim.x) {
-            sQ[i] = sQ[i] * q_norm * scale;
-            sK[i] = sK[i] * k_norm;
-            sKBeta[i] = sK[i];
-            sVBeta[i] = sV[i] * beta_val;
-            sKCumdecay[i] = sK[i] * beta_val * decay;
-            sum += sK[i] * sQ[i];
-        }
-        float attn_score = reduce_sum<block_size>(sum, sum_helper);
-        //__syncthreads();
+        float attn_score = sum_kq * scale;
 
         for (int row_out = warp_id; row_out < HEAD_DIM; row_out += NUM_WARPS) {
             float sum1 = 0.0f;
@@ -140,16 +119,15 @@ __global__ void delta_net_recurrent_f32(
             #pragma unroll
             for (int col = lane_id; col < HEAD_DIM; col += WARP_SIZE) {
                 float sval = state_dst[row_out + col * HEAD_DIM];
-                sum1 += sval * sKCumdecay[col];
+                sum1 += sval * sK[col];
                 sum2 += sval * sQ[col];
             }
-            sum1 = warp_reduce_sum(sum1);
-            sum2 = warp_reduce_sum(sum2);
+            sum1 = warp_reduce_sum(sum1) * beta_val * decay;
+            sum2 = warp_reduce_sum(sum2) * scale * decay;
             if (lane_id == 0) {
-                sVNew[row_out] = sVBeta[row_out] - sum1;
+                sVNew[row_out] = sV[row_out] * beta_val - sum1;
                 float v_attn = sVNew[row_out] * attn_score;
-                //sOut[row_out] = sum2 * decay + v_attn;
-                out_base[t * out_token_stride + row_out] = sum2 * decay + v_attn;
+                out_base[t * out_token_stride + row_out] = sum2 + v_attn;
             }
         }
         __syncthreads();
@@ -158,18 +136,14 @@ __global__ void delta_net_recurrent_f32(
             #pragma unroll
             for (int row = lane_id; row < HEAD_DIM; row += WARP_SIZE) {
                 float state_val = state_dst[row + out_dim * HEAD_DIM];
-                float safe_decay = decay;
-                if (isnan(safe_decay) || isinf(safe_decay)) {
-                    safe_decay = 1.0f;
-                }
-                float new_state_val = safe_decay * state_val + sVNew[row] * sKBeta[out_dim];
+                float new_state_val = decay * state_val + sVNew[row] * sK[out_dim];
                 new_state_val = fminf(fmaxf(new_state_val, -1e6f), 1e6f);
                 state_dst[row + out_dim * HEAD_DIM] = new_state_val;
             }
         }
-        if (t < n_tokens - 1) {
-            __syncthreads();
-        }
+        //if (t < n_tokens - 1) {
+        //    __syncthreads();
+        //}
 
     }
 }
@@ -410,7 +384,9 @@ static void delta_net_f32_cuda(
 
     // Shared memory: 9 * head_dim (for Q, K, V, KBeta, VBeta, Out, KCumdecay, VPrime, VNew)
     // Plus 6 floats for Norm[2], g_val, beta_val, decay, attn_score
-    const size_t smem_size = (9 * head_dim + 6) * sizeof(float);
+    //const size_t smem_size = (9 * head_dim + 6) * sizeof(float);
+    //const size_t smem_size = (4 * head_dim + 2 * n_tokens) * sizeof(float);
+    const size_t smem_size = 4 * head_dim * sizeof(float);
 
     // Use templated kernel for common head dimensions, generic for others
     if (head_dim == 64) {

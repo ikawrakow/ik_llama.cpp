@@ -1397,7 +1397,6 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
     static_assert(head_dim % 8 == 0);
 #endif
 
-    const float eps = 1e-6f;
     const float scale = 1.0f / sqrtf((float) head_dim);
 
     float v_new_buf[head_dim];
@@ -1428,42 +1427,25 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
             const float g_val    = g_data[g_head_offset + t];
             const float beta_raw = beta_data[g_head_offset + t];
 
-            float q_norm_sq = 0.0f;
-            float k_norm_sq = 0.0f;
             float kq_sum    = 0.0f;
 #ifdef __AVX2__
-            auto vqsum  = _mm256_setzero_ps();
-            auto vksum  = _mm256_setzero_ps();
             auto vqksum = _mm256_setzero_ps();
             for (int i = 0; i < head_dim; i += 8) {
                 auto vq = _mm256_loadu_ps(q_t + i);
                 auto vk = _mm256_loadu_ps(k_t + i);
-                vqsum  = _mm256_fmadd_ps(vq, vq, vqsum);
-                vksum  = _mm256_fmadd_ps(vk, vk, vksum);
                 vqksum = _mm256_fmadd_ps(vk, vq, vqksum);
             }
-            q_norm_sq = hsum_float_8(vqsum);
-            k_norm_sq = hsum_float_8(vksum);
             kq_sum    = hsum_float_8(vqksum);
 #else
             for (int i = 0; i < head_dim; ++i) {
-                q_norm_sq += q_t[i] * q_t[i];
-                k_norm_sq += k_t[i] * k_t[i];
-                kq_sum    += k_t[i] * q_t[i];
+                kq_sum += k_t[i] * q_t[i];
             }
 #endif
-            const float q_norm_inv = 1.0f / sqrtf(q_norm_sq + eps);
-            const float k_norm_inv = 1.0f / sqrtf(k_norm_sq + eps);
 
             const float beta_val = 1.0f / (1.0f + expf(-beta_raw));
             const float decay    = expf(fminf(g_val, 50.0f));
 
-            float attn_score = kq_sum * k_norm_inv * q_norm_inv * scale;
-
-            //float attn_score = 0.0f;
-            //for (int i = 0; i < head_dim; ++i) {
-            //    attn_score += (k_t[i] * k_norm_inv) * (q_t[i] * q_norm_inv * scale);
-            //}
+            float attn_score = kq_sum * scale;
 
             float * out_t = out_data + out_head_offset + t * out_token_stride;
 
@@ -1479,9 +1461,9 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
                 }
             }
             for (int row = 0; row < head_dim; ++row) {
-                const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay * k_norm_inv;
+                const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
                 v_new_buf[row] = v_new;
-                out_t[row] = out_val[row] * decay * q_norm_inv * scale + v_new * attn_score;
+                out_t[row] = out_val[row] * decay * scale + v_new * attn_score;
             }
 
 #ifdef __AVX2__
@@ -1489,7 +1471,7 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
             auto vmin = _mm256_set1_ps(-1e6f);
             auto vmax = _mm256_set1_ps( 1e6f);
             for (int col = 0; col < head_dim; ++col) {
-                auto vk = _mm256_set1_ps(k_t[col] * k_norm_inv);
+                auto vk = _mm256_set1_ps(k_t[col]);
                 for (int row = 0; row < head_dim; row += 8) {
                     auto vs = _mm256_loadu_ps(state + col * head_dim + row);
                     auto vn = _mm256_loadu_ps(v_new_buf + row);
@@ -1503,7 +1485,7 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
             }
 #else
             for (int col = 0; col < head_dim; ++col) {
-                const float k_col = k_t[col] * k_norm_inv;
+                const float k_col = k_t[col];
                 for (int row = 0; row < head_dim; ++row) {
                     float s = state[row + col * head_dim];
                     s = decay * s + v_new_buf[row] * k_col;
