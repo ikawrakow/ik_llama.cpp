@@ -312,7 +312,9 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
         for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
             std::regex pattern(overrides->pattern);
             if (std::regex_search(name, pattern)) {
-                LLAMA_LOG_INFO("Tensor %s buffer type overriden to %s\n", name.c_str(), ggml_backend_buft_name(overrides->buft));
+                const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
+                const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
+                LLAMA_LOG_INFO("Tensor %s (size = %zu bytes) buffer type overriden to %s\n", name.c_str(), nbytes, ggml_backend_buft_name(overrides->buft));
                 ctx = ctx_for_buft(overrides->buft);
                 break;
             }
