@@ -1916,7 +1916,7 @@ static float make_qkx1_quants(int n, int nmax, const float * restrict x, uint8_t
         if (x[i] < min) min = x[i];
         if (x[i] > max) max = x[i];
     }
-    if (max == min) {
+    if (max - min < 1e-10f) {
         for (int i = 0; i < n; ++i) L[i] = 0;
         *the_min = 0;
         return 0.f;
