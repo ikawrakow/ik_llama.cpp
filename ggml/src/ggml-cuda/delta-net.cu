@@ -95,6 +95,10 @@ __global__ void delta_net_recurrent_f32(
         state_dst[i] = state_src[i];
     }
 
+    __shared__ float all_sum[2*HEAD_DIM*NUM_WARPS];
+    auto all_sum1 = all_sum;
+    auto all_sum2 = all_sum1 + HEAD_DIM*NUM_WARPS;
+
     // Process each token sequentially
     for (int64_t t = 0; t < n_tokens; t++) {
 
@@ -113,24 +117,53 @@ __global__ void delta_net_recurrent_f32(
 
         float attn_score = sum_kq * scale;
 
-        for (int row_out = warp_id; row_out < HEAD_DIM; row_out += NUM_WARPS) {
+        for (int row_out = lane_id; row_out < HEAD_DIM; row_out += WARP_SIZE) {
             float sum1 = 0.0f;
             float sum2 = 0.0f;
             #pragma unroll
-            for (int col = lane_id; col < HEAD_DIM; col += WARP_SIZE) {
+            for (int col = warp_id; col < HEAD_DIM; col += NUM_WARPS) {
                 float sval = state_dst[row_out + col * HEAD_DIM];
                 sum1 += sval * sK[col];
                 sum2 += sval * sQ[col];
             }
-            sum1 = warp_reduce_sum(sum1) * beta_val * decay;
-            sum2 = warp_reduce_sum(sum2) * scale * decay;
-            if (lane_id == 0) {
-                sVNew[row_out] = sV[row_out] * beta_val - sum1;
-                float v_attn = sVNew[row_out] * attn_score;
-                out_base[t * out_token_stride + row_out] = sum2 + v_attn;
-            }
+            all_sum1[warp_id*HEAD_DIM + row_out] = sum1;
+            all_sum2[warp_id*HEAD_DIM + row_out] = sum2;
         }
         __syncthreads();
+
+        for (int row_out = tid; row_out < HEAD_DIM; row_out += block_size) {
+            float sum1 = all_sum1[row_out];
+            float sum2 = all_sum2[row_out];
+            for (int i = 1; i < NUM_WARPS; ++i) {
+                sum1 += all_sum1[row_out + i*HEAD_DIM];
+                sum2 += all_sum2[row_out + i*HEAD_DIM];
+            }
+            sum1 *= beta_val * decay;
+            sum2 *= scale * decay;
+            sVNew[row_out] = sV[row_out] * beta_val - sum1;
+            float v_attn = sVNew[row_out] * attn_score;
+            out_base[t * out_token_stride + row_out] = sum2 + v_attn;
+        }
+        __syncthreads();
+
+        //for (int row_out = warp_id; row_out < HEAD_DIM; row_out += NUM_WARPS) {
+        //    float sum1 = 0.0f;
+        //    float sum2 = 0.0f;
+        //    #pragma unroll
+        //    for (int col = lane_id; col < HEAD_DIM; col += WARP_SIZE) {
+        //        float sval = state_dst[row_out + col * HEAD_DIM];
+        //        sum1 += sval * sK[col];
+        //        sum2 += sval * sQ[col];
+        //    }
+        //    sum1 = warp_reduce_sum(sum1) * beta_val * decay;
+        //    sum2 = warp_reduce_sum(sum2) * scale * decay;
+        //    if (lane_id == 0) {
+        //        sVNew[row_out] = sV[row_out] * beta_val - sum1;
+        //        float v_attn = sVNew[row_out] * attn_score;
+        //        out_base[t * out_token_stride + row_out] = sum2 + v_attn;
+        //    }
+        //}
+        //__syncthreads();
 
         for (int out_dim = warp_id; out_dim < HEAD_DIM; out_dim += NUM_WARPS) {
             #pragma unroll
