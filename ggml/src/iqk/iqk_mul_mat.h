@@ -73,6 +73,10 @@ IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
 IQK_API void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
         float * weights, int32_t * ids, int ith, int nth);
 
+IQK_API bool iqk_fused_delta_net(int head_dim, int n_heads, int n_tokens, int n_seqs,
+        const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
+        const float * state_in, float * out_data, float * state_out, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif

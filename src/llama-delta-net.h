@@ -19,6 +19,11 @@ struct delta_net {
                       ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
                       int il, const llm_build_cb & cb);
 
+    static std::pair<ggml_tensor *, ggml_tensor *> build_fused_delta_net(ggml_context * ctx0,
+                      ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
+                      ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
+                      int il, const llm_build_cb & cb);
+
     std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(ggml_context * ctx0, ggml_tensor * input, int il, const llm_build_cb & cb) const;
 
     ggml_tensor * build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,

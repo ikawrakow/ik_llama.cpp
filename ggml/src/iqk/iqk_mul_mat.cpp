@@ -1383,6 +1383,155 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 }
 #endif
 
+namespace {
+template <int head_dim>
+void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
+        const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
+        const float * state_in, float * out_data, float * state_out, int ith, int nth) {
+    const int total_heads = n_heads * n_seqs;
+    const int heads_per_thread = (total_heads + nth - 1) / nth;
+    const int h_start = ith * heads_per_thread;
+    const int h_end = (h_start + heads_per_thread < total_heads) ? h_start + heads_per_thread : total_heads;
+
+#ifdef __AVX2__
+    static_assert(head_dim % 8 == 0);
+#endif
+
+    const float eps = 1e-6f;
+    const float scale = 1.0f / sqrtf((float) head_dim);
+
+    float v_new_buf[head_dim];
+    float v_prime[head_dim], out_val[head_dim];
+
+    for (int h_idx = h_start; h_idx < h_end; ++h_idx) {
+        const int batch_idx = h_idx / n_heads;
+        const int head_idx  = h_idx % n_heads;
+
+        const int qkv_head_offset  = batch_idx * (head_dim * n_tokens * n_heads) + head_idx * (head_dim * n_tokens);
+        const int qkv_token_stride = head_dim;
+        const int g_head_offset    = batch_idx * (n_tokens * n_heads) + head_idx * n_tokens;
+        const int state_head_offset = batch_idx * (head_dim * head_dim * n_heads) + head_idx * (head_dim * head_dim);
+        const int out_head_offset  = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim;
+        const int out_token_stride = head_dim * n_heads;
+
+        for (int i = 0; i < head_dim * head_dim; ++i) {
+            state_out[state_head_offset + i] = state_in[state_head_offset + i];
+        }
+
+        float * state = state_out + state_head_offset;
+
+        for (int t = 0; t < n_tokens; ++t) {
+            const float * q_t = q_data + qkv_head_offset + t * qkv_token_stride;
+            const float * k_t = k_data + qkv_head_offset + t * qkv_token_stride;
+            const float * v_t = v_data + qkv_head_offset + t * qkv_token_stride;
+
+            const float g_val    = g_data[g_head_offset + t];
+            const float beta_raw = beta_data[g_head_offset + t];
+
+            float q_norm_sq = 0.0f;
+            float k_norm_sq = 0.0f;
+            float kq_sum    = 0.0f;
+#ifdef __AVX2__
+            auto vqsum  = _mm256_setzero_ps();
+            auto vksum  = _mm256_setzero_ps();
+            auto vqksum = _mm256_setzero_ps();
+            for (int i = 0; i < head_dim; i += 8) {
+                auto vq = _mm256_loadu_ps(q_t + i);
+                auto vk = _mm256_loadu_ps(k_t + i);
+                vqsum  = _mm256_fmadd_ps(vq, vq, vqsum);
+                vksum  = _mm256_fmadd_ps(vk, vk, vksum);
+                vqksum = _mm256_fmadd_ps(vk, vq, vqksum);
+            }
+            q_norm_sq = hsum_float_8(vqsum);
+            k_norm_sq = hsum_float_8(vksum);
+            kq_sum    = hsum_float_8(vqksum);
+#else
+            for (int i = 0; i < head_dim; ++i) {
+                q_norm_sq += q_t[i] * q_t[i];
+                k_norm_sq += k_t[i] * k_t[i];
+                kq_sum    += k_t[i] * q_t[i];
+            }
+#endif
+            const float q_norm_inv = 1.0f / sqrtf(q_norm_sq + eps);
+            const float k_norm_inv = 1.0f / sqrtf(k_norm_sq + eps);
+
+            const float beta_val = 1.0f / (1.0f + expf(-beta_raw));
+            const float decay    = expf(fminf(g_val, 50.0f));
+
+            float attn_score = kq_sum * k_norm_inv * q_norm_inv * scale;
+
+            //float attn_score = 0.0f;
+            //for (int i = 0; i < head_dim; ++i) {
+            //    attn_score += (k_t[i] * k_norm_inv) * (q_t[i] * q_norm_inv * scale);
+            //}
+
+            float * out_t = out_data + out_head_offset + t * out_token_stride;
+
+            std::memset(v_prime, 0, head_dim*sizeof(float));
+            std::memset(out_val, 0, head_dim*sizeof(float));
+            for (int col = 0; col < head_dim; ++col) {
+                const float k_col = k_t[col];
+                const float q_col = q_t[col];
+                for (int row = 0; row < head_dim; ++row) {
+                    const float s = state[row + col * head_dim];
+                    v_prime[row] += s * k_col;
+                    out_val[row] += s * q_col;
+                }
+            }
+            for (int row = 0; row < head_dim; ++row) {
+                const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay * k_norm_inv;
+                v_new_buf[row] = v_new;
+                out_t[row] = out_val[row] * decay * q_norm_inv * scale + v_new * attn_score;
+            }
+
+#ifdef __AVX2__
+            auto vd = _mm256_set1_ps(decay);
+            auto vmin = _mm256_set1_ps(-1e6f);
+            auto vmax = _mm256_set1_ps( 1e6f);
+            for (int col = 0; col < head_dim; ++col) {
+                auto vk = _mm256_set1_ps(k_t[col] * k_norm_inv);
+                for (int row = 0; row < head_dim; row += 8) {
+                    auto vs = _mm256_loadu_ps(state + col * head_dim + row);
+                    auto vn = _mm256_loadu_ps(v_new_buf + row);
+                    vs = _mm256_fmadd_ps(vn, vk, _mm256_mul_ps(vs, vd));
+                    auto mask_l = _mm256_cmp_ps(vs, vmin, _CMP_LT_OQ);
+                    auto mask_u = _mm256_cmp_ps(vs, vmax, _CMP_GT_OQ);
+                    vs = _mm256_or_ps(_mm256_and_ps(mask_l, vmin), _mm256_andnot_ps(mask_l, vs));
+                    vs = _mm256_or_ps(_mm256_and_ps(mask_u, vmax), _mm256_andnot_ps(mask_u, vs));
+                    _mm256_storeu_ps(state + col * head_dim + row, vs);
+                }
+            }
+#else
+            for (int col = 0; col < head_dim; ++col) {
+                const float k_col = k_t[col] * k_norm_inv;
+                for (int row = 0; row < head_dim; ++row) {
+                    float s = state[row + col * head_dim];
+                    s = decay * s + v_new_buf[row] * k_col;
+                    state[row + col * head_dim] = fminf(fmaxf(s, -1e6f), 1e6f);
+                }
+            }
+#endif
+        }
+    }
+}
+}
+
+bool iqk_fused_delta_net(int head_dim, int n_heads, int n_tokens, int n_seqs,
+        const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
+        const float * state_in, float * out_data, float * state_out, int ith, int nth) {
+    if (head_dim != 64 && head_dim != 128) {
+        return false;
+    }
+    if (head_dim == 64) {
+        iqk_fused_delta_net_impl<64>(n_heads, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
+                out_data, state_out, ith, nth);
+    } else {
+        iqk_fused_delta_net_impl<128>(n_heads, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
+                out_data, state_out, ith, nth);
+    }
+    return true;
+}
+
 #else  // IQK_IMPLEMENT
 
 #include "ggml-impl.h"
@@ -1415,5 +1564,12 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*n
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }
+
+bool iqk_fused_delta_net(int, int, int, int,
+        const float *, const float *, const float *, const float *, const float *,
+        const float *, float *, float *, int, int) {
+    return false;
+}
+
 
 #endif

@@ -55,6 +55,7 @@
 #include "ggml-cuda/hadamard.cuh"
 #include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/tri.cuh"
+#include "ggml-cuda/delta-net.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3698,6 +3699,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SOLVE_TRI:
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
+        case GGML_OP_DELTA_NET:
+            ggml_cuda_op_delta_net(ctx, dst);
+            break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
             break;
@@ -4557,6 +4561,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[2]->ne[1] == op->src[0]->ne[1] &&
                    op->src[1]->ne[0] == op->src[0]->ne[1] &&
                    op->src[3]->ne[0] == op->src[0]->ne[2];
+        case GGML_OP_DELTA_NET:
+            return true;
         case GGML_OP_FLASH_ATTN_EXT:
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;

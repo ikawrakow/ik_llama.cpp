@@ -271,6 +271,7 @@ struct cmd_params {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
+    int  fdn = 0; // fdn = fused delta net
     bool print_overrides = false;
     output_formats output_format;
     output_formats output_format_stderr;
@@ -316,6 +317,7 @@ static const cmd_params cmd_params_defaults = {
     /* muge                 */ false,
     /* rcache               */ false,
     /* sas                  */ false,
+    /* fdn                  */ 0,
     /* print_overrides      */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
@@ -369,6 +371,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -no-fug, --no-fused-up-gate <0|1>   (default: %s)\n", cmd_params_defaults.no_fug? "1" : "0");
     printf("  -no-ooae, --no-offload-only-active-experts <0|1>   (default: %s)\n", cmd_params_defaults.no_ooae? "1" : "0");
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
+    printf("  -fdn, --fused-delta-net <n>         (default: %d)\n", cmd_params_defaults.fdn);
     printf("        --print-overrides <0|1>       (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
@@ -810,6 +813,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.sas = std::stoi(argv[i]);
+        } else if (arg == "-fdn" || arg == "--fused-delta-net") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.fdn = std::stoi(argv[i]);
         } else if (arg == "-rcache" || arg == "--rope-cache") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -956,6 +965,7 @@ struct cmd_params_instance {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
+    int fdn = 0;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -990,6 +1000,8 @@ struct cmd_params_instance {
                mqkv == other.mqkv &&
                muge == other.muge &&
                use_thp == other.use_thp &&
+               sas == other.sas &&
+               fdn == other.fdn &&
                tensor_split == other.tensor_split;
     }
 
@@ -1016,6 +1028,7 @@ struct cmd_params_instance {
         cparams.embeddings = embeddings;
         cparams.cuda_params = (void *)cuda_params.data();
         cparams.scheduler_async = sas;
+        cparams.fused_delta_net = fdn;
 
         return cparams;
     }
@@ -1082,6 +1095,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .muge         = */ params.muge,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
+                /* .fdn          = */ params.fdn,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1125,6 +1139,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .muge         = */ params.muge,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
+                /* .fdn          = */ params.fdn,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1168,6 +1183,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .muge         = */ params.muge,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
+                /* .fdn          = */ params.fdn,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1211,6 +1227,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .muge         = */ params.muge,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
+                /* .fdn          = */ params.fdn,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1265,6 +1282,7 @@ struct test {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
+    int fdn = 0;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
@@ -1306,6 +1324,7 @@ struct test {
         ger = inst.ger;
         rcache = inst.rcache;
         sas = inst.sas;
+        fdn = inst.fdn;
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
@@ -1410,7 +1429,7 @@ struct test {
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
             field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
-            field == "avg_ns" || field == "stddev_ns") {
+            field == "avg_ns" || field == "stddev_ns" || field == "fdn") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
@@ -1461,7 +1480,7 @@ struct test {
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
             std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(fmoe), std::to_string(ger),
-            std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
+            std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas), std::to_string(fdn),
             cuda_params, override_tensor,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1482,7 +1501,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "fused_moe", "grouped_er",
-            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "cuda_params", "override_tensor",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "fdn", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1672,6 +1691,9 @@ struct markdown_printer : public printer {
         if (field == "sas") {
             return 3;
         }
+        if (field == "fdn") {
+            return 4;
+        }
         if (field == "use_thp") {
             return 3;
         }
@@ -1744,6 +1766,9 @@ struct markdown_printer : public printer {
         }
         if (field == "sas") {
             return "sas";
+        }
+        if (field == "fdn") {
+            return "fdn";
         }
         if (field == "use_thp") {
             return "thp";
@@ -1854,6 +1879,9 @@ struct markdown_printer : public printer {
         }
         if (params.sas != cmd_params_defaults.sas) {
             fields.emplace_back("sas");
+        }
+        if (params.fdn != cmd_params_defaults.fdn) {
+            fields.emplace_back("fdn");
         }
         if (params.muge != cmd_params_defaults.muge) {
             fields.emplace_back("muge");
