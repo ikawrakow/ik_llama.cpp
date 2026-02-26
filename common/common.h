@@ -280,7 +280,8 @@ struct gpt_params {
     std::vector<std::string> ban_phrases;  // strings that are banned in generation
     int32_t banned_n                 =  1; // number of tokens that are banned in the phrase
     size_t n_buffer 				 =  0; // number of token buffers for string ban
-    bool can_ban_phrases             = true; // whether to ban strings
+    bool can_ban_phrases             = true;  // whether to ban strings
+    bool do_checkpoint               = false; // do checkpoint for recurrent models only
 
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
@@ -420,7 +421,7 @@ struct gpt_params {
     float slot_prompt_similarity = 0.1f;
 
     int32_t ctx_checkpoints_n = 8;            // max number of context checkpoints per slot
-    int32_t ctx_checkpoints_interval = 0;     // number of tokens between each context checkpoints
+    int32_t ctx_checkpoints_interval = 512;   // minimum number of tokens between each context checkpoints
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens

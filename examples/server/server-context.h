@@ -104,6 +104,8 @@ struct server_slot {
 
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens);
 
+    size_t checkpoint_pos = 0;
+
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
@@ -357,6 +359,8 @@ struct server_context {
     void create_checkpoint(server_slot & slot);
 
     void apply_checkpoint(server_slot & slot);
+
+    void create_checkpoint_at_interval(server_slot & slot, const gpt_params & params_base);
 
     void release_slot_after_final_response(server_slot & slot);
 };
