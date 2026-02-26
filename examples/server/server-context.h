@@ -32,6 +32,7 @@ struct server_slot {
     llama_batch batch_spec = {};
     llama_context * ctx_dft = nullptr;
 
+    bool released = false;
     slot_state state = SLOT_STATE_IDLE;
     slot_command command = SLOT_COMMAND_NONE;
 
@@ -45,6 +46,7 @@ struct server_slot {
     int32_t n_ctx = 0;  // context size per slot
     int32_t n_past = 0;
     int32_t n_past_prompt = 0;
+    int32_t n_past_offset = 0;
     int32_t n_decoded = 0;
     int32_t n_remaining = -1;
     int32_t n_discarded_prompt = 0;
@@ -101,6 +103,8 @@ struct server_slot {
     void prompt_save(server_prompt_cache& prompt_cache) const;
 
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens);
+
+    size_t checkpoint_pos = 0;
 
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
@@ -355,4 +359,8 @@ struct server_context {
     void create_checkpoint(server_slot & slot);
 
     void apply_checkpoint(server_slot & slot);
+
+    void create_checkpoint_at_interval(server_slot & slot, const gpt_params & params_base);
+
+    void release_slot_after_final_response(server_slot & slot);
 };

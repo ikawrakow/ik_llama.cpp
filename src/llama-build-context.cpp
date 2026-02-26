@@ -142,7 +142,7 @@ ggml_cgraph * llm_build_context::build_k_shift() {
     ggml_set_input(lctx.inp_K_shift);
 
     for (int il = 0; il < n_layer; ++il) {
-        if ((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && hparams.is_recurrent(il)) {
+        if (llm_arch_is_hybrid(model.arch) && hparams.is_recurrent(il)) {
             continue;
         }
         if (kv_self.k_l[il] == nullptr) {
@@ -241,7 +241,7 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
         }
 
         for (int il = 0; il < n_layer; ++il) {
-            if ((model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE) && hparams.is_recurrent(il)) {
+            if (llm_arch_is_hybrid(model.arch) && hparams.is_recurrent(il)) {
                 continue;
             }
             if (kv_self.k_l[il] == nullptr) {
