@@ -1235,7 +1235,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 std::sort(params_base.ban_phrases.begin(), params_base.ban_phrases.end(), [](const std::string & a, const std::string & b) {
                     return a.length() > b.length();
                     });
-                
                 for (auto & val : params_base.ban_phrases) {
                     if (!val.empty()) {
                         val = string_lower(val);
@@ -1245,7 +1244,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                         }
                         slot.ban_phrases.push_back(val);
                     }
-                }              
+                }
                 params_base.n_buffer = slot.n_buffer + 1; // buffer is longest string + 1
             } else {
                 slot.ban_phrases = params_base.ban_phrases;
@@ -1305,7 +1304,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             slot.n_buffer = slot.n_buffer + 1; // buffer is longest string/regex + 1
         }
 
-        slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
+		slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
         slot.ban_phrases_bias = json_value(data, "banned_bias", params_base.ban_phrases_bias);
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);
     }
