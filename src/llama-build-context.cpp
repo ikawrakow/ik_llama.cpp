@@ -4670,15 +4670,6 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             }
             cur = ggml_add(ctx0, cur, inpSA);
             cb(cur, "attn_residual", il);
-            //cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
-            //cb(cur, "attn_norm", il);
-            //cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
-            //if (il == n_layer - 1 && inp_out_ids) {
-            //    cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-            //    inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            //}
-            //cur = ggml_add(ctx0, cur, inpSA);
-            //cb(cur, "attn_residual", il);
         } else {
             cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
                     KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
