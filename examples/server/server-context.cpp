@@ -216,8 +216,6 @@ void server_context::init() {
 
         if (params_base.has_mtp) {
             if (llama_model_n_nextn_layer(model) > 0) {
-                SRV_INF("%s\n", "MTP detected, configuring for speculative decoding...");
-
                 params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
 
                 slot.has_mtp = true;
@@ -258,7 +256,6 @@ void server_context::init() {
                 }
             }
         }
-
         slot.reset();
 
         slots.push_back(std::move(slot));
@@ -2677,8 +2674,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                     slot.n_past = 0;
-                    slot.n_buffer = 0;
-                    slot.token_buffer.clear();
                     slot.n_prompt_tokens = prompt_tokens.size();
 
                     LOG_VERBOSE("prompt tokenized", {
@@ -3295,13 +3290,16 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             if (params_base.has_mtp && slot.n_decoded == 0) {
                 if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
-                    mtp_update_kv_cache(ctx, batch_view, true);
+
+                    const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
                     const float* emb = llama_get_embeddings_ith(ctx, -1);
                     if (emb) {
-                        const int n_embd = llama_model_n_embd(llama_get_model(ctx));
                         slot.mtp_hidden_state.resize(n_embd);
                         memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
                     }
+                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
+
+                    mtp_update_kv_cache(ctx, batch_view, true);
                 }
             }
             slot.n_decoded += 1;
@@ -3337,6 +3335,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             for (auto& slot : slots) {
                 if (slot.n_past < slot.n_prompt_tokens) { 
                     if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
+                        llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
                         mtp_update_kv_cache(ctx, batch_view, true);
                     }
                 }

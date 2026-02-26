@@ -227,7 +227,9 @@ struct llama_context {
     std::vector<CacheCopy> cache_copies;
 
     bool update_cache_copies();
+
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);
     void set_mtp_op_type(llama_mtp_op_type value);
+
 };

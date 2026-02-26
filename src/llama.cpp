@@ -3103,12 +3103,7 @@ static void llama_graph_compute(
 
 static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
     ggml_tensor * dst = lctx.inp_mtp_states;
-    const float * src = nullptr;
-    if (lctx.cparams.mtp_op_type == MTP_OP_WARMUP || lctx.cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
-        src = lctx.embd;
-    } else { 
-        src = lctx.draft_input_hidden_state;
-    }
+    const float * src = lctx.draft_input_hidden_state;
 
     if (!src) {
         LLAMA_LOG_ERROR("%s: Source hidden state is null\n", __func__);
@@ -3413,7 +3408,7 @@ static int llama_decode_internal(
         if (lctx.n_outputs == 0) {
             // no output
             res = nullptr;
-        } 
+        }
         else {
             const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 && lctx.model.mtp;
             if (cparams.embeddings || has_mtp) {
@@ -3436,6 +3431,7 @@ static int llama_decode_internal(
             }
         }
         // LLAMA_LOG_INFO("graph build time: %.3f ms (%d nodes, %d leafs)\n", (ggml_time_us() - t_start_us)/1000.0, gf->n_nodes, gf->n_leafs);
+
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
