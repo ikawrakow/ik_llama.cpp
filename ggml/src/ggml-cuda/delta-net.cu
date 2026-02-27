@@ -91,9 +91,16 @@ __global__ void delta_net_recurrent_f32_a(
     constexpr int num_warps = block_size/WARP_SIZE;
     const int row = tid % WARP_SIZE;
     const int col_idx_0 = tid / WARP_SIZE;
-    for (int col = col_idx_0; col < HEAD_DIM; col += num_warps) {
-        state_dst[col*HEAD_DIM + row + sub_idx * WARP_SIZE] = state_src[col*HEAD_DIM + row + sub_idx * WARP_SIZE];
+
+    float state_local[HEAD_DIM/num_warps];
+    for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
+        int col = num_warps*i + col_idx_0;
+        state_local[i] = state_src[col*HEAD_DIM + row + sub_idx * WARP_SIZE];
     }
+
+    //for (int col = col_idx_0; col < HEAD_DIM; col += num_warps) {
+    //    state_dst[col*HEAD_DIM + row + sub_idx * WARP_SIZE] = state_src[col*HEAD_DIM + row + sub_idx * WARP_SIZE];
+    //}
 
     constexpr int WARP_SIZE_S = WARP_SIZE + 1;
     constexpr int num_stored_rows = block_size/WARP_SIZE;
@@ -116,11 +123,16 @@ __global__ void delta_net_recurrent_f32_a(
 
         float sum1 = 0, sum2 = 0;
 #pragma unroll
-        for (int col = col_idx_0; col < HEAD_DIM; col += num_warps) {
-            float sval = state_dst[row + sub_idx * WARP_SIZE + col * HEAD_DIM];
-            sum1 += sval * sK[col];
-            sum2 += sval * sQ[col];
+        for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
+            int col = num_warps*i + col_idx_0;
+            sum1 += state_local[i] * sK[col];
+            sum2 += state_local[i] * sQ[col];
         }
+        //for (int col = col_idx_0; col < HEAD_DIM; col += num_warps) {
+        //    float sval = state_dst[row + sub_idx * WARP_SIZE + col * HEAD_DIM];
+        //    sum1 += sval * sK[col];
+        //    sum2 += sval * sQ[col];
+        //}
         all_sum1[col_idx_0*WARP_SIZE_S + row] = sum1;
         all_sum2[col_idx_0*WARP_SIZE_S + row] = sum2;
 
@@ -137,12 +149,23 @@ __global__ void delta_net_recurrent_f32_a(
             out_base[t * out_token_stride + row + sub_idx*WARP_SIZE] = sum2 * decay + sv_new * attn_score;
         }
 
-        for (int col = col_idx_0; col < HEAD_DIM; col += num_warps) {
-            float state_val = state_dst[row + sub_idx*WARP_SIZE + col * HEAD_DIM];
-            float new_state_val = decay * state_val + sv_new * sK[col];
+        for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
+            int col = num_warps*i + col_idx_0;
+            float new_state_val = decay * state_local[i] + sv_new * sK[col];
             new_state_val = fminf(fmaxf(new_state_val, -1e6f), 1e6f);
-            state_dst[row + sub_idx*WARP_SIZE + col * HEAD_DIM] = new_state_val;
+            state_local[i] = new_state_val;
         }
+
+        //for (int col = col_idx_0; col < HEAD_DIM; col += num_warps) {
+        //    float state_val = state_dst[row + sub_idx*WARP_SIZE + col * HEAD_DIM];
+        //    float new_state_val = decay * state_val + sv_new * sK[col];
+        //    new_state_val = fminf(fmaxf(new_state_val, -1e6f), 1e6f);
+        //    state_dst[row + sub_idx*WARP_SIZE + col * HEAD_DIM] = new_state_val;
+        //}
+    }
+    for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
+        int col = num_warps*i + col_idx_0;
+        state_dst[col*HEAD_DIM + row + sub_idx * WARP_SIZE] = state_local[i];
     }
 }
 
