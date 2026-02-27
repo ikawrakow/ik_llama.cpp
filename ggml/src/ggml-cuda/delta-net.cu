@@ -28,7 +28,7 @@ __device__ __forceinline__ float reduce_sum(float x, float * s) {
 }
 
 template <int HEAD_DIM, int block_size>
-__global__ void delta_net_recurrent_f32_a(
+__global__ void delta_net_recurrent_f32(
     const float * __restrict__ q,         // [HEAD_DIM, n_tokens, n_heads, n_seqs]
     const float * __restrict__ k,         // [HEAD_DIM, n_tokens, n_heads, n_seqs]
     const float * __restrict__ v,         // [HEAD_DIM, n_tokens, n_heads, n_seqs]
@@ -189,19 +189,19 @@ static void delta_net_f32_cuda(
     if (n_tokens <= 8) {
         constexpr int threads_per_block = 256;
         if (head_dim == 64) {
-            delta_net_recurrent_f32_a<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
+            delta_net_recurrent_f32<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
                     q, k, v, g, beta, state_in, dst, n_heads, n_tokens, n_seqs, output_offset, eps);
         } else {
-            delta_net_recurrent_f32_a<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
+            delta_net_recurrent_f32<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
                     q, k, v, g, beta, state_in, dst, n_heads, n_tokens, n_seqs, output_offset, eps);
         }
     } else {
         constexpr int threads_per_block = 128;
         if (head_dim == 64) {
-            delta_net_recurrent_f32_a<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
+            delta_net_recurrent_f32<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
                     q, k, v, g, beta, state_in, dst, n_heads, n_tokens, n_seqs, output_offset, eps);
         } else {
-            delta_net_recurrent_f32_a<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
+            delta_net_recurrent_f32<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
                     q, k, v, g, beta, state_in, dst, n_heads, n_tokens, n_seqs, output_offset, eps);
         }
     }
