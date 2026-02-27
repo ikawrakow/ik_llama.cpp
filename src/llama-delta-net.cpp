@@ -381,10 +381,8 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     GGML_ASSERT(identity    != nullptr);
     GGML_ASSERT(diag_mask   != nullptr);
 
-    auto attn_out = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb);
+    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb);
 
-    ggml_tensor * output    = attn_out.first;
-    ggml_tensor * new_state = attn_out.second;
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);
 
@@ -397,8 +395,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, new_state, ssm_state_dim, 1);
     ggml_tensor * new_state_flat = ggml_concat(ctx0, new_conv_flat, new_ssm_flat, 0);
 
-    ggml_tensor * state_update = new_state_flat;
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, state_update, state_dst));
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_state_flat, state_dst));
 
     ggml_tensor * attn_out_2d = ggml_reshape_2d(ctx0, output, head_v_dim, num_v_heads * n_tok);
     ggml_tensor * z_2d        = ggml_reshape_2d(ctx0, z,      head_v_dim, num_v_heads * n_tok);
@@ -415,7 +412,6 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     cb(out, "linear_attn_out", il);
 
     return out;
-    //return ggml_reshape_2d(ctx0, out, hparams.n_embd, n_tok);
 
 }
 
