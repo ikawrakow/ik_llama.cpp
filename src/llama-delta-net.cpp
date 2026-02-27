@@ -246,9 +246,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     const int64_t n_seqs = 1;
     const int64_t n_seq_tokens = n_tok;
 
-    auto qkvz = build_qkvz(ctx0, cur, il, cb);
-    ggml_tensor * qkv_mixed = qkvz.first;
-    ggml_tensor * z         = qkvz.second;
+    auto [qkv_mixed, z] = build_qkvz(ctx0, cur, il, cb);
 
     ggml_tensor *alpha, *beta;
     if (model.layers[il].ssm_beta_alpha) {
