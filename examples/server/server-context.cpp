@@ -217,6 +217,7 @@ void server_context::init() {
         if (params_base.has_mtp) {
             if (llama_model_n_nextn_layer(model) > 0) {
                 params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+                params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
                 slot.has_mtp = true;
                 slot.params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
@@ -375,6 +376,10 @@ void server_slot::reset() {
     oai_resp_fc_id.clear();
 
     task.reset();
+}
+
+bool server_slot::need_embd() const {
+    return embedding || has_mtp;
 }
 
 bool server_slot::has_budget(gpt_params& global_params) {
@@ -2910,7 +2915,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                     int p0 = system_tokens.size() + slot.cache_tokens.pos_next();
-                    common_batch_add(batch, cur_tok, p0, { slot.id }, slot.embedding);
+                    common_batch_add(batch, cur_tok, p0, { slot.id }, slot.need_embd());
 
                     slot.cache_tokens.push_back(cur_tok);
 
@@ -3007,14 +3012,14 @@ void server_context::speculative_decoding_accept() {
         const auto ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, slot.drafted);
         
         if (slot.has_mtp) {
-            const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
+            const int n_embd = llama_model_n_embd(llama_get_model(ctx));
             if (!ids.empty()) {
-                const float* emb = llama_get_embeddings_ith(ctx, ids.size() - 1);
+                const float* emb = llama_get_embeddings(ctx);
                 if (emb) {
-                    slot.mtp_hidden_state.resize(n_embd);
-                    memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                    slot.mtp_hidden_state.resize(ids.size() * n_embd);
+                    memcpy(slot.mtp_hidden_state.data(), emb, ids.size() * n_embd * sizeof(float));
                 }
-                }
+            }
             else {
                 llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, 0));
             }
@@ -3292,10 +3297,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
 
                     const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
-                    const float* emb = llama_get_embeddings_ith(ctx, -1);
+                    const int n_toks = batch_view.n_tokens;
+                    const float* emb = llama_get_embeddings(ctx);
                     if (emb) {
-                        slot.mtp_hidden_state.resize(n_embd);
-                        memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                        slot.mtp_hidden_state.resize(n_toks * n_embd);
+                        memcpy(slot.mtp_hidden_state.data(), emb, n_toks * n_embd * sizeof(float));
                     }
                     llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
 
@@ -3335,7 +3341,13 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             for (auto& slot : slots) {
                 if (slot.n_past < slot.n_prompt_tokens) { 
                     if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
-                        llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
+                        const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                        const float* emb = llama_get_embeddings_ith(ctx, -1);
+                        if (emb) {
+                            slot.mtp_hidden_state.resize(n_embd);
+                            memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                        }
+                        llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
                         mtp_update_kv_cache(ctx, batch_view, true);
                     }
                 }

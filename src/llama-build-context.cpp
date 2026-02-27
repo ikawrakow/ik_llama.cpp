@@ -434,10 +434,7 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
     struct ggml_tensor * inp = nullptr;
     for (int i = gf->n_nodes - 1; i >= 0; --i) {
         inp = gf->nodes[i];
-
-        if (strcmp(inp->name, "result_norm") == 0 || 
-            strcmp(inp->name, "result_embd") == 0 || 
-            strcmp(inp->name, "output_normed") == 0) { 
+        if (strcmp(inp->name, "result_norm") == 0 || strcmp(inp->name, "result_embd") == 0) {
             break;
         }
         inp = nullptr;
@@ -7293,7 +7290,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         // output token IDs (for last layer cropping)
-        struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+        struct ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
 
         float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
