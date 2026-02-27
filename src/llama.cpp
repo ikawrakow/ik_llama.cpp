@@ -661,7 +661,7 @@ llama_context::~llama_context() {
 // kv cache helpers
 //
 
-static inline bool llama_qwen3next_is_recurrent_layer(const llama_hparams & hparams, uint32_t il) {
+static inline bool llama_is_recurrent_layer(const llama_hparams & hparams, uint32_t il) {
     return hparams.is_recurrent(il);
 }
 
@@ -836,7 +836,7 @@ static bool llama_kv_cache_init(
 
     int n_mla = 0;
     for (int i = 0; i < (int) n_layer; i++) {
-        const bool qnext_recurrent = llama_qwen3next_is_recurrent_layer(hparams, i);
+        const bool qnext_recurrent = llama_is_recurrent_layer(hparams, i);
         const uint32_t n_embd_v_row = llama_kv_v_row_embd(model, hparams, i);
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
@@ -1937,6 +1937,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
         LLM_ARCH_QWEN3NEXT,
+        LLM_ARCH_QWEN35,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -4393,7 +4394,7 @@ struct llama_context_params llama_context_default_params() {
         /*.split_mode_graph_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
-        /*.fused_delta_net             =*/ 0,
+        /*.fused_delta_net             =*/ 65536,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,

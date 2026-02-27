@@ -4649,7 +4649,19 @@ ggml_cgraph * llm_build_context::build_qwen35() {
 
         if (hparams.is_recurrent(il)) {
             ggml_tensor * inpSA = inpL;
-            cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
+            int idx = model.default_layer_device[il];
+            if (inpL->op == GGML_OP_REDUCE) {
+                if (kv_self.s_l[il]) {
+                    // This shouldn't be necessary, but just in case.
+                    int idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
+                    if (idx_s_l >= 0) idx = idx_s_l;
+                }
+                if (inpL->src[idx]) {
+                    inpL->view_src = inpL->src[idx];
+                }
+            }
+            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
+            cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
             cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
             if (il == n_layer - 1 && inp_out_ids) {
