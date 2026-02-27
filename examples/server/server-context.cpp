@@ -690,9 +690,10 @@ server_slot* server_context::get_available_slot(const server_task& task) {
     bool update_cache = false;
 
     // find the slot that has at least n% prompt similarity
-    if (ret == nullptr && slot_prompt_similarity != 0.0f) {
+    if (slot_prompt_similarity != 0.0f) {
         int max_lcp_len = 0;
-        float sim_best = 0;
+        float sim_best = -1.0f;
+        server_slot* best_slot = nullptr;
 
         for (server_slot& slot : slots) {
             // skip the slot if it is not available
@@ -720,13 +721,14 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             float sim_cur = sim.second;
 
             // select the current slot if the criteria match
-            if (sim_cur > sim_best && sim_cur > slot_prompt_similarity) {
+            if (sim_cur > slot_prompt_similarity && sim_cur > sim_best) {
                 sim_best = sim_cur;
                 max_lcp_len = lcp_len.first;
-                ret = &slot;
+                best_slot = &slot;
             }
         }
-        if (ret != nullptr) {
+        if (best_slot != nullptr) {
+            ret = best_slot;
             LOG_VERBOSE("selected slot by lcp similarity", {
                 {"id_slot", ret->id},
                 {"max_lcp_len", max_lcp_len},
@@ -749,7 +751,6 @@ server_slot* server_context::get_available_slot(const server_task& task) {
                 ret = &slot;
             }
         }
-
         if (ret != nullptr) {
             LOG_VERBOSE("selected slot by lru", {
                 {"id_slot", ret->id},
@@ -766,7 +767,6 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             if (exclude_think) {
                 auto temp = tokens.get_text_tokens_exclude_think(ret->ctx, ret->params.think_tokens);
                 server_tokens cache_exclude_think = server_tokens(temp, false);
-
                 temp = task.tokens.get_text_tokens_exclude_think(ret->ctx, ret->params.think_tokens);
                 server_tokens prompt_exclude_think = server_tokens(temp, false);
 
@@ -799,7 +799,6 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             LLAMA_LOG_INFO("updating prompt cache\n");
             // copy cache tokens
             copy_data_to_cached_prompt(tokens, *ret);
-
             ret->prompt_save(*prompt_cache);
             LLAMA_LOG_INFO("prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
         }
@@ -807,7 +806,6 @@ server_slot* server_context::get_available_slot(const server_task& task) {
         if (prompt_cache && !prompt_cache->states.empty()) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
-
             ret->prompt_load(*prompt_cache, task.tokens);
             prompt_cache->update();
 
@@ -820,6 +818,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
     }
     return ret;
 }
+
 
 bool server_context::launch_slot_with_task(server_slot& slot, server_task& task) {
     slot_params defaults;
