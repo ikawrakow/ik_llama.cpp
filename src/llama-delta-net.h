@@ -8,17 +8,6 @@ struct delta_net {
     delta_net(llama_context & lctx, const llama_batch & batch);
     ~delta_net();
 
-    static std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_chunking(ggml_context * ctx0,
-                      ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
-                      ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
-                      ggml_tensor * causal_mask, ggml_tensor * identity,
-                      ggml_tensor * diag_mask, int il, const llm_build_cb & cb);
-
-    static std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_autoregressive(ggml_context * ctx0,
-                      ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
-                      ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
-                      int il, const llm_build_cb & cb);
-
     static std::pair<ggml_tensor *, ggml_tensor *> build_fused_delta_net(ggml_context * ctx0,
                       ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
                       ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
