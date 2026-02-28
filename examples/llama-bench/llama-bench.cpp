@@ -271,7 +271,7 @@ struct cmd_params {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
-    int  fdn = 65536; // fdn = fused delta net
+    int  fdn = 0; // fdn = fused delta net
     bool print_overrides = false;
     output_formats output_format;
     output_formats output_format_stderr;
@@ -317,7 +317,7 @@ static const cmd_params cmd_params_defaults = {
     /* muge                 */ false,
     /* rcache               */ false,
     /* sas                  */ false,
-    /* fdn                  */ 65536,
+    /* fdn                  */ 0,
     /* print_overrides      */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,

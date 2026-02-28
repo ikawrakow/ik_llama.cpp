@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <unordered_set>
 
-#define DELTA_CHUNK_SIZE 64
+#define QWEN3NEXT_CHUNK_SIZE 64
 
 delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_lctx), batch(_batch) {
     auto & model = lctx.model;
@@ -111,7 +111,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_delta_net_chunking(ggml
     cb(g,    "g_in", il);
     cb(state,"state_in", il);
 
-    const int64_t chunk_size = DELTA_CHUNK_SIZE;
+    const int64_t chunk_size = QWEN3NEXT_CHUNK_SIZE;
     const int64_t pad = (chunk_size - n_tokens % chunk_size) % chunk_size;
     const int64_t n_chunks = (n_tokens + pad) / chunk_size;
 
@@ -296,8 +296,8 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_delta_net_chunking(ggml
     ggml_tensor * output_tokens = ggml_view_4d(ctx0, core_attn_out,
             S_v, n_tokens, H_v, n_seqs,
             ggml_row_size(core_attn_out->type, S_v),
-            ggml_row_size(core_attn_out->type, S_v * DELTA_CHUNK_SIZE * n_chunks),
-            ggml_row_size(core_attn_out->type, S_v * DELTA_CHUNK_SIZE * n_chunks * H_v), 0);
+            ggml_row_size(core_attn_out->type, S_v * QWEN3NEXT_CHUNK_SIZE * n_chunks),
+            ggml_row_size(core_attn_out->type, S_v * QWEN3NEXT_CHUNK_SIZE * n_chunks * H_v), 0);
     cb(output_tokens, "output_tokens", il);
 
     output_tokens = ggml_permute(ctx0, output_tokens, 0, 2, 1, 3);
@@ -572,20 +572,19 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
 
         beta  = ggml_cont_4d(ctx0, b, num_v_heads, 1, n_tok, 1);
         alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_tok, 1);
-        cb(beta, "beta", il);
-        cb(alpha, "alpha", il);
     } else {
         beta = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_beta, cur);
-        alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_alpha, cur);
-        ggml_build_forward_expand(gf, beta);
-        ggml_build_forward_expand(gf, alpha);
         cb(beta, "beta", il);
-        cb(alpha, "alpha", il);
         beta = ggml_reshape_4d(ctx0, beta, num_v_heads, 1, n_tok, 1);
         cb(beta, "beta_reshaped", il);
-        alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
-        cb(alpha, "alpha_reshaped", il);
+        alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_alpha, cur);
+        cb(alpha, "alpha", il);
+        // Why? Don't think this ggml_cont_3d is needed, but lets leave it in for now just in case.
+        alpha = ggml_cont_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
+        cb(alpha, "alpha_cont", il);
     }
+    cb(beta, "beta", il);
+    cb(alpha, "alpha", il);
     ggml_build_forward_expand(gf, beta);
     ggml_build_forward_expand(gf, alpha);
 
@@ -607,13 +606,18 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     state_all = ggml_view_2d(ctx0, state_storage, state_dim, qnext_state_slots, state_row_size, 0);
 
     ggml_tensor * state_dst = ggml_view_2d(ctx0, state_all, state_dim, 1, state_row_size, state_seq_id_local * state_row_size);
+    ggml_tensor * state_f32 = state_dst;
+    if (state_f32->type != GGML_TYPE_F32) {
+        state_f32 = ggml_cast(ctx0, state_f32, GGML_TYPE_F32);
+    }
     if (reset_state_local) {
-        state_dst = ggml_scale(ctx0, state_dst, 0.0f);
-        cb(state_dst, "state_reset", il);
+        state_f32 = ggml_scale(ctx0, state_f32, 0.0f);
+        cb(state_f32, "state_reset", il);
     }
 
-    ggml_tensor * conv_state_flat = ggml_view_2d(ctx0, state_dst, conv_state_dim, 1, state_dst->nb[1], 0);
-    ggml_tensor * ssm_state_flat  = ggml_view_2d(ctx0, state_dst, ssm_state_dim, 1, state_dst->nb[1], conv_state_dim * ggml_element_size(state_dst));
+    ggml_tensor * conv_state_flat = ggml_view_2d(ctx0, state_f32, conv_state_dim, 1, state_f32->nb[1], 0);
+    ggml_tensor * ssm_state_flat  = ggml_view_2d(ctx0, state_f32, ssm_state_dim, 1, state_f32->nb[1],
+            conv_state_dim * ggml_element_size(state_f32));
 
     ggml_tensor * conv_states = ggml_reshape_3d(ctx0, conv_state_flat, hparams.ssm_d_conv - 1, conv_dim, 1);
     ggml_tensor * state       = ggml_reshape_4d(ctx0, ssm_state_flat, head_v_dim, head_v_dim, num_v_heads, 1);
@@ -624,6 +628,8 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, model.layers[il].ssm_conv1d, inp_s_seq_qnext);
     cb(conv_output_raw, "conv_output_raw", il);
 
+    //ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
+    //ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output);
     ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output_raw);
     cb(conv_output_silu, "conv_output_silu", il);
 
@@ -633,24 +639,27 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
 
     // Extract the convolved Q, K, V from conv_output
     ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok, 0);
+            ggml_row_size(conv_output_silu->type, head_k_dim),
+            nb1_qkv, nb1_qkv * n_tok, 0);
 
     ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok,
+            ggml_row_size(conv_output_silu->type, head_k_dim),
+            nb1_qkv, nb1_qkv * n_tok,
             head_k_dim * num_k_heads * ggml_element_size(conv_output_silu));
 
     ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_v_dim), nb1_qkv, nb1_qkv * n_tok,
+            ggml_row_size(conv_output_silu->type, head_v_dim),
+            nb1_qkv, nb1_qkv * n_tok,
             ggml_row_size(conv_output_silu->type, 2 * head_k_dim * num_k_heads));
 
     cb(q_conv, "q_conv", il);
     cb(k_conv, "k_conv", il);
     cb(v_conv, "v_conv", il);
 
-    q_conv = ggml_l2_norm(ctx0, q_conv, hparams.f_norm_rms_eps);
-    k_conv = ggml_l2_norm(ctx0, k_conv, hparams.f_norm_rms_eps);
-    cb(q_conv, "q_conv_normed", il);
-    cb(k_conv, "k_conv_normed", il);
+    const float eps_norm = hparams.f_norm_rms_eps;
+
+    q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
+    k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
 
     if (num_k_heads != num_v_heads) {
         GGML_ASSERT(num_v_heads % num_k_heads == 0);
@@ -700,6 +709,9 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * new_state_flat = ggml_concat(ctx0, new_conv_flat, new_ssm_flat, 0);
 
     ggml_tensor * state_update = new_state_flat;
+    if (state_dst->type != GGML_TYPE_F32) {
+        state_update = ggml_cast(ctx0, state_update, state_dst->type);
+    }
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, state_update, state_dst));
 
     ggml_tensor * attn_out_2d = ggml_reshape_2d(ctx0, output, head_v_dim, num_v_heads * n_tok);
@@ -716,8 +728,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * out = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_out, final_output);
     cb(out, "linear_attn_out", il);
 
-    return out;
-    //return ggml_reshape_2d(ctx0, out, hparams.n_embd, n_tok);
+    return ggml_reshape_2d(ctx0, out, hparams.n_embd, n_tok);
 
 }
 
