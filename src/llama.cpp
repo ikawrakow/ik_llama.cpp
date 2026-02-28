@@ -1512,7 +1512,6 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: ssm_d_inner      = %u\n",     __func__, hparams.ssm_d_inner);
         LLAMA_LOG_INFO("%s: ssm_d_state      = %u\n",     __func__, hparams.ssm_d_state);
         LLAMA_LOG_INFO("%s: ssm_dt_rank      = %u\n",     __func__, hparams.ssm_dt_rank);
-        LLAMA_LOG_INFO("%s: ssm_n_group      = %u\n",     __func__, hparams.ssm_n_group);
     }
 
     LLAMA_LOG_INFO("%s: model type       = %s\n",     __func__, llama_model_type_name(model.type));
@@ -4395,6 +4394,7 @@ struct llama_context_params llama_context_default_params() {
         /*.split_mode_graph_scheduling =*/ false,
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
+        /*.fused_delta_net             =*/ 65536,
         /*.mtp                         =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
@@ -4766,6 +4766,7 @@ struct llama_context * llama_init_from_model(
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
+    cparams.fused_delta_net  = params.fused_delta_net;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
@@ -4872,6 +4873,7 @@ struct llama_context * llama_init_from_model(
     //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
+    LLAMA_LOG_INFO("%s: fused_delta   = %d\n",     __func__, cparams.fused_delta_net);
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);
