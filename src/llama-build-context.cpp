@@ -1552,6 +1552,7 @@ static ggml_tensor * llm_build_kqv(
 
         cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        cb(cur, "fa", il);
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         if (n_swa > 0) {
             ((int32_t *)cur->op_params)[4] = n_swa;
@@ -1815,7 +1816,9 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_con
     auto row_size = ggml_row_size(Qaux->type, n_embd_head_k);
     // TODO: check why CUDA performance suffers so much if we don't make these two tensors contiguous
     auto Qcur = ggml_cont(ctx0, ggml_view_3d(ctx0, Qaux, n_embd_head_k, Qaux->ne[0]/(2*n_embd_head_k), n_tokens, 2*row_size, Qaux->nb[1], 0));
+    cb(Qcur, "Qcur_cont", il);
     auto gate = ggml_cont_2d(ctx0, ggml_view_3d(ctx0, Qaux, n_embd_head_k, Qaux->ne[0]/(2*n_embd_head_k), n_tokens, 2*row_size, Qaux->nb[1], row_size), Qaux->ne[0]/2, n_tokens);
+    cb(gate, "gate_cont", il);
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, Kcur->ne[0]/n_embd_head_k, n_tokens);
     if (q_norm) {
         Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -10384,8 +10387,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     ext_factor, attn_factor, beta_fast, beta_slow);
         }
     }
-    cb(Qcur, "Qcur", il);
-    cb(Kcur, "Kcur", il);
+    cb(Qcur, "Qcur_roped", il);
+    cb(Kcur, "Kcur_roped", il);
 
     if (inp_attn_scale) {
         Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
