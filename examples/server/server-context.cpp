@@ -3107,9 +3107,6 @@ void server_context::extend_context(const int32_t n_tokens) {
         if (slot.ga_n != 1) {
             // context extension via Self-Extend
             // TODO: simplify and/or abstract this
-            // Note: when MoE layers run on CPU with self-extend, ensure proper KV cache sync
-            // by calling llama_kv_cache_defrag after context extension to ensure all
-            // layers (including CPU-based MoE) have consistent state
             while (slot.n_past_se >= slot.ga_i + slot.ga_w) {
                 const int ib = (slot.ga_n * slot.ga_i) / slot.ga_w;
                 const int bd = (slot.ga_w / slot.ga_n) * (slot.ga_n - 1);
@@ -3132,7 +3129,6 @@ void server_context::extend_context(const int32_t n_tokens) {
             }
 
             slot.n_past_se += n_tokens;
-            llama_kv_cache_defrag(ctx);
         }
     }
 }
