@@ -318,10 +318,16 @@ struct split_strategy {
     void write() {
         int i_split = 0;
         int n_split = ctx_outs.size();
+        std::string output_prefix = params.output;
+        const std::string suffix = ".gguf";
+        if (output_prefix.size() >= suffix.size() && 
+            output_prefix.compare(output_prefix.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            output_prefix.resize(output_prefix.size() - suffix.size());
+        }
         for (auto & ctx_out : ctx_outs) {
             // construct file path
             char split_path[PATH_MAX] = {0};
-            llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
+            llama_split_path(split_path, sizeof(split_path), output_prefix.c_str(), i_split, n_split);
 
             ensure_output_directory(split_path);
 
