@@ -590,6 +590,7 @@ bool llama_context::update_cache_copies() {
                 GGML_ASSERT(kl->n_device == vl->n_device);
             }
             for (int id = 0; id < kl->n_device; ++id) {
+                if (!kl->splits[id]) continue;
                 auto& c = cache_copies[2*model.splits.size()*il + 2*id + 0];
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kl->splits[id]) return false;
                 c.cpy->view_offs = kv_self.head*c.step;
@@ -598,6 +599,7 @@ bool llama_context::update_cache_copies() {
             }
             if (!vl) continue;
             for (int id = 0; id < vl->n_device; ++id) {
+                if (!vl->splits[id]) continue;
                 auto& c = cache_copies[2*model.splits.size()*il + 2*id + 1];
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != vl->splits[id]) return false;
                 c.cpy->view_offs = kv_self.head*c.step;
