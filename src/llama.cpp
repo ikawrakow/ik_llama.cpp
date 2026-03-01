@@ -1939,6 +1939,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_STEP35,
         LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
+        LLM_ARCH_QWEN35MOE,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
