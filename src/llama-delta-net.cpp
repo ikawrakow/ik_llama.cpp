@@ -222,8 +222,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_qkvz(ggml_context * ctx
 }
 
 ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
-            ggml_tensor * cur, ggml_tensor * causal_mask, ggml_tensor * identity,
-            ggml_tensor * diag_mask, ggml_tensor * inp_s_seq_qnext,
+            ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext,
             uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
 
     auto & model = lctx.model;
@@ -387,10 +386,6 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    GGML_ASSERT(causal_mask != nullptr);
-    GGML_ASSERT(identity    != nullptr);
-    GGML_ASSERT(diag_mask   != nullptr);
-
     auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb);
 
     cb(output, "attn_output", il);
@@ -429,8 +424,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
 }
 
 ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf,
-        ggml_tensor * cur, ggml_tensor * causal_mask, ggml_tensor * identity,
-        ggml_tensor * diag_mask, int il, const llm_build_cb & cb) const {
+        ggml_tensor * cur, int il, const llm_build_cb & cb) const {
     GGML_ASSERT(lctx.inp_s_seq_qnext != nullptr);
 
     auto & model = lctx.model;
@@ -448,7 +442,7 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
 
     if (all_same_seq) {
         bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
-        return build_layer_attn_linear_core(ctx0, gf, cur, causal_mask, identity, diag_mask, lctx.inp_s_seq_qnext, token_seq_ids.front(), reset_state, il, cb);
+        return build_layer_attn_linear_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, token_seq_ids.front(), reset_state, il, cb);
     }
 
     GGML_ASSERT(has_unique_seq_ids && "qwen3next mixed-sequence batches require unique sequence IDs per token");
@@ -460,7 +454,7 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
 
         const bool reset_state_i = batch.pos != nullptr && batch.pos[i] == 0;
         const uint32_t state_seq_id_i = (uint32_t) token_seq_ids[i];
-        ggml_tensor * out_i = build_layer_attn_linear_core(ctx0, gf, cur_i, causal_mask, identity, diag_mask, inp_s_seq_qnext_i, state_seq_id_i, reset_state_i, il, cb);
+        ggml_tensor * out_i = build_layer_attn_linear_core(ctx0, gf, cur_i, inp_s_seq_qnext_i, state_seq_id_i, reset_state_i, il, cb);
 
         out = out == nullptr ? out_i : ggml_concat(ctx0, out, out_i, 1);
     }

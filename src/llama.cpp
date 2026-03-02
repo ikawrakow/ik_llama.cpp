@@ -4695,8 +4695,6 @@ struct llama_context * llama_init_from_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
 
-    printf("===================================== %s: %s\n", __func__, ggml_type_name(params.type_reduce));
-
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
         return nullptr;
