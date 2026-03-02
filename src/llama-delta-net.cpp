@@ -412,6 +412,25 @@ ggml_tensor * delta_net::build_gated_output(llama_context & lctx, ggml_context *
     return ggml_reshape_2d(ctx0, out, lctx.model.hparams.n_embd, n_tok);
 }
 
+static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor * input, int id) {
+    auto cur = input;
+    if (input->op == GGML_OP_REDUCE) {
+        auto view_src = input->view_src;
+        GGML_ASSERT(view_src);
+        cur = input->src[id];
+        if (!cur) {
+            GGML_ASSERT((input->op_params[4] & (1u << id)) == 0);
+            cur = ggml_dup_tensor(ctx, input);
+            input->src[id] = cur;
+            input->op_params[4] |= (1u << id);
+        }
+        else if (cur == view_src) {
+            cur = input;
+        }
+    }
+    return cur;
+}
+
 ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
             uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
@@ -451,9 +470,13 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         }
         GGML_ASSERT(n_device > 1);
         std::vector<ggml_tensor *> results(n_device, nullptr);
-        int last_id = -1;
+        bool input_added = false;
         for (int id = 0; id < n_device; ++id) {
             if (!split_s_l->splits[il]) continue;
+            auto input = get_input_tensor_sm_graph(ctx0, cur, id);
+            auto split_norm = (ggml_split_tensor_t *)l.attn_norm->extra;
+            GGML_ASSERT(split_norm && split_norm->splits[id]);
+            cur = llm_build_context::llm_build_norm(ctx0, input, hparams, split_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il);
             int qnext_state_slots = split_s_l->splits[il]->ne[1];
             int il_cb = 1000*il + id;
             int64_t num_k_heads_id, num_v_heads_id;
@@ -497,17 +520,26 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
                                head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, hparams.ssm_d_conv,
                                state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
                                model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf);
-            auto split_norm = (ggml_split_tensor_t *)model.layers[il].ssm_norm->extra;
+            split_norm = (ggml_split_tensor_t *)model.layers[il].ssm_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
             auto split_ssm_out = (ggml_split_tensor_t *)model.layers[il].ssm_out->extra;
             GGML_ASSERT(split_ssm_out && split_ssm_out->splits[id]);
             auto gated_output = build_gated_output(lctx, ctx0, split_norm->splits[id], split_ssm_out->splits[id], output, z, head_v_dim, num_v_heads_id, n_tok, il_cb, cb);
+            if (inp_out_ids) {
+                gated_output = ggml_get_rows(ctx0, gated_output, inp_out_ids);
+            }
+            if (!input_added) {
+                if (inp_out_ids) {
+                    input = ggml_get_rows(ctx0, input, inp_out_ids);
+                }
+                gated_output = ggml_add(ctx0, gated_output, input);
+                input_added = true;
+            }
             if (gated_output->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
                 gated_output = ggml_cast(ctx0, gated_output, lctx.cparams.reduce_type);
             }
             ggml_build_forward_expand(gf, gated_output);
             results[id] = gated_output;
-            last_id = id;
         }
         cur = ggml_reduce(ctx0, results.data(), n_device, GGML_OP_ADD);
         ggml_build_forward_expand(gf, cur);
