@@ -46,4 +46,7 @@ private:
             int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, int64_t ssm_d_conv,
             int64_t state_seq_id_local, uint32_t qnext_state_slots, bool reset_state_local,
             float eps_norm, int repeat_type, int il, const llm_build_cb & cb, ggml_cgraph * gf);
+
+    static ggml_tensor * build_gated_output(llama_context & lctx, ggml_context * ctx0, ggml_tensor * ssm_norm, ggml_tensor * ssm_out,
+            ggml_tensor * output, ggml_tensor * z, int64_t head_v_dim, int64_t num_v_heads, int64_t n_tok, int il, const llm_build_cb & cb);
 };
