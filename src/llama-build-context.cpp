@@ -4437,7 +4437,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
     ggml_tensor * cur = nullptr;
 
     for (int il = 0; il < n_layer; ++il) {
-        ggml_tensor * inpSA = inpL;
 
         GGML_ASSERT(model.layers[il].attn_norm != nullptr);
         GGML_ASSERT(model.layers[il].attn_post_norm != nullptr);
@@ -4455,27 +4454,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
 
         if (hparams.is_recurrent(il)) {
-            int idx = model.default_layer_device[il];
-            if (inpL->op == GGML_OP_REDUCE) {
-                if (kv_self.s_l[il]) {
-                    // This shouldn't be necessary, but just in case.
-                    int idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
-                    if (idx_s_l >= 0) idx = idx_s_l;
-                }
-                if (inpL->src[idx]) {
-                    inpL->view_src = inpL->src[idx];
-                }
-            }
-            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
-            cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
-            cb(cur, "attn_norm", il);
-            cur = delta.build_layer_attn_linear(ctx0, gf, cur, il, cb);
-            if (il == n_layer - 1 && inp_out_ids) {
-                cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            }
-            cur = ggml_add(ctx0, cur, inpSA);
-            cb(cur, "attn_residual", il);
+            cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_layer - 1 ? inp_out_ids : nullptr, il, cb);
         } else {
             cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
                     KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, false);
@@ -4545,28 +4524,7 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
     for (int il = 0; il < n_layer; ++il) {
 
         if (hparams.is_recurrent(il)) {
-            ggml_tensor * inpSA = inpL;
-            int idx = model.default_layer_device[il];
-            if (inpL->op == GGML_OP_REDUCE) {
-                if (kv_self.s_l[il]) {
-                    // This shouldn't be necessary, but just in case.
-                    int idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
-                    if (idx_s_l >= 0) idx = idx_s_l;
-                }
-                if (inpL->src[idx]) {
-                    inpL->view_src = inpL->src[idx];
-                }
-            }
-            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
-            cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
-            cb(cur, "attn_norm", il);
-            cur = delta.build_layer_attn_linear(ctx0, gf, cur, il, cb);
-            if (il == n_layer - 1 && inp_out_ids) {
-                cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            }
-            cur = ggml_add(ctx0, cur, inpSA);
-            cb(cur, "attn_residual", il);
+            cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_layer - 1 ? inp_out_ids : nullptr, il, cb);
         } else {
             cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
                     KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
@@ -4625,28 +4583,7 @@ ggml_cgraph * llm_build_context::build_qwen35() {
     for (int il = 0; il < n_layer; ++il) {
 
         if (hparams.is_recurrent(il)) {
-            ggml_tensor * inpSA = inpL;
-            int idx = model.default_layer_device[il];
-            if (inpL->op == GGML_OP_REDUCE) {
-                if (kv_self.s_l[il]) {
-                    // This shouldn't be necessary, but just in case.
-                    int idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
-                    if (idx_s_l >= 0) idx = idx_s_l;
-                }
-                if (inpL->src[idx]) {
-                    inpL->view_src = inpL->src[idx];
-                }
-            }
-            auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
-            cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
-            cb(cur, "attn_norm", il);
-            cur = delta.build_layer_attn_linear(ctx0, gf, cur, il, cb);
-            if (il == n_layer - 1 && inp_out_ids) {
-                cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            }
-            cur = ggml_add(ctx0, cur, inpSA);
-            cb(cur, "attn_residual", il);
+            cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_layer - 1 ? inp_out_ids : nullptr, il, cb);
         } else {
             cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
                     KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
