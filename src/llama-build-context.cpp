@@ -4411,7 +4411,6 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
 }
 
 ggml_cgraph * llm_build_context::build_qwen3next() {
-    static constexpr int QWEN3NEXT_CHUNK_SIZE = 64;
 
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
 
@@ -4428,18 +4427,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
     lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
     cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
     ggml_set_input(lctx.inp_s_seq_qnext);
-
-    ggml_tensor * causal_mask = nullptr;
-    ggml_tensor * identity    = nullptr;
-    ggml_tensor * diag_mask   = nullptr;
-    causal_mask = ggml_tri(ctx0,
-            ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE, QWEN3NEXT_CHUNK_SIZE), 1.0f),
-            GGML_TRI_TYPE_LOWER);
-    identity  = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE), 1.0f));
-    diag_mask = ggml_add(ctx0, causal_mask, identity);
-    ggml_build_forward_expand(gf, causal_mask);
-    ggml_build_forward_expand(gf, identity);
-    ggml_build_forward_expand(gf, diag_mask);
 
     float KQ_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
@@ -4478,7 +4465,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
             cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
-            cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
+            cur = delta.build_layer_attn_linear(ctx0, gf, cur, il, cb);
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
@@ -4530,7 +4517,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 }
 
 ggml_cgraph * llm_build_context::build_qwen35moe() {
-    static constexpr int QWEN3NEXT_CHUNK_SIZE = 64;
 
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
 
@@ -4549,18 +4535,6 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
     ggml_set_input(lctx.inp_s_seq_qnext);
 
     float KQ_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-
-    ggml_tensor * causal_mask = nullptr;
-    ggml_tensor * identity    = nullptr;
-    ggml_tensor * diag_mask   = nullptr;
-    causal_mask = ggml_tri(ctx0,
-            ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE, QWEN3NEXT_CHUNK_SIZE), 1.0f),
-            GGML_TRI_TYPE_LOWER);
-    identity  = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE), 1.0f));
-    diag_mask = ggml_add(ctx0, causal_mask, identity);
-    ggml_build_forward_expand(gf, causal_mask);
-    ggml_build_forward_expand(gf, identity);
-    ggml_build_forward_expand(gf, diag_mask);
 
     ggml_tensor * cur = nullptr;
 
@@ -4582,7 +4556,7 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
             auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
             cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
-            cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
+            cur = delta.build_layer_attn_linear(ctx0, gf, cur, il, cb);
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
@@ -4623,7 +4597,6 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
 }
 
 ggml_cgraph * llm_build_context::build_qwen35() {
-    static constexpr int QWEN3NEXT_CHUNK_SIZE = 64;
 
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
 
@@ -4642,18 +4615,6 @@ ggml_cgraph * llm_build_context::build_qwen35() {
     ggml_set_input(lctx.inp_s_seq_qnext);
 
     float KQ_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-
-    ggml_tensor * causal_mask = nullptr;
-    ggml_tensor * identity    = nullptr;
-    ggml_tensor * diag_mask   = nullptr;
-    causal_mask = ggml_tri(ctx0,
-            ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE, QWEN3NEXT_CHUNK_SIZE), 1.0f),
-            GGML_TRI_TYPE_LOWER);
-    identity  = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE), 1.0f));
-    diag_mask = ggml_add(ctx0, causal_mask, identity);
-    ggml_build_forward_expand(gf, causal_mask);
-    ggml_build_forward_expand(gf, identity);
-    ggml_build_forward_expand(gf, diag_mask);
 
     ggml_tensor * cur = nullptr;
 
@@ -4675,7 +4636,7 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
             cur = llm_build_norm(ctx0, inpL, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
-            cur = delta.build_layer_attn_linear(ctx0, gf, cur, causal_mask, identity, diag_mask, il, cb);
+            cur = delta.build_layer_attn_linear(ctx0, gf, cur, il, cb);
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
