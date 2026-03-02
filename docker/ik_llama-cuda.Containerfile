@@ -6,9 +6,9 @@ ARG BASE_CUDA_RUN_CONTAINER=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu
 # Stage 1: Build
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 ARG CUDA_DOCKER_ARCH=default # CUDA architecture to build for (defaults to all supported archs)
-RUN apt-get update && apt-get install -yq build-essential git libcurl4-openssl-dev curl libgomp1 cmake
+RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake
 
-RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
+COPY . /app
 WORKDIR /app
 RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
@@ -71,6 +71,6 @@ ARG LS_VER=189
 RUN curl -LO "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
-COPY ./ik_llama-cuda-swap.config.yaml /app/config.yaml
+COPY --from=build /app/docker/ik_llama-cuda-swap.config.yaml /app/config.yaml
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080"]
 ENTRYPOINT [ "/app/llama-swap", "-config", "/app/config.yaml" ]
