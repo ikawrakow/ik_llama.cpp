@@ -105,6 +105,7 @@ struct server_slot {
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens);
 
     size_t checkpoint_pos = 0;
+    bool do_checkpoint = false;
 
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
