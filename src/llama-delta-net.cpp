@@ -469,12 +469,12 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         std::vector<ggml_tensor *> results(n_device, nullptr);
         bool input_added = false;
         for (int id = 0; id < n_device; ++id) {
-            if (!split_s_l->splits[il]) continue;
+            if (!split_s_l->splits[id]) continue;
             auto input = get_input_tensor_sm_graph(ctx0, cur, id);
             auto split_norm = (ggml_split_tensor_t *)l.attn_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
             cur = llm_build_context::llm_build_norm(ctx0, input, hparams, split_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il);
-            int qnext_state_slots = split_s_l->splits[il]->ne[1];
+            int qnext_state_slots = split_s_l->splits[id]->ne[1];
             int il_cb = 1000*il + id;
             int64_t num_k_heads_id, num_v_heads_id;
             ggml_tensor *qkv_mixed, *z;
@@ -491,35 +491,35 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
                 qkv_mixed = p.first;
                 z = p.second;
             }
-            auto split_ssm_dt = (ggml_split_tensor_t *)model.layers[il].ssm_dt->extra;
+            auto split_ssm_dt = (ggml_split_tensor_t *)l.ssm_dt->extra;
             GGML_ASSERT(split_ssm_dt && split_ssm_dt->splits[id]);
-            auto split_ssm_a  = (ggml_split_tensor_t *)model.layers[il].ssm_a->extra;
+            auto split_ssm_a  = (ggml_split_tensor_t *)l.ssm_a->extra;
             GGML_ASSERT(split_ssm_a && split_ssm_a->splits[id]);
             ggml_tensor *beta, *gate;
-            if (model.layers[il].ssm_beta_alpha) {
-                auto split_ssm_beta_alpha = (ggml_split_tensor_t *)model.layers[il].ssm_beta_alpha;
+            if (l.ssm_beta_alpha) {
+                auto split_ssm_beta_alpha = (ggml_split_tensor_t *)l.ssm_beta_alpha;
                 GGML_ASSERT(split_ssm_beta_alpha && split_ssm_beta_alpha->splits[id]);
                 auto p = build_beta_gate(lctx, ctx0, split_ssm_beta_alpha->splits[id], nullptr, nullptr, split_ssm_dt->splits[id], split_ssm_a->splits[id],
                         num_k_heads_id, num_v_heads_id, n_seqs, cur, il, cb, gf);
                 beta = p.first; gate = p.second;
             } else {
-                auto split_ssm_beta = (ggml_split_tensor_t *)model.layers[il].ssm_beta->extra;
+                auto split_ssm_beta = (ggml_split_tensor_t *)l.ssm_beta->extra;
                 GGML_ASSERT(split_ssm_beta && split_ssm_beta->splits[id]);
-                auto split_ssm_alpha = (ggml_split_tensor_t *)model.layers[il].ssm_alpha->extra;
+                auto split_ssm_alpha = (ggml_split_tensor_t *)l.ssm_alpha->extra;
                 GGML_ASSERT(split_ssm_alpha && split_ssm_alpha->splits[id]);
                 auto p = build_beta_gate(lctx, ctx0, nullptr, split_ssm_beta->splits[id], split_ssm_alpha->splits[id], split_ssm_dt->splits[id], split_ssm_a->splits[id],
                         num_k_heads_id, num_v_heads_id, n_seqs, cur, il, cb, gf);
                 beta = p.first; gate = p.second;
             }
-            auto split_ssm_conv1d = (ggml_split_tensor_t *)model.layers[il].ssm_conv1d->extra;
+            auto split_ssm_conv1d = (ggml_split_tensor_t *)l.ssm_conv1d->extra;
             GGML_ASSERT(split_ssm_conv1d && split_ssm_conv1d->splits[id]);
             auto output = build_qkv(ctx0, split_s_l->splits[id], split_ssm_conv1d->splits[id], qkv_mixed, inp_s_seq_qnext, beta, gate,
                                head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, hparams.ssm_d_conv,
                                state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
-                               model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf);
-            split_norm = (ggml_split_tensor_t *)model.layers[il].ssm_norm->extra;
+                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf);
+            split_norm = (ggml_split_tensor_t *)l.ssm_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
-            auto split_ssm_out = (ggml_split_tensor_t *)model.layers[il].ssm_out->extra;
+            auto split_ssm_out = (ggml_split_tensor_t *)l.ssm_out->extra;
             GGML_ASSERT(split_ssm_out && split_ssm_out->splits[id]);
             auto gated_output = build_gated_output(lctx, ctx0, split_norm->splits[id], split_ssm_out->splits[id], output, z, head_v_dim, num_v_heads_id, n_tok, il_cb, cb);
             if (inp_out_ids) {
