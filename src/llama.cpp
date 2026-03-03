@@ -759,6 +759,9 @@ static bool llama_kv_cache_init(
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
+        if (llama_model_has_recurrent(&model)) {
+            cache.split_s_l.reserve(n_layer);
+        }
         split_cache = true;
     }
 
@@ -843,7 +846,8 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
-        struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -877,8 +881,9 @@ static bool llama_kv_cache_init(
                 cache.s_l[i] = s;
                 cache.k_l.push_back(nullptr);
                 cache.v_l.push_back(nullptr);
+                printf("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
                 if (split_cache) {
-                    auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out;
+                    auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
                     GGML_ASSERT(split_ssm_out);
                     int num_v_heads = hparams.ssm_dt_rank;
                     int head_v_dim  = hparams.ssm_d_inner / num_v_heads;
@@ -899,6 +904,7 @@ static bool llama_kv_cache_init(
                     split_s_l.ggml.n_device  = n_device;
                     split_s_l.ggml.split_dim = 0;
                     split_s_l.ggml.splits    = split_s_l.tensor_splits.data();
+                    cache.s_l[i]->extra = (void *)&split_s_l.ggml;
                 }
                 continue;
             }

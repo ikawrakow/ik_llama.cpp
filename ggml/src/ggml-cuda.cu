@@ -992,7 +992,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                 GGML_ASSERT(split->op_params[2*j+1] % n_interleave == 0);
                 auto size   = row_size*split->op_params[2*j+1];
                 auto offset = row_size*split->op_params[2*j+2];
-                CUDA_CHECK(cudaMemcpyAsync(ptr, (const char *)tensor->data + offset, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                CUDA_CHECK(cudaMemcpyAsync(ptr, (const char *)data + offset, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
                 ptr += size;
             }
         }
