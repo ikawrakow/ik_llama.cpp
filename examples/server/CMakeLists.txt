@@ -36,15 +36,15 @@ foreach(asset ${PUBLIC_ASSETS})
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
     )
-	message("TARGET_SRCS contains: ${input}")
-	set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
-																
+    message("TARGET_SRCS contains: ${input}")
+    set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
+
 endforeach()
 
 # include new llamacpp webui
 set(ALT_PUBLIC_ASSETS
     index_llamacpp.html.gz
-	loading.html
+    loading.html
 )
 
 foreach(asset ${ALT_PUBLIC_ASSETS})
@@ -56,9 +56,9 @@ foreach(asset ${ALT_PUBLIC_ASSETS})
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
     )
-	message("TARGET_SRCS contains: ${input}")
-	set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
-																
+    message("TARGET_SRCS contains: ${input}")
+    set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
+
 endforeach()
 
 
@@ -68,14 +68,14 @@ target_compile_definitions(${TARGET} PRIVATE
     SERVER_VERBOSE=$<BOOL:${LLAMA_SERVER_VERBOSE}>
 )
 if (MSVC)
-	target_link_options(${TARGET} PRIVATE
-	 $<$<CONFIG:DEBUG>:/STACK:20971520,1048576 >
-	  $<$<CONFIG:RELEASE>:/STACK:20971520,1048576>
-	  )
+    target_link_options(${TARGET} PRIVATE
+     $<$<CONFIG:DEBUG>:/STACK:20971520,1048576 >
+      $<$<CONFIG:RELEASE>:/STACK:20971520,1048576>
+      )
 endif()
 # target_link_libraries(${TARGET} PRIVATE "/STACK:104857600")
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
+#target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_link_libraries(${TARGET} PRIVATE common mtmd cpp-httplib ${CMAKE_THREAD_LIBS_INIT})

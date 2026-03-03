@@ -575,6 +575,7 @@ extern "C" {
 
     LLAMA_API enum llama_pooling_type llama_pooling_type(const struct llama_context * ctx);
 
+    struct llama_vocab;
     LLAMA_API enum llama_vocab_type   llama_vocab_type(const struct llama_vocab * vocab);
     LLAMA_API enum llama_rope_type    llama_rope_type   (const struct llama_model * model);
 
@@ -586,7 +587,7 @@ extern "C" {
     LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp(const struct llama_model* model);
-    
+
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
 
     // Compat
