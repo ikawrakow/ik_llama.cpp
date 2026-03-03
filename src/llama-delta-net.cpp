@@ -429,10 +429,10 @@ static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor *
 }
 
 ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
-            ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
+            ggml_tensor * delta_input, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
             uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
 
-    const int64_t n_tok = cur->ne[1];
+    const int64_t n_tok = delta_input->ne[1];
     const int64_t n_seqs = 1;
     //const int64_t n_seq_tokens = n_tok;
 
@@ -451,29 +451,29 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         GGML_ASSERT(head_k_dim == head_v_dim);
         auto split_s_l = (ggml_split_tensor_t *)kv_self.s_l[il]->extra;
         GGML_ASSERT(split_s_l);
+        int n_device = split_s_l->n_device;
         ggml_split_tensor_t *split_wqkv = nullptr, *split_wqkv_gate = nullptr, *split_smm_in = nullptr;
         auto & l = model.layers[il];
-        int n_device = 0;
         if (l.wqkv && l.wqkv_gate) {
             split_wqkv = (ggml_split_tensor_t *)l.wqkv->extra;
             split_wqkv_gate = (ggml_split_tensor_t *)l.wqkv_gate->extra;
             GGML_ASSERT(split_wqkv && split_wqkv_gate);
-            n_device = split_wqkv->n_device;
+            GGML_ASSERT(split_wqkv->n_device == n_device);
             GGML_ASSERT(split_wqkv_gate->n_device == n_device);
         } else {
             split_smm_in = (ggml_split_tensor_t *)l.ssm_in->extra;
             GGML_ASSERT(split_smm_in);
-            n_device = split_smm_in->n_device;
+            GGML_ASSERT(split_smm_in->n_device == n_device);
         }
         GGML_ASSERT(n_device > 1);
         std::vector<ggml_tensor *> results(n_device, nullptr);
         bool input_added = false;
         for (int id = 0; id < n_device; ++id) {
             if (!split_s_l->splits[id]) continue;
-            auto input = get_input_tensor_sm_graph(ctx0, cur, id);
+            auto input = get_input_tensor_sm_graph(ctx0, delta_input, id);
             auto split_norm = (ggml_split_tensor_t *)l.attn_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
-            cur = llm_build_context::llm_build_norm(ctx0, input, hparams, split_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il);
+            auto cur = llm_build_context::llm_build_norm(ctx0, input, hparams, split_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il);
             int qnext_state_slots = split_s_l->splits[id]->ne[1];
             int il_cb = 1000*il + id;
             int64_t num_k_heads_id, num_v_heads_id;
@@ -538,7 +538,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
             ggml_build_forward_expand(gf, gated_output);
             results[id] = gated_output;
         }
-        cur = ggml_reduce(ctx0, results.data(), n_device, GGML_OP_ADD);
+        auto cur = ggml_reduce(ctx0, results.data(), n_device, GGML_OP_ADD);
         ggml_build_forward_expand(gf, cur);
         return cur;
     }
@@ -547,7 +547,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     GGML_ASSERT(qnext_state_slots > 0);
 
     int idx = model.default_layer_device[il];
-    auto input = cur;
+    auto input = delta_input;
     if (input->op == GGML_OP_REDUCE) {
         if (kv_self.s_l[il]) {
             int idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
@@ -558,7 +558,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         }
     }
     auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
-    cur = llm_build_context::llm_build_norm(ctx0, input, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
+    auto cur = llm_build_context::llm_build_norm(ctx0, input, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
 
     auto [qkv_mixed, z] = build_qkvz(lctx, ctx0, model.layers[il].wqkv, model.layers[il].wqkv_gate, model.layers[il].ssm_in,
             head_k_dim, num_k_heads, head_v_dim, num_v_heads, cur, il, cb, gf);
