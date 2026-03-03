@@ -978,6 +978,25 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             }
         }
     }
+    else if (extra->split_dim == 11) {
+        GGML_ASSERT(tensor->ne[2]*tensor->ne[3] == 1);
+        int n_interleave = 1;
+        if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
+        auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+        for (int i = 0; i < extra->n_device; ++i) {
+            auto split = extra->splits[i];
+            if (!split) continue;
+            ggml_cuda_set_device(i);
+            auto ptr = (char *)split->data;
+            for (int j = 0; j < split->op_params[0]; ++j) {
+                GGML_ASSERT(split->op_params[2*j+1] % n_interleave == 0);
+                auto size   = row_size*split->op_params[2*j+1];
+                auto offset = row_size*split->op_params[2*j+2];
+                CUDA_CHECK(cudaMemcpyAsync(ptr, (const char *)tensor->data + offset, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                ptr += size;
+            }
+        }
+    }
     else {
         fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim == 0);
         GGML_ABORT("fatal error");
