@@ -783,8 +783,8 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     for (auto & it : buft_layer_count) {
         int n_layers = it.second;
-        size_t ctx_mem_size = 5u*n_layers*ggml_tensor_overhead();
-        if (split_cache) ctx_mem_size += 2*model.splits.size()*n_layers*ggml_tensor_overhead();
+        size_t ctx_mem_size = 8u*n_layers*ggml_tensor_overhead();
+        if (split_cache) ctx_mem_size += 4*model.splits.size()*n_layers*ggml_tensor_overhead();
         struct ggml_init_params params = {
             /*.mem_size   =*/ ctx_mem_size,
             /*.mem_buffer =*/ NULL,
