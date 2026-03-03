@@ -212,6 +212,18 @@ struct llama_layer {
     llama_split_tensor split_sinks;
     llama_split_tensor split_wqkv_gate;
 
+    llama_split_tensor split_ssm_wqkv;
+    llama_split_tensor split_ssm_wqkv_gate;
+    llama_split_tensor split_ssm_in;
+    llama_split_tensor split_ssm_conv1d;
+    llama_split_tensor split_ssm_dt;
+    llama_split_tensor split_ssm_a;
+    llama_split_tensor split_ssm_beta_alpha;
+    llama_split_tensor split_ssm_beta;
+    llama_split_tensor split_ssm_alpha;
+    llama_split_tensor split_ssm_norm;
+    llama_split_tensor split_ssm_out;
+
     // relative position bias
     struct ggml_tensor * attn_rel_b = nullptr;
     struct ggml_tensor * attn_rel_b_enc = nullptr;

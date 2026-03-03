@@ -348,17 +348,14 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
 
     // Extract the convolved Q, K, V from conv_output
     ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_k_dim),
-            nb1_qkv, nb1_qkv * n_tok, 0);
+            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok, 0);
 
     ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_k_dim),
-            nb1_qkv, nb1_qkv * n_tok,
+            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok,
             head_k_dim * num_k_heads * ggml_element_size(conv_output_silu));
 
     ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_v_dim),
-            nb1_qkv, nb1_qkv * n_tok,
+            ggml_row_size(conv_output_silu->type, head_v_dim), nb1_qkv, nb1_qkv * n_tok,
             ggml_row_size(conv_output_silu->type, 2 * head_k_dim * num_k_heads));
 
     cb(q_conv, "q_conv", il);
