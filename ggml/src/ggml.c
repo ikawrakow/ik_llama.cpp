@@ -24763,7 +24763,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_ADD_ID:
             {
                 GGML_ABORT("fatal error"); // TODO: implement
-            } break;
+            }
         case GGML_OP_ADD1:
             {
                 if (src0->grad) {
