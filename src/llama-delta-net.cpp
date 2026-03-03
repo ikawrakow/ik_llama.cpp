@@ -347,14 +347,14 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     int64_t nb1_qkv = ggml_row_size(conv_output_silu->type, qkv_dim);
 
     // Extract the convolved Q, K, V from conv_output
-    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
+    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
             ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok, 0);
 
-    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
+    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
             ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok,
             head_k_dim * num_k_heads * ggml_element_size(conv_output_silu));
 
-    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_tok, 1,
+    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
             ggml_row_size(conv_output_silu->type, head_v_dim), nb1_qkv, nb1_qkv * n_tok,
             ggml_row_size(conv_output_silu->type, 2 * head_k_dim * num_k_heads));
 
@@ -492,9 +492,9 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
                 z = p.second;
             }
             auto split_ssm_dt = (ggml_split_tensor_t *)l.ssm_dt->extra;
-            GGML_ASSERT(split_ssm_dt && split_ssm_dt->splits[id]);
+            GGML_ASSERT(split_ssm_dt && split_ssm_dt->splits[id] && split_ssm_dt->splits[id]->ne[0] == num_v_heads_id);
             auto split_ssm_a  = (ggml_split_tensor_t *)l.ssm_a->extra;
-            GGML_ASSERT(split_ssm_a && split_ssm_a->splits[id]);
+            GGML_ASSERT(split_ssm_a && split_ssm_a->splits[id] && split_ssm_a->splits[id]->ne[0] == num_v_heads_id);
             ggml_tensor *beta, *gate;
             if (l.ssm_beta_alpha) {
                 auto split_ssm_beta_alpha = (ggml_split_tensor_t *)l.ssm_beta_alpha;
@@ -520,7 +520,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
             split_norm = (ggml_split_tensor_t *)l.ssm_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
             auto split_ssm_out = (ggml_split_tensor_t *)l.ssm_out->extra;
-            GGML_ASSERT(split_ssm_out && split_ssm_out->splits[id]);
+            GGML_ASSERT(split_ssm_out && split_ssm_out->splits[id] && split_ssm_out->splits[id]->ne[0] == head_k_dim*num_v_heads_id);
             auto gated_output = build_gated_output(lctx, ctx0, split_norm->splits[id], split_ssm_out->splits[id], output, z, head_v_dim, num_v_heads_id, n_tok, il_cb, cb);
             if (inp_out_ids) {
                 gated_output = ggml_get_rows(ctx0, gated_output, inp_out_ids);
