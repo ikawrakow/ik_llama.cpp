@@ -1058,7 +1058,7 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
         return;
     }
     if (n_rewind < 0) {
-        // keep only the current
+        // clear history except most recent
         float cur = adapt_p_ctx->weighted_sum.back();
         adapt_p_ctx->weighted_sum.clear();
         adapt_p_ctx->weighted_sum.push_back(cur);
@@ -1066,6 +1066,7 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
         adapt_p_ctx->total_weight.clear();
         adapt_p_ctx->total_weight.push_back(cur);
     } else {
+        // rewind
         int32_t sz = adapt_p_ctx->weighted_sum.size() - n_rewind;
         if (sz > 0) {
             adapt_p_ctx->weighted_sum.resize(sz);
