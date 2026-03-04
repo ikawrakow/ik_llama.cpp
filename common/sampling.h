@@ -135,8 +135,7 @@ struct common_sampler {
 
     std::mt19937 rng;
 
-    bool record_samplers = false;   // record current state for stateful samplers
-    bool rewind_samplers = false;   // rewind stateful samplers to last recorded
+    int32_t n_rewind;   // number of tokens to rewind
 };
 
 
@@ -152,8 +151,7 @@ void common_sampler_free(struct common_sampler * ctx);
 void common_sampler_reset(common_sampler * ctx);
 
 // Review stateful samplers
-// | record current state for rewinding
-// | rewind to last recorded state
+// - rewind internal states (maybe)
 void common_sampler_review(common_sampler * ctx);
 
 // Set the sampler seed

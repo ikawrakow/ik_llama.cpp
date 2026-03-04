@@ -106,6 +106,8 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
+    result->n_rewind = -1;
+
     return result;
 }
 
@@ -143,16 +145,12 @@ void common_sampler_reset(common_sampler * ctx) {
 }
 
 void common_sampler_review(common_sampler * ctx) {
-    if (!ctx->adapt_p_ctx) {
-        return;
+    const int32_t n_rewind = ctx->n_rewind;
+
+    // add stateful samplers here
+    if (ctx->adapt_p_ctx != nullptr) {
+        llama_review_adaptive_p(ctx->adapt_p_ctx, n_rewind);
     }
-    const bool record = ctx->record_samplers;
-    const bool rewind = ctx->rewind_samplers;
-
-    llama_review_adaptive_p(ctx->adapt_p_ctx, record, rewind);
-
-    ctx->record_samplers = false;
-    ctx->rewind_samplers = false;
 }
 
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed) {
