@@ -135,7 +135,7 @@ struct common_sampler {
 
     std::mt19937 rng;
 
-    int32_t n_rewind;   // rewind stateful samplers to last recorded
+    int32_t n_rewind;   // number of tokens to rewind
 };
 
 
