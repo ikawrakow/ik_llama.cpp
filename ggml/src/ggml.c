@@ -17935,7 +17935,10 @@ static void ggml_compute_forward_scale_f32(
         const float * src_data = (const float *)src0->data + block_size*ib;
               float * dst_data = (      float *)dst->data  + block_size*ib;
         int n = MIN(block_size, nelements - block_size*ib);
-        if (b == 0.0f) {
+        if (s == 0.0f && b == 0.0f) {
+            memset(dst_data, 0, n*sizeof(float));
+        }
+        else if (b == 0.0f) {
             if (dst->data != src0->data) {
                 // src0 is same shape as dst => same indices
                 memcpy(dst_data, src_data, n * sizeof(float));
