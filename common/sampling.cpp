@@ -148,7 +148,9 @@ void common_sampler_review(common_sampler * ctx) {
     const int32_t n_rewind = ctx->n_rewind;
 
     // add stateful samplers here
-    llama_review_adaptive_p(ctx->adapt_p_ctx, n_rewind);
+    if (ctx->adapt_p_ctx != nullptr) {
+        llama_review_adaptive_p(ctx->adapt_p_ctx, n_rewind);
+    }
 }
 
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed) {

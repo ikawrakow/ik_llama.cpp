@@ -1054,7 +1054,7 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 // adaptive p
 
 void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const int32_t n_rewind) {
-    if ((adapt_p_ctx == nullptr) || (n_rewind == 0)) {
+    if ((n_rewind == 0) || (adapt_p_ctx->target < 0.0f)) {
         return;
     }
     auto & weighted_sum = adapt_p_ctx->weighted_sum;
