@@ -1057,34 +1057,31 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
     if ((adapt_p_ctx == nullptr) || (n_rewind == 0)) {
         return;
     }
+    auto & weighted_sum = adapt_p_ctx->weighted_sum;
+    auto & total_weight = adapt_p_ctx->total_weight;
     if (n_rewind < 0) {
         // clear history except most recent
-        float cur = adapt_p_ctx->weighted_sum.back();
-        adapt_p_ctx->weighted_sum.clear();
-        adapt_p_ctx->weighted_sum.push_back(cur);
-        cur = adapt_p_ctx->total_weight.back();
-        adapt_p_ctx->total_weight.clear();
-        adapt_p_ctx->total_weight.push_back(cur);
+        weighted_sum.erase(weighted_sum.begin(), weighted_sum.begin() + weighted_sum.size() - 1);
+        total_weight.erase(total_weight.begin(), total_weight.begin() + total_weight.size() - 1);
     } else {
         // rewind
-        int32_t sz = adapt_p_ctx->weighted_sum.size() - n_rewind;
+        int32_t sz = weighted_sum.size() - n_rewind;
         if (sz > 0) {
-            adapt_p_ctx->weighted_sum.resize(sz);
+            weighted_sum.resize(sz);
         } else {
             LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
-            adapt_p_ctx->weighted_sum.clear();
-            adapt_p_ctx->weighted_sum.push_back(adapt_p_ctx->target / adapt_p_ctx->decay);  // set to default value
+            weighted_sum.clear();
+            weighted_sum.push_back(adapt_p_ctx->target / adapt_p_ctx->decay);   // set to default value
         }
-        sz = adapt_p_ctx->total_weight.size() - n_rewind;
+        sz = total_weight.size() - n_rewind;
         if (sz > 0) {
-            adapt_p_ctx->total_weight.resize(sz);
+            total_weight.resize(sz);
         } else {
             LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
-            adapt_p_ctx->total_weight.clear();
-            adapt_p_ctx->total_weight.push_back(1.0f / adapt_p_ctx->decay);     // set to default value
+            total_weight.clear();
+            total_weight.push_back(1.0f / adapt_p_ctx->decay);  // set to default value
         }
     }
-    
 }
 
 llama_token llama_sample_token_adaptive_p_impl(

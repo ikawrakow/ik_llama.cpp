@@ -3332,7 +3332,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     bool next_token = has_next_token(result, slot);
     bool send_result = slot.token_buffer.size() >= slot.n_buffer || !next_token;
     int32_t n_rewind = 0;
-    bool clear_samplers = false;
+    bool sent_results = false;
     // don't restore if last time was also rewind
     if (!slot.rewind_status) {
         slot.ctx_sampling->params.logit_bias = slot.logit_bias; // restore logit bias
@@ -3356,14 +3356,14 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // send 1 token
             send_token_results(slot.token_buffer, slot, 1);
         }
-        clear_samplers = true;
+        sent_results = true;
     }
     else {
         // buffer the result
         slot.sampled = result.tok; // for common batch add
     }
 
-    slot.ctx_sampling->n_rewind = clear_samplers ? -1 : n_rewind;
+    slot.ctx_sampling->n_rewind = sent_results ? -1 : n_rewind;
 }
 
 void server_context::process_batch_tokens(int32_t & n_batch) {
