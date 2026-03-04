@@ -1073,7 +1073,7 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
         } else {
             LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
             adapt_p_ctx->weighted_sum.clear();
-            adapt_p_ctx->weighted_sum.push_back(adapt_p_ctx->target / adapt_p_ctx->decay);
+            adapt_p_ctx->weighted_sum.push_back(adapt_p_ctx->target / adapt_p_ctx->decay);  // set to default value
         }
         sz = adapt_p_ctx->total_weight.size() - n_rewind;
         if (sz > 0) {
@@ -1081,7 +1081,7 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
         } else {
             LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
             adapt_p_ctx->total_weight.clear();
-            adapt_p_ctx->total_weight.push_back(adapt_p_ctx->target / adapt_p_ctx->decay);
+            adapt_p_ctx->total_weight.push_back(1.0f / adapt_p_ctx->decay);     // set to default value
         }
     }
     
