@@ -1057,8 +1057,6 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
     if ((n_rewind == 0) || (adapt_p_ctx->target < 0.0f)) {
         return;
     }
-    // auto & weighted_sum = adapt_p_ctx->weighted_sum;
-    // auto & total_weight = adapt_p_ctx->total_weight;
 
     const int32_t sz = adapt_p_ctx->history.size();
     if ((sz <= 0) || (sz <= n_rewind)) {
@@ -1078,23 +1076,6 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
     } else {
         // rewind
         adapt_p_ctx->history.resize(sz - n_rewind);
-
-        // int32_t sz = weighted_sum.size() - n_rewind;
-        // if (sz > 0) {
-        //     weighted_sum.resize(sz);
-        // } else {
-        //     LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
-        //     weighted_sum.clear();
-        //     weighted_sum.push_back(adapt_p_ctx->target / adapt_p_ctx->decay);   // set to default value
-        // }
-        // sz = total_weight.size() - n_rewind;
-        // if (sz > 0) {
-        //     total_weight.resize(sz);
-        // } else {
-        //     LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
-        //     total_weight.clear();
-        //     total_weight.push_back(1.0f / adapt_p_ctx->decay);  // set to default value
-        // }
     }
 }
 
@@ -1133,8 +1114,6 @@ llama_token llama_sample_token_adaptive_p_impl(
         ctx->history.push_back({
             ctx->decay * ctx->history.back().first + update_prob,   // weighted_sum
             ctx->decay * ctx->history.back().second + 1.0f });      // total_weight
-        // ctx->weighted_sum.push_back(ctx->decay * ctx->weighted_sum.back() + update_prob);
-        // ctx->total_weight.push_back(ctx->decay * ctx->total_weight.back() + 1.0f);
     }
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
@@ -1235,8 +1214,6 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
         /* .decay             = */ clamped_decay,
         /* .updt_w_cur        = */ updt_w_cur,
         /* .rng               = */ std::mt19937(seed),
-        // /* .weighted_sum      = */ {},
-        // /* .total_weight      = */ {},
         /* .history           = */ {},
         /* .orig_prob         = */ {},
         /* .cum_orig_prob     = */ 1.0f,
@@ -1244,8 +1221,6 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
         /* .max_xform_logit   = */ -INFINITY,
         /* .cum_probs         = */ {},
     };
-    // result->weighted_sum.push_back(target / (1.0f - clamped_decay));
-    // result->total_weight.push_back(1.0f / (1.0f - clamped_decay));
     result->history.push_back({
         target / (1.0f - clamped_decay),    // weighted_sum
         1.0f / (1.0f - clamped_decay) });   // total_weight

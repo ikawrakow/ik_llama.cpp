@@ -3332,7 +3332,6 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     bool next_token = has_next_token(result, slot);
     bool send_result = slot.token_buffer.size() >= slot.n_buffer || !next_token;
     int32_t n_rewind = 0;
-    bool sent_results = false;
     // don't restore if last time was also rewind
     if (!slot.rewind_status) {
         slot.ctx_sampling->params.logit_bias = slot.logit_bias; // restore logit bias
@@ -3340,6 +3339,8 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     if (slot.ban_phrases.size() > 0) {
         n_rewind = check_ban_phrase(slot);
     }
+    slot.ctx_sampling->n_rewind = n_rewind;
+
     // if found string in the ban
     if (n_rewind > 0 && (slot.rewind_count <20 || slot.rewind_count <= 2 * slot.ban_phrases.size())) {
         rewind_context(slot, n_rewind);
@@ -3356,14 +3357,12 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // send 1 token
             send_token_results(slot.token_buffer, slot, 1);
         }
-        sent_results = true;
+        slot.ctx_sampling->n_rewind = -1;   // <0 signals stateful samplers tokens are sent
     }
     else {
         // buffer the result
         slot.sampled = result.tok; // for common batch add
     }
-
-    slot.ctx_sampling->n_rewind = sent_results ? -1 : n_rewind;
 }
 
 void server_context::process_batch_tokens(int32_t & n_batch) {

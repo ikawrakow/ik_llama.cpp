@@ -70,8 +70,6 @@ struct llama_sampler_adaptive_p {
     const float decay;      // EMA decay; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
     const bool updt_w_cur;  // false=original, true=current
     std::mt19937 rng;       // RNG
-    // std::vector<float> weighted_sum;    // [0] = sum(p_n * decay^N)
-    // std::vector<float> total_weight;    // [0] = sum(decay^i), converges to 1/(1-decay)
     std::vector<std::pair<float, float>> history;   // <weighted_sum, total_weight>
 
     // first referenced in prep
