@@ -77,7 +77,7 @@ delta_net::~delta_net() = default;
 std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_context * ctx0,
         ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
         ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
-        int il, const llm_build_cb & cb) {
+        int il, const llm_build_cb & cb, int repeat_type) {
 
     const int64_t S_k      = q->ne[0];
     const int64_t H_k      = q->ne[1];
@@ -131,6 +131,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
 
     ggml_tensor * fused_result = ggml_delta_net(ctx0, q, k, v, g, beta, state_flat);
     cb(fused_result, "delta_net_fused_raw", il);
+    fused_result->op_params[0] = repeat_type;
 
     const int64_t output_size = S_v * H_v * n_tokens * n_seqs;
     const int64_t state_size  = S_v * S_v * H_v * n_seqs;
@@ -389,7 +390,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     //cb(k_conv, "k_conv_predelta", il);
     //cb(v_conv, "v_conv_predelta", il);
 
-    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb);
+    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, model.layers[il].ssm_beta_alpha ? 0 : 1);
 
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);

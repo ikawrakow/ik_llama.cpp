@@ -38,6 +38,7 @@ __global__ void delta_net_recurrent_f32(
     float * __restrict__ dst,             // output + new_state concatenated
     const int64_t n_heads,
     const int64_t gqa_ratio,
+    const int repeat_type,
     const int64_t n_tokens,
     const int64_t n_seqs,
     const int64_t output_offset,          // offset where state starts in output
@@ -47,7 +48,7 @@ __global__ void delta_net_recurrent_f32(
     const int sub_head_idx  = blockIdx.x % (warps_per_head*n_heads);
     const int head_idx = sub_head_idx / warps_per_head;
     const int sub_idx  = sub_head_idx % warps_per_head;
-    const int head_idx_kq = head_idx / gqa_ratio;
+    const int head_idx_kq = repeat_type == 0 ? head_idx / gqa_ratio : head_idx % (n_heads/gqa_ratio);
     const int tid = threadIdx.x;
 
     // Strides for input tensors (column-major)
@@ -175,6 +176,7 @@ static void delta_net_f32_cuda(
     const int64_t n_tokens,
     const int64_t n_heads,
     const int64_t gqa_ratio,
+    const int     repeat_type,
     const int64_t n_seqs,
     const float eps,
     const int device_id,
@@ -197,19 +199,19 @@ static void delta_net_f32_cuda(
         constexpr int threads_per_block = 256;
         if (head_dim == 64) {
             delta_net_recurrent_f32<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, n_tokens, n_seqs, output_offset, eps);
+                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, eps);
         } else {
             delta_net_recurrent_f32<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, n_tokens, n_seqs, output_offset, eps);
+                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, eps);
         }
     } else {
         constexpr int threads_per_block = 128;
         if (head_dim == 64) {
             delta_net_recurrent_f32<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, n_tokens, n_seqs, output_offset, eps);
+                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, eps);
         } else {
             delta_net_recurrent_f32<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, n_tokens, n_seqs, output_offset, eps);
+                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, eps);
         }
     }
 
@@ -254,6 +256,7 @@ void ggml_cuda_op_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     GGML_ASSERT(ggml_nelements(dst) == output_size + state_size);
 
     const float eps = 1e-6f;
+    int repeat_type = dst->op_params[0];
 
     GGML_ASSERT(head_dim <= 256);  // Reasonable limit for shared memory
 
@@ -269,7 +272,7 @@ void ggml_cuda_op_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         (const float *)src4->data,
         (const float *)src5->data,
         (float *)dst->data,
-        head_dim, n_tokens, n_heads, gqa_ratio, n_seqs, eps,
+        head_dim, n_tokens, n_heads, gqa_ratio, repeat_type, n_seqs, eps,
         device_id, cc,
         ctx.stream());
 

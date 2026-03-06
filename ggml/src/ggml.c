@@ -22568,7 +22568,9 @@ static void ggml_compute_forward_delta_net_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
+    int repeat_type = dst->op_params[0];
+
+    if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
                 out_data, state_out, ith, nth)) {
         return;
     }
@@ -22587,8 +22589,10 @@ static void ggml_compute_forward_delta_net_f32(
     for (int64_t h_idx = h_start; h_idx < h_end; ++h_idx) {
         const int64_t batch_idx = h_idx / n_heads;
         const int64_t head_idx  = h_idx % n_heads;
+        const int64_t head_idx_kq = repeat_type == 0 ? head_idx / gqa_ratio : head_idx % (n_heads/gqa_ratio);
 
         const int64_t qkv_head_offset  = batch_idx * (head_dim * n_tokens * n_heads) + head_idx * (head_dim * n_tokens);
+        const int64_t qkv_head_offset_kq = batch_idx * (head_dim * n_tokens * n_heads/gqa_ratio) + head_idx_kq * (head_dim * n_tokens);
         const int64_t qkv_token_stride = head_dim;
         const int64_t g_head_offset    = batch_idx * (n_tokens * n_heads) + head_idx * n_tokens;
         const int64_t state_head_offset = batch_idx * (head_dim * head_dim * n_heads) + head_idx * (head_dim * head_dim);
@@ -22602,8 +22606,8 @@ static void ggml_compute_forward_delta_net_f32(
         float * state = state_out + state_head_offset;
 
         for (int64_t t = 0; t < n_tokens; ++t) {
-            const float * q_t = q_data + qkv_head_offset + t * qkv_token_stride;
-            const float * k_t = k_data + qkv_head_offset + t * qkv_token_stride;
+            const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
+            const float * k_t = k_data + qkv_head_offset_kq + t * qkv_token_stride;
             const float * v_t = v_data + qkv_head_offset + t * qkv_token_stride;
 
             const float g_val    = g_data[g_head_offset + t];
