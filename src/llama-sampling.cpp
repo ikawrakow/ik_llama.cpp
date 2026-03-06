@@ -1064,8 +1064,8 @@ void llama_review_adaptive_p_impl(llama_sampling_adaptive_ctx * adaptive_ctx, co
         LLAMA_LOG_WARN("%s: sz=%d, n_rewind=%d should not be possible\n", __func__, sz, n_rewind);
         adaptive_ctx->history.clear();
         adaptive_ctx->history.push_back({
-            adaptive_ctx->target / adaptive_ctx->decay,   // weighted_sum
-            1.0f / adaptive_ctx->decay });               // total_weight
+            adaptive_ctx->target / adaptive_ctx->decay,     // weighted_sum
+            1.0f / adaptive_ctx->decay });                  // total_weight
         return;
     }
 
