@@ -907,15 +907,14 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
     else if (extra->split_dim == 0) {
         int n_interleave = 1;
         if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
-        //if (tensor->type >= GGML_TYPE_Q4_0_R8) {
-        //    GGML_ABORT("Dim 0 copy of row-interleaved quants is not supported yet");
-        //}
         auto tt = ggml_internal_get_type_traits(tensor->type);
         std::vector<char> host_buffer;
         GGML_ASSERT(ggml_is_contiguous(tensor));
         int nrows = ggml_nrows(tensor);
         auto bs = tt.blck_size;
         auto ts = tt.type_size;
+        int repeat_type = tensor->op_params[0];
+        if (repeat_type == 0) {
         auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
         int ne = 0;
         for (int i = 0; i < extra->n_device; ++i) {
@@ -941,6 +940,37 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             }
             CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
             ne += split->ne[0];
+        }
+        } else {
+            int head_k_dim  = tensor->op_params[1];
+            int num_k_heads = tensor->op_params[2];
+            int head_v_dim  = tensor->op_params[3];
+            int num_v_heads = tensor->op_params[4];
+            int gqa_ratio   = num_v_heads / num_k_heads;
+            int ttype       = tensor->op_params[5];
+            if (ttype != 2 && ttype != 3 && ttype != 4) {
+                printf("%s: ttype %d is not supported for split dimension 0\n", __func__, ttype);
+                GGML_ABORT("Fatal error");
+            }
+            int nval = ttype == 3 ? head_v_dim : 1;
+            for (int i = 0; i < extra->n_device; ++i) {
+                auto split = extra->splits[i];
+                if (!split) continue;
+                GGML_ASSERT(split->ne[1] == tensor->ne[1]);
+                GGML_ASSERT(split->ne[1] == 1 && split->ne[3] == 1);
+                int nhead      = split->op_params[0];
+                int first_head = split->op_params[1];
+                for (int64_t i01 = 0; i01 < split->ne[1]; i01 += n_interleave) {
+                    auto src0 = (const char *)data + i01*tensor->nb[1];
+                    for (int ihead = 0; ihead < nhead; ++ihead) {
+                        int ihead_k  = first_head + ihead;
+                        int ihead_v0 = repeat_type == 1 ? ihead_k * gqa_ratio : ihead_k;
+                        for (int r = 0; r < gqa_ratio; ++r) {
+                            int ihead_v = ihead_v0 + (repeat_type == 1 ? r : r * num_k_heads);
+                        }
+                    }
+                }
+            }
         }
     }
     else if (extra->split_dim == 1) {
