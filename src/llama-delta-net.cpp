@@ -367,7 +367,7 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(q_conv, "q_conv_normed", il);
     cb(k_conv, "k_conv_normed", il);
 
-    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, model.layers[il].ssm_beta_alpha ? 0 : 1);
+    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, repeat_type);
 
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);
