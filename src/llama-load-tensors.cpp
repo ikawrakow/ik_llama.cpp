@@ -3416,46 +3416,26 @@ static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer &
     for ([[maybe_unused]] auto & s : split) LLAMA_LOG_DEBUG(" %d", s);
     LLAMA_LOG_DEBUG("\n");
 
+    GGML_ASSERT(layer.ssm_in || (layer.wqkv && layer.wqkv_gate));
+    int repeat_type = layer.ssm_in ? 0 : 1;
+
     size_t orig_size = 0, split_size = 0;
     auto add_size = [&orig_size, &split_size] (ggml_tensor * t) {
         orig_size += ggml_nbytes(t);
         auto extra = (ggml_split_tensor_t *)t->extra;
         for (int i = 0; i < extra->n_device; ++i) if (extra->splits[i]) split_size += ggml_nbytes(extra->splits[i]);
     };
-
-    prepare_split_tensors(-1, ctx_split, layer.ssm_norm, layer.split_ssm_norm, split, mem_used);
-    add_size(layer.ssm_norm);
-
-    auto split_k = split;
-    for (auto & k : split_k) k *= (head_k_dim*2 + head_v_dim*gqa_ratio);
-    prepare_split_tensors( 1, ctx_split, layer.ssm_conv1d, layer.split_ssm_conv1d, split_k, mem_used);
-    add_size(layer.ssm_conv1d);
-
-    //auto add_meta_3 = [head_k_dim, head_v_dim, num_k_heads, gqa_ratio] (ggml_split_tensor_t * s, const std::vector<int> & split) {
-    //    s->split_dim = 11;
-    //    int sums[3] = {0, head_k_dim*num_k_heads, 2*head_k_dim*num_k_heads};
-    //    for (int i = 0; i < s->n_device; ++i) {
-    //        if (s->splits[i]) {
-    //            s->splits[i]->op_params[0] = 3;
-    //            s->splits[i]->op_params[1] = split[i]*head_k_dim;
-    //            s->splits[i]->op_params[2] = sums[0];
-    //            sums[0] += split[i]*head_k_dim;
-    //            s->splits[i]->op_params[3] = split[i]*head_k_dim;
-    //            s->splits[i]->op_params[4] = sums[1];
-    //            sums[1] += split[i]*head_k_dim;
-    //            s->splits[i]->op_params[5] = split[i]*head_v_dim*gqa_ratio;
-    //            s->splits[i]->op_params[6] = sums[2];
-    //            sums[2] += split[i]*head_v_dim*gqa_ratio;
-    //        }
-    //    }
-    //};
-    auto add_meta_x = [head_k_dim, num_k_heads, head_v_dim, num_v_heads] (ggml_tensor * t, const std::vector<int> & split) {
-        t->op_params[0] = head_k_dim;
-        t->op_params[1] = num_k_heads;
-        t->op_params[2] = head_v_dim;
-        t->op_params[3] = num_v_heads;
+    auto add_base = [repeat_type, head_k_dim, head_v_dim, num_k_heads, num_v_heads] (ggml_tensor * t, int ttype) {
+        t->op_params[0] = repeat_type + 1;
+        t->op_params[1] = head_k_dim;
+        t->op_params[2] = num_k_heads;
+        t->op_params[3] = head_v_dim;
+        t->op_params[4] = num_v_heads;
+        t->op_params[5] = ttype;
+    };
+    auto add_meta = [&add_base] (ggml_tensor * t, const std::vector<int> & split, int ttype) {
+        add_base(t, ttype);
         auto s = (ggml_split_tensor_t *)t->extra;
-        s->split_dim = 10;
         int nk = 0;
         for (int i = 0; i < s->n_device; ++i) {
             if (!s->splits[i]) continue;
@@ -3464,38 +3444,32 @@ static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer &
             nk += split[i];
         }
     };
-    //add_meta_3((ggml_split_tensor_t *)layer.ssm_conv1d->extra, split);
-    add_meta_x(layer.ssm_conv1d, split);
+
+    // ttype = 0 -> q, k, v, always multiplied with head_k_dim/head_v_dim
+    // ttype = 1 -> q, k, v, v, always multiplied with head_k_dim/head_v_dim
+    // ttype = 2 -> v
+    // ttype = 3 -> v, but multiplied with head_v_dim
+    // ttype = 4 -> v, v, never multiplied with head_v_dim
+
+    prepare_split_tensors(-1, ctx_split, layer.ssm_norm, layer.split_ssm_norm, split, mem_used);
+    add_size(layer.ssm_norm);
+
+    auto split_k = split;
+    for (auto & k : split_k) k *= (head_k_dim*2 + head_v_dim*gqa_ratio);
+    prepare_split_tensors( 1, ctx_split, layer.ssm_conv1d, layer.split_ssm_conv1d, split_k, mem_used);
+    add_meta(layer.ssm_conv1d, split, 0);
+    add_size(layer.ssm_conv1d);
+
     if (layer.wqkv) {
         prepare_split_tensors( 1, ctx_split, layer.wqkv, layer.split_ssm_wqkv, split_k, mem_used);
-        //add_meta_3((ggml_split_tensor_t *)layer.wqkv->extra, split);
-        add_meta_x(layer.wqkv, split);
+        add_meta(layer.wqkv, split, 0);
         add_size(layer.wqkv);
     }
     if (layer.ssm_in) {
         split_k = split;
         for (auto & k : split_k) k *= (head_k_dim*2 + head_v_dim*gqa_ratio*2);
         prepare_split_tensors( 1, ctx_split, layer.ssm_in, layer.split_ssm_in, split_k, mem_used);
-        auto s = (ggml_split_tensor_t *)layer.ssm_in->extra;
-        s->split_dim = 11;
-        int sums[4] = {0, head_k_dim*num_k_heads, 2*head_k_dim*num_k_heads, 2*head_k_dim*num_k_heads + head_v_dim*num_v_heads};
-        for (int i = 0; i < s->n_device; ++i) {
-            if (s->splits[i]) {
-                s->splits[i]->op_params[0] = 4;
-                s->splits[i]->op_params[1] = split[i]*head_k_dim;
-                s->splits[i]->op_params[2] = sums[0];
-                sums[0] += split[i]*head_k_dim;
-                s->splits[i]->op_params[3] = split[i]*head_k_dim;
-                s->splits[i]->op_params[4] = sums[1];
-                sums[1] += split[i]*head_k_dim;
-                s->splits[i]->op_params[5] = split[i]*head_v_dim*gqa_ratio;
-                s->splits[i]->op_params[6] = sums[2];
-                sums[2] += split[i]*head_v_dim*gqa_ratio;
-                s->splits[i]->op_params[7] = split[i]*head_v_dim*gqa_ratio;
-                s->splits[i]->op_params[8] = sums[3];
-                sums[3] += split[i]*head_v_dim*gqa_ratio;
-            }
-        }
+        add_meta(layer.ssm_in, split, 1);
         add_size(layer.ssm_in);
     }
 
@@ -3503,23 +3477,36 @@ static void split_recurrent_tensors(const llama_hparams & hparams, llama_layer &
     for (auto & v : split_v) v *= gqa_ratio;
 
     prepare_split_tensors( 0, ctx_split, layer.ssm_dt, layer.split_ssm_dt, split_v, mem_used);
+    add_meta(layer.ssm_dt, split, 2);
     add_size(layer.ssm_dt);
     prepare_split_tensors( 0, ctx_split, layer.ssm_a,  layer.split_ssm_a,  split_v, mem_used);
+    add_meta(layer.ssm_a, split, 2);
     add_size(layer.ssm_a);
     if (layer.ssm_beta) {
         prepare_split_tensors( 1, ctx_split, layer.ssm_beta, layer.split_ssm_beta, split_v, mem_used);
+        add_meta(layer.ssm_beta, split, 2);
         add_size(layer.ssm_beta);
     }
     if (layer.ssm_alpha) {
         prepare_split_tensors( 1, ctx_split, layer.ssm_alpha, layer.split_ssm_alpha, split_v, mem_used);
+        add_meta(layer.ssm_alpha, split, 2);
         add_size(layer.ssm_alpha);
+    }
+    if (layer.ssm_beta_alpha) {
+        auto split_v2 = split_v;
+        for (auto & v : split_v2) v *= 2;
+        prepare_split_tensors( 1, ctx_split, layer.ssm_beta_alpha, layer.split_ssm_beta_alpha, split_v2, mem_used);
+        add_meta(layer.ssm_alpha, split, 4);
+        add_size(layer.ssm_beta_alpha);
     }
 
     for (auto & v : split_v) v *= head_v_dim;
     prepare_split_tensors( 0, ctx_split, layer.ssm_out, layer.split_ssm_out, split_v, mem_used);
+    add_meta(layer.ssm_out, split, 3);
     add_size(layer.ssm_out);
     if (layer.wqkv_gate) {
         prepare_split_tensors( 1, ctx_split, layer.wqkv_gate, layer.split_ssm_wqkv_gate, split_v, mem_used);
+        add_meta(layer.wqkv_gate, split, 3);
         add_size(layer.wqkv_gate);
     }
     LLAMA_LOG_DEBUG("    original size: %g MiB, split size: %g MiB\n", orig_size/1024./1024., split_size/1024./1024.);
