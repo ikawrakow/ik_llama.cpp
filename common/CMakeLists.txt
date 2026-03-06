@@ -58,6 +58,8 @@ add_library(${TARGET} STATIC
     chat-parser.h
     chat-parser-xml-toolcall.h
     chat-parser-xml-toolcall.cpp
+	chat-peg-parser.cpp
+    chat-peg-parser.h
     common.cpp
     sampling.h
     sampling.cpp
@@ -75,11 +77,27 @@ add_library(${TARGET} STATIC
     ngram-cache.h
     ngram-map.cpp
     ngram-map.h
+	peg-parser.cpp
+    peg-parser.h
 	speculative.cpp
+    unicode.cpp
+    unicode.h
     ngram-mod.cpp
     ngram-mod.h
     regex-partial.cpp
     regex-partial.h
+    jinja/lexer.cpp
+    jinja/lexer.h
+    jinja/parser.cpp
+    jinja/parser.h
+    jinja/runtime.cpp
+    jinja/runtime.h
+    jinja/value.cpp
+    jinja/value.h
+    jinja/string.cpp
+    jinja/string.h
+    jinja/caps.cpp
+    jinja/caps.h
     )
 
 if (BUILD_SHARED_LIBS)

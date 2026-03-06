@@ -617,7 +617,7 @@ json oaicompat_chat_params_parse(const json& body) {
 json oaicompat_chat_params_parse(
     const struct llama_model* model,
     json& body, /* openai api json semantics */
-    const oaicompat_parser_options& opt,
+    const server_chat_params& opt,
     std::vector<raw_buffer>& out_files)
 {
     json llama_params;
@@ -744,8 +744,7 @@ json oaicompat_chat_params_parse(
                     }
                 }
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
 
@@ -765,8 +764,7 @@ json oaicompat_chat_params_parse(
                 auto decoded_data = base64_decode(data); // expected to be base64 encoded
                 out_files.push_back(decoded_data);
 
-                // replace this chunk with a marker
-                p["type"] = "text";
+                p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("input_audio");
 
@@ -787,6 +785,9 @@ json oaicompat_chat_params_parse(
     inputs.parallel_tool_calls = json_value(body, "parallel_tool_calls", false);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.reasoning_format = opt.reasoning_format;
+    if (body.contains("reasoning_format")) {
+        inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
+    }
     inputs.enable_thinking = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
@@ -836,7 +837,7 @@ json oaicompat_chat_params_parse(
     }
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
+    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {
@@ -867,7 +868,9 @@ json oaicompat_chat_params_parse(
     for (const auto& stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
-
+    if (!chat_params.parser.empty()) {
+        llama_params["chat_parser"] = chat_params.parser;
+    }
     // Handle "n" field
     int n_choices = json_value(body, "n", 1);
     if (n_choices != 1) {
@@ -1147,7 +1150,7 @@ json convert_responses_to_chatcmpl(const json& response_body) {
 json anthropic_params_from_json(
     const struct llama_model* model,
     const json& body_in, /* anthropic messages api json semantics */
-    const oaicompat_parser_options& opt,
+    const server_chat_params& opt,
     std::vector<raw_buffer>& out_files)
 {
     json body = body_in;
@@ -1529,7 +1532,7 @@ json anthropic_params_from_json(
     }
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
+    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
 
     // Append assistant prefilled message
     if (prefill_assistant_message) {
