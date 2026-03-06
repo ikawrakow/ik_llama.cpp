@@ -176,7 +176,7 @@ struct llama_model_loader {
 
 void llm_load_arch(llama_model_loader & ml, llama_model & model);
 
-void llm_load_hparams(llama_model_loader & ml, llama_model & model);
+void llm_load_hparams(llama_model_loader & ml, llama_model & model, bool ignore_vocab = false);
 
 struct create_tensors_helper_interface {
     virtual ~create_tensors_helper_interface() = default;

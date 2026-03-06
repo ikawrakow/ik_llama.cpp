@@ -25,24 +25,30 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     }
     else {
         std::vector<std::string> trigger_patterns;
-        std::vector<std::string> patterns_anywhere;
         std::vector<llama_token> trigger_tokens;
-        for (const auto& trigger : params.grammar_triggers) {
+        for (const auto & trigger : params.grammar_triggers) {
             switch (trigger.type) {
             case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
             {
-                const auto& word = trigger.value;
-                patterns_anywhere.push_back(regex_escape(word));
+                const auto & word = trigger.value;
+                trigger_patterns.push_back(regex_escape(word));
                 break;
             }
             case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
             {
-                patterns_anywhere.push_back(trigger.value);
+                trigger_patterns.push_back(trigger.value);
                 break;
             }
             case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
             {
-                trigger_patterns.push_back(trigger.value);
+                const auto & pattern = trigger.value;
+                std::string anchored = "^$";
+                if (!pattern.empty()) {
+                    anchored = (pattern.front() != '^' ? "^" : "")
+                        + pattern
+                        + (pattern.back() != '$' ? "$" : "");
+                }
+                trigger_patterns.push_back(anchored);
                 break;
             }
             case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
@@ -56,15 +62,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             }
         }
 
-        if (!patterns_anywhere.empty()) {
-            trigger_patterns.push_back("^[\\s\\S]*?(" + string_join(patterns_anywhere, "|") + ")[\\s\\S]*");
-        }
-
-        std::vector<const char*> trigger_patterns_c;
+        std::vector<const char *> trigger_patterns_c;
         trigger_patterns_c.reserve(trigger_patterns.size());
-        for (const auto& regex : trigger_patterns) {
+        for (const auto & regex : trigger_patterns) {
             trigger_patterns_c.push_back(regex.c_str());
         }
+
         grmr = params.grammar_lazy
             ? llama_sampler_init_grammar_lazy_patterns(vocab, params.grammar.c_str(), "root",
                 trigger_patterns_c.data(), trigger_patterns_c.size(),
@@ -106,6 +109,8 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
+    result->n_rewind = -1;
+
     return result;
 }
 
@@ -143,16 +148,12 @@ void common_sampler_reset(common_sampler * ctx) {
 }
 
 void common_sampler_review(common_sampler * ctx) {
-    if (!ctx->adapt_p_ctx) {
-        return;
+    const int32_t n_rewind = ctx->n_rewind;
+
+    // add stateful samplers here
+    if (ctx->adapt_p_ctx != nullptr) {
+        llama_review_adaptive_p(ctx->adapt_p_ctx, n_rewind);
     }
-    const bool record = ctx->record_samplers;
-    const bool rewind = ctx->rewind_samplers;
-
-    llama_review_adaptive_p(ctx->adapt_p_ctx, record, rewind);
-
-    ctx->record_samplers = false;
-    ctx->rewind_samplers = false;
 }
 
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed) {

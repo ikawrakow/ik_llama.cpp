@@ -1384,10 +1384,121 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 #endif
 
 namespace {
+#ifdef __ARM_NEON
+template <int head_dim>
+void iqk_fused_delta_net_neon_impl(int n_heads, int n_tokens, int n_seqs,
+        const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
+        const float * state_in, float * out_data, float * state_out, int ith, int nth) {
+    const int total_heads = n_heads * n_seqs;
+    const int heads_per_thread = (total_heads + nth - 1) / nth;
+    const int h_start = ith * heads_per_thread;
+    const int h_end = (h_start + heads_per_thread < total_heads) ? h_start + heads_per_thread : total_heads;
+
+    static_assert(head_dim % 4 == 0);
+
+    const float scale = 1.0f / sqrtf((float) head_dim);
+
+    float v_new_buf[head_dim];
+    float v_prime[head_dim], out_val[head_dim];
+
+    float32x4x4_t vs4[4];
+
+    for (int h_idx = h_start; h_idx < h_end; ++h_idx) {
+        const int batch_idx = h_idx / n_heads;
+        const int head_idx  = h_idx % n_heads;
+
+        const int qkv_head_offset  = batch_idx * (head_dim * n_tokens * n_heads) + head_idx * (head_dim * n_tokens);
+        const int qkv_token_stride = head_dim;
+        const int g_head_offset    = batch_idx * (n_tokens * n_heads) + head_idx * n_tokens;
+        const int state_head_offset = batch_idx * (head_dim * head_dim * n_heads) + head_idx * (head_dim * head_dim);
+        const int out_head_offset  = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim;
+        const int out_token_stride = head_dim * n_heads;
+
+        for (int i = 0; i < head_dim * head_dim; ++i) {
+            state_out[state_head_offset + i] = state_in[state_head_offset + i];
+        }
+
+        float * state = state_out + state_head_offset;
+
+
+        for (int t = 0; t < n_tokens; ++t) {
+            const float * q_t = q_data + qkv_head_offset + t * qkv_token_stride;
+            const float * k_t = k_data + qkv_head_offset + t * qkv_token_stride;
+            const float * v_t = v_data + qkv_head_offset + t * qkv_token_stride;
+
+            const float g_val    = g_data[g_head_offset + t];
+            const float beta_raw = beta_data[g_head_offset + t];
+
+            float kq_sum    = 0.0f;
+            auto vqksum = vdupq_n_f32(0.0f);
+            for (int i = 0; i < head_dim; i += 4) {
+                auto vq = vld1q_f32(q_t + i);
+                auto vk = vld1q_f32(k_t + i);
+                vqksum = vfmaq_f32(vqksum, vq, vk);
+            }
+            kq_sum = vaddvq_f32(vqksum);
+
+            const float beta_val = 1.0f / (1.0f + expf(-beta_raw));
+            const float decay    = expf(fminf(g_val, 50.0f));
+
+            float attn_score = kq_sum * scale;
+
+            float * out_t = out_data + out_head_offset + t * out_token_stride;
+
+            std::memset(v_prime, 0, head_dim*sizeof(float));
+            std::memset(out_val, 0, head_dim*sizeof(float));
+            for (int col = 0; col < head_dim; ++col) {
+                const float k_col = k_t[col];
+                const float q_col = q_t[col];
+                for (int row = 0; row < head_dim; ++row) {
+                    const float s = state[row + col * head_dim];
+                    v_prime[row] += s * k_col;
+                    out_val[row] += s * q_col;
+                }
+            }
+            for (int row = 0; row < head_dim; ++row) {
+                const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
+                v_new_buf[row] = v_new;
+                out_t[row] = out_val[row] * decay * scale + v_new * attn_score;
+            }
+
+            auto vd = vdupq_n_f32(decay);
+            auto vmin = vdupq_n_f32(-1e6f);
+            auto vmax = vdupq_n_f32( 1e6f);
+            for (int col = 0; col < head_dim; col += 4) {
+                auto vk = vld1q_f32(k_t + col);
+                for (int row = 0; row < head_dim; row += 16) {
+                    for (int k = 0; k < 4; ++k) {
+                        vs4[k] = vld1q_f32_x4(state + (col + k)*head_dim + row);
+                        for (int j = 0; j < 4; ++j) vs4[k].val[j] = vmulq_f32(vs4[k].val[j], vd);
+                    }
+                    auto vn = vld1q_f32_x4(v_new_buf + row);
+                    for (int j = 0; j < 4; ++j) {
+                        vs4[0].val[j] = vfmaq_laneq_f32(vs4[0].val[j], vn.val[j], vk, 0);
+                        vs4[1].val[j] = vfmaq_laneq_f32(vs4[1].val[j], vn.val[j], vk, 1);
+                        vs4[2].val[j] = vfmaq_laneq_f32(vs4[2].val[j], vn.val[j], vk, 2);
+                        vs4[3].val[j] = vfmaq_laneq_f32(vs4[3].val[j], vn.val[j], vk, 3);
+                    }
+                    for (int k = 0; k < 4; ++k) {
+                        for (int j = 0; j < 4; ++j) {
+                            vs4[k].val[j] = vmaxq_f32(vminq_f32(vs4[k].val[j], vmax), vmin);
+                        }
+                        vst1q_f32_x4(state + (col + k)*head_dim + row, vs4[k]);
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
 template <int head_dim>
 void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
         const float * state_in, float * out_data, float * state_out, int ith, int nth) {
+#ifdef __ARM_NEON
+    iqk_fused_delta_net_neon_impl<head_dim>(n_heads, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in, out_data, state_out, ith, nth);
+    return;
+#endif
     const int total_heads = n_heads * n_seqs;
     const int heads_per_thread = (total_heads + nth - 1) / nth;
     const int h_start = ith * heads_per_thread;
@@ -1399,8 +1510,12 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
 
     const float scale = 1.0f / sqrtf((float) head_dim);
 
+#ifdef __AVX512F__
+    __m512 v_prime[head_dim/16], out_val[head_dim/16];
+#else
     float v_new_buf[head_dim];
     float v_prime[head_dim], out_val[head_dim];
+#endif
 
     for (int h_idx = h_start; h_idx < h_end; ++h_idx) {
         const int batch_idx = h_idx / n_heads;
@@ -1428,7 +1543,15 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
             const float beta_raw = beta_data[g_head_offset + t];
 
             float kq_sum    = 0.0f;
-#ifdef __AVX2__
+#if defined __AVX512F__
+            auto vqksum = _mm512_setzero_ps();
+            for (int i = 0; i < head_dim; i += 16) {
+                auto vq = _mm512_loadu_ps(q_t + i);
+                auto vk = _mm512_loadu_ps(k_t + i);
+                vqksum = _mm512_fmadd_ps(vk, vq, vqksum);
+            }
+            kq_sum = _mm512_reduce_add_ps(vqksum);
+#elif defined __AVX2__
             auto vqksum = _mm256_setzero_ps();
             for (int i = 0; i < head_dim; i += 8) {
                 auto vq = _mm256_loadu_ps(q_t + i);
@@ -1449,6 +1572,42 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
 
             float * out_t = out_data + out_head_offset + t * out_token_stride;
 
+#ifdef __AVX512F__
+            for (int j = 0; j < head_dim/16; ++j) {
+                v_prime[j] = out_val[j] = _mm512_setzero_ps();
+            }
+            for (int col = 0; col < head_dim; ++col) {
+                auto k_col = _mm512_set1_ps(k_t[col]);
+                auto q_col = _mm512_set1_ps(q_t[col]);
+                for (int j = 0; j < head_dim/16; ++j) {
+                    auto s = _mm512_loadu_ps(state + col * head_dim + 16*j);
+                    v_prime[j] = _mm512_fmadd_ps(s, k_col, v_prime[j]);
+                    out_val[j] = _mm512_fmadd_ps(s, q_col, out_val[j]);
+                }
+            }
+            auto c1 = _mm512_set1_ps(beta_val);
+            auto c2 = _mm512_set1_ps(beta_val*decay);
+            auto c3 = _mm512_set1_ps(decay*scale);
+            auto c4 = _mm512_set1_ps(attn_score);
+            for (int j = 0; j < head_dim/16; ++j) {
+                auto v = _mm512_loadu_ps(v_t + 16*j);
+                v_prime[j] = _mm512_sub_ps(_mm512_mul_ps(v, c1), _mm512_mul_ps(v_prime[j], c2));
+                auto oval = _mm512_fmadd_ps(v_prime[j], c4, _mm512_mul_ps(out_val[j], c3));
+                _mm512_storeu_ps(out_t + 16*j, oval);
+            }
+            auto vmin = _mm512_set1_ps(-1e6f);
+            auto vmax = _mm512_set1_ps( 1e6f);
+            auto vd   = _mm512_set1_ps(decay);
+            for (int col = 0; col < head_dim; ++col) {
+                auto vk = _mm512_set1_ps(k_t[col]);
+                for (int j = 0; j < head_dim/16; ++j) {
+                    auto vs = _mm512_loadu_ps(state + col * head_dim + 16*j);
+                    vs = _mm512_fmadd_ps(v_prime[j], vk, _mm512_mul_ps(vs, vd));
+                    vs = _mm512_max_ps(vmin, _mm512_min_ps(vmax, vs));
+                    _mm512_storeu_ps(state + col * head_dim + 16*j, vs);
+                }
+            }
+#else
             std::memset(v_prime, 0, head_dim*sizeof(float));
             std::memset(out_val, 0, head_dim*sizeof(float));
             for (int col = 0; col < head_dim; ++col) {
@@ -1492,6 +1651,7 @@ void iqk_fused_delta_net_impl(int n_heads, int n_tokens, int n_seqs,
                     state[row + col * head_dim] = fminf(fmaxf(s, -1e6f), 1e6f);
                 }
             }
+#endif
 #endif
         }
     }
