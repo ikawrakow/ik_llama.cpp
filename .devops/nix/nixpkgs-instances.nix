@@ -26,6 +26,12 @@
           config.cudaSupport = true;
           config.allowUnfreePredicate =
             p:
+            let
+              licenses =
+                if builtins.isList (p.meta.license or null) then p.meta.license
+                else if p.meta ? license then [ p.meta.license ]
+                else [ ];
+            in
             builtins.all
               (
                 license:
@@ -35,7 +41,7 @@
                   "cuDNN EULA"
                 ]
               )
-              (p.meta.licenses or [ p.meta.license ]);
+              licenses;
         };
         # Ensure dependencies use ROCm consistently
         pkgsRocm = import inputs.nixpkgs {
