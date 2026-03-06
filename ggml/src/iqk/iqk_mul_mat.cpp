@@ -1406,7 +1406,7 @@ void iqk_fused_delta_net_neon_impl(int n_heads, int gqa_ratio, int repeat_type, 
     for (int h_idx = h_start; h_idx < h_end; ++h_idx) {
         const int batch_idx = h_idx / n_heads;
         const int head_idx  = h_idx % n_heads;
-        const int head_idx_kq  = head_idx / gqa_ratio;
+        const int head_idx_kq = repeat_type == 0 ? head_idx / gqa_ratio : head_idx % (n_heads/gqa_ratio);
 
         const int qkv_head_offset     = batch_idx * (head_dim * n_tokens * n_heads) + head_idx * (head_dim * n_tokens);
         const int qkv_head_offset_kq  = batch_idx * (head_dim * n_tokens * n_heads/gqa_ratio) + head_idx_kq * (head_dim * n_tokens);
@@ -1498,7 +1498,7 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
         const float * state_in, float * out_data, float * state_out, int ith, int nth) {
 #ifdef __ARM_NEON
-    iqk_fused_delta_net_neon_impl<head_dim>(n_heads, gqa_ration, repeat_type, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in, out_data, state_out, ith, nth);
+    iqk_fused_delta_net_neon_impl<head_dim>(n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in, out_data, state_out, ith, nth);
     return;
 #endif
     const int total_heads = n_heads * n_seqs;

@@ -365,31 +365,6 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     cb(q_conv, "q_conv_normed", il);
     cb(k_conv, "k_conv_normed", il);
 
-    //if (num_k_heads != num_v_heads) {
-    //    GGML_ASSERT(num_v_heads % num_k_heads == 0);
-    //    if (model.layers[il].ssm_beta_alpha) {
-    //        const int64_t repeat_factor = num_v_heads / num_k_heads;
-
-    //        ggml_tensor * q_reshaped = ggml_reshape_3d(ctx0, q_conv, head_k_dim, 1, num_k_heads * n_tok);
-    //        ggml_tensor * k_reshaped = ggml_reshape_3d(ctx0, k_conv, head_k_dim, 1, num_k_heads * n_tok);
-
-    //        ggml_tensor * q_repeated = ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads * n_tok, 1);
-    //        ggml_tensor * k_repeated = ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads * n_tok, 1);
-    //        cb(q_repeated, "q_repeated", il);
-    //        cb(k_repeated, "k_repeated", il);
-
-    //        q_conv = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_k_heads * repeat_factor, n_tok, 1);
-    //        k_conv = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_k_heads * repeat_factor, n_tok, 1);
-    //    } else {
-    //        q_conv = ggml_repeat_4d(ctx0, q_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-    //        k_conv = ggml_repeat_4d(ctx0, k_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-    //    }
-    //}
-
-    //cb(q_conv, "q_conv_predelta", il);
-    //cb(k_conv, "k_conv_predelta", il);
-    //cb(v_conv, "v_conv_predelta", il);
-
     auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, model.layers[il].ssm_beta_alpha ? 0 : 1);
 
     cb(output, "attn_output", il);
