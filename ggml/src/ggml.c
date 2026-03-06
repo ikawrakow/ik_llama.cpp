@@ -9903,10 +9903,11 @@ struct ggml_tensor * ggml_delta_net(
 
     GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == n_tokens && k->ne[2] == H_k && k->ne[3] == n_seqs);
     GGML_ASSERT(v->ne[1] == n_tokens && v->ne[3] == n_seqs);
-    GGML_ASSERT(g->ne[0] == n_tokens && g->ne[1] == 1 && g->ne[2] == H_k && g->ne[3] == n_seqs);
-    GGML_ASSERT(beta->ne[0] == 1 && beta->ne[1] == n_tokens && beta->ne[2] == H_k && beta->ne[3] == n_seqs);
+    GGML_ASSERT(g->ne[0] == n_tokens && g->ne[1] == 1 && g->ne[2] == H_v && g->ne[3] == n_seqs);
+    GGML_ASSERT(beta->ne[0] == 1 && beta->ne[1] == n_tokens && beta->ne[2] == H_v && beta->ne[3] == n_seqs);
     GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v * H_v && state->ne[2] == 1 && state->ne[3] == n_seqs);
-    GGML_ASSERT(H_k == H_v);
+    //GGML_ASSERT(H_k == H_v);
+    GGML_ASSERT(H_v % H_k == 0);
 
     const int64_t output_size = S_v * H_v * n_tokens * n_seqs;
     const int64_t state_size  = S_v * S_v * H_v * n_seqs;
@@ -22548,8 +22549,10 @@ static void ggml_compute_forward_delta_net_f32(
 
     const int64_t head_dim = src0->ne[0];
     const int64_t n_tokens = src0->ne[1];
-    const int64_t n_heads  = src0->ne[2];
+    const int64_t n_heads  = src2->ne[2];
     const int64_t n_seqs   = src0->ne[3];
+    GGML_ASSERT(src2->ne[2] % src0->ne[2] == 0);
+    const int gqa_ratio    = src2->ne[2]/src0->ne[2];
 
     const int64_t output_size = head_dim * n_tokens * n_heads * n_seqs;
 
@@ -22565,7 +22568,7 @@ static void ggml_compute_forward_delta_net_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    if (iqk_fused_delta_net(head_dim, n_heads, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
+    if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
                 out_data, state_out, ith, nth)) {
         return;
     }
