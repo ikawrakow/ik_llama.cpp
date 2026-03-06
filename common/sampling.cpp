@@ -101,7 +101,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             {
                 GGML_ASSERT(vocab);
                 auto n_vocab = llama_vocab_n_tokens(vocab);
-                result->adapt_p_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
+                result->adaptive_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
                 break;
             }
             default:
@@ -151,8 +151,8 @@ void common_sampler_review(common_sampler * ctx) {
     const int32_t n_rewind = ctx->n_rewind;
 
     // add stateful samplers here
-    if (ctx->adapt_p_ctx != nullptr) {
-        llama_review_adaptive_p(ctx->adapt_p_ctx, n_rewind);
+    if (ctx->adaptive_ctx != nullptr) {
+        llama_review_adaptive_p(ctx->adaptive_ctx, n_rewind);
     }
 }
 
@@ -376,7 +376,7 @@ static void sampler_queue(
     }
     if (use_adaptive_p) {
         // adaptive p should be put to the last, so we ignore the order in the sampler
-        llama_sample_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
+        llama_sample_adaptive_p(ctx_main, &cur_p, ctx_sampling->adaptive_ctx);
     }
 }
 
@@ -423,10 +423,10 @@ static llama_token llama_sampling_sample_impl(
         } else if (mirostat == 2) {
             llama_sample_temp(ctx_main, &cur_p, temp);
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
-        } else if (adaptive_target >= 0.0f && ctx_sampling->adapt_p_ctx!=nullptr) {
+        } else if (adaptive_target >= 0.0f && ctx_sampling->adaptive_ctx!=nullptr) {
             // adaptive p sampling
             sampler_queue(ctx_main, params, ctx_sampling, cur_p, std::max(1, params.min_keep));
-            id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
+            id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->adaptive_ctx);
         } else {
             // temperature sampling
             size_t min_keep = std::max(1, params.min_keep);
@@ -496,9 +496,9 @@ static llama_token_data_array llama_sampling_prepare_impl(
         *original_logits = {logits, logits + n_vocab};
     }
 
-    if ((params.temp > 0) && (params.mirostat == 0) && (params.adaptive_target >= 0) && (ctx_sampling->adapt_p_ctx != nullptr)) {
+    if ((params.temp > 0) && (params.mirostat == 0) && (params.adaptive_target >= 0) && (ctx_sampling->adaptive_ctx != nullptr)) {
         // collect original probability before logit bias is applied
-        llama_prep_adaptive_p(ctx_main, logits, ctx_sampling->adapt_p_ctx);
+        llama_prep_adaptive_p(ctx_main, logits, ctx_sampling->adaptive_ctx);
     }
 
     // apply params.logit_bias map

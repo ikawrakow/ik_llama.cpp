@@ -127,7 +127,7 @@ struct common_sampler {
     std::vector<llama_token_data> cur;
     llama_sampler_dry* smpl;
 
-    llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
+    llama_sampling_adaptive_ctx * adaptive_ctx;    // adaptive p sampler
 
     size_t n_valid; // Number of correct top tokens with correct probabilities.
 
