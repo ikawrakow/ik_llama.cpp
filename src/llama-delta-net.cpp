@@ -77,7 +77,7 @@ delta_net::~delta_net() = default;
 std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_context * ctx0,
         ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
         ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
-        int il, const llm_build_cb & cb) {
+        int il, const llm_build_cb & cb, int repeat_type) {
 
     const int64_t S_k      = q->ne[0];
     const int64_t H_k      = q->ne[1];
@@ -94,7 +94,8 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     GGML_ASSERT(g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
     GGML_ASSERT(beta->ne[0] == H_v && beta->ne[2] == n_tokens && beta->ne[3] == n_seqs);
     GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H_v && state->ne[3] == n_seqs);
-    GGML_ASSERT(H_k == H_v);
+    //GGML_ASSERT(H_k == H_v);
+    GGML_ASSERT(H_v % H_k == 0);
 
     cb(q,    "q_in", il);
     cb(k,    "k_in", il);
@@ -112,8 +113,8 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
         q = ggml_cont_4d(ctx0, q, S_k, n_tokens, H_k, n_seqs);
         k = ggml_cont_4d(ctx0, k, S_k, n_tokens, H_k, n_seqs);
         v = ggml_cont_4d(ctx0, v, S_v, n_tokens, H_v, n_seqs);
-        g = ggml_cont_4d(ctx0, g, n_tokens, 1, H_k, n_seqs);
-        beta = ggml_cont_4d(ctx0, beta, 1, n_tokens, H_k, n_seqs);
+        g = ggml_cont_4d(ctx0, g, n_tokens, 1, H_v, n_seqs);
+        beta = ggml_cont_4d(ctx0, beta, 1, n_tokens, H_v, n_seqs);
     }
 
     ggml_tensor * state_flat = ggml_reshape_4d(ctx0, state, S_v, S_v * H_v, 1, n_seqs);
@@ -130,6 +131,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
 
     ggml_tensor * fused_result = ggml_delta_net(ctx0, q, k, v, g, beta, state_flat);
     cb(fused_result, "delta_net_fused_raw", il);
+    fused_result->op_params[0] = repeat_type;
 
     const int64_t output_size = S_v * H_v * n_tokens * n_seqs;
     const int64_t state_size  = S_v * S_v * H_v * n_seqs;
@@ -328,9 +330,8 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, model.layers[il].ssm_conv1d, inp_s_seq_qnext);
     cb(conv_output_raw, "conv_output_raw", il);
 
-    //ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
-    //ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output);
-    ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output_raw);
+    ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
+    ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output);
     cb(conv_output_silu, "conv_output_silu", il);
 
     // Calculate the total conv dimension
@@ -360,33 +361,10 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
 
     q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
     k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
+    cb(q_conv, "q_conv_normed", il);
+    cb(k_conv, "k_conv_normed", il);
 
-    if (num_k_heads != num_v_heads) {
-        GGML_ASSERT(num_v_heads % num_k_heads == 0);
-        if (model.layers[il].ssm_beta_alpha) {
-            const int64_t repeat_factor = num_v_heads / num_k_heads;
-
-            ggml_tensor * q_reshaped = ggml_reshape_3d(ctx0, q_conv, head_k_dim, 1, num_k_heads * n_tok);
-            ggml_tensor * k_reshaped = ggml_reshape_3d(ctx0, k_conv, head_k_dim, 1, num_k_heads * n_tok);
-
-            ggml_tensor * q_repeated = ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads * n_tok, 1);
-            ggml_tensor * k_repeated = ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads * n_tok, 1);
-            cb(q_repeated, "q_repeated", il);
-            cb(k_repeated, "k_repeated", il);
-
-            q_conv = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_k_heads * repeat_factor, n_tok, 1);
-            k_conv = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_k_heads * repeat_factor, n_tok, 1);
-        } else {
-            q_conv = ggml_repeat_4d(ctx0, q_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-            k_conv = ggml_repeat_4d(ctx0, k_conv, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-        }
-    }
-
-    cb(q_conv, "q_conv_predelta", il);
-    cb(k_conv, "k_conv_predelta", il);
-    cb(v_conv, "v_conv_predelta", il);
-
-    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb);
+    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, model.layers[il].ssm_beta_alpha ? 0 : 1);
 
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);
