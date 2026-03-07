@@ -1681,6 +1681,7 @@ const char * llama_model_type_name(e_model type) {
         case MODEL_0_3B:          return "0.3B";
         case MODEL_0_5B:          return "0.5B";
         case MODEL_0_6B:          return "0.6B";
+        case MODEL_0_8B:          return "0.8B";
         case MODEL_1B:            return "1B";
         case MODEL_1_2B:          return "1.2B";
         case MODEL_1_3B:          return "1.3B";
@@ -1743,10 +1744,12 @@ const char * llama_model_type_name(e_model type) {
         case MODEL_16B_A1B:       return "16B.A1B";
         case MODEL_21B_A3B:       return "21B.A3B";
         case MODEL_30B_A3B:       return "30B.A3B";
+        case MODEL_35B_A3B:       return "35B.A3B";
         case MODEL_80B_A3B:       return "80B.A3B";
         case MODEL_80B_A13B:      return "80B.A13B";
         case MODEL_100B_A6B:      return "100B.A6B";
         case MODEL_106B_A12B:     return "106B.A12B";
+        case MODEL_122B_A10B:     return "122B.A10B";
         case MODEL_230B_A10B:     return "230B.A10B";
         case MODEL_235B_A22B:     return "235B.A22B";
         case MODEL_310B_A15B:     return "310B.A15B";
