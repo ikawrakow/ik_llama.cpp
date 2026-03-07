@@ -1327,7 +1327,7 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
     const int64_t ba_dim      = num_v_heads * 2;
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_layer = ctx_for_layer(i);
+        //ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         auto & layer = model.layers[i];
@@ -1347,21 +1347,21 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
             layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
         } else {
             // Recurrent linear-attention layer
-            layer.ssm_in         = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_IN,         "weight", i), {n_embd, qkvz_dim},
+            layer.ssm_in         = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_IN,         "weight", i), {n_embd, qkvz_dim},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
-            layer.wqkv           = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_QKV,       "weight", i), {n_embd, key_dim * 2 + value_dim},
+            layer.wqkv           = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QKV,       "weight", i), {n_embd, key_dim * 2 + value_dim},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
-            layer.wqkv_gate      = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_GATE,      "weight", i), {n_embd, value_dim},
+            layer.wqkv_gate      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE,      "weight", i), {n_embd, value_dim},
                     llama_model_loader::TENSOR_NOT_REQUIRED);
-            layer.ssm_conv1d     = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_CONV1D,     "weight", i), {hparams.ssm_d_conv, conv_dim});
-            layer.ssm_dt         = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_DT,         "bias",   i), {hparams.ssm_dt_rank});
-            layer.ssm_a          = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_A_NOSCAN,             i), {hparams.ssm_dt_rank});
-            layer.ssm_beta_alpha = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_BETA_ALPHA, "weight", i), {n_embd, ba_dim});
-            layer.ssm_norm       = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_NORM,       "weight", i), {head_v_dim});
-            layer.ssm_out        = create_tensor(ctx_layer, tn(LLM_TENSOR_SSM_OUT,        "weight", i), {value_dim, n_embd});
+            layer.ssm_conv1d     = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_CONV1D,     "weight", i), {hparams.ssm_d_conv, conv_dim});
+            layer.ssm_dt         = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_DT,         "bias",   i), {hparams.ssm_dt_rank});
+            layer.ssm_a          = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_A_NOSCAN,             i), {hparams.ssm_dt_rank});
+            layer.ssm_beta_alpha = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_BETA_ALPHA, "weight", i), {n_embd, ba_dim});
+            layer.ssm_norm       = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_NORM,       "weight", i), {head_v_dim});
+            layer.ssm_out        = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_OUT,        "weight", i), {value_dim, n_embd});
         }
 
-        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        auto ffn_ctx = ctx_split; //model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
 
         // Dense FFN path (optional, e.g. mlp_only_layers)
         layer.ffn_gate = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);

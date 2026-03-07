@@ -497,7 +497,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
             GGML_ASSERT(split_ssm_a && split_ssm_a->splits[id] && split_ssm_a->splits[id]->ne[0] == num_v_heads_id);
             ggml_tensor *beta, *gate;
             if (l.ssm_beta_alpha) {
-                auto split_ssm_beta_alpha = (ggml_split_tensor_t *)l.ssm_beta_alpha;
+                auto split_ssm_beta_alpha = (ggml_split_tensor_t *)l.ssm_beta_alpha->extra;
                 GGML_ASSERT(split_ssm_beta_alpha && split_ssm_beta_alpha->splits[id]);
                 auto p = build_beta_gate(lctx, ctx0, split_ssm_beta_alpha->splits[id], nullptr, nullptr, split_ssm_dt->splits[id], split_ssm_a->splits[id],
                         num_k_heads_id, num_v_heads_id, n_seqs, cur, il, cb, gf);
