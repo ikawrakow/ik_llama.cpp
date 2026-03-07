@@ -65,7 +65,7 @@ void llama_sampler_dry_apply(struct llama_sampler_dry* smpl, llama_token_data_ar
 // maintains an exponential moving average of the *ORIGINAL* probabilities of selected tokens
 // used to compute an adapted target at each sampling step.
 // see llama.h for a full description of the sampler
-struct llama_sampling_adaptive_ctx {
+struct llama_sampling_adap_context {
     const float target;     // target probability (0.0 - 1.0; negative = disabled)
     const float decay;      // EMA decay; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
     const bool updt_w_cur;  // false=original, true=current
@@ -84,7 +84,7 @@ struct llama_sampling_adaptive_ctx {
     std::vector<float> cum_probs;   // cumulative probability distribution
 };
 
-struct llama_sampling_adaptive_ctx * llama_init_adaptive_p_impl(int n_vocab,
+struct llama_sampling_adap_context * llama_init_adaptive_p_impl(int n_vocab,
        const float target,
        const float decay,
         const bool updt_w_cur,
@@ -93,14 +93,14 @@ struct llama_sampling_adaptive_ctx * llama_init_adaptive_p_impl(int n_vocab,
 void llama_prep_adaptive_p_impl(
                  struct llama_sampling * smpl,
                                  float * logits,
-    struct llama_sampling_adaptive_ctx * adaptive_ctx);
+    struct llama_sampling_adap_context * adap_ctx);
 
 void llama_sample_adaptive_p_impl(
                  struct llama_sampling * smpl,
                 llama_token_data_array * candidates,
-    struct llama_sampling_adaptive_ctx * adaptive_ctx);
+    struct llama_sampling_adap_context * adap_ctx);
 
-void llama_review_adaptive_p_impl(llama_sampling_adaptive_ctx * adaptive_ctx, const int32_t n_rewind);
+void llama_review_adaptive_p_impl(llama_sampling_adap_context * adap_ctx, const size_t n_unsent, const bool rewind_status);
 
 
 void llama_sample_repetition_penalties_impl(
@@ -123,6 +123,6 @@ llama_token llama_sample_token_mirostat_v2_impl(struct llama_sampling * smpl, ll
 llama_token llama_sample_token_greedy_impl     (struct llama_sampling * smpl, llama_token_data_array * candidates);
 llama_token llama_sample_token_with_rng_impl   (struct llama_sampling * smpl, llama_token_data_array * candidates, std::mt19937 & rng);
 llama_token llama_sample_token_impl            (struct llama_sampling * smpl, llama_token_data_array * candidates);
-llama_token llama_sample_token_adaptive_p_impl (struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampling_adaptive_ctx * adaptive_ctx);
+llama_token llama_sample_token_adaptive_p_impl (struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampling_adap_context * adap_ctx);
 
 

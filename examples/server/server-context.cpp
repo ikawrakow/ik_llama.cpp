@@ -3220,6 +3220,8 @@ void server_context::speculative_decoding_accept() {
                 buffer_and_check_string_ban(slot, result);
             }
 
+            slot.ctx_sampling->n_unsent = slot.token_buffer.size();
+            slot.ctx_sampling->rewind_status = slot.rewind_status;
             common_sampler_review(slot.ctx_sampling);
         }
         SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int)ids.size() - 1, (int)slot.drafted.size(), slot.n_past);
@@ -3341,7 +3343,6 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     if (slot.ban_phrases.size() > 0) {
         n_rewind = check_ban_phrase(slot);
     }
-    slot.ctx_sampling->n_rewind = n_rewind;
 
     // if found string in the ban
     if (n_rewind > 0 && (slot.rewind_count <20 || slot.rewind_count <= 2 * slot.ban_phrases.size())) {
@@ -3359,12 +3360,12 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // send 1 token
             send_token_results(slot.token_buffer, slot, 1);
         }
-        slot.ctx_sampling->n_rewind = -1;   // <0 signals stateful samplers tokens are sent
     }
     else {
         // buffer the result
         slot.sampled = result.tok; // for common batch add
     }
+
 }
 
 void server_context::process_batch_tokens(int32_t & n_batch) {
@@ -3506,6 +3507,8 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 buffer_and_check_string_ban(slot, result);
             }
 
+            slot.ctx_sampling->n_unsent = slot.token_buffer.size();
+            slot.ctx_sampling->rewind_status = slot.rewind_status;
             common_sampler_review(slot.ctx_sampling);
 
             slot.i_batch = -1;

@@ -1053,40 +1053,53 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
-void llama_review_adaptive_p_impl(llama_sampling_adaptive_ctx * adaptive_ctx, const int32_t n_rewind) {
-    if ((n_rewind == 0) || (adaptive_ctx->target < 0.0f)) {
+void llama_review_adaptive_p_impl(llama_sampling_adap_context * adap_ctx, const size_t n_unsent, const bool rewind_status) {
+    if (adap_ctx->target < 0.0f) {
+        LLAMA_LOG_DEBUG("%s: disabled\n", __func__);
         return;
     }
 
-    const int32_t sz = adaptive_ctx->history.size();
-    if ((sz <= 0) || (sz <= n_rewind)) {
-        // critically short history. reset to initial state
-        LLAMA_LOG_WARN("%s: sz=%d, n_rewind=%d should not be possible\n", __func__, sz, n_rewind);
-        adaptive_ctx->history.clear();
-        adaptive_ctx->history.push_back({
-            adaptive_ctx->target / adaptive_ctx->decay,     // weighted_sum
-            1.0f / adaptive_ctx->decay });                  // total_weight
-        return;
-    }
+    auto & history = adap_ctx->history;
+    const size_t hsz = history.size();
+    const size_t hsz_next = 1 + n_unsent;
+    LLAMA_LOG_DEBUG("%s: hsz = %zu, hsz_next = %zu, rewind_status = %s\n",__func__, hsz, hsz_next, rewind_status ? "true" : "false");
+    if (hsz_next >= hsz >> 1) { return; }   // skip small update
 
-    if (n_rewind < 0) {
-        // clear history except most recent
-        adaptive_ctx->history.front() = adaptive_ctx->history.back();
-        adaptive_ctx->history.resize(1);
-    } else {
-        // rewind
-        adaptive_ctx->history.resize(sz - n_rewind);
+    if (!rewind_status) {
+        // sent results; overwrite old history
+        std::move(history.begin() + hsz - hsz_next, history.end(), history.begin());
     }
+    history.resize(hsz_next);
+
+    // if ((n_rewind == 0) || (adap_ctx->target < 0.0f)) {
+    //     return;
+    // }
+    // auto & history = adap_ctx->history;
+    // const int32_t hsz = history.size();
+    // if ((hsz <= 0) || (hsz <= n_rewind)) {
+    //     LLAMA_LOG_WARN("%s: hsz=%d is too short to rewind: n_rewind=%d\n", __func__, hsz, n_rewind);
+    //     LLAMA_LOG_WARN("%s: this is a bug. resetting to initial state\n", __func__);
+    //     history.clear();
+    //     history.push_back({
+    //         adap_ctx->target / adap_ctx->decay,     // weighted_sum
+    //         1.0f / adap_ctx->decay });                  // total_weight
+    //     return;
+    // }
+    // const int32_t n_delete = std::abs(n_rewind);
+    // if (n_rewind < 0) {
+    //     std::move(history.begin() + n_remove, history.end(), history.begin());
+    // }
+    // history.resize(hsz - n_remove);
 }
 
 llama_token llama_sample_token_adaptive_p_impl(
                      struct llama_sampling * smpl,
                     llama_token_data_array * candidates,
-        struct llama_sampling_adaptive_ctx * adaptive_ctx) {
+        struct llama_sampling_adap_context * adap_ctx) {
     GGML_ASSERT(candidates->size > 0);
     const int64_t t_start_sample_us = ggml_time_us();
 
-    struct llama_sampling_adaptive_ctx * ctx = adaptive_ctx;
+    struct llama_sampling_adap_context * ctx = adap_ctx;
     ctx->cum_probs.resize(candidates->size);
 
     // compute cumulative probability distribution
@@ -1123,8 +1136,8 @@ llama_token llama_sample_token_adaptive_p_impl(
 }
 
 void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_array * candidates,
-        struct llama_sampling_adaptive_ctx * adaptive_ctx) {
-    if (adaptive_ctx->target < 0.0f) {
+        struct llama_sampling_adap_context * adap_ctx) {
+    if (adap_ctx->target < 0.0f) {
         // sampler is disabled
         llama_sample_softmax_impl(nullptr, candidates);
         return;
@@ -1145,12 +1158,12 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
         candidates->data[i].p = prob;
         cum_sum += prob;
     }
-    adaptive_ctx->cum_cur_p = cum_sum;
+    adap_ctx->cum_cur_p = cum_sum;
 
     // compute adapted target probability
-    const float weighted_sum = adaptive_ctx->history.back().first;
-    const float total_weight = adaptive_ctx->history.back().second;
-    const float target = std::clamp(adaptive_ctx->target, 0.0f, 1.0f);
+    const float weighted_sum = adap_ctx->history.back().first;
+    const float total_weight = adap_ctx->history.back().second;
+    const float target = std::clamp(adap_ctx->target, 0.0f, 1.0f);
     const float adapted_target = std::clamp(total_weight == 0.0f
         ? target
         : 2.0f * target - (weighted_sum / total_weight),
@@ -1174,7 +1187,7 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
         max_logit = std::max(max_logit, logit);
     }
     candidates->sorted = false;
-    adaptive_ctx->max_xform_logit = max_logit;
+    adap_ctx->max_xform_logit = max_logit;
 
     ctx->t_sample_us += ggml_time_us() - t_start;
 }
@@ -1182,14 +1195,14 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
 void llama_prep_adaptive_p_impl(
                  struct llama_sampling * smpl,
                                  float * logits,
-    struct llama_sampling_adaptive_ctx * adaptive_ctx) {
-    if (adaptive_ctx->updt_w_cur) {
+    struct llama_sampling_adap_context * adap_ctx) {
+    if (adap_ctx->updt_w_cur) {
         // update with current probability, original not needed
         return;
     }
     constexpr float kDelta = 30.0f; //16.6f;
     auto t_start = ggml_time_us();
-    auto & orig_prob = adaptive_ctx->orig_prob;
+    auto & orig_prob = adap_ctx->orig_prob;
 
     std::copy(logits, logits + orig_prob.size(), orig_prob.begin());
 
@@ -1197,19 +1210,19 @@ void llama_prep_adaptive_p_impl(
     for (int j = 0; j < int(orig_prob.size()); ++j) {
         max_logit = std::max(max_logit, orig_prob[j]);
     }
-    adaptive_ctx->cum_orig_prob = iqk_exp_with_thresh(orig_prob.size(), orig_prob.data(), max_logit, max_logit - kDelta);
+    adap_ctx->cum_orig_prob = iqk_exp_with_thresh(orig_prob.size(), orig_prob.data(), max_logit, max_logit - kDelta);
 
     if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
 }
 
-struct llama_sampling_adaptive_ctx * llama_init_adaptive_p_impl(int n_vocab,
+struct llama_sampling_adap_context * llama_init_adaptive_p_impl(int n_vocab,
        const float target,
        const float decay,
         const bool updt_w_cur,
     const uint32_t seed) {
     GGML_ASSERT(n_vocab > 0);
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
-    auto result = new llama_sampling_adaptive_ctx {
+    auto result = new llama_sampling_adap_context {
         /* .target            = */ target,
         /* .decay             = */ clamped_decay,
         /* .updt_w_cur        = */ updt_w_cur,

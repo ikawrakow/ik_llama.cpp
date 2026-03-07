@@ -1400,7 +1400,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     /// @details Adaptive p sampler initializer
     /// @param target Select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
     /// @param decay Decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
-    LLAMA_API struct llama_sampling_adaptive_ctx * llama_init_adaptive_p(int n_vocab,
+    LLAMA_API struct llama_sampling_adap_context * llama_init_adaptive_p(int n_vocab,
            const float target,
            const float decay,
             const bool updt_w_cur,
@@ -1408,14 +1408,14 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     void llama_prep_adaptive_p(struct llama_context * ctx,
                                   float * logits,
-     struct llama_sampling_adaptive_ctx * adaptive_ctx);
+     struct llama_sampling_adap_context * adap_ctx);
 
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/adaptive-p-docs/blob/main/README.md
     void llama_sample_adaptive_p(struct llama_context * ctx,
                                llama_token_data_array * candidates,
-                   struct llama_sampling_adaptive_ctx * adaptive_ctx);
+                   struct llama_sampling_adap_context * adap_ctx);
 
-    void llama_review_adaptive_p(struct llama_sampling_adaptive_ctx * adaptive_ctx, const int32_t n_rewind);
+    void llama_review_adaptive_p(struct llama_sampling_adap_context * adap_ctx, const int32_t n_unsent, const bool rewind_status);
 
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
@@ -1459,7 +1459,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     llama_token llama_sample_token_adaptive_p(
                       struct llama_context * ctx,
                     llama_token_data_array * candidates,
-        struct llama_sampling_adaptive_ctx * adaptive_ctx);
+        struct llama_sampling_adap_context * adap_ctx);
 
     //
     // Model split
