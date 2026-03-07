@@ -3432,24 +3432,24 @@ static void prepare_delta_split(int ttype, int repeat_type, int num_k_heads, int
     auto extra = (ggml_split_tensor_t *)t->extra;
     GGML_ASSERT(extra && extra->n_device == int(split.size()));
     l_split.ranges.resize(split.size());
-    printf("================= %s(%s)\n", __func__, t->name);
+    LLAMA_LOG_DEBUG("================= %s(%s)\n", __func__, t->name);
     int first = 0;
     for (int is = 0; is < int(split.size()); ++is) {
         int s = split[is];
         if (!s) continue;
         auto & ranges = l_split.ranges[is];
         if (ttype == 0 || ttype == 1) {
-            printf("adding type 0/1 entry %d, %d for split %d\n", first*head_k_dim, s*head_k_dim, is);
+            LLAMA_LOG_DEBUG("adding type 0/1 entry %d, %d for split %d\n", first*head_k_dim, s*head_k_dim, is);
             ranges.push_back({first*head_k_dim, s*head_k_dim});
         }
         else if (ttype == 2 || ttype == 3 || ttype == 4) {
             int multiplier = ttype == 3 ? head_v_dim : 1;
             if (repeat_type == 0) {
-                printf("adding type 2/3/4 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
+                LLAMA_LOG_DEBUG("adding type 2/3/4 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
                 ranges.push_back({first*gqa_ratio*multiplier, s*gqa_ratio*multiplier});
             } else {
                 for (int j = 0; j < gqa_ratio; ++j) {
-                    printf("adding type 2/3/4 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
+                    LLAMA_LOG_DEBUG("adding type 2/3/4 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
                     ranges.push_back({(first + j*num_k_heads)*multiplier, s*multiplier});
                 }
             }
@@ -3472,10 +3472,10 @@ static void prepare_delta_split(int ttype, int repeat_type, int num_k_heads, int
             int multiplier = 1;
             if (repeat_type == 0) {
                 ranges.push_back({first*gqa_ratio*multiplier, s*gqa_ratio*multiplier});
-                printf("adding type 4 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
+                LLAMA_LOG_DEBUG("adding type 4 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
             } else {
                 for (int j = 0; j < gqa_ratio; ++j) {
-                    printf("adding type 4 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
+                    LLAMA_LOG_DEBUG("adding type 4 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
                     ranges.push_back({(first + j*num_k_heads)*multiplier, s*multiplier});
                 }
             }
@@ -3491,7 +3491,7 @@ static void prepare_delta_split(int ttype, int repeat_type, int num_k_heads, int
         int s = split[is];
         if (!s) continue;
         auto & ranges = l_split.ranges[is];
-        printf("adding type 0/1 entry %d, %d for split %d\n", first*head_k_dim, s*head_k_dim, is);
+        LLAMA_LOG_DEBUG("adding type 0/1 entry %d, %d for split %d\n", first*head_k_dim, s*head_k_dim, is);
         ranges.push_back({first*head_k_dim, s*head_k_dim});
         first += s;
     }
@@ -3503,11 +3503,11 @@ static void prepare_delta_split(int ttype, int repeat_type, int num_k_heads, int
         auto & ranges = l_split.ranges[is];
         int multiplier = head_v_dim;
         if (repeat_type == 0) {
-            printf("adding type 0/1 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
+            LLAMA_LOG_DEBUG("adding type 0/1 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
             ranges.push_back({first*gqa_ratio*multiplier, s*gqa_ratio*multiplier});
         } else {
             for (int j = 0; j < gqa_ratio; ++j) {
-                printf("adding type 0/1 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
+                LLAMA_LOG_DEBUG("adding type 0/1 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
                 ranges.push_back({(first + j*num_k_heads)*multiplier, s*multiplier});
             }
         }
@@ -3524,11 +3524,11 @@ static void prepare_delta_split(int ttype, int repeat_type, int num_k_heads, int
         auto & ranges = l_split.ranges[is];
         int multiplier = head_v_dim;
         if (repeat_type == 0) {
-            printf("adding type 1 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
+            LLAMA_LOG_DEBUG("adding type 1 entry %d, %d for split %d (repeat type is 0)\n", first*gqa_ratio*multiplier, s*gqa_ratio*multiplier, is);
             ranges.push_back({first*gqa_ratio*multiplier, s*gqa_ratio*multiplier});
         } else {
             for (int j = 0; j < gqa_ratio; ++j) {
-                printf("adding type 1 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
+                LLAMA_LOG_DEBUG("adding type 1 entry %d, %d for split %d (repeat type is 1)\n", (first + j*num_k_heads)*multiplier, s*multiplier, is);
                 ranges.push_back({(first + j*num_k_heads)*multiplier, s*multiplier});
             }
         }

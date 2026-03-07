@@ -916,7 +916,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         void * extra_ptr;
         memcpy(&extra_ptr, tensor->op_params, sizeof(extra_ptr));
         if (extra_ptr) {
-            printf("Processing tensor %s with split dim = 0\n", tensor->name);
             auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
             GGML_ASSERT(extra->n_device == int(ranges.size()));
             GGML_ASSERT(tensor->ne[2]*tensor->ne[3] == 1);
@@ -999,7 +998,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             void * extra_ptr;
             memcpy(&extra_ptr, tensor->op_params, sizeof(extra_ptr));
             if (extra_ptr) {
-                printf("Processing tensor %s with split dim = 1\n", tensor->name);
                 auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
                 GGML_ASSERT(extra->n_device == int(ranges.size()));
                 GGML_ASSERT(tensor->ne[2]*tensor->ne[3] == 1);
