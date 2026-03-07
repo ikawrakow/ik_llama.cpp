@@ -3,13 +3,11 @@
   glibc,
   config,
   stdenv,
-  mkShell,
   runCommand,
   cmake,
   ninja,
   pkg-config,
   git,
-  python3,
   mpi,
   blas,
   cudaPackages,
@@ -30,8 +28,10 @@
   useMetalKit ? stdenv.isAarch64 && stdenv.isDarwin,
   useMpi ? false, # Increases the runtime closure size by ~700M
   useRocm ? config.rocmSupport,
-  enableCurl ? true,
+  rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   useVulkan ? false,
+  useRpc ? false,
+  enableCurl ? true,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -45,9 +45,9 @@ let
   inherit (lib)
     cmakeBool
     cmakeFeature
+    optionalAttrs
     optionals
     strings
-    versionOlder
     ;
 
   stdenv = throw "Use effectiveStdenv instead";
@@ -66,49 +66,6 @@ let
   descriptionSuffix =
     strings.optionalString (suffices != [ ])
       ", accelerated with ${strings.concatStringsSep ", " suffices}";
-
-  executableSuffix = effectiveStdenv.hostPlatform.extensions.executable;
-
-  # TODO: package the Python in this repository in a Nix-like way.
-  # It'd be nice to migrate to buildPythonPackage, as well as ensure this repo
-  # is PEP 517-compatible, and ensure the correct .dist-info is generated.
-  # https://peps.python.org/pep-0517/
-  #
-  # TODO: Package up each Python script or service appropriately, by making
-  # them into "entrypoints"
-  llama-python = python3.withPackages (
-    ps: [
-      ps.numpy
-      ps.sentencepiece
-    ]
-  );
-
-  # TODO(Green-Sky): find a better way to opt-into the heavy ml python runtime
-  llama-python-extra = python3.withPackages (
-    ps: [
-      ps.numpy
-      ps.sentencepiece
-      ps.tiktoken
-      ps.torchWithoutCuda
-      ps.transformers
-
-      # server bench
-      ps.matplotlib
-
-      # server tests
-      ps.openai
-      ps.behave
-      ps.prometheus-client
-
-      # for examples/pydantic-models-to-grammar-examples.py
-      ps.docstring-parser
-      ps.pydantic
-
-      # for scripts/compare-llama-bench.py
-      ps.gitpython
-      ps.tabulate
-    ]
-  );
 
   xcrunHost = runCommand "xcrunHost" {} ''
     mkdir -p $out/bin
@@ -223,6 +180,7 @@ effectiveStdenv.mkDerivation (
         (cmakeBool "GGML_METAL" useMetalKit)
         (cmakeBool "GGML_VULKAN" useVulkan)
         (cmakeBool "GGML_STATIC" enableStatic)
+        (cmakeBool "GGML_RPC" useRpc)
       ]
       ++ optionals useCuda [
         (
@@ -234,7 +192,7 @@ effectiveStdenv.mkDerivation (
       ]
       ++ optionals useRocm [
         (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
-        (cmakeFeature "CMAKE_HIP_ARCHITECTURES" (builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets))
+        (cmakeFeature "CMAKE_HIP_ARCHITECTURES" rocmGpuTargets)
       ]
       ++ optionals useMetalKit [
         (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")
@@ -242,7 +200,7 @@ effectiveStdenv.mkDerivation (
       ];
 
     # Environment variables needed for ROCm
-    env = optionals useRocm {
+    env = optionalAttrs useRocm {
       ROCM_PATH = "${rocmPackages.clr}";
       HIP_DEVICE_LIB_PATH = "${rocmPackages.rocm-device-libs}/amdgcn/bitcode";
     };
@@ -254,7 +212,6 @@ effectiveStdenv.mkDerivation (
       cp $src/include/llama.h $out/include/
     '';
 
-    # Define the shells here, but don't add in the inputsFrom to avoid recursion.
     passthru = {
       inherit
         useBlas
@@ -264,23 +221,6 @@ effectiveStdenv.mkDerivation (
         useRocm
         useVulkan
         ;
-
-      shell = mkShell {
-        name = "shell-${finalAttrs.finalPackage.name}";
-        description = "contains numpy and sentencepiece";
-        buildInputs = [ llama-python ];
-        inputsFrom = [ finalAttrs.finalPackage ];
-        shellHook = ''
-          addToSearchPath "LD_LIBRARY_PATH" "${lib.getLib effectiveStdenv.cc.cc}/lib"
-        '';
-      };
-
-      shell-extra = mkShell {
-        name = "shell-extra-${finalAttrs.finalPackage.name}";
-        description = "contains numpy, sentencepiece, torchWithoutCuda, and transformers";
-        buildInputs = [ llama-python-extra ];
-        inputsFrom = [ finalAttrs.finalPackage ];
-      };
     };
 
     meta = {
@@ -293,27 +233,12 @@ effectiveStdenv.mkDerivation (
       # overridden by importing Nixpkgs with `allowBroken = true`.
       broken = (useMetalKit && !effectiveStdenv.isDarwin);
 
-      description = "Inference of LLaMA model in pure C/C++${descriptionSuffix}";
-      homepage = "https://github.com/ggerganov/llama.cpp/";
+      description = "ik_llama.cpp: llama.cpp fork with better CPU performance${descriptionSuffix}";
+      homepage = "https://github.com/ikawrakow/ik_llama.cpp/";
       license = lib.licenses.mit;
 
       # Accommodates `nix run` and `lib.getExe`
       mainProgram = "llama-cli";
-
-      # These people might respond, on the best effort basis, if you ping them
-      # in case of Nix-specific regressions or for reviewing Nix-specific PRs.
-      # Consider adding yourself to this list if you want to ensure this flake
-      # stays maintained and you're willing to invest your time. Do not add
-      # other people without their consent. Consider removing people after
-      # they've been unreachable for long periods of time.
-
-      # Note that lib.maintainers is defined in Nixpkgs, but you may just add
-      # an attrset following the same format as in
-      # https://github.com/NixOS/nixpkgs/blob/f36a80e54da29775c78d7eff0e628c2b4e34d1d7/maintainers/maintainer-list.nix
-      maintainers = with lib.maintainers; [
-        philiptaron
-        SomeoneSerge
-      ];
 
       # Extend `badPlatforms` instead
       platforms = lib.platforms.all;
