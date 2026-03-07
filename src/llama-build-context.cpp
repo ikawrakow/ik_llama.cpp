@@ -7079,7 +7079,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     if (cparams.attn_max_batch > 0 && kv_f32_size > cparams.attn_max_batch) {
                         n_max_head = 1;
                         for (int niter = 2; niter < n_head; ++niter) {
-                            if (n_head % niter == 0 && kv_f32_size/(n_head/niter) <= cparams.attn_max_batch) {
+                            if (n_head % niter == 0 && kv_f32_size/niter <= cparams.attn_max_batch) {
                                 n_max_head = n_head/niter;
                                 break;
                             }
