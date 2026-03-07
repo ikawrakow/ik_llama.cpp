@@ -3,7 +3,7 @@
 #include "llama-grammar.h"
 #include "ggml.h"
 #include "llama.h"
-#include "unicode.h"
+#include "../src/unicode.h"
 
 #include <cstdio>
 #include <cstdlib>

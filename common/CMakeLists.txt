@@ -52,12 +52,12 @@ set(TARGET common)
 
 add_library(${TARGET} STATIC
     base64.hpp
-    chat.cpp
-    chat.h
-    chat-parser.cpp
-    chat-parser.h
-    chat-parser-xml-toolcall.h
-    chat-parser-xml-toolcall.cpp
+    chat-auto-parser-generator.cpp
+    chat-auto-parser-helpers.cpp
+    chat-auto-parser.h
+    chat-diff-analyzer.cpp
+	chat-peg-parser.cpp
+    chat-peg-parser.h
     common.cpp
     sampling.h
     sampling.cpp
@@ -75,11 +75,29 @@ add_library(${TARGET} STATIC
     ngram-cache.h
     ngram-map.cpp
     ngram-map.h
-	speculative.cpp
+    peg-parser.cpp
+    peg-parser.h
+    speculative.cpp
+    unicode.cpp
+    unicode.h
     ngram-mod.cpp
     ngram-mod.h
     regex-partial.cpp
     regex-partial.h
+    chat.cpp
+    chat.h
+    jinja/lexer.cpp
+    jinja/lexer.h
+    jinja/parser.cpp
+    jinja/parser.h
+    jinja/runtime.cpp
+    jinja/runtime.h
+    jinja/value.cpp
+    jinja/value.h
+    jinja/string.cpp
+    jinja/string.h
+    jinja/caps.cpp
+    jinja/caps.h
     )
 
 if (BUILD_SHARED_LIBS)

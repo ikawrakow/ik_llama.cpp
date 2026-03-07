@@ -257,9 +257,9 @@ const STRING_FORMAT_RULES = {
 const RESERVED_NAMES = {'root': true, ...PRIMITIVE_RULES, ...STRING_FORMAT_RULES};
 
 const INVALID_RULE_CHARS_RE = /[^\dA-Za-z-]+/g;
-const GRAMMAR_LITERAL_ESCAPE_RE = /[\n\r"]/g;
+const GRAMMAR_LITERAL_ESCAPE_RE = /[\n\r"\\]/g;
 const GRAMMAR_RANGE_LITERAL_ESCAPE_RE = /[\n\r"\]\-\\]/g;
-const GRAMMAR_LITERAL_ESCAPES = { '\r': '\\r', '\n': '\\n', '"': '\\"', '-': '\\-', ']': '\\]' };
+const GRAMMAR_LITERAL_ESCAPES = { '\r': '\\r', '\n': '\\n', '"': '\\"', '-': '\\-', ']': '\\]', '\\': '\\\\' };
 
 const NON_LITERAL_SET = new Set('|.()[]{}*+?');
 const ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = new Set('^$.[]()|{}*+?');
@@ -729,6 +729,10 @@ export class SchemaConverter {
       return this._addRule(ruleName, out.join(''));
     } else if ((schemaType === 'object') || (Object.keys(schema).length === 0)) {
       return this._addRule(ruleName, this._addPrimitive('object', PRIMITIVE_RULES['object']));
+    } else if (schemaType === undefined && typeof schema === 'object' && !Array.isArray(schema) && schema !== null) {
+      // No type constraint and no recognized structural keywords (e.g. {"description": "..."}).
+      // Per JSON Schema semantics this is equivalent to {} and accepts any value.
+      return this._addRule(ruleName, this._addPrimitive('value', PRIMITIVE_RULES['value']));
     } else {
       if (!(schemaType in PRIMITIVE_RULES)) {
         throw new Error(`Unrecognized schema: ${JSON.stringify(schema)}`);

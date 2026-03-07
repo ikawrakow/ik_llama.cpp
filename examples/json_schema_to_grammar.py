@@ -231,9 +231,9 @@ DOT = '[^\\x0A\\x0D]'
 RESERVED_NAMES = set(["root", "dot", *PRIMITIVE_RULES.keys(), *STRING_FORMAT_RULES.keys()])
 
 INVALID_RULE_CHARS_RE = re.compile(r'[^a-zA-Z0-9-]+')
-GRAMMAR_LITERAL_ESCAPE_RE = re.compile(r'[\r\n"]')
+GRAMMAR_LITERAL_ESCAPE_RE = re.compile(r'[\r\n"\\]')
 GRAMMAR_RANGE_LITERAL_ESCAPE_RE = re.compile(r'[\r\n"\]\-\\]')
-GRAMMAR_LITERAL_ESCAPES = {'\r': '\\r', '\n': '\\n', '"': '\\"', '-': '\\-', ']': '\\]'}
+GRAMMAR_LITERAL_ESCAPES = {'\r': '\\r', '\n': '\\n', '"': '\\"', '-': '\\-', ']': '\\]', '\\': '\\\\'}
 
 NON_LITERAL_SET = set('|.()[]{}*+?')
 ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = set('^$.[]()|{}*+?')
@@ -688,6 +688,11 @@ class SchemaConverter:
 
         elif (schema_type == 'object') or (len(schema) == 0):
             return self._add_rule(rule_name, self._add_primitive('object', PRIMITIVE_RULES['object']))
+
+        elif schema_type is None and isinstance(schema, dict):
+            # No type constraint and no recognized structural keywords (e.g. {"description": "..."}).
+            # Per JSON Schema semantics this is equivalent to {} and accepts any value.
+            return self._add_rule(rule_name, self._add_primitive('value', PRIMITIVE_RULES['value']))
 
         else:
             assert schema_type in PRIMITIVE_RULES, f'Unrecognized schema: {schema}'
