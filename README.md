@@ -44,7 +44,7 @@ cmake -B build -DGGML_NATIVE=ON -DGGML_CUDA=ON
 
 cmake --build build --config Release -j$(nproc)
 ```
-### Thorough build instructions for Windows
+### Step-by-step instructions for a case of a successful Windows build
 https://github.com/ikawrakow/ik_llama.cpp/pull/1355#issuecomment-3992959698
 
 ### Run
