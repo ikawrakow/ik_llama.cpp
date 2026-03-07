@@ -61,16 +61,86 @@ In order to build llama.cpp you have four different options.
       cmake --build build --config Debug
       ```
     - Building for Windows (x86, x64 and arm64) with MSVC or clang as compilers:
-      - Install Visual Studio 2022, e.g. via the [Community Edition](https://visualstudio.microsoft.com/de/vs/community/). In the installer, select at least the following options (this also automatically installs the required additional tools like CMake,...):
-        - Tab Workload: Desktop-development with C++
-        - Tab Components (select quickly via search): C++-_CMake_ Tools for Windows, _Git_ for Windows, C++-_Clang_ Compiler for Windows, MS-Build Support for LLVM-Toolset (clang)
-      - Please remember to always use a Developer Command Prompt / PowerShell for VS2022 for git, build, test
-      - For Windows on ARM (arm64, WoA) build with:
-        ```bash
+ <ol type="1">
+ <li> Download official CUDA 12.6 Toolkit from Nvidia website and Visual Studio Build Tools 2022 from https://aka.ms/vs/17/release/vs_buildtools.exe
+ </li>
+ <li> CUDA installer doesn't complain about missing Nvidia GPU card in a VM, so pick custom installation and leave out "Driver components" tick and PhysX as ignored and install the rest.
+ </li>
+ <li> In Visual Studio Build Tools installer, click "Individual components" tab during customization and enter "clang" in filter prompt to pick related tools (since clang is not a default option, add two extra items in this prompt).
+ </li>
+ <li> Download Portable git from https://git-scm.com/install/windows to C:\Downloads and <code>git.exe clone https://github.com/ggml-org/llama.cpp "C:\Downloads\ik_llama.cpp_git"</code> from cmd and <code>cd "C:\Downloads\ik_llama.cpp_git"</code>
+ </li>
+ <li> <code>set VS_DIR=c:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools</code>
+ </li>
+ <li> <code>call "%VS_DIR%\VC\Auxiliary\Build\vcvarsall.bat" x64</code>
+ </li>
+ <li> <code>set LLVM_DIR=c:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64</code>
+ </li>
+ <li> <code>set CUDA_DIR=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6</code>
+ </li>
+ <li> <code>set "PATH=%LLVM_DIR%/bin;%CUDA_DIR%/bin;%PATH%"</code>
+ </li>
+ <li> <code>"c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" ^
+    -G Ninja ^
+    -S "C:/Downloads/ik_llama.cpp_git" ^
+    -B "C:/Downloads/output_compilations" ^
+    -DCMAKE_C_COMPILER="%LLVM_DIR%/bin/clang-cl.exe" ^
+    -DCMAKE_CXX_COMPILER="%LLVM_DIR%/bin/clang-cl.exe" ^
+    -DCMAKE_CUDA_COMPILER="%CUDA_DIR%/bin/nvcc.exe" ^
+    -DCUDAToolkit_ROOT="%CUDA_DIR%" ^
+    -DCMAKE_CUDA_ARCHITECTURES="89-real" ^
+    -DCMAKE_BUILD_TYPE=Release ^
+    -DGGML_CUDA=ON ^
+    -DLLAMA_CURL=OFF ^
+    -DCMAKE_C_FLAGS="/clang:-march=znver4 /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments" ^
+    -DCMAKE_CXX_FLAGS="/EHsc /clang:-march=znver4 /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments" ^
+     -DCMAKE_CUDA_STANDARD=17 ^
+     -DGGML_AVX512=ON ^
+     -DGGML_AVX512_VNNI=ON ^
+     -DGGML_AVX512_VBMI=ON ^
+     -DGGML_CUDA_USE_GRAPHS=ON ^
+     -DGGML_SCHED_MAX_COPIES=1 ^
+     -DGGML_OPENMP=ON</code>
+ </li>
+<li>
+    <code>"c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build "C:/Downloads/output_compilations" --config Release</code>
+</li>
+<li>
+Copy cublas64_12.dll, cublasLt64_12.dll and cudart64_12.dll from c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin to C:\Downloads\output_compilations\bin and libomp140.x86_64.dll from c:\Windows\System32\ to C:\Downloads\output_compilations\bin
+</li>
+ </ol>
+<ul>
+    <li>
+      For Windows on ARM (arm64, WoA) build with:
+        <code>
+        bash
         cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
         cmake --build build-arm64-windows-llvm-release
-        ```
-        Note: Building for arm64 could also be done just with MSVC (with the build-arm64-windows-MSVC preset, or the standard CMake build instructions). But MSVC does not support inline ARM assembly-code, used e.g. for the accelerated Q4_0_4_8 CPU kernels.
+        </code>
+        </li>
+    </ul>
+        Notes:
+        <ul>
+            <li>
+            Building for arm64 could also be done just with MSVC (with the build-arm64-windows-MSVC preset, or the standard CMake build instructions). But MSVC does not support inline ARM assembly-code, used e.g. for the accelerated Q4_0_4_8 CPU kernels.
+            </li>
+            <li>
+            Developer Command Prompt / PowerShell is not necessary, you can run these commands using usual cmd.exe
+            </li>
+            <li>
+                /clang:-march=znver4 option automatically includes AVX512VL AVX512BW AVX512DQ AVX512VBMI switches during compilation, so it's better to specify your processor type explicitly.
+            </li>
+            <li>
+                Adding /clang:-O3 or /clang:-mprefer-vector-width=512, surprisingly, does not seem to affect TT/TG performance.
+            </li>
+            <li>
+                Make sure you're using normal slash, not a backslash in cmake paths, or you may stumble upon strange errors (cmake on Windows may interpret, e.g. C:\Users, as C:[special escaped character]sers)
+            </li>
+            <li>
+                If you want standard MSVC compiler instead of Clang, put cl.exe in place of clang-cl.exe
+            </li>
+        </ul>
+
 
 -   Using `gmake` (FreeBSD):
 
