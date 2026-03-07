@@ -3496,11 +3496,11 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     bool next_token = has_next_token(result, slot);
     // If buffer full or generation stopped, we might send tokens
     bool buffer_full = slot.token_buffer.size() >= slot.n_buffer;
-    
+
     int32_t ban_pos = -1;
     int32_t n_rewind = 0;
     bool sent_results = false;
-    
+
     if (slot.banned_n != 1) {
         if (!slot.rewind_status) {
             slot.ctx_sampling->params.logit_bias = slot.logit_bias;
@@ -3509,7 +3509,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
 
     if (slot.ban_phrases.size() > 0 || slot.ban_regex.size() > 0 || slot.ban_regex_ci.size() > 0) {
         ban_pos = check_ban_phrase(slot);
-        if (ban_pos >= 0) {
+        if (ban_pos >= 0 && slot.sparams.adaptive_target >= 0.0f) {
             int32_t buffer_start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
             int32_t n_keep_buffer = ban_pos - buffer_start_pos;
             if (n_keep_buffer < 0) n_keep_buffer = 0;
@@ -3556,14 +3556,17 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // send 1 token from the front (FIFO)
             send_token_results(slot.token_buffer, slot, 1);
         }
-        sent_results = true;
+        if (slot.sparams.adaptive_target >= 0.0f) {
+            sent_results = true;
+        }
     }
     else {
         // buffer the result, wait for more tokens to validate string
         slot.sampled = result.tok; 
     }
-
-    slot.ctx_sampling->n_rewind = sent_results ? -1 : n_rewind;
+    if (slot.sparams.adaptive_target >= 0.0f) {
+        slot.ctx_sampling->n_rewind = sent_results ? -1 : n_rewind;
+    }
 }
 
 void server_context::process_batch_tokens(int32_t & n_batch) {
