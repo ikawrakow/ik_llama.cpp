@@ -502,8 +502,8 @@ void llm_load_hparams(
                 }
 
                 switch (hparams.n_layer) {
-                    case 28: model.type = e_model::MODEL_80B_A3B; break;
-                    case 48: model.type = e_model::MODEL_80B_A3B; break;
+                    case 40: model.type = e_model::MODEL_35B_A3B; break;
+                    case 48: model.type = e_model::MODEL_122B_A10B; break;
                     case 60: model.type = e_model::MODEL_397B_A17B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
@@ -530,7 +530,8 @@ void llm_load_hparams(
                 }
 
                 switch (hparams.n_layer) {
-                    case 24: model.type = e_model::MODEL_2B; break;
+                    case 24: model.type = hparams.n_embd == 1024 ? e_model::MODEL_0_8B : e_model::MODEL_2B; break;
+                    case 32: model.type = hparams.n_embd == 2560 ? e_model::MODEL_4B   : e_model::MODEL_9B; break;
                     case 64: model.type = e_model::MODEL_27B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
