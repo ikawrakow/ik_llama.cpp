@@ -913,9 +913,40 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         int nrows = ggml_nrows(tensor);
         auto bs = tt.blck_size;
         auto ts = tt.type_size;
-        int repeat_type = tensor->op_params[0];
-        if (repeat_type == 0) {
-        auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+        void * extra_ptr;
+        memcpy(&extra_ptr, tensor->op_params, sizeof(extra_ptr));
+        if (extra_ptr) {
+            auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
+            GGML_ASSERT(extra->n_device == int(ranges.size()));
+            GGML_ASSERT(tensor->ne[2]*tensor->ne[3] == 1);
+            GGML_ASSERT(n_interleave == 1);
+            GGML_ASSERT(tt.row_meta_size == 0);
+            for (int i = 0; i < extra->n_device; ++i) {
+                auto split = extra->splits[i];
+                if (!split) {
+                    GGML_ASSERT(ranges[i].empty());
+                    continue;
+                }
+                GGML_ASSERT(!ranges[i].empty());
+                GGML_ASSERT((int)ggml_nrows(split) == nrows);
+                auto split_row_size = ggml_row_size(split->type, split->ne[0]);
+                if (host_buffer.size() < nrows*split_row_size) host_buffer.resize(nrows*split_row_size);
+                auto dst = host_buffer.data();
+                for (int64_t i01 = 0; i01 < split->ne[1]; i01 += n_interleave) {
+                    for (auto & p : ranges[i]) {
+                        GGML_ASSERT(p.first  % bs == 0);
+                        GGML_ASSERT(p.second % bs == 0);
+                        auto src = (const char *)data + i01*tensor->nb[1] + (p.first/bs)*ts;
+                        auto size = (p.second/bs)*ts;
+                        memcpy(dst, src, size);
+                        dst += size;
+                    }
+                }
+                ggml_cuda_set_device(i);
+                CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            }
+            return;
+        }
         int ne = 0;
         for (int i = 0; i < extra->n_device; ++i) {
             auto split = extra->splits[i];
@@ -941,37 +972,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
             ne += split->ne[0];
         }
-        } else {
-            int head_k_dim  = tensor->op_params[1];
-            int num_k_heads = tensor->op_params[2];
-            int head_v_dim  = tensor->op_params[3];
-            int num_v_heads = tensor->op_params[4];
-            int gqa_ratio   = num_v_heads / num_k_heads;
-            int ttype       = tensor->op_params[5];
-            if (ttype != 2 && ttype != 3 && ttype != 4) {
-                printf("%s: ttype %d is not supported for split dimension 0\n", __func__, ttype);
-                GGML_ABORT("Fatal error");
-            }
-            int nval = ttype == 3 ? head_v_dim : 1;
-            for (int i = 0; i < extra->n_device; ++i) {
-                auto split = extra->splits[i];
-                if (!split) continue;
-                GGML_ASSERT(split->ne[1] == tensor->ne[1]);
-                GGML_ASSERT(split->ne[1] == 1 && split->ne[3] == 1);
-                int nhead      = split->op_params[0];
-                int first_head = split->op_params[1];
-                for (int64_t i01 = 0; i01 < split->ne[1]; i01 += n_interleave) {
-                    auto src0 = (const char *)data + i01*tensor->nb[1];
-                    for (int ihead = 0; ihead < nhead; ++ihead) {
-                        int ihead_k  = first_head + ihead;
-                        int ihead_v0 = repeat_type == 1 ? ihead_k * gqa_ratio : ihead_k;
-                        for (int r = 0; r < gqa_ratio; ++r) {
-                            int ihead_v = ihead_v0 + (repeat_type == 1 ? r : r * num_k_heads);
-                        }
-                    }
-                }
-            }
-        }
     }
     else if (extra->split_dim == 1) {
         if (tensor->ne[2] > 1) {
@@ -995,6 +995,33 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         } else {
             int n_interleave = 1;
             if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
+            void * extra_ptr;
+            memcpy(&extra_ptr, tensor->op_params, sizeof(extra_ptr));
+            if (extra_ptr) {
+                auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
+                GGML_ASSERT(extra->n_device == int(ranges.size()));
+                GGML_ASSERT(tensor->ne[2]*tensor->ne[3] == 1);
+                GGML_ASSERT(n_interleave == 1);
+                for (int i = 0; i < extra->n_device; ++i) {
+                    auto split = extra->splits[i];
+                    if (!split) {
+                        GGML_ASSERT(ranges[i].empty());
+                        continue;
+                    }
+                    GGML_ASSERT(!ranges[i].empty());
+                    ggml_cuda_set_device(i);
+                    auto dst = (char *)split->data;
+                    for (auto & p : ranges[i]) {
+                        GGML_ASSERT(p.first  >= 0 && p.first < tensor->ne[1]);
+                        GGML_ASSERT(p.second >= 0 && p.first + p.second < tensor->ne[1]);
+                        auto src = (const char *)data + p.first*tensor->nb[1];
+                        auto size = p.second*tensor->nb[1];
+                        CUDA_CHECK(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                        dst += size;
+                    }
+                }
+                return;
+            }
             size_t cur_offset = 0;
             for (int i = 0; i < extra->n_device; ++i) {
                 auto split = extra->splits[i];
@@ -1005,62 +1032,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                 const char * buf_host = (const char *)data + cur_offset;
                 CUDA_CHECK(cudaMemcpyAsync(split->data, buf_host, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
                 cur_offset += size;
-            }
-        }
-    }
-    else if (extra->split_dim == 10) {
-        GGML_ASSERT(tensor->ne[2]*tensor->ne[3] == 1);
-        int n_interleave = 1;
-        if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
-        auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
-        int head_k_dim  = tensor->op_params[0];
-        int num_k_heads = tensor->op_params[1];
-        int head_v_dim  = tensor->op_params[2];
-        int num_v_heads = tensor->op_params[3];
-        int gqa_ratio = num_v_heads / num_k_heads;
-        printf("Loading tensor %s: head_k_dim = %d, num_k_heads = %d, head_v_dim = %d, num_v_heads = %d, gqa_ratio = %d\n", tensor->name, head_k_dim, num_k_heads, head_v_dim, num_v_heads, gqa_ratio);
-        for (int i = 0; i < extra->n_device; ++i) {
-            auto split = extra->splits[i];
-            if (!split) continue;
-            ggml_cuda_set_device(i);
-            auto ptr = (char *)split->data;
-            int num_k_heads_i = split->op_params[0];
-            GGML_ASSERT((num_k_heads_i * head_k_dim) % n_interleave == 0);
-            int first_k_head  = split->op_params[1];
-            auto size = row_size*head_k_dim*num_k_heads_i;
-            printf("    split %d: first_k_head = %d, num_k_heads_i = %d\n", i, first_k_head, num_k_heads_i);
-            auto src_data = (const char *)data + row_size*head_k_dim*first_k_head;
-            CUDA_CHECK(cudaMemcpyAsync(ptr, src_data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-            ptr += size;
-            src_data += row_size*head_k_dim*num_k_heads;
-            CUDA_CHECK(cudaMemcpyAsync(ptr, src_data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-            ptr += size;
-            src_data = (const char *)data + row_size*(head_k_dim*2*num_k_heads + head_v_dim*first_k_head);
-            size = row_size*head_v_dim*num_k_heads_i;
-            GGML_ASSERT((num_k_heads_i * head_v_dim) % n_interleave == 0);
-            for (int j = 0; j < gqa_ratio; ++j) {
-                CUDA_CHECK(cudaMemcpyAsync(ptr, src_data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-                ptr += size;
-                src_data += row_size*head_v_dim*num_k_heads;
-            }
-        }
-    }
-    else if (extra->split_dim == 11) {
-        GGML_ASSERT(tensor->ne[2]*tensor->ne[3] == 1);
-        int n_interleave = 1;
-        if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
-        auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
-        for (int i = 0; i < extra->n_device; ++i) {
-            auto split = extra->splits[i];
-            if (!split) continue;
-            ggml_cuda_set_device(i);
-            auto ptr = (char *)split->data;
-            for (int j = 0; j < split->op_params[0]; ++j) {
-                GGML_ASSERT(split->op_params[2*j+1] % n_interleave == 0);
-                auto size   = row_size*split->op_params[2*j+1];
-                auto offset = row_size*split->op_params[2*j+2];
-                CUDA_CHECK(cudaMemcpyAsync(ptr, (const char *)data + offset, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-                ptr += size;
             }
         }
     }
