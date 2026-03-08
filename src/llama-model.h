@@ -45,6 +45,7 @@ enum e_model {
     MODEL_0_3B,
     MODEL_0_5B,
     MODEL_0_6B,
+    MODEL_0_8B,
     MODEL_1B,
     MODEL_1_2B,
     MODEL_1_3B,
@@ -107,10 +108,12 @@ enum e_model {
     MODEL_16B_A1B,
     MODEL_21B_A3B, // Ernie MoE small
     MODEL_30B_A3B,
+    MODEL_35B_A3B,
     MODEL_80B_A3B, // Qwen3-Next
     MODEL_80B_A13B,
     MODEL_100B_A6B,
     MODEL_106B_A12B,
+    MODEL_122B_A10B,
     MODEL_230B_A10B, // Minimax M2
     MODEL_235B_A22B,
     MODEL_310B_A15B,

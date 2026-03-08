@@ -1981,14 +1981,6 @@ static bool llm_load_tensors(
                 LLAMA_LOG_WARN("================================================================\n\n");
                 max_gpu = 4;
             }
-            else if (llama_model_has_recurrent(&model) && model.has_tensor_overrides()) {
-                LLAMA_LOG_WARN("\n================================================================\n");
-                LLAMA_LOG_WARN("Split mode 'graph' for recurrent/hybrid models is currently\n");
-                LLAMA_LOG_WARN("disabled when using tensor overrides\n");
-                LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
-                LLAMA_LOG_WARN("=======================================================\n\n");
-                split_mode = LLAMA_SPLIT_MODE_LAYER;
-            }
         }
     }
 
