@@ -1056,7 +1056,7 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const size_t n_unsent, const bool rewind_status) {
     // LLAMA_LOG_DEBUG("%s: n_unsent = %zu, rewind_status = %s\n", __func__, n_unsent, rewind_status ? "true" : "false");
     if (adapt_p_ctx->target < 0.0f) {
-        // LLAMA_LOG_DEBUG("%s: adaptive p sampler is disabled, %f\n", __func__, adapt_p_ctx->target);
+        // LLAMA_LOG_DEBUG("%s: sampler disabled, target = %f\n", __func__, adapt_p_ctx->target);
         return;
     }
 
@@ -1139,7 +1139,7 @@ llama_token llama_sample_token_adaptive_p_impl(
 void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_array * candidates,
         struct llama_sampler_adaptive_p * adapt_p_ctx) {
     if (adapt_p_ctx->target < 0.0f) {
-        LLAMA_LOG_DEBUG("%s: adaptive p sampler is disabled, %f\n", __func__, adapt_p_ctx->target);
+        LLAMA_LOG_DEBUG("%s: sampler disabled, target = %f\n", __func__, adapt_p_ctx->target);
         llama_sample_softmax_impl(nullptr, candidates);
         return;
     }
