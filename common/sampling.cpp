@@ -428,7 +428,7 @@ static llama_token llama_sampling_sample_impl(
             // temperature sampling
             size_t min_keep = std::max(1, params.min_keep);
 
-            sampler_queue(ctx_main, params,ctx_sampling, cur_p, min_keep);           
+            sampler_queue(ctx_main, params,ctx_sampling, cur_p, min_keep);
             id = llama_sample_token_with_rng(ctx_main, &cur_p, ctx_sampling->rng);
 
         }
