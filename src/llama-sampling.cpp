@@ -1067,30 +1067,10 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
     if (hsz_next >= hsz >> 1) { return; }   // skip small update
 
     if (!rewind_status) {
-        // sent results; overwrite old history
+        // sent results, overwrite old history
         std::move(history.begin() + hsz - hsz_next, history.end(), history.begin());
     }
     history.resize(hsz_next);
-
-    // if ((n_rewind == 0) || (adapt_p_ctx->target < 0.0f)) {
-    //     return;
-    // }
-    // auto & history = adapt_p_ctx->history;
-    // const int32_t hsz = history.size();
-    // if ((hsz <= 0) || (hsz <= n_rewind)) {
-    //     LLAMA_LOG_WARN("%s: hsz=%d is too short to rewind: n_rewind=%d\n", __func__, hsz, n_rewind);
-    //     LLAMA_LOG_WARN("%s: this is a bug. resetting to initial state\n", __func__);
-    //     history.clear();
-    //     history.push_back({
-    //         adapt_p_ctx->target / adapt_p_ctx->decay,     // weighted_sum
-    //         1.0f / adapt_p_ctx->decay });                  // total_weight
-    //     return;
-    // }
-    // const int32_t n_delete = std::abs(n_rewind);
-    // if (n_rewind < 0) {
-    //     std::move(history.begin() + n_remove, history.end(), history.begin());
-    // }
-    // history.resize(hsz - n_remove);
 }
 
 llama_token llama_sample_token_adaptive_p_impl(
