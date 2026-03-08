@@ -1,4 +1,5 @@
 # Build llama.cpp locally
+Typical build is aimed at CPU + GPU split and requires pre-installation of numerous tools which can bring mess to the configuration of your main OS if you're on Windows. To avoid this, one may make their builds in a virtual machine with Windows 10. For such cases, make sure you have a way to copy files from the VM to the host OS, e.g. via RDP. So, Windows users, consider doing the following actions in a VM.
 
 **To get the Code:**
 
@@ -108,7 +109,32 @@ In order to build llama.cpp you have four different options.
 <li>
 Copy cublas64_12.dll, cublasLt64_12.dll and cudart64_12.dll from c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin to C:\Downloads\output_compilations\bin and libomp140.x86_64.dll from c:\Windows\System32\ to C:\Downloads\output_compilations\bin
 </li>
+<li>
+Now, ik_llama.cpp is ready-to-use, you have to copy C:\Downloads\output_compilations\bin to your main OS.
+</li>
  </ol>
+
+Example of use with very effective RAM + VRAM split scheme for Zen4 AMD CPU with 16 physical cores for most of cases (this model has `qwen3moe.block_count` being 48):
+
+`> llama-cli -m ../Qwen3-30B-A3B-Thinking-2507-IQ4_XS.gguf -ot blk.[1-9][0-9].ffn=CPU -fa on  -ctk q8_0 -ctv q4_0 -ngl 99 --threads 16 --ctx-size 64000 --prompt "Tell me 'Good morning' in  3 difference languages." -mla 3 -amb 512 -b 64 -ub 64`
+During execution, this command will load almost all non-attention (i.e., "fat" ffn tensors which are less sensitive to slow RAM speed) tensors, starting from 10th, to RAM while keeping the rest in VRAM and answer your prompt and report RAM and VRAM usage at 27 t/s (token generation speed):
+```
+Tensor blk.10.ffn_norm.weight buffer type overriden to CPU
+...
+Tensor blk.47.ffn_down_exps.weight buffer type overriden to CPU
+...
+llm_load_tensors:        CPU buffer size = 12026.22 MiB
+llm_load_tensors:        CPU buffer size =   166.92 MiB
+llm_load_tensors:      CUDA0 buffer size =  3780.44 MiB
+...
+llama_kv_cache_init:      CUDA0 KV buffer size =  2437.52 MiB
+llama_new_context_with_model: KV self size  = 2437.50 MiB, K (q8_0): 1593.75 MiB, V (q4_0):  843.75 MiB
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.58 MiB
+llama_new_context_with_model:      CUDA0 compute buffer size =    38.10 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =     8.31 MiB
+```
+`llm_load_tensors` say that "fat" tensors from 10th to 47th took 12026.22 MiB of RAM with 167 MB of temporary data on RAM while the rest of tensors took 3780.44 MiB of VRAM (which, in sum, roughly equals the size of Qwen3-30B-A3B-Thinking-2507-IQ4_XS.gguf - 15.9 GB). `llama_kv_cache_init` says that your KV context storage is kept on VRAM and takes ~2.4GB of VRAM. `llama_new_context_with_model` say that temporary data takes ~50 MB of VRAM. Larger values of -b and -ub can increase interference speed by 5-10% while sacrificing 300-600 MB of VRAM.
+ 
 <ul>
     <li>
       For Windows on ARM (arm64, WoA) build with:
