@@ -447,7 +447,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     GGML_ASSERT(num_v_heads % num_k_heads == 0);
     int64_t gqa_ratio   = num_v_heads / num_k_heads;
 
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && kv_self.s_l[il]->extra) {
         GGML_ASSERT(head_k_dim == head_v_dim);
         auto split_s_l = (ggml_split_tensor_t *)kv_self.s_l[il]->extra;
         GGML_ASSERT(split_s_l);
@@ -487,7 +487,8 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
             } else {
                 num_k_heads_id = split_smm_in->splits[id]->ne[1]/(2*head_k_dim*(1 + gqa_ratio));
                 num_v_heads_id = num_k_heads_id * gqa_ratio;
-                auto p = build_qkvz(lctx, ctx0, split_smm_in->splits[id], head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, cur, il_cb, cb);
+                auto p = build_qkvz(lctx, ctx0, nullptr, nullptr, split_smm_in->splits[id], head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, cur, il, cb, gf);
+                //auto p = build_qkvz(lctx, ctx0, split_smm_in->splits[id], head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, cur, il_cb, cb);
                 qkv_mixed = p.first;
                 z = p.second;
             }

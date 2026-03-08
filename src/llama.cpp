@@ -882,7 +882,7 @@ static bool llama_kv_cache_init(
                 cache.k_l.push_back(nullptr);
                 cache.v_l.push_back(nullptr);
                 LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
-                if (split_cache) {
+                if (split_cache && model.layers[i].ssm_out->extra) {
                     auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
                     GGML_ASSERT(split_ssm_out);
                     int num_v_heads = hparams.ssm_dt_rank;
@@ -1968,7 +1968,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MINIMAX_M2,
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
-        LLM_ARCH_QWEN3NEXT,
+        //LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,
     };
