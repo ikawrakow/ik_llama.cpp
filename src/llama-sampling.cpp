@@ -1068,7 +1068,10 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
 
     if (!rewind_status) {
         // sent results, overwrite old history
-        std::move(history.begin() + hsz - hsz_next, history.end(), history.begin());
+        const size_t hsz_diff = hsz - hsz_next;
+        for (int j = 0; j < hsz_next; ++j) {
+            history[j] = history[j + hsz_diff];
+        }
     }
     history.resize(hsz_next);
 }
