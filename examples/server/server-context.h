@@ -251,7 +251,9 @@ struct server_context {
     server_metrics metrics;
 
     common_chat_templates_ptr chat_templates;
-    oaicompat_parser_options  oai_parser_opt;
+    server_chat_params  chat_params;
+    std::map<std::string, bool> chat_template_caps;
+
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
     int32_t cache_ram_n_min = 0;
