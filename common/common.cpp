@@ -1650,6 +1650,79 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.banned_n = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "--whitelist-unicode-rule") {
+        CHECK_ARG
+        auto subs = string_split(argv[i], ":");
+        float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
+
+        subs = string_split(subs[0], ",");
+        std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
+            return std::isalpha(c);
+        }) ? string_lower(subs.back()) : "*";
+        if (script == "ascii") {
+            params.white_rules.push_back({ 0x000000, 0x00007F, "*", bias });
+            return true;
+        }
+
+        uint32_t first = 0;
+        uint32_t last = -1;
+        if ((script == "*") || (subs.size() > 1)) {
+            subs = string_split(subs.front(), ".");
+            if (!subs.front().empty()) {
+                first = std::stoul(subs.front());
+            }
+            if (!subs.back().empty()) {
+                last = std::stoul(subs.back());
+            }
+        }
+
+        params.white_rules.push_back({ first, last, script, bias });
+        return true;
+    }
+    if (arg == "--whitelist-no-defer-common") {
+        params.white_df_common = false;
+        return true;
+    }
+    if (arg == "--whitelist-each-piece") {
+        CHECK_ARG
+        params.white_each_pieces.push_back(argv[i]);
+        return true;
+    }
+    if (arg == "--whitelist-piece") {
+        CHECK_ARG
+        params.white_pieces.push_back(argv[i]);
+        return true;
+    }
+    if (arg == "--whitelist-binning-keyword") {
+        CHECK_ARG
+        params.white_bin_kw = argv[i];
+        return true;
+    }
+    if (arg == "--whitelist-binning-keyword-count") {
+        CHECK_ARG
+        params.white_bin_kw_count = std::stoul(argv[i]);
+        return true;
+    }
+    if (arg == "--temporary-bias") {
+        CHECK_ARG
+        params.tmp_piece_bias[""] = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "--temporary-piece") {
+        CHECK_ARG
+        params.tmp_piece_bias[argv[i]] = params.tmp_piece_bias.at("");
+        return true;
+    }
+    if (arg == "--temporary-bias-duration") {
+        CHECK_ARG
+        params.tmp_bias_duration = std::stoul(argv[i]);
+        return true;
+    }
+    if (arg == "--temporary-bias-keyword") {
+        CHECK_ARG
+        params.tmp_bias_kw = argv[i];
+        return true;
+    }
     if (arg == "-ld" || arg == "--logdir") {
         CHECK_ARG
         params.logdir = argv[i];
@@ -2394,9 +2467,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
     options.push_back({ "*",           "       --adaptive-target",      "adaptive-p sampling: (default: %.2f, <0.0 = disabled)", (double)sparams.adaptive_target});
     options.push_back({ "*",           "       --adaptive-decay",       "adaptive-p sampling: (default: %.2f)", (double)sparams.adaptive_decay});
+    options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
     options.push_back({ "*",           "       --banned-string-file",   "file path of the list of banned strings on each line" });
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
-    options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });

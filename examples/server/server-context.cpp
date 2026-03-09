@@ -386,6 +386,19 @@ void server_slot::reset() {
     ban_regex.clear();
     ban_regex_ci.clear();
 
+    white_rules.clear();
+    white_df_common = false;
+    white_each_pieces.clear();
+    white_pieces.clear();
+    white_bin_kw = "";
+    white_bin_kw_count = 0;
+    white_bin_kw_counter = 0;
+    white_bin_kw_pos = 0;
+
+    tmp_bias_duration = 0;
+    tmp_bias_kw = "";
+    tmp_bias_kw_pos = 0;
+
     // Reset speculative decoding stats
     n_draft_total = 0;
     n_draft_accepted = 0;
@@ -1223,6 +1236,59 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             slot.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
         }
 
+        // apply temporary logit bias
+        slot.sparams.tmp_logit_bias.clear();
+        const auto& temporary_logit_bias = data.find("temporary_logit_bias");
+        if ((temporary_logit_bias != data.end()) && temporary_logit_bias->is_array()) {
+            std::vector<llama_token> tokens;
+            for (const auto& elem: *temporary_logit_bias) {
+                if (!elem.is_array() || (elem.size() != 2)) {
+                    LLAMA_LOG_WARN("%s: temporary_logit_bias: skipping invalid element, .size = %zu\n", __func__, elem.size());
+                    continue;
+                } else if (!elem[0].is_string()) {
+                    LLAMA_LOG_WARN("%s: temporary_logit_bias: piece arg is not string\n", __func__);
+                    continue;
+                } else if (!elem[1].is_number()) {
+                    LLAMA_LOG_WARN("%s: temporary_logit_bias: bias arg is not number\n", __func__);
+                    continue;
+                }
+
+                const auto piece = elem[0].get<std::string>();
+                tokens = common_tokenize(model, piece, false, true);
+                if (tokens.size() == 1) {
+                    slot.sparams.tmp_logit_bias[tokens[0]] = elem[0].get<float>();
+                } else {
+                    LLAMA_LOG_WARN("%s: temporary_logit_bias: skipping `%s`, .size = %zu\n", __func__, piece.c_str(), tokens.size());
+                }
+            }
+        } else if (params_base.tmp_piece_bias.size() > 0) {
+            LLAMA_LOG_DEBUG("%s: applying temporary bias\n", __func__);
+            std::vector<llama_token> tokens;
+            for (const auto& piece_bias: params_base.tmp_piece_bias) {
+                tokens = common_tokenize(model, piece_bias.first, false, true);
+                if (piece_bias.first == "") {
+                    printf("======================================== %zu", tokens.size());
+                    for (auto token: tokens) {
+                        printf(" %d", token);
+                    }
+                    printf("\n");
+                }
+                if (tokens.size() == 1) {
+                    slot.sparams.tmp_logit_bias[tokens[0]] = piece_bias.second;
+                } else {
+                    LLAMA_LOG_WARN("%s: tmp_logit_bias: skipping `%s`, .size = %zu\n", __func__, piece_bias.first.c_str(), tokens.size());
+                }
+            }
+        }
+
+        // params_base.tmp_piece_bias.erase("");  // used to store bias (user argument)
+
+        slot.tmp_bias_duration = json_value(data, "temporary_bias_duration", params_base.tmp_bias_duration);
+        slot.tmp_bias_kw = json_value(data, "temporary_bias_keyword", params_base.tmp_bias_kw);
+
+        if ((slot.tmp_bias_duration == 0) && !slot.tmp_bias_kw.empty()) {
+            slot.tmp_bias_duration = -1;
+        }
     }
 
     {
@@ -1329,6 +1395,154 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.ban_phrases_bias = json_value(data, "banned_bias", params_base.ban_phrases_bias);
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);
     }
+
+    {
+        // apply whitelist
+        slot.white_rules = params_base.white_rules;
+        slot.white_df_common = params_base.white_df_common;
+        const auto& whitelist_unicode_rule_array = data.find("whitelist_unicode_rule_array");
+        if ((whitelist_unicode_rule_array != data.end()) && whitelist_unicode_rule_array->is_array()) {
+            slot.white_rules.clear();
+            for (size_t j = 0; j < whitelist_unicode_rule_array->size(); ++j) {
+                if (!whitelist_unicode_rule_array->at(j).is_string()) {
+                    continue;
+                }
+                const auto rule = whitelist_unicode_rule_array->at(j).get<std::string>();
+                auto subs = string_split(rule, ":");
+                float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
+
+                subs = string_split(subs[0], ",");
+                std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
+                    return std::isalpha(c);
+                }) ? string_lower(subs.back()) : "*";
+                if (script == "ascii") {
+                    slot.white_rules.push_back({ 0x000000, 0x00007F, "*", bias });
+                    continue;
+                }
+
+                uint32_t first = 0;
+                uint32_t last = -1;
+                if ((script == "*") || (subs.size() > 1)) {
+                    subs = string_split(subs.front(), ".");
+                    if (!subs.front().empty()) {
+                        first = std::stoul(subs.front());
+                    }
+                    if (!subs.back().empty()) {
+                        last = std::stoul(subs.back());
+                    }
+                }
+
+                slot.white_rules.push_back({ first, last, script, bias });
+            }
+
+            slot.white_df_common = data.find("whitelist_no_defer_common") == data.end();
+        }
+
+        slot.white_each_pieces = params_base.white_each_pieces;
+        const auto& whitelist_each_piece_array = data.find("whitelist_each_piece_array");
+        if (whitelist_each_piece_array != data.end() && whitelist_each_piece_array->is_array()) {
+            slot.white_each_pieces.clear();
+            for (const auto& piece: *whitelist_each_piece_array) {
+                if (piece.is_string()) {
+                    slot.white_each_pieces.push_back(piece.get<std::string>());
+                }
+            }
+        }
+
+        slot.white_pieces = params_base.white_pieces;
+        const auto& whitelist_piece_array = data.find("whitelist_piece_array");
+        if (whitelist_piece_array != data.end() && whitelist_piece_array->is_array()) {
+            slot.white_pieces.clear();
+            for (const auto& piece: *whitelist_piece_array) {
+                if (piece.is_string()) {
+                    slot.white_each_pieces.push_back(piece.get<std::string>());
+                }
+            }
+        }
+
+        slot.white_bin_kw = json_value(data, "whitelist_binning_keyword", params_base.white_bin_kw);
+        slot.white_bin_kw_count = json_value(data, "whitelist_binning_keyword_count", params_base.white_bin_kw_count);
+
+        const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+        if (vocab_pieces.size() != n_vocab) {
+            vocab_pieces.clear();
+            vocab_pieces.reserve(n_vocab);
+            for (int32_t id = 0; id < n_vocab; ++id) {
+                vocab_pieces.push_back(common_token_to_piece(ctx, id, true));
+            }
+        }
+
+        if ((slot.white_rules != slot.white_rules_prev) && (slot.white_df_common ^ slot.white_df_common_prev)) {
+            LLAMA_LOG_DEBUG("%s: applying new whitelist rules\n", __func__);
+            slot.white_biases.resize(n_vocab);
+
+            std::vector<uint32_t> cpts;
+            std::vector<std::string> scripts;
+            for (size_t id = 0; id < n_vocab; ++id) {
+                const size_t n_cpt = llama_fill_from_utf8(&vocab_pieces[id], &cpts, &scripts);
+                float bias = -INFINITY;
+
+                // each codepoint must be found in
+                for (size_t j = 0; j < n_cpt; ++j) {
+                    bool in_rule = false;
+
+                    // at least one rule
+                    for (const auto& rule: slot.white_rules) {
+                        const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
+                        in_rule = in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j]);
+                        if (in_rule) {
+                            // earlier rule has higher priority
+                            bias = std::max(bias, std::get<3>(rule));
+                            break;
+                        }
+                    }
+                    if (!in_rule) {
+                        if (slot.white_df_common && (scripts[j] == "common")) {
+                            // for common codepoints (e.g. whitespace), defer to other codepoints in the token
+                            continue;
+                        }
+
+                        // to shadow realm
+                        bias = -INFINITY;
+                        break;
+                    }
+                }
+                slot.white_biases[id] = bias;
+            }
+        }
+
+        float max_bias = -INFINITY;
+        for (const auto& rule: slot.white_rules) {
+            max_bias = std::max(max_bias, std::get<3>(rule));
+        }
+        for (const auto& piece: slot.white_each_pieces) {
+            for (const auto token: common_tokenize(model, piece, false, true)) {
+                slot.white_biases[token] = max_bias;
+            }
+        }
+        for (const auto& piece: slot.white_pieces) {
+            const auto tokens = common_tokenize(model, piece, false, true);
+            if (tokens.size() == 1) {
+                slot.white_biases[tokens[0]] = max_bias;
+            } else {
+                LLAMA_LOG_WARN("%s: skipping `%s` with %zu tokens, which is invalid\n", __func__, piece.c_str(), tokens.size());
+            }
+        }
+
+        if (!slot.white_bin_kw.empty()) {
+            LLAMA_LOG_INFO("%s: preparing binned whitelist\n", __func__);
+            slot.white_bin_biases.resize(n_vocab);
+            for (int32_t id = 0; id < n_vocab; ++id) {
+                if (slot.white_biases[id] < 0) {
+                    slot.white_bin_biases[id] = -999;
+                }
+            }
+        }
+
+        slot.white_rules_prev = slot.white_rules;
+        slot.white_df_common_prev = slot.white_df_common;
+    }
+
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         params_base.can_ban_phrases = false;
         bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
@@ -1919,6 +2133,14 @@ void server_context::send_embedding(const server_slot& slot, const llama_batch& 
         res->embedding.emplace_back(embd, embd + n_embd);
     }
     queue_results.send(std::move(res));
+}
+
+void server_context::apply_server_biases(server_slot& slot) {
+    auto& server_biases = slot.ctx_sampling->server_biases;
+
+    server_biases = slot.white_bin_kw_count > slot.white_bin_kw_counter
+        ? &slot.white_biases
+        : &slot.white_bin_biases;
 }
 
 void server_context::request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens&& inputs) {
@@ -3372,6 +3594,9 @@ void server_context::speculative_decoding_accept() {
             }
 
             common_sampler_review(slot.ctx_sampling, slot.token_buffer.size(), slot.rewind_status);
+
+            update_whitelist_binning(slot);
+            update_temporary_biases(slot);
         }
         SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int)ids.size() - 1, (int)slot.drafted.size(), slot.n_past);
         LOG_VERBOSE("speculative decoding result", {
@@ -3547,7 +3772,7 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     size_t n_keep_cache = 0;
     if (ban_pos > 0) {
         n_keep_cache = (size_t)(ban_pos - 1);
-}
+    }
 
     if (n_keep_cache > slot.cache_tokens.size()) {
         n_keep_cache = slot.cache_tokens.size();
@@ -3636,6 +3861,58 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     else {
         // buffer the result, wait for more tokens to validate string
         slot.sampled = result.tok; 
+    }
+}
+
+void server_context::update_whitelist_binning(server_slot& slot) {
+    auto& kw_counter = slot.white_bin_kw_counter;
+    if (kw_counter >= slot.white_bin_kw_count) {
+        return;
+    }
+
+    const auto& kw = slot.white_bin_kw;
+    auto& kw_pos = slot.white_bin_kw_pos;
+
+    // search for keyword
+    auto pos = slot.generated_text.find(kw, kw_pos + 1);
+    while (pos != std::string::npos) {
+        ++kw_counter;
+        kw_pos = pos;
+        pos = slot.generated_text.find(kw, kw_pos + 1);
+
+    }
+
+    // if (kw_counter >= slot.white_bin_kw_count) {
+    //     LLAMA_LOG_INFO("%s: counter >= count\n", __func__);
+    //     printf("%s\n", slot.generated_text.substr(kw_pos - 10, 10).c_str());
+
+    //     // apply precomputed differences
+    //     for (int32_t id = 0; id < white_bin_biases.size(); ++id) {
+    //         slot.ctx_sampling->params.server_biases[id] += white_bin_biases[id];
+    //     }
+    // }
+}
+
+void server_context::update_temporary_biases(server_slot& slot) {
+    auto& logit_bias = slot.ctx_sampling->params.tmp_logit_bias;
+    if (logit_bias.size() == 0) {
+        return;
+    }
+
+    if (slot.n_decoded >= params_base.tmp_bias_duration) {
+        LLAMA_LOG_INFO("%s: expired\n", __func__);
+        logit_bias.clear();
+        return;
+    }
+
+    const auto& kw = params_base.tmp_bias_kw;
+    auto& kw_pos = slot.tmp_bias_kw_pos;
+    if (kw.empty() || (slot.generated_text.find(kw, kw_pos) == std::string::npos)) {
+        kw_pos = slot.generated_text.size();
+    } else {
+        LLAMA_LOG_INFO("%s: found keyword\n", __func__);
+        logit_bias.clear();
+        return;
     }
 }
 
@@ -3759,6 +4036,8 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
 
+            apply_server_biases(slot);
+
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
 
@@ -3798,6 +4077,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             result.tok = id;
             result.prob = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
             result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
+
             if (slot.sparams.n_probs > 0) {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, tok_idx);
             }
@@ -3813,6 +4093,9 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             common_sampler_review(slot.ctx_sampling, slot.token_buffer.size(), slot.rewind_status);
+
+            update_whitelist_binning(slot);
+            update_temporary_biases(slot);
 
             slot.i_batch = -1;
         }

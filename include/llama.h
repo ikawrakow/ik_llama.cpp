@@ -1540,4 +1540,6 @@ llama_token llama_sample_token_with_rng(struct llama_context * ctx, llama_token_
 
 #endif // LLAMA_API_INTERNAL
 
+size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts);
+
 #endif // LLAMA_H
