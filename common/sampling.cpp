@@ -145,12 +145,11 @@ void common_sampler_reset(common_sampler * ctx) {
     llama_sampler_dry_reset(ctx->smpl);
 }
 
-void common_sampler_review(common_sampler * ctx) {
-    const size_t n_unsent = ctx->n_unsent;
-    const bool rewind_status = ctx->rewind_status;
-
+void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bool rewind_status) {
     // add stateful samplers here
-    if (ctx->adapt_p_ctx != nullptr) { llama_review_adaptive_p(ctx->adapt_p_ctx, n_unsent, rewind_status); }
+    if (ctx->adapt_p_ctx != nullptr) {
+        llama_review_adaptive_p(ctx->adapt_p_ctx, n_unsent, rewind_status);
+    }
 }
 
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed) {

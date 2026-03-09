@@ -3220,9 +3220,7 @@ void server_context::speculative_decoding_accept() {
                 buffer_and_check_string_ban(slot, result);
             }
 
-            slot.ctx_sampling->n_unsent = slot.token_buffer.size();
-            slot.ctx_sampling->rewind_status = slot.rewind_status;
-            common_sampler_review(slot.ctx_sampling);
+            common_sampler_review(slot.ctx_sampling, slot.token_buffer.size(), slot.rewind_status);
         }
         SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int)ids.size() - 1, (int)slot.drafted.size(), slot.n_past);
         LOG_VERBOSE("speculative decoding result", {
@@ -3506,9 +3504,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 buffer_and_check_string_ban(slot, result);
             }
 
-            slot.ctx_sampling->n_unsent = slot.token_buffer.size();
-            slot.ctx_sampling->rewind_status = slot.rewind_status;
-            common_sampler_review(slot.ctx_sampling);
+            common_sampler_review(slot.ctx_sampling, slot.token_buffer.size(), slot.rewind_status);
 
             slot.i_batch = -1;
         }
