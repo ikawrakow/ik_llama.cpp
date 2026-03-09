@@ -1,5 +1,6 @@
-# Build llama.cpp locally
-Typical build is aimed at CPU + GPU split and requires pre-installation of numerous tools which can bring mess to the configuration of your main OS if you're on Windows. To avoid this, one may make their builds in a virtual machine with Windows 10. For such cases, make sure you have a way to copy files from the VM to the host OS, e.g. via RDP. So, Windows users, consider doing the following actions in a VM.
+# Build ik_llama.cpp locally
+
+`ik_llama.cpp` requires has a very minimal set of dependencies: `cmake`, a functional C++-17 compiler, and, if building with Nvidia GPU support, the CUDA toolkit. All these are available from the system package manager on Linux. If you are building on Windows and are worried about messing up your main OS, you may consider building in a virtual machine (VM). In that case, make sure you can copy files between the host OS and the VM.  
 
 **To get the Code:**
 
@@ -8,7 +9,7 @@ git clone https://github.com/ggerganov/llama.cpp
 cd llama.cpp
 ```
 
-In order to build llama.cpp you have four different options.
+In order to build `ik_llama.cpp` you have four different options.
 
 - Using `make`:
   - On Linux or MacOS:
