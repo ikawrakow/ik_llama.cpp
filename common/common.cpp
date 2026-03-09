@@ -3227,11 +3227,20 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
+    auto split_mode = params.split_mode;
+    if (!params.mmproj.path.empty() || !params.mmproj.url.empty()) {
+        if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
+            LLAMA_LOG_WARN("\n======================================================\n");
+            LLAMA_LOG_WARN("Disabling split mode graph due to vision being enabled\n");
+            LLAMA_LOG_WARN("======================================================\n\n");
+            split_mode = LLAMA_SPLIT_MODE_LAYER;
+        }
+    }
     mparams.mla             = params.mla_attn;
     mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu         = params.max_gpu;
-    mparams.split_mode      = params.split_mode;
+    mparams.split_mode      = split_mode;
     mparams.tensor_split    = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
     mparams.use_mlock       = params.use_mlock;
