@@ -6717,7 +6717,7 @@ struct llama_data_write_buffer : llama_data_write {
             auto split = extra->splits[id];
             if (!split) continue;
             GGML_ASSERT(split->type == tensor->type);
-            auto split_row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+            auto split_row_size = ggml_row_size(tensor->type, split->ne[0]);
             auto split_size = split_row_size * num_rows;
             if (split_size > aux_buffer.size()) aux_buffer.resize(split_size);
             ggml_backend_tensor_get(split, aux_buffer.data(), first_row*split_row_size, split_size);
