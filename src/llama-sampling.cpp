@@ -1068,12 +1068,15 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
 
     if (!rewind_status) {
         // sent results, overwrite old history
+        // LLAMA_LOG_DEBUG("%s: hsz = %zu, hsz_next = %zu\n", __func__, hsz, hsz_next);
+        // LLAMA_LOG_DEBUG("%s: history[hsz-1].first = %f\n", __func__, history[hsz-1].first);
         const size_t hsz_diff = hsz - hsz_next;
         for (int j = 0; j < hsz_next; ++j) {
             history[j] = history[j + hsz_diff];
         }
     }
     history.resize(hsz_next);
+    // LLAMA_LOG_DEBUG("%s: history[hsz_next-1].first = %f\n", __func__, history[hsz_next-1].first);
 }
 
 llama_token llama_sample_token_adaptive_p_impl(
