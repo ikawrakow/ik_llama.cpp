@@ -3665,15 +3665,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 continue; // sample using speculative decoding
             }
 
-            // RESTORE AND APPLY POSITIONAL BANS
-            slot.ctx_sampling->params.logit_bias = slot.logit_bias;
-            auto ban_it = slot.positional_bans.find(slot.n_past);
-            if (ban_it != slot.positional_bans.end()) {
-                for (llama_token tok : ban_it->second) {
-                    slot.ctx_sampling->params.logit_bias[tok] += slot.ban_phrases_bias;
-                }
-            }
-
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
             const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, tok_idx);
