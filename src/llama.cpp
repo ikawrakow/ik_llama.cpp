@@ -759,6 +759,9 @@ static bool llama_kv_cache_init(
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
+        if (llama_model_has_recurrent(&model)) {
+            cache.split_s_l.reserve(n_layer);
+        }
         split_cache = true;
     }
 
@@ -766,7 +769,7 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
         for (int64_t i = 0; i < n_layer; ++i) {
-            if (split_cache && !hparams.is_recurrent(i)) {
+            if (split_cache) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
             } else {
                 buft_layer_count[model.buft_layer[i].buft]++;
@@ -780,8 +783,8 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     for (auto & it : buft_layer_count) {
         int n_layers = it.second;
-        size_t ctx_mem_size = 5u*n_layers*ggml_tensor_overhead();
-        if (split_cache) ctx_mem_size += 2*model.splits.size()*n_layers*ggml_tensor_overhead();
+        size_t ctx_mem_size = 8u*n_layers*ggml_tensor_overhead();
+        if (split_cache) ctx_mem_size += 4*model.splits.size()*n_layers*ggml_tensor_overhead();
         struct ggml_init_params params = {
             /*.mem_size   =*/ ctx_mem_size,
             /*.mem_buffer =*/ NULL,
@@ -843,7 +846,8 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
-        struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -877,6 +881,31 @@ static bool llama_kv_cache_init(
                 cache.s_l[i] = s;
                 cache.k_l.push_back(nullptr);
                 cache.v_l.push_back(nullptr);
+                LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
+                if (split_cache && model.layers[i].ssm_out->extra) {
+                    auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
+                    GGML_ASSERT(split_ssm_out);
+                    int num_v_heads = hparams.ssm_dt_rank;
+                    int head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+                    int n_device = split_ssm_out->n_device;
+                    auto & split_s_l = cache.split_s_l.emplace_back();
+                    split_s_l.tensor_splits.resize(n_device, nullptr);
+                    for (int is = 0; is < n_device; ++is) {
+                        auto split = split_ssm_out->splits[is];
+                        if (!split) continue;
+                        GGML_ASSERT(split->ne[0] % head_v_dim == 0);
+                        int nv = split->ne[0] / head_v_dim;
+                        auto size = hparams.n_embd_v_s_id(nv);
+                        split_s_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, size, qnext_state_slots);
+                        auto split_name = s_name + '.' + std::to_string(is);
+                        ggml_set_name(split_s_l.tensor_splits[is], split_name.c_str());
+                        mem_split[is] += ggml_nbytes(split_s_l.tensor_splits[is]);
+                    }
+                    split_s_l.ggml.n_device  = n_device;
+                    split_s_l.ggml.split_dim = 0;
+                    split_s_l.ggml.splits    = split_s_l.tensor_splits.data();
+                    cache.s_l[i]->extra = (void *)&split_s_l.ggml;
+                }
                 continue;
             }
             bool split_cache_i = split_cache;
@@ -1939,7 +1968,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MINIMAX_M2,
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
-        LLM_ARCH_QWEN3NEXT,
+        //LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,
     };
@@ -6256,22 +6285,24 @@ struct llama_data_read {
     void read_kv_cache_data_split(llama_context * ctx, ggml_tensor * tensor, const uint8_t * data, size_t head, size_t row_size, int nrows, int il) {
         GGML_ASSERT(il >= 0 && il < int(ctx->model.layers.size()));
         GGML_ASSERT(ggml_internal_get_type_traits(tensor->type).row_meta_size == 0);
-        auto kv = get_kv_cache_split_tensor(tensor, ctx->model.layers[il]);
+        bool is_recurrent =  ctx->model.hparams.recurrent_layer_arr[il];
+        auto kv = is_recurrent ? nullptr : get_kv_cache_split_tensor(tensor, ctx->model.layers[il]);
         auto extra = (ggml_split_tensor_t *)tensor->extra;
-        auto kv_extra = (ggml_split_tensor_t *)kv->extra;
-        GGML_ASSERT(extra && kv_extra);
-        auto ne = kv->ne[1];
+        auto kv_extra = kv ? (ggml_split_tensor_t *)kv->extra : nullptr;
+        GGML_ASSERT(extra && (is_recurrent || kv_extra));
+        auto ne = kv ? kv->ne[1] : tensor->ne[0];
         size_t sum_ne = 0;
         size_t sum_split_row_size = 0;
         GGML_ASSERT(row_size == ggml_row_size(tensor->type, ne));
         std::vector<uint8_t> aux;
         for (int id = 0; id < extra->n_device; ++id) {
             auto split = extra->splits[id];
-            auto kv_split = kv_extra->splits[id];
-            GGML_ASSERT((split && kv_split) || (!split && !kv_split));
+            auto kv_split = kv_extra ? kv_extra->splits[id] : nullptr;
+            GGML_ASSERT((split && (kv_split || is_recurrent)) || (!split && !kv_split));
             if (!split) continue;
             GGML_ASSERT(split->type == tensor->type);
-            auto split_row_size = ggml_row_size(tensor->type, kv_split->ne[1]);
+            auto ne_split = kv_split ? kv_split->ne[1] : split->ne[0];
+            auto split_row_size = ggml_row_size(tensor->type, ne_split);
             aux.resize(split_row_size*nrows);
             auto src = data + sum_split_row_size;
             auto dst = aux.data();
@@ -6281,7 +6312,7 @@ struct llama_data_read {
                 src += row_size;
             }
             ggml_backend_tensor_set(split, aux.data(), head*split_row_size, nrows*split_row_size);
-            sum_ne += kv_split->ne[1];
+            sum_ne += ne_split;
             sum_split_row_size += split_row_size;
         }
         GGML_ASSERT(sum_ne == ne);
@@ -6627,8 +6658,12 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
-        get_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
+        if (model.hparams.recurrent_layer_arr[il]) {
+            get_tensor_data_split(ptr, tensor, aux_buffer, offset, size);
+        } else {
+            auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
+            get_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
+        }
     }
 
     static void get_tensor_data_split(uint8_t * ptr, const ggml_tensor * tensor, const ggml_tensor * kv,
@@ -6651,6 +6686,38 @@ struct llama_data_write_buffer : llama_data_write {
             if (!split) continue;
             GGML_ASSERT(split->type == tensor->type);
             auto split_row_size = ggml_row_size(tensor->type, kv_split->ne[1]);
+            auto split_size = split_row_size * num_rows;
+            if (split_size > aux_buffer.size()) aux_buffer.resize(split_size);
+            ggml_backend_tensor_get(split, aux_buffer.data(), first_row*split_row_size, split_size);
+            auto dst = ptr + split_offset;
+            auto src = aux_buffer.data();
+            for (int row = 0; row < (int)num_rows; ++row) {
+                std::memcpy(dst, src, split_row_size);
+                dst += full_row_size;
+                src += split_row_size;
+            }
+            split_offset += split_row_size;
+            total_size   += split_row_size * num_rows;
+        }
+        GGML_ASSERT(total_size == size);
+    }
+    static void get_tensor_data_split(uint8_t * ptr, const ggml_tensor * tensor,
+            std::vector<uint8_t> & aux_buffer, size_t offset, size_t size) {
+        auto ne = tensor->ne[0];
+        auto full_row_size = ggml_row_size(tensor->type, ne);
+        GGML_ASSERT(offset % full_row_size == 0);
+        GGML_ASSERT(size   % full_row_size == 0);
+        auto first_row = offset / full_row_size;
+        auto num_rows  = size / full_row_size;
+        auto extra = (const ggml_split_tensor_t *)tensor->extra;
+        GGML_ASSERT(extra);
+        size_t split_offset = 0;
+        size_t total_size   = 0;
+        for (int id = 0; id < extra->n_device; ++id) {
+            auto split = extra->splits[id];
+            if (!split) continue;
+            GGML_ASSERT(split->type == tensor->type);
+            auto split_row_size = ggml_row_size(tensor->type, split->ne[0]);
             auto split_size = split_row_size * num_rows;
             if (split_size > aux_buffer.size()) aux_buffer.resize(split_size);
             ggml_backend_tensor_get(split, aux_buffer.data(), first_row*split_row_size, split_size);
