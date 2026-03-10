@@ -1081,12 +1081,12 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
     server_tokens prompt_tokens;
     server_tokens tokens_new_ex;
     if (think_tokens.exclude) {
-        prompt_tokens = server_tokens(prompt.tokens.get_text_tokens_exclude_think(ctx, think_tokens), false);
-        tokens_new_ex = server_tokens(tokens_new.get_text_tokens_exclude_think(ctx, think_tokens), false);
+        prompt_tokens = prompt.tokens.get_tokens_exclude_think(ctx, think_tokens);
+        tokens_new_ex = tokens_new.get_tokens_exclude_think(ctx, think_tokens);
     }
     else {
-        prompt_tokens = std::move(prompt.tokens); //server_tokens(prompt.tokens.get_text_tokens(), false);
-        tokens_new_ex = server_tokens(tokens_new.get_text_tokens(), false);
+        prompt_tokens = std::move(prompt.tokens); 
+        tokens_new_ex = tokens_new.clone();
     }
     const auto lcp_best = prompt_tokens.get_common_prefix(ctx, tokens_new_ex);
     float f_keep_best = float(lcp_best.second) / prompt_tokens.size();
@@ -1099,7 +1099,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
     for (auto it = states.begin(); it != states.end(); ++it) {
         server_tokens tokens;
         if (think_tokens.exclude) {
-            tokens = server_tokens(it->tokens.get_text_tokens_exclude_think(ctx, think_tokens), false);
+            tokens = it->tokens.get_tokens_exclude_think(ctx, think_tokens);
         }
         else {
             tokens = std::move(it->tokens);
@@ -1136,7 +1136,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
 
 server_prompt* server_prompt_cache::alloc(const server_prompt& prompt, size_t state_size) {
     for (auto it = states.begin(); it != states.end();) {
-        auto tokens_ctx_shift = server_tokens(prompt.tokens.get_text_tokens(), false); // copy cache tokens
+        auto tokens_ctx_shift = prompt.tokens.clone();  // copy cache tokens
         tokens_ctx_shift.discard_n_tokens(prompt.n_kept_prompt, prompt.n_discarded_prompt);
         auto prefix = it->tokens.get_common_prefix(ctx, tokens_ctx_shift);
         const size_t len = prefix.first;
@@ -1177,7 +1177,7 @@ server_prompt* server_prompt_cache::alloc(const server_prompt& prompt, size_t st
     // TODO: for some reason we can't copy server_tokens, so we have to do this workaround
     auto& cur = states.emplace_back();
     cur = {
-        /*.tokens          =*/ server_tokens(prompt.tokens.get_text_tokens(), false),
+        /*.tokens          =*/ prompt.tokens.clone(),
         /*.n_keep          =*/ prompt.n_kept_prompt,
         /*.n_discarded_prompt     =*/ prompt.n_discarded_prompt,
         /*.think_tokens                   =*/ prompt.think_tokens,
