@@ -544,6 +544,10 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
             CUBLAS_CHECK(cublasDestroy(cublas_handles[i]));
         }
     }
+    auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
+    if (info->all_ctx[device] == this) {
+        info->all_ctx[device] = nullptr;
+    }
 
 }
 
