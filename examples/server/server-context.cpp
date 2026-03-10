@@ -1610,7 +1610,7 @@ void server_context::populate_token_probs(const server_slot& slot, completion_to
         for (size_t i = 0; i < std::min(max_probs, n_probs); i++) {
             result.probs.push_back({
                 cur_p->data[i].id,
-                common_token_to_piece(ctx, {cur_p->data[i].id}, special),
+                common_token_to_piece(ctx, cur_p->data[i].id, special),
                 cur_p->data[i].p
                 });
         }
@@ -1626,7 +1626,7 @@ void server_context::populate_token_probs(const server_slot& slot, completion_to
         for (size_t i = 0; i < std::min(n_vocab, n_probs); i++) {
             result.probs.push_back({
                 cur[i].id,
-                common_token_to_piece(ctx, {cur[i].id}, special),
+                common_token_to_piece(ctx, cur[i].id, special),
                 cur[i].p
                 });
         }
@@ -3331,9 +3331,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
         bool has_next = process_token(it, slot);
         
         // Clean up positional bans for the token we just confirmed/sent
-        if (slot.banned_n == 1) {
-            slot.positional_bans.erase(start_pos + count);
-        }
+        slot.positional_bans.erase(start_pos + count);
         
         count++;
         if (!has_next) {
@@ -3445,24 +3443,17 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     int32_t n_keep_buffer = ban_pos - buffer_start_pos;
     if (n_keep_buffer < 0) n_keep_buffer = 0;
 
-    if (slot.banned_n == 1) {
-        if (n_keep_buffer < (int32_t)slot.token_buffer.size()) {
-            llama_token banned_tok = slot.token_buffer[n_keep_buffer].tok;
-            
-            LLAMA_LOG_INFO("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n", 
-                ban_pos, banned_tok, slot.token_buffer[n_keep_buffer].text_to_send.c_str());
-
-            slot.positional_bans[ban_pos].insert(banned_tok);
-        }
-    } else if (slot.banned_n != 0) {
-        std::set<llama_token> tokens;
+    if (slot.banned_n != 0) {
         int32_t n = 0;
         for (auto result = slot.token_buffer.begin() + n_keep_buffer; result != slot.token_buffer.end(); result++) {
-            if (!tokens.contains(result->tok)) {
-                slot.ctx_sampling->params.logit_bias[result->tok] += slot.ban_phrases_bias;
-            } else {
-                tokens.insert(result->tok);
+            llama_token banned_tok = result->tok;
+            
+            if (n == 0) {
+                LLAMA_LOG_INFO("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n", 
+                    ban_pos, banned_tok, result->text_to_send.c_str());
             }
+
+            slot.positional_bans[ban_pos].insert(banned_tok);
             n++;
             if (slot.banned_n > 0 && n == slot.banned_n) {
                 break;
@@ -3502,6 +3493,15 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
         slot.n_decoded -= n_rewind_total;
         if (slot.n_decoded < 0) slot.n_decoded = 0;
     }
+
+    // RESTORE AND APPLY POSITIONAL BANS
+    slot.ctx_sampling->params.logit_bias = slot.logit_bias;
+    auto ban_it = slot.positional_bans.find(ban_pos);
+    if (ban_it != slot.positional_bans.end()) {
+        for (llama_token tok : ban_it->second) {
+            slot.ctx_sampling->params.logit_bias[tok] += slot.ban_phrases_bias;
+        }
+    }
 }
 
 void server_context::buffer_and_check_string_ban(server_slot & slot, completion_token_output & result) {
@@ -3515,11 +3515,8 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     int32_t n_rewind = 0;
     bool sent_results = false;
 
-    if (slot.banned_n != 1) {
-        if (!slot.rewind_status) {
-            slot.ctx_sampling->params.logit_bias = slot.logit_bias;
-        }
-    }
+    // Always reset logit bias to base before checking bans
+    slot.ctx_sampling->params.logit_bias = slot.logit_bias;
 
     if (slot.ban_phrases.size() > 0 || slot.ban_regex.size() > 0 || slot.ban_regex_ci.size() > 0) {
         ban_pos = check_ban_phrase(slot);
@@ -3669,13 +3666,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             // RESTORE AND APPLY POSITIONAL BANS
-            if (slot.banned_n == 1) {
-                slot.ctx_sampling->params.logit_bias = slot.logit_bias;
-                auto ban_it = slot.positional_bans.find(slot.n_past);
-                if (ban_it != slot.positional_bans.end()) {
-                    for (llama_token tok : ban_it->second) {
-                        slot.ctx_sampling->params.logit_bias[tok] += slot.ban_phrases_bias;
-                    }
+            slot.ctx_sampling->params.logit_bias = slot.logit_bias;
+            auto ban_it = slot.positional_bans.find(slot.n_past);
+            if (ban_it != slot.positional_bans.end()) {
+                for (llama_token tok : ban_it->second) {
+                    slot.ctx_sampling->params.logit_bias[tok] += slot.ban_phrases_bias;
                 }
             }
 
