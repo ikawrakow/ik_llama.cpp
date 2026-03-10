@@ -323,6 +323,7 @@ void server_context::init() {
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio(mctx) : false,
             /* enable_thinking       */ enable_thinking,
+            /* parallel_tool_calls  */ params_base.parallel_tool_calls,
            // /* media_path            */ params_base.media_path,
         };
     }
@@ -527,20 +528,76 @@ result_timings server_slot::get_timings() const {
     return timings;
 }
 
-const common_chat_msg& server_slot::update_chat_msg(std::vector<common_chat_msg_diff>& diffs) {
-    auto previous_msg = chat_msg;
+const common_chat_msg& server_slot::update_chat_msg(bool is_partial, std::vector<common_chat_msg_diff>& diffs,
+    bool filter_tool_calls) {
+    auto msg_prv_copy = chat_msg;
     auto new_msg = common_chat_parse(
         generated_text,
         /* is_partial= */ stop != STOP_TYPE_EOS,
         params.oaicompat_chat_syntax);
     if (!new_msg.empty()) {
-        new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
+        //new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
+        new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
-        diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
+        auto all_diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, chat_msg);
+
+        if (!filter_tool_calls) {
+            diffs = std::move(all_diffs);
+        } else {
+            for (auto & d : all_diffs) {
+                // If this is a new type of delta, flush all currently pending tool call names
+                for (size_t i = 0; i < chat_msg.tool_calls.size(); ++i) {
+                    if (sent_tool_call_names.count(i) || chat_msg.tool_calls[i].name.empty()) {
+                        continue;
+                    }
+                    if (d.tool_call_index != i || !d.tool_call_delta.arguments.empty()) {
+                        common_chat_msg_diff header;
+                        header.tool_call_index = i;
+                        header.tool_call_delta.id = chat_msg.tool_calls[i].id;
+                        header.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                        diffs.push_back(std::move(header));
+                        sent_tool_call_names.insert(i);
+                    }
+                }
+
+                if (d.tool_call_index == std::string::npos) {
+                    diffs.push_back(std::move(d));
+                } else {
+                    size_t i = d.tool_call_index;
+                    if (sent_tool_call_names.count(i)) {
+                        if (!d.tool_call_delta.arguments.empty()) {
+                            d.tool_call_delta.name = "";
+                            d.tool_call_delta.id = "";
+                            diffs.push_back(std::move(d));
+                        }
+                    } else {
+                        // Not sent yet.
+                        if (!d.tool_call_delta.arguments.empty() || !is_partial) {
+                            d.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                            d.tool_call_delta.id = chat_msg.tool_calls[i].id;
+                            diffs.push_back(std::move(d));
+                            sent_tool_call_names.insert(i);
+                        } else {
+                            // Suppress
+                        }
+                    }
+                }
+            }
+            // Final check at EOF
+            if (!is_partial) {
+                for (size_t i = 0; i < chat_msg.tool_calls.size(); ++i) {
+                    if (!sent_tool_call_names.count(i) && !chat_msg.tool_calls[i].name.empty()) {
+                        common_chat_msg_diff header;
+                        header.tool_call_index = i;
+                        header.tool_call_delta.id = chat_msg.tool_calls[i].id;
+                        header.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                        diffs.push_back(std::move(header));
+                        sent_tool_call_names.insert(i);
+                    }
+                }
+            }
+        }
     }
-    //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", generated_text.c_str());
-    //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.reasoning_content.c_str());
-    //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.content.c_str());
     return chat_msg;
 }
 
@@ -1348,7 +1405,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
-        }
+    }
     }
     {
         const auto& stop = data.find("stop");
@@ -1773,7 +1830,7 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
         {"id_slot",    slot.id},
         {"multimodal", false}
     };
-    slot.update_chat_msg(res->oaicompat_msg_diffs);
+    slot.update_chat_msg(true, res->oaicompat_msg_diffs);
 
     res->anthropic_has_reasoning = !slot.chat_msg.reasoning_content.empty();
 
@@ -1834,7 +1891,7 @@ void server_context::send_final_response(server_slot& slot) {
     res->post_sampling_probs = slot.params.post_sampling_probs;
     res->oaicompat = slot.params.oaicompat;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
-    res->oaicompat_msg = slot.update_chat_msg(res->oaicompat_msg_diffs);
+    res->oaicompat_msg = slot.update_chat_msg(false, res->oaicompat_msg_diffs);
     res->oai_resp_id = slot.oai_resp_id;
     res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
     res->oai_resp_message_id = slot.oai_resp_message_id;
@@ -2906,10 +2963,10 @@ void  server_context::create_checkpoint_at_interval(server_slot & slot, const gp
         if (slot.checkpoint_pos + params_base.ctx_checkpoints_interval <= 1 + pos) {
             bool created = create_checkpoint(slot);
             if (created) {
-                slot.checkpoint_pos = pos;
-            }
+            slot.checkpoint_pos = pos;
         }
     }
+}
 }
 
 void server_context::apply_checkpoint(server_slot & slot) {
@@ -2944,9 +3001,9 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     do_reset = true;
                     //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else {
-                    slot.n_past = std::min(slot.n_past, std::max(it->pos_min+1, it->pos_max));
+                    slot.n_past = std::min(slot.n_past, std::max(it->pos_min + 1, it->pos_max));
                     slot.n_past = slot.cache_tokens.size_up_to_pos(slot.n_past-1);
-                    slot.n_past_prompt = std::min(slot.n_past_prompt, std::max(it->pos_min_prompt+1, it->pos_max_prompt));
+                    slot.n_past_prompt = std::min(slot.n_past_prompt, std::max(it->pos_min_prompt + 1, it->pos_max_prompt));
                     slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(slot.n_past_prompt-1);
                     SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, (float)checkpoint_size / 1024 / 1024);
                 }

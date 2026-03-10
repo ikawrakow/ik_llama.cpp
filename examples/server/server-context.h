@@ -72,7 +72,7 @@ struct server_slot {
     std::vector<int32_t> i_batch_dft;
 
     std::vector<completion_token_output> generated_token_probs;
-    common_chat_msg chat_msg;
+
 
     bool infill = false;
     bool embedding = false;
@@ -119,7 +119,9 @@ struct server_slot {
     json json_schema;
 
     common_chat_format chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    common_chat_msg chat_msg;
     std::vector<std::string> generated_tool_call_ids;
+    std::unordered_set<size_t> sent_tool_call_names;
 
     bool anthropic_thinking_block_started = false;
     bool anthropic_text_block_started = false;
@@ -185,7 +187,8 @@ struct server_slot {
 
     result_timings get_timings() const;
 
-    const common_chat_msg& update_chat_msg(std::vector<common_chat_msg_diff>& diffs);
+    const common_chat_msg& update_chat_msg(bool is_partial, std::vector<common_chat_msg_diff>& diffs,
+        bool filter_tool_calls = false);
 
     size_t find_stopping_strings(const std::string& text, const size_t last_token_size, bool is_full_stop);
 

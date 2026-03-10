@@ -395,12 +395,18 @@ struct gpt_params {
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";
+    std::string system_prompt = "";
+
+    // tool call and template
     std::string chat_template = "";
     bool use_jinja = false;                                                                                 // NOLINT
     bool use_peg = false;
     std::string system_prompt = "";
     bool enable_chat_template = true;
+    bool parallel_tool_calls = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    std::map<std::string, std::string> default_template_kwargs;
+
     thinking_tokens think_tokens;
     int reasoning_budget      = -1;
     bool prefill_assistant    = true;
@@ -411,7 +417,7 @@ struct gpt_params {
     std::string ssl_file_key  = "";
     std::string ssl_file_cert = "";
 
-    std::map<std::string, std::string> default_template_kwargs;
+
 
     // "advanced" endpoints are disabled by default for better security
     common_webui webui = COMMON_WEBUI_AUTO;
