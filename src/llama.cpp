@@ -769,7 +769,7 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
         for (int64_t i = 0; i < n_layer; ++i) {
-            if (split_cache && !hparams.is_recurrent(i)) {
+            if (split_cache) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
             } else {
                 buft_layer_count[model.buft_layer[i].buft]++;
