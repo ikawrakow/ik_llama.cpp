@@ -3493,15 +3493,6 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
         slot.n_decoded -= n_rewind_total;
         if (slot.n_decoded < 0) slot.n_decoded = 0;
     }
-
-    // RESTORE AND APPLY POSITIONAL BANS
-    slot.ctx_sampling->params.logit_bias = slot.logit_bias;
-    auto ban_it = slot.positional_bans.find(ban_pos);
-    if (ban_it != slot.positional_bans.end()) {
-        for (llama_token tok : ban_it->second) {
-            slot.ctx_sampling->params.logit_bias[tok] += slot.ban_phrases_bias;
-        }
-    }
 }
 
 void server_context::buffer_and_check_string_ban(server_slot & slot, completion_token_output & result) {
@@ -3663,6 +3654,15 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             if (slot.i_batch_dft.size() > 0) {
                 continue; // sample using speculative decoding
+            }
+
+            // RESTORE AND APPLY POSITIONAL BANS
+            slot.ctx_sampling->params.logit_bias = slot.logit_bias;
+            auto ban_it = slot.positional_bans.find(slot.n_past);
+            if (ban_it != slot.positional_bans.end()) {
+                for (llama_token tok : ban_it->second) {
+                    slot.ctx_sampling->params.logit_bias[tok] += slot.ban_phrases_bias;
+                }
             }
 
             completion_token_output result;
