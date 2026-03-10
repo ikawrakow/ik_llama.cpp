@@ -157,6 +157,7 @@ __global__ void delta_net_recurrent_f32(
         }
 
     }
+    __syncthreads();
     // Copy the final state to its destination
     for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
         int col = num_warps*i + col_idx_0;

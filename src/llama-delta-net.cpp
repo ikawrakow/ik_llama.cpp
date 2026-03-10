@@ -153,28 +153,28 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     return {output_tokens, new_state};
 }
 
-std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_qkvz(ggml_context * ctx0, ggml_tensor * input, int il, const llm_build_cb & cb, ggml_cgraph * gf) const {
-    auto & model = lctx.model;
+std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_qkvz(llama_context & lctx, ggml_context * ctx0, ggml_tensor * wqkv, ggml_tensor * wqkv_gate,
+        ggml_tensor * input, int il, const llm_build_cb & cb, ggml_cgraph * gf) {
+
     const int64_t n_tok = input->ne[1];
-    if (model.layers[il].wqkv) {
-        ggml_tensor * qkv_mixed = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].wqkv, input);
-        cb(qkv_mixed, "qkv_mixed", il);
-        ggml_tensor * z = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].wqkv_gate, input);
-        cb(z, "z", il);
-        ggml_build_forward_expand(gf, qkv_mixed);
-        ggml_build_forward_expand(gf, z);
-        qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_tok, 1);
-        cb(qkv_mixed, "linear_attn_qkv_mixed", il);
-        return { qkv_mixed, z };
-    }
+    ggml_tensor * qkv_mixed = llm_build_context::llm_build_lora_mm(lctx, ctx0, wqkv, input);
+    cb(qkv_mixed, "qkv_mixed", il);
+    ggml_tensor * z = llm_build_context::llm_build_lora_mm(lctx, ctx0, wqkv_gate, input);
+    cb(z, "z", il);
+    ggml_build_forward_expand(gf, qkv_mixed);
+    ggml_build_forward_expand(gf, z);
+    qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_tok, 1);
+    cb(qkv_mixed, "linear_attn_qkv_mixed", il);
+    return { qkv_mixed, z };
+}
 
-    auto & hparams = model.hparams;
-    const int64_t head_k_dim  = hparams.ssm_d_state;
-    const int64_t num_k_heads = hparams.ssm_n_group;
-    const int64_t num_v_heads = hparams.ssm_dt_rank;
-    const int64_t head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_qkvz(llama_context & lctx, ggml_context * ctx0, ggml_tensor * ssm_in,
+        int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads,
+        ggml_tensor * input, int il, const llm_build_cb & cb) {
 
-    ggml_tensor * mixed_qkvz = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_in, input);
+    const int64_t n_tok = input->ne[1];
+
+    ggml_tensor * mixed_qkvz = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_in, input);
     cb(mixed_qkvz, "linear_attn_mixed_qkvz", il);
 
     const int64_t qkvz_new_dim = 2 * head_k_dim + 2 * head_v_dim * (num_v_heads / num_k_heads);
@@ -223,35 +223,24 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_qkvz(ggml_context * ctx
     return { qkv_mixed, z };
 }
 
-ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
-            ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext,
-            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
+std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_qkvz(llama_context & lctx, ggml_context * ctx0, ggml_tensor * wqkv, ggml_tensor * wqkv_gate, ggml_tensor * ssm_in,
+            int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, ggml_tensor * input, int il, const llm_build_cb & cb, ggml_cgraph * gf) {
+    GGML_ASSERT((wqkv && wqkv_gate) || ssm_in);
+    return wqkv && wqkv_gate ? build_qkvz(lctx, ctx0, wqkv, wqkv_gate, input, il, cb, gf)
+                             : build_qkvz(lctx, ctx0, ssm_in, head_k_dim, num_k_heads, head_v_dim, num_v_heads, input, il, cb);
+}
 
-    auto & model = lctx.model;
-    auto & hparams = model.hparams;
-    auto & kv_self = lctx.kv_self;
-    const int64_t head_k_dim  = hparams.ssm_d_state;
-    const int64_t num_k_heads = hparams.ssm_n_group;
-    const int64_t num_v_heads = hparams.ssm_dt_rank;
-    const int64_t head_v_dim  = hparams.ssm_d_inner / num_v_heads;
-    const int64_t key_dim        = head_k_dim * num_k_heads;
-    const int64_t value_dim      = head_v_dim * num_v_heads;
-    const int64_t conv_dim       = key_dim * 2 + value_dim;
-    const int64_t conv_state_dim = (hparams.ssm_d_conv - 1) * conv_dim;
-    const int64_t ssm_state_dim  = head_v_dim * head_v_dim * num_v_heads;
-    const int64_t state_dim      = conv_state_dim + ssm_state_dim;
-    const uint32_t qnext_state_slots = llm_build_context::llama_kv_qnext_state_slots(kv_self);
-    GGML_ASSERT(qnext_state_slots > 0);
+std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_beta_gate(llama_context & lctx, ggml_context * ctx0,
+        ggml_tensor * ssm_beta_alpha, ggml_tensor * ssm_beta, ggml_tensor * ssm_alpha,
+        ggml_tensor * ssm_dt, ggml_tensor * ssm_a, int64_t num_k_heads, int64_t num_v_heads, int64_t n_seqs,
+        ggml_tensor * cur, int il, const llm_build_cb & cb, ggml_cgraph * gf) {
 
-    const int64_t n_tok = cur->ne[1];
-    const int64_t n_seqs = 1;
-    const int64_t n_seq_tokens = n_tok;
-
-    auto [qkv_mixed, z] = build_qkvz(ctx0, cur, il, cb, gf);
+    auto n_tok = cur->ne[1];
+    auto n_seq_tokens = n_tok / n_seqs;
 
     ggml_tensor *alpha, *beta;
-    if (model.layers[il].ssm_beta_alpha) {
-        ggml_tensor * mixed_ba = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_beta_alpha, cur);
+    if (ssm_beta_alpha) {
+        ggml_tensor * mixed_ba = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_beta_alpha, cur);
         cb(mixed_ba, "linear_attn_mixed_ba", il);
 
         int64_t ba_new_dim = 2 * num_v_heads / num_k_heads;
@@ -274,11 +263,11 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         beta  = ggml_cont_4d(ctx0, b, num_v_heads, 1, n_tok, 1);
         alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_tok, 1);
     } else {
-        beta = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_beta, cur);
+        beta = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_beta, cur);
         cb(beta, "beta", il);
         beta = ggml_reshape_4d(ctx0, beta, num_v_heads, 1, n_tok, 1);
         cb(beta, "beta_reshaped", il);
-        alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_alpha, cur);
+        alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_alpha, cur);
         cb(alpha, "alpha", il);
         // Why? Don't think this ggml_cont_3d is needed, but lets leave it in for now just in case.
         alpha = ggml_cont_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
@@ -289,22 +278,41 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_build_forward_expand(gf, beta);
     ggml_build_forward_expand(gf, alpha);
 
-    ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
+    ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, ssm_dt);
     cb(alpha_biased, "alpha_biased", il);
     ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
     cb(alpha_softplus, "a_softplus", il);
-    ggml_tensor * gate = ggml_mul(ctx0, alpha_softplus, model.layers[il].ssm_a);
+    ggml_tensor * gate = ggml_mul(ctx0, alpha_softplus, ssm_a);
     cb(gate, "gate", il);
+
+    return {beta, gate};
+}
+
+ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_storage, ggml_tensor * ssm_conv1d,
+        ggml_tensor * qkv_mixed, ggml_tensor * inp_s_seq_qnext, ggml_tensor * beta, ggml_tensor * gate,
+        int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, int64_t ssm_d_conv,
+        int64_t state_seq_id_local, uint32_t qnext_state_slots, bool reset_state_local,
+        float eps_norm, int repeat_type, int il, const llm_build_cb & cb, ggml_cgraph * gf) {
+    const int64_t key_dim        = head_k_dim * num_k_heads;
+    const int64_t value_dim      = head_v_dim * num_v_heads;
+    const int64_t conv_dim       = key_dim * 2 + value_dim;
+    const int64_t conv_state_dim = (ssm_d_conv - 1) * conv_dim;
+    const int64_t ssm_state_dim  = head_v_dim * head_v_dim * num_v_heads;
+    const int64_t state_dim      = conv_state_dim + ssm_state_dim;
+    GGML_ASSERT(qnext_state_slots > 0);
+
+    const int64_t n_seq_tokens = qkv_mixed->ne[1];
+    const int64_t n_seqs       = qkv_mixed->ne[2];
+    const int64_t n_tok        = n_seq_tokens * n_seqs;
 
     size_t state_row_size = 0;
     ggml_tensor * state_all = nullptr;
-    GGML_ASSERT((size_t) il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr);
-    ggml_tensor * state_storage = kv_self.s_l[il];
     GGML_ASSERT(state_storage->type == GGML_TYPE_F32);
     GGML_ASSERT(state_storage->ne[0] >= state_dim);
     GGML_ASSERT((uint32_t) state_storage->ne[1] == qnext_state_slots);
     state_row_size = state_storage->nb[1];
     GGML_ASSERT(ggml_nbytes(state_storage) >= state_row_size * qnext_state_slots);
+
     state_all = ggml_view_2d(ctx0, state_storage, state_dim, qnext_state_slots, state_row_size, 0);
 
     ggml_tensor * state_dst = ggml_view_2d(ctx0, state_all, state_dim, 1, state_row_size, state_seq_id_local * state_row_size);
@@ -321,13 +329,13 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     ggml_tensor * ssm_state_flat  = ggml_view_2d(ctx0, state_f32, ssm_state_dim, 1, state_f32->nb[1],
             conv_state_dim * ggml_element_size(state_f32));
 
-    ggml_tensor * conv_states = ggml_reshape_3d(ctx0, conv_state_flat, hparams.ssm_d_conv - 1, conv_dim, 1);
+    ggml_tensor * conv_states = ggml_reshape_3d(ctx0, conv_state_flat, ssm_d_conv - 1, conv_dim, 1);
     ggml_tensor * state       = ggml_reshape_4d(ctx0, ssm_state_flat, head_v_dim, head_v_dim, num_v_heads, 1);
     cb(conv_states, "conv_states", il);
     cb(state, "state_predelta", il);
     ggml_build_forward_expand(gf, state);
 
-    ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, model.layers[il].ssm_conv1d, inp_s_seq_qnext);
+    ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, ssm_conv1d, inp_s_seq_qnext);
     cb(conv_output_raw, "conv_output_raw", il);
 
     ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
@@ -339,38 +347,33 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     int64_t nb1_qkv = ggml_row_size(conv_output_silu->type, qkv_dim);
 
     // Extract the convolved Q, K, V from conv_output
-    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_k_dim),
-            nb1_qkv, nb1_qkv * n_tok, 0);
+    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok, 0);
 
-    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_k_dim),
-            nb1_qkv, nb1_qkv * n_tok,
+    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok,
             head_k_dim * num_k_heads * ggml_element_size(conv_output_silu));
 
-    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_tok, 1,
-            ggml_row_size(conv_output_silu->type, head_v_dim),
-            nb1_qkv, nb1_qkv * n_tok,
+    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_output_silu->type, head_v_dim), nb1_qkv, nb1_qkv * n_tok,
             ggml_row_size(conv_output_silu->type, 2 * head_k_dim * num_k_heads));
 
     cb(q_conv, "q_conv", il);
     cb(k_conv, "k_conv", il);
     cb(v_conv, "v_conv", il);
 
-    const float eps_norm = hparams.f_norm_rms_eps;
-
     q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
     k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
     cb(q_conv, "q_conv_normed", il);
     cb(k_conv, "k_conv_normed", il);
 
-    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, model.layers[il].ssm_beta_alpha ? 0 : 1);
+    auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, repeat_type);
 
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);
 
-    ggml_tensor * new_conv_states = ggml_view_2d(ctx0, conv_output_raw, hparams.ssm_d_conv - 1, conv_dim,
-            hparams.ssm_d_conv * ggml_element_size(conv_output_raw),
+    ggml_tensor * new_conv_states = ggml_view_2d(ctx0, conv_output_raw, ssm_d_conv - 1, conv_dim,
+            ssm_d_conv * ggml_element_size(conv_output_raw),
             (1 + conv_dim * n_tok) * ggml_element_size(conv_output_raw));
     auto new_conv_states_cont = ggml_cont(ctx0, new_conv_states);
     cb(new_conv_states_cont, "new_conv_states_cont", il);
@@ -383,26 +386,207 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     cb(state_cpy, "state_cpy", il);
     ggml_build_forward_expand(gf, state_cpy);
 
+    return output;
+}
+
+ggml_tensor * delta_net::build_gated_output(llama_context & lctx, ggml_context * ctx0, ggml_tensor * ssm_norm, ggml_tensor * ssm_out, ggml_tensor * output, ggml_tensor * z,
+        int64_t head_v_dim, int64_t num_v_heads, int64_t n_tok, int il, const llm_build_cb & cb) {
+
     ggml_tensor * attn_out_2d = ggml_reshape_2d(ctx0, output, head_v_dim, num_v_heads * n_tok);
     ggml_tensor * z_2d        = ggml_reshape_2d(ctx0, z,      head_v_dim, num_v_heads * n_tok);
 
-    ggml_tensor * attn_out_norm = llm_build_context::llm_build_norm(ctx0, attn_out_2d, hparams, model.layers[il].ssm_norm, nullptr, LLM_NORM_RMS, cb, il);
+    ggml_tensor * attn_out_norm = llm_build_context::llm_build_norm(ctx0, attn_out_2d, lctx.model.hparams, ssm_norm, nullptr, LLM_NORM_RMS, cb, il);
     cb(attn_out_norm, "attn_rms_norm", il);
     attn_out_norm = ggml_fused_mul_unary(ctx0, z_2d, attn_out_norm, GGML_UNARY_OP_SILU);
     cb(attn_out_norm, "attn_out_norm", il);
 
-    ggml_tensor * final_output = ggml_reshape_2d(ctx0, attn_out_norm, value_dim, n_tok);
+    ggml_tensor * final_output = ggml_reshape_2d(ctx0, attn_out_norm, head_v_dim*num_v_heads, n_tok);
     cb(final_output, "final_output", il);
 
-    ggml_tensor * out = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_out, final_output);
+    ggml_tensor * out = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_out, final_output);
     cb(out, "linear_attn_out", il);
 
-    return ggml_reshape_2d(ctx0, out, hparams.n_embd, n_tok);
+    return ggml_reshape_2d(ctx0, out, lctx.model.hparams.n_embd, n_tok);
+}
+
+static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor * input, int id) {
+    auto cur = input;
+    if (input->op == GGML_OP_REDUCE) {
+        auto view_src = input->view_src;
+        GGML_ASSERT(view_src);
+        cur = input->src[id];
+        if (!cur) {
+            GGML_ASSERT((input->op_params[4] & (1u << id)) == 0);
+            cur = ggml_dup_tensor(ctx, input);
+            input->src[id] = cur;
+            input->op_params[4] |= (1u << id);
+        }
+        else if (cur == view_src) {
+            cur = input;
+        }
+    }
+    return cur;
+}
+
+ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * delta_input, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
+            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
+
+    const int64_t n_tok = delta_input->ne[1];
+    const int64_t n_seqs = 1;
+    //const int64_t n_seq_tokens = n_tok;
+
+    auto & model   = lctx.model;
+    auto & hparams = model.hparams;
+    auto & kv_self = lctx.kv_self;
+
+    int64_t head_k_dim  = hparams.ssm_d_state;
+    int64_t num_k_heads = hparams.ssm_n_group;
+    int64_t num_v_heads = hparams.ssm_dt_rank;
+    int64_t head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+    GGML_ASSERT(num_v_heads % num_k_heads == 0);
+    int64_t gqa_ratio   = num_v_heads / num_k_heads;
+
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && kv_self.s_l[il]->extra) {
+        GGML_ASSERT(head_k_dim == head_v_dim);
+        auto split_s_l = (ggml_split_tensor_t *)kv_self.s_l[il]->extra;
+        GGML_ASSERT(split_s_l);
+        int n_device = split_s_l->n_device;
+        ggml_split_tensor_t *split_wqkv = nullptr, *split_wqkv_gate = nullptr, *split_smm_in = nullptr;
+        auto & l = model.layers[il];
+        if (l.wqkv && l.wqkv_gate) {
+            split_wqkv = (ggml_split_tensor_t *)l.wqkv->extra;
+            split_wqkv_gate = (ggml_split_tensor_t *)l.wqkv_gate->extra;
+            GGML_ASSERT(split_wqkv && split_wqkv_gate);
+            GGML_ASSERT(split_wqkv->n_device == n_device);
+            GGML_ASSERT(split_wqkv_gate->n_device == n_device);
+        } else {
+            split_smm_in = (ggml_split_tensor_t *)l.ssm_in->extra;
+            GGML_ASSERT(split_smm_in);
+            GGML_ASSERT(split_smm_in->n_device == n_device);
+        }
+        GGML_ASSERT(n_device > 1);
+        std::vector<ggml_tensor *> results(n_device, nullptr);
+        bool input_added = false;
+        for (int id = 0; id < n_device; ++id) {
+            if (!split_s_l->splits[id]) continue;
+            auto input = get_input_tensor_sm_graph(ctx0, delta_input, id);
+            auto split_norm = (ggml_split_tensor_t *)l.attn_norm->extra;
+            GGML_ASSERT(split_norm && split_norm->splits[id]);
+            auto cur = llm_build_context::llm_build_norm(ctx0, input, hparams, split_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il);
+            int qnext_state_slots = split_s_l->splits[id]->ne[1];
+            int il_cb = 1000*il + id;
+            int64_t num_k_heads_id, num_v_heads_id;
+            ggml_tensor *qkv_mixed, *z;
+            if (split_wqkv && split_wqkv_gate) {
+                num_k_heads_id = split_wqkv->splits[id]->ne[1]/(head_k_dim*(2 + gqa_ratio));
+                num_v_heads_id = num_k_heads_id * gqa_ratio;
+                auto p = build_qkvz(lctx, ctx0, split_wqkv->splits[id], split_wqkv_gate->splits[id], cur, il_cb, cb, gf);
+                qkv_mixed = p.first;
+                z = p.second;
+            } else {
+                num_k_heads_id = split_smm_in->splits[id]->ne[1]/(2*head_k_dim*(1 + gqa_ratio));
+                num_v_heads_id = num_k_heads_id * gqa_ratio;
+                auto p = build_qkvz(lctx, ctx0, nullptr, nullptr, split_smm_in->splits[id], head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, cur, il, cb, gf);
+                //auto p = build_qkvz(lctx, ctx0, split_smm_in->splits[id], head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, cur, il_cb, cb);
+                qkv_mixed = p.first;
+                z = p.second;
+            }
+            auto split_ssm_dt = (ggml_split_tensor_t *)l.ssm_dt->extra;
+            GGML_ASSERT(split_ssm_dt && split_ssm_dt->splits[id] && split_ssm_dt->splits[id]->ne[0] == num_v_heads_id);
+            auto split_ssm_a  = (ggml_split_tensor_t *)l.ssm_a->extra;
+            GGML_ASSERT(split_ssm_a && split_ssm_a->splits[id] && split_ssm_a->splits[id]->ne[0] == num_v_heads_id);
+            ggml_tensor *beta, *gate;
+            if (l.ssm_beta_alpha) {
+                auto split_ssm_beta_alpha = (ggml_split_tensor_t *)l.ssm_beta_alpha->extra;
+                GGML_ASSERT(split_ssm_beta_alpha && split_ssm_beta_alpha->splits[id]);
+                auto p = build_beta_gate(lctx, ctx0, split_ssm_beta_alpha->splits[id], nullptr, nullptr, split_ssm_dt->splits[id], split_ssm_a->splits[id],
+                        num_k_heads_id, num_v_heads_id, n_seqs, cur, il, cb, gf);
+                beta = p.first; gate = p.second;
+            } else {
+                auto split_ssm_beta = (ggml_split_tensor_t *)l.ssm_beta->extra;
+                GGML_ASSERT(split_ssm_beta && split_ssm_beta->splits[id]);
+                auto split_ssm_alpha = (ggml_split_tensor_t *)l.ssm_alpha->extra;
+                GGML_ASSERT(split_ssm_alpha && split_ssm_alpha->splits[id]);
+                auto p = build_beta_gate(lctx, ctx0, nullptr, split_ssm_beta->splits[id], split_ssm_alpha->splits[id], split_ssm_dt->splits[id], split_ssm_a->splits[id],
+                        num_k_heads_id, num_v_heads_id, n_seqs, cur, il, cb, gf);
+                beta = p.first; gate = p.second;
+            }
+            auto split_ssm_conv1d = (ggml_split_tensor_t *)l.ssm_conv1d->extra;
+            GGML_ASSERT(split_ssm_conv1d && split_ssm_conv1d->splits[id]);
+            auto output = build_qkv(ctx0, split_s_l->splits[id], split_ssm_conv1d->splits[id], qkv_mixed, inp_s_seq_qnext, beta, gate,
+                               head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, hparams.ssm_d_conv,
+                               state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
+                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf);
+            split_norm = (ggml_split_tensor_t *)l.ssm_norm->extra;
+            GGML_ASSERT(split_norm && split_norm->splits[id]);
+            auto split_ssm_out = (ggml_split_tensor_t *)l.ssm_out->extra;
+            GGML_ASSERT(split_ssm_out && split_ssm_out->splits[id] && split_ssm_out->splits[id]->ne[0] == head_k_dim*num_v_heads_id);
+            auto gated_output = build_gated_output(lctx, ctx0, split_norm->splits[id], split_ssm_out->splits[id], output, z, head_v_dim, num_v_heads_id, n_tok, il_cb, cb);
+            if (inp_out_ids) {
+                gated_output = ggml_get_rows(ctx0, gated_output, inp_out_ids);
+            }
+            if (!input_added) {
+                if (inp_out_ids) {
+                    input = ggml_get_rows(ctx0, input, inp_out_ids);
+                }
+                gated_output = ggml_add(ctx0, gated_output, input);
+                input_added = true;
+            }
+            if (gated_output->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                gated_output = ggml_cast(ctx0, gated_output, lctx.cparams.reduce_type);
+            }
+            ggml_build_forward_expand(gf, gated_output);
+            results[id] = gated_output;
+        }
+        auto cur = ggml_reduce(ctx0, results.data(), n_device, GGML_OP_ADD);
+        ggml_build_forward_expand(gf, cur);
+        return cur;
+    }
+
+    const uint32_t qnext_state_slots = llm_build_context::llama_kv_qnext_state_slots(kv_self);
+    GGML_ASSERT(qnext_state_slots > 0);
+
+    int idx = model.default_layer_device[il];
+    auto input = delta_input;
+    if (input->op == GGML_OP_REDUCE) {
+        if (kv_self.s_l[il]) {
+            int idx_s_l = ggml_backend_sched_get_backend_idx(lctx.sched, kv_self.s_l[il]->buffer);
+            if (idx_s_l >= 0) idx = idx_s_l;
+        }
+        if (input->src[idx]) {
+            input->view_src = input->src[idx];
+        }
+    }
+    auto norm = model.layers[il].attn_norm->extra ? ((ggml_split_tensor_t *)model.layers[il].attn_norm->extra)->splits[idx] : model.layers[il].attn_norm;
+    auto cur = llm_build_context::llm_build_norm(ctx0, input, hparams, norm, nullptr, LLM_NORM_RMS, cb, il);
+
+    auto [qkv_mixed, z] = build_qkvz(lctx, ctx0, model.layers[il].wqkv, model.layers[il].wqkv_gate, model.layers[il].ssm_in,
+            head_k_dim, num_k_heads, head_v_dim, num_v_heads, cur, il, cb, gf);
+
+    auto [beta, gate] = build_beta_gate(lctx, ctx0, model.layers[il].ssm_beta_alpha, model.layers[il].ssm_beta, model.layers[il].ssm_alpha,
+            model.layers[il].ssm_dt, model.layers[il].ssm_a, num_k_heads, num_v_heads, n_seqs, cur, il, cb, gf);
+
+    auto output = build_qkv(ctx0, kv_self.s_l[il], model.layers[il].ssm_conv1d,
+        qkv_mixed, inp_s_seq_qnext, beta, gate,
+        head_k_dim, num_k_heads, head_v_dim, num_v_heads, hparams.ssm_d_conv,
+        state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
+        model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf);
+
+    auto gated_output = build_gated_output(lctx, ctx0, model.layers[il].ssm_norm, model.layers[il].ssm_out, output, z, head_v_dim, num_v_heads, n_tok, il, cb);
+    if (inp_out_ids) {
+        gated_output = ggml_get_rows(ctx0, gated_output, inp_out_ids);
+        input        = ggml_get_rows(ctx0, input, inp_out_ids);
+    }
+    output = ggml_add(ctx0, gated_output, input);
+    cb(output, "ssm_output", il);
+    return output;
+    //return build_gated_output(lctx, ctx0, model.layers[il].ssm_norm, model.layers[il].ssm_out, output, z, head_v_dim, num_v_heads, n_tok, il, cb);
 
 }
 
 ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf,
-        ggml_tensor * cur, int il, const llm_build_cb & cb) const {
+        ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb) const {
     GGML_ASSERT(lctx.inp_s_seq_qnext != nullptr);
 
     auto & model = lctx.model;
@@ -420,7 +604,7 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
 
     if (all_same_seq) {
         bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
-        return build_layer_attn_linear_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, token_seq_ids.front(), reset_state, il, cb);
+        return build_layer_attn_linear_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, inp_out_ids, token_seq_ids.front(), reset_state, il, cb);
     }
 
     GGML_ASSERT(has_unique_seq_ids && "qwen3next mixed-sequence batches require unique sequence IDs per token");
@@ -432,7 +616,7 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
 
         const bool reset_state_i = batch.pos != nullptr && batch.pos[i] == 0;
         const uint32_t state_seq_id_i = (uint32_t) token_seq_ids[i];
-        ggml_tensor * out_i = build_layer_attn_linear_core(ctx0, gf, cur_i, inp_s_seq_qnext_i, state_seq_id_i, reset_state_i, il, cb);
+        ggml_tensor * out_i = build_layer_attn_linear_core(ctx0, gf, cur_i, inp_s_seq_qnext_i, inp_out_ids, state_seq_id_i, reset_state_i, il, cb);
 
         out = out == nullptr ? out_i : ggml_concat(ctx0, out, out_i, 1);
     }
