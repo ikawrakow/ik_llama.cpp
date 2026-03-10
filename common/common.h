@@ -27,6 +27,7 @@
 #include <tuple>
 #include <map>
 #include <sstream>
+#include <variant>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -149,7 +150,6 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_SUFFIX,        // self-speculative suffix-decoding (arXiv:2411.04975)
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
-
 
 struct common_params_model {
     std::string path        = ""; // model local path                                       // NOLINT
@@ -423,14 +423,23 @@ struct gpt_params {
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";
+
+    // tool call and template
     std::string chat_template = "";
     bool use_jinja = false;                                                                                 // NOLINT
     bool use_peg = false;
     std::string system_prompt = "";
     bool enable_chat_template = true;
+    bool force_pure_content_parser = false;
+    bool parallel_tool_calls = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
+    int reasoning_budget = -1;
+    std::string reasoning_budget_message; // message injected before end tag when budget exhausted
+    std::map<std::string, std::string> default_template_kwargs;
+
     thinking_tokens think_tokens;
-    int reasoning_budget      = -1;
+
     bool prefill_assistant    = true;
     bool dry_run              = false;
 
@@ -439,7 +448,7 @@ struct gpt_params {
     std::string ssl_file_key  = "";
     std::string ssl_file_cert = "";
 
-    std::map<std::string, std::string> default_template_kwargs;
+
 
     // "advanced" endpoints are disabled by default for better security
     common_webui webui = COMMON_WEBUI_AUTO;
@@ -649,9 +658,15 @@ std::vector<llama_token> common_tokenize(
                         bool   add_special,
                         bool   parse_special = false);
 
-std::vector<llama_token> llama_tokenize(
+std::vector<llama_token> common_tokenize(
     const struct llama_vocab* vocab,
     const std::string& text,
+    bool   add_special,
+    bool   parse_special = false);
+
+std::vector<llama_token> llama_tokenize(
+    const struct llama_vocab * vocab,
+    const std::string & text,
     bool   add_special,
     bool   parse_special = false);
 

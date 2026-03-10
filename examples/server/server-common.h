@@ -245,7 +245,6 @@ json oaicompat_chat_params_parse(const json& body);
 
 struct server_chat_params {
     bool use_jinja;
-    bool use_peg;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs;
@@ -253,6 +252,10 @@ struct server_chat_params {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    bool parallel_tool_calls = false;
+    int  reasoning_budget = -1;
+    std::string reasoning_budget_message;
+    bool force_pure_content = false;
 };
 
 // used by /chat/completions endpoint

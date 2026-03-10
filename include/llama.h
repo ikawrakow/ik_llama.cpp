@@ -1254,7 +1254,7 @@ extern "C" {
     LLAMA_API struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar);
 
     /// @details Apply constraints from grammar
-    LLAMA_API void llama_grammar_sample(
+    LLAMA_API void llama_grammar_apply(
             const struct llama_grammar * grammar,
             const struct llama_context * ctx,
                 llama_token_data_array * candidates);
@@ -1262,7 +1262,7 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates,
       const struct llama_grammar * grammar),
-        "use llama_grammar_sample instead");
+        "use llama_grammar_apply instead");
 
     /// @details Accepts the sampled token into the grammar
     LLAMA_API void llama_grammar_accept_token(

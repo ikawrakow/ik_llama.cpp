@@ -8895,7 +8895,7 @@ struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) 
     return llama_grammar_clone_impl(*grammar);
 }
 
-void llama_grammar_sample(
+void llama_grammar_apply(
       const struct llama_grammar * grammar,
       const struct llama_context * ctx,
           llama_token_data_array * candidates) {
@@ -8906,7 +8906,7 @@ void llama_sample_grammar(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
       const struct llama_grammar * grammar) {
-    llama_grammar_sample(grammar, ctx, candidates);
+    llama_grammar_apply(grammar, ctx, candidates);
 }
 
 void llama_grammar_accept_token(

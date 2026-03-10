@@ -781,10 +781,9 @@ json oaicompat_chat_params_parse(
     inputs.json_schema = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar = grammar;
     inputs.use_jinja = opt.use_jinja;
-    inputs.parallel_tool_calls = json_value(body, "parallel_tool_calls", false);
+    inputs.parallel_tool_calls = json_value(body, "parallel_tool_calls", opt.parallel_tool_calls);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.reasoning_format = opt.reasoning_format;
-    inputs.use_peg = opt.use_peg;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
     }
@@ -835,6 +834,7 @@ json oaicompat_chat_params_parse(
         }
         inputs.add_generation_prompt = true;
     }
+    inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
@@ -855,16 +855,18 @@ json oaicompat_chat_params_parse(
     llama_params["prompt"] = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"] = chat_params.grammar;
+        llama_params["grammar_type"] = std::string("tool_calls");
     }
     llama_params["grammar_lazy"] = chat_params.grammar_lazy;
     auto grammar_triggers = json::array();
-    for (const auto& trigger : chat_params.grammar_triggers) {
+    for (const auto & trigger : chat_params.grammar_triggers) {
         server_grammar_trigger ct(trigger);
         grammar_triggers.push_back(ct.to_json());
     }
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
-    llama_params["thinking_forced_open"] = chat_params.thinking_forced_open;
+    llama_params["generation_prompt"] = chat_params.generation_prompt;
+
     for (const auto& stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
@@ -875,6 +877,21 @@ json oaicompat_chat_params_parse(
     int n_choices = json_value(body, "n", 1);
     if (n_choices != 1) {
         throw std::runtime_error("Only one completion choice is allowed");
+    }
+
+    // Reasoning budget: pass parameters through to sampling layer
+    {
+        int reasoning_budget = opt.reasoning_budget;
+        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        }
+
+        if (!chat_params.thinking_end_tag.empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+        }
     }
 
     // Handle "logprobs" field
