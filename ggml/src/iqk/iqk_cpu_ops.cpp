@@ -562,7 +562,7 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
     int nr16 = nr/16;
     int dr16 = (nr16 + nth - 1)/nth;
     int ir0  = ith*dr16;
-    int ir1  = ir0 + dr16;
+    int ir1  = std::min(nr16, ir0 + dr16);
     __m256 vs[8], vc[8];
     float aux[64];
     for (int ir = ir0; ir < ir1; ++ir) {
