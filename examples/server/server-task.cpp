@@ -198,7 +198,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat_partial() {
     }
 
     for (const auto& diff : oaicompat_msg_diffs) {
-        add_delta(common_chat_msg_diff_to_json_oaicompat<json>(diff));
+        add_delta(common_chat_msg_diff_to_json_oaicompat(diff));
     }
 
     if (!deltas.empty()) {
@@ -363,7 +363,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_final() {
     json choice{
         {"finish_reason", finish_reason},
         {"index", 0},
-        {"message", msg.to_json_oaicompat<json>()},
+        {"message", msg.to_json_oaicompat()},
     };
 
     if (!stream && probs_output.size() > 0) {
@@ -413,7 +413,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
                 json {
                     {"finish_reason", nullptr},
                     {"index", 0},
-                    {"delta", common_chat_msg_diff_to_json_oaicompat<json>(diff)},
+                    {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
             {"created", t},
@@ -1117,7 +1117,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
     if (it_best != states.end()) {
         LLAMA_LOG_INFO(" - found better prompt with f_keep = %.3f, sim = %.3f, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, it_best->n_kept_prompt, it_best->n_discarded_prompt);
         const size_t size = it_best->data.size();
-        const size_t n = llama_state_seq_set_data(ctx, it_best->data.data(), size, id_slot);
+        const size_t n = llama_state_seq_set_data(ctx, it_best->data.data(), size, id_slot, 0);
         if (n != size) {
             LLAMA_LOG_INFO("failed to restore state with size %zu\n", size);
             return false;

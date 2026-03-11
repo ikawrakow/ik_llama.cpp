@@ -32,6 +32,7 @@ struct server_slot {
     llama_batch batch_spec = {};
     llama_context * ctx_dft = nullptr;
 
+    bool released = false;
     slot_state state = SLOT_STATE_IDLE;
     slot_command command = SLOT_COMMAND_NONE;
 
@@ -45,6 +46,7 @@ struct server_slot {
     int32_t n_ctx = 0;  // context size per slot
     int32_t n_past = 0;
     int32_t n_past_prompt = 0;
+    int32_t n_past_offset = 0;
     int32_t n_decoded = 0;
     int32_t n_remaining = -1;
     int32_t n_discarded_prompt = 0;
@@ -79,7 +81,7 @@ struct server_slot {
     bool stopped_eos = false;
     bool stopped_word = false;
     bool stopped_limit = false;
-
+    bool saturate_predict = false;
     bool oaicompat = false;
 
     std::string oaicompat_model;
@@ -89,18 +91,25 @@ struct server_slot {
     // For context rewind/ token buffer
     size_t n_buffer = 0;
     int32_t rewind_count = 0;
+    int32_t rewind_count_max = -1;
     bool rewind_status = false;
     std::unordered_map<llama_token, float> logit_bias;
-    std::vector<std::string>ban_phrases;
+    std::vector<std::string> ban_phrases;
+    std::vector<std::string> ban_regex;
+    std::vector<std::string> ban_regex_ci;
     completion_token_outputs token_buffer;
     float ban_phrases_bias = 0;
     int32_t banned_n = 1;
+	std::map<int32_t, std::set<llama_token>> positional_bans;
 
     server_prompt server_cached_prompt;
 
     void prompt_save(server_prompt_cache& prompt_cache) const;
 
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens);
+
+    size_t checkpoint_pos = 0;
+    bool do_checkpoint = false;
 
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
@@ -248,7 +257,9 @@ struct server_context {
     server_metrics metrics;
 
     common_chat_templates_ptr chat_templates;
-    oaicompat_parser_options  oai_parser_opt;
+    server_chat_params  chat_params;
+    std::map<std::string, bool> chat_template_caps;
+
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
     int32_t cache_ram_n_min = 0;
@@ -354,4 +365,11 @@ struct server_context {
     // Re-aggregates all active vectors and updates the model state
     bool apply_control_vectors_internal();
 
+    void create_checkpoint(server_slot & slot);
+
+    void apply_checkpoint(server_slot & slot);
+
+    void create_checkpoint_at_interval(server_slot & slot, const gpt_params & params_base);
+
+    void release_slot_after_final_response(server_slot & slot);
 };

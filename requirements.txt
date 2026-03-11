@@ -11,3 +11,4 @@
 -r ./requirements/requirements-convert_llama_ggml_to_gguf.txt
 -r ./requirements/requirements-convert_lora_to_gguf.txt
 -r ./requirements/requirements-tool_bench.txt
+-r ./requirements/requirements-convert_imatrix_gguf_to_dat.txt

@@ -3,11 +3,14 @@
 #pragma once
 
 #include "common.h"
+#include "peg-parser.h"
 #include <functional>
 #include <chrono>
 #include <string>
 #include <vector>
 #include <map>
+
+#include <nlohmann/json_fwd.hpp>
 
 struct common_chat_templates;
 
@@ -25,6 +28,11 @@ struct common_chat_msg_content_part {
     std::string type;
     std::string text;
 
+    // TODO @ngxson : no known chat templates support reasoning_content in content parts yet
+    //                this can be useful for models with interleaved thinking (like Kimi-K2)
+    //                if you see any templates explicitly support this, please ping me
+    // std::string reasoning_content;
+
     bool operator==(const common_chat_msg_content_part & other) const {
         return type == other.type && text == other.text;
     }
@@ -39,7 +47,7 @@ struct common_chat_msg {
     std::string tool_name;
     std::string tool_call_id;
 
-    template <class T> T to_json_oaicompat() const;
+    nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
 
     bool empty() const {
         return content.empty() && content_parts.empty() && tool_calls.empty() && reasoning_content.empty() && tool_name.empty() && tool_call_id.empty();
@@ -125,6 +133,11 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_XIAOMI_MIMO,
     COMMON_CHAT_FORMAT_MIROTHINKER,
 
+    // These are intended to be parsed by the PEG parser
+    COMMON_CHAT_FORMAT_PEG_SIMPLE,
+    COMMON_CHAT_FORMAT_PEG_NATIVE,
+    COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
+
     COMMON_CHAT_FORMAT_COUNT, // Not a format, just the # formats
 };
 
@@ -155,6 +168,7 @@ struct common_chat_params {
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
+    std::string                         parser;
 };
 
 struct common_chat_syntax {
@@ -164,6 +178,7 @@ struct common_chat_syntax {
     bool                     reasoning_in_content  = false;
     bool                     thinking_forced_open  = false;
     bool                     parse_tool_calls      = true;
+    common_peg_arena         parser                = {};
 };
 
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
@@ -182,8 +197,7 @@ common_chat_templates_ptr common_chat_templates_init(
                                            const std::string & eos_token_override = "");
 
 bool         common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
-const char * common_chat_templates_source(const struct common_chat_templates * tmpls, const char * variant = nullptr);
-
+std::string  common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
 struct common_chat_params      common_chat_templates_apply(
     const struct common_chat_templates * tmpls,
@@ -207,19 +221,22 @@ const char*               common_chat_format_name(common_chat_format format);
 const char*               common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format   common_reasoning_format_from_name(const std::string& format);
 common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+common_chat_msg           common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
 
 // Parses a JSON array of messages in OpenAI's chat completion API format.
-// T can be std::string containing JSON or nlohmann::ordered_json
-template <class T> std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const T & messages);
-template <class T> T common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
+std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const nlohmann::ordered_json & messages);
 
-// Parses a JSON array of tools in OpenAI's chat completion tool call API format.
-// T can be std::string containing JSON or nlohmann::ordered_json
-template <class T> std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const T & tools);
-template <class T> T common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
+// DEPRECATED: only used in tests
+nlohmann::ordered_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
-template <class T> T common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff);
+std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const nlohmann::ordered_json & tools);
+nlohmann::ordered_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
+
+nlohmann::ordered_json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff);
+
+// get template caps, useful for reporting to server /props endpoint
+std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);

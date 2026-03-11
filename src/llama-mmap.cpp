@@ -275,7 +275,7 @@ struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
-    impl(struct llama_file * file, size_t prefetch, bool numa, bool use_thp) {
+    impl(struct llama_file * file, size_t prefetch, bool numa, [[maybe_unused]] bool use_thp) {
         size = file->size();
         int fd = file->file_id();
         int flags = MAP_SHARED;

@@ -2664,6 +2664,16 @@ ggml_backend_t ggml_backend_sched_get_backend(ggml_backend_sched_t sched, int i)
     return sched->backends[i];
 }
 
+int ggml_backend_sched_get_backend_idx(ggml_backend_sched_t sched, ggml_backend_buffer_t buffer) {
+    if (!buffer || !buffer->buft) return -1;
+    if (buffer && buffer->buft) {
+        for (int i = 0; i < sched->n_backends; ++i) {
+            if (ggml_backend_get_default_buffer_type(sched->backends[i]) == buffer->buft) return i;
+        }
+    }
+    return -1;
+}
+
 size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend) {
     int backend_index = ggml_backend_sched_backend_id(sched, backend);
     GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);

@@ -238,7 +238,7 @@
 // Maximum number of model contexts (e.g., for model shards).
 // Increase this value using -DGGML_MAX_CONTEXTS=<value> in CMake
 // if you need to load more than 64 model shards.
-#define GGML_MAX_CONTEXTS 64
+#define GGML_MAX_CONTEXTS       64
 #endif
 #define GGML_MAX_SRC            10
 #ifndef GGML_MAX_NAME
@@ -678,6 +678,7 @@ extern "C" {
         GGML_OP_TRI,
         GGML_OP_FILL,
         GGML_OP_SOLVE_TRI,
+        GGML_OP_DELTA_NET,
 
         GGML_OP_MAP_UNARY,
         GGML_OP_MAP_BINARY,
@@ -772,7 +773,7 @@ extern "C" {
     struct ggml_tensor {
         enum ggml_type         type;
 
-        GGML_DEPRECATED(enum ggml_backend_type backend, "use the buffer type to find the storage location of the tensor");
+        enum ggml_backend_type __backend;
 
         struct ggml_backend_buffer * buffer;
 
@@ -2507,6 +2508,15 @@ extern "C" {
             bool                  left,
             bool                  lower,
             bool                  uni);
+
+    GGML_API struct ggml_tensor * ggml_delta_net(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state);
 
     // custom operators
 

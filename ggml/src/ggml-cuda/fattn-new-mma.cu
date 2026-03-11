@@ -227,46 +227,46 @@ struct fattn_mma_f16_config<128, 128> {
         return 64;
     }
 };
-//
-//template <>
-//struct fattn_mma_f16_config<256, 256> {
-//    static constexpr int  nbatch_fa      = 32;
-//    static constexpr int  nwarps_max     = 4;
-//    static constexpr bool Q_in_reg       = true;
-//    static constexpr int  nstages_target = 2;
-//
-//    static int get_nbatch_K2_host(const int /*cc*/, const int /*ncols*/) {
-//        return 128;
-//    }
-//
-//    static constexpr __device__ int get_nbatch_K2_device(int /*ncols*/) {
-//        return 128;
-//    }
-//
-//    static int get_nbatch_V2_host(const int /*cc*/, const int /*ncols*/) {
-//        return 128;
-//    }
-//
-//    static constexpr __device__ int get_nbatch_V2_device(int /*ncols*/) {
-//        return 128;
-//    }
-//
-//    static int get_nbatch_combine_host(const int cc, const int ncols) {
-//        if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING) {
-//            return ncols <= 16 ? 128 : 64;
-//        }
-//        return 64;
-//    }
-//
-//    static constexpr __device__ int get_nbatch_combine_device(int ncols) {
-//#if __CUDA_ARCH__ == CC_TURING
-//        return ncols <= 16 ? 128 : 64;
-//#else
-//        GGML_UNUSED(ncols);
-//        return 128;
-//#endif // __CUDA_ARCH__ == CC_TURING
-//    }
-//};
+
+template <>
+struct fattn_mma_f16_config<256, 256> {
+    static constexpr int  nbatch_fa      = 32;
+    static constexpr int  nwarps_max     = 4;
+    static constexpr bool Q_in_reg       = true;
+    static constexpr int  nstages_target = 2;
+
+    static int get_nbatch_K2_host(const int /*cc*/, const int /*ncols*/) {
+        return 128;
+    }
+
+    static constexpr __device__ int get_nbatch_K2_device(int /*ncols*/) {
+        return 128;
+    }
+
+    static int get_nbatch_V2_host(const int /*cc*/, const int /*ncols*/) {
+        return 128;
+    }
+
+    static constexpr __device__ int get_nbatch_V2_device(int /*ncols*/) {
+        return 128;
+    }
+
+    static int get_nbatch_combine_host(const int cc, const int ncols) {
+        if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING) {
+            return ncols <= 16 ? 128 : 64;
+        }
+        return 64;
+    }
+
+    static constexpr __device__ int get_nbatch_combine_device(int ncols) {
+#if __CUDA_ARCH__ == CC_TURING
+        return ncols <= 16 ? 128 : 64;
+#else
+        GGML_UNUSED(ncols);
+        return 128;
+#endif // __CUDA_ARCH__ == CC_TURING
+    }
+};
 
 template <>
 struct fattn_mma_f16_config<192, 128> {
@@ -2144,6 +2144,15 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
             ggml_cuda_flash_attn_ext_mma_f16_case<128, 128, 1, 8>(ctx, dst);
         } else if (gqa_ratio == 10) {
             ggml_cuda_flash_attn_ext_mma_f16_case<128, 128, 1, 16>(ctx, dst);
+        } else {
+            GGML_ABORT("Not implemented");
+        }
+        return;
+    }
+    if (K->ne[0] == 256) {
+        GGML_ASSERT(Q->ne[0] == 256 && V->ne[0] == 256);
+        if (gqa_ratio == 6) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<256, 256, 1, 8>(ctx, dst);
         } else {
             GGML_ABORT("Not implemented");
         }

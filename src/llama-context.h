@@ -37,6 +37,7 @@ struct llama_kv_cache {
     bool do_defrag = false;
     bool do_copy   = false;
     bool recurrent = false; // with recurrent state models, a cell can hold the state for more than one past token
+    bool hybrid    = false;
     bool v_trans   = true;  // the value tensor is transposed
 
     // Note: The value of head isn't only used to optimize searching
@@ -60,6 +61,7 @@ struct llama_kv_cache {
 
     std::vector<llama_split_tensor> split_k_l;
     std::vector<llama_split_tensor> split_v_l;
+    std::vector<llama_split_tensor> split_s_l;
 
     std::vector<struct ggml_context *> ctxs;
     std::vector<ggml_backend_buffer_t> bufs;
