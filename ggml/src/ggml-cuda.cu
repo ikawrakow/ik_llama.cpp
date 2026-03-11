@@ -2752,7 +2752,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             if (src0_2) {
                 ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, &local_dst,
                         dst->src[4], dst->src[5],
-                        (const char *)src0_1->data, src0_2 ? (const char *)src0_2->data : nullptr,
+                        (const char *)src0_1->data, (const char *)src0_2->data,
                         (const float *)src1->data, src1_quantized.get(),
                         (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
             } else {
@@ -2763,7 +2763,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 if (!dst->src[4]) {
                     ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, &local_src0_1, &local_src1, ids, &local_dst,
                             nullptr, nullptr,
-                            (const char *)local_src0_1.data, (const char *)local_src0_2.data,
+                            (const char *)local_src0_2.data, (const char *)local_src0_1.data,
                             (const float *)src1->data, src1_quantized.get(),
                             (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
                 } else {
@@ -2773,8 +2773,8 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                     auto local_bias_2 = local_bias_1;
                     local_bias_2.data = (char *)local_bias_1.data + local_bias_1.ne[0]*local_bias_1.nb[0];
                     ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, &local_src0_1, &local_src1, ids, &local_dst,
-                            &local_bias_1, &local_bias_2,
-                            (const char *)local_src0_1.data, (const char *)local_src0_2.data,
+                            &local_bias_2, &local_bias_1,
+                            (const char *)local_src0_2.data, (const char *)local_src0_1.data,
                             (const float *)src1->data, src1_quantized.get(),
                             (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
                 }
