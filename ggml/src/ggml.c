@@ -17448,12 +17448,20 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
             continue;
         }
 
-        const char * src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
-        const char * src0_2_cur = src0_2 ? (const char *) src0_2->data + cur_a*nb02 : src0_1_cur + nb02/2;
-        const char * up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
-        const char * gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
-        if (up_b_cur && !gate_b_cur) {
-            gate_b_cur = up_b_cur + nb41/2;
+        const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
+        if (src0_2) {
+            src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
+            up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
+            gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
+        } else {
+            src0_2_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_1_cur = src0_2_cur + nb02/2;
+            if (up_b) {
+                GGML_ASSERT(!gate_b);
+                gate_b_cur = (const char *)up_b->data + cur_a*nb41;
+                up_b_cur   = gate_b_cur + nb41/2;
+            }
         }
 
         const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
@@ -17462,7 +17470,6 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         const int64_t nr0 = src0_2 ? ne01 : ne01/2; // src0 rows
         const int64_t nr1 = cne1; // src1 rows
 
-        //if (ith == 0) printf("Calling iqk_moe_fused_up_gate with nr0 = %d, nr1 = %d, ne00 = %d, ne11 = %d\n", (int)nr0, (int)nr1, (int)ne00, (int)ne11);
         if (!iqk_moe_fused_up_gate(nr0, nr1, ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
                             vec_dot_type, (const char *)wdata, row_size,
