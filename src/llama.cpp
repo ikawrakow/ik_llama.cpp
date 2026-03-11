@@ -4882,6 +4882,12 @@ struct llama_context * llama_init_from_model(
         }
     }
 
+    if (model->arch != LLM_ARCH_GLM4_MOE && cparams.mtp != 0) {
+        cparams.mtp = 0;
+    }
+
+    cparams.mtp_op_type = params.mtp_op_type;
+
     LLAMA_LOG_INFO("%s: n_ctx         = %u\n",     __func__, cparams.n_ctx);
     LLAMA_LOG_INFO("%s: n_batch       = %u\n",     __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch      = %u\n",     __func__, cparams.n_ubatch);
