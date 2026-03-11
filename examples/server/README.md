@@ -548,7 +548,7 @@ node index.js
 
     `saturate_predict`: If `true`, ensure that the number of tokens sent in the response equals `n_predict` even if tokens were discarded due to bans. When `false`, `n_predict` counts all generated tokens including those discarded during rewinds. Default: `false`
 
-    `banbuffer_size`: Set the token buffer size for ban detection. Larger values detect banned patterns spanning more tokens but delay streaming more. When `-1`, automatically sets to the longest banned string/regex length plus 1. Default: `-1`
+    `banbuffer_size`: Set the token buffer size for ban detection. Larger values detect banned patterns spanning more tokens but delay streaming more. When `0`, automatically sets to the longest banned string/regex length plus 1. Default: `0`
 
     `rewind_count_max`: Set the maximum number of regeneration attempts when banned content is encountered. When `-1`, automatically sets to `max(20, 2 * (number of banned_strings + banned_regex + banned_regex_case_insensitive))`. When `0`, allows infinite retries. Default: `-1`
 
