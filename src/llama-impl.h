@@ -227,6 +227,7 @@ ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer);
 
 struct llama_split_tensor {
     std::vector<ggml_tensor *> tensor_splits;
+    std::vector<std::vector<std::pair<int,int>>> ranges;
     ggml_split_tensor_t        ggml;
 };
 

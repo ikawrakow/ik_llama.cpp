@@ -1,4 +1,6 @@
-# Build llama.cpp locally
+# Build ik_llama.cpp locally
+
+`ik_llama.cpp` requires has a very minimal set of dependencies: `cmake`, a functional C++-17 compiler, and, if building with Nvidia GPU support, the CUDA toolkit. All these are available from the system package manager on Linux. If you are building on Windows and are worried about messing up your main OS, you may consider building in a virtual machine (VM). In that case, make sure you can copy files between the host OS and the VM.  
 
 **To get the Code:**
 
@@ -7,7 +9,7 @@ git clone https://github.com/ggerganov/llama.cpp
 cd llama.cpp
 ```
 
-In order to build llama.cpp you have four different options.
+In order to build `ik_llama.cpp` you have four different options.
 
 - Using `make`:
   - On Linux or MacOS:
@@ -61,16 +63,111 @@ In order to build llama.cpp you have four different options.
       cmake --build build --config Debug
       ```
     - Building for Windows (x86, x64 and arm64) with MSVC or clang as compilers:
-      - Install Visual Studio 2022, e.g. via the [Community Edition](https://visualstudio.microsoft.com/de/vs/community/). In the installer, select at least the following options (this also automatically installs the required additional tools like CMake,...):
-        - Tab Workload: Desktop-development with C++
-        - Tab Components (select quickly via search): C++-_CMake_ Tools for Windows, _Git_ for Windows, C++-_Clang_ Compiler for Windows, MS-Build Support for LLVM-Toolset (clang)
-      - Please remember to always use a Developer Command Prompt / PowerShell for VS2022 for git, build, test
-      - For Windows on ARM (arm64, WoA) build with:
-        ```bash
+ <ol type="1">
+ <li> Download official CUDA 12.6 Toolkit from Nvidia website and Visual Studio Build Tools 2022 from https://aka.ms/vs/17/release/vs_buildtools.exe
+ </li>
+ <li> CUDA installer doesn't complain about missing Nvidia GPU card in a VM, so pick custom installation and leave out "Driver components" tick and PhysX as ignored and install the rest.
+ </li>
+ <li> In Visual Studio Build Tools installer, click "Individual components" tab during customization and enter "clang" in filter prompt to pick related tools (since clang is not a default option, add two extra items in this prompt).
+ </li>
+ <li> Download Portable git from https://git-scm.com/install/windows to C:\Downloads and <code>git.exe clone https://github.com/ggml-org/llama.cpp "C:\Downloads\ik_llama.cpp_git"</code> from cmd and <code>cd "C:\Downloads\ik_llama.cpp_git"</code>
+ </li>
+ <li> <code>set VS_DIR=c:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools</code>
+ </li>
+ <li> <code>call "%VS_DIR%\VC\Auxiliary\Build\vcvarsall.bat" x64</code>
+ </li>
+ <li> <code>set LLVM_DIR=c:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64</code>
+ </li>
+ <li> <code>set CUDA_DIR=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6</code>
+ </li>
+ <li> <code>set "PATH=%LLVM_DIR%/bin;%CUDA_DIR%/bin;%PATH%"</code>
+ </li>
+ <li> <code>"c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" ^
+    -G Ninja ^
+    -S "C:/Downloads/ik_llama.cpp_git" ^
+    -B "C:/Downloads/output_compilations" ^
+    -DCMAKE_C_COMPILER="%LLVM_DIR%/bin/clang-cl.exe" ^
+    -DCMAKE_CXX_COMPILER="%LLVM_DIR%/bin/clang-cl.exe" ^
+    -DCMAKE_CUDA_COMPILER="%CUDA_DIR%/bin/nvcc.exe" ^
+    -DCUDAToolkit_ROOT="%CUDA_DIR%" ^
+    -DCMAKE_CUDA_ARCHITECTURES="89-real" ^
+    -DCMAKE_BUILD_TYPE=Release ^
+    -DGGML_CUDA=ON ^
+    -DLLAMA_CURL=OFF ^
+    -DCMAKE_C_FLAGS="/clang:-march=znver4 /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments" ^
+    -DCMAKE_CXX_FLAGS="/EHsc /clang:-march=znver4 /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments" ^
+     -DCMAKE_CUDA_STANDARD=17 ^
+     -DGGML_AVX512=ON ^
+     -DGGML_AVX512_VNNI=ON ^
+     -DGGML_AVX512_VBMI=ON ^
+     -DGGML_CUDA_USE_GRAPHS=ON ^
+     -DGGML_SCHED_MAX_COPIES=1 ^
+     -DGGML_OPENMP=ON</code>
+ </li>
+<li>
+    <code>"c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build "C:/Downloads/output_compilations" --config Release</code>
+</li>
+<li>
+Copy cublas64_12.dll, cublasLt64_12.dll and cudart64_12.dll from c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin to C:\Downloads\output_compilations\bin and libomp140.x86_64.dll from c:\Windows\System32\ to C:\Downloads\output_compilations\bin
+</li>
+<li>
+Now, ik_llama.cpp is ready-to-use, you have to copy C:\Downloads\output_compilations\bin to your main OS.
+</li>
+ </ol>
+
+Example of use with very effective RAM + VRAM split scheme for Zen4 AMD CPU with 16 physical cores for most of cases (this model has `qwen3moe.block_count` being 48):
+
+`> llama-cli -m ../Qwen3-30B-A3B-Thinking-2507-IQ4_XS.gguf -ot blk.[1-9][0-9].ffn=CPU -fa on  -ctk q8_0 -ctv q4_0 -ngl 99 --threads 16 --ctx-size 64000 --prompt "Tell me 'Good morning' in  3 difference languages." -mla 3 -amb 512 -b 64 -ub 64`
+During execution, this command will load almost all non-attention (i.e., "fat" ffn tensors which are less sensitive to slow RAM speed) tensors, starting from 10th, to RAM while keeping the rest in VRAM and answer your prompt and report RAM and VRAM usage at 27 t/s (token generation speed):
+```
+Tensor blk.10.ffn_norm.weight buffer type overriden to CPU
+...
+Tensor blk.47.ffn_down_exps.weight buffer type overriden to CPU
+...
+llm_load_tensors:        CPU buffer size = 12026.22 MiB
+llm_load_tensors:        CPU buffer size =   166.92 MiB
+llm_load_tensors:      CUDA0 buffer size =  3780.44 MiB
+...
+llama_kv_cache_init:      CUDA0 KV buffer size =  2437.52 MiB
+llama_new_context_with_model: KV self size  = 2437.50 MiB, K (q8_0): 1593.75 MiB, V (q4_0):  843.75 MiB
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.58 MiB
+llama_new_context_with_model:      CUDA0 compute buffer size =    38.10 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =     8.31 MiB
+```
+`llm_load_tensors` say that "fat" tensors from 10th to 47th took 12026.22 MiB of RAM with 167 MB of temporary data on RAM while the rest of tensors took 3780.44 MiB of VRAM (which, in sum, roughly equals the size of Qwen3-30B-A3B-Thinking-2507-IQ4_XS.gguf - 15.9 GB). `llama_kv_cache_init` says that your KV context storage is kept on VRAM and takes ~2.4GB of VRAM. `llama_new_context_with_model` say that temporary data takes ~50 MB of VRAM. Larger values of -b and -ub can increase interference speed by 5-10% while sacrificing 300-600 MB of VRAM.
+ 
+<ul>
+    <li>
+      For Windows on ARM (arm64, WoA) build with:
+        <code>
+        bash
         cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
         cmake --build build-arm64-windows-llvm-release
-        ```
-        Note: Building for arm64 could also be done just with MSVC (with the build-arm64-windows-MSVC preset, or the standard CMake build instructions). But MSVC does not support inline ARM assembly-code, used e.g. for the accelerated Q4_0_4_8 CPU kernels.
+        </code>
+        </li>
+    </ul>
+        Notes:
+        <ul>
+            <li>
+            Building for arm64 could also be done just with MSVC (with the build-arm64-windows-MSVC preset, or the standard CMake build instructions). But MSVC does not support inline ARM assembly-code, used e.g. for the accelerated Q4_0_4_8 CPU kernels.
+            </li>
+            <li>
+            Developer Command Prompt / PowerShell is not necessary, you can run these commands using usual cmd.exe
+            </li>
+            <li>
+                /clang:-march=znver4 option automatically includes AVX512VL AVX512BW AVX512DQ AVX512VBMI switches during compilation, so it's better to specify your processor type explicitly.
+            </li>
+            <li>
+                Adding /clang:-O3 or /clang:-mprefer-vector-width=512, surprisingly, does not seem to affect TT/TG performance.
+            </li>
+            <li>
+                Make sure you're using normal slash, not a backslash in cmake paths, or you may stumble upon strange errors (cmake on Windows may interpret, e.g. C:\Users, as C:[special escaped character]sers)
+            </li>
+            <li>
+                If you want standard MSVC compiler instead of Clang, put cl.exe in place of clang-cl.exe
+            </li>
+        </ul>
+
 
 -   Using `gmake` (FreeBSD):
 

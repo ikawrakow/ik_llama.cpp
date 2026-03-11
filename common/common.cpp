@@ -495,10 +495,15 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CONT_BATCHING",    params.cont_batching);
     get_env("LLAMA_ARG_HOST",             params.hostname);
     get_env("LLAMA_ARG_PORT",             params.port);
+    get_env("LLAMA_ARG_CACHE_TYPE_K",     params.cache_type_k);
+    get_env("LLAMA_ARG_CACHE_TYPE_V",     params.cache_type_v);
+    get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
+    get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
 
 }
 
 bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
+    gpt_params_parse_from_env(params);
     const auto params_org = params; // the example can modify the default params
 
     try {
