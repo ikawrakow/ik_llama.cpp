@@ -1378,7 +1378,7 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
             if (n_expert_used == 0) {
                 throw std::runtime_error("n_expert_used must be > 0 when QWEN3NEXT MoE tensors are present");
             }
-            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, llama_model_loader::TENSOR_NOT_REQUIRED, n_ff_exp);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp);
         }
 
         // Shared expert path (optional per-layer)
@@ -1450,9 +1450,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         }
 
         layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert }, 0);
-        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
-        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, 0);
-        layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp);
 
         // Shared experts
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
@@ -3137,7 +3135,7 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto g_meta = ml.require_tensor_meta(g_name.c_str());
 
     if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0] || u_meta->ne[2] != g_meta->ne[2]) {
-        LLAMA_LOG_INFO("%s: not merging because up/fate meta info is different\n", __func__);
+        LLAMA_LOG_INFO("%s: not merging because up/gate meta info is different\n", __func__);
         return false;
     }
 
