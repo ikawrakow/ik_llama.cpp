@@ -3198,10 +3198,21 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
     auto & layer = model.layers[i];
     auto ffn_ctx = ctx_for_layer_split(i);
 
-    bool merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
-    if (!merged) {
-        layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
-        layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
+    bool merged = false;
+    auto ug_name = tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", i);
+    auto ug_meta = ml.get_tensor_meta(ug_name.c_str());
+    printf("Checking for tensor %s: %s\n", ug_name.c_str(), ug_meta ? "found" : "not found");
+    if (ug_meta) {
+        if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+            GGML_ABORT("Merged ffn_up_exps/ffn_gate_exps are not supported for split mode graph!");
+        }
+        layer.ffn_up_gate_exps = create_tensor(ffn_ctx, ug_name, {  n_embd, 2*n_ff_exp, n_expert}, flags);
+    } else {
+        merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
+        if (!merged) {
+            layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
+            layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
+        }
     }
     layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, flags);
 
