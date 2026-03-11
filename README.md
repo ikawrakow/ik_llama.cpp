@@ -13,7 +13,10 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 >[!IMPORTANT]
 >Do not use quantized models from Unsloth that have `_XL` in their name. These are likely to not work with `ik_llama.cpp`.
 >
->The above has caused some stir, so to clarify: the Unsloth `_XL` models that are likely to not work are those that contain `f16` tensors (which is never a good idea in the first place). All others are fine. 
+>The above has caused some stir, so to clarify: the Unsloth `_XL` models that are likely to not work are those that contain `f16` tensors (which is never a good idea in the first place). All others are fine.
+
+>[!IMPORTANT]
+>Do not download models where the `ffn_up_exps` and `ffn_gate_exps` tensors have been merged into `ffn_gate_up_exps`. These models will not work with `ik_llama.cpp`. The merge can be done on-the-fly when loading the model, see [PR #1137](https://github.com/ikawrakow/ik_llama.cpp/pull/1137). Hence, there is absolutely zero reason to tolerate incompatibilities added by `llama.cpp` maintainers. If that does not work for you, just use `llama.cpp`. 
   
 ## Quickstart
 
