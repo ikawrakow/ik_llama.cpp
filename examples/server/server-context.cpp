@@ -3510,6 +3510,10 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     // Always reset logit bias to base before checking bans
     slot.ctx_sampling->params.logit_bias = slot.logit_bias;
 
+    if (slot.ban_phrases.size() > 0 || slot.ban_regex.size() > 0 || slot.ban_regex_ci.size() > 0) {
+        ban_pos = check_ban_phrase(slot);
+    }
+
     bool allow_rewind = true;
 
     if (ban_pos >= 0) {
