@@ -3155,11 +3155,11 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     LLAMA_LOG_INFO("%s: merging up/gate in layer %d\n", __func__, i);
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
-    snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_up_gate_exps.weight", i);
-    layer.ffn_up_exps   = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, u_name.c_str(),
-            { u_meta->ne[0], u_meta->ne[1], u_meta->ne[2] }, 0);
+    snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_gate_up_exps.weight", i);
     layer.ffn_gate_exps = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, g_name.c_str(),
-            { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, ggml_nbytes(layer.ffn_up_exps) ); //u_meta->ne[1]*u_meta->nb[1] );
+            { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, 0);
+    layer.ffn_up_exps   = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, u_name.c_str(),
+            { u_meta->ne[0], u_meta->ne[1], u_meta->ne[2] }, ggml_nbytes(layer.ffn_gate_exps));
 
     if (!bias) return true;
 
@@ -3201,7 +3201,7 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
     bool merged = false;
     auto ug_name = tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", i);
     auto ug_meta = ml.get_tensor_meta(ug_name.c_str());
-    printf("Checking for tensor %s: %s\n", ug_name.c_str(), ug_meta ? "found" : "not found");
+    //printf("Checking for tensor %s: %s\n", ug_name.c_str(), ug_meta ? "found" : "not found");
     if (ug_meta) {
         if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
             GGML_ABORT("Merged ffn_up_exps/ffn_gate_exps are not supported for split mode graph!");

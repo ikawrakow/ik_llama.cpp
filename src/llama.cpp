@@ -4692,9 +4692,9 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
             size_t offset_up = 0;
             auto expert_size = l.ffn_up_exps->ne[1]*l.ffn_up_exps->nb[1];
             for (int i2 = 0; i2 < (int)l.ffn_up_gate_exps->ne[2]; ++i2) {
-                std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
-                offset_up_gate += expert_size;
                 std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_gate.data() + offset_up, expert_size);
+                offset_up_gate += expert_size;
+                std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
                 offset_up_gate += expert_size;
                 offset_up      += expert_size;
             }
@@ -4718,9 +4718,9 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
                 offset_up = 0;
                 expert_size = l.ffn_up_exps_b->nb[1];
                 for (int i1 = 0; i1 < (int)l.ffn_up_gate_exps_b->ne[1]; ++i1) {
-                    std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
-                    offset_up_gate += expert_size;
                     std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_gate.data() + offset_up, expert_size);
+                    offset_up_gate += expert_size;
+                    std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
                     offset_up_gate += expert_size;
                     offset_up      += expert_size;
                 }
