@@ -22250,6 +22250,14 @@ static void ggml_compute_forward_ssm_conv_f32(
     // for use with the destination state offset between sequences
     GGML_ASSERT(src2->nb[2] == src2->ne[1]*src2->ne[0]*sizeof(float));
 
+    if (n_kv == 1 && nc == 4) {
+        if (iqk_ssm_conv4(nr, nc, n_t, src0->nb[1], src1->nb[0], src1->nb[1], src2->nb[1],
+                    (const float *)src1->data, (const float *)src0->data, (const float *)src2->data,
+                    (float *)dst->data, ith, nth)) {
+            return;
+        }
+    }
+
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
 
