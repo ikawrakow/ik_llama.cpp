@@ -127,7 +127,7 @@
                 {%- set message.content = message.content + "\n<server_name>" + server_name + "</server_name>\n<tool_name>" + tool_name + "</tool_name>\n<arguments>\n" + (tool.arguments | tojson(ensure_ascii=False)) + "\n</arguments>" %}
             {%- endfor %}
             {%- set message.content = message.content + "\n</use_mcp_tool>" %}
-            {%- set message.tool_calls = [] %}
+            {%- set _ = message.pop('tool_calls', None) %}
         {%- endif %}
     {%- elif message.role == 'user' %}
         {%- if message.content.startswith('<tool_response>') %}
