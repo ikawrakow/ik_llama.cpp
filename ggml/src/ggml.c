@@ -22250,70 +22250,13 @@ static void ggml_compute_forward_ssm_conv_f32(
     // for use with the destination state offset between sequences
     GGML_ASSERT(src2->nb[2] == src2->ne[1]*src2->ne[0]*sizeof(float));
 
-#ifdef __AVX2__
-    if (n_kv == 1 && n_t > 32 && nc == 4 && nr%16 == 0) {
-        int nr16 = nr/16;
-        int dr16 = (nr16 + nth - 1)/nth;
-        int ir0  = ith*dr16;
-        int ir1  = MIN(ir0 + dr16, nr16);
-        __m256 vs[8], vc[8];
-        float aux[64];
-        for (int ir = ir0; ir < ir1; ++ir) {
-            float *   x  = (float *) ((char *)  dst->data + 16*ir*sizeof(float));
-            float *   s  = (float *) ((char *)  dst->data + 16*ir*src2->nb[1]) + nr*n_t;
-            float *   s0 = (float *) ((char *) src0->data + 16*ir*src0->nb[1]); // {d_conv - 1, d_inner, n_kv}
-            float *   x0 = (float *) ((char *) src1->data + 16*ir*src1->nb[0]);
-            float *   c  = (float *) ((char *) src2->data + 16*ir*src2->nb[1]);
-            for (int ic = 0; ic < 3; ++ic) {
-                for (int j = 0; j < 8; ++j) {
-                    aux[j + 8*ic +  8] = s0[(j+0)*src0->nb[1]/sizeof(float) + ic];
-                    aux[j + 8*ic + 40] = s0[(j+8)*src0->nb[1]/sizeof(float) + ic];
-                }
-            }
-            // Not necessary, but doing it to shut up compiler warnings
-            for (int j = 0; j < 8; ++j) {
-                aux[j] = aux[j+32] = 0.0f;
-            }
-            for (int k = 0; k < 8; ++k) vs[k] = _mm256_loadu_ps(aux + 8*k);
-            for (int ic = 0; ic < 4; ++ic) {
-                for (int j = 0; j < 8; ++j) {
-                    aux[j + 8*ic     ] = c[(j+0)*src2->nb[1]/sizeof(float) + ic];
-                    aux[j + 8*ic + 32] = c[(j+8)*src2->nb[1]/sizeof(float) + ic];
-                }
-            }
-            for (int k = 0; k < 8; ++k) vc[k] = _mm256_loadu_ps(aux + 8*k);
-            int idx = 0;
-            for (int it = 0; it < n_t; ++it) {
-                vs[idx+0] = _mm256_loadu_ps(x0+0);
-                vs[idx+4] = _mm256_loadu_ps(x0+8);
-                idx = (idx + 1) & 3;
-                __m256 sum1 = _mm256_setzero_ps();
-                __m256 sum2 = _mm256_setzero_ps();
-                for (int k = 0; k < 4; ++k) {
-                    int ii = (idx + k) & 3;
-                    sum1 = _mm256_fmadd_ps(vs[ii+0], vc[k+0], sum1);
-                    sum2 = _mm256_fmadd_ps(vs[ii+4], vc[k+4], sum2);
-                }
-                _mm256_storeu_ps(x+0, sum1);
-                _mm256_storeu_ps(x+8, sum2);
-                x0 += src1->nb[1]/sizeof(float);
-                x  += nr;
-            }
-            for (int k = 0; k < 4; ++k) {
-                int ii = (idx + k) & 3;
-                _mm256_storeu_ps(aux + 8*k +  0, vs[ii+0]);
-                _mm256_storeu_ps(aux + 8*k + 32, vs[ii+4]);
-            }
-            for (int j = 0; j < 8; ++j) {
-                for (int ic = 0; ic < 4; ++ic) {
-                    s[(j+0)*src2->nb[1]/sizeof(float) + ic] = aux[j + 8*ic +  0];
-                    s[(j+8)*src2->nb[1]/sizeof(float) + ic] = aux[j + 8*ic + 32];
-                }
-            }
+    if (n_kv == 1 && nc == 4) {
+        if (iqk_ssm_conv4(nr, nc, n_t, src0->nb[1], src1->nb[0], src1->nb[1], src2->nb[1],
+                    (const float *)src1->data, (const float *)src0->data, (const float *)src2->data,
+                    (float *)dst->data, ith, nth)) {
+            return;
         }
-        return;
     }
-#endif
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
