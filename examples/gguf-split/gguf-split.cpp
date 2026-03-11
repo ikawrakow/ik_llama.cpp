@@ -7,6 +7,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 #include <stdio.h>
 #include <string.h>
@@ -190,6 +191,18 @@ static void zeros(std::ofstream & file, size_t n) {
     }
 }
 
+static void ensure_output_directory(const std::string & filepath) {
+    std::filesystem::path p(filepath);
+    if (p.has_parent_path()) {
+        std::error_code ec;
+        std::filesystem::create_directories(p.parent_path(), ec);
+        if (ec) {
+            fprintf(stderr, "Failed to create directory '%s': %s\n", p.parent_path().string().c_str(), ec.message().c_str());
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
 struct split_strategy {
     const split_params params;
     std::ifstream & f_input;
@@ -305,10 +318,18 @@ struct split_strategy {
     void write() {
         int i_split = 0;
         int n_split = ctx_outs.size();
+        std::string output_prefix = params.output;
+        const std::string suffix = ".gguf";
+        if (output_prefix.size() >= suffix.size() && 
+            output_prefix.compare(output_prefix.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            output_prefix.resize(output_prefix.size() - suffix.size());
+        }
         for (auto & ctx_out : ctx_outs) {
             // construct file path
             char split_path[PATH_MAX] = {0};
-            llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
+            llama_split_path(split_path, sizeof(split_path), output_prefix.c_str(), i_split, n_split);
+
+            ensure_output_directory(split_path);
 
             // open the output file
             printf("Writing file %s ... ", split_path);
@@ -400,6 +421,8 @@ static void gguf_merge(const split_params & split_params) {
             split_params.output.c_str());
     int n_split = 1;
     int total_tensors = 0;
+
+    ensure_output_directory(split_params.output);
 
     // avoid overwriting existing output file
     if (std::ifstream(split_params.output.c_str())) {

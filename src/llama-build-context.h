@@ -114,6 +114,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_defrag(const std::vector<uint32_t> & ids);
 
+    struct ggml_tensor * build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd);
+
     ggml_tensor * build_inp_pos();
 
     ggml_tensor * build_input_scale(int n_tokens);
@@ -159,6 +161,9 @@ struct llm_build_context {
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
             ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, bool add_graph_split = false) const;
+
+    std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_mul_mat_qkv_gated(ggml_cgraph * gf, ggml_tensor * cur,
+            ggml_tensor * wq, ggml_tensor * wk, ggml_tensor * wv, ggml_tensor * q_norm, ggml_tensor * k_norm, int il) const;
 
     ggml_cgraph * build_llama();
 
@@ -207,6 +212,8 @@ struct llm_build_context {
     ggml_cgraph * build_qwen3next();
 
     ggml_cgraph * build_qwen35moe();
+
+    ggml_cgraph * build_qwen35();
 
     ggml_cgraph * build_phi2();
 
@@ -430,4 +437,12 @@ llm_expert_gating_func_type   gating_op,
             bool is_multi = false);
 
     static uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self);
+    struct ggml_tensor * build_mtp_tail(
+        const struct llama_layer & mtp_layer, 
+        struct ggml_tensor * prev_embeddings, 
+        int64_t n_embd_head,
+        struct ggml_cgraph * gf,
+        struct ggml_tensor * inp_pos,
+        struct ggml_tensor * rope_cache
+    );
 };

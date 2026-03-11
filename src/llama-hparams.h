@@ -279,6 +279,23 @@ struct llama_hparams {
         return ssm_d_state * ssm_d_inner;
     }
 
+    uint32_t n_embd_v_s_id(int nv) const {
+        if (ssm_n_group <= 0 || nv < 1 || ssm_dt_rank < 1) return 0;
+        int num_v_heads = ssm_dt_rank;
+        int num_k_heads = ssm_n_group;
+        int gqa_ratio   = num_v_heads / num_k_heads;
+        GGML_ASSERT(nv <= num_v_heads);
+        GGML_ASSERT(nv % gqa_ratio == 0);
+        int nk = nv / gqa_ratio;
+        int head_k_dim  = ssm_d_state;
+        int head_v_dim  = ssm_d_inner / num_v_heads;
+        uint32_t conv_dim       = 2 * nk * head_k_dim + nv * head_v_dim;
+        uint32_t conv_state_dim = conv_dim * (ssm_d_conv - 1);
+        uint32_t ssm_state_dim  = head_v_dim * head_v_dim * nv;
+        return conv_state_dim + ssm_state_dim;
+
+    }
+
     bool is_recurrent(uint32_t il) const {
         return il < n_layer ? recurrent_layer_arr[il] : false;
     }

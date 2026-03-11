@@ -588,15 +588,15 @@ int main(int argc, char ** argv) {
 
     // print sample chat example to make it clear which template is used
 
-        LOG_INFO("chat template", {
-        {"chat_template", common_chat_templates_source(ctx_server.chat_templates.get())},
-    });
+    //    LOG_INFO("chat template", {
+    //    {"chat_template", common_chat_templates_source(ctx_server.chat_templates.get())},
+    //});
 
-    LOG_INFO("chat template", {
-        {"chat_example", common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params_base.use_jinja, {}).c_str()
-        },
-            {"built_in",     params.chat_template.empty()},
-        });
+    //LOG_INFO("chat template", {
+    //    {"chat_example", common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params_base.use_jinja, {}).c_str()
+    //    },
+    //        {"built_in",     params.chat_template.empty()},
+    //    });
     //
     // Middlewares
     //
@@ -988,6 +988,9 @@ int main(int argc, char ** argv) {
                 curr_tmpl = std::string(curr_tmpl_buf.data(), tlen);
             }
         }
+        std::string tmpl_default = common_chat_templates_source(ctx_server.chat_params.tmpls.get(), "");
+        std::string tmpl_tools = common_chat_templates_source(ctx_server.chat_params.tmpls.get(), "tool_use");
+
         json data = {
             { "system_prompt",               ctx_server.system_prompt.c_str() },
             { "model_alias",                 ctx_server.params_base.model_alias },
@@ -995,21 +998,22 @@ int main(int argc, char ** argv) {
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
             { "model_name",                  get_model_name(ctx_server.params_base.model)},
-            { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
+            { "chat_template",               tmpl_default },
+            { "chat_template_caps",      ctx_server.chat_template_caps },
             { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_token_eos(ctx_server.model), /* special= */ true)},
             { "model_path",                  ctx_server.params_base.model },
             { "modalities",                  json {
-                {"vision", ctx_server.oai_parser_opt.allow_image},
-                {"audio",  ctx_server.oai_parser_opt.allow_audio},
+                {"vision", ctx_server.chat_params.allow_image},
+                {"audio",  ctx_server.chat_params.allow_audio},
             } },
             { "n_ctx",                       ctx_server.n_ctx }
 
         };
 
         if (ctx_server.params_base.use_jinja) {
-            if (auto tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
-                data["chat_template_tool_use"] = tool_use_src;
+            if (!tmpl_tools.empty()) {
+                data["chat_template_tool_use"] = tmpl_tools;
             }
         }
         res.set_content(data.dump(), "application/json; charset=utf-8");
@@ -1029,8 +1033,8 @@ int main(int argc, char ** argv) {
             { "model_name",                  get_model_name(ctx_server.params_base.model)},
             { "model_path",                  ctx_server.params_base.model },
             { "modalities",                  json {
-                {"vision", ctx_server.oai_parser_opt.allow_image},
-                {"audio",  ctx_server.oai_parser_opt.allow_audio},
+                {"vision", ctx_server.chat_params.allow_image},
+                {"audio",  ctx_server.chat_params.allow_audio},
             } },
              { "n_ctx",                       ctx_server.n_ctx }
         };
@@ -1263,7 +1267,7 @@ int main(int argc, char ** argv) {
     const auto handle_chat_completions = [&ctx_server, &params, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
-        json data = oaicompat_chat_params_parse(ctx_server.model, body, ctx_server.oai_parser_opt, files);
+        json data = oaicompat_chat_params_parse(ctx_server.model, body, ctx_server.chat_params, files);
         handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
@@ -1277,7 +1281,7 @@ int main(int argc, char ** argv) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
         json body_parsed = convert_responses_to_chatcmpl(body);
-        json data = oaicompat_chat_params_parse(ctx_server.model, body_parsed, ctx_server.oai_parser_opt, files);
+        json data = oaicompat_chat_params_parse(ctx_server.model, body_parsed, ctx_server.chat_params, files);
         handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
@@ -1293,7 +1297,7 @@ int main(int argc, char ** argv) {
         json body_parsed = anthropic_params_from_json(
             ctx_server.model,
             body,
-            ctx_server.oai_parser_opt,
+            ctx_server.chat_params,
             files);
         return handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
@@ -1312,7 +1316,7 @@ int main(int argc, char ** argv) {
         json body_parsed = anthropic_params_from_json(
             ctx_server.model,
             body,
-            ctx_server.oai_parser_opt,
+            ctx_server.chat_params,
             files);
 
         json prompt = body_parsed.at("prompt");
@@ -1326,7 +1330,7 @@ int main(int argc, char ** argv) {
     const auto handle_apply_template = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files; // dummy, unused
-        json data = oaicompat_chat_params_parse(ctx_server.model, body,ctx_server.oai_parser_opt, files);
+        json data = oaicompat_chat_params_parse(ctx_server.model, body,ctx_server.chat_params, files);
         res_ok(res, { { "prompt", std::move(data.at("prompt")) } });
     };
 

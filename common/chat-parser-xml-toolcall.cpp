@@ -245,15 +245,28 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
 
                 auto next_arg_with_sep = builder.add_rule(name + "-last-arg-end", form.last_val_end ? gbnf_format_literal(*form.last_val_end) : gbnf_format_literal(form.val_end));
                 decltype(next_arg_with_sep) next_arg = "\"\"";
-                for (auto i = arg_rules.size() - 1; /* i >= 0 && */ i < arg_rules.size(); --i) {
-                    std::string include_this_arg = arg_rules[i].symbol_name + " " + next_arg_with_sep;
-                    next_arg = builder.add_rule(name + "-arg-after-" + std::to_string(i), arg_rules[i].is_required ?
-                            include_this_arg : "( " + include_this_arg + " ) | " + next_arg
-                    );
-                    include_this_arg = gbnf_format_literal(form.val_end) + " " + include_this_arg;
-                    next_arg_with_sep = builder.add_rule(name + "-arg-after-" + std::to_string(i) + "-with-sep", arg_rules[i].is_required ?
-                            include_this_arg : "( " + include_this_arg + " ) | " + next_arg_with_sep
-                    );
+                if (form.relax_arg) {
+                    if (!arg_rules.empty()) {
+                        std::vector<std::string> arg_symbols;
+                        arg_symbols.reserve(arg_rules.size());
+                        for (const auto & rule : arg_rules) {
+                            arg_symbols.push_back(rule.symbol_name);
+                        }
+                        auto any_arg = builder.add_rule(name + "-any-arg", string_join(arg_symbols, " | "));
+                        auto any_arg_with_end = builder.add_rule(name + "-any-arg-with-end", any_arg + " " + next_arg_with_sep);
+                        next_arg = builder.add_rule(name + "-args-relaxed", "( " + any_arg_with_end + " )*");
+                    }
+                } else {
+                    for (auto i = arg_rules.size() - 1; /* i >= 0 && */ i < arg_rules.size(); --i) {
+                        std::string include_this_arg = arg_rules[i].symbol_name + " " + next_arg_with_sep;
+                        next_arg = builder.add_rule(name + "-arg-after-" + std::to_string(i), arg_rules[i].is_required ?
+                                include_this_arg : "( " + include_this_arg + " ) | " + next_arg
+                        );
+                        include_this_arg = gbnf_format_literal(form.val_end) + " " + include_this_arg;
+                        next_arg_with_sep = builder.add_rule(name + "-arg-after-" + std::to_string(i) + "-with-sep", arg_rules[i].is_required ?
+                                include_this_arg : "( " + include_this_arg + " ) | " + next_arg_with_sep
+                        );
+                    }
                 }
 
                 std::string quoted_name = name;
@@ -829,7 +842,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         }
 
         // remove potential partial suffix
-        if (builder.pos() == builder.input().size()) {
+        if (builder.pos() == builder.input().size() && builder.is_partial()) {
             if (unclosed_reasoning_content.empty()) {
                 rstrip(content);
                 trim_potential_partial_word(content);

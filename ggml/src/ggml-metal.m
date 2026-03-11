@@ -4158,7 +4158,7 @@ GGML_CALL static void * ggml_backend_metal_buffer_get_base(ggml_backend_buffer_t
     return ctx->all_data;
 }
 
-GGML_CALL  void ggml_backend_metal_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+GGML_CALL static void ggml_backend_metal_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     memset((char *)tensor->data + offset, value, size);
 
     GGML_UNUSED(buffer);

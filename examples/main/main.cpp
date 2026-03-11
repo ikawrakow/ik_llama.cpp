@@ -2,7 +2,6 @@
 #include "chat.h"
 #include "console.h"
 #include "llama.h"
-#include "minja/chat-template.hpp"
 #include <cassert>
 #include <cinttypes>
 #include <cmath>

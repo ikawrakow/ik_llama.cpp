@@ -1,3 +1,19 @@
+#llama_add_compile_flags()
+
+function(llama_build source)
+    set(TEST_SOURCES ${source} ${ARGN})
+
+    if (DEFINED LLAMA_TEST_NAME)
+        set(TEST_TARGET ${LLAMA_TEST_NAME})
+    else()
+        get_filename_component(TEST_TARGET ${source} NAME_WE)
+    endif()
+
+    add_executable(${TEST_TARGET} ${TEST_SOURCES})
+    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    install(TARGETS ${TEST_TARGET} RUNTIME)
+endfunction()
+
 function(llama_test target)
     include(CMakeParseArguments)
     set(options)
@@ -41,6 +57,8 @@ function(llama_target_and_test source)
     set(multiValueArgs ARGS)
     cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+    set(TEST_SOURCES ${source} ${LLAMA_TEST_UNPARSED_ARGUMENTS} get-model.cpp)
+
     if (NOT DEFINED LLAMA_TEST_LABEL)
         set(LLAMA_TEST_LABEL "main")
     endif()
@@ -53,9 +71,45 @@ function(llama_target_and_test source)
         get_filename_component(TEST_TARGET ${source} NAME_WE)
     endif()
 
-    add_executable(${TEST_TARGET} ${source} get-model.cpp)
+    add_executable(${TEST_TARGET} ${TEST_SOURCES})
     install(TARGETS ${TEST_TARGET} RUNTIME)
     target_link_libraries(${TEST_TARGET} PRIVATE common)
+    add_test(
+        NAME ${TEST_TARGET}
+        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
+        COMMAND $<TARGET_FILE:${TEST_TARGET}>
+        ${LLAMA_TEST_ARGS})
+
+    set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+endfunction()
+
+function(llama_build_and_test source)
+    include(CMakeParseArguments)
+    set(options)
+    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
+    set(multiValueArgs ARGS)
+    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    set(TEST_SOURCES ${source} ${LLAMA_TEST_UNPARSED_ARGUMENTS} get-model.cpp)
+
+    if (NOT DEFINED LLAMA_TEST_LABEL)
+        set(LLAMA_TEST_LABEL "main")
+    endif()
+    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
+        set(LLAMA_TEST_WORKING_DIRECTORY .)
+    endif()
+    if (DEFINED LLAMA_TEST_NAME)
+        set(TEST_TARGET ${LLAMA_TEST_NAME})
+    else()
+        get_filename_component(TEST_TARGET ${source} NAME_WE)
+    endif()
+
+    add_executable(${TEST_TARGET} ${TEST_SOURCES})
+    if (LLAMA_TESTS_INSTALL)
+        install(TARGETS ${TEST_TARGET} RUNTIME)
+    endif()
+    target_link_libraries(${TEST_TARGET} PRIVATE common)
+
     add_test(
         NAME ${TEST_TARGET}
         WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
@@ -128,10 +182,24 @@ if (NOT WIN32)
     # llama_target_and_test(test-double-float.cpp) # SLOW
 endif()
 
-llama_target_and_test(test-chat-parser.cpp)
-#llama_target_and_test(test-chat-template.cpp)
-llama_target_and_test(test-json-partial.cpp)
-llama_target_and_test(test-regex-partial.cpp)
+llama_build_and_test(test-chat-parser.cpp)
+llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
+#llama_build_and_test(test-chat-template.cpp)
+llama_build_and_test(test-jinja.cpp)
+llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
+llama_build_and_test(test-json-partial.cpp)
+#llama_build_and_test(test-log.cpp)
+llama_build_and_test(
+    test-peg-parser.cpp
+    peg-parser/simple-tokenize.cpp
+    peg-parser/test-basic.cpp
+    peg-parser/test-gbnf-generation.cpp
+    peg-parser/test-json-parser.cpp
+    peg-parser/test-json-serialization.cpp
+    peg-parser/test-unicode.cpp
+    peg-parser/tests.h
+)
+llama_build_and_test(test-regex-partial.cpp)
 
 # llama_target_and_test(test-opt.cpp) # SLOW
 

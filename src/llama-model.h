@@ -45,6 +45,7 @@ enum e_model {
     MODEL_0_3B,
     MODEL_0_5B,
     MODEL_0_6B,
+    MODEL_0_8B,
     MODEL_1B,
     MODEL_1_2B,
     MODEL_1_3B,
@@ -107,10 +108,12 @@ enum e_model {
     MODEL_16B_A1B,
     MODEL_21B_A3B, // Ernie MoE small
     MODEL_30B_A3B,
+    MODEL_35B_A3B,
     MODEL_80B_A3B, // Qwen3-Next
     MODEL_80B_A13B,
     MODEL_100B_A6B,
     MODEL_106B_A12B,
+    MODEL_122B_A10B,
     MODEL_230B_A10B, // Minimax M2
     MODEL_235B_A22B,
     MODEL_310B_A15B,
@@ -209,6 +212,18 @@ struct llama_layer {
     llama_split_tensor split_sinks;
     llama_split_tensor split_wqkv_gate;
 
+    llama_split_tensor split_ssm_wqkv;
+    llama_split_tensor split_ssm_wqkv_gate;
+    llama_split_tensor split_ssm_in;
+    llama_split_tensor split_ssm_conv1d;
+    llama_split_tensor split_ssm_dt;
+    llama_split_tensor split_ssm_a;
+    llama_split_tensor split_ssm_beta_alpha;
+    llama_split_tensor split_ssm_beta;
+    llama_split_tensor split_ssm_alpha;
+    llama_split_tensor split_ssm_norm;
+    llama_split_tensor split_ssm_out;
+
     // relative position bias
     struct ggml_tensor * attn_rel_b = nullptr;
     struct ggml_tensor * attn_rel_b_enc = nullptr;
@@ -267,6 +282,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_up_shexp;
     llama_split_tensor split_ffn_gate_shexp;
     llama_split_tensor split_ffn_down_shexp;
+    llama_split_tensor split_ffn_gate_inp_shexp;
 
     llama_split_tensor split_ffn_gate_inp_b;
     llama_split_tensor split_ffn_gate_exps_b;
@@ -374,8 +390,11 @@ struct llama_model {
     int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     int n_gpu_layers;
 
+    bool mtp; // use mtp if is supported by the Model
+
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
+    std::vector<int32_t> default_layer_device;
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
@@ -420,8 +439,15 @@ struct llama_model {
 
     ~llama_model();
 
-    // Not actually needed, but left in place for now
-    size_t max_nodes() const { return 65536 * 2; }
+    size_t max_nodes(int n_tokens) const {
+        auto n_tensors = tensors_by_name.size();
+        if (split_mode == LLAMA_SPLIT_MODE_GRAPH && !devices.empty()) n_tensors *= devices.size();
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35) {
+            return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
+        }
+        //return std::max<size_t>(1024, 8*n_tensors);
+        return 65536;
+    }
 
     bool has_tensor_overrides() const {
         return tensor_overrides;
