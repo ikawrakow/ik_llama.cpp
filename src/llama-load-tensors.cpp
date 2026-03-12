@@ -4035,7 +4035,7 @@ bool create_tensors_helper::create_tensors() {
                         prepare_split_tensors(1, ctx_split, layer.ffn_up_gate_exps, layer.split_ffn_up_gate_exps, up_gate_split, mem_used);
                         prepare_up_gate_split(layer.ffn_up_gate_exps, layer.split_ffn_up_gate_exps);
                         if (layer.ffn_up_gate_exps_b) {
-                            prepare_split_tensors(1, ctx_split, layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b, up_gate_split, mem_used);
+                            prepare_split_tensors(0, ctx_split, layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b, up_gate_split, mem_used);
                             prepare_up_gate_split(layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b);
                         }
                     } else {
