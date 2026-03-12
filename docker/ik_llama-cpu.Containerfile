@@ -80,7 +80,8 @@ ENTRYPOINT [ "/app/llama-server" ]
 FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
 ARG LS_VER=189
-RUN curl -LO "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
+RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
+    -o "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
 COPY --from=build /app/docker/ik_llama-cpu-swap.config.yaml /app/config.yaml
