@@ -161,7 +161,7 @@
     {%- if message.role == 'assistant' %}
         {%- if message.tool_calls %}
             {%- set message.content = message.content + render_tool_call() %}
-            {%- set message.tool_calls = None %}
+            {%- set message.tool_calls = [] %}
         {%- endif %}
     {%- elif message.role == 'user' %}
         {%- if message.content.startswith('<tool_response>') %}
@@ -271,3 +271,15 @@
         {{- '<think>\n\n</think>\n\n' }}
     {%- endif %}
 {%- endif %}
+
+{#- ========== Workaround for llama.cpp crashing ========== #}
+{%- for message in messages %}
+    {%- if message.role == "assistant" %}
+        {%- if message.tool_calls | length == 0 %}
+            {%- set fake_function = namespace(name='fake_name', arguments='{}') %}
+            {%- set fake_function = namespace(function=fake_function) %}
+            {%- set message.tool_calls = [fake_function, fake_function] %}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{#- ========== Workaround for llama.cpp crashing ========== #}
