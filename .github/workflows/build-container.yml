@@ -47,19 +47,29 @@ jobs:
           echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.variant }}-
+
       - name: Build and Push
         uses: docker/bake-action@v5
         env:
-          # This maps the shell/github variables to the HCL variables
           REPO_OWNER: ${{ env.REPO_LOWER }}
           VARIANT: ${{ matrix.variant }}
           SHA_SHORT: ${{ env.SHA_SHORT }}
           CUDA_VERSION: ${{ matrix.cuda_version }}
+          USE_CCACHE: "true"
         with:
           push: true
           files: ./docker-bake.hcl
           set: |
             *.dockerfile=./docker/${{ matrix.containerfile }}
+            *.cache-from=type=gha,scope=ccache-${{ matrix.variant }}
+            *.cache-to=type=gha,mode=max,scope=ccache-${{ matrix.variant }}
 
   cleanup:
     runs-on: ubuntu-latest

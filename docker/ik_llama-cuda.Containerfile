@@ -5,16 +5,34 @@ ARG BASE_CUDA_RUN_CONTAINER=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu
 
 # Stage 1: Build
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
-ARG CUDA_DOCKER_ARCH=default # CUDA architecture to build for (defaults to all supported archs)
-RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake
+ARG CUDA_DOCKER_ARCH=default 
+# Add the toggle for ccache
+ARG USE_CCACHE=false
+ENV CCACHE_DIR=/ccache
+
+# Install build dependencies + ccache
+RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache
 
 COPY . /app
 WORKDIR /app
-RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
-    export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
+
+# We use a cache mount for /ccache to persist objects between builds
+RUN --mount=type=cache,target=/ccache \
+    if [ "${USE_CCACHE}" = "true" ]; then \
+        export PATH="/usr/lib/ccache:$PATH"; \
+        echo "ccache enabled. Current stats:"; \
+        ccache -s; \
+    fi && \
+    if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
+        export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
     cmake -B build -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
-    cmake --build build --config Release -j$(nproc)
+    cmake --build build --config Release -j$(nproc) && \
+    if [ "${USE_CCACHE}" = "true" ]; then \
+        echo "Build finished. Updated stats:"; \
+        ccache -s; \
+    fi
+
 RUN mkdir -p /app/lib && \
     find build -name "*.so" -exec cp {} /app/lib \;
 RUN mkdir -p /app/build/src && \
