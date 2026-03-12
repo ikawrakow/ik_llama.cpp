@@ -4,12 +4,29 @@ ARG UBUNTU_VERSION=22.04
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 ENV LLAMA_CURL=1
 ENV LC_ALL=C.utf8
+# Add the toggle for ccache
+ARG USE_CCACHE=false
+ENV CCACHE_DIR=/ccache
 
-RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake
+RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache
+
 COPY . /app
 WORKDIR /app
-RUN cmake -B build -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON && \
-    cmake --build build --config Release -j$(nproc)
+
+# Use a cache mount for /ccache to persist objects between builds
+RUN --mount=type=cache,target=/ccache \
+    if [ "${USE_CCACHE}" = "true" ]; then \
+        export PATH="/usr/lib/ccache:$PATH"; \
+        echo "ccache enabled. Current stats:"; \
+        ccache -s; \
+    fi && \
+    cmake -B build -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON . && \
+    cmake --build build --config Release -j$(nproc) && \
+    if [ "${USE_CCACHE}" = "true" ]; then \
+        echo "Build finished. Updated stats:"; \
+        ccache -s; \
+    fi
+
 RUN mkdir -p /app/lib && \
     find build -name "*.so" -exec cp {} /app/lib \;
 RUN mkdir -p /app/build/src && \
