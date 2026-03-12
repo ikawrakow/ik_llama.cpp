@@ -3215,9 +3215,6 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
     auto ug_meta = ml.get_tensor_meta(ug_name.c_str());
     //printf("Checking for tensor %s: %s\n", ug_name.c_str(), ug_meta ? "found" : "not found");
     if (ug_meta) {
-        //if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        //    GGML_ABORT("Merged ffn_up_exps/ffn_gate_exps are not supported for split mode graph!");
-        //}
         layer.ffn_up_gate_exps = create_tensor(ffn_ctx, ug_name, {  n_embd, 2*n_ff_exp, n_expert}, flags);
     } else {
         merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
