@@ -978,10 +978,13 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         }
     }
     else if (extra->split_dim == 1) {
+        void * extra_ptr;
+        memcpy(&extra_ptr, tensor->op_params, sizeof(extra_ptr));
         if (tensor->ne[2] > 1) {
             auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
             std::vector<char> host_buffer;
             int ne1 = 0;
+            int extra_ne1 = 0;
             for (int i = 0; i < extra->n_device; ++i) {
                 auto split = extra->splits[i];
                 if (!split) continue;
@@ -990,8 +993,18 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                 if (host_buffer.size() < size) host_buffer.resize(size);
                 for (int64_t i02 = 0; i02 < split->ne[2]; ++i02) {
                     auto dst = host_buffer.data() + i02*split->ne[1]*row_size;
-                    auto src = (const char *)data + i02*tensor->nb[2] + ne1*tensor->nb[1];
-                    memcpy(dst, src, split->ne[1]*row_size);
+                    if (extra_ptr) {
+                        auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
+                        for (auto & p : ranges[i]) {
+                            auto this_src = (const char *)data + i02*tensor->nb[2] + p.first*tensor->nb[1];
+                            auto this_size = p.second*tensor->nb[1];
+                            memcpy(dst, this_src, this_size);
+                            dst += this_size;
+                        }
+                    } else {
+                        auto src = (const char *)data + i02*tensor->nb[2] + ne1*tensor->nb[1];
+                        memcpy(dst, src, split->ne[1]*row_size);
+                    }
                 }
                 CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), size, cudaMemcpyHostToDevice, cudaStreamPerThread));
                 ne1 += split->ne[1];
@@ -999,8 +1012,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         } else {
             int n_interleave = 1;
             if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
-            void * extra_ptr;
-            memcpy(&extra_ptr, tensor->op_params, sizeof(extra_ptr));
             if (extra_ptr) {
                 auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
                 GGML_ASSERT(extra->n_device == int(ranges.size()));
