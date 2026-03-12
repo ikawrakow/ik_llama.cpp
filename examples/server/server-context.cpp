@@ -3491,7 +3491,7 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
             llama_token banned_tok = result->tok;
             
             if (n == 0) {
-                LLAMA_LOG_INFO("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n", 
+                LLAMA_LOG_DEBUG("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n", 
                     ban_pos, banned_tok, result->text_to_send.c_str());
             }
 
