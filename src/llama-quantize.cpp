@@ -1453,6 +1453,13 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                         auto pos = pos1 != std::string::npos ? pos1 : pos2;
                         auto merged_name = name.substr(0, pos) + "ffn_gate_up_exps.weight";
                         it = imatrix_data->find(merged_name);
+                        if (it == imatrix_data->end()) {
+                            auto up_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                            it = imatrix_data->find(up_name);
+                        }
+                    } else if (auto pos = name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
+                        auto not_merged_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                        it = imatrix_data->find(not_merged_name);
                     } else {
                         // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
                         //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
