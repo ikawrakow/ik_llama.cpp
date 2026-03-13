@@ -352,12 +352,19 @@ public:
 
     server_tokens(const llama_tokens& tokens, bool has_mtmd);
 
-    llama_pos pos_next() const;
+    // the next position after n_tokens. if n_tokens < 0, return the next position after all tokens.
+    llama_pos pos_next(int64_t n_tokens = -1) const;
+
+    // number of tokens with position <= max_pos
+    size_t size_up_to_pos(llama_pos max_pos) const;
 
     int n_tokens() const {
         return tokens.size();
     }
 
+    bool has_mtmd_data() {
+       return !map_idx_to_media.empty();
+    }
     // for debugging
     std::string str() const;
 
@@ -412,7 +419,7 @@ public:
 
     size_t get_common_prefix_exact(const server_tokens& b) const;
 
-    llama_tokens get_text_tokens_exclude_think(const llama_context* ctx, const thinking_tokens& think_token) const;
+    server_tokens get_tokens_exclude_think(const llama_context * ctx, const thinking_tokens & think_token) const;
 
     common_prefix get_common_prefix(const llama_context* ctx, const server_tokens& b, bool exact = false) const;
     // take first n tokens of tokens list a
@@ -430,6 +437,8 @@ public:
         llama_pos pos,
         int32_t seq_id,
         size_t& n_tokens_out) const;
+
+    server_tokens clone() const;
 
     // Keep the first n_keep and remove n_discard tokens from tokens
     void discard_n_tokens(int32_t n_keep, int32_t n_discard);

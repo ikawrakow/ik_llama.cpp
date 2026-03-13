@@ -125,7 +125,7 @@ ggml_cgraph * llm_build_context::build_k_shift() {
 
     GGML_ASSERT(kv_self.size == n_ctx);
 
-    const auto & rope_type_shift = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE
+    const auto & rope_type_shift = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE
         // @ngxson : this is a workaround
         // for M-RoPE, we want to rotate the whole vector when doing KV shift
         // a normal RoPE should work, we just need to use the correct ordering

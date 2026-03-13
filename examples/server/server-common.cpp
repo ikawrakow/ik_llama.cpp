@@ -1791,263 +1791,472 @@ token_probabilities get_token_probabilities(llama_context* ctx, int idx, llama_t
  */
 
 server_tokens::server_tokens(mtmd::input_chunks& mtmd_chunks, bool has_mtmd) : has_mtmd(has_mtmd) {
-        for (size_t i = 0; i < mtmd_chunks.size(); ++i) {
-            push_back(mtmd_chunks[i]);
-        }
+    for (size_t i = 0; i < mtmd_chunks.size(); ++i) {
+        push_back(mtmd_chunks[i]);
     }
+}
 
-server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
-    }
+server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
 
-    llama_pos server_tokens::pos_next() const {
-        if (!has_mtmd) {
+llama_pos server_tokens::pos_next(int64_t n_tokens) const {
+    if (!has_mtmd) {
+        if (n_tokens < 0) {
             return tokens.size();
         }
 
+        return n_tokens;
+    }
+
+    if (n_tokens < 0) {
         llama_pos res = tokens.size();
 
         for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
-            const auto& chunk = it->second;
+            const auto & chunk = it->second;
             res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
         }
 
         return res;
     }
 
-    // for debugging
-    std::string server_tokens::str() const {
-        std::ostringstream oss;
-        oss << "tokens: ";
-        for (size_t idx = 0; idx < tokens.size(); ++idx) {
-            llama_token t = tokens[idx];
-            oss << "idx:" << idx << " ";
-            if (t == LLAMA_TOKEN_NULL) {
-                oss << "<embd> ";
-            }
-            else {
-                oss << t << " ";
-            }
+    int64_t idx = 0;
+    llama_pos pos = 0;
+
+    GGML_ASSERT(n_tokens <= (int64_t)tokens.size());
+
+    while (idx < n_tokens) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
         }
-        oss << "\n";
-        oss << "image idx: ";
-        for (const auto& it : map_idx_to_media) {
-            oss << it.first << ", ";
-        }
-        return oss.str();
     }
 
-    const mtmd::input_chunk_ptr& server_tokens::find_chunk(size_t idx) const {
-        auto it = map_idx_to_media.find(idx);
-        if (it != map_idx_to_media.end()) {
-            return it->second;
-        }
-        throw std::runtime_error("Chunk not found");
+    return pos;
+}
+
+
+size_t server_tokens::size_up_to_pos(llama_pos max_idx) const {
+    if (!has_mtmd) {
+        return std::min((size_t)max_idx+1, tokens.size());
     }
 
-    void server_tokens::push_back(llama_token tok) {
-        if (tok == LLAMA_TOKEN_NULL) {
-            throw std::runtime_error("Invalid token");
+    size_t idx = 0;
+    llama_pos pos = 0;
+
+    while (idx < tokens.size()) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
         }
-        tokens.emplace_back(tok);
+
+        if (idx >= max_idx) {
+            break;
+        }
     }
 
-    // will create a copy of the chunk if it contains non-text data
-    void server_tokens::push_back(const mtmd_input_chunk* chunk) {
-        auto type = mtmd_input_chunk_get_type(chunk);
-        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
-            GGML_ASSERT(has_mtmd);
-            const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
-            size_t start_idx = tokens.size();
-            for (size_t i = 0; i < n_tokens; ++i) {
-                tokens.emplace_back(LLAMA_TOKEN_NULL);
-            }
-            mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
-            map_idx_to_media[start_idx] = std::move(new_chunk);
-        }
-        else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-            size_t n_tokens;
-            const auto* text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
-            for (size_t i = 0; i < n_tokens; ++i) {
-                push_back(text_tokens[i]);
-            }
+    return idx+1;
+}
+
+
+// for debugging
+std::string server_tokens::str() const {
+    std::ostringstream oss;
+    oss << "tokens: ";
+    for (size_t idx = 0; idx < tokens.size(); ++idx) {
+        llama_token t = tokens[idx];
+        oss << "idx:" << idx << " ";
+        if (t == LLAMA_TOKEN_NULL) {
+            oss << "<embd> ";
         }
         else {
-            GGML_ABORT("Invalid chunk type");
+            oss << t << " ";
         }
     }
+    oss << "\n";
+    oss << "image idx: ";
+    for (const auto& it : map_idx_to_media) {
+        oss << it.first << ", ";
+    }
+    return oss.str();
+}
 
-    // appends server tokens, updates the media map. copies media chunks.
-    void server_tokens::push_back(server_tokens& tokens) {
-        size_t start_idx = size();
-        for (size_t i = 0; i < tokens.size(); i++) {
-            push_back(tokens[i]);
+const mtmd::input_chunk_ptr& server_tokens::find_chunk(size_t idx) const {
+    auto it = map_idx_to_media.find(idx);
+    if (it != map_idx_to_media.end()) {
+        return it->second;
+    }
+    throw std::runtime_error("Chunk not found");
+}
+
+void server_tokens::push_back(llama_token tok) {
+    if (tok == LLAMA_TOKEN_NULL) {
+        throw std::runtime_error("Invalid token");
+    }
+    tokens.emplace_back(tok);
+}
+
+// will create a copy of the chunk if it contains non-text data
+void server_tokens::push_back(const mtmd_input_chunk* chunk) {
+    auto type = mtmd_input_chunk_get_type(chunk);
+    if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+        GGML_ASSERT(has_mtmd);
+        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+        size_t start_idx = tokens.size();
+        for (size_t i = 0; i < n_tokens; ++i) {
+            tokens.emplace_back(LLAMA_TOKEN_NULL);
         }
-        if (tokens.has_mtmd) {
-            // Assert if we are copying MTMD chunks to a server_tokens that does not have mtmd.
-            // We could also just check, but this will prevent silently dropping MTMD data.
-            GGML_ASSERT(has_mtmd);
-            for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ) {
-                auto* chunk = tokens.map_idx_to_media[it->first].get();
-                mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
-                map_idx_to_media[start_idx + it->first] = std::move(new_chunk);
+        mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
+        map_idx_to_media[start_idx] = std::move(new_chunk);
+    }
+    else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+        size_t n_tokens;
+        const auto* text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
+        for (size_t i = 0; i < n_tokens; ++i) {
+            push_back(text_tokens[i]);
+        }
+    }
+    else {
+        GGML_ABORT("Invalid chunk type");
+    }
+}
+
+// appends server tokens, updates the media map. copies media chunks.
+void server_tokens::push_back(server_tokens& tokens) {
+    size_t start_idx = size();
+    for (size_t i = 0; i < tokens.size(); i++) {
+        push_back(tokens[i]);
+    }
+    if (tokens.has_mtmd) {
+        // Assert if we are copying MTMD chunks to a server_tokens that does not have mtmd.
+        // We could also just check, but this will prevent silently dropping MTMD data.
+        GGML_ASSERT(has_mtmd);
+        for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ) {
+            auto* chunk = tokens.map_idx_to_media[it->first].get();
+            mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
+            map_idx_to_media[start_idx + it->first] = std::move(new_chunk);
+        }
+    }
+}
+
+// for compatibility with context shift and prompt truncation
+void server_tokens::insert(const std::vector<llama_token>& inp_tokens) {
+    GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+    tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
+}
+
+// for compatibility with context shift and prompt truncation
+void server_tokens::resize(size_t size) {
+    //GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+    tokens.resize(size);
+}
+
+llama_token* server_tokens::data() {
+    return tokens.data();
+}
+
+llama_tokens::iterator server_tokens::begin() {
+    return tokens.begin();
+}
+
+llama_tokens::iterator server_tokens::end() {
+    return tokens.end();
+}
+
+llama_tokens::const_iterator server_tokens::cbegin() {
+    return tokens.cbegin();
+}
+
+llama_tokens::const_iterator server_tokens::cend() {
+    return tokens.cend();
+}
+
+llama_tokens server_tokens::tokens_data() {
+    return tokens;
+}
+
+// for compatibility with speculative decoding, ctx shift, slot save/load
+const std::vector<llama_token>& server_tokens::get_text_tokens() const {
+    GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+    return tokens;
+}
+
+// for compatibility with speculative decoding
+void server_tokens::set_token(llama_pos pos, llama_token id) {
+    GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+    tokens[pos] = id;
+}
+
+size_t server_tokens::size() const {
+    return tokens.size();
+}
+
+bool server_tokens::empty() const {
+    return tokens.empty();
+}
+
+void server_tokens::clear() {
+    tokens.clear();
+}
+
+void server_tokens::keep_first(size_t n) {
+    GGML_ASSERT(n <= tokens.size());
+    if (has_mtmd) {
+        if (n == tokens.size()) {
+            return; // nothing to do
+        }
+        // we throw an error if we try to remove a token in the middle of an image
+        // for ex. with input of 5 text tokens and 2 images:
+        //    [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1]
+        // n  1   2   3   4   5   6      7      8      9      10
+        // allowed to resize      ^                    ^
+        // disallowed to resize          ^      ^             ^
+        if (n > 0) {
+            llama_token last_token = tokens[n - 1];
+            // make sure we never remove tokens in the middle of an image
+            if (last_token == LLAMA_TOKEN_NULL) {
+                find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+            }
+        }
+        // remove all image chunks that are not used anymore
+        for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ) {
+            size_t idx = it->first;
+            if (idx >= n) {
+                it = map_idx_to_media.erase(it);
+            }
+            else {
+                ++it;
             }
         }
     }
+    tokens.resize(n);
+}
 
-    // for compatibility with context shift and prompt truncation
-    void server_tokens::insert(const std::vector<llama_token>& inp_tokens) {
-        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
-        tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
+std::string server_tokens::detokenize(const llama_context* ctx, bool special) const {
+    llama_tokens text_tokens;
+    text_tokens.reserve(tokens.size());
+    for (const auto& t : tokens) {
+        if (t != LLAMA_TOKEN_NULL) {
+            text_tokens.push_back(t);
+        }
     }
+    return common_detokenize(ctx, text_tokens, special);
+}
 
-    // for compatibility with context shift and prompt truncation
-    void server_tokens::resize(size_t size) {
-        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
-        tokens.resize(size);
+std::string server_tokens::detokenize(const llama_context* ctx, bool special, size_t start, size_t length) const {
+    std::string str;
+    if (tokens.size() <= start || length == 0) {
+        return str;
     }
-
-    llama_token* server_tokens::data() {
-        return tokens.data();
-    }
-
-    llama_tokens::iterator server_tokens::begin() {
-        return tokens.begin();
-    }
-
-    llama_tokens::iterator server_tokens::end() {
-        return tokens.end();
-    }
-
-    llama_tokens::const_iterator server_tokens::cbegin() {
-        return tokens.cbegin();
-    }
-
-    llama_tokens::const_iterator server_tokens::cend() {
-        return tokens.cend();
-    }
-
-    llama_tokens server_tokens::tokens_data() {
-        return tokens;
-    }
-
-    // for compatibility with speculative decoding, ctx shift, slot save/load
-    const std::vector<llama_token>& server_tokens::get_text_tokens() const {
-        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
-        return tokens;
-    }
-
-    // for compatibility with speculative decoding
-    void server_tokens::set_token(llama_pos pos, llama_token id) {
-        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
-        tokens[pos] = id;
-    }
-
-    size_t server_tokens::size() const {
-        return tokens.size();
-    }
-
-    bool server_tokens::empty() const {
-        return tokens.empty();
-    }
-
-    void server_tokens::clear() {
-        tokens.clear();
-    }
-
-    void server_tokens::keep_first(size_t n) {
-        GGML_ASSERT(n <= tokens.size());
-        if (has_mtmd) {
-            if (n == tokens.size()) {
-                return; // nothing to do
+    llama_tokens text_tokens;
+    text_tokens.reserve(tokens.size() - start);
+    size_t i = 0;
+    size_t count = 0;
+    for (const auto& t : tokens) {
+        if (t != LLAMA_TOKEN_NULL && i >= start) {
+            text_tokens.push_back(t);
+            ++count;
+            if (count >= length) {
+                break;
             }
-            // we throw an error if we try to remove a token in the middle of an image
-            // for ex. with input of 5 text tokens and 2 images:
-            //    [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1]
-            // n  1   2   3   4   5   6      7      8      9      10
-            // allowed to resize      ^                    ^
-            // disallowed to resize          ^      ^             ^
-            if (n > 0) {
-                llama_token last_token = tokens[n - 1];
-                // make sure we never remove tokens in the middle of an image
-                if (last_token == LLAMA_TOKEN_NULL) {
-                    find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+        }
+        ++i;
+    }
+    return common_detokenize(ctx, text_tokens, special);
+}
+
+size_t server_tokens::find_n_from_tokens(const llama_context* ctx, const server_tokens& b, bool special,
+    size_t start, const size_t length) {
+    std::string str = detokenize(ctx, special, start, length);
+    std::vector<size_t> tmp;
+    size_t n = find_n_tokens_from_string(ctx, b.tokens, start, length, tmp);
+    return n;
+}
+
+size_t server_tokens::get_common_prefix_exact(const server_tokens& b) const {
+    const size_t max_idx = std::min(tokens.size(), b.tokens.size());
+
+    if (!has_mtmd) {
+        for (size_t i = 0; i < max_idx; ++i) {
+            if (tokens[i] == b.tokens[i]) {
+                continue;
+            }
+            return i;
+        }
+        return max_idx;
+    }
+
+    for (size_t i = 0; i < max_idx; ++i) {
+        const llama_token ai = tokens[i];
+        const llama_token bi = b.tokens[i];
+
+        if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
+            const auto& a_chunk = find_chunk(i);
+            const auto& b_chunk = b.find_chunk(i);
+
+            GGML_ASSERT(a_chunk && b_chunk);
+
+            const std::string id_ai = mtmd_input_chunk_get_id(a_chunk.get());
+            const std::string id_bi = mtmd_input_chunk_get_id(b_chunk.get());
+
+            const size_t n_tok_a = mtmd_input_chunk_get_n_tokens(a_chunk.get());
+            const size_t n_tok_b = mtmd_input_chunk_get_n_tokens(b_chunk.get());
+
+            if (id_ai == id_bi && n_tok_a == n_tok_b) {
+                GGML_ASSERT(n_tok_a > 0 && "Invalid media chunk"); // should never happen
+                i += n_tok_a - 1; // will be +1 by the for loop
+                continue;
+            }
+
+            return i;
+        }
+
+        if (ai == bi) {
+            continue;
+        }
+
+        return i;
+    }
+
+    return max_idx; // all tokens are equal
+}
+
+server_tokens server_tokens::get_tokens_exclude_think(const llama_context * ctx, const thinking_tokens & think_token) const {
+    if (!think_token.exclude) {
+        return clone();
+    }
+    GGML_ASSERT((think_token.begin != "" && think_token.end != "") && "think tokens cannot be empty");
+    std::string startStr = think_token.begin;
+    std::string endStr = think_token.end;
+    std::string str = detokenize(ctx, true, 0, n_tokens());
+
+    std::vector<std::pair<size_t, size_t>> results;
+    // Find all positions of start and end
+    std::vector<size_t> startPositions;
+    std::vector<size_t> endPositions;
+
+    size_t pos = 0;
+    // Find all start positions
+    while ((pos = str.find(startStr, pos)) != std::string::npos) {
+        startPositions.push_back(pos);
+        pos += startStr.length();
+    }
+
+    pos = 0;
+    // Find all end positions
+    while ((pos = str.find(endStr, pos)) != std::string::npos) {
+        endPositions.push_back(pos + endStr.length());
+        pos += endStr.length();
+    }
+
+    // For each start position, pair with all end positions that come after it
+    for (size_t i = 0; i < startPositions.size(); i++) {
+        for (size_t j = 0; j < endPositions.size(); j++) {
+            if (results.size()) {
+                // start must be after last end
+                if (startPositions[i] > results[results.size() - 1].second && endPositions[j] > startPositions[i]) {
+                    results.push_back({ startPositions[i], endPositions[j] });
+                    break;
                 }
-            }
-            // remove all image chunks that are not used anymore
-            for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ) {
-                size_t idx = it->first;
-                if (idx >= n) {
-                    it = map_idx_to_media.erase(it);
-                }
-                else {
-                    ++it;
-                }
-            }
-        }
-        tokens.resize(n);
-    }
-
-    std::string server_tokens::detokenize(const llama_context* ctx, bool special) const {
-        llama_tokens text_tokens;
-        text_tokens.reserve(tokens.size());
-        for (const auto& t : tokens) {
-            if (t != LLAMA_TOKEN_NULL) {
-                text_tokens.push_back(t);
-            }
-        }
-        return common_detokenize(ctx, text_tokens, special);
-    }
-
-    std::string server_tokens::detokenize(const llama_context* ctx, bool special, size_t start, size_t length) const {
-        std::string str;
-        if (tokens.size() <= start || length == 0) {
-            return str;
-        }
-        llama_tokens text_tokens;
-        text_tokens.reserve(tokens.size() - start);
-        size_t i = 0;
-        size_t count = 0;
-        for (const auto& t : tokens) {
-            if (t != LLAMA_TOKEN_NULL && i >= start) {
-                text_tokens.push_back(t);
-                ++count;
-                if (count >= length) {
+            } else {
+                if (endPositions[j] > startPositions[i]) {
+                    results.push_back({ startPositions[i], endPositions[j] });
                     break;
                 }
             }
+
+        }
+    }
+    if (!results.size()) {
+        return clone();
+    }
+
+    server_tokens res;
+    res.has_mtmd = has_mtmd;
+    // Exclude tokens
+    pos = 0;
+    size_t n = 0;
+    size_t string_len = 0;
+    auto model = llama_get_model(ctx);
+    for (n = 0; n < tokens.size(); ++n) {
+        if (tokens[n] != LLAMA_TOKEN_NULL) {
+            str = llama_token_to_piece(model, tokens[n], true);
+            string_len = string_len + str.size();
+        }
+        if (string_len <= results[pos].first) {
+            res.tokens.push_back(tokens[n]);
+            auto it = map_idx_to_media.find(n);
+            if (it!= map_idx_to_media.end()) {
+                const mtmd::input_chunk_ptr & chunk = it->second;
+                res.map_idx_to_media[res.n_tokens()-1] = mtmd::input_chunk_ptr(mtmd_input_chunk_copy(chunk.get()));
+            }
+        } else if (string_len <= results[pos].second) {
+            continue;
+        } else {
+            res.tokens.push_back(tokens[n]);
+            auto it = map_idx_to_media.find(n);
+            if (it != map_idx_to_media.end()) {
+                const mtmd::input_chunk_ptr & chunk = it->second;
+                res.map_idx_to_media[res.n_tokens() - 1] = mtmd::input_chunk_ptr(mtmd_input_chunk_copy(chunk.get()));
+            }
+            if (pos + 1 < results.size()) {
+                pos++;
+            }
+        }
+    }
+    return res;
+}
+
+common_prefix server_tokens::get_common_prefix(const llama_context* ctx, const server_tokens& b, bool exact) const {
+    common_prefix token_prefix;
+
+    size_t n = get_common_prefix_exact(b); // strict token match as a starting point
+    token_prefix.first = n;
+    token_prefix.second = n;
+
+    if (!has_mtmd) {
+        token_prefix = find_common_text_token_prefix(ctx, this->tokens, b.tokens, n, exact);
+        token_prefix.first += n;
+        token_prefix.second += n;
+        return token_prefix;
+    }
+    size_t i = n;
+    size_t j = n;
+    llama_tokens a_list;
+    llama_tokens b_list;
+    while (i < size() && j < b.size()) {
+        llama_token ai = tokens[i];
+        llama_token bi = b.tokens[j];
+        if (ai != LLAMA_TOKEN_NULL) {
+            a_list.push_back(ai);
             ++i;
         }
-        return common_detokenize(ctx, text_tokens, special);
-    }
-
-    size_t server_tokens::find_n_from_tokens(const llama_context* ctx, const server_tokens& b, bool special,
-        size_t start, const size_t length) {
-        std::string str = detokenize(ctx, special, start, length);
-        std::vector<size_t> tmp;
-        size_t n = find_n_tokens_from_string(ctx, b.tokens, start, length, tmp);
-        return n;
-    }
-
-    size_t server_tokens::get_common_prefix_exact(const server_tokens& b) const {
-        const size_t max_idx = std::min(tokens.size(), b.tokens.size());
-
-        if (!has_mtmd) {
-            for (size_t i = 0; i < max_idx; ++i) {
-                if (tokens[i] == b.tokens[i]) {
-                    continue;
-                }
-                return i;
-            }
-            return max_idx;
+        if (bi != LLAMA_TOKEN_NULL) {
+            b_list.push_back(bi);
+            ++j;
         }
-
-        for (size_t i = 0; i < max_idx; ++i) {
-            const llama_token ai = tokens[i];
-            const llama_token bi = b.tokens[i];
-
-            if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
+        if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
+            common_prefix prefix = find_common_text_token_prefix(ctx, a_list, b_list, 0, exact);
+            // text match or empty
+            if (prefix.first == a_list.size() && prefix.second == b_list.size()) {
+                a_list.clear();
+                b_list.clear();
                 const auto& a_chunk = find_chunk(i);
-                const auto& b_chunk = b.find_chunk(i);
+                const auto& b_chunk = b.find_chunk(j);
 
                 GGML_ASSERT(a_chunk && b_chunk);
 
@@ -2057,302 +2266,173 @@ server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mt
                 const size_t n_tok_a = mtmd_input_chunk_get_n_tokens(a_chunk.get());
                 const size_t n_tok_b = mtmd_input_chunk_get_n_tokens(b_chunk.get());
 
+                // image match
                 if (id_ai == id_bi && n_tok_a == n_tok_b) {
                     GGML_ASSERT(n_tok_a > 0 && "Invalid media chunk"); // should never happen
-                    i += n_tok_a - 1; // will be +1 by the for loop
-                    continue;
-                }
-
-                return i;
-            }
-
-            if (ai == bi) {
-                continue;
-            }
-
-            return i;
-        }
-
-        return max_idx; // all tokens are equal
-    }
-
-    llama_tokens server_tokens::get_text_tokens_exclude_think(const llama_context* ctx, const thinking_tokens& think_token) const {
-        if (!think_token.exclude) {
-            return get_text_tokens();
-        }
-        GGML_ASSERT((think_token.begin != "" && think_token.end != "") && "think tokens cannot be empty");
-        std::string startStr = think_token.begin;
-        std::string endStr = think_token.end;
-
-        llama_tokens tokens = get_text_tokens();
-        std::string str = common_detokenize(ctx, tokens, true);
-
-        std::vector<std::pair<size_t, size_t>> results;
-        // Find all positions of start and end
-        std::vector<size_t> startPositions;
-        std::vector<size_t> endPositions;
-
-        size_t pos = 0;
-        // Find all start positions
-        while ((pos = str.find(startStr, pos)) != std::string::npos) {
-            startPositions.push_back(pos);
-            pos += startStr.length();
-        }
-
-        pos = 0;
-        // Find all end positions
-        while ((pos = str.find(endStr, pos)) != std::string::npos) {
-            endPositions.push_back(pos + endStr.length());
-            pos += endStr.length();
-        }
-
-        // For each start position, pair with all end positions that come after it
-        for (size_t i = 0; i < startPositions.size(); i++) {
-            for (size_t j = 0; j < endPositions.size(); j++) {
-                if (results.size()) {
-                    // start must be after last end
-                    if (startPositions[i] > results[results.size() - 1].second && endPositions[j] > startPositions[i]) {
-                        results.push_back({ startPositions[i], endPositions[j] });
-                        break;
-                    }
+                    i += n_tok_a;
+                    j += n_tok_a;
+                    prefix.first += n_tok_a;
+                    prefix.second += n_tok_a;
+                    token_prefix = common_prefix_add(prefix, token_prefix);
                 }
                 else {
-                    if (endPositions[j] > startPositions[i]) {
-                        results.push_back({ startPositions[i], endPositions[j] });
-                        break;
-                    }
-                }
-
-            }
-        }
-        if (!results.size()) {
-            return tokens;
-        }
-
-        // Exclude tokens
-        pos = 0;
-        size_t n = 0;
-        size_t string_len = 0;
-        llama_tokens tokens_new;
-        auto model = llama_get_model(ctx);
-        for (n = 0; n < tokens.size(); ++n) {
-            str = llama_token_to_piece(model, tokens[n], true);
-            string_len = string_len + str.size();
-            if (string_len <= results[pos].first) {
-                tokens_new.push_back(tokens[n]);
-            }
-            else if (string_len <= results[pos].second) {
-                continue;
-            }
-            else {
-                tokens_new.push_back(tokens[n]);
-                if (pos+1 < results.size()) {
-                    pos++;
-                }
-            }            
-        }
-        return tokens_new;
-    }
-
-
-    common_prefix server_tokens::get_common_prefix(const llama_context* ctx, const server_tokens& b, bool exact) const {
-        common_prefix token_prefix;
-
-        size_t n = get_common_prefix_exact(b); // strict token match as a starting point
-        token_prefix.first = n;
-        token_prefix.second = n;
-
-        if (!has_mtmd) {
-            token_prefix = find_common_text_token_prefix(ctx, this->tokens, b.tokens, n, exact);
-            token_prefix.first += n;
-            token_prefix.second += n;
-            return token_prefix;
-        }
-        size_t i = n;
-        size_t j = n;
-        llama_tokens a_list;
-        llama_tokens b_list;
-        while (i < size() && j < b.size()) {
-            llama_token ai = tokens[i];
-            llama_token bi = b.tokens[j];
-            if (ai != LLAMA_TOKEN_NULL) {
-                a_list.push_back(ai);
-                ++i;
-            }
-            if (bi != LLAMA_TOKEN_NULL) {
-                b_list.push_back(bi);
-                ++j;
-            }
-            if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
-                common_prefix prefix = find_common_text_token_prefix(ctx, a_list, b_list, 0, exact);
-                // text match or empty
-                if (prefix.first == a_list.size() && prefix.second == b_list.size()) {
-                    a_list.clear();
-                    b_list.clear();
-                    const auto& a_chunk = find_chunk(i);
-                    const auto& b_chunk = b.find_chunk(j);
-
-                    GGML_ASSERT(a_chunk && b_chunk);
-
-                    const std::string id_ai = mtmd_input_chunk_get_id(a_chunk.get());
-                    const std::string id_bi = mtmd_input_chunk_get_id(b_chunk.get());
-
-                    const size_t n_tok_a = mtmd_input_chunk_get_n_tokens(a_chunk.get());
-                    const size_t n_tok_b = mtmd_input_chunk_get_n_tokens(b_chunk.get());
-
-                    // image match
-                    if (id_ai == id_bi && n_tok_a == n_tok_b) {
-                        GGML_ASSERT(n_tok_a > 0 && "Invalid media chunk"); // should never happen
-                        i += n_tok_a;
-                        j += n_tok_a;
-                        prefix.first += n_tok_a;
-                        prefix.second += n_tok_a;
-                        token_prefix = common_prefix_add(prefix, token_prefix);
-                    }
-                    else {
-                        // do no include image token prefix
-                        // only return text token prefix
-                        token_prefix = common_prefix_add(prefix, token_prefix);
-                        return token_prefix;
-                    }
-                }
-                else {
-                    // text not match
+                    // do no include image token prefix
+                    // only return text token prefix
                     token_prefix = common_prefix_add(prefix, token_prefix);
                     return token_prefix;
                 }
             }
-        }
-        common_prefix prefix = find_common_text_token_prefix(ctx, a_list, b_list, 0, exact);
-        token_prefix = common_prefix_add(prefix, token_prefix);
-
-        return token_prefix;
-
-    }
-
-    // take first n tokens of tokens list a
-    // find the common prefix between a and b
-    common_prefix server_tokens::get_common_prefix_first_n(const llama_context* ctx, const server_tokens& b, size_t n, bool exact) const {
-        // not work for mtmd
-        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
-        auto tokens = get_text_tokens();
-        if (n > tokens.size()) {
-            n = tokens.size();
-        }
-        llama_tokens copy(tokens.begin(), tokens.begin() + n);
-        server_tokens a = server_tokens(copy, false);
-        return a.get_common_prefix(ctx, b, exact);
-    }
-
-    // make sure all text tokens are within the vocab range
-    bool server_tokens::validate(const struct llama_context* ctx) const {
-        const llama_model* model = llama_get_model(ctx);
-        const llama_vocab* vocab = llama_model_get_vocab(model);
-        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-
-        for (size_t i = 0; i < tokens.size(); ++i) {
-            auto& t = tokens[i];
-            if (t == LLAMA_TOKEN_NULL) {
-                try {
-                    const auto& chunk = find_chunk(i);
-                    size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-                    i += n_tokens - 1; // will be +1 by the for loop
-                }
-                catch (const std::exception& e) {
-                    return false;
-                }
+            else {
+                // text not match
+                token_prefix = common_prefix_add(prefix, token_prefix);
+                return token_prefix;
             }
-            else if (t < 0 || t >= n_vocab) {
+        }
+    }
+    common_prefix prefix = find_common_text_token_prefix(ctx, a_list, b_list, 0, exact);
+    token_prefix = common_prefix_add(prefix, token_prefix);
+
+    return token_prefix;
+
+}
+
+// take first n tokens of tokens list a
+// find the common prefix between a and b
+common_prefix server_tokens::get_common_prefix_first_n(const llama_context* ctx, const server_tokens& b, size_t n, bool exact) const {
+    if (n > n_tokens()) {
+        n = n_tokens();
+    }
+    server_tokens a = clone();
+    a.keep_first(n);
+    return a.get_common_prefix(ctx, b, exact);
+}
+
+// make sure all text tokens are within the vocab range
+bool server_tokens::validate(const struct llama_context* ctx) const {
+    const llama_model* model = llama_get_model(ctx);
+    const llama_vocab* vocab = llama_model_get_vocab(model);
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        auto& t = tokens[i];
+        if (t == LLAMA_TOKEN_NULL) {
+            try {
+                const auto& chunk = find_chunk(i);
+                size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+                i += n_tokens - 1; // will be +1 by the for loop
+            }
+            catch (const std::exception& e) {
                 return false;
             }
         }
-        return true;
+        else if (t < 0 || t >= n_vocab) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// encode and decode the image chunk
+int32_t server_tokens::process_chunk(
+    llama_context* ctx,
+    mtmd_context* mctx,
+    size_t idx,
+    llama_pos pos,
+    int32_t seq_id,
+    size_t& n_tokens_out) const {
+    const auto& chunk = find_chunk(idx);
+    const char* name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
+        ? "image" : "audio";
+    LLAMA_LOG_INFO("processing %s...\n", name);
+    int32_t n_batch = llama_n_batch(ctx);
+    int64_t t0 = ggml_time_ms();
+    llama_pos new_n_past; // unused for now
+    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
+        chunk.get(),
+        pos,
+        seq_id,
+        n_batch,
+        true, // logits last
+        &new_n_past);
+    LLAMA_LOG_INFO("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+    if (result != 0) {
+        LLAMA_LOG_ERROR("mtmd_helper_eval failed with status %d", result);
+        n_tokens_out = 0;
+        return result;
+    }
+    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
+    return 0;
+}
+
+server_tokens server_tokens::clone() const {
+    server_tokens res;
+    res.has_mtmd = has_mtmd;
+    res.tokens = tokens;
+    for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
+        size_t idx = it->first;
+        const mtmd::input_chunk_ptr & chunk = it->second;
+        res.map_idx_to_media[idx] = mtmd::input_chunk_ptr(mtmd_input_chunk_copy(chunk.get()));
+    }
+    return res;
+}
+
+// Keep the first n_keep and remove n_discard tokens from tokens
+void server_tokens::discard_n_tokens(int32_t n_keep, int32_t n_discard) {
+
+    if (n_discard <= 0 || n_keep + n_discard >=n_tokens()) {
+        return;
+    }
+    server_tokens res = clone();
+    keep_first(n_keep);
+    tokens.resize(res.n_tokens()-n_discard);
+    for (size_t i = n_keep + n_discard; i < res.n_tokens(); i++) {
+        tokens[i - n_discard] = res.tokens[i];
+    }
+    for (auto it = res.map_idx_to_media.begin(); it != res.map_idx_to_media.end(); ++it) {
+        size_t idx = it->first;
+        if (idx >= n_keep+ n_discard) {
+            const mtmd::input_chunk_ptr & chunk = it->second;
+            map_idx_to_media[idx - n_discard] = mtmd::input_chunk_ptr(mtmd_input_chunk_copy(chunk.get()));
+        }
     }
 
-    // encode and decode the image chunk
-    int32_t server_tokens::process_chunk(
-        llama_context* ctx,
-        mtmd_context* mctx,
-        size_t idx,
-        llama_pos pos,
-        int32_t seq_id,
-        size_t& n_tokens_out) const {
-        const auto& chunk = find_chunk(idx);
-        const char* name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
-            ? "image" : "audio";
-        LLAMA_LOG_INFO("processing %s...\n", name);
-        int32_t n_batch = llama_n_batch(ctx);
-        int64_t t0 = ggml_time_ms();
-        llama_pos new_n_past; // unused for now
-        int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-            chunk.get(),
-            pos,
-            seq_id,
-            n_batch,
-            true, // logits last
-            &new_n_past);
-        LLAMA_LOG_INFO("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
-        if (result != 0) {
-            LLAMA_LOG_ERROR("mtmd_helper_eval failed with status %d", result);
-            n_tokens_out = 0;
-            return result;
-        }
-        n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-        return 0;
+}
+
+// Similarity between prompt and cached
+float server_tokens::get_tokens_similarity(const llama_context* ctx, const server_tokens& tokens, int n_keep, int n_discard) const {
+    GGML_ASSERT(n_keep >= 0 && n_discard >= 0);
+    float sim_cur = 0;
+    if (n_keep == 0 && n_discard == 0) {
+        auto lcp_len = get_common_prefix(ctx, tokens);
+        sim_cur = get_slot_similarity(lcp_len.second, tokens.size(), size());
     }
-
-    // Keep the first n_keep and remove n_discard tokens from tokens
-    void server_tokens::discard_n_tokens(int32_t n_keep, int32_t n_discard) {
-        if (n_discard <= 0 || n_keep + n_discard >= size()) {
-            return;
-        }
-
-        llama_tokens new_tokens = get_text_tokens(); // copy
-        for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
-            new_tokens[i - n_discard] = new_tokens[i];
-        }
-        int32_t token_size = (int32_t)size();
-        new_tokens.resize(token_size - n_discard);
-        clear();
-        insert(new_tokens);
-
+    else {
+        // remove tokens due to context shift and compare
+        auto tokens_ctx_shift = tokens.clone(); // copy cache tokens
+        tokens_ctx_shift.discard_n_tokens(n_keep, n_discard);
+        auto lcp_len = get_common_prefix(ctx, tokens_ctx_shift);
+        sim_cur = get_slot_similarity(lcp_len.second, tokens_ctx_shift.size(), size());
     }
+    return sim_cur;
+}
 
-    // Similarity between prompt and cached
-    float server_tokens::get_tokens_similarity(const llama_context* ctx, const server_tokens& tokens, int n_keep, int n_discard) const {
-        GGML_ASSERT(n_keep >= 0 && n_discard >= 0);
-        float sim_cur = 0;
-        if (n_keep == 0 && n_discard == 0) {
-            auto lcp_len = get_common_prefix(ctx, tokens);
-            sim_cur = get_slot_similarity(lcp_len.second, tokens.size(), size());
-        }
-        else {
-            // remove tokens due to context shift and compare
-            auto tokens_ctx_shift = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
-            tokens_ctx_shift.discard_n_tokens(n_keep, n_discard);
-            auto lcp_len = get_common_prefix(ctx, tokens_ctx_shift);
-            sim_cur = get_slot_similarity(lcp_len.second, tokens_ctx_shift.size(), size());
-        }
-        return sim_cur;
+// Similarity between common part and cache
+float server_tokens::get_cached_tokens_similarity(const llama_context* ctx, const server_tokens& tokens, int n_keep, int n_discard) const {
+    GGML_ASSERT(n_keep >= 0 && n_discard >= 0);
+    float sim_cur = 0;
+    if (n_keep == 0 && n_discard == 0) {
+        auto lcp_len = get_common_prefix(ctx, tokens);
+        sim_cur = (float)lcp_len.first / size();
     }
-
-    // Similarity between common part and cache
-    float server_tokens::get_cached_tokens_similarity(const llama_context* ctx, const server_tokens& tokens, int n_keep, int n_discard) const {
-        GGML_ASSERT(n_keep >= 0 && n_discard >= 0);
-        float sim_cur = 0;
-        if (n_keep == 0 && n_discard == 0) {
-            auto lcp_len = get_common_prefix(ctx, tokens);
-            sim_cur = (float)lcp_len.first / size();
-        }
-        else {
-            // remove tokens due to context shift and compare
-            auto tokens_ctx_shift = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
-            tokens_ctx_shift.discard_n_tokens(n_keep, n_discard);
-            auto lcp_len = get_common_prefix(ctx, tokens_ctx_shift);
-            sim_cur = (float)lcp_len.first / size();
-        }
-        return sim_cur;
+    else {
+        // remove tokens due to context shift and compare
+        auto tokens_ctx_shift = tokens.clone(); // copy cache tokens
+        tokens_ctx_shift.discard_n_tokens(n_keep, n_discard);
+        auto lcp_len = get_common_prefix(ctx, tokens_ctx_shift);
+        sim_cur = (float)lcp_len.first / size();
     }
+    return sim_cur;
+}
 
 
 // Computes FNV-1a hash of the data
