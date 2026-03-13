@@ -395,7 +395,6 @@ struct gpt_params {
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";
-    std::string system_prompt = "";
 
     // tool call and template
     std::string chat_template = "";

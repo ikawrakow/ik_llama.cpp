@@ -218,6 +218,8 @@ struct common_chat_params {
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
     std::string                         parser;
+    std::string                         thinking_start_tag;
+    std::string                         thinking_end_tag;
 };
 
 struct common_chat_parser_params {
