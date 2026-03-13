@@ -854,6 +854,85 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
 }
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    if (!tensor->extra && tensor->view_src && tensor->view_src->extra) {
+        // OK, this is an ugly hack, but I don't really see a way to trick the machine into correctly
+        // loading non-contiguous merged split tensors.
+        auto view_src = tensor->view_src;
+        auto extra = (ggml_split_tensor_t *)view_src->extra;
+        void * extra_ptr;
+        memcpy(&extra_ptr, view_src->op_params, sizeof(extra_ptr));
+        if (extra_ptr) {
+            std::string merged_name = view_src->name;
+            if (auto pos = merged_name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
+                std::string name = tensor->name;
+                auto pos_u = name.find("ffn_up_exps.weight");
+                auto pos_g = name.find("ffn_gate_exps.weight");
+                if (pos_u != std::string::npos || pos_g != std::string::npos) {
+                    GGML_ASSERT(extra->split_dim == 1);
+                    auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
+                    int ne = 0;
+                    for (int is = 0; is < int(ranges.size()); ++is) {
+                        auto & r = ranges[is];
+                        GGML_ASSERT((extra->splits[is] && !r.empty()) || (!extra->splits[is] && r.empty()));
+                        if (r.empty()) continue;
+                        GGML_ASSERT(r.size() == 2);
+                        auto split = extra->splits[is];
+                        ggml_cuda_set_device(is);
+                        int ir = pos_g != std::string::npos ? 0 : 1;
+                        auto p = r[ir];
+                        size_t offset = 0;
+                        if (ir == 1) {
+                            p.first -= tensor->ne[1];
+                            GGML_ASSERT(p.first >= 0);
+                            offset = split->ne[1]/2 * split->nb[1];
+                        }
+                        for (int i02 = 0; i02 < split->ne[2]; ++i02) {
+                            auto dst = (char *)split->data + i02*split->nb[2] + offset;
+                            auto src = (const char *)data + i02*tensor->nb[2] + ne*tensor->nb[1];
+                            CUDA_CHECK(cudaMemcpyAsync(dst, src, p.second*tensor->nb[1], cudaMemcpyHostToDevice, cudaStreamPerThread));
+                        }
+                        ne += p.second;
+                        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+                    }
+                }
+                return;
+            }
+            if (auto pos = merged_name.find("ffn_gate_up_exps.bias"); pos != std::string::npos) {
+                std::string name = tensor->name;
+                auto pos_u = name.find("ffn_up_exps.bias");
+                auto pos_g = name.find("ffn_gate_exps.bias");
+                if (pos_u != std::string::npos || pos_g != std::string::npos) {
+                    GGML_ASSERT(extra->split_dim == 0);
+                    auto & ranges = *(const std::vector<std::vector<std::pair<int,int>>> *)extra_ptr;
+                    int ne = 0;
+                    for (int is = 0; is < int(ranges.size()); ++is) {
+                        auto & r = ranges[is];
+                        GGML_ASSERT((extra->splits[is] && !r.empty()) || (!extra->splits[is] && r.empty()));
+                        if (r.empty()) continue;
+                        GGML_ASSERT(r.size() == 2);
+                        auto split = extra->splits[is];
+                        ggml_cuda_set_device(is);
+                        int ir = pos_g != std::string::npos ? 0 : 1;
+                        auto p = r[ir];
+                        size_t offset = 0;
+                        if (ir == 1) {
+                            p.first -= tensor->ne[0];
+                            GGML_ASSERT(p.first >= 0);
+                            offset = split->ne[0]/2 * split->nb[0];
+                        }
+                        for (int i01 = 0; i01 < split->ne[1]; ++i01) {
+                            auto dst = (char *)split->data + i01*split->nb[1] + offset;
+                            auto src = (const char *)data + i01*tensor->nb[1] + ne*tensor->nb[0];
+                            CUDA_CHECK(cudaMemcpyAsync(dst, src, p.second*tensor->nb[0], cudaMemcpyHostToDevice, cudaStreamPerThread));
+                        }
+                        ne += p.second;
+                        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+                    }
+                }
+                return;
+            }
+        }
+    }
     if (!tensor->extra) return;
     static std::map<ggml_type, int> k_map = {
         { GGML_TYPE_Q4_0_R8   , 8},
@@ -886,7 +965,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         { GGML_TYPE_Q8_KV_R8  , 4},
         { GGML_TYPE_Q8_K_R8   , 8},
     };
-    //printf("%s(%s)\n", __func__, tensor->name);
 
     // split tensors must always be set in their entirety at once
     GGML_ASSERT(offset == 0);
@@ -984,7 +1062,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
             std::vector<char> host_buffer;
             int ne1 = 0;
-            int extra_ne1 = 0;
             for (int i = 0; i < extra->n_device; ++i) {
                 auto split = extra->splits[i];
                 if (!split) continue;

@@ -5209,7 +5209,9 @@ struct llama_context * llama_init_from_model(
                 LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(ctx->sched));
             }
 
-            llama_repack_up_gate_exps(*ctx);
+            if (ctx->model.split_mode != LLAMA_SPLIT_MODE_GRAPH) {
+                llama_repack_up_gate_exps(*ctx);
+            }
 
             // build worst-case graph
             int n_past = cparams.n_ctx - n_tokens;

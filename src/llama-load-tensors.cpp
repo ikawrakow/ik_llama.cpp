@@ -3168,6 +3168,9 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_gate_up_exps.weight", i);
+    if (u_ctx == ctx_split) {
+        split_tensors.insert(layer.ffn_up_gate_exps);
+    }
     layer.ffn_gate_exps = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, g_name.c_str(),
             { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, 0);
     layer.ffn_up_exps   = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, u_name.c_str(),
@@ -3702,13 +3705,6 @@ bool create_tensors_helper::create_tensors() {
         LLAMA_LOG_WARN("========================================================\n\n");
         ml.merge_qkv = false;
     }
-    if (ml.merge_up_gate_exps && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
-        LLAMA_LOG_WARN("\n========================================================\n");
-        LLAMA_LOG_WARN("merge_up_gate_exps is not compatible with split mode 'graph'\n");
-        LLAMA_LOG_WARN("  => turning off merge_up_gate_exps\n");
-        LLAMA_LOG_WARN("========================================================\n\n");
-        ml.merge_up_gate_exps = false;
-    }
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_REFACT:
@@ -4039,7 +4035,7 @@ bool create_tensors_helper::create_tensors() {
                         prepare_split_tensors(1, ctx_split, layer.ffn_up_gate_exps, layer.split_ffn_up_gate_exps, up_gate_split, mem_used);
                         prepare_up_gate_split(layer.ffn_up_gate_exps, layer.split_ffn_up_gate_exps);
                         if (layer.ffn_up_gate_exps_b) {
-                            prepare_split_tensors(1, ctx_split, layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b, up_gate_split, mem_used);
+                            prepare_split_tensors(0, ctx_split, layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b, up_gate_split, mem_used);
                             prepare_up_gate_split(layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b);
                         }
                     } else {
