@@ -506,12 +506,32 @@ void llama_sample_top_n_sigma_impl(struct llama_sampling * smpl, llama_token_dat
     float sigma = sqrtf(sigma2/count);
     float thresh = max - top_n_sigma*sigma;
 
+    thread_local std::vector<int> indices;
+    if (indices.size() < candidates->size) {
+        indices.resize(candidates->size);
+    }
+    int n_use = 0;
     int n_masked = 0;
     for (int i = 0; i < (int)candidates->size; ++i) {
-        if (candidates->data[i].logit != -INFINITY && candidates->data[i].logit < thresh) {
-            candidates->data[i].logit = -INFINITY;
-            ++n_masked;
+        if (candidates->data[i].logit != -INFINITY) {
+            if (candidates->data[i].logit < thresh) {
+                candidates->data[i].logit = -INFINITY;
+                ++n_masked;
+            } else {
+                indices[n_use++] = i;
+            }
         }
+        //if (candidates->data[i].logit != -INFINITY && candidates->data[i].logit < thresh) {
+        //    candidates->data[i].logit = -INFINITY;
+        //    ++n_masked;
+        //}
+    }
+
+    if (4*n_use < (int)candidates->size) {
+        for (int i = 0; i < n_use; ++i) {
+            candidates->data[i] = candidates->data[indices[i]];
+        }
+        candidates->size = n_use;
     }
 
     // do we really want to compute softmax unconditionally?
