@@ -81,7 +81,7 @@ Some often used terms.
 | `--no-gr, --no-graph-reuse` | Disable graph reuse | Disabled | Option to turn off graph reuse. [PR 1094](https://github.com/ikawrakow/ik_llama.cpp/pull/1094) |
 | `-ser, --smart-expert-reduction` | Experts reduction Kmin,t | -1, 0 | Use a custom number of active experts. Powerful, basically REAP from just command line. If we set t = 1, we use a fixed number of experts  K_min (`-ser 1,6` will use 6 experts instead of the model default). [PR 239](https://github.com/ikawrakow/ik_llama.cpp/pull/239) |
 | `-mqkv, --merge-qkv` | Merge Q,K,V | 0 | Downside: mmap cannot be used. [PR 878](https://github.com/ikawrakow/ik_llama.cpp/pull/878) [PR 892](https://github.com/ikawrakow/ik_llama.cpp/pull/892) |
-| `-muge, --merge-up-gate-experts` | Merge ffn_up/gate_exps | 0 | Speed up on some models. [PR 1137](https://github.com/ikawrakow/ik_llama.cpp/pull/1137) [PR 1139](https://github.com/ikawrakow/ik_llama.cpp/pull/1139) |
+| `-muge, --merge-up-gate-experts` | Merge ffn_up/gate_exps | 0 | Speed up on some models. [PR 1137](https://github.com/ikawrakow/ik_llama.cpp/pull/1137) [PR 1139](https://github.com/ikawrakow/ik_llama.cpp/pull/1139) [PR 1403](https://github.com/ikawrakow/ik_llama.cpp/pull/1403) [PR 1413](https://github.com/ikawrakow/ik_llama.cpp/pull/1413)|
 | `-khad, --k-cache-hadamard` | Use Hadamard transform for K-cache | 0 | May improve KV quality when heavily quantized. [PR 1033](https://github.com/ikawrakow/ik_llama.cpp/pull/1033) [PR 1034](https://github.com/ikawrakow/ik_llama.cpp/pull/1034) |
 | `-sas, --scheduler_async` | Async evaluation of compute graphs | 0 | [PR 1089](https://github.com/ikawrakow/ik_llama.cpp/pull/1089) |
 | `-vq, --validate-quants` | Validate quantized data while loading the model | 0 | If there are NaNs in the model, you will get info about the tensors containing NaNs. [PR 977](https://github.com/ikawrakow/ik_llama.cpp/pull/977) |
@@ -90,6 +90,9 @@ Some often used terms.
 | `--mlock` | Force system to keep model in RAM rather than swapping or compressing | - |  |
 | `--no-mmap` | Do not memory-map model (slower load but may reduce pageouts) | - |  |
 | `-rtr, --run-time-repack` | Repack tensors if interleaved variant is available | - | May improve performance on some systems. [PR 147](https://github.com/ikawrakow/ik_llama.cpp/pull/147) |
+| `-fdn`, `--fused-delta-net N` |  | - | **deprecated** fused delta-net implementation for Qwen3-Next and Qwen3.5-MoE. [PR 1315](https://github.com/ikawrakow/ik_llama.cpp/pull/1315) |
+| `--ctx-checkpoints` | set the number of checkpoints per slot | - | enable checkpoint for recurrent models Qwen3-Next and Qwen3.5-MoE. [PR 1310](https://github.com/ikawrakow/ik_llama.cpp/pull/1310) |
+| `--ctx-checkpoints-interval` |  minimum number of tokens between each context checkpoint. | - |  If you want to create the checkpoint more frequently, set it to a small value. If it's set to positive number, it saves checkpoints during TG at this interval. During PP, it can only save checkpoint every batch size, so it becomes minimum number of tokens between each context checkpoint. [PR 1310](https://github.com/ikawrakow/ik_llama.cpp/pull/1310) |
 
 ## Speculative Decoding
 
@@ -110,6 +113,10 @@ Check the details [here](./speculative.md).
 | `--spec-ngram-size-m N` | ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram | 48 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
 | `--spec-ngram-min-hits N` | minimum hits for ngram-map speculative decoding | 1 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
 | `--spec-type Name` | Comma-separated list of draft model parameters | - | none / ngram - cache / ngram - simple / ngram - map - k / ngram - map - k4v / ngram - mod [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
+| `-mtp, --multi-token-prediction` |  | - | MTP decoding for GLM-4.x MoE [1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
+| `-no-mtp, --no-multi-token-prediction` |  | - | MTP decoding for GLM-4.x MoE [1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
+| `--draft-max` |  | - | MTP decoding for GLM-4.x MoE [1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
+| `--draft-p-min` |  | - | MTP decoding for GLM-4.x MoE [1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
 
 ## Cache Prompt to Host Memory
 
@@ -369,6 +376,10 @@ llama-imatrix -m /models/model-bf16.gguf -f /models/calibration_data_v5_rc.txt -
 | `--layer-similarity or -lsim` | Collect statistics about activations change caused by a layer using cosine similarity | - | [PR 328](https://github.com/ikawrakow/ik_llama.cpp/pull/328) |
 | `--hide-imatrix` | Store "top_secret" in the imatrix data file name | - | And in calibration dataset fields, and zeros in the batch size and number of chunks used to compute the imatrix. [PR 329](https://github.com/ikawrakow/ik_llama.cpp/pull/329) |
 
+Notes:
+- Use `convert_imatrix_gguf_to_dat.py` to convert the "new" GGUF imatrix files to the format supported here. [PR 1405](https://github.com/ikawrakow/ik_llama.cpp/pull/1405)
+- imatrix calculation for models with merged ffn_up/gate_exps tensors is supported, see [PR 1418](https://github.com/ikawrakow/ik_llama.cpp/pull/1418) [PR 1419](https://github.com/ikawrakow/ik_llama.cpp/pull/1419)
+
 ### Quantization
 
 Quantize models to reduce size and improve speed.
@@ -386,6 +397,8 @@ llama-gguf-split --split --split-max-size 1G --no-tensor-first-split /models/mod
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
 | `--custom-q` | Custom quantization rules with regular expressions | - | Example: `llama-quantize --imatrix some_imatrix --custom-q "regex1=typ1,regex2=type2..." some_model some_output_file some_base_quant` [PR 244](https://github.com/ikawrakow/ik_llama.cpp/pull/244) |
+| `--dry-run` | Prints the tensor types and resulting tensor sizes, but does not run the quantization, so it is very fast. | - | Useful for experimenting with --custom-q before running the actual quantization. [PR 1309](https://github.com/ikawrakow/ik_llama.cpp/pull/1309) |
+| `--partial-requant` | quantize only missing split files in the split quantized .gguf destination directory | - | - |
 
 ### Build Arguments
 
