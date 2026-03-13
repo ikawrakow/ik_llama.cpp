@@ -480,44 +480,37 @@ void llama_sample_top_n_sigma_impl(struct llama_sampling * smpl, llama_token_dat
 
     const int64_t t_start_sample_us = ggml_time_us();
 
-    float max = candidates->data[0].logit;
-    float mean = 0;
-    size_t count = 0;
+    double sum1 = 0, sum2 = 0;
+    float max = 0;
+    int count = 0;
     for (int i = 0; i < (int)candidates->size; ++i) {
-        // Only count non-negative infinity values
-        if (candidates->data[i].logit != -INFINITY) {
-            max = std::max(max, candidates->data[i].logit);
-            mean += candidates->data[i].logit;
+        if (auto l = candidates->data[i].logit; l != -INFINITY) {
+            max = std::max(max, l);
             ++count;
+            double dl = l;
+            sum1 += dl;
+            sum2 += dl*dl;
         }
     }
     if (count < 4) {
-        return; // again, tandard deviation is not well defined for so few logits (4 is actually pushing it)
+        return;
     }
-    mean /= count;
+    double dmean = sum1/count;
+    double dsigma2 = sum2/count - dmean*dmean;
+    if (dsigma2 <= 0) {
+        return;
+    }
+    float sigma = float(sqrt(dsigma2));
 
-    float sigma2 = 0;
-    for (int i = 0; i < (int)candidates->size; ++i) {
-        if (candidates->data[i].logit != -INFINITY) {
-            float delta = candidates->data[i].logit - mean;
-            sigma2 += delta*delta;
-        }
-    }
-    float sigma = sqrtf(sigma2/count);
     float thresh = max - top_n_sigma*sigma;
-
-    int n_masked = 0;
+    int n_use = 0;
     for (int i = 0; i < (int)candidates->size; ++i) {
-        if (candidates->data[i].logit != -INFINITY && candidates->data[i].logit < thresh) {
-            candidates->data[i].logit = -INFINITY;
-            ++n_masked;
+        if (candidates->data[i].logit >= thresh) {
+            candidates->data[n_use++] = candidates->data[i];
         }
     }
-
-    // do we really want to compute softmax unconditionally?
-    // The following coresponds to mainline implementation with the minor optimization
-    // that we only call the relativly expensive softmax if we masked away some tokens.
-    if (n_masked > 0 || !candidates->sorted) {
+    if (n_use < (int)candidates->size) {
+        candidates->size = n_use;
         llama_sample_softmax_impl(nullptr, candidates);
     }
 

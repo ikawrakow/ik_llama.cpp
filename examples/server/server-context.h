@@ -110,6 +110,7 @@ struct server_slot {
 
     size_t checkpoint_pos = 0;
     bool do_checkpoint = false;
+    bool image_just_processed = false;
 
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
@@ -302,7 +303,7 @@ struct server_context {
     void send_error(const int id_task, const int id_multi, const std::string& error, const enum error_type type = ERROR_TYPE_SERVER);
 
     // if multimodal is enabled, send an error and return false
-    bool ensure_no_mtmd(const int id_task);
+    bool check_no_mtmd(const int id_task);
 
     void send_partial_response(server_slot& slot, completion_token_output tkn);
 
@@ -363,7 +364,7 @@ struct server_context {
     // Re-aggregates all active vectors and updates the model state
     bool apply_control_vectors_internal();
 
-    void create_checkpoint(server_slot & slot);
+    bool create_checkpoint(server_slot & slot);
 
     void apply_checkpoint(server_slot & slot);
 

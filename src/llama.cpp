@@ -4058,12 +4058,18 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     //LLAMA_LOG_INFO("(tmp log) KV defrag time: %.3f ms\n", (t_end - t_start)/1000.0);
 }
 
+static bool get_can_shift(struct llama_context & lctx) {
+    bool no_shift = lctx.model.arch == LLM_ARCH_DEEPSEEK2 || lctx.model.arch == LLM_ARCH_GLM_DSA;  // not supported due to MLA
+    no_shift = no_shift || lctx.model.hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE;
+    return !no_shift;
+}
+
 static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
     bool need_reserve = false;
 
     // apply K-shift if needed
     if (lctx.model.hparams.rope_type != LLAMA_ROPE_TYPE_NONE && lctx.kv_self.has_shift) {
-        if (lctx.model.arch == LLM_ARCH_DEEPSEEK2 || lctx.model.arch == LLM_ARCH_GLM_DSA) { // not supported due to MLA
+        if (!get_can_shift(lctx)) {
             return 1;
         }
 
@@ -4692,9 +4698,9 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
             size_t offset_up = 0;
             auto expert_size = l.ffn_up_exps->ne[1]*l.ffn_up_exps->nb[1];
             for (int i2 = 0; i2 < (int)l.ffn_up_gate_exps->ne[2]; ++i2) {
-                std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
-                offset_up_gate += expert_size;
                 std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_gate.data() + offset_up, expert_size);
+                offset_up_gate += expert_size;
+                std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
                 offset_up_gate += expert_size;
                 offset_up      += expert_size;
             }
@@ -4718,9 +4724,9 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
                 offset_up = 0;
                 expert_size = l.ffn_up_exps_b->nb[1];
                 for (int i1 = 0; i1 < (int)l.ffn_up_gate_exps_b->ne[1]; ++i1) {
-                    std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
-                    offset_up_gate += expert_size;
                     std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_gate.data() + offset_up, expert_size);
+                    offset_up_gate += expert_size;
+                    std::memcpy(aux_buffer_up_gate.data() + offset_up_gate, aux_buffer_up.data() + offset_up, expert_size);
                     offset_up_gate += expert_size;
                     offset_up      += expert_size;
                 }
@@ -5203,7 +5209,9 @@ struct llama_context * llama_init_from_model(
                 LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(ctx->sched));
             }
 
-            llama_repack_up_gate_exps(*ctx);
+            if (ctx->model.split_mode != LLAMA_SPLIT_MODE_GRAPH) {
+                llama_repack_up_gate_exps(*ctx);
+            }
 
             // build worst-case graph
             int n_past = cparams.n_ctx - n_tokens;
