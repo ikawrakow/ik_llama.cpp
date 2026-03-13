@@ -168,13 +168,15 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     GGML_UNUSED(user_data);
 
     const struct ggml_tensor * src0 = t->src[0];
-    const struct ggml_tensor * src1 = t->src[1];
+    const struct ggml_tensor * src1 = t->op == GGML_OP_FUSED_UP_GATE || t->op == GGML_OP_MOE_FUSED_UP_GATE ? t->src[2] : t->src[1];
     std::string wname = filter_tensor_name(src0->name);
 
     // when ask is true, the scheduler wants to know if we are interested in data from this tensor
     // if we return true, a follow-up call will be made with ask=false in which we can do the actual collection
     if (ask) {
-        if (t->op == GGML_OP_MUL_MAT_ID) return true; // collect all indirect matrix multiplications
+        if (t->op == GGML_OP_MUL_MAT_ID ||
+            t->op == GGML_OP_FUSED_UP_GATE ||
+            t->op == GGML_OP_MOE_FUSED_UP_GATE) return true; // collect all indirect matrix multiplications
         if (t->op != GGML_OP_MUL_MAT) return false;
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
@@ -225,10 +227,10 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
 
     // this has been adapted to the new format of storing merged experts in a single 3d tensor
     // ref: https://github.com/ggerganov/llama.cpp/pull/6387
-    if (t->op == GGML_OP_MUL_MAT_ID) {
+    if (t->op == GGML_OP_MUL_MAT_ID || t->op == GGML_OP_MOE_FUSED_UP_GATE) {
         //   ids  -> [n_experts_used, n_tokens]
         //   src1 -> [cols, n_expert_used, n_tokens]
-        const ggml_tensor * ids = t->src[2];
+        const ggml_tensor * ids = t->op == GGML_OP_MUL_MAT_ID ? t->src[2] : t->src[3];
         const int n_as = src0->ne[2];
         const int n_ids = ids->ne[0];
 
