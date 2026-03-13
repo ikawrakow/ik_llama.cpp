@@ -554,7 +554,7 @@ float iqk_exp_with_thresh(int n, float * logits, float max, float min) {
 bool iqk_ssm_conv4(int nr, int nc, int nt,
         uint64_t nb01, uint64_t nb10, uint64_t nb11, uint64_t nb21,
         const float * x0_in, const float * s0_in, const float * c_in,
-        float * dst, int ith, int nth) {
+        float * dst, float * dst_silu, int ith, int nth) {
 #ifdef __AVX2__
     if (nt <= 32 || nc != 4 || nr%16 != 0) {
         return false;
@@ -566,7 +566,7 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
     __m256 vs[8], vc[8];
     float aux[64];
     for (int ir = ir0; ir < ir1; ++ir) {
-        auto x  = dst   + 16*ir;
+        auto x  = dst_silu == nullptr ? dst + 16*ir : dst_silu + 16*ir;
         auto s  = dst   + 16*ir*nb21/sizeof(float) + nr*nt;
         auto s0 = s0_in + 16*ir*nb01/sizeof(float); // {d_conv - 1, d_inner, n_kv}
         auto x0 = x0_in + 16*ir*nb10/sizeof(float);
@@ -600,6 +600,10 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
                 int ii = (idx + k) & 3;
                 sum1 = _mm256_fmadd_ps(vs[ii+0], vc[k+0], sum1);
                 sum2 = _mm256_fmadd_ps(vs[ii+4], vc[k+4], sum2);
+            }
+            if (dst_silu) {
+                sum1 = v_silu(sum1);
+                sum2 = v_silu(sum2);
             }
             _mm256_storeu_ps(x+0, sum1);
             _mm256_storeu_ps(x+8, sum2);

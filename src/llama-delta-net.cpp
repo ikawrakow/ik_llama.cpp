@@ -341,6 +341,7 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
     ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output);
     cb(conv_output_silu, "conv_output_silu", il);
+    ggml_build_forward_expand(gf, conv_output_silu);
 
     // Calculate the total conv dimension
     int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
