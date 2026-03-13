@@ -37,7 +37,7 @@ Some often used terms.
 | Term | Meaning |
 | - | - |
 | LLM/model | Large Language Model, language model trained with machine learning on a vast amount of text. |
-| Tensors | The foundational part of an model, is just a multi-dimensional array of numbers (Scalar, Vector, Matrix, Higher Dimensions). |
+| Tensors | The foundational part of a model, are just a multi-dimensional array of numbers (Scalar, Vector, Matrix, Higher Dimensions). |
 | Layers | Modular units that perform specific computations on the tensors. A neural network is essentially a stack of layers, each transforming the data in some way. |
 | Weights | Numerical values associated with the connections between tensors in the layers. |
 | Activations | Output of a layer after it has performed its computations. |
@@ -132,7 +132,7 @@ Good overview on [kalomaze/llm_samplers_explained.md](https://gist.github.com/ka
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
 | `--samplers SAMPLERS` | Samplers used for generation in order, separated by `;` | dry;top_k;tfs_z;typical_p;top_p;min_p;xtc;top_n_sigma;temperature;adaptive_p | Powerful option to customize samplers. Try to keep the default order otherwise effects will be minimized. Example to use only min_p and temperature: `--samplers min_p;temperature` |
-| `--sampling-seq SEQUENCE` | Simplified sequence for samplers | dkfypmxntw | Same as `--samplers` , just shorter format. |
+| `--sampling-seq SEQUENCE` | Simplified sequence for samplers | dkfypmxntw | Same as `--samplers`, just shorter format. |
 | `--banned-string-file` | File path of the list of banned strings on each line |  |  |
 | `--banned-n` | Number of tokens banned in the phrase during rewind. | -1 | -1 means all tokens [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) |
 
@@ -175,7 +175,7 @@ Some frontends, like the included Webui, can use this feature to allow user star
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `-np, --parallel N` | Number of parallel sequences to decode | 1 | Useful when fronted support it. See `--ctx-size` |
+| `-np, --parallel N` | Number of parallel sequences to decode | 1 | Useful when frontend support it. See `--ctx-size` |
 
 ## GPU Offload
 
@@ -192,7 +192,7 @@ Beside the improved quants (better quality and performance at the same size; usa
 
 A. **Find the model size** in GB
 
-Ideally, it should fit entirely in the VRAM (`-ngl 999`). It uses the size of the model file plus the size of KV cache which depends by length (`--ctx-size 4096`).
+Ideally, it should fit entirely in the VRAM (`-ngl 999`). It needs the size of the model file plus the size of KV cache (which depends by the context length `--ctx-size 4096`) and some buffers.
 
 Note that the model size influences the speed as well, with smaller sizes being faster (less data to move around and calculate).
 
@@ -243,17 +243,17 @@ llama_kv_cache_init:        CPU KV buffer size =    59.50 MiB
 llama_new_context_with_model: KV self size  =   59.50 MiB, K (q8_0):   29.75 MiB, V (q8_0):   29.75 MiB
 ```
 
-- To have access to more quant types, build with GGML_IQK_FA_ALL_QUANTS=ON, otherwise only F16, Q8_0, Q6_0, and, if the CPU provides native BF16 support, BF16 FA kernels will be included.
-- K-cache may needs better quant than V-cache to reduce quality loss, they can be specified separately `--cache-type-k q8_0 --cache-type-v q8_0`
+- To have access to more quant types, build with `GGML_IQK_FA_ALL_QUANTS=ON`, otherwise only F16, Q8_0, Q6_0, and, if the CPU provides native BF16 support, BF16 FA kernels will be included.
+- K-cache may need better quant than V-cache to reduce quality loss, they can be specified separately `--cache-type-k q8_0 --cache-type-v q8_0`
 - It needs FA `--flash-attn` flag, which is already turned on by default.
 - Fast quant type Q8_KV `-ctk q8_KV` [PR 208](https://github.com/ikawrakow/ik_llama.cpp/pull/208)
-- Using `--k-cache-hadamard` on quants lower thank Q6_0 may give better results.
+- Using `--k-cache-hadamard` on quants lower than Q6_0 may give better results.
 
 3. Offload less to the GPU. Try to find a mix of parameters that better suits your system that default.
 
 - Use `--no-kv-offload` to keep KV cache on CPU. This is provided for flexibility, and practically not desired as reduces the prompt processing speed.
 
-- Identify tensors, how many layers (also shape and more metadata) by opening the GGUF model file on browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. For the split models, look to each file part.
+- Identify tensors, how many layers (also shape and more metadata) by opening the GGUF model file on the Web browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. For the split models, look to each file part.
 
 Or, if you already have the quant locally you can just run `gguf_dump.py`:
 ```
@@ -267,11 +267,11 @@ python3 gguf-py/scripts/gguf_dump.py /models/Qwen_Qwen3-0.6B-IQ4_NL.gguf
    - For models with shared experts (like GPT-OSS), they should end up on GPU.
    - In some quants the layers aren't uniform so it can be better to skip larger layers if more smaller blocks will fit without empty space where nothing fits.
    - You put anything that says "exps" in your slowest memory, and anything else in your fastest memory (VRAM). Those ffn "exps" are the sparse experts tensors, the ones that get actually used only 2-5% of the times (depending on the model). If then you have extra VRAM to spare, you start putting some of the exps into VRAM too, for some improvements.
-   - Some layers (layers are called blk.n in gguf), are different in some models. For example [GLM5](https://huggingface.co/ubergarm/GLM-5-GGUF/blob/main/IQ3_KS/GLM-5-IQ3_KS-00002-of-00008.gguf) the first three layers are different (blk.0(14), blk.1(14), blk.2(14) vs. blk.10(19), blk.11(19),...), they don't have exps, they have dense ffn, so they should all go in VRAM. Dense layers are very good to speed up mixed inference systems, as a much larger share of active parameters is fixed, and hence you know which to put in faster VRAM. Also the layers from the 4th onwards have shared exps, "shexp", those too go to VRAM as they are always active.
+   - Some layers (layers are called `blk.n` in gguf), are different in some models. For example [GLM5](https://huggingface.co/ubergarm/GLM-5-GGUF/blob/main/IQ3_KS/GLM-5-IQ3_KS-00002-of-00008.gguf) the first three layers are different (blk.0(14), blk.1(14), blk.2(14) vs. blk.10(19), blk.11(19),...), they don't have exps, they have dense ffn, so they should all go in VRAM. Dense layers are very good to speed up mixed inference systems, as a much larger share of active parameters is fixed, and hence you know which to put in faster VRAM. Also the layers from the 4th onwards have shared exps, "shexp", those too go to VRAM as they are always active.
    - For MoE models you can play with `--cpu-moe`, `--n-cpu-moe N`, `-ooae`/`-no-ooae` before moving to `-ot`.
    - In general, in a single GPU + CPU system, you just do something like this:
 
-   `-ngl 999` To put all layers in vram by default
+   `-ngl 999` To put all layers in VRAM by default
    
    `-ot "blk.(?:[0-9]|[1-7][0-9]|[8][0-7]).ffn._exps.=CPU"` To create exceptions and put back in ram anything that has "ffn" and "_exps" in its name, and that sits in layers called "blk.n", where "n" (the lawyer number) is any match between 0 and 9, or between 1 to 7 + 0 to 9 (aka a number between 10 and 79), or 8 + 0 to 7 (aka a number between 80 and 87).
    Basically a complicated way of saying put all experts from layer 0 to 87 in ram. Experts from layer 88 to 93 (there's 93 layers in qwen3vl 235b) can sit in VRAM still. (Thats all I can load on a 5090).
@@ -283,7 +283,7 @@ WIP
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `-ngl, --gpu-layers N` | Number of layers to store in VRAM | - | For better speed you aim to offload the entire model in GPU memory. To identify how many layers (also shape and more metadata) open the GGUF model file on browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. Use a number higher than the numbers of model layers to full offload (`--gpu-layers` 99, for a model with less than 99 layers). See `--ctx-size` and reduce it to the minimum needed. If model fails to load due to the insufficient GPU memory, reduce the number of layers (`--gpu-layers 20`, for a model with 40 layers will offload only the first 20 layers). |
+| `-ngl, --gpu-layers N` | Number of layers to store in VRAM | - | For better speed you aim to offload the entire model in GPU memory. To identify how many layers (also shape and more metadata) open the GGUF model file on the Web browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. Use a number higher than the numbers of model layers to fully offload (`--gpu-layers` 99, for a model with less than 99 layers). See `--ctx-size` and reduce it to the minimum needed. If model fails to load due to the insufficient GPU memory, reduce the number of layers (`--gpu-layers 20`, for a model with 40 layers will offload only the first 20 layers). |
 | `-ngld, --gpu-layers-draft N` | Number of layers to store in VRAM for the draft model | - | For draft model, see `--gpu-layers` |
 | `--cpu-moe` | Keep all MoE weights in CPU memory | - | Simple offload mode for MoE. [PR 841](https://github.com/ikawrakow/ik_llama.cpp/pull/841) |
 | `--n-cpu-moe N` | Keep MoE weights of the first N layers in CPU memory | - | Similar to `--cpu-moe` but when some GPU memory is available to store some layers. |
