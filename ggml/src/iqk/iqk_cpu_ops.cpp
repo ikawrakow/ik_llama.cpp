@@ -555,7 +555,7 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
         uint64_t nb01, uint64_t nb10, uint64_t nb11, uint64_t nb21,
         const float * x0_in, const float * s0_in, const float * c_in,
         float * dst, float * dst_silu, int ith, int nth) {
-#ifdef __AVX2__
+#if defined __AVX2__
     if (nt <= 32 || nc != 4 || nr%16 != 0) {
         return false;
     }
@@ -614,6 +614,160 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
             int ii = (idx + k) & 3;
             _mm256_storeu_ps(aux + 8*k +  0, vs[ii+0]);
             _mm256_storeu_ps(aux + 8*k + 32, vs[ii+4]);
+        }
+        for (int j = 0; j < 8; ++j) {
+            for (int ic = 0; ic < 4; ++ic) {
+                s[(j+0)*nb21/sizeof(float) + ic] = aux[j + 8*ic +  0];
+                s[(j+8)*nb21/sizeof(float) + ic] = aux[j + 8*ic + 32];
+            }
+        }
+    }
+    return true;
+#elif defined __ARM_NEON
+    if (nt <= 32 || nc != 4 || nr%16 != 0) {
+        return false;
+    }
+    int nr16 = nr/16;
+    int dr16 = (nr16 + nth - 1)/nth;
+    int ir0  = ith*dr16;
+    int ir1  = std::min(nr16, ir0 + dr16);
+    float32x4x2_t vs[8], vc[8];
+    float aux[64];
+    for (int ir = ir0; ir < ir1; ++ir) {
+        auto x  = dst_silu == nullptr ? dst + 16*ir : dst_silu + 16*ir;
+        auto s  = dst   + 16*ir*nb21/sizeof(float) + nr*nt;
+        auto s0 = s0_in + 16*ir*nb01/sizeof(float); // {d_conv - 1, d_inner, n_kv}
+        auto x0 = x0_in + 16*ir*nb10/sizeof(float);
+        auto c  = c_in  + 16*ir*nb21/sizeof(float);
+        for (int ic = 0; ic < 3; ++ic) {
+            for (int j = 0; j < 8; ++j) {
+                aux[j + 8*ic +  8] = s0[(j+0)*nb01/sizeof(float) + ic];
+                aux[j + 8*ic + 40] = s0[(j+8)*nb01/sizeof(float) + ic];
+            }
+        }
+        // Not necessary, but doing it to shut up compiler warnings
+        for (int j = 0; j < 8; ++j) {
+            aux[j] = aux[j+32] = 0.0f;
+        }
+        for (int k = 0; k < 8; ++k) vs[k] = vld1q_f32_x2(aux + 8*k);
+        for (int ic = 0; ic < 4; ++ic) {
+            for (int j = 0; j < 8; ++j) {
+                aux[j + 8*ic     ] = c[(j+0)*nb21/sizeof(float) + ic];
+                aux[j + 8*ic + 32] = c[(j+8)*nb21/sizeof(float) + ic];
+            }
+        }
+        for (int k = 0; k < 8; ++k) vc[k] = vld1q_f32_x2(aux + 8*k);
+        for (int it4 = 0; it4 < nt/4; ++it4) {
+            float32x4x2_t sum1, sum2;
+            vs[0] = vld1q_f32_x2(x0+0);
+            vs[4] = vld1q_f32_x2(x0+8);
+            for (int j = 0; j < 2; ++j) {
+                sum1.val[j] = vmulq_f32(             vs[1].val[j], vc[0].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[2].val[j], vc[1].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[3].val[j], vc[2].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[0].val[j], vc[3].val[j]);
+                sum2.val[j] = vmulq_f32(             vs[5].val[j], vc[4].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[6].val[j], vc[5].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[7].val[j], vc[6].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[4].val[j], vc[7].val[j]);
+                if (dst_silu) {
+                    sum1.val[j] = v_silu(sum1.val[j]);
+                    sum2.val[j] = v_silu(sum2.val[j]);
+                }
+            }
+            vst1q_f32_x2(x+0, sum1);
+            vst1q_f32_x2(x+8, sum2);
+            x0 += nb11/sizeof(float);
+            x  += nr;
+            vs[1] = vld1q_f32_x2(x0+0);
+            vs[5] = vld1q_f32_x2(x0+8);
+            for (int j = 0; j < 2; ++j) {
+                sum1.val[j] = vmulq_f32(             vs[2].val[j], vc[0].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[3].val[j], vc[1].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[0].val[j], vc[2].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[1].val[j], vc[3].val[j]);
+                sum2.val[j] = vmulq_f32(             vs[6].val[j], vc[4].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[7].val[j], vc[5].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[4].val[j], vc[6].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[5].val[j], vc[7].val[j]);
+                if (dst_silu) {
+                    sum1.val[j] = v_silu(sum1.val[j]);
+                    sum2.val[j] = v_silu(sum2.val[j]);
+                }
+            }
+            vst1q_f32_x2(x+0, sum1);
+            vst1q_f32_x2(x+8, sum2);
+            x0 += nb11/sizeof(float);
+            x  += nr;
+            vs[2] = vld1q_f32_x2(x0+0);
+            vs[6] = vld1q_f32_x2(x0+8);
+            for (int j = 0; j < 2; ++j) {
+                sum1.val[j] = vmulq_f32(             vs[3].val[j], vc[0].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[0].val[j], vc[1].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[1].val[j], vc[2].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[2].val[j], vc[3].val[j]);
+                sum2.val[j] = vmulq_f32(             vs[7].val[j], vc[4].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[4].val[j], vc[5].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[5].val[j], vc[6].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[6].val[j], vc[7].val[j]);
+                if (dst_silu) {
+                    sum1.val[j] = v_silu(sum1.val[j]);
+                    sum2.val[j] = v_silu(sum2.val[j]);
+                }
+            }
+            vst1q_f32_x2(x+0, sum1);
+            vst1q_f32_x2(x+8, sum2);
+            x0 += nb11/sizeof(float);
+            x  += nr;
+            vs[3] = vld1q_f32_x2(x0+0);
+            vs[7] = vld1q_f32_x2(x0+8);
+            for (int j = 0; j < 2; ++j) {
+                sum1.val[j] = vmulq_f32(             vs[0].val[j], vc[0].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[1].val[j], vc[1].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[2].val[j], vc[2].val[j]);
+                sum1.val[j] = vfmaq_f32(sum1.val[j], vs[3].val[j], vc[3].val[j]);
+                sum2.val[j] = vmulq_f32(             vs[4].val[j], vc[4].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[5].val[j], vc[5].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[6].val[j], vc[6].val[j]);
+                sum2.val[j] = vfmaq_f32(sum2.val[j], vs[7].val[j], vc[7].val[j]);
+                if (dst_silu) {
+                    sum1.val[j] = v_silu(sum1.val[j]);
+                    sum2.val[j] = v_silu(sum2.val[j]);
+                }
+            }
+            vst1q_f32_x2(x+0, sum1);
+            vst1q_f32_x2(x+8, sum2);
+            x0 += nb11/sizeof(float);
+            x  += nr;
+        }
+        int idx = 0;
+        for (int it = 4*(nt/4); it < nt; ++it) {
+            vs[idx+0] = vld1q_f32_x2(x0+0);
+            vs[idx+4] = vld1q_f32_x2(x0+8);
+            idx = (idx + 1) & 3;
+            float32x4x2_t sum1 = {}, sum2 = {};
+            for (int k = 0; k < 4; ++k) {
+                int ii = (idx + k) & 3;
+                for (int j = 0; j < 2; ++j) {
+                    sum1.val[j] = vfmaq_f32(sum1.val[j], vs[ii+0].val[j], vc[k+0].val[j]);
+                    sum2.val[j] = vfmaq_f32(sum2.val[j], vs[ii+4].val[j], vc[k+4].val[j]);
+                }
+            }
+            if (dst_silu) {
+                for (int j = 0; j < 2; ++j) {
+                    sum1.val[j] = v_silu(sum1.val[j]);
+                    sum2.val[j] = v_silu(sum2.val[j]);
+                }
+            }
+            vst1q_f32_x2(x+0, sum1);
+            vst1q_f32_x2(x+8, sum2);
+            x0 += nb11/sizeof(float);
+            x  += nr;
+        }
+        for (int k = 0; k < 4; ++k) {
+            int ii = (idx + k) & 3;
+            vst1q_f32_x2(aux + 8*k +  0, vs[ii+0]);
+            vst1q_f32_x2(aux + 8*k + 32, vs[ii+4]);
         }
         for (int j = 0; j < 8; ++j) {
             for (int ic = 0; ic < 4; ++ic) {
