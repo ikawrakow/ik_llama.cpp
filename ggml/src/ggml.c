@@ -22232,9 +22232,9 @@ static void ggml_compute_forward_flash_attn_back(
 
 // ggml_compute_forward_ssm_conv
 
-static void ggml_compute_forward_ssm_conv_f32(
+static int ggml_compute_forward_ssm_conv_f32(
         const struct ggml_compute_params * params,
-        struct ggml_tensor * dst) {
+        struct ggml_tensor * dst, int node, const struct ggml_cgraph * cgraph) {
     const struct ggml_tensor * src0 = dst->src[0]; // conv_state
     const struct ggml_tensor * src1 = dst->src[1]; // x
     const struct ggml_tensor * src2 = dst->src[2]; // conv1d.weight
@@ -22258,10 +22258,17 @@ static void ggml_compute_forward_ssm_conv_f32(
     GGML_ASSERT(src2->nb[2] == src2->ne[1]*src2->ne[0]*sizeof(float));
 
     if (n_kv == 1 && nc == 4) {
+        float * dst_silu = NULL;
+        if (node < cgraph->n_nodes + 2 &&
+            cgraph->nodes[node+1]->op == GGML_OP_VIEW && cgraph->nodes[node+1]->src[0] == dst &&
+            cgraph->nodes[node+2]->op == GGML_OP_UNARY && cgraph->nodes[node+2]->src[0] == cgraph->nodes[node+1] &&
+            (enum ggml_unary_op)cgraph->nodes[node+2]->op_params[0] == GGML_UNARY_OP_SILU) {
+            dst_silu = (float *)cgraph->nodes[node+2]->data;
+        }
         if (iqk_ssm_conv4(nr, nc, n_t, src0->nb[1], src1->nb[0], src1->nb[1], src2->nb[1],
                     (const float *)src1->data, (const float *)src0->data, (const float *)src2->data,
-                    (float *)dst->data, ith, nth)) {
-            return;
+                    (float *)dst->data, dst_silu, ith, nth)) {
+            return node + (dst_silu ? 2 : 0);
         }
     }
 
@@ -22343,15 +22350,15 @@ static void ggml_compute_forward_ssm_conv_f32(
             x[i1] = sumf;
         }
     }
+    return node;
 }
 
-static void ggml_compute_forward_ssm_conv(
-        const struct ggml_compute_params * params,
-        struct ggml_tensor * dst) {
+static int ggml_compute_forward_ssm_conv(const struct ggml_compute_params * params,
+        struct ggml_tensor * dst, int node, const struct ggml_cgraph * cgraph) {
     switch (dst->src[0]->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_ssm_conv_f32(params, dst);
+                return ggml_compute_forward_ssm_conv_f32(params, dst, node, cgraph);
             } break;
         default:
             {
@@ -24407,7 +24414,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SSM_CONV:
             {
-                ggml_compute_forward_ssm_conv(params, tensor);
+                i = ggml_compute_forward_ssm_conv(params, tensor, i, cgraph);
             } break;
         case GGML_OP_SSM_SCAN:
             {

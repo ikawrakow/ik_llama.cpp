@@ -35,7 +35,7 @@ float iqk_exp_with_thresh(int n, float * logits, float max, float min);
 bool iqk_ssm_conv4(int nr, int nc, int nt,
         uint64_t nb01, uint64_t nb10, uint64_t nb11, uint64_t nb21,
         const float * x0, const float * s0, const float * c,
-        float * dst, int ith, int nth);
+        float * dst, float * dst_silu, int ith, int nth);
 
 #ifdef __cplusplus
 }
