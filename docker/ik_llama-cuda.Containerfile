@@ -5,7 +5,7 @@ ARG BASE_CUDA_RUN_CONTAINER=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu
 
 # Stage 1: Build
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
-ARG CUDA_DOCKER_ARCH=default # CUDA architecture to build for (defaults to all supported archs)
+ARG CUDA_DOCKER_ARCH=86 # CUDA architecture to build for
 RUN apt-get update && apt-get install -yq build-essential git libcurl4-openssl-dev curl libgomp1 cmake
 
 RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
