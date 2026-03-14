@@ -8281,8 +8281,8 @@ void llama_sample_adaptive_p(llama_context * ctx,
     llama_sample_adaptive_p_impl(&ctx->sampling, candidates, adapt_p_ctx);
 }
 
-void llama_prep_adaptive_p(struct llama_context * ctx, float * logits, struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    llama_prep_adaptive_p_impl(&ctx->sampling, logits, adapt_p_ctx);
+void llama_prep_adaptive_p(struct llama_context * ctx, llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx) {
+    llama_prep_adaptive_p_impl(&ctx->sampling, candidates, adapt_p_ctx);
 }
 
 
@@ -8388,8 +8388,8 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float
     return llama_init_adaptive_p_impl(n_vocab, target, decay, updt_w_cur, seed);
 }
 
-void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const int32_t n_rewind) {
-    llama_review_adaptive_p_impl(adapt_p_ctx, n_rewind);
+void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const size_t n_unsent, const bool rewind_status) {
+    llama_review_adaptive_p_impl(adapt_p_ctx, n_unsent, rewind_status);
 }
 
 

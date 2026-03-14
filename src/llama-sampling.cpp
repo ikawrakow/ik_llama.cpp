@@ -1046,49 +1046,30 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
-void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const int32_t n_rewind) {
-    if ((n_rewind == 0) || (adapt_p_ctx->target < 0.0f)) {
-        return;
-    }
-    // auto & weighted_sum = adapt_p_ctx->weighted_sum;
-    // auto & total_weight = adapt_p_ctx->total_weight;
-
-    const int32_t sz = adapt_p_ctx->history.size();
-    if ((sz <= 0) || (sz <= n_rewind)) {
-        // critically short history. reset to initial state
-        LLAMA_LOG_WARN("%s: sz=%d, n_rewind=%d should not be possible\n", __func__, sz, n_rewind);
-        adapt_p_ctx->history.clear();
-        adapt_p_ctx->history.push_back({
-            adapt_p_ctx->target / adapt_p_ctx->decay,   // weighted_sum
-            1.0f / adapt_p_ctx->decay });               // total_weight
+void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const size_t n_unsent, const bool rewind_status) {
+    // LLAMA_LOG_DEBUG("%s: n_unsent = %zu, rewind_status = %s\n", __func__, n_unsent, rewind_status ? "true" : "false");
+    if (adapt_p_ctx->target < 0.0f) {
+        // LLAMA_LOG_DEBUG("%s: sampler disabled, target = %f\n", __func__, adapt_p_ctx->target);
         return;
     }
 
-    if (n_rewind < 0) {
-        // clear history except most recent
-        adapt_p_ctx->history.front() = adapt_p_ctx->history.back();
-        adapt_p_ctx->history.resize(1);
-    } else {
-        // rewind
-        adapt_p_ctx->history.resize(sz - n_rewind);
+    auto & history = adapt_p_ctx->history;
+    const size_t hsz = history.size();
+    const size_t hsz_next = 1 + n_unsent;
+    // LLAMA_LOG_DEBUG("%s: hsz = %zu, hsz_next = %zu\n", __func__, hsz, hsz_next);
+    if (hsz_next >= hsz >> 1) { return; }   // skip small update
 
-        // int32_t sz = weighted_sum.size() - n_rewind;
-        // if (sz > 0) {
-        //     weighted_sum.resize(sz);
-        // } else {
-        //     LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
-        //     weighted_sum.clear();
-        //     weighted_sum.push_back(adapt_p_ctx->target / adapt_p_ctx->decay);   // set to default value
-        // }
-        // sz = total_weight.size() - n_rewind;
-        // if (sz > 0) {
-        //     total_weight.resize(sz);
-        // } else {
-        //     LLAMA_LOG_WARN("%s: n_rewind=%d, sz=%d should not be possible\n", __func__, n_rewind, sz);
-        //     total_weight.clear();
-        //     total_weight.push_back(1.0f / adapt_p_ctx->decay);  // set to default value
-        // }
+    if (!rewind_status) {
+        // sent results, overwrite old history
+        // LLAMA_LOG_DEBUG("%s: hsz = %zu, hsz_next = %zu\n", __func__, hsz, hsz_next);
+        // LLAMA_LOG_DEBUG("%s: history[hsz-1].first = %f\n", __func__, history[hsz-1].first);
+        const size_t hsz_diff = hsz - hsz_next;
+        for (int j = 0; j < hsz_next; ++j) {
+            history[j] = history[j + hsz_diff];
+        }
     }
+    history.resize(hsz_next);
+    // LLAMA_LOG_DEBUG("%s: history[hsz_next-1].first = %f\n", __func__, history[hsz_next-1].first);
 }
 
 llama_token llama_sample_token_adaptive_p_impl(
@@ -1126,8 +1107,6 @@ llama_token llama_sample_token_adaptive_p_impl(
         ctx->history.push_back({
             ctx->decay * ctx->history.back().first + update_prob,   // weighted_sum
             ctx->decay * ctx->history.back().second + 1.0f });      // total_weight
-        // ctx->weighted_sum.push_back(ctx->decay * ctx->weighted_sum.back() + update_prob);
-        // ctx->total_weight.push_back(ctx->decay * ctx->total_weight.back() + 1.0f);
     }
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
@@ -1139,7 +1118,7 @@ llama_token llama_sample_token_adaptive_p_impl(
 void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_array * candidates,
         struct llama_sampler_adaptive_p * adapt_p_ctx) {
     if (adapt_p_ctx->target < 0.0f) {
-        // sampler is disabled
+        // LLAMA_LOG_DEBUG("%s: sampler disabled, target = %f\n", __func__, adapt_p_ctx->target);
         llama_sample_softmax_impl(nullptr, candidates);
         return;
     }
@@ -1195,20 +1174,25 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
 
 void llama_prep_adaptive_p_impl(
               struct llama_sampling * smpl,
-                              float * logits,
+             llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    if (adapt_p_ctx->updt_w_cur) {
-        // update with current probability, original not needed
+    if (adapt_p_ctx->updt_w_cur     // update with current probability, original not needed
+        || (adapt_p_ctx->target < 0.0f)) {  // or disabled
         return;
     }
     constexpr float kDelta = 30.0f; //16.6f;
     auto t_start = ggml_time_us();
     auto & orig_prob = adapt_p_ctx->orig_prob;
-
-    std::copy(logits, logits + orig_prob.size(), orig_prob.begin());
+    if (candidates->size != orig_prob.size() || candidates->sorted) {
+        LLAMA_LOG_ERROR("%s: this function must be called before any other sampler has been applied\n", __func__);
+        LLAMA_LOG_ERROR("%s: the sampler has been initialized with a vocabulary of %zu, but is being called with %zu candidates\n",
+                __func__, orig_prob.size(), candidates->size);
+        GGML_ABORT("Bad candidates in adaptive_p sampler");
+    }
 
     float max_logit = -INFINITY;
-    for (int j = 0; j < int(orig_prob.size()); ++j) {
+    for (int j = 0; j < int(candidates->size); ++j) {
+        orig_prob[j] = candidates->data[j].logit;
         max_logit = std::max(max_logit, orig_prob[j]);
     }
     adapt_p_ctx->cum_orig_prob = iqk_exp_with_thresh(orig_prob.size(), orig_prob.data(), max_logit, max_logit - kDelta);
@@ -1228,8 +1212,6 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
         /* .decay             = */ clamped_decay,
         /* .updt_w_cur        = */ updt_w_cur,
         /* .rng               = */ std::mt19937(seed),
-        // /* .weighted_sum      = */ {},
-        // /* .total_weight      = */ {},
         /* .history           = */ {},
         /* .orig_prob         = */ {},
         /* .cum_orig_prob     = */ 1.0f,
@@ -1237,8 +1219,6 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
         /* .max_xform_logit   = */ -INFINITY,
         /* .cum_probs         = */ {},
     };
-    // result->weighted_sum.push_back(target / (1.0f - clamped_decay));
-    // result->total_weight.push_back(1.0f / (1.0f - clamped_decay));
     result->history.push_back({
         target / (1.0f - clamped_decay),    // weighted_sum
         1.0f / (1.0f - clamped_decay) });   // total_weight

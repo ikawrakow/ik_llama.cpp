@@ -1406,7 +1406,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
         const uint32_t seed);
 
     void llama_prep_adaptive_p(struct llama_context * ctx,
-                                  float * logits,
+                 llama_token_data_array * candidates,
         struct llama_sampler_adaptive_p * adapt_p_ctx);
 
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/adaptive-p-docs/blob/main/README.md
@@ -1414,7 +1414,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
                                llama_token_data_array * candidates,
                       struct llama_sampler_adaptive_p * adapt_p_ctx);
 
-    void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const int32_t n_rewind);
+    void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const size_t n_unsent, const bool rewind_status);
 
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
