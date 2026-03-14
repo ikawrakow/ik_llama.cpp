@@ -80,17 +80,16 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
         int il, const llm_build_cb & cb, int repeat_type) {
 
     const int64_t S_k      = q->ne[0];
-    const int64_t H_k      = q->ne[1];
-    const int64_t n_tokens = q->ne[2];
+    const int64_t H_k      = q->ne[2];
+    const int64_t n_tokens = q->ne[1];
     const int64_t n_seqs   = q->ne[3];
 
     const int64_t S_v = v->ne[0];
     const int64_t H_v = v->ne[1];
 
-    GGML_ASSERT(q->ne[0] == S_k && q->ne[1] == H_k && q->ne[2] == n_tokens && q->ne[3] == n_seqs);
-    GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == H_k && k->ne[2] == n_tokens && k->ne[3] == n_seqs);
+    GGML_ASSERT(q->ne[0] == S_k && q->ne[2] == H_k && q->ne[1] == n_tokens && q->ne[3] == n_seqs);
+    GGML_ASSERT(k->ne[0] == S_k && k->ne[2] == H_k && k->ne[1] == n_tokens && k->ne[3] == n_seqs);
     GGML_ASSERT(v->ne[2] == n_tokens);
-    GGML_ASSERT(k->ne[2] == n_tokens);
     GGML_ASSERT(g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
     GGML_ASSERT(beta->ne[0] == H_v && beta->ne[2] == n_tokens && beta->ne[3] == n_seqs);
     GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H_v && state->ne[3] == n_seqs);
@@ -104,14 +103,10 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     cb(g,    "g_in", il);
     cb(state,"state_in", il);
 
-    q = ggml_permute(ctx0, q, 0, 2, 1, 3);
-    k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
     g = ggml_permute(ctx0, g, 2, 0, 3, 1);
     beta = ggml_permute(ctx0, beta, 2, 0, 1, 3);
     if (n_seqs > 1 || n_tokens > 1) {
-        q = ggml_cont_4d(ctx0, q, S_k, n_tokens, H_k, n_seqs);
-        k = ggml_cont_4d(ctx0, k, S_k, n_tokens, H_k, n_seqs);
         v = ggml_cont_4d(ctx0, v, S_v, n_tokens, H_v, n_seqs);
         g = ggml_cont_4d(ctx0, g, n_tokens, 1, H_v, n_seqs);
         beta = ggml_cont_4d(ctx0, beta, 1, n_tokens, H_v, n_seqs);
@@ -363,8 +358,17 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(k_conv, "k_conv", il);
     cb(v_conv, "v_conv", il);
 
-    q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
-    k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
+    if (n_seq_tokens > 1) {
+        q_conv = ggml_permute(ctx0, q_conv, 0, 2, 1, 3);
+        k_conv = ggml_permute(ctx0, k_conv, 0, 2, 1, 3);
+        q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
+        k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
+    } else {
+        q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
+        k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
+        q_conv = ggml_permute(ctx0, q_conv, 0, 2, 1, 3);
+        k_conv = ggml_permute(ctx0, k_conv, 0, 2, 1, 3);
+    }
     cb(q_conv, "q_conv_normed", il);
     cb(k_conv, "k_conv_normed", il);
 
