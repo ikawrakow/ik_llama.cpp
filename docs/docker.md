@@ -1,5 +1,8 @@
 # Docker
 
+>[!IMPORTANT]
+>`ik_llama.cpp` provides to official support for docker images. All of the following has been inheritted from `llama.cpp` when I forked the project, and has never been updated. As such, it is outdated and likely inaccurate. I have still left it behind in case it is useful for someone interested in preparing theor own docker images.
+
 ## Prerequisites
 * Docker must be installed and running on your system.
 * Create a folder to store big models & intermediate files (ex. /llama/models)
