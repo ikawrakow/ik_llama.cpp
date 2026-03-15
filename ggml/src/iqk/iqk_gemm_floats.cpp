@@ -569,7 +569,7 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
 
 void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo& info, int k_step) {
     using q_float = float;
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int nrc_q = 8;
     constexpr int nrc_k = 8;
 #else
@@ -602,7 +602,7 @@ void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo
                     mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 3>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
                 }
             } break;
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             case 4: {
                 for (int ik = 0; ik < k_step/nrc_k; ++ik) {
                     mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 4>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);

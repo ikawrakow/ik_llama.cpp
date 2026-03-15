@@ -53,7 +53,7 @@ inline void set_scales_8_iq(int j, const __m256i& all_scales, __m256i * scales) 
 }
 
 inline void set_scales_16_iq(const __m256i& all_scales, __m256i * scales) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     auto shuffle = _mm256_set_epi64x(0x0706070607060706, 0x0302030203020302, 0x0504050405040504, 0x0100010001000100);
     scales[0] = _mm256_shuffle_epi8(all_scales, shuffle);
     scales[1] = _mm256_shuffle_epi8(all_scales, _mm256_add_epi8(shuffle, _mm256_set1_epi8(8)));
@@ -691,7 +691,7 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
 template <typename Bits>
 inline void multiply_add_1(int j, const Bits& bits, const __m256i * scales, const __m256i * q8, __m256i * sumi) {
     if (j == 0) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto p1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[0], q8[0]);
         auto p2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[1], q8[1]);
         auto p3 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[2], q8[2]);
@@ -707,7 +707,7 @@ inline void multiply_add_1(int j, const Bits& bits, const __m256i * scales, cons
         sumi[1] = _mm256_add_epi32(p2, p4);
 #endif
     } else {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto p1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[0], q8[0]);
         auto p2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[1], q8[1]);
         auto p3 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), bits.values[2], q8[2]);
@@ -834,7 +834,7 @@ static void mul_mat_qX_K_q8_K_IQ_N(int n, const void * vx, size_t bx, const Data
 
 template <int n_sum>
 inline __m256i compute_dot_4(const __m256i * x, const __m256i * y) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     auto sumi0 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), x[0], y[0]);
     auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), x[1], y[1]);
     auto sumi2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), x[2], y[2]);
@@ -883,7 +883,7 @@ template <typename Dequantizer, int nrc_y, int n_sum = 2>
 static void mul_mat_qX_K_q8_2_IQ_N(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     static_assert(Dequantizer::num_blocks == 8);
     static_assert(n_sum == 2 || n_sum == 4 || n_sum == 8);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr bool use_1_row = nrc_y == 1;
 #else
     constexpr bool use_1_row = nrc_y == 1 && !std::is_same_v<Dequantizer, DequantizerIQ2XXS>;
@@ -1011,7 +1011,7 @@ static void mul_mat_iq2_xxs_q8_2_IQ_N(int n, const void * vx, size_t bx, const D
 template <typename Dequantizer, int nrc_y>
 static void mul_mat_qX_K_q8_K_IQ(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n % QK_K == 0);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     if constexpr (nrc_y == 1) {
         mul_mat_qX_K_q8_K_IQ_1<Dequantizer>(n, vx, bx, info, nrc_x);
     } else {
@@ -1050,7 +1050,7 @@ static void mul_mat_iq2_xxs_r4_q8_k(int n, const void * vx, size_t bx, const Dat
                 qs += 16;
                 auto sas = _mm_loadu_si128((const __m128i *)iq2[ibl].sas + ib);
                 auto scales = _mm_and_si128(sas, _mm_set1_epi8(1));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 scales = _mm_dpbusd_epi32(_mm_set1_epi32(1), scales, _mm_set1_epi32(0x10080402));
 #else
                 scales = _mm_maddubs_epi16(scales, _mm_set1_epi32(0x10080402));
@@ -1119,7 +1119,7 @@ static void mul_mat_iq2_xs_r4_q8_k(int n, const void * vx, size_t bx, const Data
     auto m4 = _mm256_set1_epi8(4);
 #endif
     __m256  acc[nrc_y] = {};
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     __m256i shuffles[2] = {
         _mm256_set_epi64x(0x0706070607060706, 0x0302030203020302, 0x0504050405040504, 0x0100010001000100),
         _mm256_set_epi64x(0x0f0e0f0e0f0e0f0e, 0x0b0a0b0a0b0a0b0a, 0x0d0c0d0c0d0c0d0c, 0x0908090809080908)
@@ -1207,7 +1207,7 @@ static void mul_mat_iq2_xs_r4_q8_k(int n, const void * vx, size_t bx, const Data
 #endif
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 auto sumi = _mm256_hadd_epi32(isum[2*iy+0], isum[2*iy+1]);
                 acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
                 isum[2*iy+0] = isum[2*iy+1] = _mm256_setzero_si256();
@@ -1244,7 +1244,7 @@ static void mul_mat_iq2_xs_r4_q8_k_16(int n, const void * vx, size_t bx, const D
     auto m4 = _mm256_set1_epi8(4);
 #endif
     __m256  acc[nrc_y] = {};
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     __m256i shuffles[2] = {
         _mm256_set_epi64x(0x0706070607060706, 0x0302030203020302, 0x0504050405040504, 0x0100010001000100),
         _mm256_set_epi64x(0x0f0e0f0e0f0e0f0e, 0x0b0a0b0a0b0a0b0a, 0x0d0c0d0c0d0c0d0c, 0x0908090809080908)
@@ -1287,7 +1287,7 @@ static void mul_mat_iq2_xs_r4_q8_k_16(int n, const void * vx, size_t bx, const D
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto bsums = q8.load_bsums(iy, ibl);
                     auto sumi = _mm256_setzero_si256();
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     sumi = _mm256_dpwssd_epi32(sumi, t1, _mm256_shuffle_epi32(bsums, 0x00));
                     sumi = _mm256_dpwssd_epi32(sumi, t2, _mm256_shuffle_epi32(bsums, 0x55));
                     sumi = _mm256_dpwssd_epi32(sumi, t3, _mm256_shuffle_epi32(bsums, 0xaa));
@@ -1366,7 +1366,7 @@ static void mul_mat_iq2_xs_r4_q8_k_16(int n, const void * vx, size_t bx, const D
 #endif
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 auto sumi = _mm256_hadd_epi32(isum[2*iy+0], isum[2*iy+1]);
                 acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
                 isum[2*iy+0] = isum[2*iy+1] = _mm256_setzero_si256();
@@ -1403,7 +1403,7 @@ static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     auto m4 = _mm256_set1_epi8(4);
 #endif
     __m256  acc[nrc_y] = {};
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     __m256i shuffles[2] = {
         _mm256_set_epi64x(0x0706070607060706, 0x0302030203020302, 0x0504050405040504, 0x0100010001000100),
         _mm256_set_epi64x(0x0f0e0f0e0f0e0f0e, 0x0b0a0b0a0b0a0b0a, 0x0d0c0d0c0d0c0d0c, 0x0908090809080908)
@@ -1488,7 +1488,7 @@ static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
 #endif
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 auto sumi = _mm256_hadd_epi32(isum[2*iy+0], isum[2*iy+1]);
                 acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
                 isum[2*iy+0] = isum[2*iy+1] = _mm256_setzero_si256();
@@ -1525,7 +1525,7 @@ static void mul_mat_iq2_s_r4_q8_k_16(int n, const void * vx, size_t bx, const Da
     auto m4 = _mm256_set1_epi8(4);
 #endif
     __m256  acc[nrc_y] = {};
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     __m256i shuffles[2] = {
         _mm256_set_epi64x(0x0706070607060706, 0x0302030203020302, 0x0504050405040504, 0x0100010001000100),
         _mm256_set_epi64x(0x0f0e0f0e0f0e0f0e, 0x0b0a0b0a0b0a0b0a, 0x0d0c0d0c0d0c0d0c, 0x0908090809080908)
@@ -1569,7 +1569,7 @@ static void mul_mat_iq2_s_r4_q8_k_16(int n, const void * vx, size_t bx, const Da
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto bsums = q8.load_bsums(iy, ibl);
                     auto sumi = _mm256_setzero_si256();
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     sumi = _mm256_dpwssd_epi32(sumi, t1, _mm256_shuffle_epi32(bsums, 0x00));
                     sumi = _mm256_dpwssd_epi32(sumi, t2, _mm256_shuffle_epi32(bsums, 0x55));
                     sumi = _mm256_dpwssd_epi32(sumi, t3, _mm256_shuffle_epi32(bsums, 0xaa));
@@ -1644,7 +1644,7 @@ static void mul_mat_iq2_s_r4_q8_k_16(int n, const void * vx, size_t bx, const Da
 #endif
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 auto sumi = _mm256_hadd_epi32(isum[2*iy+0], isum[2*iy+1]);
                 acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
                 isum[2*iy+0] = isum[2*iy+1] = _mm256_setzero_si256();
@@ -1692,7 +1692,7 @@ static void mul_mat_iq3_xxs_r4_q8_k(int n, const void * vx, size_t bx, const Dat
                                          iq3xxs_grid[iq3[ibl].qs[32*ib+27]], iq3xxs_grid[iq3[ibl].qs[32*ib+26]], iq3xxs_grid[iq3[ibl].qs[32*ib+25]], iq3xxs_grid[iq3[ibl].qs[32*ib+24]]);
                 auto sas = _mm_loadu_si128((const __m128i *)iq3[ibl].sas + ib);
                 auto scales = _mm_and_si128(sas, _mm_set1_epi8(1));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 scales = _mm_dpbusd_epi32(_mm_set1_epi32(1), scales, _mm_set1_epi32(0x10080402));
 #else
                 scales = _mm_maddubs_epi16(scales, _mm_set1_epi32(0x10080402));
@@ -1889,7 +1889,7 @@ void iqk_convert_iq2_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, i
 }
 
 void iqk_convert_iq2_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -1941,7 +1941,7 @@ void iqk_convert_iq2_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, i
 }
 
 void iqk_convert_iq2_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2133,7 +2133,7 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
                     auto qs = q8.y[0][2*i+j].qs;
                     for (int k = 0; k < 4; ++k) us[k] = _mm256_loadu_si256((const __m256i*)qs+k);
                     deq.prepare_signed(i, j, deq.bits.values, us);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[0], us[0]);
                     auto sumi2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[1], us[1]);
                     auto sumi3 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[2], us[2]);
@@ -2157,7 +2157,7 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
 
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto qs = q8.y[iy][2*i+j].qs;
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     // 0...31
                     auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), us[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+0), deq.bits.values[0]));
                     // 32...63
@@ -2279,7 +2279,7 @@ void iqk_convert_iq2_s_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int
 }
 
 void iqk_convert_iq2_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2373,7 +2373,7 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
                     auto qs = q8.y[0][2*i+j].qs;
                     for (int k = 0; k < 4; ++k) us[k] = _mm256_loadu_si256((const __m256i*)qs+k);
                     deq.prepare_signed(i, j, deq.bits.values, us);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[0], us[0]);
                     auto sumi2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[1], us[1]);
                     auto sumi3 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), deq.bits.values[2], us[2]);
@@ -2397,7 +2397,7 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
 
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto qs = q8.y[iy][2*i+j].qs;
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     // 0...31
                     auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), us[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i*)qs+0), deq.bits.values[0]));
                     // 32...63
@@ -2444,7 +2444,7 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
 }
 
 void iqk_convert_iq3_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else
@@ -2550,7 +2550,7 @@ void iqk_convert_iq3_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, i
 }
 
 void iqk_convert_iq3_s_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
     constexpr int k_nr = 16;
     using block_q8_k_r = block_q8_k_r16;
 #else

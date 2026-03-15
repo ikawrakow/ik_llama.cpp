@@ -121,7 +121,7 @@ struct Trellis3 {
     }
     inline __m256 gen8(uint32_t val1, uint32_t val2) const {
         auto v8 = _mm256_and_si256(next8(val1, val2), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto i8 = _mm256_dpbusd_epi32(_mm256_set1_epi32(-126), _mm256_set1_epi32(0x01010101), v8);
 #else
         auto dot = _mm256_maddubs_epi16(v8, _mm256_set1_epi32(0x01010101));
@@ -135,7 +135,7 @@ struct Trellis3 {
     }
     inline __m256 gen8(uint32_t val) const {
         auto v8 = _mm256_and_si256(next8(val), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto i8 = _mm256_dpbusd_epi32(_mm256_set1_epi32(-126), _mm256_set1_epi32(0x01010101), v8);
 #else
         auto dot = _mm256_maddubs_epi16(v8, _mm256_set1_epi32(0x01010101));
@@ -152,7 +152,7 @@ struct Trellis3 {
         __m256i aux[4];
         for (int i = 0; i < 4; ++i) {
             auto i8 = _mm256_and_si256(next8(val[2*i+0], val[2*i+1]), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             aux[i] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8);
 #else
             auto dot = _mm256_maddubs_epi16(i8, _mm256_set1_epi32(0x01010101));
@@ -308,7 +308,7 @@ struct Trellis3 {
         __m256i aux[4];
         for (int i = 0; i < 4; ++i) {
             auto i8 = _mm256_and_si256(next8(v0 + val[i]), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             aux[i] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8);
 #else
             auto dot = _mm256_maddubs_epi16(i8, _mm256_set1_epi32(0x01010101));
@@ -335,7 +335,7 @@ struct Trellis3 {
             auto i8_2 = _mm256_mullo_epi32(i8_1, vka3);
             i8_1 = _mm256_and_si256(i8_1, _mm256_set1_epi32(0x3f3f3f3f));
             i8_2 = _mm256_and_si256(i8_2, _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             aux[i+0] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8_1);
             aux[i+4] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8_2);
 #else
@@ -599,7 +599,7 @@ void mul_mat_iq1_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
             dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
 #else
@@ -690,7 +690,7 @@ void mul_mat_iq2_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
             dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
 #else
@@ -834,7 +834,7 @@ void mul_mat_iq3_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv, &sv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
             dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], _mm256_sign_epi8(yv, sv[k]));
 #else
@@ -1135,7 +1135,7 @@ void mul_mat_iq4_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
             dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
 #else
@@ -1286,7 +1286,7 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ1_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq1_kt_q8_2_x4_T, kernels);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_iq1_kt_q8_2_x4_T<16>;
 #endif
             return true;
@@ -1297,7 +1297,7 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ2_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_q8_2_x4_T, kernels);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_iq2_kt_q8_2_x4_T<16>;
 #endif
             return true;
@@ -1308,7 +1308,7 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ3_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq3_kt_q8_2_x4_T, kernels);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_iq3_kt_q8_2_x4_T<16>;
 #endif
             return true;
@@ -1319,7 +1319,7 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ4_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_kt_q8_2_x4_T, kernels);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             func16 = mul_mat_iq4_kt_q8_2_x4_T<16>;
 #endif
             return true;

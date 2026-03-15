@@ -6701,7 +6701,7 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
             m1 = _mm256_unpackhi_epi64(t0, t1);
             m2 = _mm256_unpacklo_epi64(t2, t3);
             m3 = _mm256_unpackhi_epi64(t2, t3);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
             if (online) {
                 m0 = _mm256_add_epi8(m0, _mm256_set1_epi8(127));
                 m1 = _mm256_add_epi8(m1, _mm256_set1_epi8(127));

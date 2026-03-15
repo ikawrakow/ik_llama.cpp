@@ -382,7 +382,7 @@ struct BaseDequantizer {
 template <typename Q8, typename Bits>
 static inline void multiply_add(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
     if (j == 0) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
             sumi[iy] = _mm256_dpwssd_epi32(_mm256_setzero_si256(), scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 0)));
             sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 1)));
@@ -399,7 +399,7 @@ static inline void multiply_add(const Bits& bits, const __m256i * scales, int j,
         }
 #endif
     } else {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
             sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[0], _mm256_maddubs_epi16(bits.values[0], q8.load_quants(iy, i, 4)));
             sumi[iy] = _mm256_dpwssd_epi32(sumi[iy], scales[1], _mm256_maddubs_epi16(bits.values[1], q8.load_quants(iy, i, 5)));
