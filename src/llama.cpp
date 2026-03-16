@@ -1183,12 +1183,18 @@ static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache) {
 }
 
 static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache, uint32_t pad) {
+    uint32_t last = cache.size;
     for (uint32_t i = cache.size; i > 0; i -= pad) {
         const llama_kv_cell & cell = cache.cells[i - 1];
 
         if (cell.pos >= 0 && !cell.is_empty()) {
+            for (uint32_t j = last; j > i; --j) {
+                auto & cell_j = cache.cells[j - 1];
+                if (cell_j.pos >= 0 && !cell_j.is_empty()) return j;
+            }
             return i;
         }
+        last = i;
     }
 
     return 0;
