@@ -17,6 +17,7 @@
 #include "llama-cparams.h"
 #include "llama-hparams.h"
 #include "llama-context.h"
+#include "llama-quantize.h"
 
 #include "unicode.h"
 
@@ -4696,7 +4697,11 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
         auto & l = model.layers[il];
         if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps &&
            !l.ffn_up_gate_exps->extra) {
-            GGML_ASSERT(l.ffn_up_gate_exps->type  == l.ffn_up_exps->type  && l.ffn_up_gate_exps->type  == l.ffn_gate_exps->type);
+            GGML_ASSERT(l.ffn_up_exps->type == l.ffn_gate_exps->type);
+            if (l.ffn_up_gate_exps->type != l.ffn_up_exps->type) {
+                auto [other_type, _] = interleaved_properties(l.ffn_up_gate_exps->type);
+                GGML_ASSERT(other_type == l.ffn_up_exps->type);
+            }
             GGML_ASSERT(l.ffn_up_gate_exps->ne[0] == l.ffn_up_exps->ne[0] && l.ffn_up_gate_exps->ne[0] == l.ffn_gate_exps->ne[0]);
             GGML_ASSERT(l.ffn_up_gate_exps->ne[2] == l.ffn_up_exps->ne[2] && l.ffn_up_gate_exps->ne[2] == l.ffn_gate_exps->ne[2]);
             GGML_ASSERT(l.ffn_up_gate_exps->ne[1] == l.ffn_up_exps->ne[1] + l.ffn_gate_exps->ne[1]);

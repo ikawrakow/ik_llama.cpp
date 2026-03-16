@@ -1,6 +1,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
+#include "llama-quantize.h"
 
 #include "ggml.h"
 #include "ggml-common.h"
@@ -79,7 +80,7 @@ struct quantize_state_internal {
         {}
 };
 
-static std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
+std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
     static std::unordered_map<ggml_type, std::pair<ggml_type, int>> k_map = {
         { GGML_TYPE_Q4_0_4_4,    { GGML_TYPE_Q4_0, 4} },
         { GGML_TYPE_Q4_0_4_8,    { GGML_TYPE_Q4_0, 4} },
