@@ -444,15 +444,17 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
     for (int ir = first; ir < last; ++ir) {
         auto c0 = (const char *)src0->data + ir*src0->nb[2];
         auto c1 = (const char *)src1->data + ir*src1->nb[2];
-        auto cy = (      char *) dst->data + ir* dst->nb[1];
-        std::memset(cy, 0, ne00*sizeof(float));
-        for (int j = 0; j < ne01; ++j) {
-            auto x0 = (const float *)c0;
-            auto x1 = (const float *)c1;
-            auto  y = (      float *)cy;
-            for (int k = 0; k < ne00; ++k) y[k] += x0[k] * x1[0];
+        auto cy = (      char *)dst->data + ir* dst->nb[1];
+        auto  y = (     float *)cy;
+        auto x0 = (const float *)c0;
+        auto x1 = (const float *)c1;
+        for (int k = 0; k < ne00; ++k) y[k] = x0[k] * x1[0];
+        for (int j = 1; j < ne01; ++j) {
             c0 += src0->nb[1];
             c1 += src1->nb[1];
+            x0 = (const float *)c0;
+            x1 = (const float *)c1;
+            for (int k = 0; k < ne00; ++k) y[k] += x0[k] * x1[0];
         }
     }
 }

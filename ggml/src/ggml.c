@@ -17576,23 +17576,24 @@ static void ggml_compute_forward_l2_norm_f32(
 
     GGML_ASSERT(eps >= 0.0f);
 
-    for (int64_t i03 = 0; i03 < ne03; i03++) {
-        for (int64_t i02 = 0; i02 < ne02; i02++) {
-            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
-                const float * x = (const float *) ((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+    int nrows = ne01*ne02*ne03;
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first = ith*nrows_per_thread;
+    int last  = MIN(first + nrows_per_thread, nrows);
 
-                ggml_float sum = 0.0;
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
-                    sum += (ggml_float) (x[i00] * x[i00]);
-                }
-
-                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
-
-                memcpy(y, x, ne00 * sizeof(float));
-
-                const float scale = 1.0f/fmaxf(sqrtf(sum), eps);
-                ggml_vec_scale_f32(ne00, y, scale);
-            }
+    for (int ir = first; ir < last; ++ir) {
+        int i03 = ir/(ne01*ne02);
+        int i02 = (ir - i03*ne01*ne02)/ne01;
+        int i01 = ir - i03*ne01*ne02 - i02*ne01;
+        const float * x = (const float *) ((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+        float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+        ggml_float sum = 0.0;
+        for (int64_t i00 = 0; i00 < ne00; i00++) {
+            sum += (ggml_float) (x[i00] * x[i00]);
+        }
+        const float scale = 1.0f/fmaxf(sqrtf(sum), eps);
+        for (int j = 0; j < (int)ne00; ++j) {
+            y[j] = scale * x[j];
         }
     }
 }
