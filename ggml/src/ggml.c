@@ -22266,6 +22266,12 @@ static int ggml_compute_forward_ssm_conv_f32(
             cgraph->nodes[node+2]->op == GGML_OP_UNARY && cgraph->nodes[node+2]->src[0] == cgraph->nodes[node+1] &&
             (enum ggml_unary_op)cgraph->nodes[node+2]->op_params[0] == GGML_UNARY_OP_SILU) {
             dst_silu = (float *)cgraph->nodes[node+2]->data;
+            const float * x0_begin = (const float *)src1->data;
+            const float * x0_end   = x0_begin + src1->nb[1]*n_t/sizeof(float) - 1;
+            const float * dst_silu_end = dst_silu + nr*n_t - 1;
+            if (!(dst_silu_end < x0_begin || dst_silu > x0_end)) {
+                dst_silu = NULL;
+            }
         }
         if (iqk_ssm_conv4(nr, nc, n_t, src0->nb[1], src1->nb[0], src1->nb[1], src2->nb[1],
                     (const float *)src1->data, (const float *)src0->data, (const float *)src2->data,
