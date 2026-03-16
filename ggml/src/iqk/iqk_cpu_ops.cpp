@@ -555,7 +555,6 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
         uint64_t nb01, uint64_t nb10, uint64_t nb11, uint64_t nb21,
         const float * x0_in, const float * s0_in, const float * c_in,
         float * dst, float * dst_silu, int ith, int nth) {
-    return false;
 #if defined __AVX2__
     if (nt <= 32 || nc != 4 || nr%16 != 0) {
         return false;
