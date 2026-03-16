@@ -1566,6 +1566,9 @@ json anthropic_params_from_json(
     for (const auto& stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
+    if (!chat_params.parser.empty()) {
+        llama_params["chat_parser"] = chat_params.parser;
+    }
 
     // Handle "n" field
     int n_choices = json_value(body, "n", 1);
