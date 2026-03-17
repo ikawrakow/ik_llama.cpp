@@ -84,6 +84,8 @@ if (LLAMA_SERVER_SSL)
     find_package(OpenSSL REQUIRED)
     target_link_libraries(${TARGET} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     target_compile_definitions(${TARGET} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_compile_definitions(cpp-httplib PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(cpp-httplib PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
 if (LLAMA_SERVER_SQLITE3)
