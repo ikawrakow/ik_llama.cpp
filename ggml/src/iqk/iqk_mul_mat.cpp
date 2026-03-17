@@ -1499,13 +1499,12 @@ void iqk_fused_delta_net_neon_impl(int n_heads, int gqa_ratio, int repeat_type, 
         const int head_idx  = h_idx % n_heads;
         const int head_idx_kq = repeat_type == 0 ? head_idx / gqa_ratio : head_idx % (n_heads/gqa_ratio);
 
-        const int qkv_head_offset     = batch_idx * (head_dim * n_tokens * n_heads) + head_idx * (head_dim * n_tokens);
         const int qkv_head_offset_kq  = batch_idx * (head_dim * n_tokens * n_heads/gqa_ratio) + head_idx_kq * (head_dim * n_tokens);
-        const int qkv_token_stride = head_dim;
-        const int g_head_offset    = batch_idx * (n_tokens * n_heads) + head_idx * n_tokens;
-        const int state_head_offset = batch_idx * (head_dim * head_dim * n_heads) + head_idx * (head_dim * head_dim);
-        const int out_head_offset  = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim;
-        const int out_token_stride = head_dim * n_heads;
+        const int qkv_token_stride    = head_dim;
+        const int g_batch_offset      = batch_idx * n_tokens * n_heads;
+        const int state_head_offset   = batch_idx * (head_dim * head_dim * n_heads) + head_idx * (head_dim * head_dim);
+        const int out_head_offset     = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim;
+        const int out_token_stride    = head_dim * n_heads;
 
         for (int i = 0; i < head_dim * head_dim; ++i) {
             state_out[state_head_offset + i] = state_in[state_head_offset + i];
@@ -1513,14 +1512,13 @@ void iqk_fused_delta_net_neon_impl(int n_heads, int gqa_ratio, int repeat_type, 
 
         float * state = state_out + state_head_offset;
 
-
         for (int t = 0; t < n_tokens; ++t) {
             const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
             const float * k_t = k_data + qkv_head_offset_kq + t * qkv_token_stride;
-            const float * v_t = v_data + qkv_head_offset + t * qkv_token_stride;
+            const float * v_t = v_data + batch_idx * vnb3 + head_idx * vnb2 + t * vnb1;
 
-            const float g_val    = g_data[g_head_offset + t];
-            const float beta_raw = beta_data[g_head_offset + t];
+            const float g_val    = g_data[g_batch_offset + t * n_heads + head_idx];
+            const float beta_raw = beta_data[g_batch_offset + t * n_heads + head_idx];
 
             float kq_sum    = 0.0f;
             auto vqksum = vdupq_n_f32(0.0f);
