@@ -1536,7 +1536,7 @@ static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             auto mins = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lbits, 4), mf), _mm256_and_si256(_mm256_srli_epi16(hbits, 2), m3));
             process_min_r4_b32(ibl, m4, mins, q8, acc);
             for (int ib = 0; ib < QK_K/32; ++ib) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 auto scales_d = _mm256_cvtepi8_epi32(_mm_set1_epi32(hd.val[ib]));
 #else
                 auto aux = _mm_set1_epi32(hd.val[ib]);
@@ -1551,7 +1551,7 @@ static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 qx[3] = _mm256_and_si256(_mm256_srli_epi16(bits2, 4), mf);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ibl].qs+ib);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi = _mm256_setzero_si256();
                     sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
                     sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
@@ -1605,7 +1605,7 @@ static void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             auto mins = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lbits, 4), mf), _mm256_and_si256(_mm256_srli_epi16(hbits, 2), m30));
             process_min_r4_b32(ibl, m4, mins, q8, acc);
             for (int ib = 0; ib < QK_K/32; ++ib) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                 auto scales_d = _mm256_cvtepi8_epi32(_mm_set1_epi32(hd.val[ib]));
 #else
                 auto aux = _mm_set1_epi32(hd.val[ib]);
@@ -1622,7 +1622,7 @@ static void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                 qx[3] = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(lbits2, 4), mf), _mm256_and_si256(m10, _mm256_srli_epi16(hbits, 3)));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ibl].qs+ib);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
                     auto sumi = _mm256_setzero_si256();
                     sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
                     sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
