@@ -9881,9 +9881,6 @@ struct ggml_tensor * ggml_delta_net(
         struct ggml_tensor  * state) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
-    GGML_ASSERT(ggml_is_contiguous(v));
-    GGML_ASSERT(ggml_is_contiguous(g));
-    GGML_ASSERT(ggml_is_contiguous(beta));
     GGML_ASSERT(ggml_is_contiguous(state));
 
     GGML_ASSERT(q->type == GGML_TYPE_F32);
@@ -12103,6 +12100,7 @@ static void ggml_compute_forward_dup_bytes(
             //}
         } else {
 
+            //if (ith == 0) printf("%s: %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu\n", src0->name, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3]);
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
                     id += rs * ir0;
@@ -22616,11 +22614,14 @@ static void ggml_compute_forward_delta_net_f32(
 
     int repeat_type = dst->op_params[0];
 
-    if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, q_data, k_data, v_data, g_data, beta_data, state_in,
+    if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
+                src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
+                q_data, k_data, v_data, g_data, beta_data, state_in,
                 out_data, state_out, ith, nth)) {
         return;
     }
 
+    // TODO: fix this in case we need to fall back to it.
     const int64_t total_heads = n_heads * n_seqs;
     const int64_t heads_per_thread = (total_heads + nth - 1) / nth;
     const int64_t h_start = ith * heads_per_thread;

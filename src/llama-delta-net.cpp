@@ -106,11 +106,6 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
     g = ggml_permute(ctx0, g, 2, 0, 3, 1);
     beta = ggml_permute(ctx0, beta, 2, 0, 1, 3);
-    if (n_seqs > 1 || n_tokens > 1) {
-        v = ggml_cont_4d(ctx0, v, S_v, n_tokens, H_v, n_seqs);
-        g = ggml_cont_4d(ctx0, g, n_tokens, 1, H_v, n_seqs);
-        beta = ggml_cont_4d(ctx0, beta, 1, n_tokens, H_v, n_seqs);
-    }
 
     ggml_tensor * state_flat = ggml_reshape_4d(ctx0, state, S_v, S_v * H_v, 1, n_seqs);
     if (!ggml_is_contiguous(state_flat)) {
