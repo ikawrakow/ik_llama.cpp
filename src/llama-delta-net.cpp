@@ -264,9 +264,8 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_beta_gate(llama_context
         cb(beta, "beta_reshaped", il);
         alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_alpha, cur);
         cb(alpha, "alpha", il);
-        // Why? Don't think this ggml_cont_3d is needed, but lets leave it in for now just in case.
-        alpha = ggml_cont_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
-        cb(alpha, "alpha_cont", il);
+        alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
+        cb(alpha, "alpha_reshaped", il);
     }
     cb(beta, "beta", il);
     cb(alpha, "alpha", il);

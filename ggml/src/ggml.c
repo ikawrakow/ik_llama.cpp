@@ -12067,25 +12067,40 @@ static void ggml_compute_forward_dup_bytes(
         return;
     }
 
+    //if (ith == 0) printf("%s(%s->%s): %ld x %ld x %ld x %ld\n", __func__, src0->name, dst->name, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
+
     if (ggml_is_contiguous(dst)) {
         size_t id = 0;
         char * dst_ptr = (char *) dst->data;
-        const size_t rs = ne00 * type_size;
+        const size_t rs = ggml_row_size(dst->type, ne00); //ne00 * type_size;
 
         if (nb00 == type_size) {
-            //if (ith == 0) printf("%s(2): %ld x %ld x %ld x %ld\n", __func__, ne00, ne01, ne02, ne03);
-            // src0 is contigous on first dimension, copy by rows
-            for (int64_t i03 = 0; i03 < ne03; i03++) {
-                for (int64_t i02 = 0; i02 < ne02; i02++) {
-                    id += rs * ir0;
-                    for (int64_t i01 = ir0; i01 < ir1; i01++) {
-                        const char * src0_ptr = (char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
-                        memcpy(dst_ptr + id, src0_ptr, rs);
-                        id += rs;
-                    }
-                    id += rs * (ne01 - ir1);
-                }
+            int nrows = ne01*ne02*ne03;
+            int nrows_per_thread = (nrows + nth - 1)/nth;
+            int first = ith*nrows_per_thread;
+            int last  = MIN(nrows, first + nrows_per_thread);
+            for (int ir = first; ir < last; ++ir) {
+                int ii = ir;
+                int i03 = ii/(ne01*ne02); ii -= i03*ne01*ne02;
+                int i02 = ii/ne01;        ii -= i02*ne01;
+                int i01 = ii;
+                const char * src0_ptr = (char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+                memcpy((char *)dst->data + ir*rs, src0_ptr, rs);
             }
+            //if (ith == 0) printf("%s(%s->%s): %ld x %ld x %ld x %ld\n", __func__, src0->name, dst->name, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
+            ////if (ith == 0) printf("%s(2): %ld x %ld x %ld x %ld\n", __func__, ne00, ne01, ne02, ne03);
+            //// src0 is contigous on first dimension, copy by rows
+            //for (int64_t i03 = 0; i03 < ne03; i03++) {
+            //    for (int64_t i02 = 0; i02 < ne02; i02++) {
+            //        id += rs * ir0;
+            //        for (int64_t i01 = ir0; i01 < ir1; i01++) {
+            //            const char * src0_ptr = (char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+            //            memcpy(dst_ptr + id, src0_ptr, rs);
+            //            id += rs;
+            //        }
+            //        id += rs * (ne01 - ir1);
+            //    }
+            //}
         } else {
 
             for (int64_t i03 = 0; i03 < ne03; i03++) {

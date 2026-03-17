@@ -503,10 +503,54 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth) {
 
+    constexpr int k_min_step = 32; //16;
+
     MulMat mm;
 
+    size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
+    size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
+    //if (ith == 0) printf("%s: ne00 = %d, row_size_qx = %d, strideA = %d\n", __func__, int(ne00), int(row_size_qx), int(strideA));
+
+    //const int k_min_step = Ny <= 16 ? 16 : 32;
+
+    if (Nx/nth < k_min_step) {
+        if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
+            return false;
+        }
+        //int ntile_x = (Nx + k_min_step - 1)/k_min_step;
+        //int ntile_y = (Ny + k_min_step - 1)/k_min_step;
+        //int ntile   = ntile_x * ntile_y;
+        //for (int itile = ith; itile < ntile; itile += nth) {
+        //    int iy = (itile / ntile_x) * k_min_step;
+        //    int ix = (itile % ntile_x) * k_min_step;
+        //    int nrc_x = std::min<int>(k_min_step, Nx - ix);
+        //    int nrc_y = std::min<int>(k_min_step, Ny - iy);
+        //    //DataInfo info{C + ix + iy*stride_C, (const char *)B + iy*row_size_qy, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+        //    //mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, nrc_y);
+        //    DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, iy, 1, nullptr, 0};
+        //    mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, iy + nrc_y);
+        //}
+        const int min_step = Ny <= 16 ? 16 : 32;
+        int ntile_x = (Nx + min_step - 1)/min_step;
+        int ntile_y = (Ny + min_step - 1)/min_step;
+        int ntile   = ntile_x * ntile_y;
+        for (int itile = ith; itile < ntile; itile += nth) {
+            int iy = (itile / ntile_x) * min_step;
+            int ix = (itile % ntile_x) * min_step;
+            int nrc_x = std::min<int>(min_step, Nx - ix);
+            int nrc_y = std::min<int>(min_step, Ny - iy);
+            //DataInfo info{C + ix + iy*stride_C, (const char *)B + iy*row_size_qy, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+            //mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, nrc_y);
+            DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, iy, 1, nullptr, 0};
+            mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, iy + nrc_y);
+        }
+        return true;
+    }
+
+    int npt = (Nx + nth - 1)/nth;
+
     auto etypeA = ggml_type(typeA);
-    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny);
+    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); npt >= 16 &&
              dequant_type != etypeA && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny) &&
              Nx%MulMat::num_rows(ggml_type(dequant_type)) == 0) {
 
@@ -548,9 +592,13 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         return false;
     }
 
-    size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
-    size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
-    //if (ith == 0) printf("%s: ne00 = %d, row_size_qx = %d, strideA = %d\n", __func__, int(ne00), int(row_size_qx), int(strideA));
+    //if (npt <= 16) {
+    //    int nth_new = (Nx + 15)/16;
+    //    nth_new = std::min(nth, nth_new);
+    //    if (ith >= nth_new) return true;
+    //    //if (ith == 0) printf("Adjusted threads from %d to %d for Nx = %ld\n", nth, nth_new, Nx);
+    //    nth = nth_new;
+    //}
 
     auto num_rows = MulMat::num_rows(ggml_type(typeA));
     if (Nx%num_rows) {
@@ -559,6 +607,25 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         GGML_ASSERT(false);
     }
     GGML_ASSERT(Nx%num_rows == 0);
+
+    if (npt <= 16 && nth%2 == 0 && Ny >= 16 && Ny%2 == 0) {
+        int nth_new = nth/2;
+        auto nrc_x = num_rows*((Nx/num_rows + nth_new - 1)/nth_new);
+        if (ith < nth_new) {
+            auto first_x = ith*nrc_x;
+            nrc_x = std::min(nrc_x, Nx - first_x);
+            DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+            mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny/2);
+        } else {
+            ith -= nth_new;
+            auto first_x = ith*nrc_x;
+            nrc_x = std::min(nrc_x, Nx - first_x);
+            DataInfo info{C + first_x + (Ny/2)*stride_C, (const char *)B + (Ny/2)*row_size_qy, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+            mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny/2);
+        }
+        return true;
+    }
+
     auto nrc_x = (Nx/num_rows + nth - 1)/nth;
     auto first_x = ith*nrc_x;
     if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
@@ -745,10 +812,35 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
         const char * up_b_c, const char * gate_b_c,
         float * C, long nb1, long nb2, const void * vrow_mapping, float limit, int ith, int nth) {
 
+    //constexpr int k_min_step = 16;
+
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
     //assert(row_mapping != nullptr);
+    size_t row_size_qx = strideA;
+    size_t row_size_qy = strideB;
 
     MulMat mm;
+
+    //if (Nx/nth < k_min_step) {
+    //    if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
+    //        return false;
+    //    }
+    //    int ntile_x = (Nx + k_min_step - 1)/k_min_step;
+    //    int ntile_y = (Ny + k_min_step - 1)/k_min_step;
+    //    int ntile   = ntile_x * ntile_y;
+    //    for (int itile = ith; itile < ntile; itile += nth) {
+    //        int iy = (itile / ntile_x) * k_min_step;
+    //        int ix = (itile % ntile_x) * k_min_step;
+    //        int nrc_x = std::min<int>(k_min_step, Nx - ix);
+    //        int nrc_y = std::min<int>(k_min_step, Ny - iy);
+    //        DataInfo info{C + ix, (const char *)B, nb1/sizeof(float), row_size_qy, iy, ne11, row_mapping, nb2/sizeof(float)};
+    //        auto up_b   = up_b_c   ? (const float *)up_b_c   + ix: nullptr;
+    //        auto gate_b = gate_b_c ? (const float *)gate_b_c + ix: nullptr;
+    //        mm.mul_mat_up_gate_NxM(ne00, (const char *)Aup + row_size_qx*ix, (const char *)Agate + row_size_qx*ix, row_size_qx,
+    //                up_b, gate_b, info, nrc_x, iy + nrc_y, unary_op, limit);
+    //    }
+    //    return true;
+    //}
 
     auto etypeA = ggml_type(typeA);
     if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
@@ -797,8 +889,6 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
-    size_t row_size_qx = strideA;
-    size_t row_size_qy = strideB;
     auto num_rows = MulMat::num_rows(ggml_type(typeA));
     GGML_ASSERT(Nx%num_rows == 0);
     auto nrc_x = (Nx/num_rows + nth - 1)/nth;
