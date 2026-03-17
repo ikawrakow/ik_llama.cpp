@@ -3794,6 +3794,7 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_ARCTIC:
             use_mmap_buffer = create_arctix_tensors(tn); break;
         case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_MISTRAL4:
             use_mmap_buffer = create_deepseek2_tensors(tn); break;
         case LLM_ARCH_GLM_DSA:
             use_mmap_buffer = create_glm_dsa_tensors(tn); break;
