@@ -378,6 +378,38 @@ struct fattn_mma_f16_config<576, 512> {
     }
 };
 
+template <>
+struct fattn_mma_f16_config<320, 256> {
+    static constexpr int  nbatch_fa      = 32;
+    static constexpr int  nwarps_max     = 8;
+    static constexpr bool Q_in_reg       = false;
+    static constexpr int  nstages_target = 1;
+
+    static int get_nbatch_K2_host(const int /*cc*/, const int /*ncols*/) {
+        return 160;
+    }
+
+    static constexpr __device__ int get_nbatch_K2_device(int /*ncols*/) {
+        return 160;
+    }
+
+    static int get_nbatch_V2_host(const int /*cc*/, const int /*ncols*/) {
+        return 128;
+    }
+
+    static constexpr __device__ int get_nbatch_V2_device(int /*ncols*/) {
+        return 128;
+    }
+
+    static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
+        return 128;
+    }
+
+    static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
+        return 128;
+    }
+};
+
 // ------------------------------------------------------------------------------------------------------------------
 
 // The compiler is always able to unroll loops if they contain continue expressions.
@@ -1999,7 +2031,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
     constexpr int nwarps_max_y  = c::nbatch_fa / tile_A::I;
     constexpr int nwarps        = nwarps_max_x*nwarps_max_y <= c::nwarps_max ? nwarps_max_x*nwarps_max_y : c::nwarps_max;
 
-    constexpr bool mla = DKQ == 576;
+    constexpr bool mla = DKQ == 576 || DKQ == 320;
 
     const int nbatch_K2      = c::get_nbatch_K2_host     (cc, ncols);
     const int nbatch_V2      = c::get_nbatch_K2_host     (cc, ncols);
@@ -2170,6 +2202,11 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         GGML_ASSERT(Q->ne[0] == 192);
         GGML_ASSERT(gqa_ratio == 1);
         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 192, 1>(ctx, dst);
+        return;
+    }
+    if (Q->ne[0] == 320 && K->ne[0] == 320 && V->ne[0] == 256) {
+        GGML_ASSERT(gqa_ratio % 16 == 0);
+        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<320, 256, 16>(ctx, dst);
         return;
     }
     GGML_ASSERT(Q->ne[0] == 576 && K->ne[0] == 576 && V->ne[0] == 512);
