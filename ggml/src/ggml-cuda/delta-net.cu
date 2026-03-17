@@ -72,9 +72,6 @@ __global__ void delta_net_recurrent_f32(
     // Pointers for this batch/head
     const float * q_ptr = q + batch_idx * qkv_stride_batch_kq + head_idx_kq * qkv_stride_head;
     const float * k_ptr = k + batch_idx * qkv_stride_batch_kq + head_idx_kq * qkv_stride_head;
-    //const float * v_ptr = v + batch_idx * qkv_stride_batch + head_idx * qkv_stride_head;
-    //const float * g_ptr = g + batch_idx * g_stride_batch + head_idx * g_stride_head;
-    //const float * beta_ptr = beta_in + batch_idx * g_stride_batch + head_idx * g_stride_head;
     const float * v_ptr = v + batch_idx * vnb3 + head_idx * vnb2;
     const float * g_ptr = g + batch_idx * g_stride_batch + head_idx;
     const float * beta_ptr = beta_in + batch_idx * g_stride_batch + head_idx;
@@ -123,8 +120,6 @@ __global__ void delta_net_recurrent_f32(
 
         float attn_score = reduce_sum<block_size>(sum_kq, sum_helper);
 
-        //float beta_val = sigmoid_f(beta_ptr[t]);
-        //float decay    = expf(fminf(g_ptr[t], 50.0f));
         float beta_val = sigmoid_f(beta_ptr[t*n_heads]);
         float decay    = expf(fminf(g_ptr[t*n_heads], 50.0f));
 

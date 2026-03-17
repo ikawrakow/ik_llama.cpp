@@ -503,33 +503,17 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth) {
 
-    constexpr int k_min_step = 32; //16;
+    constexpr int k_min_step = 32;
 
     MulMat mm;
 
     size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
     size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
-    //if (ith == 0) printf("%s: ne00 = %d, row_size_qx = %d, strideA = %d\n", __func__, int(ne00), int(row_size_qx), int(strideA));
-
-    //const int k_min_step = Ny <= 16 ? 16 : 32;
 
     if (Nx/nth < k_min_step) {
         if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
             return false;
         }
-        //int ntile_x = (Nx + k_min_step - 1)/k_min_step;
-        //int ntile_y = (Ny + k_min_step - 1)/k_min_step;
-        //int ntile   = ntile_x * ntile_y;
-        //for (int itile = ith; itile < ntile; itile += nth) {
-        //    int iy = (itile / ntile_x) * k_min_step;
-        //    int ix = (itile % ntile_x) * k_min_step;
-        //    int nrc_x = std::min<int>(k_min_step, Nx - ix);
-        //    int nrc_y = std::min<int>(k_min_step, Ny - iy);
-        //    //DataInfo info{C + ix + iy*stride_C, (const char *)B + iy*row_size_qy, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
-        //    //mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, nrc_y);
-        //    DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, iy, 1, nullptr, 0};
-        //    mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, iy + nrc_y);
-        //}
         const int min_step = Ny <= 16 ? 16 : 32;
         int ntile_x = (Nx + min_step - 1)/min_step;
         int ntile_y = (Ny + min_step - 1)/min_step;
@@ -539,8 +523,6 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
             int ix = (itile % ntile_x) * min_step;
             int nrc_x = std::min<int>(min_step, Nx - ix);
             int nrc_y = std::min<int>(min_step, Ny - iy);
-            //DataInfo info{C + ix + iy*stride_C, (const char *)B + iy*row_size_qy, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
-            //mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, nrc_y);
             DataInfo info{C + ix, (const char *)B, (size_t)stride_C, row_size_qy, iy, 1, nullptr, 0};
             mm.mul_mat_NxM(ne00, (const char *)A + ix*row_size_qx, row_size_qx, info, nrc_x, iy + nrc_y);
         }
@@ -567,8 +549,6 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         size_t row_size_qx = ggml_row_size(dequant_type, ne00);
         size_t row_size_qy = strideB;
 
-        //printf("Dequant mul mat %s x %s: ne00 = %d, row_size = %d\n", ggml_type_name(dequant_type), ggml_type_name(ggml_type(typeB)), (int)ne00, (int)row_size_qx);
-
         DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
 
         auto& f = thread_local_work_buffer();
@@ -591,14 +571,6 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
-
-    //if (npt <= 16) {
-    //    int nth_new = (Nx + 15)/16;
-    //    nth_new = std::min(nth, nth_new);
-    //    if (ith >= nth_new) return true;
-    //    //if (ith == 0) printf("Adjusted threads from %d to %d for Nx = %ld\n", nth, nth_new, Nx);
-    //    nth = nth_new;
-    //}
 
     auto num_rows = MulMat::num_rows(ggml_type(typeA));
     if (Nx%num_rows) {
@@ -812,35 +784,12 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
         const char * up_b_c, const char * gate_b_c,
         float * C, long nb1, long nb2, const void * vrow_mapping, float limit, int ith, int nth) {
 
-    //constexpr int k_min_step = 16;
-
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
     //assert(row_mapping != nullptr);
     size_t row_size_qx = strideA;
     size_t row_size_qy = strideB;
 
     MulMat mm;
-
-    //if (Nx/nth < k_min_step) {
-    //    if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
-    //        return false;
-    //    }
-    //    int ntile_x = (Nx + k_min_step - 1)/k_min_step;
-    //    int ntile_y = (Ny + k_min_step - 1)/k_min_step;
-    //    int ntile   = ntile_x * ntile_y;
-    //    for (int itile = ith; itile < ntile; itile += nth) {
-    //        int iy = (itile / ntile_x) * k_min_step;
-    //        int ix = (itile % ntile_x) * k_min_step;
-    //        int nrc_x = std::min<int>(k_min_step, Nx - ix);
-    //        int nrc_y = std::min<int>(k_min_step, Ny - iy);
-    //        DataInfo info{C + ix, (const char *)B, nb1/sizeof(float), row_size_qy, iy, ne11, row_mapping, nb2/sizeof(float)};
-    //        auto up_b   = up_b_c   ? (const float *)up_b_c   + ix: nullptr;
-    //        auto gate_b = gate_b_c ? (const float *)gate_b_c + ix: nullptr;
-    //        mm.mul_mat_up_gate_NxM(ne00, (const char *)Aup + row_size_qx*ix, (const char *)Agate + row_size_qx*ix, row_size_qx,
-    //                up_b, gate_b, info, nrc_x, iy + nrc_y, unary_op, limit);
-    //    }
-    //    return true;
-    //}
 
     auto etypeA = ggml_type(typeA);
     if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
