@@ -1665,6 +1665,14 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
     auto dot = [&qx, &sx, &m1] (const int8_t * qy) {
         auto y128 = _mm_loadu_si128((const __m128i*)qy);
         auto y = MM256_SET_M128I(y128, y128);
+#ifdef HAVE_VNNI256
+        auto sumi = _mm256_setzero_si256();
+        sumi = _mm256_dpbusd_epi32(sumi, sx[0], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]));
+        sumi = _mm256_dpbusd_epi32(sumi, sx[1], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1]));
+        sumi = _mm256_dpbusd_epi32(sumi, sx[2], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qx[2]));
+        sumi = _mm256_dpbusd_epi32(sumi, sx[3], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qx[3]));
+        return sumi;
+#else
         auto sumi1 = _mm256_add_epi32(
                 _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[0], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]))),
                 _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[1], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1])))
@@ -1674,6 +1682,7 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
                 _mm256_madd_epi16(m1, _mm256_maddubs_epi16(sx[3], _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qx[3])))
         );
         return _mm256_add_epi32(sumi1, sumi2);
+#endif
     };
     for (int ix = 0; ix < nrc_x; ix += 8) {
         const block_q8_0_r8 * iq8 = (const block_q8_0_r8 *)((const char *)vx + ix*bx);
