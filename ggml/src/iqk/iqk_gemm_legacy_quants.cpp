@@ -1751,7 +1751,7 @@ static void mul_mat_q8_1_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
     auto dot = [&qx] (const int8_t * qy) {
         auto y128 = _mm_loadu_si128((const __m128i*)qy);
         auto y = MM256_SET_M128I(y128, y128);
-#ifdef HAVE_FANCY_SIMD
+#ifdef HAVE_VNNI256
         auto sumi = _mm256_setzero_si256();
         sumi = _mm256_dpbusd_epi32(sumi, qx[0], _mm256_shuffle_epi32(y, 0x00));
         sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
