@@ -370,6 +370,7 @@ extern "C" {
         // LLAMA_SPLIT_LAYER: ignored
         int32_t main_gpu;
         int32_t max_gpu;
+        int32_t ncmoe;
 
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;

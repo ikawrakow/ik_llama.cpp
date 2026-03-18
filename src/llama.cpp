@@ -2375,7 +2375,7 @@ static bool llm_load_tensors(
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
-        llama_model_loader ml(fname, params.use_mmap, params.check_tensors,
+        llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.kv_overrides, params.tensor_buft_overrides);
 
@@ -4391,6 +4391,7 @@ struct llama_model_params llama_model_default_params() {
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
         /*.max_gpu                     =*/ 0,
+        /*.ncmoe                       =*/ 0,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
