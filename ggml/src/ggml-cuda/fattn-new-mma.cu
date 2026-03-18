@@ -1467,8 +1467,8 @@ static __global__ void flash_attn_ext_f16(
     constexpr int kb_niter = FATTN_KQ_STRIDE / c::nbatch_fa; // Number of kernel iterations per assigned KQ slice.
 
     // kbc == k block continuous, current index in continuous ijk space.
-    int       kbc      = int64_t((blockIdx.x + 0)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
-    const int kbc_stop = int64_t((blockIdx.x + 1)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
+    int       kbc      = (int64_t(blockIdx.x + 0)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
+    const int kbc_stop = (int64_t(blockIdx.x + 1)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
 
     // If the seams of 2 CUDA blocks fall within an output tile their results need to be combined.
     // For this we need to track both the block that starts the tile (needs_fixup) and the block that finishes the tile (is_fixup).
@@ -1486,7 +1486,7 @@ static __global__ void flash_attn_ext_f16(
 
         const float2 * Q_f2    = (const float2 *) (Q + nb03*sequence + nb02*zt_Q);
         const half2  * K_h2    = (const half2  *) (K + nb13*sequence + nb12*z_KV);
-        const half2  * mask_h2 = ncols2 > 1 || mask ? (const half2  *) mask + (nb31/sizeof(half2))*jt*ncols1 : nullptr;
+        const half2  * mask_h2 = ncols2 > 1 || mask ? (const half2  *) mask + int64_t(nb31/sizeof(half2))*jt*ncols1 : nullptr;
         float2       * dstk    = ((float2 *) dst) + (sequence*ne01*ne02 + zt_Q) * (DV/2);
 
         const half2 * V_h2 = mla ? K_h2 + (DKQ/2 - DV/2) : (const half2 *) (V + nb23*sequence + nb22*z_KV);
@@ -1590,8 +1590,8 @@ static __global__ void flash_attn_stream_k_fixup(
     const int iter_j = (ne01 + (ncols1 - 1)) / ncols1;
     const int iter_z = (gqa_ratio + (ncols2 - 1)) / ncols2;
 
-    const int kbc0      = int64_t((bidx0 + 0)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
-    const int kbc0_stop = int64_t((bidx0 + 1)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
+    const int kbc0      = (int64_t(bidx0 + 0)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
+    const int kbc0_stop = (int64_t(bidx0 + 1)*iter_k*iter_j*iter_z*ne12*ne03) / gridDim.x;
 
     const bool did_not_have_any_data   = kbc0 == kbc0_stop;
     const bool wrote_beginning_of_tile = kbc0 % iter_k == 0;
