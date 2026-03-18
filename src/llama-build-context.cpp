@@ -9988,8 +9988,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             GGML_ABORT("fatal error");
     }
 
+    result->n_batch = llm.n_tokens;
+
     // add on pooling layer
-    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && (lctx.cparams.embeddings || 
+    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && (lctx.cparams.embeddings ||
         (lctx.model.hparams.nextn_predict_layers > 0 || lctx.model.mtp))) {
         result = llm.append_pooling(result);
     }
