@@ -75,6 +75,7 @@ enum llm_arch {
     LLM_ARCH_SEED_OSS,
     LLM_ARCH_STEP35,
     LLM_ARCH_GLM_DSA,
+    LLM_ARCH_MISTRAL4,
     LLM_ARCH_UNKNOWN,
 };
 
