@@ -2008,6 +2008,7 @@ static bool llm_load_tensors(
         bool use_mlock,
         bool validate_quants,
         bool mtp,
+        bool dry_run,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -2286,11 +2287,13 @@ static bool llm_load_tensors(
     }
 
     // load tensor data
-    for (auto & it : ctx_bufs) {
-        ggml_context * ctx = it.first;
-        auto & bufs = it.second;
-        if (!ml.load_all_data(ctx, bufs, use_mlock ? &model.mlock_mmaps : NULL, progress_callback, progress_callback_user_data)) {
-            return false;
+    if (!dry_run) {
+        for (auto & it : ctx_bufs) {
+            ggml_context * ctx = it.first;
+            auto & bufs = it.second;
+            if (!ml.load_all_data(ctx, bufs, use_mlock ? &model.mlock_mmaps : NULL, progress_callback, progress_callback_user_data)) {
+                return false;
+            }
         }
     }
 
@@ -2429,7 +2432,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
-            params.use_mlock, params.validate_quants, params.mtp,
+            params.use_mlock, params.validate_quants, params.mtp, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -4407,6 +4410,7 @@ struct llama_model_params llama_model_default_params() {
         /*.merge_qkv                   =*/ false,
         /*.merge_up_gate_exps          =*/ false,
         /*.mtp                         =*/ false,
+        /*.dry_run                     =*/ false,
     };
 
 #ifdef GGML_USE_METAL

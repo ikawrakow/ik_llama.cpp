@@ -395,8 +395,9 @@ struct gpt_params {
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     thinking_tokens think_tokens;
-    int reasoning_budget = -1;
-    bool prefill_assistant = true;
+    int reasoning_budget      = -1;
+    bool prefill_assistant    = true;
+    bool dry_run              = false;
 
     std::vector<std::string> api_keys;
 
