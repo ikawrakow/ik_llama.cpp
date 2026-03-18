@@ -1733,6 +1733,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
         exit(0);
     }
+    if (arg == "--dry-run" || arg == "-dr") {
+        params.dry_run = true;
+        return true;
+    }
     if (arg == "--in-prefix-bos") {
         params.input_prefix_bos = true;
         params.enable_chat_template = false;
@@ -2239,6 +2243,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-v,    --verbose",              "print verbose information" });
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
+    options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
     options.push_back({ "*",           "       --no-display-prompt",    "don't print prompt at generation (default: %s)", !params.display_prompt ? "true" : "false" });
     options.push_back({ "*",           "-co,   --color",                "colorise output to distinguish prompt and user input from generations (default: %s)", params.use_color ? "true" : "false" });
     options.push_back({ "*",           "-s,    --seed SEED",            "RNG seed (default: %d, use random seed for < 0)", params.seed });
@@ -3233,6 +3238,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
     mparams.mla             = params.mla_attn;
+    mparams.dry_run         = params.dry_run;
     mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu         = params.max_gpu;

@@ -224,7 +224,10 @@ void server_context::init() {
             }
         }
 
-        const bool can_spec = common_speculative_is_compat(ctx);
+        bool can_spec = true;
+        if (!params_base.dry_run) {
+            can_spec = common_speculative_is_compat(ctx);
+        }  
         if (!can_spec) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
