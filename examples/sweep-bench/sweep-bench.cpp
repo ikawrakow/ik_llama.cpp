@@ -136,6 +136,8 @@ int main(int argc, char ** argv) {
     common_batch_clear(batch);
     llama_kv_cache_clear(ctx);
 
+    llama_reset_timings(ctx);
+
     int i_loop = 0;
 
     for (unsigned int n_kv = 0; n_kv < n_kv_max; n_kv += params.n_ubatch) {
@@ -210,6 +212,8 @@ int main(int argc, char ** argv) {
 
         ++i_loop;
     }
+
+    llama_print_timings(ctx);
 
     llama_batch_free(batch);
 
