@@ -2137,19 +2137,20 @@ static bool llm_load_tensors(
         double sum = 0;
         for (int i = i_gpu_start; i < n_last; ++i) sum += layer_sizes[i];
         int last = i_gpu_start;
+        float loaded_sum = 0;
         for (int id = 0; id < int(model.splits.size()); ++id) {
             float split_size = model.splits[id]*sum;
             int il = last;
-            float this_sum = 0;
             for (; il < n_last; ++il) {
-                if (this_sum + layer_sizes[il] <= split_size) {
+                if (loaded_sum + layer_sizes[il] <= split_size) {
                     model.default_layer_device[il] = id;
-                    this_sum += layer_sizes[il];
+                    loaded_sum += layer_sizes[il];
                     LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
                 } else {
-                    if (this_sum + layer_sizes[il] - split_size < split_size - this_sum) {
+                    if (loaded_sum + layer_sizes[il] - split_size < split_size - loaded_sum) {
                         LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
-                        model.default_layer_device[il++] = id;
+                        model.default_layer_device[il] = id;
+                        loaded_sum += layer_sizes[il++];
                     }
                     break;
                 }
