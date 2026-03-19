@@ -13,6 +13,73 @@
 
 #include <regex>
 
+static void debug_log_embd(const char* prefix, const float* emb, int n_tokens, int n_embd) {
+    if (!emb) {
+        fprintf(stderr, "\n[MTP-EMBD] %-20s | ptr: NULL\n", prefix);
+        return;
+    }
+    fprintf(stderr, "\n[MTP-EMBD] %-20s | ptr: %p | n_tokens: %d\n", prefix, (const void*)emb, n_tokens);
+    
+    // Helper to print a single token
+    auto print_tok = [&](int i) {
+        const float* vec = emb + i * n_embd;
+        fprintf(stderr, "  Tok %4d:[%9.5f, %9.5f ... %9.5f ... %9.5f]\n", 
+            i, vec[0], vec[1], vec[n_embd/2], vec[n_embd-1]);
+    };
+
+    // Scan all tokens to find anomalies (NaN or All-Zeros)
+    int zero_count = 0;
+    int nan_count = 0;
+    int first_bad = -1;
+    
+    for (int i = 0; i < n_tokens; ++i) {
+        const float* vec = emb + i * n_embd;
+        float v0 = vec[0], v1 = vec[1], vmid = vec[n_embd/2], vlast = vec[n_embd-1];
+        
+        // x != x is a fast C++ trick to check for NaN without including <cmath>
+        bool bad_nan = (v0 != v0) || (v1 != v1) || (vmid != vmid) || (vlast != vlast);
+        bool bad_zero = (v0 == 0.0f && v1 == 0.0f && vmid == 0.0f && vlast == 0.0f);
+        
+        if (bad_nan) nan_count++;
+        if (bad_zero) zero_count++;
+        
+        if ((bad_nan || bad_zero) && first_bad == -1) {
+            first_bad = i; // Save the index of the first corrupted token
+        }
+    }
+
+    int max_print = 10; // Print up to 10 at the start and 10 at the end
+    
+    if (n_tokens <= max_print * 2) {
+        // If batch is small (e.g. 15), just print all of them
+        for (int i = 0; i < n_tokens; ++i) print_tok(i);
+    } else {
+        // 1. Print the start
+        for (int i = 0; i < max_print; ++i) print_tok(i);
+        
+        fprintf(stderr, "  ... skipping %d tokens ...\n", n_tokens - (max_print * 2));
+        
+        // 2. Print exactly where the data breaks (if it breaks in the middle)
+        if (first_bad >= max_print && first_bad < n_tokens - max_print) {
+            fprintf(stderr, "  >>> FIRST CORRUPTED TOKEN DETECTED HERE <<<\n");
+            print_tok(first_bad - 1); // Print the last good one
+            print_tok(first_bad);     // Print the bad one
+            fprintf(stderr, "  ...\n");
+        }
+        
+        // 3. Print the end
+        for (int i = n_tokens - max_print; i < n_tokens; ++i) print_tok(i);
+    }
+
+    // 4. Print Summary
+    if (zero_count > 0 || nan_count > 0) {
+        fprintf(stderr, "  [!] WARNING: %d tokens are ZERO. %d tokens are NaN.\n", zero_count, nan_count);
+    } else {
+        fprintf(stderr, "  [+] SUCCESS: All %d tokens have valid data.\n", n_tokens);
+    }
+    fprintf(stderr, "--------------------------------------------------\n");
+}
+
 server_context::~server_context() {
     if (ctx) {
         llama_free(ctx);
@@ -2671,6 +2738,8 @@ void server_context::add_sampled_tokens() {
             if (slot.has_mtp) {
                 if (!slot.mtp_hidden_state.empty()) {
                     llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
+                    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                    // debug_log_embd("Server->Draft Input", slot.mtp_hidden_state.data(), 1, n_embd);
                 } else {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
                     llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
@@ -3245,9 +3314,11 @@ void server_context::speculative_decoding_accept() {
             else {
                 llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, 0));
             }
+            // debug_log_embd("Server->Accept Save", slot.mtp_hidden_state.data(), ids.size(), n_embd);
             llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
-
             int32_t n_past_base = slot.n_past - (slot.drafted.size() + 1);
+            // Test later
+            // int32_t n_past_base = slot.n_past - slot.drafted.size();
             mtp_accept_tokens(ctx, ids, n_past_base, slot.id);
         }
 
@@ -3677,15 +3748,18 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (params_base.has_mtp && slot.n_decoded == 0) {
                 if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
 
+                    // const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
+                    const float* emb = llama_get_embeddings(ctx); 
                     const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
                     const int n_toks = batch_view.n_tokens;
-                    const float* emb = llama_get_embeddings(ctx);
+
                     if (emb) {
                         slot.mtp_hidden_state.resize(n_toks * n_embd);
                         memcpy(slot.mtp_hidden_state.data(), emb, n_toks * n_embd * sizeof(float));
                     }
-                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
 
+                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
+                    debug_log_embd("Server->Warmup Save", slot.mtp_hidden_state.data(), n_toks, n_embd);
                     mtp_update_kv_cache(ctx, batch_view, true);
                 }
             }
@@ -3734,13 +3808,26 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             for (auto& slot : slots) {
                 if (slot.n_past < slot.n_prompt_tokens) { 
                     if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
-                        const int n_embd = llama_model_n_embd(llama_get_model(ctx));
-                        const float* emb = llama_get_embeddings_ith(ctx, -1);
+                        const float* emb = llama_get_embeddings(ctx); 
+                        const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
+                        const int n_toks = batch_view.n_tokens;
+
                         if (emb) {
-                            slot.mtp_hidden_state.resize(n_embd);
-                            memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                            slot.mtp_hidden_state.resize(n_toks * n_embd);
+                            memcpy(slot.mtp_hidden_state.data(), emb, n_toks * n_embd * sizeof(float));
                         }
+                        // const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                        // // const int n_toks = batch_view.n_tokens;
+                        // // const float* emb = llama_get_embeddings(ctx);
+                        // const float* emb = llama_get_embeddings_ith(ctx, -1);
+                        // if (emb) {
+                        //     slot.mtp_hidden_state.resize(n_embd);
+                        //     memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                        //     // slot.mtp_hidden_state.resize(n_toks * n_embd);
+                        //     // memcpy(slot.mtp_hidden_state.data(), emb, n_toks * n_embd * sizeof(float));
+                        // }
                         llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
+                        debug_log_embd("Server->Warmup Save", slot.mtp_hidden_state.data(), n_toks, n_embd);
                         mtp_update_kv_cache(ctx, batch_view, true);
                     }
                 }

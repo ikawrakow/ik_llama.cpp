@@ -3230,9 +3230,12 @@ static int llama_decode_internal(
 
     // this indicates we are doing pooled embedding, so we ignore batch.logits and output all tokens
     const bool embd_pooled = cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
+    const bool has_mtp = cparams.mtp && hparams.nextn_predict_layers > 0;
 
     // count outputs
-    if (batch_all.logits && !embd_pooled) {
+    if (has_mtp) {
+        n_outputs = n_tokens_all;
+    } else if (batch_all.logits && !embd_pooled) {
         for (uint32_t i = 0; i < n_tokens_all; ++i) {
             n_outputs += batch_all.logits[i] != 0;
         }
@@ -3250,11 +3253,13 @@ static int llama_decode_internal(
     };
 
     // set output mappings
-    if (batch_all.logits) {
+    if (batch_all.logits && !has_mtp) {
         int32_t i_logits = 0;
         for (uint32_t i = 0; i < n_tokens_all; ++i) {
             if (batch_all.logits[i]) {
                 lctx.output_ids[i] = i_logits++;
+            } else {
+                lctx.output_ids[i] = -1;
             }
         }
     } else {
@@ -3325,7 +3330,9 @@ static int llama_decode_internal(
         {
             int32_t n_outputs_new = 0;
 
-            if (u_batch.logits && !embd_pooled) {
+            if (has_mtp) {
+                n_outputs_new = n_tokens;
+            } else if (u_batch.logits && !embd_pooled) {
                 for (uint32_t i = 0; i < n_tokens; i++) {
                     n_outputs_new += u_batch.logits[i] != 0;
                 }
