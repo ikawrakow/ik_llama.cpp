@@ -1493,10 +1493,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             invalid_param = true;
             return true;
         }
-        for (int32_t l = 0; l < n_layers; ++l) {
-            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
-            params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
-        }
+        params.ncmoe = n_layers;
+        //for (int32_t l = 0; l < n_layers; ++l) {
+        //    std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+        //    params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+        //}
         return true;
     }
     if (arg == "--no-mmap") {
@@ -3242,6 +3243,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu         = params.max_gpu;
+    mparams.ncmoe           = params.ncmoe;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
@@ -4319,6 +4321,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "lora_init_without_apply: %s # default: false\n", params.lora_init_without_apply ? "true" : "false");
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu: %d # default: 0\n", params.max_gpu);
+    fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);

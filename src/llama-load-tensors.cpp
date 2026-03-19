@@ -183,6 +183,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     std::unordered_set<ggml_tensor *> split_tensors;
 
+    std::vector<std::pair<std::regex, ggml_backend_buffer_type_t>> overrides;
+
     inline ggml_context * ctx_for_buft(ggml_backend_buffer_type_t buft) {
         if (auto it = ctx_map.find(buft); it != ctx_map.end()) return it->second;
 
@@ -211,6 +213,91 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
     for (int i = 0; i < n_layer; ++i) {
         buft_layer_count[model.buft_layer[i].buft]++;
         buft_layer_count[model.buft_layer[i].buft_matrix]++;
+    }
+
+    if (ml.tensor_buft_overrides) {
+        for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) {
+            overrides.emplace_back(std::make_pair(std::regex(o->pattern), o->buft));
+        }
+    }
+
+    if (ml.ncmoe > 0) {
+        auto buft = ggml_backend_cpu_buffer_type();
+        if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH || ml.ncmoe >= n_layer || model.devices.size() < 2) {
+            int nmax = std::min(ml.ncmoe, n_layer);
+            for (int i = 0; i < nmax; ++i) {
+                std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+            }
+        }
+        else if (model.split_mode == LLAMA_SPLIT_MODE_LAYER) {
+            std::vector<int> counts(model.devices.size(), 0);
+            int nbad = 0;
+            for (int i = 0; i < n_layer; ++i) {
+                if (model.default_layer_device[i] >= 0 && model.default_layer_device[i] < (int)model.devices.size()) {
+                    ++counts[model.default_layer_device[i]];
+                } else {
+                    LLAMA_LOG_WARN("%s: default device for layer %d is %d?\n", __func__, i, model.default_layer_device[i]);
+                    ++nbad;
+                }
+            }
+            if (nbad > 0) {
+                throw std::runtime_error("Unexpected device configuration");
+            }
+            std::vector<int> n_override(counts.size());
+            printf("================= %s: split mode layer with ncmoe = %d, %d devices\n", __func__, ml.ncmoe, (int)model.devices.size());
+            int ntot = 0;
+            for (int i = 0; i < int(counts.size()); ++i) {
+                float fraction = 1.f*counts[i]/n_layer;
+                n_override[i] = std::roundf(fraction*ml.ncmoe);
+                ntot += n_override[i];
+            }
+            while (ntot > ml.ncmoe) {
+                float best_err = -1e30; int ibest = -1;
+                for (int i = 0; i < int(counts.size()); ++i) {
+                    if (n_override[i] == 0) continue;
+                    float n_want = 1.f*counts[i]*ml.ncmoe/n_layer;
+                    float err = n_override[i] - 1 - n_want;
+                    if (err > best_err) {
+                        best_err = err; ibest = i;
+                    }
+                }
+                if (ibest < 0) { // shouldn't happen
+                    break;
+                }
+                --n_override[ibest];
+                --ntot;
+            }
+            while (ntot < ml.ncmoe) {
+                float best_err = 1e30; int ibest = -1;
+                for (int i = 0; i < int(counts.size()); ++i) {
+                    if (n_override[i] >= counts[i]) continue;
+                    float n_want = 1.f*counts[i]*ml.ncmoe/n_layer;
+                    float err = n_override[i] + 1 - n_want;
+                    if (err < best_err) {
+                        best_err = err; ibest = i;
+                    }
+                }
+                if (ibest < 0) { // shouldn't happen
+                    break;
+                }
+                ++n_override[ibest];
+                ++ntot;
+            }
+            for (int i = 0; i < int(counts.size()); ++i) {
+                printf("    device %d: %d layers -> %d overrides\n", i, counts[i], n_override[i]);
+            }
+            // it is better to go backwards to avoid (or at least reduce) issues when there are layers without MoE tensors
+            for (int i = n_layer-1; i >= 0; --i) {
+                int id = model.default_layer_device[i];
+                if (n_override[id] > 0) {
+                    std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                    printf("Adding override %s=%s\n", pattern.c_str(), ggml_backend_buft_name(buft));
+                    this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+                    --n_override[id];
+                }
+            }
+        }
     }
 
     auto n_tensors = ml.n_tensors;
@@ -310,18 +397,27 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
 }
 
 ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx, const std::string & name) {
-    if (ml.tensor_buft_overrides) {
-        for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
-            std::regex pattern(overrides->pattern);
-            if (std::regex_search(name, pattern)) {
-                const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
-                const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
-                LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(overrides->buft));
-                ctx = ctx_for_buft(overrides->buft);
-                break;
-            }
+    for (auto & o : overrides) {
+        if (std::regex_search(name, o.first)) {
+            const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
+            const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
+            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.second));
+            ctx = ctx_for_buft(o.second);
+            break;
         }
     }
+    //if (ml.tensor_buft_overrides) {
+    //    for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+    //        std::regex pattern(overrides->pattern);
+    //        if (std::regex_search(name, pattern)) {
+    //            const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
+    //            const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
+    //            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(overrides->buft));
+    //            ctx = ctx_for_buft(overrides->buft);
+    //            break;
+    //        }
+    //    }
+    //}
     return ctx;
 }
 
