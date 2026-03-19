@@ -362,6 +362,8 @@ struct rpc_device {
     uint32_t device;
 };
 
+struct llama_cparams;
+
 struct llama_model {
     e_model     type  = MODEL_UNKNOWN;
     llm_arch    arch  = LLM_ARCH_UNKNOWN;
@@ -456,6 +458,8 @@ struct llama_model {
     bool has_tensor_overrides() const {
         return tensor_overrides;
     }
+
+    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const;
 
     void set_tensor_overrides(const llama_model_params& params);
 
