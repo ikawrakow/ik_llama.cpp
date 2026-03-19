@@ -2783,6 +2783,7 @@ struct ggml_compute_state_shared {
     const struct ggml_cplan * cplan;
 
     int n_threads;
+    int n_batch;
 
     // synchronization primitives
     atomic_int n_barrier;
@@ -4497,16 +4498,7 @@ inline static void ggml_critical_section_start(void) {
     }
 }
 
-#ifdef GGML_USE_OPENMP
-static void ggml_barrier(struct ggml_compute_state_shared * shared) {
-    if (shared->n_threads == 1) {
-        return;
-    }
-
-    #pragma omp barrier
-}
-#else
-static void ggml_barrier(struct ggml_compute_state_shared * shared) {
+static inline void ggml_barrier_impl(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
         return;
     }
@@ -4538,6 +4530,22 @@ static void ggml_barrier(struct ggml_compute_state_shared * shared) {
             sched_yield();
         }
     }
+}
+
+#ifdef GGML_USE_OPENMP
+static void ggml_barrier(struct ggml_compute_state_shared * shared) {
+    if (shared->n_threads == 1) {
+        return;
+    }
+    if (shared && shared->n_batch > 32) {
+        ggml_barrier_impl(shared);
+        return;
+    }
+    #pragma omp barrier
+}
+#else
+static void ggml_barrier(struct ggml_compute_state_shared * shared) {
+    ggml_barrier_impl(shared);
 }
 #endif
 
@@ -25878,6 +25886,7 @@ struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t siz
         /*.size         =*/ size,
         /*.n_nodes      =*/ 0,
         /*.n_leafs      =*/ 0,
+        /*.n_batch      =*/ 0,
         /*.nodes        =*/ nodes_ptr,
         /*.grads        =*/ grads_ptr,
         /*.leafs        =*/ leafs_ptr,
@@ -25899,6 +25908,7 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1)
         /*.size         =*/ 0,
         /*.n_nodes      =*/ i1 - i0,
         /*.n_leafs      =*/ 0,
+        /*.n_batch      =*/ cgraph0->n_batch,
         /*.nodes        =*/ cgraph0->nodes + i0,
         /*.grads        =*/ cgraph0->grads ? cgraph0->grads + i0 : NULL,
         /*.leafs        =*/ NULL,
@@ -26638,6 +26648,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         /*.cgraph                  =*/ cgraph,
         /*.cgraph_plan             =*/ cplan,
         /*.n_threads               =*/ n_threads,
+        /*.n_batch                 =*/ cgraph->n_batch,
         /*.n_barrier               =*/ 0,
         /*.n_barrier_passed        =*/ 0,
         /*.abort_callback          =*/ NULL,
