@@ -471,6 +471,7 @@ struct gpt_params {
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
 
     bool sweep_bench_output_jsonl = false;
+    bool minilog = false;
 };
 
 
