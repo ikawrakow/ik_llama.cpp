@@ -1267,7 +1267,7 @@ int main(int argc, char ** argv) {
     const auto handle_chat_completions = [&ctx_server, &params, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
-        json data = oaicompat_chat_params_parse(ctx_server.model, body, ctx_server.chat_params, files);
+        json data = oaicompat_chat_params_parse(body, ctx_server.chat_params, files);
         handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
@@ -1281,7 +1281,7 @@ int main(int argc, char ** argv) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
         json body_parsed = convert_responses_to_chatcmpl(body);
-        json data = oaicompat_chat_params_parse(ctx_server.model, body_parsed, ctx_server.chat_params, files);
+        json data = oaicompat_chat_params_parse(body_parsed, ctx_server.chat_params, files);
         handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
@@ -1293,9 +1293,10 @@ int main(int argc, char ** argv) {
 
     const auto handle_anthropic_messages = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         std::vector<raw_buffer> files;
-        json body = json::parse(req.body);
-        json body_parsed = anthropic_params_from_json(
-            ctx_server.model,
+        json body = convert_anthropic_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
+        json body_parsed = oaicompat_chat_params_parse(
             body,
             ctx_server.chat_params,
             files);
@@ -1310,19 +1311,16 @@ int main(int argc, char ** argv) {
 
     const auto handle_anthropic_count_tokens = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         std::vector<raw_buffer> files;
-        json body = json::parse(req.body);
-
-        // Parse the Anthropic request (max_tokens is not required for count_tokens)
-        json body_parsed = anthropic_params_from_json(
-            ctx_server.model,
+        json body = convert_anthropic_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
+        json body_parsed = oaicompat_chat_params_parse(
             body,
             ctx_server.chat_params,
             files);
-
         json prompt = body_parsed.at("prompt");
         llama_tokens tokens = tokenize_mixed(llama_get_vocab(ctx_server.ctx), prompt, true, true);
-
-        res_ok(res, {{"input_tokens", static_cast<int>(tokens.size())}});
+        res_ok(res, { {"input_tokens", static_cast<int>(tokens.size())} });
         return res;
     };
 
@@ -1330,7 +1328,7 @@ int main(int argc, char ** argv) {
     const auto handle_apply_template = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files; // dummy, unused
-        json data = oaicompat_chat_params_parse(ctx_server.model, body,ctx_server.chat_params, files);
+        json data = oaicompat_chat_params_parse(body,ctx_server.chat_params, files);
         res_ok(res, { { "prompt", std::move(data.at("prompt")) } });
     };
 

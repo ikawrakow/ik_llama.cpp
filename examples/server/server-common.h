@@ -256,7 +256,6 @@ struct server_chat_params {
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
-    const struct llama_model* model,
     json& body, /* openai api json semantics */
     const server_chat_params& opt,
     std::vector<raw_buffer>& out_files);
@@ -264,11 +263,8 @@ json oaicompat_chat_params_parse(
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
 json convert_responses_to_chatcmpl(const json& body);
 
-json anthropic_params_from_json(
-    const struct llama_model* model,
-    const json& body_in, /* anthropic messages api json semantics */
-    const server_chat_params& opt,
-    std::vector<raw_buffer>& out_files);
+// convert Anthropic Messages API format to OpenAI Chat Completions API format
+json convert_anthropic_to_oai(const json & body);
 
 
 //
