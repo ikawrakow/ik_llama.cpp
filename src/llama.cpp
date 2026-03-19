@@ -1997,7 +1997,8 @@ static bool is_model_split_supported(const llama_model & model) {
     return it != k_supported.end();
 }
 
-static std::vector<double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model) {
+static std::vector<double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model,
+        ggml_type cache_type_k, ggml_type cache_type_v, uint32_t max_ctx_size, int mla_attn, int n_seq_max, bool flash_attn) {
     int n_layer = model.hparams.n_layer;
     std::vector<double> result(n_layer+1, 0);
     size_t ow_size = 0;
@@ -2040,8 +2041,18 @@ static std::vector<double> get_layer_sizes(const llama_model_loader & ml, const 
     if (!ow_size) ow_size = embd_size;
     result[n_layer] = ow_size;
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
-    for (int il = 0; il < n_layer; ++il) LLAMA_LOG_INFO("Layer %2d: %g MiB\n", il, result[il]/1024./1024.);
-    LLAMA_LOG_INFO("Layer %2d: %g MiB (output layer)\n", n_layer, result[n_layer]/1024./1024.);
+    double tot_model = 0, tot_cache = 0;
+    for (int il = 0; il < n_layer; ++il) {
+        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, flash_attn);
+        LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024.);
+        tot_model += result[il];
+        tot_cache += kv_size;
+        result[il] += kv_size;
+    }
+    //auto output_size = model.hparams.n_vocab * 
+    LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f MiB (output layer)\n", n_layer, result[n_layer]/1024./1024., 0., result[n_layer]/1024./1024.);
+    LLAMA_LOG_INFO("--------------------------------------------------------------------------\n");
+    LLAMA_LOG_INFO("Total   : %9.2f, %9.2f, %9.2f MiB\n", tot_model/1024./1024., tot_cache/1024./1024., (tot_model + tot_cache)/1024./1024.);
     return result;
 }
 
@@ -2055,6 +2066,11 @@ static bool llm_load_tensors(
         int main_gpu,
         int max_gpu,
         const float * tensor_split,
+        ggml_type cache_type_k,
+        ggml_type cache_type_v,
+        uint32_t max_ctx_size,
+        int n_seq_max,
+        bool flash_attn,
         bool use_mlock,
         bool validate_quants,
         bool mtp,
@@ -2087,6 +2103,9 @@ static bool llm_load_tensors(
         LLAMA_LOG_INFO("======================================= HAVE_FANCY_SIMD is defined\n");
     } else {
         LLAMA_LOG_INFO("======================================= HAVE_FANCY_SIMD is NOT defined\n");
+    }
+    if (max_ctx_size == 0) {
+        max_ctx_size = model.hparams.n_ctx_train;
     }
 
     model.split_mode   = split_mode;
@@ -2139,7 +2158,7 @@ static bool llm_load_tensors(
     model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
     int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     if (device_count > 1) {
-        auto layer_sizes = get_layer_sizes(ml, model);
+        auto layer_sizes = get_layer_sizes(ml, model, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, flash_attn);
         int n_last = n_layer;
         if (n_gpu_layers > n_layer) ++n_last;
         double sum = 0;
@@ -2513,7 +2532,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
+            ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
+            params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -4477,6 +4497,10 @@ struct llama_model_params llama_model_default_params() {
         /*.main_gpu                    =*/ 0,
         /*.max_gpu                     =*/ 0,
         /*.ncmoe                       =*/ 0,
+        /*.type_k                      =*/ GGML_TYPE_F16,
+        /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.max_ctx_size                =*/ 0,
+        /*.n_seq_max                   =*/ 1,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
@@ -4494,6 +4518,7 @@ struct llama_model_params llama_model_default_params() {
         /*.merge_up_gate_exps          =*/ false,
         /*.mtp                         =*/ false,
         /*.dry_run                     =*/ false,
+        /*.flash_attn                  =*/ true,
     };
 
 #ifdef GGML_USE_METAL
