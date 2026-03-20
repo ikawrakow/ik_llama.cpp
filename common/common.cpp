@@ -3273,6 +3273,23 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     throw std::runtime_error("Invalid cache type: " + s);
 }
 
+static std::pair<int, int> get_batch_ubatch(const gpt_params & params) {
+    int n_batch = params.n_batch;
+    int n_ubatch = params.n_ubatch;
+    if (params.n_ctx > 0) {
+        n_batch = std::min(n_batch, params.n_ctx);
+    }
+    if (!params.mmproj.path.empty()) {
+        // temporary fix for qwen mtmd
+        n_batch = std::max(n_batch, n_ubatch);
+        n_ubatch = n_batch;
+        fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);
+    } else {
+        n_ubatch = std::min(n_batch, n_ubatch);
+    }
+    return {n_batch, n_ubatch};
+}
+
 struct llama_model_params common_model_params_to_llama(const gpt_params & params) {
     auto mparams = llama_model_default_params();
     mparams.devices = params.devices.c_str();
@@ -3290,6 +3307,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
     mparams.max_ctx_size    = params.n_ctx;
     mparams.n_seq_max       = params.n_parallel;
+    mparams.n_ubatch        = get_batch_ubatch(params).second;
+    mparams.amb             = params.attn_max_batch;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
@@ -3339,15 +3358,8 @@ static ggml_type ggml_type_from_str(const std::string & s) {
 
 struct llama_context_params common_context_params_to_llama(const gpt_params & params) {
     auto cparams = llama_context_default_params();
-    int n_batch = params.n_batch;
-    int n_ubatch = params.n_ubatch;
 
-    // temporary fix for qwen mtmd
-    if (!params.mmproj.path.empty()) {
-        n_batch = std::max(params.n_batch, params.n_ubatch);
-        n_ubatch = params.n_batch;
-        fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);
-    }
+    auto [n_batch, n_ubatch] = get_batch_ubatch(params);
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
