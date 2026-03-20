@@ -353,8 +353,8 @@ template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V
 void ggml_cuda_flash_attn_ext_vec_f32_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     constexpr int nwarps = Dk/WARP_SIZE;
     fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f32<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap>;
-    constexpr bool need_f16_K = type_K == GGML_TYPE_F16;
-    constexpr bool need_f16_V = type_V == GGML_TYPE_F16;
+    constexpr bool need_f16_K = Dk != 128 && Dk != 256;
+    constexpr bool need_f16_V = Dv != 64 && Dv != 128 && Dv != 256;
     constexpr size_t nbytes_shared = 0;
     launch_fattn<Dv, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, Dv, need_f16_K, need_f16_V);
 }
