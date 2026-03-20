@@ -3804,35 +3804,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             slot.i_batch = -1;
         }
-        if (params_base.has_mtp) {
-            for (auto& slot : slots) {
-                if (slot.n_past < slot.n_prompt_tokens) { 
-                    if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
-                        const float* emb = llama_get_embeddings(ctx); 
-                        const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
-                        const int n_toks = batch_view.n_tokens;
-
-                        if (emb) {
-                            slot.mtp_hidden_state.resize(n_toks * n_embd);
-                            memcpy(slot.mtp_hidden_state.data(), emb, n_toks * n_embd * sizeof(float));
-                        }
-                        // const int n_embd = llama_model_n_embd(llama_get_model(ctx));
-                        // // const int n_toks = batch_view.n_tokens;
-                        // // const float* emb = llama_get_embeddings(ctx);
-                        // const float* emb = llama_get_embeddings_ith(ctx, -1);
-                        // if (emb) {
-                        //     slot.mtp_hidden_state.resize(n_embd);
-                        //     memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
-                        //     // slot.mtp_hidden_state.resize(n_toks * n_embd);
-                        //     // memcpy(slot.mtp_hidden_state.data(), emb, n_toks * n_embd * sizeof(float));
-                        // }
-                        llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
-                        debug_log_embd("Server->Warmup Save", slot.mtp_hidden_state.data(), n_toks, n_embd);
-                        mtp_update_kv_cache(ctx, batch_view, true);
-                    }
-                }
-            }
-        }
         // speculative decoding - main model sample and accept
         speculative_decoding_accept();
     }

@@ -3233,9 +3233,7 @@ static int llama_decode_internal(
     const bool has_mtp = cparams.mtp && hparams.nextn_predict_layers > 0;
 
     // count outputs
-    if (has_mtp) {
-        n_outputs = n_tokens_all;
-    } else if (batch_all.logits && !embd_pooled) {
+    if (batch_all.logits && !embd_pooled) {
         for (uint32_t i = 0; i < n_tokens_all; ++i) {
             n_outputs += batch_all.logits[i] != 0;
         }
@@ -3247,7 +3245,8 @@ static int llama_decode_internal(
     }
 
     // reserve output buffer
-    if (llama_output_reserve(lctx, n_outputs) < n_outputs) {
+    size_t n_outputs_embd = has_mtp ? n_tokens_all : n_outputs;
+    if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_outputs);
         return -2;
     };
