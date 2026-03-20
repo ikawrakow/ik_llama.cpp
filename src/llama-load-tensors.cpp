@@ -3548,7 +3548,7 @@ static void prepare_up_gate_split(ggml_tensor * t, llama_split_tensor & split) {
         if (!extra->splits[is]) continue;
         auto & ranges = split.ranges[is];
         ranges.resize(2);
-        int nrows_is = extra->splits[idim]->ne[1]/2;
+        int nrows_is = extra->splits[is]->ne[idim]/2;
         ranges[0] = {ntot,         nrows_is};
         ranges[1] = {ntot + nrows, nrows_is};
         ntot += nrows_is;
