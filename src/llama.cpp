@@ -3219,6 +3219,8 @@ static int llama_decode_internal(
 
     uint32_t n_outputs = 0;
     uint32_t n_outputs_prev = 0;
+    uint32_t n_outputs_embd = 0;
+    uint32_t n_outputs_prev_embd = 0;
 
     const auto n_ubatch = cparams.n_ubatch;
 
@@ -3245,14 +3247,14 @@ static int llama_decode_internal(
     }
 
     // reserve output buffer
-    size_t n_outputs_embd = has_mtp ? n_tokens_all : n_outputs;
+    n_outputs_embd = has_mtp ? n_tokens_all : n_outputs;
     if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
-        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_outputs);
+        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, std::max<size_t>(n_outputs, n_outputs_embd));
         return -2;
     };
 
     // set output mappings
-    if (batch_all.logits && !has_mtp) {
+    if (batch_all.logits) {
         int32_t i_logits = 0;
         for (uint32_t i = 0; i < n_tokens_all; ++i) {
             if (batch_all.logits[i]) {
@@ -3261,8 +3263,13 @@ static int llama_decode_internal(
                 lctx.output_ids[i] = -1;
             }
         }
+    } else if (n_outputs == 1 && n_tokens_all > 0) {
+        for (uint32_t i = 0; i < n_tokens_all; ++i) {
+            lctx.output_ids[i] = -1;
+        }
+        lctx.output_ids[n_tokens_all - 1] = 0;
     } else {
-        for (uint32_t i = 0; i < n_outputs; ++i) {
+        for (uint32_t i = 0; i < std::max<uint32_t>(n_outputs, n_outputs_embd); ++i) {
             lctx.output_ids[i] = i;
         }
     }
@@ -3329,9 +3336,7 @@ static int llama_decode_internal(
         {
             int32_t n_outputs_new = 0;
 
-            if (has_mtp) {
-                n_outputs_new = n_tokens;
-            } else if (u_batch.logits && !embd_pooled) {
+            if (u_batch.logits && !embd_pooled) {
                 for (uint32_t i = 0; i < n_tokens; i++) {
                     n_outputs_new += u_batch.logits[i] != 0;
                 }
@@ -3552,7 +3557,22 @@ static int llama_decode_internal(
                 if (n_outputs_new) {
                     GGML_ASSERT( n_outputs_prev + n_outputs_new <= n_outputs);
                     GGML_ASSERT((n_outputs_prev + n_outputs_new)*n_vocab <= (int64_t) lctx.logits_size);
-                    ggml_backend_tensor_get_async(backend_res, res, logits_out, 0, n_outputs_new*n_vocab*sizeof(float));
+                    
+                    if (res->ne[1] == n_tokens && n_outputs_new < n_tokens) {
+                        int32_t i_out = 0;
+                        if (u_batch.logits && !embd_pooled) {
+                            for (uint32_t i = 0; i < n_tokens; i++) {
+                                if (u_batch.logits[i]) {
+                                    ggml_backend_tensor_get_async(backend_res, res, logits_out + i_out*n_vocab, i*n_vocab*sizeof(float), n_vocab*sizeof(float));
+                                    i_out++;
+                                }
+                            }
+                        } else if (cur_token + n_tokens >= n_tokens_all) {
+                            ggml_backend_tensor_get_async(backend_res, res, logits_out, (n_tokens - 1)*n_vocab*sizeof(float), n_vocab*sizeof(float));
+                        }
+                    } else {
+                        ggml_backend_tensor_get_async(backend_res, res, logits_out, 0, n_outputs_new*n_vocab*sizeof(float));
+                    }
                 }
             }
 #if IK_PRINT_TIMING
@@ -3574,13 +3594,13 @@ static int llama_decode_internal(
                     {
                         // extract token embeddings
                         GGML_ASSERT(lctx.embd != nullptr);
-                        float * embd_out = lctx.embd + n_outputs_prev*n_embd;
-                        const int32_t n_outputs_new = lctx.n_outputs;
+                        float * embd_out = lctx.embd + n_outputs_prev_embd*n_embd;
+                        const int32_t n_outputs_new_embd = has_mtp ? n_tokens : lctx.n_outputs;
 
-                        if (n_outputs_new) {
-                            GGML_ASSERT( n_outputs_prev + n_outputs_new <= n_outputs);
-                            GGML_ASSERT((n_outputs_prev + n_outputs_new)*n_embd <= (int64_t) lctx.embd_size);
-                            ggml_backend_tensor_get_async(backend_embd, embd, embd_out, 0, n_outputs_new*n_embd*sizeof(float));
+                        if (n_outputs_new_embd) {
+                            GGML_ASSERT( n_outputs_prev_embd + n_outputs_new_embd <= n_outputs_embd);
+                            GGML_ASSERT((n_outputs_prev_embd + n_outputs_new_embd)*n_embd <= (int64_t) lctx.embd_size);
+                            ggml_backend_tensor_get_async(backend_embd, embd, embd_out, 0, n_outputs_new_embd*n_embd*sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
@@ -3611,6 +3631,7 @@ static int llama_decode_internal(
 #endif
         }
         n_outputs_prev += lctx.n_outputs;
+        n_outputs_prev_embd += has_mtp ? n_tokens : lctx.n_outputs;
         cur_token += n_tokens;
         if (reset_previous) {
             // We need to discard this graph. Otherwise, iwith CUDA graphs enabled, the graph will get resused and this will reset the
