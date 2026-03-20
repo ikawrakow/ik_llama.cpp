@@ -340,6 +340,8 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_PROJ,
     LLM_TENSOR_INDEXER_ATTN_K,
     LLM_TENSOR_INDEXER_ATTN_Q_B,
+
+    LLM_TENSOR_UNKNOWN,
 };
 
 llm_arch llm_arch_from_string(const std::string & name);
@@ -348,3 +350,5 @@ const char * llama_model_arch_name(llm_arch arch);
 
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid(const llm_arch & arch);
+
+llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il);

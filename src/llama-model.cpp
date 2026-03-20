@@ -1837,6 +1837,29 @@ bool llama_model_has_recurrent(const llama_model * model) {
     return llm_arch_is_hybrid(model->arch) || llm_arch_is_recurrent(model->arch);
 }
 
+llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
+    auto it = LLM_TENSOR_NAMES.find(arch);
+    if (it == LLM_TENSOR_NAMES.end()) {
+        printf("%s: Oops, did not find arch\n", __func__);
+        return LLM_TENSOR_UNKNOWN;
+    }
+    if (il < 0) {
+        for (auto & entry : it->second) {
+            if (tensor_name.find(entry.second) == 0) {
+                return entry.first;
+            }
+        }
+        return LLM_TENSOR_UNKNOWN;
+    }
+    for (auto & entry : it->second) {
+        auto this_name = ::format(entry.second.c_str(), il);
+        if (tensor_name.find(this_name) == 0) {
+            return entry.first;
+        }
+    }
+    return LLM_TENSOR_UNKNOWN;
+}
+
 size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const {
     if (il < 0 || il >= hparams.n_layer) return 0;
     if (hparams.recurrent_layer_arr[il]) {
