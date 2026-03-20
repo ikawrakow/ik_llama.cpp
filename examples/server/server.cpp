@@ -431,6 +431,12 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
+static void log_prompt(const gpt_params & params_base, const json & body) {
+    if (params_base.minilog) {
+        LOG_TEE("Prompt:\n%s\n", body.dump(4).c_str());
+    }
+}
+
 int main(int argc, char ** argv) {
 #if SERVER_VERBOSE != 1
     log_disable();
@@ -1220,7 +1226,8 @@ int main(int argc, char ** argv) {
             }
     };
 
-    const auto handle_completions = [&handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_completions = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         auto data = json::parse(req.body);
         std::vector<raw_buffer> files; // dummy
         handle_completions_impl(
@@ -1232,7 +1239,8 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_NONE);
     };
 
-    const auto handle_completions_oai = [&handle_completions_impl](const httplib::Request& req, httplib::Response& res) {
+    const auto handle_completions_oai = [&ctx_server, &handle_completions_impl](const httplib::Request& req, httplib::Response& res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         auto body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(body);
         std::vector<raw_buffer> files; // dummy
@@ -1265,6 +1273,7 @@ int main(int argc, char ** argv) {
 
 
     const auto handle_chat_completions = [&ctx_server, &params, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
         json data = oaicompat_chat_params_parse(body, ctx_server.chat_params, files);
@@ -1278,6 +1287,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_responses = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
         json body_parsed = convert_responses_to_chatcmpl(body);
@@ -1293,6 +1303,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_anthropic_messages = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         std::vector<raw_buffer> files;
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         json body = convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
@@ -1311,6 +1322,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_anthropic_count_tokens = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         std::vector<raw_buffer> files;
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         json body = convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
@@ -1326,6 +1338,7 @@ int main(int argc, char ** argv) {
 
     // same with handle_chat_completions, but without inference part
     const auto handle_apply_template = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files; // dummy, unused
         json data = oaicompat_chat_params_parse(body,ctx_server.chat_params, files);
@@ -1333,6 +1346,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_infill = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         json data = json::parse(req.body);
         const int id_task = ctx_server.queue_tasks.get_new_id();
         server_tokens token; // dummy tokens
@@ -1477,11 +1491,13 @@ int main(int argc, char ** argv) {
 
     };
 
-    const auto handle_embeddings = [&handle_embeddings_impl](const httplib::Request& req, httplib::Response& res) {
+    const auto handle_embeddings = [&ctx_server, &handle_embeddings_impl](const httplib::Request& req, httplib::Response& res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         handle_embeddings_impl(req, res, OAICOMPAT_TYPE_NONE);
     };
 
-    const auto handle_embeddings_oai = [&handle_embeddings_impl](const httplib::Request& req, httplib::Response& res) {
+    const auto handle_embeddings_oai = [&ctx_server, &handle_embeddings_impl](const httplib::Request& req, httplib::Response& res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         handle_embeddings_impl(req, res, OAICOMPAT_TYPE_EMBEDDING);
     };
 
@@ -1502,6 +1518,7 @@ int main(int argc, char ** argv) {
 
 
     const auto handle_lora_adapters_apply = [&](const httplib::Request & req, httplib::Response & res) {
+        log_prompt(ctx_server.params_base, json::parse(req.body));
         const std::vector<json> body = json::parse(req.body);
         int max_idx = ctx_server.lora_adapters.size();
 
