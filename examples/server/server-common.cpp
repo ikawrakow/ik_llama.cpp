@@ -1160,7 +1160,10 @@ json convert_anthropic_to_oai(const json & body) {
         } else if (system_param.is_array()) {
             for (const auto & block : system_param) {
                 if (json_value(block, "type", std::string()) == "text") {
-                    system_content += json_value(block, "text", std::string());
+                    std::string content_block = json_value(block, "text", std::string());
+                    if (!string_starts_with(content_block, "x-anthropic-")) {
+                        system_content += content_block;
+                    }
                 }
             }
         }
