@@ -1737,6 +1737,9 @@ bool server_context::ensure_no_mtmd(const int id_task) {
 }
 
 void server_context::send_partial_response(server_slot& slot, completion_token_output tkn) {
+    if (slot.task == nullptr) {
+        return;
+    }
     auto res = std::make_unique<server_task_result_cmpl_partial>();
     res->final_result = false;
     res->id = slot.id_task;
@@ -2679,8 +2682,8 @@ void server_context::add_sampled_tokens() {
                         const int n_embd = llama_model_n_embd(llama_get_model(ctx));
                         slot.mtp_hidden_state.resize(n_embd);
                         memcpy(slot.mtp_hidden_state.data(), emb_neg1, n_embd * sizeof(float));
+                        llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
                     }
-                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
                 }
             }
 
@@ -3308,6 +3311,9 @@ void server_context::speculative_decoding_accept() {
                 }
             } else {
                 buffer_and_check_string_ban(slot, result);
+                if (slot.task == nullptr) {
+                    break;
+                }
             }
 
             common_sampler_review(slot.ctx_sampling);
@@ -3647,7 +3653,8 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         std::vector<float> batch_mtp_hidden_state;
         if (params_base.has_mtp) {
             for (auto& slot : slots) {
-                if (slot.state == SLOT_STATE_PROCESSING && slot.n_decoded == 0) {
+                if ((slot.state == SLOT_STATE_PROCESSING && slot.n_decoded == 0) ||
+                    (slot.state == SLOT_STATE_IDLE && slot.command == SLOT_COMMAND_LOAD_PROMPT)) {
                     bool has_tokens_for_slot = (batch_view.n_tokens > 0 && batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id);
                     if (has_tokens_for_slot) {
                         mtp_warmup_needed = true;
