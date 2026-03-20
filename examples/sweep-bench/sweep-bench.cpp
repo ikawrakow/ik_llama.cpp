@@ -14,8 +14,45 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
+
+static void llama_selective_log_callback(ggml_log_level level, const char * text, void * user_data) {
+    (void) level;
+    (void) user_data;
+    const char * skip_patterns[] = {
+        "Setting default device in layer",
+        "llama_model_loader: Dumping metadata",
+        "llama_model_loader: - kv  ",
+        "llama_model_loader: - type ",
+        "validate_override:",
+        "load: printing all EOG",
+        "load:   - ",
+        "load: special tokens cache",
+        "load: token to piece cache",
+        "llm_load_print_meta:",
+        "print_info:",
+        "------------------- Layer sizes",
+        "Layer ",
+        "llm_load_tensors:",
+        "==========================",
+    };
+    for (const char * pat : skip_patterns) {
+        if (strstr(text, pat) != nullptr) {
+            return;
+        }
+    }
+    // Skip incomplete/continuation lines
+    int i = 0;
+    while (text[i] == ' ' || text[i] == '\t') {
+        i++;
+    }
+    if (text[i] == ',' || text[i] == '(' || text[i] == ')'|| (text[i] >= '0' && text[i] <= '9')) {
+        return;
+    }
+    LOG_TEE("%s", text);
+}
 
 static void print_usage(int, char ** argv) {
     LOG_TEE("\nexample usage:\n");
@@ -32,6 +69,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
     if (params.nrep < 1) params.nrep = 1;
+
+    if (params.minilog) {
+        llama_log_set(llama_selective_log_callback, nullptr);
+    }
 
     // init LLM
 
