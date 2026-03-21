@@ -17169,9 +17169,66 @@ static void ggml_compute_forward_mul_mat_id(
         }
     }
 
+    // Use dynamic expert scheduling: threads claim experts via atomic counter.
+    // This eliminates cross-expert load imbalance where all threads must wait
+    // for the slowest expert before moving to the next one.
+    if (ith == 0) {
+        atomic_store(&params->shared->current_chunk, 0);
+    }
+
     ggml_barrier(params->shared);
 
-    // compute each matrix multiplication in sequence
+    const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
+
+#if GGML_USE_IQK_MULMAT
+    if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
+        // Cross-expert chunk pooling: divide each active expert into chunks,
+        // then use atomic work-stealing across the unified chunk pool.
+        const int chunks_per_expert = MAX(1, MIN(nth, (int)(ne01 / 16)));
+
+        int total_chunks = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] > 0) total_chunks += chunks_per_expert;
+        }
+
+        int chunk_id;
+        while ((chunk_id = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks) {
+            // Map global chunk_id to (expert_index, local_chunk_index)
+            int acc = 0, cur_a = -1, local_chunk = 0;
+            for (int a = 0; a < n_as; a++) {
+                if (matrix_row_counts[a] == 0) continue;
+                if (chunk_id < acc + chunks_per_expert) {
+                    cur_a = a;
+                    local_chunk = chunk_id - acc;
+                    break;
+                }
+                acc += chunks_per_expert;
+            }
+
+            const char * src0_cur = (const char *) src0->data + cur_a*nb02;
+
+            if (!iqk_mul_mat_moe(ne01, matrix_row_counts[cur_a], ne00, ne11,
+                        src0->type, src0_cur, nb01,
+                        vec_dot_type, (const char *)wdata_mm, row_size_mm,
+                        (float *)dst->data, nb1, nb2,
+                        matrix_rows + cur_a*ne12, local_chunk, chunks_per_expert)) goto IQK_MulMat_Not_Available;
+        }
+        goto IQK_MulMat_Done;
+    }
+IQK_MulMat_Not_Available:;
+
+    // Reset counter for fallback path
+    if (ith == 0) {
+        atomic_store(&params->shared->current_chunk, 0);
+    }
+    ggml_barrier(params->shared);
+#endif
+
+    // Fallback: sequential expert processing with static thread assignment
+    const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
 
@@ -17181,23 +17238,8 @@ static void ggml_compute_forward_mul_mat_id(
 
         const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
-        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
-        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
-
         const int64_t nr0 = ne01; // src0 rows
         const int64_t nr1 = cne1; // src1 rows
-                                  //
-#if GGML_USE_IQK_MULMAT
-        if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
-           if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
-                       src0->type, (const char *)src0_cur, nb01, ///ggml_type_size(src0->type),
-                       vec_dot_type, (const char *)wdata, row_size, ///ggml_type_size(vec_dot_type),
-                       (float *)dst->data, nb1, nb2,
-                       matrix_rows + cur_a*ne12, ith, nth)) goto IQK_MulMat_Not_Available;
-                continue;
-        }
-IQK_MulMat_Not_Available:;
-#endif
 
         if (((ggml_n_dims(src0) - 1) == 2) && gemv) {
             int64_t src0_cur_start = (ith * ne01) / nth;
@@ -17324,6 +17366,8 @@ IQK_MulMat_Not_Available:;
         }
     }
 
+IQK_MulMat_Done:;
+
 #undef MMID_MATRIX_ROW
 }
 
@@ -17439,18 +17483,38 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         }
     }
 
+    // Use dynamic expert scheduling: threads claim experts via atomic counter.
+    if (ith == 0) {
+        atomic_store(&params->shared->current_chunk, 0);
+    }
+
     ggml_barrier(params->shared);
 
     const float limit = *(const float *)(dst->op_params + 1);
 
-    // so GGML_TENSOR_BINARY_OP_LOCALS works
+    const void * wdata_ug    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
+    const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
 
-    // compute each matrix multiplication in sequence
-    for (int cur_a = 0; cur_a < n_as; ++cur_a) {
-        const int64_t cne1 = matrix_row_counts[cur_a];
+    // Cross-expert chunk pooling for fused up/gate
+    const int chunks_per_expert_ug = MAX(1, MIN(nth, (int)(nr0_base / 16)));
 
-        if (cne1 == 0) {
-            continue;
+    int total_chunks_ug = 0;
+    for (int a = 0; a < n_as; a++) {
+        if (matrix_row_counts[a] > 0) total_chunks_ug += chunks_per_expert_ug;
+    }
+
+    int chunk_id_ug;
+    while ((chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1)) < total_chunks_ug) {
+        int acc = 0, cur_a = -1, local_chunk = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] == 0) continue;
+            if (chunk_id_ug < acc + chunks_per_expert_ug) {
+                cur_a = a;
+                local_chunk = chunk_id_ug - acc;
+                break;
+            }
+            acc += chunks_per_expert_ug;
         }
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
@@ -17469,19 +17533,12 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
             }
         }
 
-        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
-        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
-
-        const int64_t nr0 = src0_2 ? ne01 : ne01/2; // src0 rows
-        const int64_t nr1 = cne1; // src1 rows
-
-        if (!iqk_moe_fused_up_gate(nr0, nr1, ne00, ne11, dst->op_params[0],
+        if (!iqk_moe_fused_up_gate(nr0_base, matrix_row_counts[cur_a], ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
-                            vec_dot_type, (const char *)wdata, row_size,
+                            vec_dot_type, (const char *)wdata_ug, row_size_ug,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, ith, nth)) GGML_ABORT("fatal error");
-
+                            matrix_rows + cur_a*ne12, limit, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
     }
 
 #undef MMID_MATRIX_ROW
