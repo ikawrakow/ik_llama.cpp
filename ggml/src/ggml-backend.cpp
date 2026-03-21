@@ -2034,7 +2034,10 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
                     ggml_backend_synchronize(ids_backend);
-                    needs_sync[tensor_backend_id(ids_tensor)] = k_set_sync;
+                    int ids_backend_id = tensor_backend_id(ids_tensor);
+                    if (ids_backend_id >= 0 && ids_backend_id < GGML_SCHED_MAX_BACKENDS) {
+                        needs_sync[ids_backend_id] = k_set_sync;
+                    }
 
                     unique_ids.resize((n_expert + 31)/32);
                     std::memset(unique_ids.data(), 0, unique_ids.size()*sizeof(uint32_t));
