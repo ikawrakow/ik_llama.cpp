@@ -3262,8 +3262,6 @@ void server_context::speculative_decoding_accept() {
             llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
 
             int32_t n_past_base = slot.n_past - (slot.drafted.size() + 1);
-            // Test later
-            // int32_t n_past_base = slot.n_past - slot.drafted.size();
             mtp_accept_tokens(ctx, ids, n_past_base, slot.id);
         }
 
