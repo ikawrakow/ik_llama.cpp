@@ -7636,6 +7636,7 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
         cb(cur, "mtp_ffn_out_resid", il);
     }
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
+    cb(cur, "result_norm", -1);
 
     if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);

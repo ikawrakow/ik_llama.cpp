@@ -1092,7 +1092,13 @@ static bool llama_kv_cache_find_slot(
 
         bool found = false;
 
-        if (cache.head < cache.size &&
+        if (cache.mtp_kv_head_hint < cache.size &&
+            cache.cells[cache.mtp_kv_head_hint].pos == target_pos &&
+            cache.cells[cache.mtp_kv_head_hint].has_seq_id(target_seq)) {
+            cache.head = cache.mtp_kv_head_hint;
+            found = true;
+        }
+        else if (cache.head < cache.size &&
             cache.cells[cache.head].pos == target_pos &&
             cache.cells[cache.head].has_seq_id(target_seq)) {
             found = true;
@@ -3495,6 +3501,10 @@ static int llama_decode_internal(
                 return 1;
             }
 
+            if (cparams.mtp_op_type == MTP_OP_NONE) {
+                kv_self.mtp_kv_head_hint = kv_self.head;
+            }
+
             if (!kv_self.recurrent) {
                 // a heuristic, to avoid attending the full cache if it is not yet utilized
                 // after enough generations, the benefit from this heuristic disappears
@@ -3678,7 +3688,7 @@ static int llama_decode_internal(
         }
 
         // extract embeddings
-        if (embd && cparams.mtp_op_type == MTP_OP_NONE) {
+        if (embd && (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) { 
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
