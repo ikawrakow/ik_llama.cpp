@@ -70,8 +70,6 @@ struct llama_sampler_adaptive_p {
     const float decay;      // EMA decay; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
     const bool updt_w_cur;  // false=original, true=current
     std::mt19937 rng;       // RNG
-    // std::vector<float> weighted_sum;    // [0] = sum(p_n * decay^N)
-    // std::vector<float> total_weight;    // [0] = sum(decay^i), converges to 1/(1-decay)
     std::vector<std::pair<float, float>> history;   // <weighted_sum, total_weight>
 
     // first referenced in prep
@@ -94,7 +92,7 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
 
 void llama_prep_adaptive_p_impl(
               struct llama_sampling * smpl,
-                              float * logits,
+             llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx);
 
 void llama_sample_adaptive_p_impl(
@@ -102,7 +100,7 @@ void llama_sample_adaptive_p_impl(
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx);
 
-void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const int32_t n_rewind);
+void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const size_t n_unsent, const bool rewind_status);
 
 
 void llama_sample_repetition_penalties_impl(

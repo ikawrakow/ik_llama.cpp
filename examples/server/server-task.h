@@ -371,6 +371,16 @@ struct server_prompt {
         return tokens.size();
     }
 
+    server_prompt clone() const {
+        return server_prompt{
+            tokens.clone(),
+            n_kept_prompt,
+            n_discarded_prompt,
+            think_tokens,
+            data,
+            checkpoints
+        };
+    }
 };
 
 struct server_prompt_cache {

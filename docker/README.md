@@ -73,6 +73,9 @@ docker run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models
 - Install Nvidia Drivers and CUDA on the host.
 - For Docker, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 - For Podman, install [CDI Container Device Interface](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html)
+- Identify for your GPU:
+  - [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus) (e.g. `8.6` for `RTX30*0`, `8.9` for `RTX40*0`, `12.0` for `RTX50*0`) then change `CUDA_DOCKER_ARCH` in `ik_llama-cuda.Containerfile` to your GPU architecture (e.g. `CUDA_DOCKER_ARCH=86` for `RTX30*0`, `CUDA_DOCKER_ARCH=89` for `RTX40*0`, `CUDA_DOCKER_ARCH=120` for `RTX50*0`). If you have a mix of different GPUs add them like `CUDA_DOCKER_ARCH=86;89;120`).
+  - [CUDA Toolkit supported version](https://developer.nvidia.com/cuda-toolkit-archive) then adjust `CUDA_VERSION` in `ik_llama-cuda.Containerfile` to your GPU (e.g. `CUDA_VERSION=13.1` for `RTX50*0`).
 
 ```
 podman run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro --device nvidia.com/gpu=all --security-opt=label=disable localhost/ik_llama-cuda:swap
@@ -121,8 +124,9 @@ docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --r
 - Customize `llama-swap` config: save the `ik_llama-cpu-swap.config.yaml` or `ik_llama-cuda-swap.config.yaml` localy  (e.g. under `/my_local_files/`) then map it to `/app/config.yaml` inside the container appending `-v /my_local_files/ik_llama-cpu-swap.config.yaml:/app/config.yaml:ro` to your`podman run ...` or `docker run ...`.
 - To run the container in background, replace `-it` with `-d`: `podman run -d ...` or `docker run -d ...`. To stop it: `podman stop ik_llama` or `docker stop ik_llama`.
 - If you build the image on the same machine where will be used, change `-DGGML_NATIVE=OFF` to `-DGGML_NATIVE=ON` in the `.Containerfile`.
-- For a smaller CUDA build, identify your GPU [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus) (e.g. `8.6` for RTX30*0) then change `CUDA_DOCKER_ARCH` in `ik_llama-cuda.Containerfile` from `default` to your GPU architecture (e.g. `CUDA_DOCKER_ARCH=86`).
 - If you build only for your GPU architecture and want to make use of more KV quantization types, build with `-DGGML_IQK_FA_ALL_QUANTS=ON`.
+- If you experiment with several `CUDA_VERSION`, remember to identify with `podman image ls` or `docker image ls` then delete (e.g.`podman image rm docker.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04 && podman image rm docker.io/nvidia/cuda:12.4.0-devel-ubuntu22.04` or `docker image rm docker.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04 && docker image rm docker.io/nvidia/cuda:12.4.0-devel-ubuntu22.04` the unused images as they have several GB.
+- If you want to build without `llama-swap`, change `--target swap` to `--target server` in `ik_llama Containerfiles`, e.g. `docker image build --file ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && docker image build --file ik_llama-cuda.Containerfile --target server --tag ik_llama-cuda:server .`
 - Look for premade quants (and imatrix files) that work well on most standard systems and are designed around ik_llama.cpp (with helpful metrics in the model card) from [ubergarm](https://huggingface.co/ubergarm/models).
 - Usefull graphs and numbers on @magikRUKKOLA [Perplexity vs Size Graphs for the recent quants (GLM-4.7, Kimi-K2-Thinking, Deepseek-V3.1-Terminus, Deepseek-R1, Qwen3-Coder, Kimi-K2, Chimera etc.)](https://github.com/ikawrakow/ik_llama.cpp/discussions/715) topic.
 - Build custom quants with [Thireus](https://github.com/Thireus/GGUF-Tool-Suite)'s tools.

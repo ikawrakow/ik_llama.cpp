@@ -540,6 +540,20 @@ node index.js
 
     `samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["top_k", "tfs_z", "typical_p", "top_p", "min_p", "temperature"]` - these are all the available values.
 
+    `banned_strings`: Specify a JSON array of strings that are prohibited in the generated text. If a banned string is generated, the model rewinds and resamples. Format: `["string1", "string2"]`. Default: `[]`
+
+    `banned_regex`: Specify a JSON array of ECMAScript-compatible regular expression patterns that are prohibited in the generated text. If a match is found, the model rewinds and resamples. Format: `["pattern1", "pattern2"]`. Default: `[]`
+
+    `banned_regex_case_insensitive`: Specify a JSON array of case-insensitive ECMAScript-compatible regular expression patterns that are prohibited in the generated text. Same behavior as `banned_regex` but matches are case-insensitive. Format: `["pattern1", "pattern2"]`. Default: `[]`
+
+    `saturate_predict`: If `true`, ensure that the number of tokens sent in the response equals `n_predict` even if tokens were discarded due to bans. When `false`, `n_predict` counts all generated tokens including those discarded during rewinds. Default: `false`
+
+    `banbuffer_size`: Set the token buffer size for ban detection. Larger values detect banned patterns spanning more tokens but delay streaming more. When `0`, automatically sets to the longest banned string/regex length plus 1. Default: `0`
+
+    `rewind_count_max`: Set the maximum number of regeneration attempts when banned content is encountered. When `-1`, automatically sets to `max(20, 2 * (number of banned_strings + banned_regex + banned_regex_case_insensitive))`. When `0`, allows infinite retries. Default: `-1`
+
+    `banned_n`: Control how many tokens to ban when a banned string is detected at a specific position. For a string tokenizing to `["I", " can", " do"]`, `1` bans only "I", `2` bans "I" and " can", etc. When `-1`, bans all tokens in the match. **Note:** Using `-1` with regex patterns may cause excessive unintended bans. Default: `1`
+
 **Response format**
 
 - Note: When using streaming mode (`stream`), only `content` and `stop` will be returned until end of completion.

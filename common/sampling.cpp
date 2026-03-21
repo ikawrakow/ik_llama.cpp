@@ -109,8 +109,6 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
-    result->n_rewind = -1;
-
     return result;
 }
 
@@ -147,12 +145,10 @@ void common_sampler_reset(common_sampler * ctx) {
     llama_sampler_dry_reset(ctx->smpl);
 }
 
-void common_sampler_review(common_sampler * ctx) {
-    const int32_t n_rewind = ctx->n_rewind;
-
+void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bool rewind_status) {
     // add stateful samplers here
     if (ctx->adapt_p_ctx != nullptr) {
-        llama_review_adaptive_p(ctx->adapt_p_ctx, n_rewind);
+        llama_review_adaptive_p(ctx->adapt_p_ctx, n_unsent, rewind_status);
     }
 }
 
@@ -425,13 +421,14 @@ static llama_token llama_sampling_sample_impl(
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
         } else if (adaptive_target >= 0.0f && ctx_sampling->adapt_p_ctx!=nullptr) {
             // adaptive p sampling
+            llama_prep_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
             sampler_queue(ctx_main, params, ctx_sampling, cur_p, std::max(1, params.min_keep));
             id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
         } else {
             // temperature sampling
             size_t min_keep = std::max(1, params.min_keep);
 
-            sampler_queue(ctx_main, params,ctx_sampling, cur_p, min_keep);           
+            sampler_queue(ctx_main, params,ctx_sampling, cur_p, min_keep);
             id = llama_sample_token_with_rng(ctx_main, &cur_p, ctx_sampling->rng);
 
         }
@@ -494,11 +491,6 @@ static llama_token_data_array llama_sampling_prepare_impl(
         GGML_ASSERT(original_logits != NULL);
         // Only make a copy of the original logits if we are not applying grammar checks, not sure if I actually have to do this.
         *original_logits = {logits, logits + n_vocab};
-    }
-
-    if ((params.temp > 0) && (params.mirostat == 0) && (params.adaptive_target >= 0) && (ctx_sampling->adapt_p_ctx != nullptr)) {
-        // collect original probability before logit bias is applied
-        llama_prep_adaptive_p(ctx_main, logits, ctx_sampling->adapt_p_ctx);
     }
 
     // apply params.logit_bias map

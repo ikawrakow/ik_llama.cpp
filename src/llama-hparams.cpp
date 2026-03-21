@@ -837,11 +837,14 @@ void llm_load_hparams(
                     model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_DEEPSEEK2:
             {
+                int expected_head_size_k = model.arch == LLM_ARCH_DEEPSEEK2 ? 576 : 320;
+                int expected_head_size_v = model.arch == LLM_ARCH_DEEPSEEK2 ? 512 : 256;
                 if (hparams.n_head_kv() == 1) {
                     int n_nead_kv = hparams.n_gqa();
-                    if (n_nead_kv%4 != 0 || hparams.n_embd_head_k != 576 || hparams.n_embd_head_v != 512 ||
+                    if (n_nead_kv%4 != 0 || hparams.n_embd_head_k != expected_head_size_k || hparams.n_embd_head_v != expected_head_size_v ||
                         hparams.n_rot != 64) {
                         printf("==========================================================================\n");
                         printf("Detected incompatible DeepSeek model without a known way to fix it.\n");
@@ -858,7 +861,7 @@ void llm_load_hparams(
                     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k);
                     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v);
                 }
-                bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
+                bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26) || (hparams.n_layer == 48 && hparams.n_vocab == 128256);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT, hparams.n_layer_dense_lead);
                 if (!is_lite) {
@@ -888,6 +891,7 @@ void llm_load_hparams(
 
                 switch (hparams.n_layer) {
                     case 27: model.type = e_model::MODEL_16B; break;
+                    case 36: model.type = e_model::MODEL_119B_A6B; break;
                     case 47: model.type = e_model::MODEL_30B_A3B; break; // GLM-4.7-Flash
                     case 60: model.type = e_model::MODEL_236B; break;
                     case 61: model.type = e_model::MODEL_671B; break;

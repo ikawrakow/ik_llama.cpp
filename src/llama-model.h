@@ -113,6 +113,7 @@ enum e_model {
     MODEL_80B_A13B,
     MODEL_100B_A6B,
     MODEL_106B_A12B,
+    MODEL_119B_A6B,
     MODEL_122B_A10B,
     MODEL_230B_A10B, // Minimax M2
     MODEL_235B_A22B,
@@ -250,6 +251,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_gate;
     llama_split_tensor split_ffn_down;
     llama_split_tensor split_ffn_norm;
+    llama_split_tensor split_ffn_up_gate;
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp = nullptr;
@@ -262,6 +264,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_up_exps;
     llama_split_tensor split_ffn_gate_exps;
     llama_split_tensor split_ffn_down_exps;
+    llama_split_tensor split_ffn_up_gate_exps;
 
     // ff MoE bias
     struct ggml_tensor * ffn_gate_inp_b = nullptr;
@@ -288,6 +291,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_gate_exps_b;
     llama_split_tensor split_ffn_down_exps_b;
     llama_split_tensor split_ffn_up_exps_b;
+    llama_split_tensor split_ffn_up_gate_exps_b;
 
     // ff bias
     struct ggml_tensor * ffn_gate_b = nullptr;
