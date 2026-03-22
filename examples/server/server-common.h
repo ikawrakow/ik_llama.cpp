@@ -245,6 +245,7 @@ json oaicompat_chat_params_parse(const json& body);
 
 struct server_chat_params {
     bool use_jinja;
+    bool use_peg;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs;

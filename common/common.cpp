@@ -1959,6 +1959,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_jinja = true;
         return true;
     }
+    if (arg == "--peg") {
+        params.use_peg = true;
+        return true;
+    }
     if (arg == "--chat-template-kwargs") {
         CHECK_ARG
         std::string value = argv[i];
