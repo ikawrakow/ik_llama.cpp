@@ -3961,6 +3961,10 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
         }
+        std::vector<int> gpu_split_count;
+        if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size())) {
+            gpu_split_count.resize(model.splits.size(), 0);
+        }
         for (int il = 0; il < n_layer; ++il) {
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
@@ -4241,6 +4245,14 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
             }
+        }
+
+        if (!gpu_split_count.empty()) {
+            LLAMA_LOG_INFO("Adjusted splits (totalized): ");
+            for (int i = 0; i < (int)gpu_split_count.size(); ++i) {
+                LLAMA_LOG_INFO("GPU%d: %4d ; ", i, gpu_split_count[i]);
+            }
+            LLAMA_LOG_INFO("\n");
         }
 
         if (model.output) {
