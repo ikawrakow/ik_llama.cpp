@@ -1,6 +1,8 @@
 healthCheckTimeout: 1800
-logRequests: true
+logLevel: info
 metricsMaxInMemory: 1000
+sendLoadingState: true
+includeAliasesInList: true
 
 models:
   "qwen3 (you need to download .gguf first)":
