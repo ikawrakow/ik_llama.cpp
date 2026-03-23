@@ -3977,7 +3977,10 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
                 float last_split = 0;
                 for (int i = 0; i < (int)cur_splits.size(); ++i) {
-                    LLAMA_LOG_INFO("GPU%d: %4g ; ", i, cur_splits[i] - last_split);
+                    if (i > 0) {
+                        LLAMA_LOG_INFO(" ; ");
+                    }
+                    LLAMA_LOG_INFO("GPU%d: %4g", i, cur_splits[i] - last_split);
                     last_split = cur_splits[i];
                 }
                 LLAMA_LOG_INFO("\n");
@@ -4250,7 +4253,10 @@ bool create_tensors_helper::create_tensors() {
         if (!gpu_split_count.empty()) {
             LLAMA_LOG_INFO("Adjusted splits (totalized): ");
             for (int i = 0; i < (int)gpu_split_count.size(); ++i) {
-                LLAMA_LOG_INFO("GPU%d: %4d ; ", i, gpu_split_count[i]);
+                if (i > 0) {
+                    LLAMA_LOG_INFO(" ; ");
+                }
+                LLAMA_LOG_INFO("GPU%d: %4d", i, gpu_split_count[i]);
             }
             LLAMA_LOG_INFO("\n");
         }
