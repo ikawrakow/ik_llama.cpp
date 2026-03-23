@@ -4254,7 +4254,7 @@ bool create_tensors_helper::create_tensors() {
         }
 
         if (!gpu_split_count.empty()) {
-            LLAMA_LOG_INFO("Adjusted splits (totalized): ");
+            LLAMA_LOG_INFO("Adjusted splits (total)   :  ");
             for (int i = 0; i < (int)gpu_split_count.size(); ++i) {
                 if (i > 0) {
                     LLAMA_LOG_INFO(" ; ");
