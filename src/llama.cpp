@@ -25,8 +25,9 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
-// TODO: fix this include
+// TODO: fix these includes
 #include "iqk/iqk_quantize.h"
+#include "iqk/iqk_cpu_ops.h"
 
 #define IK_PRINT_TIMING 0
 
@@ -1977,6 +1978,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_QWEN3MOE,
         LLM_ARCH_GLM4_MOE,
         LLM_ARCH_MISTRAL3,
+        LLM_ARCH_COMMAND_R,
         LLM_ARCH_COHERE2,
         LLM_ARCH_MIMO2,
         LLM_ARCH_QWEN3,
@@ -2010,7 +2012,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     bool has_mla = model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_MISTRAL4;
     if (has_mla) {
         mla_tensors.resize(n_layer);
-    };
+    }
     std::vector<size_t> ffn_exps(n_layer, 0), ffn_shexp(n_layer, 0), ffn_dense(n_layer, 0);
     std::vector<size_t> attn(n_layer, 0);
     std::vector<bool> has_layer_norm(n_layer, false);
@@ -2202,6 +2204,11 @@ static bool llm_load_tensors(
         }
     }
 
+    if (iqk_has_fancy_simd()) {
+        LLAMA_LOG_INFO("======================================= HAVE_FANCY_SIMD is defined\n");
+    } else {
+        LLAMA_LOG_INFO("======================================= HAVE_FANCY_SIMD is NOT defined\n");
+    }
     if (max_ctx_size == 0) {
         max_ctx_size = model.hparams.n_ctx_train;
     }
@@ -4858,7 +4865,6 @@ struct llama_model * llama_model_load_from_file(
             LLAMA_LOG_ERROR("%s backend not available.\n", device.c_str());
         }
     }
-
 
     // no gpu used, so set layers offload to be 0
     if (!model->devices.size()) {
