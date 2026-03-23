@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -yq build-essential git libcurl4-openssl-d
 RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
 WORKDIR /app
 RUN if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT"; fi
-RUN cmake -B build -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON && \
+RUN cmake -B build -DGGML_NATIVE=ON -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON && \
     cmake --build build --config Release -j$(nproc)
 RUN mkdir -p /app/lib && \
     find build -name "*.so" -exec cp {} /app/lib \;
@@ -64,7 +64,7 @@ ENTRYPOINT [ "/app/llama-server" ]
 # Stage 5: Swap
 FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
-ARG LS_VER=189
+ARG LS_VER=198
 RUN curl -LO "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
