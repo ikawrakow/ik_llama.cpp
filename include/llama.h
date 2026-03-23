@@ -372,6 +372,13 @@ extern "C" {
         int32_t max_gpu;
         int32_t ncmoe;
 
+        enum ggml_type type_k;
+        enum ggml_type type_v;
+        uint32_t max_ctx_size;
+        int32_t  n_seq_max;
+        int32_t  n_ubatch;
+        int32_t  amb;
+
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 
@@ -403,6 +410,7 @@ extern "C" {
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
+        bool flash_attn;
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

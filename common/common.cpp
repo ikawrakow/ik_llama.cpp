@@ -3235,46 +3235,6 @@ void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lor
     }
 }
 
-struct llama_model_params common_model_params_to_llama(const gpt_params & params) {
-    auto mparams = llama_model_default_params();
-    mparams.devices = params.devices.c_str();
-
-    if (params.n_gpu_layers != -1) {
-        mparams.n_gpu_layers = params.n_gpu_layers;
-    }
-    mparams.mla             = params.mla_attn;
-    mparams.dry_run         = params.dry_run;
-    mparams.rpc_servers     = params.rpc_servers.c_str();
-    mparams.main_gpu        = params.main_gpu;
-    mparams.max_gpu         = params.max_gpu;
-    mparams.ncmoe           = params.ncmoe;
-    mparams.split_mode      = params.split_mode;
-    mparams.tensor_split    = params.tensor_split;
-    mparams.use_mmap        = params.use_mmap;
-    mparams.use_mlock       = params.use_mlock;
-    mparams.check_tensors   = params.check_tensors;
-    mparams.repack_tensors  = params.repack_tensors;
-    mparams.use_thp         = params.use_thp;
-    mparams.validate_quants = params.validate_quants;
-    mparams.merge_qkv       = params.merge_qkv;
-    mparams.merge_up_gate_exps = params.merge_up_gate_exps;
-    mparams.mtp             = params.has_mtp;
-    if (params.kv_overrides.empty()) {
-        mparams.kv_overrides = NULL;
-    } else {
-        GGML_ASSERT(params.kv_overrides.back().key[0] == 0 && "KV overrides not terminated with empty key");
-        mparams.kv_overrides = params.kv_overrides.data();
-    }
-    if (params.tensor_buft_overrides.empty()) {
-        mparams.tensor_buft_overrides = NULL;
-    } else {
-        GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
-        mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
-    }
-
-    return mparams;
-}
-
 static ggml_type kv_cache_type_from_str(const std::string & s) {
     if (s == "f32") {
         return GGML_TYPE_F32;
@@ -3313,6 +3273,73 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     throw std::runtime_error("Invalid cache type: " + s);
 }
 
+static std::pair<int, int> get_batch_ubatch(const gpt_params & params) {
+    int n_batch = params.n_batch;
+    int n_ubatch = params.n_ubatch;
+    if (params.n_ctx > 0) {
+        n_batch = std::min(n_batch, params.n_ctx);
+    }
+    if (!params.mmproj.path.empty()) {
+        // temporary fix for qwen mtmd
+        n_batch = std::max(n_batch, n_ubatch);
+        n_ubatch = n_batch;
+        fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);
+    } else {
+        n_ubatch = std::min(n_batch, n_ubatch);
+    }
+    return {n_batch, n_ubatch};
+}
+
+struct llama_model_params common_model_params_to_llama(const gpt_params & params) {
+    auto mparams = llama_model_default_params();
+    mparams.devices = params.devices.c_str();
+
+    if (params.n_gpu_layers != -1) {
+        mparams.n_gpu_layers = params.n_gpu_layers;
+    }
+    mparams.mla             = params.mla_attn;
+    mparams.dry_run         = params.dry_run;
+    mparams.rpc_servers     = params.rpc_servers.c_str();
+    mparams.main_gpu        = params.main_gpu;
+    mparams.max_gpu         = params.max_gpu;
+    mparams.ncmoe           = params.ncmoe;
+    mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
+    mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
+    mparams.max_ctx_size    = params.n_ctx;
+    mparams.n_seq_max       = params.n_parallel;
+    mparams.n_ubatch        = get_batch_ubatch(params).second;
+    mparams.amb             = params.attn_max_batch;
+    mparams.split_mode      = params.split_mode;
+    mparams.tensor_split    = params.tensor_split;
+    mparams.use_mmap        = params.use_mmap;
+    mparams.use_mlock       = params.use_mlock;
+    mparams.check_tensors   = params.check_tensors;
+    mparams.repack_tensors  = params.repack_tensors;
+    mparams.use_thp         = params.use_thp;
+    mparams.validate_quants = params.validate_quants;
+    mparams.merge_qkv       = params.merge_qkv;
+    mparams.merge_up_gate_exps = params.merge_up_gate_exps;
+    mparams.mtp             = params.has_mtp;
+    mparams.flash_attn      = params.flash_attn;
+    if (params.kv_overrides.empty()) {
+        mparams.kv_overrides = NULL;
+    } else {
+        GGML_ASSERT(params.kv_overrides.back().key[0] == 0 && "KV overrides not terminated with empty key");
+        mparams.kv_overrides = params.kv_overrides.data();
+    }
+    if (params.tensor_buft_overrides.empty()) {
+        mparams.tensor_buft_overrides = NULL;
+    } else {
+        GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
+        mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
+    }
+    if (!mparams.flash_attn && ggml_is_quantized(mparams.type_v)) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
+
+    return mparams;
+}
+
 static ggml_type ggml_type_from_str(const std::string & s) {
     if (s == "f32") {
         return GGML_TYPE_F32;
@@ -3331,15 +3358,8 @@ static ggml_type ggml_type_from_str(const std::string & s) {
 
 struct llama_context_params common_context_params_to_llama(const gpt_params & params) {
     auto cparams = llama_context_default_params();
-    int n_batch = params.n_batch;
-    int n_ubatch = params.n_ubatch;
 
-    // temporary fix for qwen mtmd
-    if (!params.mmproj.path.empty()) {
-        n_batch = std::max(params.n_batch, params.n_ubatch);
-        n_ubatch = params.n_batch;
-        fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);
-    }
+    auto [n_batch, n_ubatch] = get_batch_ubatch(params);
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
@@ -3387,6 +3407,9 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
     cparams.type_reduce = ggml_type_from_str(params.reduce_type);
+    if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v)) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
     if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
