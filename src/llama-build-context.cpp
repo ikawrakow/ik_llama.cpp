@@ -1544,6 +1544,7 @@ static ggml_tensor * llm_build_kqv(
                                   || model.arch == LLM_ARCH_GPTNEOX
                                   || model.arch == LLM_ARCH_QWEN2
                                   || model.arch == LLM_ARCH_COHERE2
+                                  || model.arch == LLM_ARCH_COMMAND_R
                                   || model.arch == LLM_ARCH_GLM4
                                   || model.arch == LLM_ARCH_GLM4_MOE
                                   || model.arch == LLM_ARCH_MIMO2;
@@ -1669,7 +1670,7 @@ static ggml_tensor * llm_build_kqv(
                 auto q_i = ggml_view_3d(ctx, q, q->ne[0], q->ne[1], this_ne12, q->nb[1], q->nb[2], q->nb[2]*i12);
                 auto kq_i = ggml_mul_mat(ctx, k_i, q_i);
                 if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2 ||
-                    model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
+                    model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_COMMAND_R || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
                     ggml_mul_mat_set_prec(kq_i, GGML_PREC_F32);
                 }
                 if (model.arch == LLM_ARCH_GROK) {
@@ -1934,14 +1935,16 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
 
     auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, wq, bq, wk, bk, wv, bv, attention_scale, il, add_graph_split);
     auto Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head_k, Q->ne[0]/n_embd_head_k, n_tokens);
+    // Command-R/R+ uses LayerNorm (not RMSNorm) for per-head Q/K normalisation
+    const auto qk_norm_type = (model.arch == LLM_ARCH_COMMAND_R) ? LLM_NORM : LLM_NORM_RMS;
     if (q_norm) {
-        Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
+        Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, qk_norm_type, cb, il);
         cb(Qcur, "Qcur_normed", il);
     }
 
     auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head_k, K->ne[0]/n_embd_head_k, n_tokens);
     if (k_norm) {
-        Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
+        Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, qk_norm_type, cb, il);
         cb(Kcur, "Kcur_normed", il);
     }
     auto Vcur = V;
@@ -6242,79 +6245,32 @@ ggml_cgraph * llm_build_context::build_command_r() {
 
     for (int il = 0; il < n_layer; ++il) {
 
-        // norm
-        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM, cb, il);
-        cb(cur, "attn_norm", il);
-        struct ggml_tensor * ffn_inp = cur;
+        // self-attention (norm applied inside; handles graph-parallel split path automatically)
+        auto attn_out = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos,
+                nullptr, nullptr, KQ_mask, nullptr, nullptr,
+                1.0f / sqrtf(float(n_embd_head)), 0.f,
+                0, il, /*do_rope=*/true, /*add_graph_split=*/true,
+                /*add_input=*/true, /*is_norm=*/true, /*is_multi=*/false);
+        cb(attn_out, "attn_out", il);
 
-        // self-attention
-        {
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, model.layers[il].bq,
-                    model.layers[il].wk, model.layers[il].bk,
-                    model.layers[il].wv, model.layers[il].bv, 0.f, il);
-
-            if (model.layers[il].attn_q_norm) {
-                Qcur = ggml_view_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens,
-                        ggml_element_size(Qcur) * n_embd_head,
-                        ggml_element_size(Qcur) * n_embd_head * n_head,
-                        0);
-                cb(Qcur, "Qcur", il);
-                Kcur = ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens,
-                        ggml_element_size(Kcur) * n_embd_head,
-                        ggml_element_size(Kcur) * n_embd_head * n_head_kv,
-                        0);
-                cb(Kcur, "Kcur", il);
-
-                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM, cb, il);
-                cb(Qcur, "Qcur", il);
-
-                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM, cb, il);
-                cb(Kcur, "Kcur", il);
-            }
-
-            Qcur = ggml_rope_ext(
-                    ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-            cb(Qcur, "Qcur", il);
-
-            Kcur = ggml_rope_ext(
-                    ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens), inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-            cb(Kcur, "Kcur", il);
-
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                    model.layers[il].wo, model.layers[il].bo,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
-        }
-
-        if (il == n_layer - 1) {
+        if (il == n_layer - 1 && n_tokens > 1) {
             // skip computing output for unused tokens
             struct ggml_tensor * inp_out_ids = build_inp_out_ids();
-            cur     = ggml_get_rows(ctx0,     cur, inp_out_ids);
-            inpL    = ggml_get_rows(ctx0,    inpL, inp_out_ids);
-            ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+            attn_out = ggml_get_rows(ctx0, attn_out, inp_out_ids);
+            inpL     = ggml_get_rows(ctx0, inpL,     inp_out_ids);
         }
 
-        struct ggml_tensor * attn_out = cur;
+        attn_out->op_params[3] = 1; // turn off attention reduce; the FFN reduce will cover both
 
-        // feed-forward network
-        {
-            cur = llm_build_ffn(ctx0, lctx, nullptr, ffn_inp,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
-                    NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-            cb(cur, "ffn_out", il);
-        }
+        // feed-forward network (norm applied inside; graph-parallel when ffn tensors are split)
+        cur = llm_build_ffn(ctx0, lctx, model.layers[il].attn_norm, inpL,
+                model.layers[il].ffn_up,   NULL, NULL,
+                model.layers[il].ffn_gate, NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL,
+                NULL,
+                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, /*add_input=*/false, /*is_norm=*/true, attn_out);
+        cb(cur, "ffn_out", il);
 
-        // add together residual + FFN + self-attention
-        cur = ggml_add(ctx0, cur, inpL);
-        cur = ggml_add(ctx0, cur, attn_out);
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
@@ -6327,13 +6283,13 @@ ggml_cgraph * llm_build_context::build_command_r() {
     cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
-
     if (f_logit_scale) {
         cur = ggml_scale(ctx0, cur, f_logit_scale);
+        cb(cur, "result_norm_scaled", -1);
     }
 
+    // lm_head
+    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
@@ -10029,6 +9985,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                                   || model.arch == LLM_ARCH_GPTNEOX
                                   || model.arch == LLM_ARCH_QWEN2
                                   || model.arch == LLM_ARCH_COHERE2
+                                  || model.arch == LLM_ARCH_COMMAND_R
                                   || model.arch == LLM_ARCH_GLM4
                                //   || model.arch == LLM_ARCH_GLM4_MOE
                                   || model.arch == LLM_ARCH_MIMO2;

@@ -2060,16 +2060,15 @@ bool create_tensors_helper::create_command_r_tensors(const LLM_TN & tn) {
     }
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         auto & layer = model.layers[i];
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         if (n_layer >= 64){
-            layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head});
-            layer.attn_k_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv});
+            layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head}, 0);
+            layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv}, 0);
         }
 
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
@@ -4006,6 +4005,13 @@ bool create_tensors_helper::create_tensors() {
                     auto tt = ggml_internal_get_type_traits(layer.wo->type);
                     if (tt.blck_size > granularity_vo) granularity_vo = tt.blck_size;
                     GGML_ASSERT(granularity_vo % hparams.n_embd_head_v == 0);
+                    // Command-R: align KQ split to wo's block size so wq row
+                    // counts remain valid after splitting.
+                    if (model.arch == LLM_ARCH_COMMAND_R) {
+                        if (tt.blck_size > granularity_kq && layer.wq->ne[1] % tt.blck_size == 0) {
+                            granularity_kq = tt.blck_size;
+                        }
+                    }
                 }
                 auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used); //, true);
                 auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used); //, true);
@@ -4027,7 +4033,14 @@ bool create_tensors_helper::create_tensors() {
                 } else {
                     prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                     if (layer.attn_q_norm) {
-                        prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                        if (layer.attn_q_norm->ne[1] > 1) {
+                            // 2D per-head norm (e.g., Command-R+): split along the Q-head dimension
+                            auto split_q_heads = split_kq;
+                            for (auto & s : split_q_heads) s /= hparams.n_embd_head_k;
+                            prepare_split_tensors(1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_q_heads, mem_used);
+                        } else {
+                            prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                        }
                     }
                     if (layer.bq) {
                         prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
@@ -4076,7 +4089,16 @@ bool create_tensors_helper::create_tensors() {
                         prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
                     }
                     if (layer.attn_k_norm) {
-                        prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                        if (layer.attn_k_norm->ne[1] > 1) {
+                            // 2D per-head norm (e.g., Command-R+): split along the KV-head dimension
+                            // split_kq has already been divided by gqa_ratio, so values are in
+                            // (n_embd_head_k * n_head_kv) units; divide again to get head units
+                            auto split_k_heads = split_kq;
+                            for (auto & s : split_k_heads) s /= hparams.n_embd_head_k;
+                            prepare_split_tensors(1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_k_heads, mem_used);
+                        } else {
+                            prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                        }
                     }
                 }
                 prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);

@@ -1977,6 +1977,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_QWEN3MOE,
         LLM_ARCH_GLM4_MOE,
         LLM_ARCH_MISTRAL3,
+        LLM_ARCH_COMMAND_R,
         LLM_ARCH_COHERE2,
         LLM_ARCH_MIMO2,
         LLM_ARCH_QWEN3,
