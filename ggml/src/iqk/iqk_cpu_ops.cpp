@@ -22,6 +22,14 @@
 #include <arm_neon.h>
 #endif
 
+bool iqk_has_fancy_simd(void) {
+#ifdef HAVE_FANCY_SIMD
+    return true;
+#else
+    return false;
+#endif
+}
+
 namespace {
 // Playing around with group scores: use sum of probabilities in the group
 inline float group_score(int n_per_group, const float * data) {

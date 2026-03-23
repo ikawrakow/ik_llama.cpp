@@ -25,8 +25,9 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
-// TODO: fix this include
+// TODO: fix these includes
 #include "iqk/iqk_quantize.h"
+#include "iqk/iqk_cpu_ops.h"
 
 #define IK_PRINT_TIMING 0
 
@@ -2080,6 +2081,12 @@ static bool llm_load_tensors(
                 max_gpu = 4;
             }
         }
+    }
+
+    if (iqk_has_fancy_simd()) {
+        LLAMA_LOG_INFO("======================================= HAVE_FANCY_SIMD is defined\n");
+    } else {
+        LLAMA_LOG_INFO("======================================= HAVE_FANCY_SIMD is NOT defined\n");
     }
 
     model.split_mode   = split_mode;
@@ -4713,7 +4720,7 @@ struct llama_model * llama_model_load_from_file(
         if (has_rpc) {
             for (auto& it : model->rpc_servers) {
                 device_names.push_back(create_rpc_name(it.endpoint, it.device));
-            }     
+            }
         }
         device_names.insert(device_names.end(), gpu_names.begin(), gpu_names.end());
     }
@@ -4726,7 +4733,6 @@ struct llama_model * llama_model_load_from_file(
         }
     }
 
- 
     // no gpu used, so set layers offload to be 0
     if (!model->devices.size()) {
         params.n_gpu_layers = 0;
@@ -4737,7 +4743,7 @@ struct llama_model * llama_model_load_from_file(
             const char* name = ggml_backend_buft_name(buft);
             const char* description = name;
             size_t description_size = llama_get_device_memory(*model, i);
-            LLAMA_LOG_INFO("%s: using device %s - %zu MiB free\n", 
+            LLAMA_LOG_INFO("%s: using device %s - %zu MiB free\n",
                 name, description,
                 description_size / 1024 / 1024);
         }
