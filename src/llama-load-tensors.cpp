@@ -3984,7 +3984,6 @@ bool create_tensors_helper::create_tensors() {
                     if (i < int(gpu_split_count.size())) {
                         gpu_split_count[i] += cur_splits[i] - last_split;
                     }
-                    gpu_split_count[i] += split_delta;
                     last_split = cur_splits[i];
                 }
                 LLAMA_LOG_INFO("\n");
