@@ -3961,9 +3961,9 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
         }
-        std::vector<int> gpu_split_count;
+        std::vector<float> gpu_split_count;
         if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size())) {
-            gpu_split_count.resize(model.splits.size(), 0);
+            gpu_split_count.resize(model.splits.size(), 0.0f);
         }
         for (int il = 0; il < n_layer; ++il) {
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
@@ -3980,7 +3980,9 @@ bool create_tensors_helper::create_tensors() {
                     if (i > 0) {
                         LLAMA_LOG_INFO(" ; ");
                     }
-                    LLAMA_LOG_INFO("GPU%d: %4g", i, cur_splits[i] - last_split);
+                    float split_delta = cur_splits[i] - last_split;
+                    LLAMA_LOG_INFO("GPU%d: %4g", i, split_delta);
+                    gpu_split_count[i] += split_delta;
                     last_split = cur_splits[i];
                 }
                 LLAMA_LOG_INFO("\n");
@@ -4256,7 +4258,7 @@ bool create_tensors_helper::create_tensors() {
                 if (i > 0) {
                     LLAMA_LOG_INFO(" ; ");
                 }
-                LLAMA_LOG_INFO("GPU%d: %4d", i, gpu_split_count[i]);
+                LLAMA_LOG_INFO("GPU%d: %4g", i, gpu_split_count[i]);
             }
             LLAMA_LOG_INFO("\n");
         }
