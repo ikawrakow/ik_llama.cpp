@@ -1,4 +1,5 @@
 #include "llama-model.h"
+#include "llama-cparams.h"
 
 #include <map>
 
@@ -1834,4 +1835,30 @@ bool llama_model_is_hybrid(const llama_model * model) {
 
 bool llama_model_has_recurrent(const llama_model * model) {
     return llm_arch_is_hybrid(model->arch) || llm_arch_is_recurrent(model->arch);
+}
+
+size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const {
+    if (il < 0 || il >= hparams.n_layer) return 0;
+    if (hparams.recurrent_layer_arr[il]) {
+        auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
+        return hparams.n_embd_v_s() * state_sots * sizeof(float);
+    }
+    bool is_mla_attn = arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
+    if (is_mla_attn && mla_attn) {
+        auto n_embd_head_qk_rope = hparams.n_rot;
+        auto kv_lora_rank = hparams.n_lora_kv;
+        if (flash_attn) {
+            return ggml_row_size(type_k, kv_lora_rank + n_embd_head_qk_rope) * kv_size;
+        }
+        auto kv_type = mla_attn == 1 ? type_k : type_v;
+        auto size = ggml_row_size(kv_type, kv_lora_rank + n_embd_head_qk_rope) * kv_size;
+        if (mla_attn == 1) {
+            size += ggml_row_size(type_v, kv_lora_rank*kv_size);
+        }
+        return size;
+    }
+    auto n_head_kv = hparams.n_head_kv(il);
+    auto k_size = ggml_row_size(type_k, hparams.n_embd_head_k) * n_head_kv*kv_size;
+    auto v_size = ggml_row_size(type_v, hparams.n_embd_v_gqa(il)) * kv_size;
+    return k_size + v_size;
 }
