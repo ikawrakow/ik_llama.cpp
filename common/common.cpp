@@ -1959,6 +1959,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_jinja = true;
         return true;
     }
+    if (arg == "--peg") {
+        params.use_peg = true;
+        return true;
+    }
     if (arg == "--chat-template-kwargs") {
         CHECK_ARG
         std::string value = argv[i];
@@ -2246,6 +2250,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-h,    --help, --usage",        "print usage and exit" });
     options.push_back({ "*",           "       --version",              "show version and build info" });
     options.push_back({ "*",           "-v,    --verbose",              "print verbose information" });
+    options.push_back({ "*",           "       --minilog",              "print important information" });
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
@@ -2374,6 +2379,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
+    options.push_back({ "main",        "       --peg",
+                                                                    "use peg parser for qwen3.5 models.\n"
+                                                                    "https://github.com/ikawrakow/ik_llama.cpp/pull/1490" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",

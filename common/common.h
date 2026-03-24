@@ -392,6 +392,7 @@ struct gpt_params {
     std::string public_path   = "";
     std::string chat_template = "";
     bool use_jinja = false;                                                                                 // NOLINT
+    bool use_peg = false;
     std::string system_prompt = "";
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;

@@ -314,6 +314,7 @@ void server_context::init() {
 
         chat_params = {
             /* use_jinja             */ params_base.use_jinja,
+            /* use_peg               */ params_base.use_peg,
             /* prefill_assistant     */ params_base.prefill_assistant,
             /* reasoning_format      */ params_base.reasoning_format,
             /* chat_template_kwargs  */ params_base.default_template_kwargs,
