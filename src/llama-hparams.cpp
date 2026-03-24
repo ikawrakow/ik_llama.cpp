@@ -492,16 +492,27 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
+                // NextN/MTP parameters (read before recurrent layer marking)
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+
                 // Mark recurrent layers (linear attention layers)
+                // MTP layers use standard attention, NOT GDN — mark them non-recurrent
                 {
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+                    const uint32_t n_main_layers = hparams.n_layer - hparams.nextn_predict_layers;
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                        hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        if (i >= n_main_layers) {
+                            // MTP layers use standard attention
+                            hparams.recurrent_layer_arr[i] = false;
+                        } else {
+                            hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        }
                     }
                 }
 
-                switch (hparams.n_layer) {
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
                     case 40: model.type = e_model::MODEL_35B_A3B; break;
                     case 48: model.type = e_model::MODEL_122B_A10B; break;
                     case 60: model.type = e_model::MODEL_397B_A17B; break;

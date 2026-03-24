@@ -594,6 +594,9 @@ class Model:
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
+        if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
+            # ref: https://huggingface.co/Qwen/Qwen3.5-35B-A3B
+            res = "qwen2"
         if chkhsh == "b6dc8df998e1cfbdc4eac8243701a65afe638679230920b50d6f17d81c098166":
             # ref: https://huggingface.co/allenai/OLMo-1.7-7B-hf
             res = "olmo"
@@ -2253,6 +2256,251 @@ class Qwen3Model(Qwen2Model):
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
+class Qwen3_5MoeModel(Model):
+    model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def find_hparam(self, keys: Iterable[str], optional: bool = False) -> Any:
+        """Override to look inside text_config for multimodal models."""
+        keys = list(keys)  # Ensure we can iterate multiple times
+        # First try top-level keys
+        key = next((k for k in keys if k in self.hparams), None)
+        if key is not None:
+            return self.hparams[key]
+        # Then try text_config (for ForConditionalGeneration models)
+        text_config = self.hparams.get("text_config", {})
+        key = next((k for k in keys if k in text_config), None)
+        if key is not None:
+            return text_config[key]
+        if optional:
+            return None
+        raise KeyError(f"could not find any of: {keys}")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Flatten text_config into hparams for consistent access
+        if "text_config" in self.hparams:
+            self.hparams = {**self.hparams, **self.hparams["text_config"]}
+
+        # Include MTP layers in block count
+        self.mtp_num_layers = self.hparams.get("mtp_num_hidden_layers", 0)
+        self.num_main_layers = self.hparams["num_hidden_layers"]
+        self.block_count = self.num_main_layers + self.mtp_num_layers
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        self._experts = [{} for _ in range(self.block_count)]
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        # Override block_count to include MTP layers
+        self.gguf_writer.add_block_count(self.block_count)
+
+        # Expert parameters
+        if (n_experts := hparams.get("num_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+        if (n_experts_used := hparams.get("num_experts_per_tok")) is not None:
+            self.gguf_writer.add_expert_used_count(n_experts_used)
+        if (moe_intermediate_size := hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        if (shared_expert_intermediate_size := hparams.get("shared_expert_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size)
+
+        # Shared expert count (always 1 for Qwen3.5)
+        self.gguf_writer.add_expert_shared_count(1)
+
+        # RoPE parameters
+        rope_params = hparams.get("rope_parameters", {})
+        partial_rotary_factor = rope_params.get("partial_rotary_factor", hparams.get("partial_rotary_factor", 1.0))
+        head_dim = hparams.get("head_dim", hparams["hidden_size"] // hparams["num_attention_heads"])
+        self.gguf_writer.add_rope_dimension_count(int(head_dim * partial_rotary_factor))
+
+        rope_theta = rope_params.get("rope_theta", hparams.get("rope_theta"))
+        if rope_theta is not None:
+            self.gguf_writer.add_rope_freq_base(rope_theta)
+
+        # M-RoPE sections
+        mrope_section = rope_params.get("mrope_section")
+        if mrope_section is not None:
+            # Pad to 4 values (3 sections + 1 zero)
+            sections = list(mrope_section) + [0] * (4 - len(mrope_section))
+            self.gguf_writer.add_rope_dimension_sections(sections)
+
+        # GDN (Gated Delta Net) / linear attention parameters
+        if (conv_kernel := hparams.get("linear_conv_kernel_dim")) is not None:
+            self.gguf_writer.add_ssm_conv_kernel(conv_kernel)
+        if (state_size := hparams.get("linear_key_head_dim")) is not None:
+            self.gguf_writer.add_ssm_state_size(state_size)
+        if (n_group := hparams.get("linear_num_key_heads")) is not None:
+            self.gguf_writer.add_ssm_group_count(n_group)
+        if (dt_rank := hparams.get("linear_num_value_heads")) is not None:
+            self.gguf_writer.add_ssm_time_step_rank(dt_rank)
+
+        # SSM inner size = key_dim * 2 + value_dim (for the combined QKV projection)
+        key_head_dim = hparams.get("linear_key_head_dim", 128)
+        n_key_heads = hparams.get("linear_num_key_heads", 16)
+        value_head_dim = hparams.get("linear_value_head_dim", 128)
+        n_value_heads = hparams.get("linear_num_value_heads", 32)
+        key_dim = key_head_dim * n_key_heads
+        value_dim = value_head_dim * n_value_heads
+        self.gguf_writer.add_ssm_inner_size(key_dim * 2 + value_dim)
+
+        # Full attention interval (every Nth layer is full attention, rest are GDN)
+        full_attn_interval = hparams.get("full_attention_interval", 4)
+        self.gguf_writer.add_full_attention_interval(full_attn_interval)
+
+        # NextN/MTP prediction layers
+        if self.mtp_num_layers > 0:
+            self.gguf_writer.add_nextn_predict_layers(self.mtp_num_layers)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip visual/vision tensors
+        if name.startswith("model.visual.") or name.startswith("visual."):
+            return []
+
+        # Strip language_model prefix for multimodal models
+        if name.startswith("model.language_model."):
+            name = name.replace("model.language_model.", "model.")
+
+        # ================================================================
+        # MTP tensor handling: remap mtp.* to model.layers.{mtp_bid}.*
+        # ================================================================
+        mtp_bid = self.num_main_layers  # layer 40 for 35B-A3B
+
+        # mtp.fc.weight -> nextn.eh_proj
+        if name == "mtp.fc.weight":
+            return [(f"blk.{mtp_bid}.nextn.eh_proj.weight", data_torch)]
+
+        # mtp.norm.weight -> nextn.shared_head_norm (the MTP output norm)
+        if name == "mtp.norm.weight":
+            return [(f"blk.{mtp_bid}.nextn.shared_head_norm.weight", data_torch)]
+
+        # mtp.pre_fc_norm_embedding.weight -> nextn.enorm (norm before eh_proj on embedding side)
+        if name == "mtp.pre_fc_norm_embedding.weight":
+            return [(f"blk.{mtp_bid}.nextn.enorm.weight", data_torch)]
+
+        # mtp.pre_fc_norm_hidden.weight -> nextn.hnorm (norm before eh_proj on hidden state side)
+        if name == "mtp.pre_fc_norm_hidden.weight":
+            return [(f"blk.{mtp_bid}.nextn.hnorm.weight", data_torch)]
+
+        # mtp.layers.X.* -> model.layers.{mtp_bid + X}.*
+        mtp_match = re.match(r"mtp\.layers\.(\d+)\.(.*)", name)
+        if mtp_match:
+            mtp_layer_idx = int(mtp_match.group(1))
+            remainder = mtp_match.group(2)
+            target_bid = mtp_bid + mtp_layer_idx
+            name = f"model.layers.{target_bid}.{remainder}"
+            bid = target_bid
+
+            # MTP experts: individual per-expert tensors need merging
+            if "mlp.experts" in name and re.search(r"mlp\.experts\.\d+\.", name):
+                return self._handle_experts(data_torch, name, bid)
+
+            # All other MTP tensors: fall through to standard mapping below
+
+        # ================================================================
+        # GDN (linear attention) tensors with non-standard suffixes
+        # These need special handling because the GGUF names use different
+        # suffix conventions than HuggingFace
+        # ================================================================
+        if ".linear_attn." in name and bid is not None:
+            # dt_bias -> blk.{bid}.ssm_dt.bias (no .weight suffix in HF)
+            if name.endswith(".linear_attn.dt_bias"):
+                return [(f"blk.{bid}.ssm_dt.bias", data_torch)]
+
+            # A_log -> blk.{bid}.ssm_a (no suffix at all in C++)
+            if name.endswith(".linear_attn.A_log"):
+                return [(f"blk.{bid}.ssm_a", data_torch)]
+
+            # All other linear_attn tensors have .weight suffix, handled normally below
+
+        # ================================================================
+        # Handle main layer pre-merged expert tensors (gate_up_proj / down_proj)
+        # These are already 3D tensors, map directly
+        # ================================================================
+        if name.endswith(".mlp.experts.gate_up_proj"):
+            return [(self.map_tensor_name(name), data_torch)]
+
+        if name.endswith(".mlp.experts.down_proj") and "experts." in name and not re.search(r"experts\.\d+\.", name):
+            return [(self.map_tensor_name(name), data_torch)]
+
+        # ================================================================
+        # Handle individual expert tensors (from MTP layer)
+        # ================================================================
+        if "mlp.experts" in name and re.search(r"mlp\.experts\.\d+\.", name):
+            return self._handle_experts(data_torch, name, bid)
+
+        # ================================================================
+        # Handle embed_tokens for main model (not nextn)
+        # ================================================================
+        if name == "model.embed_tokens.weight":
+            # Also store as nextn.embed_tokens for the MTP layer if no dedicated embeddings
+            if not self.hparams.get("mtp_use_dedicated_embeddings", False) and self.mtp_num_layers > 0:
+                results = [(self.map_tensor_name(name), data_torch)]
+                results.append((f"blk.{mtp_bid}.nextn.embed_tokens.weight", data_torch))
+                return results
+
+        # ================================================================
+        # Handle lm_head -> also shared_head for MTP
+        # ================================================================
+        if name == "lm_head.weight":
+            results = [(self.map_tensor_name(name), data_torch)]
+            if self.mtp_num_layers > 0:
+                results.append((f"blk.{mtp_bid}.nextn.shared_head_head.weight", data_torch))
+            return results
+
+        # ================================================================
+        # Default: use standard tensor mapping
+        # ================================================================
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def _handle_experts(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        """Handle individual expert tensors by collecting and merging into 3D tensors."""
+        n_experts = self.hparams["num_experts"]
+        assert bid is not None
+
+        if self._experts is None:
+            self._experts = [{} for _ in range(self.block_count)]
+
+        self._experts[bid][name] = data_torch
+
+        if len(self._experts[bid]) >= n_experts * 3:
+            tensors: list[tuple[str, Tensor]] = []
+
+            # Merge experts into single 3D tensors
+            for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                datas: list[Tensor] = []
+
+                for xid in range(n_experts):
+                    ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                    datas.append(self._experts[bid][ename])
+                    del self._experts[bid][ename]
+
+                data_merged = torch.stack(datas, dim=0)
+                merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                new_name = self.map_tensor_name(merged_name)
+                tensors.append((new_name, data_merged))
+
+            return tensors
+        else:
+            return []
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # Verify all experts were processed
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")

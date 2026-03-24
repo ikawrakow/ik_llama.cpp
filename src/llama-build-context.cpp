@@ -4531,37 +4531,60 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
 
     ggml_tensor * cur = nullptr;
 
-    for (int il = 0; il < n_layer; ++il) {
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
+        ggml_tensor * hidden_states_from_main_model;
 
-        if (hparams.is_recurrent(il)) {
-            cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_layer - 1 ? inp_out_ids : nullptr, il, cb);
+        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
+            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
         } else {
-            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
-                    KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
+            hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
+        }
+        ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
+        ggml_set_input(hidden_states_from_main_model);
+
+        lctx.inp_mtp_states = hidden_states_from_main_model;
+
+        const int il_mtp = hparams.n_layer - 1;
+        const auto & mtp_layer = model.layers[il_mtp];
+
+        cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, nullptr);
+    } else {
+        // Only process transformer layers (skip final MTP layer when nextn_predict_layers > 0)
+        const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
+
+        for (int il = 0; il < n_transformer_layers; ++il) {
+
+            if (hparams.is_recurrent(il)) {
+                cur = delta.build_layer_attn_linear(ctx0, gf, inpL, il == n_transformer_layers - 1 ? inp_out_ids : nullptr, il, cb);
+            } else {
+                cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_transformer_layers - 1 ? inp_out_ids : nullptr, nullptr,
+                        KQ_mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false, true, false, true);
+            }
+
+            cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                    model.layers[il].ffn_gate_inp,  nullptr,
+                    model.layers[il].ffn_up_exps,   nullptr,
+                    model.layers[il].ffn_gate_exps, nullptr,
+                    model.layers[il].ffn_down_exps, nullptr,
+                    nullptr,
+                    model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
+                    model.layers[il].ffn_gate_shexp,  nullptr,
+                    model.layers[il].ffn_down_shexp,  nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true, false, 0.0f,
+                    LLM_EXPERT_GATING_FUNC_SOFTMAX,
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp);
+
+            cur = lctx.cvec.apply_to(ctx0, cur, il);
+            cb(cur, "l_out", il);
+
+            inpL = cur;
         }
 
-        cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
-                model.layers[il].ffn_gate_inp,  nullptr,
-                model.layers[il].ffn_up_exps,   nullptr,
-                model.layers[il].ffn_gate_exps, nullptr,
-                model.layers[il].ffn_down_exps, nullptr,
-                nullptr,
-                model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
-                model.layers[il].ffn_gate_shexp,  nullptr,
-                model.layers[il].ffn_down_shexp,  nullptr,
-                n_expert, n_expert_used,
-                LLM_FFN_SILU, true, false, 0.0f,
-                LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps, nullptr, model.layers[il].ffn_gate_inp_shexp);
-
-        cur = lctx.cvec.apply_to(ctx0, cur, il);
-        cb(cur, "l_out", il);
-
-        inpL = cur;
+        // lm head
+        cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+        cb(cur, "result_output", -1);
     }
-
-    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
-    cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
 

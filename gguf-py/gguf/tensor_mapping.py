@@ -138,6 +138,12 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "layers.{bid}.attention.wqkv",
+            "model.layers.{bid}.linear_attn.in_proj_qkv",              # qwen3.5 gated delta net
+        ),
+
+        # Attention gate (gated delta net z-projection)
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.linear_attn.in_proj_z",                # qwen3.5 gated delta net
         ),
 
         # Attention query
@@ -310,6 +316,11 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_experts.up_proj", # deepseek2
         ),
 
+        # Fused gate+up expert weights
+        MODEL_TENSOR.FFN_GATE_UP_EXP: (
+            "model.layers.{bid}.mlp.experts.gate_up_proj",   # qwen3.5 (pre-merged)
+        ),
+
         # AWQ-activation gate
         MODEL_TENSOR.FFN_ACT: (
             "transformer.blocks.{bid}.ffn.act",  # mpt
@@ -421,6 +432,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_CONV1D: (
             "model.layers.{bid}.conv1d",
             "backbone.layers.{bid}.mixer.conv1d",
+            "model.layers.{bid}.linear_attn.conv1d",                   # qwen3.5 gated delta net
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -431,11 +443,15 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_DT: (
             "model.layers.{bid}.dt_proj",
             "backbone.layers.{bid}.mixer.dt_proj",
+            # NOTE: qwen3.5 linear_attn.dt_bias is handled in modify_tensors
+            # because it maps to blk.{bid}.ssm_dt.bias (with .bias suffix)
         ),
 
         MODEL_TENSOR.SSM_A: (
             "model.layers.{bid}.A_log",
             "backbone.layers.{bid}.mixer.A_log",
+            # NOTE: qwen3.5 linear_attn.A_log is handled in modify_tensors
+            # because it maps to blk.{bid}.ssm_a (no suffix at all)
         ),
 
         MODEL_TENSOR.SSM_D: (
@@ -446,6 +462,22 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",
             "backbone.layers.{bid}.mixer.out_proj",
+            "model.layers.{bid}.linear_attn.out_proj",                 # qwen3.5 gated delta net
+        ),
+
+        # SSM beta (gated delta net)
+        MODEL_TENSOR.SSM_BETA: (
+            "model.layers.{bid}.linear_attn.in_proj_b",                # qwen3.5 gated delta net
+        ),
+
+        # SSM alpha (gated delta net)
+        MODEL_TENSOR.SSM_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_a",                # qwen3.5 gated delta net
+        ),
+
+        # SSM norm (gated delta net)
+        MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.linear_attn.norm",                     # qwen3.5 gated delta net
         ),
 
         MODEL_TENSOR.ATTN_Q_A: (
