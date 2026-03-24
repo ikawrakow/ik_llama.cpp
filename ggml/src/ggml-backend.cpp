@@ -2015,6 +2015,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
 
                 ggml_tensor * ids_tensor = node->op == GGML_OP_MUL_MAT_ID ? node->src[2] : node->src[3];
                 auto ids_backend = split_backend;
+                int  ids_backend_id = split_backend_id;
 
                 // if the ids tensor is also an input of the split, it may not have been copied yet to the split backend
                 // in that case, we use the original ids tensor
@@ -2022,6 +2023,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     if (ids_tensor == tensor_copy(split->inputs[jj], split_backend_id, sched->cur_copy)) {
                         ids_tensor = split->inputs[jj];
                         ids_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[jj]);
+                        ids_backend_id = tensor_backend_id(split->inputs[jj]);
                         break;
                     }
                 }
@@ -2034,10 +2036,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
                     ggml_backend_synchronize(ids_backend);
-                    int ids_backend_id = tensor_backend_id(ids_tensor);
-                    if (ids_backend_id >= 0 && ids_backend_id < GGML_SCHED_MAX_BACKENDS) {
-                        needs_sync[ids_backend_id] = k_set_sync;
-                    }
+                    needs_sync[ids_backend_id] = k_set_sync;
 
                     unique_ids.resize((n_expert + 31)/32);
                     std::memset(unique_ids.data(), 0, unique_ids.size()*sizeof(uint32_t));

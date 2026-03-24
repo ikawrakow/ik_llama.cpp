@@ -5,6 +5,7 @@
 #include "iqk/iqk_cpu_ops.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <cfloat>
@@ -711,6 +712,15 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
     for (int j = 1; j < candidates->size; ++j) {
         probs[j] = candidates->data[j].logit;
         max = std::max(max, probs[j]);
+    }
+
+    if (std::isnan(max)) {
+        max = 0.0f;
+        for (int j = 0; j < candidates->size; ++j) {
+            if (std::isnan(probs[j])) {
+                probs[j] = -INFINITY;
+            }
+        }
     }
 
     float sump = 0;
