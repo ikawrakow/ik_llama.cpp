@@ -149,6 +149,8 @@ struct common_speculative_state {
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
     common_sampler * smpl;
+    std::vector<llama_token> pending_accepted_ids;
+    int32_t pending_n_past_base = 0;
 
     common_speculative_state_mtp(
             enum common_speculative_type type,
@@ -178,18 +180,14 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_tokens & result) override {
 
         int32_t n_past = (int32_t)prompt_tgt.size();
-
         llama_seq_id seq_id = 0;
 
-        result = mtp_speculative_gen_draft(
-            smpl,
-            ctx_tgt,
-            params.n_max,
-            params.p_min,
-            id_last,
-            n_past,
-            seq_id
+        result = mtp_gen_draft(
+            smpl, ctx_tgt, params.n_max, params.p_min,
+            pending_accepted_ids, pending_n_past_base,
+            id_last, n_past, seq_id
         );
+        pending_accepted_ids.clear();
     }
 
     void accept(uint16_t n_accepted) override {
@@ -1085,6 +1083,20 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     }
 }
 
+void common_speculative_mtp_set_accepted(
+        common_speculative * spec,
+        const std::vector<llama_token> & ids,
+        int32_t n_past_base) {
+    for (auto & impl : spec->impls) {
+        auto * mtp = dynamic_cast<common_speculative_state_mtp *>(impl.get());
+        if (mtp) {
+            mtp->pending_accepted_ids = ids;
+            mtp->pending_n_past_base = n_past_base;
+            return;
+        }
+    }
+}
+
 void common_speculative_print_stats(const common_speculative * spec) {
     if (spec == nullptr) {
         return;
@@ -1116,58 +1128,98 @@ void common_speculative_print_stats(const common_speculative * spec) {
 // ----------------------------------------------------------------------------
 // MTP
 // ----------------------------------------------------------------------------
-std::vector<llama_token> mtp_speculative_gen_draft(
+std::vector<llama_token> mtp_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,
     int n_draft,
     float p_min,
+    const std::vector<llama_token> & accepted_ids,
+    int32_t n_past_base,
     llama_token id_last,
     int32_t n_past,
     llama_seq_id seq_id) {
-    
+
     llama_tokens drafts;
     drafts.reserve(n_draft);
 
     if (!smpl) return drafts;
 
     common_sampler_reset(smpl);
-
-    llama_batch mtp_batch = llama_batch_init(1, 0, 1);
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
-    llama_token current_input_id = id_last;
     int32_t current_n_past = n_past;
+    llama_token current_input_id = id_last;
+    int draft_start = 0;
 
-    for (int i = 0; i < n_draft; ++i) {
-        mtp_batch.n_tokens = 0;
-        common_batch_add(mtp_batch, current_input_id, current_n_past, {seq_id}, true);
+    if (!accepted_ids.empty()) {
+        const int32_t n_accepted = (int32_t)accepted_ids.size();
+        const int32_t n_combined = n_accepted + 1;
 
-        if (llama_decode(ctx, mtp_batch) != 0) {
-            break;
+        llama_batch combined_batch = llama_batch_init(n_combined, 0, 1);
+        for (int32_t i = 0; i < n_accepted; ++i) {
+            common_batch_add(combined_batch, accepted_ids[i], n_past_base + i, {seq_id}, false);
+        }
+        common_batch_add(combined_batch, id_last, n_past_base + n_accepted, {seq_id}, true);
+
+        if (llama_decode(ctx, combined_batch) != 0) {
+            llama_batch_free(combined_batch);
+            llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+            return drafts;
         }
 
         float prob;
-        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, &prob);
-
+        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, n_combined - 1, &prob);
         drafts.push_back(id_next);
 
-        const float * emb = llama_get_embeddings_ith(ctx, 0);
+        const float * emb = llama_get_embeddings_ith(ctx, n_combined - 1);
         if (emb) {
             llama_set_draft_input_hidden_state(ctx, emb);
         }
 
+        llama_batch_free(combined_batch);
+
         current_input_id = id_next;
-        current_n_past++;
+        current_n_past = n_past + 1;
+        draft_start = 1;
 
         if (prob < p_min) {
-            break;
+            goto done;
         }
     }
-    llama_batch_free(mtp_batch);
+    {
+        llama_batch single_batch = llama_batch_init(1, 0, 1);
+
+        for (int i = draft_start; i < n_draft; ++i) {
+            single_batch.n_tokens = 0;
+            common_batch_add(single_batch, current_input_id, current_n_past, {seq_id}, true);
+
+            if (llama_decode(ctx, single_batch) != 0) {
+                break;
+            }
+
+            float prob;
+            llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, &prob);
+            drafts.push_back(id_next);
+
+            const float * emb = llama_get_embeddings_ith(ctx, 0);
+            if (emb) {
+                llama_set_draft_input_hidden_state(ctx, emb);
+            }
+
+            current_input_id = id_next;
+            current_n_past++;
+
+            if (prob < p_min) {
+                break;
+            }
+        }
+        llama_batch_free(single_batch);
+    }
+
+done:
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
-    // Purge the metadata for the draft tokens.
-    // This prevents cache state corruption where two cells map to the same logical position.
+    // Purge draft metadata to prevent cache state corruption
     if (!drafts.empty()) {
         llama_kv_cache_seq_rm(ctx, seq_id, n_past, current_n_past);
     }
@@ -1181,38 +1233,18 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
         return;
     }
 
-    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
+    if (!is_prompt_warmup) {
+        return;
+    }
+
+    LOG_DBG("[MTP-UPDATE|PROMPT_WARMUP] Updating %d tokens...\n", batch.n_tokens);
 
     llama_batch mtp_batch = batch;
-    if (is_prompt_warmup) {
-        llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
-    } else {
-        llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
-    }
+    llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
 
     for (int i = 0; i < mtp_batch.n_tokens; ++i) {
         mtp_batch.logits[i] = true;
     }
     llama_decode(ctx, mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
-}
-
-void mtp_accept_tokens(
-    struct llama_context * ctx,
-    const std::vector<llama_token> & ids,
-    int32_t n_past_base,
-    llama_seq_id seq_id
-) {
-    if (ids.empty()) {
-        return;
-    }
-
-    llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
-    for (size_t i = 0; i < ids.size(); ++i) {
-        common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
-    }
-
-    mtp_update_kv_cache(ctx, accepted_batch, false);
-
-    llama_batch_free(accepted_batch);
 }

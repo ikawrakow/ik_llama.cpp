@@ -1082,9 +1082,8 @@ static bool llama_kv_cache_find_slot(
     }
     // otherwise, one cell per token.
 
-    bool is_mtp_special_op = (op_type == MTP_OP_WARMUP || 
-                              op_type == MTP_OP_UPDATE_ACCEPTED);
-    if (is_mtp_special_op) {
+    // For MTP operations, it is necessary to use existing cells
+    if (op_type == MTP_OP_WARMUP || (op_type == MTP_OP_DRAFT_GEN && n_tokens > 1)) {
         const llama_pos target_pos = batch.pos[0];
         const llama_seq_id target_seq = batch.seq_id[0][0];
 
@@ -1105,7 +1104,6 @@ static bool llama_kv_cache_find_slot(
             for (uint32_t i = 0; i < cache.size; ++i) {
                 if (cache.cells[i].pos == target_pos &&
                     cache.cells[i].has_seq_id(target_seq)) {
-
                     cache.head = i;
                     found = true;
                     break;
@@ -1114,14 +1112,33 @@ static bool llama_kv_cache_find_slot(
         }
 
         if (!found) {
-            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n",
+            LLAMA_LOG_ERROR("%s: MTP find_slot failed - slot for seq %d pos %d not found\n",
                 __func__, target_seq, target_pos);
             return false;
         }
 
         if (cache.head + n_tokens > cache.size) {
-             LLAMA_LOG_ERROR("%s: MTP Update out of bounds\n", __func__);
-             return false;
+            LLAMA_LOG_ERROR("%s: MTP find_slot out of bounds\n", __func__);
+            return false;
+        }
+
+        // Assign the new draft cell
+        if (op_type == MTP_OP_DRAFT_GEN) {
+            const uint32_t n_accepted = n_tokens - 1;
+            for (uint32_t i = 0; i < n_accepted; ++i) {
+                if (cache.cells[cache.head + i].pos != batch.pos[i]) {
+                    LLAMA_LOG_ERROR("%s: MTP DRAFT_GEN combined - cell %d has pos %d, expected %d\n",
+                        __func__, cache.head + i, (int)cache.cells[cache.head + i].pos, (int)batch.pos[i]);
+                    return false;
+                }
+            }
+
+            auto & draft_cell = cache.cells[cache.head + n_accepted];
+            draft_cell.pos = batch.pos[n_accepted];
+            for (int32_t j = 0; j < batch.n_seq_id[n_accepted]; j++) {
+                draft_cell.seq_id.insert(batch.seq_id[n_accepted][j]);
+            }
+            cache.used += 1;
         }
 
         return true;
@@ -4035,9 +4052,8 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            // Do not process logits if MTP is only updating the KV cache.
-            if (cparams.mtp_op_type != MTP_OP_WARMUP &&
-                cparams.mtp_op_type != MTP_OP_UPDATE_ACCEPTED) {
+            // Do not process logits if MTP is only warming up the KV cache.
+            if (cparams.mtp_op_type != MTP_OP_WARMUP) {
                 ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(lctx.sched, res);
                 GGML_ASSERT(backend_res != nullptr);
                 GGML_ASSERT(lctx.logits != nullptr);
@@ -7842,6 +7858,20 @@ float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {
     try {
         if (ctx->embd == nullptr) {
             throw std::runtime_error("no embeddings");
+        }
+
+        const bool has_mtp = ctx->cparams.mtp && ctx->model.hparams.nextn_predict_layers > 0;
+
+        if (has_mtp) {
+            // For MTP use position-based indexing
+            int32_t idx = i;
+            if (idx < 0) {
+                idx = ctx->n_outputs + idx;
+            }
+            if (idx < 0 || (size_t)(idx + 1) * ctx->model.hparams.n_embd > ctx->embd_size) {
+                throw std::runtime_error(format("MTP embedding index %d out of range", i));
+            }
+            return ctx->embd + idx * ctx->model.hparams.n_embd;
         }
 
         if (i < 0) {

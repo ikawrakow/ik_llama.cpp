@@ -7345,15 +7345,11 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     if (cparams.mtp_op_type != MTP_OP_NONE) {
         ggml_tensor* hidden_states_from_main_model;
 
-        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
-            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-        } else {
-            hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
-        }
+        hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
         ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
         ggml_set_input(hidden_states_from_main_model);
 
-        lctx.inp_mtp_states = hidden_states_from_main_model; 
+        lctx.inp_mtp_states = hidden_states_from_main_model;
 
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
