@@ -4,7 +4,7 @@
   # the module `{ pkgs ... }: { /* config */ }` implicitly uses
   # `_module.args.pkgs` (defined in this case by flake-parts).
   perSystem =
-    { system, ... }:
+    { lib, system, ... }:
     {
       _module.args = {
         # Note: bringing up https://zimbatm.com/notes/1000-instances-of-nixpkgs
@@ -27,10 +27,7 @@
           config.allowUnfreePredicate =
             p:
             let
-              licenses =
-                if builtins.isList (p.meta.license or null) then p.meta.license
-                else if p.meta ? license then [ p.meta.license ]
-                else [ ];
+              licenses = lib.toList (p.meta.license or []);
             in
             builtins.all
               (
