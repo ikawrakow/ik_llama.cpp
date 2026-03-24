@@ -1852,7 +1852,12 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
         return LLM_TENSOR_UNKNOWN;
     }
     for (auto & entry : it->second) {
-        auto this_name = ::format(entry.second.c_str(), il);
+        auto base_name = ::format(entry.second.c_str(), il);
+        auto this_name = base_name + ".weight";
+        if (tensor_name.find(this_name) == 0) {
+            return entry.first;
+        }
+        this_name = base_name + ".bias";
         if (tensor_name.find(this_name) == 0) {
             return entry.first;
         }

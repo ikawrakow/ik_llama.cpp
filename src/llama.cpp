@@ -2042,23 +2042,23 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         }
         auto pos = name.find("blk.");
         if (pos != 0) {
-            printf("Oops: tensor with strange name %s\n", name.c_str());
+            LLAMA_LOG_WARN("Oops: tensor with strange name %s\n", name.c_str());
             continue;
         }
         pos += 4;
         auto pos1 = name.find('.', pos);
         if (pos1 == std::string::npos) {
-            printf("Oops: tensor with strange name %s\n", name.c_str());
+            LLAMA_LOG_WARN("Oops: tensor with strange name %s\n", name.c_str());
             continue;
         }
         auto layer_string = name.substr(pos, pos1-pos);
         std::istringstream str(layer_string);
         int il; str >> il;
         if (str.fail()) {
-            printf("Oops: failed to read layer index from %s for tensor %s\n", layer_string.c_str(), name.c_str());
+            LLAMA_LOG_WARN("Oops: failed to read layer index from %s for tensor %s\n", layer_string.c_str(), name.c_str());
         }
         if (il < 0 || il >= model.hparams.n_layer) {
-            printf("Oops: strange layer index %d for tensor %s\n", il, name.c_str());
+            LLAMA_LOG_WARN("Oops: strange layer index %d for tensor %s\n", il, name.c_str());
             continue;
         }
         result[il] += size;
@@ -2083,18 +2083,23 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         }
         if (!is_mla) {
             auto ttype = llm_tensor_type(model.arch, name, il);
-            if (ttype == LLM_TENSOR_UNKNOWN) printf("Oops: got unknows for tensor %s\n", name.c_str());
+            if (ttype == LLM_TENSOR_UNKNOWN) {
+                LLAMA_LOG_WARN("Oops: got unknown for tensor %s\n", name.c_str());
+                continue;
+            }
             if (ttype == LLM_TENSOR_FFN_GATE_UP_EXPS || ttype == LLM_TENSOR_FFN_GATE_EXPS || ttype == LLM_TENSOR_FFN_UP_EXPS || ttype == LLM_TENSOR_FFN_DOWN_EXPS) {
                 auto size = t->ne[1] * n_ubatch * model.hparams.n_expert_used * sizeof(float);
                 ffn_exps[il] += size;
-                if (ttype == LLM_TENSOR_FFN_GATE_UP_EXPS || ttype == LLM_TENSOR_FFN_UP_EXPS) {
-                    experts[il].up = t;
-                }
-                else if (ttype == LLM_TENSOR_FFN_GATE_EXPS) {
-                    experts[il].gate = t;
-                }
-                else if (ttype == LLM_TENSOR_FFN_DOWN_EXPS) {
-                    experts[il].down = t;
+                if (name.find(".bias") == std::string::npos) {
+                    if (ttype == LLM_TENSOR_FFN_GATE_UP_EXPS || ttype == LLM_TENSOR_FFN_UP_EXPS) {
+                        experts[il].up = t;
+                    }
+                    else if (ttype == LLM_TENSOR_FFN_GATE_EXPS) {
+                        experts[il].gate = t;
+                    }
+                    else if (ttype == LLM_TENSOR_FFN_DOWN_EXPS) {
+                        experts[il].down = t;
+                    }
                 }
             }
             else if (ttype == LLM_TENSOR_FFN_UP_SHEXP || ttype == LLM_TENSOR_FFN_GATE_SHEXP || ttype == LLM_TENSOR_FFN_DOWN_SHEXP) {
@@ -2115,6 +2120,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
                      ttype == LLM_TENSOR_FFN_NORM  || ttype == LLM_TENSOR_FFN_POST_NORM || ttype == LLM_TENSOR_LAYER_OUT_NORM) {
                 has_layer_norm[il] = true;
             }
+            //else {
+            //    printf("Unhandled tensor %s of type %d\n", name.c_str(), int(ttype));
+            //}
         }
     }
     for (int il = 0; il < n_layer; ++il) {
@@ -2393,7 +2401,7 @@ static bool llm_load_tensors(
                         has_experts = true;
                     }
                     if (has_experts) {
-                        printf("Adding experts CPU overrides for layer %d\n", il);
+                        LLAMA_LOG_INFO("Adding experts CPU overrides for layer %d\n", il);
                         std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
                         auto & o = overrides.emplace_back();
                         o.pattern = strdup(pattern.c_str());
@@ -2401,7 +2409,7 @@ static bool llm_load_tensors(
                         ++n_override;
                     }
                     if (cur_mem <= available_mem - max_compute) {
-                        printf("Estimated memory use for split mode `graph' is %zu MiB after adding %d overrides, which is less than available memory of %zu MiB\n",
+                        LLAMA_LOG_INFO("Estimated memory use for split mode `graph' is %zu MiB after adding %d overrides, which is less than available memory of %zu MiB\n",
                                 cur_mem/(1024*1024), n_override, size_t(available_mem - max_compute)/(1024*1024));
                         break;
                     }
@@ -2433,7 +2441,7 @@ static bool llm_load_tensors(
                     float last_split = 0;
                     for (int id = 0; id < int(model.splits.size()); ++id) {
                         model.splits[id] /= sum;
-                        printf("Device %2d: %zu MiB -> split = %g\n", id, device_mem[id]/(1024*1024), model.splits[id] - last_split);
+                        LLAMA_LOG_INFO("Device %2d: %zu MiB -> split = %g\n", id, device_mem[id]/(1024*1024), model.splits[id] - last_split);
                         last_split = model.splits[id];
                     }
                 } else {
@@ -2450,8 +2458,7 @@ static bool llm_load_tensors(
                     size_t cur_mem = mem;
                     int n_override = 0;
                     if (cur_mem > device_mem[id]) {
-                        //for (int il = n_layer-1; il >= 0; --il) {
-                        for (int il = 0; il < n_layer; ++il) {
+                        for (int il = n_layer-1; il >= 0; --il) {
                             if (model.default_layer_device[il] != id) continue;
                             bool has_experts = false;
                             if (experts[il].down) {
@@ -2467,7 +2474,7 @@ static bool llm_load_tensors(
                                 has_experts = true;
                             }
                             if (has_experts) {
-                                printf("Adding experts CPU overrides for layer %d in device %d\n", il, id);
+                                LLAMA_LOG_INFO("Adding experts CPU overrides for layer %d in device %d\n", il, id);
                                 std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
                                 auto & o = overrides.emplace_back();
                                 o.pattern = strdup(pattern.c_str());
@@ -2475,7 +2482,7 @@ static bool llm_load_tensors(
                                 ++n_override;
                             }
                             if (cur_mem <= device_mem[id]) {
-                                printf("Memory use in device %d is %zu MiB after adding %d overrides, which is less than available memory of %zu MiB\n",
+                                LLAMA_LOG_INFO("Memory use in device %d is %zu MiB after adding %d overrides, which is less than available memory of %zu MiB\n",
                                         id, cur_mem/(1024*1024) ,n_override, device_mem[id]/(1024*1024));
                                 break;
                             }
@@ -2527,7 +2534,7 @@ static bool llm_load_tensors(
                 int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count,
                         float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
                 model.buft_layer[i] = { split_buft, llama_default_buffer_type_offload(model, model.devices[layer_gpu]) };
-                printf("Layer %d: assigning buft_layer to GPU %d\n", i, layer_gpu);
+                LLAMA_LOG_INFO("Layer %d: assigning buft_layer to GPU %d\n", i, layer_gpu);
             } else {
                 model.buft_layer[i] = { split_buft, buft_layer };
             }
@@ -2724,7 +2731,7 @@ static bool llm_load_tensors(
                 if (iqk_modify_tensor(it.second)) ++n_modified;
             }
         }
-        if (n_modified > 0) printf("============ Modified %d tensors\n", n_modified);
+        if (n_modified > 0) LLAMA_LOG_INFO("============ Modified %d tensors\n", n_modified);
     }
 
     if (validate_quants) {
@@ -2750,7 +2757,7 @@ static bool llm_load_tensors(
                 if (it.second->type != orig_type) ++n_repacked;
             }
         }
-        if (n_repacked > 0) printf("============ Repacked %d tensors\n", n_repacked);
+        if (n_repacked > 0) LLAMA_LOG_INFO("============ Repacked %d tensors\n", n_repacked);
     }
 
     if (model.arch == LLM_ARCH_BITNET) {
