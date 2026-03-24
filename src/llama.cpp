@@ -3556,9 +3556,12 @@ static int llama_decode_internal(
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
+            fprintf(stderr, "[MTP_DEBUG] prepare_mtp_graph_inputs: mtp_op=%d, inp_mtp_states=%p, embd=%p\n",
+                    cparams.mtp_op_type, (void*)lctx.inp_mtp_states, (void*)lctx.embd);
             if (!prepare_mtp_graph_inputs(lctx)) {
                 return GGML_STATUS_FAILED;
             }
+            fprintf(stderr, "[MTP_DEBUG] prepare_mtp_graph_inputs OK. About to compute graph (n_nodes=%d)...\n", gf->n_nodes);
         }
 
         // the output is always the last tensor in the graph
@@ -3594,7 +3597,11 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
+        // llama_set_inputs sets tokens, positions, KQ_mask — needed for both normal and MTP graphs
         llama_set_inputs(lctx, u_batch);
+        if (cparams.mtp_op_type != MTP_OP_NONE) {
+            fprintf(stderr, "[MTP_DEBUG] llama_set_inputs done for MTP, calling graph_compute...\n");
+        }
 #if IK_PRINT_TIMING == 1
         tim2 = ggml_time_us();
         printf("set_inputs(...): %d us\n", int(tim2-tim1));
@@ -5333,6 +5340,21 @@ struct llama_context * llama_init_from_model(
                     LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
                     llama_free(ctx);
                     return nullptr;
+                }
+            }
+
+            // MTP: also reserve for the MTP graph which may be larger.
+            // ggml_backend_sched_reserve keeps the max allocation across calls.
+            if (cparams.mtp && model->hparams.nextn_predict_layers > 0) {
+                auto saved_mtp_op = cparams.mtp_op_type;
+                cparams.mtp_op_type = MTP_OP_WARMUP;
+                ggml_cgraph * gf_mtp = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true);
+                cparams.mtp_op_type = saved_mtp_op;
+                // Don't reset scheduler — reserve adds to existing allocation
+                if (!ggml_backend_sched_reserve(ctx->sched, gf_mtp)) {
+                    LLAMA_LOG_WARN("%s: failed to reserve compute buffer for MTP graph, MTP may not work\n", __func__);
+                } else {
+                    LLAMA_LOG_INFO("%s: MTP compute buffer reserved (%d nodes)\n", __func__, gf_mtp->n_nodes);
                 }
             }
 

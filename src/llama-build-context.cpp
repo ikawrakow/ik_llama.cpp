@@ -7685,8 +7685,11 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     if (mtp_head_weights == nullptr) {
         mtp_head_weights = model.output;
     }
+    fprintf(stderr, "[MTP_DEBUG] lm_head matmul... mtp_head_weights=%p cur ne=[%ld,%ld]\n",
+            (void*)mtp_head_weights, cur->ne[0], cur->ne[1]);
     cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
     cb(cur, "result_output", -1);
+    fprintf(stderr, "[MTP_DEBUG] build_mtp_tail COMPLETE! result ne=[%ld,%ld]\n", cur->ne[0], cur->ne[1]);
 
     return cur;
 }
