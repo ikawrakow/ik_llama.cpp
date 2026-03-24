@@ -2724,8 +2724,9 @@ void server_context::add_sampled_tokens() {
 
             if (slot.has_mtp) {
                 if (!slot.mtp_hidden_state.empty()) {
-                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
                     const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                    const int n_hidden = slot.mtp_hidden_state.size() / n_embd;
+                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data() + (n_hidden - 1) * n_embd);
                 } else {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
                     const float* emb_neg1 = llama_get_embeddings_ith(ctx, -1);

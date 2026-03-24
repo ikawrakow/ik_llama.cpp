@@ -678,3 +678,29 @@ common_grammar_trigger common_grammar_trigger::from_json(const json& in) {
     }
     return out;
 }
+
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob) {
+    GGML_UNUSED(gsmpl);
+
+    float * logits = llama_get_logits_ith(ctx, idx);
+    const int n_vocab = llama_n_vocab(llama_get_model(ctx));
+
+    int best_id = 0;
+    float max_val = logits[0];
+    for (int i = 1; i < n_vocab; ++i) {
+        if (logits[i] > max_val) {
+            max_val = logits[i];
+            best_id = i;
+        }
+    }
+
+    if (out_prob) {
+        double sum_exp = 0.0;
+        for (int i = 0; i < n_vocab; ++i) {
+            sum_exp += exp((double)(logits[i] - max_val));
+        }
+        *out_prob = (float)(1.0 / sum_exp);
+    }
+
+    return best_id;
+}

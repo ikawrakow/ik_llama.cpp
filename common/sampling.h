@@ -227,5 +227,8 @@ std::vector<llama_token> llama_sampling_sample_and_accept_n(struct common_sample
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first = false);
 
+// Greedy argmax sampling for speculative drafting
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob = nullptr);
+
 llama_grammar* llama_sampler_init_llg(const llama_vocab* vocab,
     const char* grammar_kind, const char* grammar_data);
