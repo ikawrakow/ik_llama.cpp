@@ -2030,6 +2030,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             ow_size = size;
             continue;
         }
+        if (name == "output_norm.weight") {
+            continue;
+        }
         auto pos = name.find("blk.");
         if (pos != 0) {
             printf("Oops: tensor with strange name %s\n", name.c_str());
