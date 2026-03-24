@@ -2013,6 +2013,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     if (has_mla) {
         mla_tensors.resize(n_layer);
     }
+    std::vector<size_t> ffn_exps(n_layer, 0), ffn_shexp(n_layer, 0), ffn_dense(n_layer, 0);
+    std::vector<size_t> attn(n_layer, 0);
+    std::vector<bool> has_layer_norm(n_layer, false);
     size_t ow_size = 0;
     size_t embd_size = 0;
     for (int i = 0; i < ml.n_tensors; ++i) {
@@ -2025,6 +2028,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         }
         if (name == "output.weight") {
             ow_size = size;
+            continue;
+        }
+        if (name == "output_norm.weight") {
             continue;
         }
         auto pos = name.find("blk.");
@@ -2049,17 +2055,58 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         result[il] += size;
+        if (auto pos = name.rfind(".bias"); pos < name.size() && name.size() - pos == 4) {
+            // bias, we don't need to account for those
+            continue;
+        }
+        bool is_mla = false;
         if (has_mla) {
             if (name.find("attn_k_b.weight") != std::string::npos) {
                 mla_tensors[il].wk_b = t;
+                is_mla = true;
             }
             else if (name.find("attn_v_b.weight") != std::string::npos) {
                 mla_tensors[il].wv_b = t;
+                is_mla = true;
             }
             else if (name.find("attn_kv_b.weight") != std::string::npos) {
                 mla_tensors[il].wkv_b = t;
+                is_mla = true;
             }
         }
+        if (!is_mla) {
+            auto ttype = llm_tensor_type(model.arch, name, il);
+            if (ttype == LLM_TENSOR_UNKNOWN) printf("Oops: got unknows for tensor %s\n", name.c_str());
+            if (ttype == LLM_TENSOR_FFN_GATE_UP_EXPS || ttype == LLM_TENSOR_FFN_GATE_EXPS || ttype == LLM_TENSOR_FFN_UP_EXPS || ttype == LLM_TENSOR_FFN_DOWN_EXPS) {
+                auto size = t->ne[1] * n_ubatch * model.hparams.n_expert_used * sizeof(float);
+                ffn_exps[il] += size;
+            }
+            else if (ttype == LLM_TENSOR_FFN_UP_SHEXP || ttype == LLM_TENSOR_FFN_GATE_SHEXP || ttype == LLM_TENSOR_FFN_DOWN_SHEXP) {
+                ffn_shexp[il] += t->ne[1] * n_ubatch * sizeof(float);
+            }
+            else if (ttype == LLM_TENSOR_FFN_UP || ttype == LLM_TENSOR_FFN_GATE || ttype == LLM_TENSOR_FFN_DOWN) {
+                ffn_dense[il] += t->ne[1] * n_ubatch * sizeof(float);
+            }
+            else if (ttype == LLM_TENSOR_ATTN_Q || ttype == LLM_TENSOR_ATTN_K || ttype == LLM_TENSOR_ATTN_V) {
+                attn[il] += t->ne[1] * n_ubatch * sizeof(float);
+            }
+            else if (ttype == LLM_TENSOR_ATTN_OUT) {
+                // This assume FA. With FA, we need to have at the same time Q, K, V and FA(Q, K, V).
+                // FA(Q, K, V) has the dimension t->ne[0] x n_ubatch
+                attn[il] += t->ne[0] * n_ubatch * sizeof(float);
+            }
+            else if (ttype == LLM_TENSOR_ATTN_NORM || ttype == LLM_TENSOR_ATTN_NORM_2 || ttype == LLM_TENSOR_ATTN_OUT_NORM || ttype == LLM_TENSOR_ATTN_POST_NORM ||
+                     ttype == LLM_TENSOR_FFN_NORM  || ttype == LLM_TENSOR_FFN_POST_NORM || ttype == LLM_TENSOR_LAYER_OUT_NORM) {
+                has_layer_norm[il] = true;
+            }
+        }
+    }
+    for (int il = 0; il < n_layer; ++il) {
+        auto ffn = std::max(std::max(ffn_exps[il], ffn_shexp[il]), ffn_dense[il]);
+        auto inp = model.hparams.n_embd * n_ubatch * sizeof(float);
+        if (has_layer_norm[il]) inp *= 2;
+        ffn += inp;
+        compute[il] = std::max<double>(compute[il], ffn);
     }
     if (has_mla) {
         for (int il = 0; il < n_layer; ++il) {
