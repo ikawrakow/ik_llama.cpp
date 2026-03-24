@@ -3038,7 +3038,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
-    if (kv_self.recurrent) {
+    if (kv_self.recurrent && cparams.mtp_op_type == MTP_OP_NONE) {
         const int64_t n_kv = kv_self.n;
 
         if (lctx.inp_s_mask) {
@@ -3085,7 +3085,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
-    if (lctx.inp_s_seq_qnext) {
+    if (lctx.inp_s_seq_qnext && cparams.mtp_op_type == MTP_OP_NONE) {
         const int64_t n_tokens = batch.n_tokens;
 
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_s_seq_qnext->buffer));
