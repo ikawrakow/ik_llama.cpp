@@ -4888,7 +4888,7 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
             if (nbytes > aux_buffer_gate.size()) {
                 aux_buffer_gate.resize(nbytes);
             }
-            printf("%s: repacking up/gate experts weight in layer %d\n", __func__, il);
+            LLAMA_LOG_INFO("%s: repacking up/gate experts weight in layer %d\n", __func__, il);
             ggml_backend_tensor_get(l.ffn_up_exps, aux_buffer_up.data(), 0, nbytes);
             ggml_backend_tensor_get(l.ffn_gate_exps, aux_buffer_gate.data(), 0, nbytes);
             if (aux_buffer_up_gate.size() < 2*nbytes) {
@@ -4914,7 +4914,7 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
                 if (nbytes > aux_buffer_gate.size()) {
                     aux_buffer_gate.resize(nbytes);
                 }
-                printf("%s: repacking up/gate experts bias in layer %d\n", __func__, il);
+                LLAMA_LOG_INFO("%s: repacking up/gate experts bias in layer %d\n", __func__, il);
                 ggml_backend_tensor_get(l.ffn_up_exps_b, aux_buffer_up.data(), 0, nbytes);
                 ggml_backend_tensor_get(l.ffn_gate_exps_b, aux_buffer_gate.data(), 0, nbytes);
                 if (aux_buffer_up_gate.size() < 2*nbytes) {

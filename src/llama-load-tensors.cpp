@@ -3961,6 +3961,10 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
         }
+        std::vector<float> gpu_split_count;
+        if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size())) {
+            gpu_split_count.resize(model.splits.size(), 0.0f);
+        }
         for (int il = 0; il < n_layer; ++il) {
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
@@ -3970,11 +3974,17 @@ bool create_tensors_helper::create_tensors() {
             if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
                 adjust_split(cur_splits, mem_used, model.max_gpu);
-                LLAMA_LOG_INFO("Adjusted split at layer %2d:", il);
+                LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
                 float last_split = 0;
-                for (auto & p : cur_splits) {
-                    LLAMA_LOG_INFO(" %g", p - last_split);
-                    last_split = p;
+                for (int i = 0; i < (int)cur_splits.size(); ++i) {
+                    if (i > 0) {
+                        LLAMA_LOG_INFO(" ; ");
+                    }
+                    LLAMA_LOG_INFO("GPU%d: %4g", i, cur_splits[i] - last_split);
+                    if (i < int(gpu_split_count.size())) {
+                        gpu_split_count[i] += cur_splits[i] - last_split;
+                    }
+                    last_split = cur_splits[i];
                 }
                 LLAMA_LOG_INFO("\n");
             }
@@ -4241,6 +4251,17 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
             }
+        }
+
+        if (!gpu_split_count.empty()) {
+            LLAMA_LOG_INFO("Adjusted splits (total)   :  ");
+            for (int i = 0; i < (int)gpu_split_count.size(); ++i) {
+                if (i > 0) {
+                    LLAMA_LOG_INFO(" ; ");
+                }
+                LLAMA_LOG_INFO("GPU%d: %4g", i, gpu_split_count[i]);
+            }
+            LLAMA_LOG_INFO("\n");
         }
 
         if (model.output) {
