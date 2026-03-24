@@ -1518,7 +1518,8 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[i];
 
         int flags = 0;
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        // Skip MTP layer tensors only if MTP is disabled
+        if (!model.mtp && hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
             flags |= llama_model_loader::TENSOR_SKIP;
         }
 
