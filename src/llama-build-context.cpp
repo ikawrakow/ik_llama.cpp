@@ -1781,25 +1781,18 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
             float attention_scale, int il, bool add_graph_split) const {
-    if (il >= 40) fprintf(stderr, "[MTP_DEBUG] simple_qkv: wq ne=[%ld,%ld] cur ne=[%ld,%ld]\n",
-            wq->ne[0], wq->ne[1], cur->ne[0], cur->ne[1]);
     auto Qcur = llm_build_lora_mm(lctx, ctx0, wq, cur);
-    if (il >= 40) fprintf(stderr, "[MTP_DEBUG] simple_qkv: Q done, shape=[%ld,%ld]\n", Qcur->ne[0], Qcur->ne[1]);
     cb(Qcur, "Qcur", il);
     if (add_graph_split) {
         Qcur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
     }
     auto Kcur = llm_build_lora_mm(lctx, ctx0, wk, cur);
-    if (il >= 40) fprintf(stderr, "[MTP_DEBUG] simple_qkv: K done\n");
     cb(Kcur, "Kcur", il);
     auto Vcur = llm_build_lora_mm(lctx, ctx0, wv, cur);
-    if (il >= 40) fprintf(stderr, "[MTP_DEBUG] simple_qkv: V done, expanding graph...\n");
     cb(Vcur, "Vcur", il);
     ggml_build_forward_expand(gf, Qcur);
-    if (il >= 40) fprintf(stderr, "[MTP_DEBUG] simple_qkv: gf expand Q done (n_nodes=%d)\n", gf->n_nodes);
     ggml_build_forward_expand(gf, Kcur);
     ggml_build_forward_expand(gf, Vcur);
-    if (il >= 40) fprintf(stderr, "[MTP_DEBUG] simple_qkv: all graph expansions done (n_nodes=%d)\n", gf->n_nodes);
 
     if (attention_scale != 0) {
         Qcur = ggml_scale(ctx0, Qcur, attention_scale);
@@ -1864,20 +1857,10 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
             ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, bool add_graph_split) const {
-    if (il >= 40) {
-        fprintf(stderr, "[MTP_DEBUG] llm_build_mul_mat_qkv: il=%d wqkv=%p wqk=%p wq=%p wk=%p wv=%p cur=%p\n",
-                il, (void*)wqkv, (void*)wqk, (void*)wq, (void*)wk, (void*)wv, (void*)cur);
-        fprintf(stderr, "[MTP_DEBUG] n_layer=%d, calling n_head(%d)...\n", hparams.n_layer, il);
-    }
     int n_head    = hparams.n_head(il);
     int n_head_kv = hparams.n_head_kv(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k;
     const int64_t n_embd_gqa  = hparams.n_embd_v_gqa(il);
-    if (il >= 40) {
-        fprintf(stderr, "[MTP_DEBUG] n_head=%d n_head_kv=%d n_embd_head_k=%ld n_embd_gqa=%ld n_tokens=%d\n",
-                n_head, n_head_kv, (long)n_embd_head_k, (long)n_embd_gqa, n_tokens);
-        fprintf(stderr, "[MTP_DEBUG] wqkv=%p, wqk=%p — entering branches...\n", (void*)wqkv, (void*)wqk);
-    }
     if (wqkv) {
         auto qkv = llm_build_lora_mm(lctx, ctx0, wqkv, cur);
         if (add_graph_split) {
@@ -4549,8 +4532,6 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
     ggml_tensor * cur = nullptr;
 
     if (cparams.mtp_op_type != MTP_OP_NONE) {
-        fprintf(stderr, "[MTP_DEBUG] build_qwen35moe: mtp_op_type=%d, n_tokens=%d, n_layer=%d\n",
-                cparams.mtp_op_type, n_tokens, n_layer);
 
         ggml_tensor * hidden_states_from_main_model;
 
@@ -4567,16 +4548,6 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        fprintf(stderr, "[MTP_DEBUG] il_mtp=%d, layer.attn_norm=%p, layer.wq=%p, layer.wk=%p, layer.wv=%p, layer.wo=%p\n",
-                il_mtp, (void*)mtp_layer.attn_norm, (void*)mtp_layer.wq, (void*)mtp_layer.wk,
-                (void*)mtp_layer.wv, (void*)mtp_layer.wo);
-        fprintf(stderr, "[MTP_DEBUG] nextn: eh_proj=%p, embed_tokens=%p, enorm=%p, hnorm=%p, shared_head_head=%p, shared_head_norm=%p\n",
-                (void*)mtp_layer.nextn.eh_proj, (void*)mtp_layer.nextn.embed_tokens,
-                (void*)mtp_layer.nextn.enorm, (void*)mtp_layer.nextn.hnorm,
-                (void*)mtp_layer.nextn.shared_head_head, (void*)mtp_layer.nextn.shared_head_norm);
-        fprintf(stderr, "[MTP_DEBUG] ffn: gate_inp=%p, up_exps=%p, gate_exps=%p, down_exps=%p\n",
-                (void*)mtp_layer.ffn_gate_inp, (void*)mtp_layer.ffn_up_exps,
-                (void*)mtp_layer.ffn_gate_exps, (void*)mtp_layer.ffn_down_exps);
 
         cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, nullptr);
     } else {
@@ -7589,43 +7560,31 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     struct ggml_tensor * rope_cache
 ) {
     const int il = hparams.n_layer - 1;
-    fprintf(stderr, "[MTP_DEBUG] build_mtp_tail: il=%d, n_embd_head=%ld, prev_embeddings=%p\n",
-            il, (long)n_embd_head, (void*)prev_embeddings);
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
-    fprintf(stderr, "[MTP_DEBUG] KQ_mask=%p\n", (void*)KQ_mask);
 
     struct ggml_tensor * inp_out_ids = build_inp_out_ids();
-    fprintf(stderr, "[MTP_DEBUG] inp_out_ids=%p\n", (void*)inp_out_ids);
 
     // If nextn.embed_tokens is missing (GLM-4.6), use model.tok_embd
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
     if (mtp_embd_weights == nullptr) {
         mtp_embd_weights = model.tok_embd;
-        fprintf(stderr, "[MTP_DEBUG] using model.tok_embd as fallback for embed_tokens\n");
     }
-    fprintf(stderr, "[MTP_DEBUG] mtp_embd_weights=%p\n", (void*)mtp_embd_weights);
     ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
-    fprintf(stderr, "[MTP_DEBUG] token_emb=%p\n", (void*)token_emb);
 
     ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
-    fprintf(stderr, "[MTP_DEBUG] token_emb_norm done, building hidden_state_norm...\n");
     ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
 
-    fprintf(stderr, "[MTP_DEBUG] concat token_emb_norm + hidden_state_norm...\n");
     ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
     cb(combined, "mtp_concat", il);
-    fprintf(stderr, "[MTP_DEBUG] eh_proj matmul...\n");
     ggml_tensor* cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
 
     // Use build_std_attention which correctly handles gated Q (Qwen3.5 MoE wq = Q + Gate)
     // and M-RoPE (is_multi=true). add_input=true adds the residual connection internally.
-    fprintf(stderr, "[MTP_DEBUG] calling build_std_attention for MTP layer il=%d...\n", il);
     float KQ_scale_mtp = 1.0f / sqrtf(float(n_embd_head));
     cur = build_std_attention(gf, mtp_layer.attn_norm, cur, inp_pos, nullptr, nullptr,
             KQ_mask, nullptr, nullptr, KQ_scale_mtp, 0.0f, 0, il,
             /*do_rope=*/true, /*add_graph_split=*/false, /*add_input=*/true, /*is_norm=*/false, /*is_multi=*/true);
-    fprintf(stderr, "[MTP_DEBUG] build_std_attention done. cur ne=[%ld,%ld]\n", cur->ne[0], cur->ne[1]);
 
     ggml_tensor * ffn_inp = cur;
     cb(ffn_inp, "mtp_ffn_inp", il);
@@ -7633,8 +7592,6 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     cur = llm_build_norm(ctx0, ffn_inp, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "attn_post_norm", il);
 
-    fprintf(stderr, "[MTP_DEBUG] MoE FFN... ffn_gate_inp=%p, up_gate_exps=%p\n",
-            (void*)mtp_layer.ffn_gate_inp, (void*)mtp_layer.ffn_up_gate_exps);
     // moe ffn for nextn block
     {
         // Routed Experts
@@ -7666,7 +7623,6 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
                 LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
         cb(shared_out, "ffn_shexp_out", il);
 
-        fprintf(stderr, "[MTP_DEBUG] MoE + shared expert done, summing...\n");
         // Sum and Residual
         cur = ggml_add(ctx0, routed_out, shared_out);
         cb(cur, "ffn_out", il);
@@ -7685,11 +7641,8 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     if (mtp_head_weights == nullptr) {
         mtp_head_weights = model.output;
     }
-    fprintf(stderr, "[MTP_DEBUG] lm_head matmul... mtp_head_weights=%p cur ne=[%ld,%ld]\n",
-            (void*)mtp_head_weights, cur->ne[0], cur->ne[1]);
     cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
     cb(cur, "result_output", -1);
-    fprintf(stderr, "[MTP_DEBUG] build_mtp_tail COMPLETE! result ne=[%ld,%ld]\n", cur->ne[0], cur->ne[1]);
 
     return cur;
 }

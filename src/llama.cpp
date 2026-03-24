@@ -3556,12 +3556,9 @@ static int llama_decode_internal(
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
-            fprintf(stderr, "[MTP_DEBUG] prepare_mtp_graph_inputs: mtp_op=%d, inp_mtp_states=%p, embd=%p\n",
-                    cparams.mtp_op_type, (void*)lctx.inp_mtp_states, (void*)lctx.embd);
             if (!prepare_mtp_graph_inputs(lctx)) {
                 return GGML_STATUS_FAILED;
             }
-            fprintf(stderr, "[MTP_DEBUG] prepare_mtp_graph_inputs OK. About to compute graph (n_nodes=%d)...\n", gf->n_nodes);
         }
 
         // the output is always the last tensor in the graph
@@ -3600,7 +3597,6 @@ static int llama_decode_internal(
         // llama_set_inputs sets tokens, positions, KQ_mask — needed for both normal and MTP graphs
         llama_set_inputs(lctx, u_batch);
         if (cparams.mtp_op_type != MTP_OP_NONE) {
-            fprintf(stderr, "[MTP_DEBUG] llama_set_inputs done for MTP, calling graph_compute...\n");
         }
 #if IK_PRINT_TIMING == 1
         tim2 = ggml_time_us();
