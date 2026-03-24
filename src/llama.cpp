@@ -2194,14 +2194,18 @@ static bool llm_load_tensors(
         int n_seq_max,
         int n_ubatch,
         int amb,
+        int fit_margin,
         bool flash_attn,
         bool use_mlock,
         bool validate_quants,
         bool mtp,
+        bool fit,
         bool dry_run,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
+
+    constexpr size_t k_default_mem_margin = 1024 * 1024 * 1024;
 
     auto & hparams = model.hparams;
 
@@ -2232,11 +2236,23 @@ static bool llm_load_tensors(
         max_ctx_size = model.hparams.n_ctx_train;
     }
 
+    if (fit) {
+        if (ml.tensor_buft_overrides) {
+            throw std::runtime_error("Manual tensor overrides cannot be used with --fit");
+        }
+        if (ml.ncmoe > 0) {
+            throw std::runtime_error("-ncmoe | --n-cpu-moe cannot be used with --fit");
+        }
+        n_gpu_layers = 999;
+    }
+
     model.split_mode   = split_mode;
     model.main_gpu     = main_gpu;
     model.max_gpu      = max_gpu;
     model.n_gpu_layers = n_gpu_layers;
     model.mtp          = mtp;
+
+    size_t mem_margin  = fit_margin > 0 ? size_t(fit_margin)*1024*1024 : k_default_mem_margin;
 
     const int n_layer     = hparams.n_layer;
     const int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
@@ -2252,15 +2268,13 @@ static bool llm_load_tensors(
         model.buft_layer[i] = llama_default_buffer_type_cpu(true);
     }
 
-    constexpr size_t k_mem_margin = 1024 * 1024 * 1024;
-
     std::vector<size_t> device_mem(model.devices.size());
     for (int i = 0; i < int(device_mem.size()); ++i) {
         device_mem[i] = llama_get_device_memory(model, model.devices[i]);
-        if (device_mem[i] > k_mem_margin) {
-            device_mem[i] -= k_mem_margin;
+        if (device_mem[i] > mem_margin) {
+            device_mem[i] -= mem_margin;
         } else {
-            LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the %zu MiB safety margin\n", device_mem[i]/(1024*1024), model.devices[i], k_mem_margin/(1024*1024));
+            LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the %zu MiB safety margin\n", device_mem[i]/(1024*1024), model.devices[i], mem_margin/(1024*1024));
             device_mem[i] = 0;
         }
     }
@@ -2292,6 +2306,12 @@ static bool llm_load_tensors(
     }
 
     int device_count = model.splits.size();
+    if (device_count < 2 && (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH)) {
+        throw std::runtime_error("It is not possible to use split mode 'graph' with less than 2 devices");
+    }
+    if (fit && device_count > 1) {
+        model.main_gpu = device_count - 1;
+    }
     model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
     int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     std::vector<llama_model_tensor_buft_override> overrides;
@@ -2326,84 +2346,153 @@ static bool llm_load_tensors(
             }
         }
         if (device_count > 1) {
-        int n_last = n_layer;
-        if (n_gpu_layers > n_layer) ++n_last;
-        double sum = max_compute * device_count;
-        for (int i = i_gpu_start; i < n_last; ++i) sum += layer_sizes[i];
-        int last = i_gpu_start;
-        float loaded_sum = 0;
-        for (int id = 0; id < device_count; ++id) {
-            loaded_sum += max_compute;
-            float split_size = model.splits[id]*sum;
-            int il = last;
-            for (; il < n_last; ++il) {
-                if (loaded_sum + layer_sizes[il] <= split_size) {
-                    model.default_layer_device[il] = id;
-                    loaded_sum += layer_sizes[il];
-                    LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
-                } else {
-                    if (loaded_sum + layer_sizes[il] - split_size < split_size - loaded_sum) {
-                        LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
-                        model.default_layer_device[il] = id;
-                        loaded_sum += layer_sizes[il++];
-                    }
-                    break;
-                }
-            }
-            last = il;
-        }
-        if (required_mem > available_mem) {
-            auto buft = ggml_backend_cpu_buffer_type();
+            int n_last = n_layer;
+            if (n_gpu_layers > n_layer) ++n_last;
+            double sum = max_compute * device_count;
+            for (int i = i_gpu_start; i < n_last; ++i) sum += layer_sizes[i];
+            int last = i_gpu_start;
+            float loaded_sum = 0;
             for (int id = 0; id < device_count; ++id) {
-                size_t mem = 0;
-                for (int il = 0; il <= n_layer; ++il) {
-                    if (model.default_layer_device[il] == id) {
-                        mem += layer_sizes[il];
+                loaded_sum += max_compute;
+                float split_size = model.splits[id]*sum;
+                int il = last;
+                for (; il < n_last; ++il) {
+                    if (loaded_sum + layer_sizes[il] <= split_size) {
+                        model.default_layer_device[il] = id;
+                        loaded_sum += layer_sizes[il];
+                        LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                    } else {
+                        if (loaded_sum + layer_sizes[il] - split_size < split_size - loaded_sum) {
+                            LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                            model.default_layer_device[il] = id;
+                            loaded_sum += layer_sizes[il++];
+                        }
+                        break;
                     }
                 }
-                if (mem > device_mem[id]) {
+                last = il;
+            }
+        }
+        if (fit && required_mem > available_mem) {
+            auto buft = ggml_backend_cpu_buffer_type();
+            if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+                auto cur_mem = required_mem;
+                int n_override = 0;
+                for (int il = 0; il < n_layer; ++il) {
+                    bool has_experts = false;
+                    if (experts[il].down) {
+                        cur_mem -= ggml_nbytes(experts[il].down);
+                        has_experts = true;
+                    }
+                    if (experts[il].up) {
+                        cur_mem -= ggml_nbytes(experts[il].up);
+                        has_experts = true;
+                    }
+                    if (experts[il].gate) {
+                        cur_mem -= ggml_nbytes(experts[il].gate);
+                        has_experts = true;
+                    }
+                    if (has_experts) {
+                        printf("Adding experts CPU overrides for layer %d\n", il);
+                        std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                        auto & o = overrides.emplace_back();
+                        o.pattern = strdup(pattern.c_str());
+                        o.buft = buft;
+                        ++n_override;
+                    }
+                    if (cur_mem <= available_mem - max_compute) {
+                        printf("Estimated memory use for split mode `graph' is %zu MiB after adding %d overrides, which is less than available memory of %zu MiB\n",
+                                cur_mem/(1024*1024), n_override, size_t(available_mem - max_compute)/(1024*1024));
+                        break;
+                    }
+                }
+                if (cur_mem > available_mem) {
+                    if (n_override > 0) {
+                        LLAMA_LOG_ERROR("Required memory %zu MiB is still greater than available memory %zu MiB after overriding all MoE tensors to CPU\n",
+                                cur_mem/(1024*1024), available_mem/(1024*1024));
+                    } else {
+                        LLAMA_LOG_ERROR("No MoE tensors in model and required memory %zu MiB greater than available memory %zu MiB.\n",
+                                cur_mem/(1024*1024), available_mem/(1024*1024));
+                        LLAMA_LOG_ERROR("Note: auto-fit currently only works for MoE models\n");
+                    }
+                    throw std::runtime_error("Unable to auto-fit model");
+                }
+                int id = model.default_layer_device[n_layer];
+                if (device_mem[id] <= layer_sizes[n_layer]) {
+                    LLAMA_LOG_ERROR("Not enough memory in device %d to offload the output layer\n", id);
+                    throw std::runtime_error("Unable to auto-fit model");
+                }
+                device_mem[id] -= layer_sizes[id];
+                float sum = 0;
+                for (int id = 0; id < int(model.splits.size()); ++id) {
+                    sum += device_mem[id];
+                    model.splits[id] = sum;
+                }
+                if (sum > 0) {
+                    LLAMA_LOG_INFO("=== Adjusted device splits for split mode graph:\n");
+                    float last_split = 0;
+                    for (int id = 0; id < int(model.splits.size()); ++id) {
+                        model.splits[id] /= sum;
+                        printf("Device %2d: %zu MiB -> split = %g\n", id, device_mem[id]/(1024*1024), model.splits[id] - last_split);
+                        last_split = model.splits[id];
+                    }
+                } else {
+                    throw std::runtime_error("Unable to auto-fit model");
+                }
+            } else {
+                for (int id = 0; id < device_count; ++id) {
+                    size_t mem = 0;
+                    for (int il = 0; il <= n_layer; ++il) {
+                        if (model.default_layer_device[il] == id) {
+                            mem += layer_sizes[il];
+                        }
+                    }
                     size_t cur_mem = mem;
                     int n_override = 0;
-                    for (int il = n_layer-1; il >= 0; --il) {
-                        if (model.default_layer_device[il] != id) continue;
-                        bool has_experts = false;
-                        if (experts[il].down) {
-                            cur_mem -= ggml_nbytes(experts[il].down);
-                            has_experts = true;
+                    if (cur_mem > device_mem[id]) {
+                        //for (int il = n_layer-1; il >= 0; --il) {
+                        for (int il = 0; il < n_layer; ++il) {
+                            if (model.default_layer_device[il] != id) continue;
+                            bool has_experts = false;
+                            if (experts[il].down) {
+                                cur_mem -= ggml_nbytes(experts[il].down);
+                                has_experts = true;
+                            }
+                            if (experts[il].up) {
+                                cur_mem -= ggml_nbytes(experts[il].up);
+                                has_experts = true;
+                            }
+                            if (experts[il].gate) {
+                                cur_mem -= ggml_nbytes(experts[il].gate);
+                                has_experts = true;
+                            }
+                            if (has_experts) {
+                                printf("Adding experts CPU overrides for layer %d in device %d\n", il, id);
+                                std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                                auto & o = overrides.emplace_back();
+                                o.pattern = strdup(pattern.c_str());
+                                o.buft = buft;
+                                ++n_override;
+                            }
+                            if (cur_mem <= device_mem[id]) {
+                                printf("Memory use in device %d is %zu MiB after adding %d overrides, which is less than available memory of %zu MiB\n",
+                                        id, cur_mem/(1024*1024) ,n_override, device_mem[id]/(1024*1024));
+                                break;
+                            }
                         }
-                        if (experts[il].up) {
-                            cur_mem -= ggml_nbytes(experts[il].up);
-                            has_experts = true;
+                    }
+                    if (cur_mem > device_mem[id]) {
+                        if (n_override > 0) {
+                            LLAMA_LOG_ERROR("Required memory %zu MiB in device %d is still greater than available memory %zu MiB after overriding all MoE tensors to CPU\n",
+                                    cur_mem/(1024*1024), id, device_mem[id]/(1024*1024));
+                        } else {
+                            LLAMA_LOG_ERROR("No MoE tensors in layers assigned to device %d, and required memory %zu MiB greater than available memory %zu MiB.\n",
+                                    id, cur_mem/(1024*1024), available_mem/(1024*1024));
                         }
-                        if (experts[il].gate) {
-                            cur_mem -= ggml_nbytes(experts[il].gate);
-                            has_experts = true;
-                        }
-                        if (has_experts) {
-                            printf("Adding experts CPU overrides for layer %d in device %d\n", il, id);
-                            std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
-                            auto & o = overrides.emplace_back();
-                            o.pattern = strdup(pattern.c_str());
-                            o.buft = buft;
-                            ++n_override;
-                        }
-                        if (cur_mem <= device_mem[id]) {
-                            printf("Memory use in device %d is %zu MiB after adding %d overrides, which is less than available memory of %zu MiB\n",
-                                    id, cur_mem/(1024*1024) ,n_override, device_mem[id]/(1024*1024));
-                            break;
-                        }
+                        throw std::runtime_error("Unable to auto-fit model");
                     }
                 }
             }
-        }
-        //for (int i = i_gpu_start; i < n_layer; ++i) {
-        //    int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
-        //    model.default_layer_device[i] = model.devices[layer_gpu];
-        //}
-        //if (n_gpu_layers > n_layer) {
-        //    int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - model.splits.begin();
-        //    model.default_layer_device[n_layer] = model.devices[layer_gpu];
-        //}
         }
     }
     // assign the repeating layers to the devices according to the splits
@@ -2690,6 +2779,13 @@ static bool llm_load_tensors(
         }
     }
 
+    if (!overrides.empty()) {
+        for (auto & o : overrides) {
+            if (o.pattern) free(const_cast<char*>(o.pattern));
+        }
+        ml.tensor_buft_overrides = nullptr;
+    }
+
     // loading time will be recalculate after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = ggml_time_us() - model.t_start_us;
@@ -2753,8 +2849,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
-            params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.flash_attn,
-            params.use_mlock, params.validate_quants, params.mtp, params.dry_run,
+            params.type_k, params.type_v, params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.flash_attn,
+            params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -4723,6 +4819,8 @@ struct llama_model_params llama_model_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_ubatch                    =*/ 512,
         /*.amb                         =*/ 0,
+        /*.fit_margin                  =*/ 0,
+        /*.fit                         =*/ false,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
