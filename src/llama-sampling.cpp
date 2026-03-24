@@ -733,9 +733,7 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
 
     auto p = sump * rng() / rng.max();
     auto iter = std::upper_bound(probs.begin(), probs.end(), p);
-    if (iter == probs.end()) {
-        iter = std::prev(probs.end());
-    }
+    GGML_ASSERT(iter != probs.end());
     auto idx = std::distance(probs.begin(), iter);
     auto id  = candidates->data[idx].id;
 
