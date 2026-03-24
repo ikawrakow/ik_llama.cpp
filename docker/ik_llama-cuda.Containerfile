@@ -13,7 +13,7 @@ WORKDIR /app
 RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
-    cmake -B build -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
+    cmake -B build -DGGML_NATIVE=ON -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
     cmake --build build --config Release -j$(nproc)
 RUN mkdir -p /app/lib && \
     find build -name "*.so" -exec cp {} /app/lib \;
@@ -67,7 +67,7 @@ ENTRYPOINT [ "/app/llama-server" ]
 # Stage 5: Swap
 FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
-ARG LS_VER=189
+ARG LS_VER=198
 RUN curl -LO "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"

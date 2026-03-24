@@ -123,7 +123,7 @@ docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --r
 
 - Customize `llama-swap` config: save the `ik_llama-cpu-swap.config.yaml` or `ik_llama-cuda-swap.config.yaml` localy  (e.g. under `/my_local_files/`) then map it to `/app/config.yaml` inside the container appending `-v /my_local_files/ik_llama-cpu-swap.config.yaml:/app/config.yaml:ro` to your`podman run ...` or `docker run ...`.
 - To run the container in background, replace `-it` with `-d`: `podman run -d ...` or `docker run -d ...`. To stop it: `podman stop ik_llama` or `docker stop ik_llama`.
-- If you build the image on the same machine where will be used, change `-DGGML_NATIVE=OFF` to `-DGGML_NATIVE=ON` in the `.Containerfile`.
+- If you build the image on a diferent machine, change `-DGGML_NATIVE=ON` to `-DGGML_NATIVE=OFF` in the `.Containerfile`.
 - If you build only for your GPU architecture and want to make use of more KV quantization types, build with `-DGGML_IQK_FA_ALL_QUANTS=ON`.
 - If you experiment with several `CUDA_VERSION`, remember to identify with `podman image ls` or `docker image ls` then delete (e.g.`podman image rm docker.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04 && podman image rm docker.io/nvidia/cuda:12.4.0-devel-ubuntu22.04` or `docker image rm docker.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04 && docker image rm docker.io/nvidia/cuda:12.4.0-devel-ubuntu22.04` the unused images as they have several GB.
 - If you want to build without `llama-swap`, change `--target swap` to `--target server` in `ik_llama Containerfiles`, e.g. `docker image build --file ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && docker image build --file ik_llama-cuda.Containerfile --target server --tag ik_llama-cuda:server .`
