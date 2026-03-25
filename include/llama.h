@@ -378,6 +378,8 @@ extern "C" {
         int32_t  n_seq_max;
         int32_t  n_ubatch;
         int32_t  amb;
+        int32_t  fit_margin;
+        bool     fit;
 
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;

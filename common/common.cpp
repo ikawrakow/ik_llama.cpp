@@ -1500,6 +1500,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         //}
         return true;
     }
+    if (arg == "--fit") {
+        params.fit = true;
+        return true;
+    }
+    if (arg == "--fit-margin") {
+        CHECK_ARG;
+        int32_t margin = std::stoi(argv[i]);
+        if (margin < 0) {
+            fprintf(stderr, "error: Invalid value for --fit-margin: %d (must be >= 0)\n", margin);
+            invalid_param = true;
+        } else {
+            params.fit_margin = margin;
+        }
+        return true;
+    }
     if (arg == "--no-mmap") {
         params.use_mmap = false;
         return true;
@@ -2479,6 +2494,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
+    options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
@@ -3311,6 +3328,8 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.main_gpu        = params.main_gpu;
     mparams.max_gpu         = params.max_gpu;
     mparams.ncmoe           = params.ncmoe;
+    mparams.fit             = params.fit;
+    mparams.fit_margin      = params.fit_margin;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
     mparams.max_ctx_size    = params.n_ctx;
@@ -4357,6 +4376,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu: %d # default: 0\n", params.max_gpu);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
+    fprintf(stream, "fit: %d # default: false\n", params.fit);
+    fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);
