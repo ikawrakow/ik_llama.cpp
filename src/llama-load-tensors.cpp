@@ -217,12 +217,14 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 
     if (ml.tensor_buft_overrides) {
         for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) {
-            overrides.emplace_back(std::make_pair(std::regex(o->pattern), o->buft));
+            auto buft = o->buft;
+            if (ggml_backend_buft_is_host(buft)) buft = llama_default_buffer_type_cpu(true);
+            overrides.emplace_back(std::make_pair(std::regex(o->pattern), buft));
         }
     }
 
     if (ml.ncmoe > 0) {
-        auto buft = ggml_backend_cpu_buffer_type();
+        auto buft = llama_default_buffer_type_cpu(true);
         if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH || ml.ncmoe >= n_layer || model.devices.size() < 2) {
             int nmax = std::min(ml.ncmoe, n_layer);
             for (int i = 0; i < nmax; ++i) {
