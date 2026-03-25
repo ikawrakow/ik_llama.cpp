@@ -2263,7 +2263,7 @@ static bool llm_load_tensors(
     size_t mem_margin  = fit_margin > 0 ? size_t(fit_margin)*1024*1024 : k_default_mem_margin;
 
     const int n_layer     = hparams.n_layer;
-    const int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
+    int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
     bool use_mmap_buffer = true;
 
     // there is very little benefit to offloading the input layer, so always keep it on the CPU
@@ -2330,6 +2330,13 @@ static bool llm_load_tensors(
         for (int i = 0; i <= n_layer; ++i) {
             required_mem += layer_sizes[i];
         }
+        bool has_experts = false;
+        for (int il = 0; il < n_layer; ++il) {
+            if (experts[il].down || experts[il].up || experts[il].gate) {
+                has_experts = true;
+                break;
+            }
+        }
         size_t available_mem = 0;
         for (int id = 0; id < device_count; ++id) {
             if (device_mem[id] > max_compute) {
@@ -2368,10 +2375,14 @@ static bool llm_load_tensors(
                     if (loaded_sum + layer_sizes[il] <= split_size) {
                         model.default_layer_device[il] = id;
                         loaded_sum += layer_sizes[il];
-                        LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                        if (required_mem <= available_mem) {
+                            LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                        }
                     } else {
                         if (loaded_sum + layer_sizes[il] - split_size < split_size - loaded_sum) {
-                            LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                            if (required_mem <= available_mem) {
+                                LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                            }
                             model.default_layer_device[il] = id;
                             loaded_sum += layer_sizes[il++];
                         }
@@ -2383,6 +2394,7 @@ static bool llm_load_tensors(
         }
         if (fit && required_mem > available_mem) {
             auto buft = ggml_backend_cpu_buffer_type();
+            if (has_experts) {
             if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
                 auto cur_mem = required_mem;
                 int n_override = 0;
@@ -2498,6 +2510,28 @@ static bool llm_load_tensors(
                         }
                         throw std::runtime_error("Unable to auto-fit model");
                     }
+                }
+            }
+            } else {
+                int id = model.devices.size() - 1;
+                for (int il = n_layer; il >= 0; --il) {
+                    if (device_mem[id] >= layer_sizes[il]) {
+                        device_mem[id] -= layer_sizes[il];
+                        model.default_layer_device[il] = id;
+                        LLAMA_LOG_INFO("Setting layer %d to device %d\n", il, id);
+                    } else {
+                        --id;
+                        if (id >= 0) {
+                            ++il;
+                        } else {
+                            i_gpu_start = il+1;
+                            break;
+                        }
+                    }
+                }
+                for (int il = 0; il < i_gpu_start; ++il) {
+                    model.default_layer_device[il] = -1;
+                    model.buft_layer[il] = llama_default_buffer_type_cpu(true);
                 }
             }
         }
