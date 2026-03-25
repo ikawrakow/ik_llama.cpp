@@ -4,7 +4,7 @@
   # the module `{ pkgs ... }: { /* config */ }` implicitly uses
   # `_module.args.pkgs` (defined in this case by flake-parts).
   perSystem =
-    { system, ... }:
+    { lib, system, ... }:
     {
       _module.args = {
         # Note: bringing up https://zimbatm.com/notes/1000-instances-of-nixpkgs
@@ -26,6 +26,9 @@
           config.cudaSupport = true;
           config.allowUnfreePredicate =
             p:
+            let
+              licenses = lib.toList (p.meta.license or []);
+            in
             builtins.all
               (
                 license:
@@ -35,7 +38,7 @@
                   "cuDNN EULA"
                 ]
               )
-              (p.meta.licenses or [ p.meta.license ]);
+              licenses;
         };
         # Ensure dependencies use ROCm consistently
         pkgsRocm = import inputs.nixpkgs {

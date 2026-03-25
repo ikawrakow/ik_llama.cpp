@@ -3171,10 +3171,9 @@ static common_chat_params common_chat_templates_apply_jinja(
         workaround::func_args_not_string(params.messages);
         // Models with <think> support (Step-3.5-Flash, Nemotron 3 Nano) use the
         // Nemotron v3 PEG parser for streaming and schema-aware parameter parsing.
-        // Qwen3-Coder has no <think> in its template.
-        //if (src.find("<think>") != std::string::npos) {
-        //    return common_chat_params_init_qwen3_coder(tmpl, params);
-        //}
+        if (inputs.use_peg) {
+            return common_chat_params_init_qwen3_coder(tmpl, params);
+        }
         return common_chat_params_init_qwen3_coder_xml(tmpl, params);
     }
 

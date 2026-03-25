@@ -784,6 +784,7 @@ json oaicompat_chat_params_parse(
     inputs.parallel_tool_calls = json_value(body, "parallel_tool_calls", false);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.reasoning_format = opt.reasoning_format;
+    inputs.use_peg = opt.use_peg;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
     }

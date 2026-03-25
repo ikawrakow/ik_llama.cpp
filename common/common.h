@@ -226,6 +226,8 @@ struct gpt_params {
     int32_t main_gpu              =       0; // the GPU that is used for scratch and small tensors
     int32_t max_gpu               =       0; // max number of GPUs to use at a time for split mode "graph"
     int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
+    int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
+    bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     float   tensor_split[128]     =     {0}; // how split tensors should be distributed across GPUs
     int32_t grp_attn_n            =       1; // group-attention factor
     int32_t grp_attn_w            =     512; // group-attention width
@@ -392,6 +394,7 @@ struct gpt_params {
     std::string public_path   = "";
     std::string chat_template = "";
     bool use_jinja = false;                                                                                 // NOLINT
+    bool use_peg = false;
     std::string system_prompt = "";
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;

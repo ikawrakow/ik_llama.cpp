@@ -1482,7 +1482,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
-        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
+        params.ncmoe = 999;
+        //params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
     }
     if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
@@ -1498,6 +1499,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         //    std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
         //    params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
         //}
+        return true;
+    }
+    if (arg == "--fit") {
+        params.fit = true;
+        return true;
+    }
+    if (arg == "--fit-margin") {
+        CHECK_ARG;
+        int32_t margin = std::stoi(argv[i]);
+        if (margin < 0) {
+            fprintf(stderr, "error: Invalid value for --fit-margin: %d (must be >= 0)\n", margin);
+            invalid_param = true;
+        } else {
+            params.fit_margin = margin;
+        }
         return true;
     }
     if (arg == "--no-mmap") {
@@ -1959,6 +1975,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_jinja = true;
         return true;
     }
+    if (arg == "--peg") {
+        params.use_peg = true;
+        return true;
+    }
     if (arg == "--chat-template-kwargs") {
         CHECK_ARG
         std::string value = argv[i];
@@ -2246,6 +2266,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-h,    --help, --usage",        "print usage and exit" });
     options.push_back({ "*",           "       --version",              "show version and build info" });
     options.push_back({ "*",           "-v,    --verbose",              "print verbose information" });
+    options.push_back({ "*",           "       --minilog",              "print important information" });
     options.push_back({ "*",           "       --verbosity N",          "set specific verbosity level (default: %d)", params.verbosity });
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
@@ -2374,6 +2395,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
+    options.push_back({ "main",        "       --peg",
+                                                                    "use peg parser for qwen3.5 models.\n"
+                                                                    "https://github.com/ikawrakow/ik_llama.cpp/pull/1490" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
@@ -2471,6 +2495,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
+    options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
@@ -3235,46 +3261,6 @@ void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lor
     }
 }
 
-struct llama_model_params common_model_params_to_llama(const gpt_params & params) {
-    auto mparams = llama_model_default_params();
-    mparams.devices = params.devices.c_str();
-
-    if (params.n_gpu_layers != -1) {
-        mparams.n_gpu_layers = params.n_gpu_layers;
-    }
-    mparams.mla             = params.mla_attn;
-    mparams.dry_run         = params.dry_run;
-    mparams.rpc_servers     = params.rpc_servers.c_str();
-    mparams.main_gpu        = params.main_gpu;
-    mparams.max_gpu         = params.max_gpu;
-    mparams.ncmoe           = params.ncmoe;
-    mparams.split_mode      = params.split_mode;
-    mparams.tensor_split    = params.tensor_split;
-    mparams.use_mmap        = params.use_mmap;
-    mparams.use_mlock       = params.use_mlock;
-    mparams.check_tensors   = params.check_tensors;
-    mparams.repack_tensors  = params.repack_tensors;
-    mparams.use_thp         = params.use_thp;
-    mparams.validate_quants = params.validate_quants;
-    mparams.merge_qkv       = params.merge_qkv;
-    mparams.merge_up_gate_exps = params.merge_up_gate_exps;
-    mparams.mtp             = params.has_mtp;
-    if (params.kv_overrides.empty()) {
-        mparams.kv_overrides = NULL;
-    } else {
-        GGML_ASSERT(params.kv_overrides.back().key[0] == 0 && "KV overrides not terminated with empty key");
-        mparams.kv_overrides = params.kv_overrides.data();
-    }
-    if (params.tensor_buft_overrides.empty()) {
-        mparams.tensor_buft_overrides = NULL;
-    } else {
-        GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
-        mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
-    }
-
-    return mparams;
-}
-
 static ggml_type kv_cache_type_from_str(const std::string & s) {
     if (s == "f32") {
         return GGML_TYPE_F32;
@@ -3313,6 +3299,75 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     throw std::runtime_error("Invalid cache type: " + s);
 }
 
+static std::pair<int, int> get_batch_ubatch(const gpt_params & params) {
+    int n_batch = params.n_batch;
+    int n_ubatch = params.n_ubatch;
+    if (params.n_ctx > 0) {
+        n_batch = std::min(n_batch, params.n_ctx);
+    }
+    if (!params.mmproj.path.empty()) {
+        // temporary fix for qwen mtmd
+        n_batch = std::max(n_batch, n_ubatch);
+        n_ubatch = n_batch;
+        fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);
+    } else {
+        n_ubatch = std::min(n_batch, n_ubatch);
+    }
+    return {n_batch, n_ubatch};
+}
+
+struct llama_model_params common_model_params_to_llama(const gpt_params & params) {
+    auto mparams = llama_model_default_params();
+    mparams.devices = params.devices.c_str();
+
+    if (params.n_gpu_layers != -1) {
+        mparams.n_gpu_layers = params.n_gpu_layers;
+    }
+    mparams.mla             = params.mla_attn;
+    mparams.dry_run         = params.dry_run;
+    mparams.rpc_servers     = params.rpc_servers.c_str();
+    mparams.main_gpu        = params.main_gpu;
+    mparams.max_gpu         = params.max_gpu;
+    mparams.ncmoe           = params.ncmoe;
+    mparams.fit             = params.fit;
+    mparams.fit_margin      = params.fit_margin;
+    mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
+    mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
+    mparams.max_ctx_size    = params.n_ctx;
+    mparams.n_seq_max       = params.n_parallel;
+    mparams.n_ubatch        = get_batch_ubatch(params).second;
+    mparams.amb             = params.attn_max_batch;
+    mparams.split_mode      = params.split_mode;
+    mparams.tensor_split    = params.tensor_split;
+    mparams.use_mmap        = params.use_mmap;
+    mparams.use_mlock       = params.use_mlock;
+    mparams.check_tensors   = params.check_tensors;
+    mparams.repack_tensors  = params.repack_tensors;
+    mparams.use_thp         = params.use_thp;
+    mparams.validate_quants = params.validate_quants;
+    mparams.merge_qkv       = params.merge_qkv;
+    mparams.merge_up_gate_exps = params.merge_up_gate_exps;
+    mparams.mtp             = params.has_mtp;
+    mparams.flash_attn      = params.flash_attn;
+    if (params.kv_overrides.empty()) {
+        mparams.kv_overrides = NULL;
+    } else {
+        GGML_ASSERT(params.kv_overrides.back().key[0] == 0 && "KV overrides not terminated with empty key");
+        mparams.kv_overrides = params.kv_overrides.data();
+    }
+    if (params.tensor_buft_overrides.empty()) {
+        mparams.tensor_buft_overrides = NULL;
+    } else {
+        GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
+        mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
+    }
+    if (!mparams.flash_attn && ggml_is_quantized(mparams.type_v)) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
+
+    return mparams;
+}
+
 static ggml_type ggml_type_from_str(const std::string & s) {
     if (s == "f32") {
         return GGML_TYPE_F32;
@@ -3331,15 +3386,8 @@ static ggml_type ggml_type_from_str(const std::string & s) {
 
 struct llama_context_params common_context_params_to_llama(const gpt_params & params) {
     auto cparams = llama_context_default_params();
-    int n_batch = params.n_batch;
-    int n_ubatch = params.n_ubatch;
 
-    // temporary fix for qwen mtmd
-    if (!params.mmproj.path.empty()) {
-        n_batch = std::max(params.n_batch, params.n_ubatch);
-        n_ubatch = params.n_batch;
-        fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);
-    }
+    auto [n_batch, n_ubatch] = get_batch_ubatch(params);
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
@@ -3387,6 +3435,9 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
     cparams.type_reduce = ggml_type_from_str(params.reduce_type);
+    if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v)) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
     if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
@@ -4326,6 +4377,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "max_gpu: %d # default: 0\n", params.max_gpu);
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
+    fprintf(stream, "fit: %d # default: false\n", params.fit);
+    fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);

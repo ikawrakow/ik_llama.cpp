@@ -217,12 +217,14 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 
     if (ml.tensor_buft_overrides) {
         for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) {
-            overrides.emplace_back(std::make_pair(std::regex(o->pattern), o->buft));
+            auto buft = o->buft;
+            if (ggml_backend_buft_is_host(buft)) buft = llama_default_buffer_type_cpu(true);
+            overrides.emplace_back(std::make_pair(std::regex(o->pattern), buft));
         }
     }
 
     if (ml.ncmoe > 0) {
-        auto buft = ggml_backend_cpu_buffer_type();
+        auto buft = llama_default_buffer_type_cpu(true);
         if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH || ml.ncmoe >= n_layer || model.devices.size() < 2) {
             int nmax = std::min(ml.ncmoe, n_layer);
             for (int i = 0; i < nmax; ++i) {
@@ -2060,16 +2062,15 @@ bool create_tensors_helper::create_command_r_tensors(const LLM_TN & tn) {
     }
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         auto & layer = model.layers[i];
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         if (n_layer >= 64){
-            layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head});
-            layer.attn_k_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv});
+            layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head}, 0);
+            layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv}, 0);
         }
 
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
@@ -3965,6 +3966,10 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
         }
+        std::vector<float> gpu_split_count;
+        if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size())) {
+            gpu_split_count.resize(model.splits.size(), 0.0f);
+        }
         for (int il = 0; il < n_layer; ++il) {
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
@@ -3974,11 +3979,17 @@ bool create_tensors_helper::create_tensors() {
             if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
                 adjust_split(cur_splits, mem_used, model.max_gpu);
-                LLAMA_LOG_INFO("Adjusted split at layer %2d:", il);
+                LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
                 float last_split = 0;
-                for (auto & p : cur_splits) {
-                    LLAMA_LOG_INFO(" %g", p - last_split);
-                    last_split = p;
+                for (int i = 0; i < (int)cur_splits.size(); ++i) {
+                    if (i > 0) {
+                        LLAMA_LOG_INFO(" ; ");
+                    }
+                    LLAMA_LOG_INFO("GPU%d: %4g", i, cur_splits[i] - last_split);
+                    if (i < int(gpu_split_count.size())) {
+                        gpu_split_count[i] += cur_splits[i] - last_split;
+                    }
+                    last_split = cur_splits[i];
                 }
                 LLAMA_LOG_INFO("\n");
             }
@@ -4009,6 +4020,13 @@ bool create_tensors_helper::create_tensors() {
                     auto tt = ggml_internal_get_type_traits(layer.wo->type);
                     if (tt.blck_size > granularity_vo) granularity_vo = tt.blck_size;
                     GGML_ASSERT(granularity_vo % hparams.n_embd_head_v == 0);
+                    // Command-R: align KQ split to wo's block size so wq row
+                    // counts remain valid after splitting.
+                    if (model.arch == LLM_ARCH_COMMAND_R) {
+                        if (tt.blck_size > granularity_kq && layer.wq->ne[1] % tt.blck_size == 0) {
+                            granularity_kq = tt.blck_size;
+                        }
+                    }
                 }
                 auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used); //, true);
                 auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used); //, true);
@@ -4030,7 +4048,14 @@ bool create_tensors_helper::create_tensors() {
                 } else {
                     prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                     if (layer.attn_q_norm) {
-                        prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                        if (layer.attn_q_norm->ne[1] > 1) {
+                            // 2D per-head norm (e.g., Command-R+): split along the Q-head dimension
+                            auto split_q_heads = split_kq;
+                            for (auto & s : split_q_heads) s /= hparams.n_embd_head_k;
+                            prepare_split_tensors(1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_q_heads, mem_used);
+                        } else {
+                            prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                        }
                     }
                     if (layer.bq) {
                         prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
@@ -4079,7 +4104,16 @@ bool create_tensors_helper::create_tensors() {
                         prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
                     }
                     if (layer.attn_k_norm) {
-                        prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                        if (layer.attn_k_norm->ne[1] > 1) {
+                            // 2D per-head norm (e.g., Command-R+): split along the KV-head dimension
+                            // split_kq has already been divided by gqa_ratio, so values are in
+                            // (n_embd_head_k * n_head_kv) units; divide again to get head units
+                            auto split_k_heads = split_kq;
+                            for (auto & s : split_k_heads) s /= hparams.n_embd_head_k;
+                            prepare_split_tensors(1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_k_heads, mem_used);
+                        } else {
+                            prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                        }
                     }
                 }
                 prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
@@ -4222,6 +4256,17 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
             }
+        }
+
+        if (!gpu_split_count.empty()) {
+            LLAMA_LOG_INFO("Adjusted splits (total)   :  ");
+            for (int i = 0; i < (int)gpu_split_count.size(); ++i) {
+                if (i > 0) {
+                    LLAMA_LOG_INFO(" ; ");
+                }
+                LLAMA_LOG_INFO("GPU%d: %4g", i, gpu_split_count[i]);
+            }
+            LLAMA_LOG_INFO("\n");
         }
 
         if (model.output) {
