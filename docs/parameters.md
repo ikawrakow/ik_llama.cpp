@@ -60,6 +60,8 @@ Some often used terms.
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
 | `-h, --help, --usage` | Print usage and exit | - | - |
+| `--fit` | Automatically fit to available VRAM | off | Loads as many tensors to the GPU(s) as available VRAM will permit. Cannot be used together with `--cpu-moe`, `--n-cpu-moe` or tensor overrides |
+| `--fit-margin N` | Safety VRAM margin in MiB when using `--fit` | 1024 | Increase this value in case of CUDA OOM when loading the model. Decrease to less than 1024 if the model loads successfully and you feel that too much VRAM has been left unused |  
 | `-t, --threads N` | Number of threads to use during generation | 4 | Try to match the number of physical CPU cores. Avoid odd numbers (e.g. 1,3,...). |
 | `-tb, --threads-batch N` | Number of threads to use during batch and prompt processing | Same as `--threads` | Same as `--threads` When doing full GPU offload, use a lower number (e.g. 2) |
 | `-c, --ctx-size N` | Size of the prompt context | 0 (loaded from model) | Influences the size of KV size (memory) therefore look for a value that fits your system then increase as needed (2048, 4096,…). If you use parallel slots, this context size will be split across the slots. |
