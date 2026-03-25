@@ -916,62 +916,59 @@ static bool llama_kv_cache_init(
             if (split_cache && (!K || !V || !K->extra || !V->extra)) {
                 ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
                 split_cache_i = false;
-            } else {
-                int n_embd_head_v = hparams.n_embd_head_v;
-                k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
-
-                int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
-                v = ggml_new_tensor_1d(ctx, type_v, v_ne);
-
-                auto k_name = std::string{"cache_k_l"} + std::to_string(i);
-                auto v_name = std::string{"cache_v_l"} + std::to_string(i);
-                ggml_set_name(k, k_name.c_str());
-                ggml_set_name(v, v_name.c_str());
-                //ggml_format_name(k, "cache_k_l%d", i);
-                //ggml_format_name(v, "cache_v_l%d", i);
-
-                if (split_cache_i) {
-                    bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
-                    auto extra_K = (const ggml_split_tensor_t *)K->extra;
-                    auto extra_V = (const ggml_split_tensor_t *)V->extra;
-                    auto & split_k_l = cache.split_k_l.emplace_back();
-                    auto & split_v_l = cache.split_v_l.emplace_back();
-                    split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
-                    split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
-                    for (int is = 0; is < extra_K->n_device; ++is) {
-                        auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
-                        if (!split) continue;
-                        int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
-                        if (use_V_for_K) {
-                            LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
-                                    i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
-                        }
-                        split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
-                        auto split_name = k_name + '.' + std::to_string(is);
-                        ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
-                        mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
-                    }
-                    split_k_l.ggml.n_device  = extra_K->n_device;
-                    split_k_l.ggml.split_dim = 0;
-                    split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
-                    for (int is = 0; is < extra_V->n_device; ++is) {
-                        auto split = extra_V->splits[is];
-                        if (!split) continue;
-                        split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
-                        auto split_name = v_name + '.' + std::to_string(is);
-                        ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
-                        mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
-                    }
-                    split_v_l.ggml.n_device  = extra_V->n_device;
-                    split_v_l.ggml.split_dim = 0;
-                    split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
-                    k->extra = (void *)&split_k_l.ggml;
-                    v->extra = (void *)&split_v_l.ggml;
-                }
             }
-            cache.k_l.push_back(k);
-            cache.v_l.push_back(v);
+            int n_embd_head_v = hparams.n_embd_head_v;
+            k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
+
+            int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
+            v = ggml_new_tensor_1d(ctx, type_v, v_ne);
+
+            auto k_name = std::string{"cache_k_l"} + std::to_string(i);
+            auto v_name = std::string{"cache_v_l"} + std::to_string(i);
+            ggml_set_name(k, k_name.c_str());
+            ggml_set_name(v, v_name.c_str());
+
+            if (split_cache_i) {
+                bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
+                auto extra_K = (const ggml_split_tensor_t *)K->extra;
+                auto extra_V = (const ggml_split_tensor_t *)V->extra;
+                auto & split_k_l = cache.split_k_l.emplace_back();
+                auto & split_v_l = cache.split_v_l.emplace_back();
+                split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
+                split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
+                for (int is = 0; is < extra_K->n_device; ++is) {
+                    auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
+                    if (!split) continue;
+                    int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
+                    if (use_V_for_K) {
+                        LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
+                                i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
+                    }
+                    split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
+                    auto split_name = k_name + '.' + std::to_string(is);
+                    ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
+                    mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
+                }
+                split_k_l.ggml.n_device  = extra_K->n_device;
+                split_k_l.ggml.split_dim = 0;
+                split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
+                for (int is = 0; is < extra_V->n_device; ++is) {
+                    auto split = extra_V->splits[is];
+                    if (!split) continue;
+                    split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
+                    auto split_name = v_name + '.' + std::to_string(is);
+                    ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
+                    mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
+                }
+                split_v_l.ggml.n_device  = extra_V->n_device;
+                split_v_l.ggml.split_dim = 0;
+                split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
+                k->extra = (void *)&split_k_l.ggml;
+                v->extra = (void *)&split_v_l.ggml;
+            }
         }
+        cache.k_l.push_back(k);
+        cache.v_l.push_back(v);
     }
     if (is_mla_attn && cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
