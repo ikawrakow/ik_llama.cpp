@@ -438,10 +438,18 @@ llm_expert_gating_func_type   gating_op,
 
     static uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self);
 
-    struct ggml_tensor * build_mtp_tail(
+    struct ggml_tensor * build_glm4_mtp_tail(
         const struct llama_layer & mtp_layer, 
         struct ggml_tensor * prev_embeddings, 
         int64_t n_embd_head,
+        struct ggml_cgraph * gf,
+        struct ggml_tensor * inp_pos,
+        struct ggml_tensor * rope_cache
+    );
+
+    struct ggml_tensor * build_mtp_tail_dsa(
+        const struct llama_layer & mtp_layer,
+        struct ggml_tensor * prev_embeddings,
         struct ggml_cgraph * gf,
         struct ggml_tensor * inp_pos,
         struct ggml_tensor * rope_cache

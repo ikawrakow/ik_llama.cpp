@@ -1286,8 +1286,12 @@ void llm_load_hparams(
                 // NextN/MTP parameters
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
 
-                // TODO: when MTP is implemented, this should probably be updated if needed
-                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                if (model.mtp) {
+                    hparams.n_layer_kv_from_start = hparams.n_layer;
+                }
+                else {
+                    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                }
 
                 switch (hparams.n_layer) {
                     case 79: model.type = MODEL_744B_A40B; break;

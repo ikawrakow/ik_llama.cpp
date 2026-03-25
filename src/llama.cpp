@@ -5028,8 +5028,7 @@ struct llama_context * llama_init_from_model(
             cparams.reduce_type = GGML_TYPE_F32;
         }
     }
-
-    if (model->arch != LLM_ARCH_GLM4_MOE && cparams.mtp != 0) {
+    if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_GLM_DSA && cparams.mtp != 0) {
         cparams.mtp = 0;
     }
 
