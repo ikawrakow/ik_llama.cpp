@@ -7369,7 +7369,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
         // output token IDs (for last layer cropping)
-        struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+        struct ggml_tensor * inp_out_ids = (n_tokens > 1 && !lctx.cparams.mtp) ? build_inp_out_ids() : nullptr;
 
         float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
@@ -7592,6 +7592,7 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
         cb(cur, "mtp_ffn_out_resid", il);
     }
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
+    cb(cur, "result_norm", -1);
 
     if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);

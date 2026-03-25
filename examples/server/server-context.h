@@ -165,6 +165,8 @@ struct server_slot {
 
     void reset();
 
+    bool need_embd() const;
+
     bool has_budget(gpt_params& global_params);
 
     bool available() const;
