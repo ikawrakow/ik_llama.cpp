@@ -2375,10 +2375,14 @@ static bool llm_load_tensors(
                     if (loaded_sum + layer_sizes[il] <= split_size) {
                         model.default_layer_device[il] = id;
                         loaded_sum += layer_sizes[il];
-                        LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                        if (required_mem <= available_mem) {
+                            LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                        }
                     } else {
                         if (loaded_sum + layer_sizes[il] - split_size < split_size - loaded_sum) {
-                            LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                            if (required_mem <= available_mem) {
+                                LLAMA_LOG_INFO("Setting default device in layer %2d to %d\n", il, id);
+                            }
                             model.default_layer_device[il] = id;
                             loaded_sum += layer_sizes[il++];
                         }
@@ -2514,7 +2518,7 @@ static bool llm_load_tensors(
                     if (device_mem[id] >= layer_sizes[il]) {
                         device_mem[id] -= layer_sizes[il];
                         model.default_layer_device[il] = id;
-                        printf("Setting layer %d to device %d\n", il, id);
+                        LLAMA_LOG_INFO("Setting layer %d to device %d\n", il, id);
                     } else {
                         --id;
                         if (id >= 0) {
