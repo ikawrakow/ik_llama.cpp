@@ -738,7 +738,7 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
         }
         out.flush();
         out.close();
-        LLAMA_LOG_ERROR("Data has been tored in probabilities.txt\n");
+        LLAMA_LOG_ERROR("Data has been stored in probabilities.txt\n");
         LLAMA_LOG_ERROR("Create an issue with full log and attach probabilities.txt to the issue\n");
         LLAMA_LOG_ERROR("\n\nCrashing now\n");
         GGML_ABORT("Fatal error");
