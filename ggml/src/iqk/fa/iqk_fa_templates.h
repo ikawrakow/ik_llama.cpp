@@ -2008,6 +2008,7 @@ struct FlashAttnBF16 {
             q    += q_step*stride_q;
             mask += q_step*stride_m;
             qkv  += q_step*stride_qkv;
+            if (M && S) { M += q_step; S += q_step; }
         }
         int n_left = nq1 - q_step*(nq1/q_step);
         if (n_left > 0) {
