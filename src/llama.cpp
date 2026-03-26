@@ -2064,6 +2064,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             LLAMA_LOG_WARN("Oops: strange layer index %d for tensor %s\n", il, name.c_str());
             continue;
         }
+        if (!model.mtp && model.hparams.nextn_predict_layers > 0 && il >= n_layer - model.hparams.nextn_predict_layers) {
+            continue;
+        }
         result[il] += size;
         if (auto pos = name.rfind(".bias"); pos < name.size() && name.size() - pos == 4) {
             // bias, we don't need to account for those
