@@ -10,6 +10,7 @@
 #include <cfloat>
 #include <numeric>
 #include <unordered_map>
+#include <fstream>
 
 static void llama_log_softmax(float * array, size_t size) {
     float max_l = *std::max_element(array, array + size);
@@ -721,8 +722,27 @@ llama_token llama_sample_token_with_rng_impl(struct llama_sampling * smpl, llama
     }
     probs.back() += sump;
 
-    auto p = sump * rng() / rng.max();
+    auto r = rng();
+    auto p = sump * r / rng.max();
     auto iter = std::upper_bound(probs.begin(), probs.end(), p);
+    if (iter == probs.end()) {
+        LLAMA_LOG_ERROR("=============================== Failed to sample token\n");
+        std::ofstream out("probabilities.txt");
+        out << "candidates->size: " << candidates->size << std::endl;
+        out << "max  = " << max << std::endl;
+        out << "sump = " << sump << std::endl;
+        out << "r    = " << r << std::endl;
+        out << "probabilities:\n";
+        for (int j = 0; j < candidates->size; ++j) {
+            out << j << "  " << candidates->data[j].id << "  " << candidates->data[j].logit << "  " << probs[j] << std::endl;
+        }
+        out.flush();
+        out.close();
+        LLAMA_LOG_ERROR("Data has been tored in probabilities.txt\n");
+        LLAMA_LOG_ERROR("Create an issue with full log and attach probabilities.txt to the issue\n");
+        LLAMA_LOG_ERROR("\n\nCrashing now\n");
+        GGML_ABORT("Fatal error");
+    }
     GGML_ASSERT(iter != probs.end());
     auto idx = std::distance(probs.begin(), iter);
     auto id  = candidates->data[idx].id;
