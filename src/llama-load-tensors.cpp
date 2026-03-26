@@ -181,6 +181,9 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_context * ctx_output;
     ggml_context * ctx_output_split;
 
+    ggml_backend_buffer_type_t default_cpu_buft;
+    bool has_buft_overrides = false;
+
     std::unordered_set<ggml_tensor *> split_tensors;
 
     std::vector<std::pair<std::regex, ggml_backend_buffer_type_t>> overrides;
@@ -215,10 +218,12 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         buft_layer_count[model.buft_layer[i].buft_matrix]++;
     }
 
+    default_cpu_buft = llama_default_buffer_type_cpu(true);
+
     if (ml.tensor_buft_overrides) {
         for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) {
             auto buft = o->buft;
-            if (ggml_backend_buft_is_host(buft)) buft = llama_default_buffer_type_cpu(true);
+            if (ggml_backend_buft_is_host(buft)) buft = default_cpu_buft;
             overrides.emplace_back(std::make_pair(std::regex(o->pattern), buft));
         }
     }
@@ -401,6 +406,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
 ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx, const std::string & name) {
     for (auto & o : overrides) {
         if (std::regex_search(name, o.first)) {
+            if (o.second == default_cpu_buft) has_buft_overrides = true;
             const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
             const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
             LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.second));
@@ -3941,6 +3947,9 @@ bool create_tensors_helper::create_tensors() {
         default:
             throw std::runtime_error("unknown architecture");
     }
+
+    use_mmap_buffer &= !has_buft_overrides;
+
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.mtp ? model.layers.size()
                                   : model.layers.size() - model.hparams.nextn_predict_layers;

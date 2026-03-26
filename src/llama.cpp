@@ -966,9 +966,9 @@ static bool llama_kv_cache_init(
                 k->extra = (void *)&split_k_l.ggml;
                 v->extra = (void *)&split_v_l.ggml;
             }
+            cache.k_l.push_back(k);
+            cache.v_l.push_back(v);
         }
-        cache.k_l.push_back(k);
-        cache.v_l.push_back(v);
     }
     if (is_mla_attn && cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
@@ -2062,6 +2062,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         }
         if (il < 0 || il >= model.hparams.n_layer) {
             LLAMA_LOG_WARN("Oops: strange layer index %d for tensor %s\n", il, name.c_str());
+            continue;
+        }
+        if (!model.mtp && model.hparams.nextn_predict_layers > 0 && il >= n_layer - model.hparams.nextn_predict_layers) {
             continue;
         }
         result[il] += size;

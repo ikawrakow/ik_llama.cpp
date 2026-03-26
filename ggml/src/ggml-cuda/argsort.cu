@@ -407,7 +407,10 @@ static void argsort_openai_f32_f32_i32_cuda(const float * x, float * weights, in
 
     const dim3 block_dims(ncols_pad, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
-    const size_t shared_mem = (ncols_pad + ncols_pad > WARP_SIZE ? WARP_SIZE : 0) * sizeof(int);
+    // k_openai_f32_f32_i32 always stores dst_row[ncols_pad] in dynamic shared memory.
+    // When blockDim > WARP_SIZE it also uses a per-warp float scratch segment (s_sum).
+    const int n_warps = (ncols_pad + WARP_SIZE - 1) / WARP_SIZE;
+    const size_t shared_mem = ncols_pad * sizeof(int) + (ncols_pad > WARP_SIZE ? n_warps * sizeof(float) : 0);
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
     GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
