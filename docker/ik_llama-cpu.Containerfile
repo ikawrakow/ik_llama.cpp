@@ -8,8 +8,7 @@ ARG UBUNTU_VERSION=22.04
   ARG USE_CCACHE=false
   ENV CCACHE_DIR=/ccache
 
-  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1
-  cmake ccache
+  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache
 
   COPY . /app
   WORKDIR /app
