@@ -13,13 +13,14 @@ ENV CCACHE_UMASK=000
 ENV CCACHE_MAXSIZE=1G
 
 # Install build dependencies + ccache
-RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git
+RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git libnccl-dev
 
 COPY . /app
 WORKDIR /app
 
-# We use a cache mount for /ccache to persist objects between builds
+# We use a cache mount for /ccache and .git to persist objects between builds
 RUN --mount=type=cache,target=/ccache \
+    --mount=type=bind,source=.git,target=.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         echo "ccache enabled. Current stats:"; \
