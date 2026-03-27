@@ -139,7 +139,7 @@ thinking_tokens thinking_tokens_from_string(const std::string& format);
 enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
-    COMMON_SPECULATIVE_TYPE_MTP,           // MTP model 
+    COMMON_SPECULATIVE_TYPE_MTP,           // MTP model
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
@@ -225,6 +225,9 @@ struct gpt_params {
     int32_t n_gpu_layers          =      -1; // number of layers to store in VRAM (-1 - use default)
     int32_t main_gpu              =       0; // the GPU that is used for scratch and small tensors
     int32_t max_gpu               =       0; // max number of GPUs to use at a time for split mode "graph"
+    int32_t ncmoe                 =       0; // number of layers in which MoE tensors are left in VRAM
+    int32_t fit_margin            =       0; // safety margin for auto-fit in MiB
+    bool    fit                   =   false; // automatically fit model (for now just using MoE tensor overrides)
     float   tensor_split[128]     =     {0}; // how split tensors should be distributed across GPUs
     int32_t grp_attn_n            =       1; // group-attention factor
     int32_t grp_attn_w            =     512; // group-attention width
@@ -391,12 +394,14 @@ struct gpt_params {
     std::string public_path   = "";
     std::string chat_template = "";
     bool use_jinja = false;                                                                                 // NOLINT
+    bool use_peg = false;
     std::string system_prompt = "";
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     thinking_tokens think_tokens;
-    int reasoning_budget = -1;
-    bool prefill_assistant = true;
+    int reasoning_budget      = -1;
+    bool prefill_assistant    = true;
+    bool dry_run              = false;
 
     std::vector<std::string> api_keys;
 
@@ -420,7 +425,7 @@ struct gpt_params {
     float slot_prompt_similarity = 0.1f;
 
     bool do_checkpoint = false;               // do checkpoint for recurrent models only
-    int32_t ctx_checkpoints_n = 8;            // max number of context checkpoints per slot
+    int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
     int32_t ctx_checkpoints_interval = 512;   // minimum number of tokens between each context checkpoints
     int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint 
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
@@ -469,6 +474,7 @@ struct gpt_params {
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
 
     bool sweep_bench_output_jsonl = false;
+    bool minilog = false;
 };
 
 

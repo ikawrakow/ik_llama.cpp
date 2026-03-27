@@ -134,8 +134,6 @@ struct common_sampler {
     llama_token_data_array cur_p; // current candidates
 
     std::mt19937 rng;
-
-    int32_t n_rewind;   // number of tokens to rewind
 };
 
 
@@ -152,7 +150,7 @@ void common_sampler_reset(common_sampler * ctx);
 
 // Review stateful samplers
 // - rewind internal states (maybe)
-void common_sampler_review(common_sampler * ctx);
+void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bool rewind_status);
 
 // Set the sampler seed
 void llama_sampling_set_rng_seed(struct common_sampler * ctx, uint32_t seed);
@@ -228,6 +226,9 @@ llama_token_data_array * common_sampler_get_candidates(struct common_sampler * c
 std::vector<llama_token> llama_sampling_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first = false);
+
+// Greedy argmax sampling for speculative drafting
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob = nullptr);
 
 llama_grammar* llama_sampler_init_llg(const llama_vocab* vocab,
     const char* grammar_kind, const char* grammar_data);

@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <fstream>
 
 using json = nlohmann::ordered_json;
 
@@ -550,6 +551,8 @@ std::string common_chat_format_single(
     std::string fmt_past_msg;
     if (!past_msg.empty()) {
         inputs.messages = past_msg;
+        auto & extra = inputs.messages.emplace_back();
+        extra.role = new_msg.role;
         inputs.add_generation_prompt = false;
         fmt_past_msg = common_chat_templates_apply(tmpls, inputs).prompt;
     }
@@ -557,11 +560,21 @@ std::string common_chat_format_single(
     // if the past_msg ends with a newline, we must preserve it in the formatted version
     if (add_ass && !fmt_past_msg.empty() && fmt_past_msg.back() == '\n') {
         ss << "\n";
-    };
+    }
+    if (inputs.messages.empty()) {
+        inputs.messages.push_back(new_msg);
+    } else {
+        inputs.messages.back() = new_msg;
+    }
     // format chat with new_msg
-    inputs.messages.push_back(new_msg);
     inputs.add_generation_prompt = add_ass;
     auto fmt_new_msg = common_chat_templates_apply(tmpls, inputs).prompt;
+    if (fmt_new_msg.size() < fmt_past_msg.size()) {
+        LOG_ERR("============================================ Oops: new message is of length %zu, past message is %zu\n", fmt_new_msg.size(), fmt_past_msg.size());
+        LOG_ERR("=== past message: <%s>\n", fmt_past_msg.c_str());
+        LOG_ERR("=== new  message: <%s>\n", fmt_new_msg.c_str());
+        throw std::runtime_error("Failed to apply chat template");
+    }
     // get the diff part
     ss << fmt_new_msg.substr(fmt_past_msg.size(), fmt_new_msg.size() - fmt_past_msg.size());
     return ss.str();
@@ -3171,10 +3184,9 @@ static common_chat_params common_chat_templates_apply_jinja(
         workaround::func_args_not_string(params.messages);
         // Models with <think> support (Step-3.5-Flash, Nemotron 3 Nano) use the
         // Nemotron v3 PEG parser for streaming and schema-aware parameter parsing.
-        // Qwen3-Coder has no <think> in its template.
-        //if (src.find("<think>") != std::string::npos) {
-        //    return common_chat_params_init_qwen3_coder(tmpl, params);
-        //}
+        if (inputs.use_peg) {
+            return common_chat_params_init_qwen3_coder(tmpl, params);
+        }
         return common_chat_params_init_qwen3_coder_xml(tmpl, params);
     }
 

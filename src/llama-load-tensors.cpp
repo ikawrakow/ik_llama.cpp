@@ -181,7 +181,12 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_context * ctx_output;
     ggml_context * ctx_output_split;
 
+    ggml_backend_buffer_type_t default_cpu_buft;
+    bool has_buft_overrides = false;
+
     std::unordered_set<ggml_tensor *> split_tensors;
+
+    std::vector<std::pair<std::regex, ggml_backend_buffer_type_t>> overrides;
 
     inline ggml_context * ctx_for_buft(ggml_backend_buffer_type_t buft) {
         if (auto it = ctx_map.find(buft); it != ctx_map.end()) return it->second;
@@ -211,6 +216,95 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
     for (int i = 0; i < n_layer; ++i) {
         buft_layer_count[model.buft_layer[i].buft]++;
         buft_layer_count[model.buft_layer[i].buft_matrix]++;
+    }
+
+    default_cpu_buft = llama_default_buffer_type_cpu(true);
+
+    if (ml.tensor_buft_overrides) {
+        for (const auto * o = ml.tensor_buft_overrides; o->pattern != nullptr; ++o) {
+            auto buft = o->buft;
+            if (ggml_backend_buft_is_host(buft)) buft = default_cpu_buft;
+            overrides.emplace_back(std::make_pair(std::regex(o->pattern), buft));
+        }
+    }
+
+    if (ml.ncmoe > 0) {
+        auto buft = llama_default_buffer_type_cpu(true);
+        if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH || ml.ncmoe >= n_layer || model.devices.size() < 2) {
+            int nmax = std::min(ml.ncmoe, n_layer);
+            for (int i = 0; i < nmax; ++i) {
+                std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+            }
+        }
+        else if (model.split_mode == LLAMA_SPLIT_MODE_LAYER) {
+            std::vector<int> counts(model.devices.size(), 0);
+            int nbad = 0;
+            for (int i = 0; i < n_layer; ++i) {
+                if (model.default_layer_device[i] >= 0 && model.default_layer_device[i] < (int)model.devices.size()) {
+                    ++counts[model.default_layer_device[i]];
+                } else {
+                    LLAMA_LOG_WARN("%s: default device for layer %d is %d?\n", __func__, i, model.default_layer_device[i]);
+                    ++nbad;
+                }
+            }
+            if (nbad > 0) {
+                throw std::runtime_error("Unexpected device configuration");
+            }
+            std::vector<int> n_override(counts.size());
+            printf("================= %s: split mode layer with ncmoe = %d, %d devices\n", __func__, ml.ncmoe, (int)model.devices.size());
+            int ntot = 0;
+            for (int i = 0; i < int(counts.size()); ++i) {
+                float fraction = 1.f*counts[i]/n_layer;
+                n_override[i] = std::roundf(fraction*ml.ncmoe);
+                ntot += n_override[i];
+            }
+            while (ntot > ml.ncmoe) {
+                float best_err = -1e30; int ibest = -1;
+                for (int i = 0; i < int(counts.size()); ++i) {
+                    if (n_override[i] == 0) continue;
+                    float n_want = 1.f*counts[i]*ml.ncmoe/n_layer;
+                    float err = n_override[i] - 1 - n_want;
+                    if (err > best_err) {
+                        best_err = err; ibest = i;
+                    }
+                }
+                if (ibest < 0) { // shouldn't happen
+                    break;
+                }
+                --n_override[ibest];
+                --ntot;
+            }
+            while (ntot < ml.ncmoe) {
+                float best_err = 1e30; int ibest = -1;
+                for (int i = 0; i < int(counts.size()); ++i) {
+                    if (n_override[i] >= counts[i]) continue;
+                    float n_want = 1.f*counts[i]*ml.ncmoe/n_layer;
+                    float err = n_override[i] + 1 - n_want;
+                    if (err < best_err) {
+                        best_err = err; ibest = i;
+                    }
+                }
+                if (ibest < 0) { // shouldn't happen
+                    break;
+                }
+                ++n_override[ibest];
+                ++ntot;
+            }
+            for (int i = 0; i < int(counts.size()); ++i) {
+                printf("    device %d: %d layers -> %d overrides\n", i, counts[i], n_override[i]);
+            }
+            // it is better to go backwards to avoid (or at least reduce) issues when there are layers without MoE tensors
+            for (int i = n_layer-1; i >= 0; --i) {
+                int id = model.default_layer_device[i];
+                if (n_override[id] > 0) {
+                    std::string pattern = "blk\\." + std::to_string(i) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                    printf("Adding override %s=%s\n", pattern.c_str(), ggml_backend_buft_name(buft));
+                    this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft));
+                    --n_override[id];
+                }
+            }
+        }
     }
 
     auto n_tensors = ml.n_tensors;
@@ -310,18 +404,28 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
 }
 
 ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx, const std::string & name) {
-    if (ml.tensor_buft_overrides) {
-        for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
-            std::regex pattern(overrides->pattern);
-            if (std::regex_search(name, pattern)) {
-                const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
-                const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
-                LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(overrides->buft));
-                ctx = ctx_for_buft(overrides->buft);
-                break;
-            }
+    for (auto & o : overrides) {
+        if (std::regex_search(name, o.first)) {
+            if (o.second == default_cpu_buft) has_buft_overrides = true;
+            const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
+            const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
+            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.second));
+            ctx = ctx_for_buft(o.second);
+            break;
         }
     }
+    //if (ml.tensor_buft_overrides) {
+    //    for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+    //        std::regex pattern(overrides->pattern);
+    //        if (std::regex_search(name, pattern)) {
+    //            const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
+    //            const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
+    //            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(overrides->buft));
+    //            ctx = ctx_for_buft(overrides->buft);
+    //            break;
+    //        }
+    //    }
+    //}
     return ctx;
 }
 
@@ -1964,16 +2068,15 @@ bool create_tensors_helper::create_command_r_tensors(const LLM_TN & tn) {
     }
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         auto & layer = model.layers[i];
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         if (n_layer >= 64){
-            layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head});
-            layer.attn_k_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv});
+            layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head}, 0);
+            layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv}, 0);
         }
 
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
@@ -3168,6 +3271,9 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_gate_up_exps.weight", i);
+    if (u_ctx == ctx_split) {
+        split_tensors.insert(layer.ffn_up_gate_exps);
+    }
     layer.ffn_gate_exps = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, g_name.c_str(),
             { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, 0);
     layer.ffn_up_exps   = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, u_name.c_str(),
@@ -3215,9 +3321,6 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
     auto ug_meta = ml.get_tensor_meta(ug_name.c_str());
     //printf("Checking for tensor %s: %s\n", ug_name.c_str(), ug_meta ? "found" : "not found");
     if (ug_meta) {
-        if (model.split_mode == LLAMA_SPLIT_MODE_ATTN || model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-            GGML_ABORT("Merged ffn_up_exps/ffn_gate_exps are not supported for split mode graph!");
-        }
         layer.ffn_up_gate_exps = create_tensor(ffn_ctx, ug_name, {  n_embd, 2*n_ff_exp, n_expert}, flags);
     } else {
         merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
@@ -3439,6 +3542,25 @@ static void check_delta_split(ggml_tensor * t, llama_split_tensor & l_split) {
     }
     auto data = &l_split.ranges;
     std::memcpy(t->op_params, &data, sizeof(data));
+}
+
+static void prepare_up_gate_split(ggml_tensor * t, llama_split_tensor & split) {
+    auto extra = (ggml_split_tensor_t *)t->extra;
+    GGML_ASSERT(extra);
+    split.ranges.resize(extra->n_device);
+    int idim = extra->split_dim;
+    int nrows = t->ne[idim]/2;
+    int ntot = 0;
+    for (int is = 0; is < extra->n_device; ++is) {
+        if (!extra->splits[is]) continue;
+        auto & ranges = split.ranges[is];
+        ranges.resize(2);
+        int nrows_is = extra->splits[is]->ne[idim]/2;
+        ranges[0] = {ntot,         nrows_is};
+        ranges[1] = {ntot + nrows, nrows_is};
+        ntot += nrows_is;
+    }
+    check_delta_split(t, split);
 }
 
 // ttype = 0 -> q, k, v, always multiplied with head_k_dim/head_v_dim
@@ -3686,13 +3808,6 @@ bool create_tensors_helper::create_tensors() {
         LLAMA_LOG_WARN("========================================================\n\n");
         ml.merge_qkv = false;
     }
-    if (ml.merge_up_gate_exps && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
-        LLAMA_LOG_WARN("\n========================================================\n");
-        LLAMA_LOG_WARN("merge_up_gate_exps is not compatible with split mode 'graph'\n");
-        LLAMA_LOG_WARN("  => turning off merge_up_gate_exps\n");
-        LLAMA_LOG_WARN("========================================================\n\n");
-        ml.merge_up_gate_exps = false;
-    }
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_REFACT:
@@ -3782,6 +3897,7 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_ARCTIC:
             use_mmap_buffer = create_arctix_tensors(tn); break;
         case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_MISTRAL4:
             use_mmap_buffer = create_deepseek2_tensors(tn); break;
         case LLM_ARCH_GLM_DSA:
             use_mmap_buffer = create_glm_dsa_tensors(tn); break;
@@ -3828,6 +3944,9 @@ bool create_tensors_helper::create_tensors() {
         default:
             throw std::runtime_error("unknown architecture");
     }
+
+    use_mmap_buffer &= !has_buft_overrides;
+
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.mtp ? model.layers.size()
                                   : model.layers.size() - model.hparams.nextn_predict_layers;
@@ -3853,6 +3972,10 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
         }
+        std::vector<float> gpu_split_count;
+        if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size())) {
+            gpu_split_count.resize(model.splits.size(), 0.0f);
+        }
         for (int il = 0; il < n_layer; ++il) {
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
@@ -3862,11 +3985,17 @@ bool create_tensors_helper::create_tensors() {
             if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
                 adjust_split(cur_splits, mem_used, model.max_gpu);
-                LLAMA_LOG_INFO("Adjusted split at layer %2d:", il);
+                LLAMA_LOG_INFO("Adjusted split at layer %2d:  ", il);
                 float last_split = 0;
-                for (auto & p : cur_splits) {
-                    LLAMA_LOG_INFO(" %g", p - last_split);
-                    last_split = p;
+                for (int i = 0; i < (int)cur_splits.size(); ++i) {
+                    if (i > 0) {
+                        LLAMA_LOG_INFO(" ; ");
+                    }
+                    LLAMA_LOG_INFO("GPU%d: %4g", i, cur_splits[i] - last_split);
+                    if (i < int(gpu_split_count.size())) {
+                        gpu_split_count[i] += cur_splits[i] - last_split;
+                    }
+                    last_split = cur_splits[i];
                 }
                 LLAMA_LOG_INFO("\n");
             }
@@ -3897,6 +4026,13 @@ bool create_tensors_helper::create_tensors() {
                     auto tt = ggml_internal_get_type_traits(layer.wo->type);
                     if (tt.blck_size > granularity_vo) granularity_vo = tt.blck_size;
                     GGML_ASSERT(granularity_vo % hparams.n_embd_head_v == 0);
+                    // Command-R: align KQ split to wo's block size so wq row
+                    // counts remain valid after splitting.
+                    if (model.arch == LLM_ARCH_COMMAND_R) {
+                        if (tt.blck_size > granularity_kq && layer.wq->ne[1] % tt.blck_size == 0) {
+                            granularity_kq = tt.blck_size;
+                        }
+                    }
                 }
                 auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used); //, true);
                 auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used); //, true);
@@ -3918,7 +4054,14 @@ bool create_tensors_helper::create_tensors() {
                 } else {
                     prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                     if (layer.attn_q_norm) {
-                        prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                        if (layer.attn_q_norm->ne[1] > 1) {
+                            // 2D per-head norm (e.g., Command-R+): split along the Q-head dimension
+                            auto split_q_heads = split_kq;
+                            for (auto & s : split_q_heads) s /= hparams.n_embd_head_k;
+                            prepare_split_tensors(1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_q_heads, mem_used);
+                        } else {
+                            prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                        }
                     }
                     if (layer.bq) {
                         prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
@@ -3967,7 +4110,16 @@ bool create_tensors_helper::create_tensors() {
                         prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
                     }
                     if (layer.attn_k_norm) {
-                        prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                        if (layer.attn_k_norm->ne[1] > 1) {
+                            // 2D per-head norm (e.g., Command-R+): split along the KV-head dimension
+                            // split_kq has already been divided by gqa_ratio, so values are in
+                            // (n_embd_head_k * n_head_kv) units; divide again to get head units
+                            auto split_k_heads = split_kq;
+                            for (auto & s : split_k_heads) s /= hparams.n_embd_head_k;
+                            prepare_split_tensors(1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_k_heads, mem_used);
+                        } else {
+                            prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                        }
                     }
                 }
                 prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
@@ -4002,10 +4154,10 @@ bool create_tensors_helper::create_tensors() {
             }
 
             std::vector<int> ffn_split;
-            if (layer.ffn_down_exps && layer.ffn_up_exps && layer.ffn_gate_exps) {
-                bool use_split = split_tensors.find(layer.ffn_down_exps) != split_tensors.end() &&
-                                 split_tensors.find(layer.ffn_gate_exps) != split_tensors.end() &&
-                                 split_tensors.find(layer.ffn_up_exps)   != split_tensors.end();
+            if (layer.ffn_down_exps && ((layer.ffn_up_exps && layer.ffn_gate_exps) || layer.ffn_up_gate_exps)) {
+                bool has_up_gate = split_tensors.find(layer.ffn_gate_exps) != split_tensors.end() && split_tensors.find(layer.ffn_up_exps) != split_tensors.end();
+                has_up_gate |= split_tensors.find(layer.ffn_up_gate_exps) != split_tensors.end();
+                bool use_split = split_tensors.find(layer.ffn_down_exps) != split_tensors.end() && has_up_gate;
 
                 if (use_split) {
                     int ffn_granularity = 16;
@@ -4017,16 +4169,29 @@ bool create_tensors_helper::create_tensors() {
                     LLAMA_LOG_DEBUG("  split_ffn_exps:"); for ([[maybe_unused]] auto s : ffn_split) LLAMA_LOG_DEBUG(" %d", s);
                     LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, ffn_split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   ffn_split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, ffn_split, mem_used);
+                    if (layer.ffn_up_gate_exps) {
+                        auto up_gate_split = ffn_split;
+                        for (auto & v : up_gate_split) v *= 2;
+                        prepare_split_tensors(1, ctx_split, layer.ffn_up_gate_exps, layer.split_ffn_up_gate_exps, up_gate_split, mem_used);
+                        prepare_up_gate_split(layer.ffn_up_gate_exps, layer.split_ffn_up_gate_exps);
+                        if (layer.ffn_up_gate_exps_b) {
+                            prepare_split_tensors(0, ctx_split, layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b, up_gate_split, mem_used);
+                            prepare_up_gate_split(layer.ffn_up_gate_exps_b, layer.split_ffn_up_gate_exps_b);
+                        }
+                    } else {
+                        prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   ffn_split, mem_used);
+                        prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, ffn_split, mem_used);
+                    }
                     if (layer.ffn_down_exps_b) {
                         prepare_split_tensors(-1, ctx_split, layer.ffn_down_exps_b, layer.split_ffn_down_exps_b, ffn_split, mem_used);
                     }
-                    if (layer.ffn_up_exps_b) {
-                        prepare_split_tensors( 0, ctx_split, layer.ffn_up_exps_b, layer.split_ffn_up_exps_b, ffn_split, mem_used);
-                    }
-                    if (layer.ffn_gate_exps_b) {
-                        prepare_split_tensors( 0, ctx_split, layer.ffn_gate_exps_b, layer.split_ffn_gate_exps_b, ffn_split, mem_used);
+                    if (!layer.ffn_up_gate_exps) {
+                        if (layer.ffn_up_exps_b) {
+                            prepare_split_tensors( 0, ctx_split, layer.ffn_up_exps_b, layer.split_ffn_up_exps_b, ffn_split, mem_used);
+                        }
+                        if (layer.ffn_gate_exps_b) {
+                            prepare_split_tensors( 0, ctx_split, layer.ffn_gate_exps_b, layer.split_ffn_gate_exps_b, ffn_split, mem_used);
+                        }
                     }
                 }
             }
@@ -4097,6 +4262,17 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
             }
+        }
+
+        if (!gpu_split_count.empty()) {
+            LLAMA_LOG_INFO("Adjusted splits (total)   :  ");
+            for (int i = 0; i < (int)gpu_split_count.size(); ++i) {
+                if (i > 0) {
+                    LLAMA_LOG_INFO(" ; ");
+                }
+                LLAMA_LOG_INFO("GPU%d: %4g", i, gpu_split_count[i]);
+            }
+            LLAMA_LOG_INFO("\n");
         }
 
         if (model.output) {

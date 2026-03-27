@@ -115,7 +115,7 @@ static __global__ void flash_attn_vec_ext_f32(
 
     // Convert Q to float2 (f16 K) or q8_1 (quantized K) and store in registers:
     float2  Q_f2[ncols][Dk/(2*WARP_SIZE)];
-    int    Q_i32[ncols][Dk/(sizeof(int)*QK8_1) == 0 ? 1 : Dk >= Dk/(sizeof(int)*QK8_1)];
+    int    Q_i32[ncols][Dk/(sizeof(int)*QK8_1) == 0 ? 1 : Dk/(sizeof(int)*QK8_1)];
     float2  Q_ds[ncols][Dk/QK8_1 == 0 ? 1 : Dk/QK8_1];
     if (Q_q8_1) {
 #pragma unroll
@@ -147,7 +147,7 @@ static __global__ void flash_attn_vec_ext_f32(
             const float * Q_f = (const float *) (Q + j*nb01);
 #pragma unroll
             for (int i0 = 0; i0 < Dk/sizeof(int); i0 += WARP_SIZE) {
-                quantize_q8_1_to_shared<float2>(Q_f + 4*i0, scale, tmp_q_i32, tmp_q_ds);
+                quantize_q8_1_to_shared<float2>(Q_f + 4*i0, scale, tmp_q_i32 + i0, tmp_q_ds + i0/QI8_1);
             }
         }
 
@@ -353,8 +353,8 @@ template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V
 void ggml_cuda_flash_attn_ext_vec_f32_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     constexpr int nwarps = Dk/WARP_SIZE;
     fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f32<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap>;
-    constexpr bool need_f16_K = Dk != 128;
-    constexpr bool need_f16_V = Dv != 128 && Dv != 64;
+    constexpr bool need_f16_K = Dk != 128 && Dk != 256;
+    constexpr bool need_f16_V = Dv != 64 && Dv != 128 && Dv != 256;
     constexpr size_t nbytes_shared = 0;
     launch_fattn<Dv, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, Dv, need_f16_K, need_f16_V);
 }
@@ -477,7 +477,8 @@ extern DECL_FATTN_VEC_F32_CASE(128, GGML_TYPE_Q5_1, GGML_TYPE_F16);
 extern DECL_FATTN_VEC_F32_CASE(128, GGML_TYPE_Q8_0, GGML_TYPE_F16);
 extern DECL_FATTN_VEC_F32_CASE(128, GGML_TYPE_F16,  GGML_TYPE_F16);
 
-extern DECL_FATTN_VEC_F32_CASE(256, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_VEC_F32_CASE(256, GGML_TYPE_F16,  GGML_TYPE_F16);
+extern DECL_FATTN_VEC_F32_CASE(256, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0);
 
 extern DECL_FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_F16, GGML_TYPE_F16);
 extern DECL_FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0);

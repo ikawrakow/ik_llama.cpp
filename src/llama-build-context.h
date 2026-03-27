@@ -437,6 +437,7 @@ llm_expert_gating_func_type   gating_op,
             bool is_multi = false);
 
     static uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self);
+
     struct ggml_tensor * build_mtp_tail(
         const struct llama_layer & mtp_layer, 
         struct ggml_tensor * prev_embeddings, 

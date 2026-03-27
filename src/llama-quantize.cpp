@@ -1,6 +1,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
+#include "llama-quantize.h"
 
 #include "ggml.h"
 #include "ggml-common.h"
@@ -79,7 +80,7 @@ struct quantize_state_internal {
         {}
 };
 
-static std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
+std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
     static std::unordered_map<ggml_type, std::pair<ggml_type, int>> k_map = {
         { GGML_TYPE_Q4_0_4_4,    { GGML_TYPE_Q4_0, 4} },
         { GGML_TYPE_Q4_0_4_8,    { GGML_TYPE_Q4_0, 4} },
@@ -1021,7 +1022,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         auto v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
         kv_overrides = v->data();
     }
-    llama_model_loader ml(fname_inp, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
+    llama_model_loader ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
             /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
@@ -1448,19 +1449,33 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             if (imatrix_data) {
                 auto it = imatrix_data->find(tensor->name);
                 if (it == imatrix_data->end()) {
-                    // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
-                    //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
-                    //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
-                    //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
-                    //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
-                    std::string name{tensor->name};
-                    static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
-                    for (int j = 0; j < int(alternatives.size()); ++j) {
-                        if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
-                            int j1 = (j + 1) % alternatives.size();
-                            auto alternative_name = name.substr(0, pos) + alternatives[j1];
-                            it = imatrix_data->find(alternative_name);
-                            break;
+                    if (auto pos1 = name.find("ffn_up_exps.weight"), pos2 = name.find("ffn_gate_exps.weight"); pos1 != std::string::npos || pos2 != std::string::npos) {
+                        // Merged ffn_up/gate_exps hack
+                        auto pos = pos1 != std::string::npos ? pos1 : pos2;
+                        auto merged_name = name.substr(0, pos) + "ffn_gate_up_exps.weight";
+                        it = imatrix_data->find(merged_name);
+                        if (it == imatrix_data->end()) {
+                            auto up_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                            it = imatrix_data->find(up_name);
+                        }
+                    } else if (auto pos = name.find("ffn_gate_up_exps.weight"); pos != std::string::npos) {
+                        auto not_merged_name = name.substr(0, pos) + "ffn_up_exps.weight";
+                        it = imatrix_data->find(not_merged_name);
+                    } else {
+                        // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
+                        //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
+                        //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
+                        //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
+                        //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
+                        std::string name{tensor->name};
+                        static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
+                        for (int j = 0; j < int(alternatives.size()); ++j) {
+                            if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
+                                int j1 = (j + 1) % alternatives.size();
+                                auto alternative_name = name.substr(0, pos) + alternatives[j1];
+                                it = imatrix_data->find(alternative_name);
+                                break;
+                            }
                         }
                     }
                 }

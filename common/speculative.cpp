@@ -1146,27 +1146,22 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             break;
         }
 
-        common_sampler_sample(smpl, ctx, 0, true); 
+        float prob;
+        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, &prob);
 
-        const auto * cur_p = common_sampler_get_candidates(smpl, true);
-        
-        if (!cur_p || cur_p->size == 0) {
-            break;
+        drafts.push_back(id_next);
+
+        const float * emb = llama_get_embeddings_ith(ctx, 0);
+        if (emb) {
+            llama_set_draft_input_hidden_state(ctx, emb);
         }
 
-        const llama_token id_next = cur_p->data[0].id;
-        const float prob = cur_p->data[0].p;
-
-        common_sampler_accept(smpl, nullptr, id_next, true);
+        current_input_id = id_next;
+        current_n_past++;
 
         if (prob < p_min) {
             break;
         }
-
-        drafts.push_back(id_next);
-        
-        current_input_id = id_next;
-        current_n_past++;
     }
     llama_batch_free(mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
