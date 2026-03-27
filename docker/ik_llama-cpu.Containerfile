@@ -10,7 +10,7 @@ ARG UBUNTU_VERSION=22.04
   ENV CCACHE_UMASK=000
   ENV CCACHE_MAXSIZE=1G
 
-  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache
+  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git
 
   COPY . /app
   WORKDIR /app
