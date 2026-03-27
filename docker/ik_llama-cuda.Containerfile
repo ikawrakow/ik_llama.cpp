@@ -79,19 +79,22 @@ ARG UBUNTU_VERSION=24.04
   # Stage 4: Server
   FROM base AS server
   ENV LLAMA_ARG_HOST=0.0.0.0
+  COPY --from=build /app/lib /app/lib
   COPY --from=build /app/full/llama-server /app/llama-server
   WORKDIR /app
-  HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
+  HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+      CMD [ "curl", "-f", "http://localhost:8080/health" ]
   ENTRYPOINT [ "/app/llama-server" ]
 
   # Stage 5: Swap
   FROM server AS swap
   ARG LS_REPO=mostlygeek/llama-swap
-  ARG LS_VER=198
+  ARG LS_VER=199
   RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
       -o "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
       && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
       && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
   COPY --from=build /app/docker/ik_llama-cuda-swap.config.yaml /app/config.yaml
-  HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080"]
+  HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+      CMD [ "curl", "-f", "http://localhost:8080"]
   ENTRYPOINT [ "/app/llama-swap", "-config", "/app/config.yaml" ]
