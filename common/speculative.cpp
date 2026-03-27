@@ -182,6 +182,12 @@ struct common_speculative_state_mtp : public common_speculative_state {
         int32_t n_past = (int32_t)prompt_tgt.size();
         llama_seq_id seq_id = 0;
 
+        // Check whether the accepted positions are aligned with the current n_past
+        if (!pending_accepted_ids.empty() &&
+            pending_n_past_base + (int32_t)pending_accepted_ids.size() != n_past) {
+            pending_accepted_ids.clear();
+        }
+
         result = mtp_gen_draft(
             smpl, ctx_tgt, params.n_max, params.p_min,
             pending_accepted_ids, pending_n_past_base,
@@ -1237,14 +1243,12 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
         return;
     }
 
-    LOG_DBG("[MTP-UPDATE|PROMPT_WARMUP] Updating %d tokens...\n", batch.n_tokens);
+    LOG_DBG("[PROMPT_WARMUP] Updating %d tokens...\n", batch.n_tokens);
 
     llama_batch mtp_batch = batch;
     llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
 
-    for (int i = 0; i < mtp_batch.n_tokens; ++i) {
-        mtp_batch.logits[i] = true;
-    }
+    mtp_batch.logits[mtp_batch.n_tokens - 1] = true;
     llama_decode(ctx, mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 }
