@@ -1581,6 +1581,10 @@ static ggml_tensor * llm_build_kqv(
         }
         //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
 
+        if (cparams.v_cache_hadamard) {
+            cur = ggml_hadamard(ctx, cur, n_embd_head_v);
+            cb(cur, "fa_h", il);
+        }
         cur = ggml_reshape_2d(ctx, cur, n_embd_head_v*n_head, n_tokens);
     } else {
 
@@ -1743,6 +1747,9 @@ ggml_tensor * llm_build_context::llm_build_kv(
         k_cur = ggml_hadamard(ctx, k_cur, hparams.n_embd_head_k);
         cb(q_cur, "Qcur_hadamard", il);
         cb(k_cur, "Kcur_hadamard", il);
+    }
+    if (cparams.v_cache_hadamard) {
+        v_cur = ggml_hadamard(ctx, v_cur, hparams.n_embd_head_v);
     }
 
     // these nodes are added to the graph together so that they are not reordered
@@ -9322,6 +9329,11 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 }
                 ggml_build_forward_expand(gf, Qcur);
                 ggml_build_forward_expand(gf, Kcur);
+                if (cparams.v_cache_hadamard) {
+                    Vcur = ggml_hadamard(ctx0, Vcur, hparams.n_embd_head_v);
+                    cb(Vcur, "Vcur_hadamard", il_id);
+                    ggml_build_forward_expand(gf, Vcur);
+                }
 
                 // Store K, V in KV cache
                 auto idx = 2*wq->n_device*il + 2*id;
@@ -10093,6 +10105,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cb(Qcur, "Qcur_hadamard", il_cb);
                     cb(Kcur, "Kcur_hadamard", il_cb);
                 }
+                if (cparams.v_cache_hadamard) {
+                    Vcur = ggml_hadamard(ctx0, Vcur, hparams.n_embd_head_v);
+                    cb(Vcur, "Vcur_hadamard", il_cb);
+                }
                 ggml_build_forward_expand(gf, Qcur);
                 ggml_build_forward_expand(gf, Kcur);
                 ggml_build_forward_expand(gf, Vcur);
@@ -10164,6 +10180,11 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
                 if (should_use_f32_precision) {
                     ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+                }
+
+                if (cparams.v_cache_hadamard) {
+                    cur = ggml_hadamard(ctx0, cur, n_embd_head_v);
+                    cb(cur, "flash_attn_h", il_cb);
                 }
 
                 if (model.layers[il].wqkv_gate) {
