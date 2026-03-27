@@ -546,10 +546,15 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
 
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
-    invalidate_graph_slots();
+    if (cparams.n_graph_reuse <= 1) {
+        invalidate_graph_slots();
+    } else {
+        active_graph_slot = -1;
+    }
 }
 
 void llama_context::invalidate_graph_slots() {
+    LLAMA_LOG_DEBUG("%s: invalidating all %d graph slots\n", __func__, (int)graph_slots.size());
     for (auto & slot : graph_slots) {
         slot.valid = false;
     }
@@ -574,9 +579,7 @@ int llama_context::find_reusable_graph(const llama_batch & u_batch) {
                 return i;
             }
         } else {
-            if (update_cache_copies_for_slot(i)) {
-                return i;
-            }
+            return i;
         }
     }
     return -1;
@@ -795,6 +798,8 @@ void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * 
 
     GGML_ASSERT(target >= 0);
     auto & slot = graph_slots[target];
+    LLAMA_LOG_DEBUG("%s: storing graph in slot %d (mtp_op=%d, n_kv=%d, n_out=%d, lru=%" PRIu64 ")\n",
+                    __func__, target, (int)cparams.mtp_op_type, (int)kv_self.n, (int)n_outputs, graph_slot_counter + 1);
     slot.valid       = true;
     slot.last_used   = ++graph_slot_counter;
     slot.all_seq_id  = (int)u_batch.all_seq_id;
@@ -811,6 +816,14 @@ void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * 
         if (buf_compute_meta.size() < slot.buf_compute_meta.size()) {
             buf_compute_meta.resize(slot.buf_compute_meta.size());
         }
+        const auto & hparams = model.hparams;
+        size_t needed = ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)
+                         && model.splits.size() > 1)
+                        ? 2 * model.splits.size() * hparams.n_layer
+                        : 2 * hparams.n_layer;
+        if (cache_copies.size() < needed) {
+            cache_copies.resize(needed);
+        }
     }
 
     active_graph_slot = target;
@@ -821,15 +834,22 @@ void llama_context::activate_graph_slot(int slot_idx) {
     auto & slot = graph_slots[slot_idx];
     GGML_ASSERT(slot.valid && slot.graph);
 
+    LLAMA_LOG_DEBUG("%s: reusing slot %d (mtp_op=%d, n_kv=%d, lru=%" PRIu64 ", cross_slot=%s)\n",
+                    __func__, slot_idx, (int)slot.mtp_op_type, slot.n_kv, graph_slot_counter + 1,
+                    (cparams.n_graph_reuse > 1 && slot_idx != active_graph_slot) ? "yes" : "no");
     slot.last_used = ++graph_slot_counter;
 
     if (cparams.n_graph_reuse > 1 && slot_idx != active_graph_slot) {
-        std::swap(buf_compute_meta, slot.buf_compute_meta);
-        std::swap(cache_copies, slot.cache_copies);
         restore_input_tensors_from_slot(slot);
 
         ggml_backend_sched_reset(sched);
         ggml_backend_sched_alloc_graph(sched, slot.graph);
+
+        if (!update_cache_copies_for_slot(slot_idx)) {
+            slot.valid = false;
+            active_graph_slot = -1;
+            return;
+        }
     }
 
     active_graph_slot = slot_idx;
@@ -4120,6 +4140,16 @@ static int llama_decode_internal(
 #endif
         ggml_cgraph * gf = nullptr;
         int reuse_slot = lctx.find_reusable_graph(u_batch);
+
+        if (reuse_slot >= 0) {
+            lctx.activate_graph_slot(reuse_slot);
+            if (lctx.active_graph_slot >= 0) {
+                gf = lctx.graph_slots[reuse_slot].graph;
+            } else {
+                reuse_slot = -1;
+            }
+        }
+
         if (reuse_slot < 0) {
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
@@ -4148,9 +4178,6 @@ static int llama_decode_internal(
             if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
                 lctx.store_graph_slot(u_batch, gf);
             }
-        } else {
-            lctx.activate_graph_slot(reuse_slot);
-            gf = lctx.graph_slots[reuse_slot].graph;
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
