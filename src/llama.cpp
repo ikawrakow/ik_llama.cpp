@@ -544,35 +544,119 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     GGML_UNUSED(device);
 }
 
-struct llama_context::Prev {
-    int all_seq_id;
-    int n_outputs;
-    int n_kv;
-    llama_mtp_op_type mtp_op_type;
-    ggml_cgraph * graph;
-};
-
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
-    prev.reset();
+    invalidate_graph_slots();
+}
+
+void llama_context::invalidate_graph_slots() {
+    for (auto & slot : graph_slots) {
+        slot.valid = false;
+    }
+    active_graph_slot = -1;
+}
+
+int llama_context::find_reusable_graph(const llama_batch & u_batch) {
+    if (u_batch.n_tokens > 1) return -1;
+    if (u_batch.embd)         return -1;
+    if (cparams.n_graph_reuse <= 0) return -1;
+
+    for (int i = 0; i < (int)graph_slots.size(); ++i) {
+        auto & slot = graph_slots[i];
+        if (!slot.valid || !slot.graph) continue;
+        if (slot.mtp_op_type != cparams.mtp_op_type) continue;
+        if (u_batch.all_seq_id != slot.all_seq_id)   continue;
+        if (kv_self.head == 0)                        continue;
+        if ((int)kv_self.n != slot.n_kv)              continue;
+        if (n_outputs != slot.n_outputs)              continue;
+        if (cparams.n_graph_reuse == 1) {
+            if (update_cache_copies()) {
+                return i;
+            }
+        } else {
+            if (update_cache_copies_for_slot(i)) {
+                return i;
+            }
+        }
+    }
+    return -1;
 }
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
-    if (!prev || !prev->graph) return false;
-    if (u_batch.n_tokens > 1) return false;
-    if (u_batch.embd) return false;
-    if (!cparams.graph_reuse) return false;
-    return u_batch.all_seq_id == prev->all_seq_id &&
-           kv_self.head > 0 &&
-           kv_self.n == prev->n_kv &&
-           n_outputs == prev->n_outputs &&
-           cparams.mtp_op_type == prev->mtp_op_type &&
-           update_cache_copies();
+    return find_reusable_graph(u_batch) >= 0;
+}
+
+bool llama_context::update_cache_copies_for_slot(int slot_idx) {
+    auto & cc = graph_slots[slot_idx].cache_copies;
+    const int n_layer = model.mtp ? model.hparams.n_layer
+                                  : model.hparams.n_layer - model.hparams.nextn_predict_layers;
+    auto layer_has_attention_kv = [&](int il) {
+        return !model.hparams.is_recurrent(il);
+    };
+    if ((int)kv_self.k_l.size() != n_layer) return false;
+    if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
+    for (int il = 0; il < n_layer; ++il) {
+        if (!layer_has_attention_kv(il) || kv_self.k_l[il] == nullptr) {
+            continue;
+        }
+        auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
+        if (kl) {
+            GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+            GGML_ASSERT(model.splits.size() > 1);
+            auto vl = !kv_self.v_l.empty() && kv_self.v_l[il] ? (ggml_split_tensor_t *)kv_self.v_l[il]->extra : nullptr;
+            GGML_ASSERT(kl && (!kv_self.v_l[il] || vl));
+            if (vl) {
+                GGML_ASSERT(kl->n_device == vl->n_device);
+            }
+            for (int id = 0; id < kl->n_device; ++id) {
+                if (!kl->splits[id]) continue;
+                auto& c = cc[2*model.splits.size()*il + 2*id + 0];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kl->splits[id]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kl->splits[id]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+            if (!vl) continue;
+            for (int id = 0; id < vl->n_device; ++id) {
+                if (!vl->splits[id]) continue;
+                auto& c = cc[2*model.splits.size()*il + 2*id + 1];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != vl->splits[id]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)vl->splits[id]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+        } else {
+            for (int jl = 0; jl < n_layer; ++jl) {
+                if (!layer_has_attention_kv(jl) || kv_self.k_l[jl] == nullptr) continue;
+                if (kv_self.k_l[jl]->extra) continue;
+                auto& c = cc[2*jl+0];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[jl]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kv_self.k_l[jl]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+            if (kv_self.v_l.empty()) return true;
+            for (int jl = 0; jl < n_layer; ++jl) {
+                if (!layer_has_attention_kv(jl) || kv_self.v_l[jl] == nullptr) continue;
+                if (kv_self.v_l[jl]->extra) continue;
+                auto& c = cc[2*jl+1];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[jl]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kv_self.v_l[jl]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+        }
+    }
+    return true;
 }
 
 bool llama_context::update_cache_copies() {
     const int n_layer = model.mtp ? model.hparams.n_layer
-                                  : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
+                                  : model.hparams.n_layer - model.hparams.nextn_predict_layers;
     auto layer_has_attention_kv = [&](int il) {
         return !model.hparams.is_recurrent(il);
     };
@@ -633,6 +717,122 @@ bool llama_context::update_cache_copies() {
         }
     }
     return true;
+}
+
+void llama_context::save_input_tensors_to_slot(GraphSlot & slot) {
+    slot.inp_tokens      = inp_tokens;
+    slot.inp_embd        = inp_embd;
+    slot.inp_pos         = inp_pos;
+    slot.inp_out_ids     = inp_out_ids;
+    slot.inp_KQ_mask     = inp_KQ_mask;
+    slot.inp_KQ_mask_swa = inp_KQ_mask_swa;
+    slot.inp_K_shift     = inp_K_shift;
+    slot.inp_mean        = inp_mean;
+    slot.inp_cls         = inp_cls;
+    slot.inp_s_copy      = inp_s_copy;
+    slot.inp_s_mask      = inp_s_mask;
+    slot.inp_s_seq       = inp_s_seq;
+    slot.inp_s_seq_qnext = inp_s_seq_qnext;
+    slot.inp_pos_bucket  = inp_pos_bucket;
+    slot.inp_embd_enc    = inp_embd_enc;
+    slot.inp_KQ_mask_cross = inp_KQ_mask_cross;
+    slot.inp_scale       = inp_scale;
+    slot.inp_mtp_states  = inp_mtp_states;
+}
+
+void llama_context::restore_input_tensors_from_slot(GraphSlot & slot) {
+    inp_tokens      = slot.inp_tokens;
+    inp_embd        = slot.inp_embd;
+    inp_pos         = slot.inp_pos;
+    inp_out_ids     = slot.inp_out_ids;
+    inp_KQ_mask     = slot.inp_KQ_mask;
+    inp_KQ_mask_swa = slot.inp_KQ_mask_swa;
+    inp_K_shift     = slot.inp_K_shift;
+    inp_mean        = slot.inp_mean;
+    inp_cls         = slot.inp_cls;
+    inp_s_copy      = slot.inp_s_copy;
+    inp_s_mask      = slot.inp_s_mask;
+    inp_s_seq       = slot.inp_s_seq;
+    inp_s_seq_qnext = slot.inp_s_seq_qnext;
+    inp_pos_bucket  = slot.inp_pos_bucket;
+    inp_embd_enc    = slot.inp_embd_enc;
+    inp_KQ_mask_cross = slot.inp_KQ_mask_cross;
+    inp_scale       = slot.inp_scale;
+    inp_mtp_states  = slot.inp_mtp_states;
+}
+
+void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf) {
+    const int n_slots = (int)graph_slots.size();
+
+    // Find an existing slot for a graph
+    int target = -1;
+
+    for (int i = 0; i < n_slots; ++i) {
+        if (graph_slots[i].valid && graph_slots[i].mtp_op_type == cparams.mtp_op_type) {
+            target = i;
+            break;
+        }
+    }
+
+    if (target < 0) {
+        for (int i = 0; i < n_slots; ++i) {
+            if (!graph_slots[i].valid) {
+                target = i;
+                break;
+            }
+        }
+    }
+
+    if (target < 0) {
+        uint64_t min_used = UINT64_MAX;
+        for (int i = 0; i < n_slots; ++i) {
+            if (graph_slots[i].last_used < min_used) {
+                min_used = graph_slots[i].last_used;
+                target = i;
+            }
+        }
+    }
+
+    GGML_ASSERT(target >= 0);
+    auto & slot = graph_slots[target];
+    slot.valid       = true;
+    slot.last_used   = ++graph_slot_counter;
+    slot.all_seq_id  = (int)u_batch.all_seq_id;
+    slot.n_outputs   = (int)n_outputs;
+    slot.n_kv        = (int)kv_self.n;
+    slot.mtp_op_type = cparams.mtp_op_type;
+    slot.graph       = gf;
+
+    if (cparams.n_graph_reuse > 1) {
+        std::swap(buf_compute_meta, slot.buf_compute_meta);
+        std::swap(cache_copies, slot.cache_copies);
+        save_input_tensors_to_slot(slot);
+
+        if (buf_compute_meta.size() < slot.buf_compute_meta.size()) {
+            buf_compute_meta.resize(slot.buf_compute_meta.size());
+        }
+    }
+
+    active_graph_slot = target;
+}
+
+void llama_context::activate_graph_slot(int slot_idx) {
+    GGML_ASSERT(slot_idx >= 0 && slot_idx < (int)graph_slots.size());
+    auto & slot = graph_slots[slot_idx];
+    GGML_ASSERT(slot.valid && slot.graph);
+
+    slot.last_used = ++graph_slot_counter;
+
+    if (cparams.n_graph_reuse > 1 && slot_idx != active_graph_slot) {
+        std::swap(buf_compute_meta, slot.buf_compute_meta);
+        std::swap(cache_copies, slot.cache_copies);
+        restore_input_tensors_from_slot(slot);
+
+        ggml_backend_sched_reset(sched);
+        ggml_backend_sched_alloc_graph(sched, slot.graph);
+    }
+
+    active_graph_slot = slot_idx;
 }
 
 llama_context::llama_context(const llama_model & model)
@@ -3919,7 +4119,8 @@ static int llama_decode_internal(
         tim1 = ggml_time_us();
 #endif
         ggml_cgraph * gf = nullptr;
-        if (!lctx.can_reuse_graph(u_batch)) {
+        int reuse_slot = lctx.find_reusable_graph(u_batch);
+        if (reuse_slot < 0) {
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
@@ -3944,14 +4145,12 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
-                lctx.prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
-                        (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
-                        cparams.mtp_op_type, gf});
+            if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
+                lctx.store_graph_slot(u_batch, gf);
             }
         } else {
-            //printf("Reusing graph\n");
-            gf = lctx.prev->graph;
+            lctx.activate_graph_slot(reuse_slot);
+            gf = lctx.graph_slots[reuse_slot].graph;
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
@@ -4126,7 +4325,7 @@ static int llama_decode_internal(
             // We need to discard this graph. Otherwise, iwith CUDA graphs enabled, the graph will get resused and this will reset the
             // recurrent state for each new token. This is probably not very relevant in practice because we basically never run TG with
             // empty context, but for the sake of correctness let's just do it.
-            lctx.prev.reset();
+            lctx.invalidate_graph_slots();
         }
     }
 
@@ -4153,7 +4352,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    if (!lctx.prev) {
+    if (lctx.active_graph_slot < 0) {
         lctx.reset_scheduler();
     }
 #if IK_PRINT_TIMING
@@ -4957,7 +5156,7 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_up_gate               =*/ true,
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
-        /*.graph_reuse                 =*/ true,
+        /*.n_graph_reuse               =*/ 1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
@@ -5340,7 +5539,7 @@ struct llama_context * llama_init_from_model(
     cparams.fused_up_gate    = params.fused_up_gate;
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
-    cparams.graph_reuse      = params.graph_reuse;
+    cparams.n_graph_reuse   = params.n_graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
@@ -5446,7 +5645,11 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: fused_up_gate = %d\n",     __func__, cparams.fused_up_gate);
     LLAMA_LOG_INFO("%s: fused_mmad    = %d\n",     __func__, cparams.fused_mmad);
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
-    LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
+    LLAMA_LOG_INFO("%s: n_graph_reuse = %d\n",     __func__, cparams.n_graph_reuse);
+    if (cparams.n_graph_reuse > 0) {
+        const int n_slots = std::min(cparams.n_graph_reuse, (int)llama_context::GRAPH_SLOTS_MAX);
+        ctx->graph_slots.resize(n_slots);
+    }
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: v_cache_hadam = %d\n",     __func__, cparams.v_cache_hadamard);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);

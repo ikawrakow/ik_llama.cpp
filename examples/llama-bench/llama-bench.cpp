@@ -1018,7 +1018,7 @@ struct cmd_params_instance {
         cparams.flash_attn = flash_attn;
         cparams.mla_attn = mla_attn;
         cparams.attn_max_batch = attn_max_batch;
-        cparams.graph_reuse = reuse;
+        cparams.n_graph_reuse = reuse ? 1 : 0;
         cparams.fused_moe_up_gate = fmoe;
         cparams.grouped_expert_routing = ger;
         cparams.rope_cache = rcache;
