@@ -56,8 +56,7 @@ COPY --from=build /app/build/src /app/build/src
 WORKDIR /app
 RUN apt-get update && \
     apt-get install -yq --no-install-recommends git python3 python3-pip && \
-    pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements.txt && \
+    pip install --break-system-packages -r requirements.txt && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 ENTRYPOINT ["/app/full/tools.sh"]
 
