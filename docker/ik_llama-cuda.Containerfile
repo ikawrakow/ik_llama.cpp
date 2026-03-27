@@ -9,9 +9,12 @@ ARG UBUNTU_VERSION=24.04
   # Add the toggle for ccache
   ARG USE_CCACHE=false
   ENV CCACHE_DIR=/ccache
+  ENV CCACHE_UMASK=000
+  ENV CCACHE_MAXSIZE=1G
 
   # Install build dependencies + ccache
-  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git
+  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
+      if [ "${USE_CCACHE}" = "true" ]; then ccache -i; fi
 
   COPY . /app
   WORKDIR /app

@@ -7,8 +7,11 @@ ARG UBUNTU_VERSION=22.04
   # Add the toggle for ccache
   ARG USE_CCACHE=false
   ENV CCACHE_DIR=/ccache
+  ENV CCACHE_UMASK=000
+  ENV CCACHE_MAXSIZE=1G
 
-  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache
+  RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache && \
+      if [ "${USE_CCACHE}" = "true" ]; then ccache -i; fi
 
   COPY . /app
   WORKDIR /app
