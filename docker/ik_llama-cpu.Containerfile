@@ -81,8 +81,7 @@ ARG UBUNTU_VERSION=22.04
   FROM server AS swap
   ARG LS_REPO=mostlygeek/llama-swap
   ARG LS_VER=198
-  RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_li
-  nux_amd64.tar.gz" \
+  RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
       -o "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
       && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
       && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
