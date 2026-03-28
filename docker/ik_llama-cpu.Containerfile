@@ -4,76 +4,80 @@ ARG UBUNTU_VERSION=24.04
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 ENV LLAMA_CURL=1
 ENV LC_ALL=C.utf8
-# Add the toggle for ccache
+# Tuning for portability and GitHub Actions
 ARG USE_CCACHE=false
-ARG BUILD_NUMBER
-ARG LLAMA_COMMIT
 ENV CCACHE_DIR=/ccache
-ENV CCACHE_UMASK=000
 ENV CCACHE_MAXSIZE=1G
+ENV CCACHE_COMPRESS=1
+ENV CCACHE_COMPRESSLEVEL=6
+# This is CRITICAL for GitHub Actions: it ignores the absolute path of the runner
+ENV CCACHE_BASEDIR=/app 
 
 RUN apt-get update && \
     apt-get install -yq --no-install-recommends build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    rm -rf /var/lib/apt/lists/*
 
-COPY . /app
-COPY .git /app/.git
+# New ARGs for flexible optimization
+ARG GGML_NATIVE=ON
+ARG GGML_AVX2=ON
+
 WORKDIR /app
+COPY . .
 
-# Use a cache mount for /ccache only (git is copied)
 RUN --mount=type=cache,target=/ccache \
+    --mount=type=bind,source=.git,target=.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
-        echo "ccache enabled. Current stats:"; \
-        ccache -s; \
+        echo "--- CCACHE STARTING STATS ---"; \
+        ccache -z; \
     fi && \
-    # Calculate build info from git
     BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 0) && \
     LLAMA_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) && \
-    cmake -B build -DGGML_NATIVE=ON -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON \
+    cmake -B build \
+        -DGGML_NATIVE=${GGML_NATIVE} \
+        -DGGML_AVX2=${GGML_AVX2} \
+        -DLLAMA_CURL=ON \
+        -DGGML_IQK_FA_ALL_QUANTS=ON \
         -DBUILD_NUMBER=$BUILD_NUMBER -DBUILD_COMMIT=$LLAMA_COMMIT && \
     cmake --build build --config Release -j$(nproc) && \
     if [ "${USE_CCACHE}" = "true" ]; then \
-        echo "Build finished. Updated stats:"; \
+        echo "--- CCACHE FINAL STATS ---"; \
         ccache -s; \
     fi
 
-RUN mkdir -p /app/lib /app/build/src /app/full \
-    && find build -name "*.so" -exec cp {} /app/lib \; \
-    && find build -name "*.so" -exec cp {} /app/build/src \; \
-    && cp build/bin/* /app/full \
-    && cp *.py /app/full \
-    && cp -r gguf-py /app/full \
-    && cp -r requirements /app/full \
-    && cp requirements.txt /app/full \
-    && cp .devops/tools.sh /app/full/tools.sh
+# Prepare structured artifacts
+RUN mkdir -p /app/dist/lib /app/dist/full /app/dist/bin && \
+    find build -name "*.so" -exec cp {} /app/dist/lib \; && \
+    cp build/bin/* /app/dist/bin/ && \
+    cp build/bin/* /app/dist/full/ && \
+    cp *.py /app/dist/full/ && \
+    cp -r gguf-py /app/dist/full/ && \
+    cp -r requirements /app/dist/full/ && \
+    cp requirements.txt /app/dist/full/ && \
+    cp .devops/tools.sh /app/dist/tools.sh
 
-# Stage 2: Base
+# Stage 2: Base (Shared Runtime)
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS base
 RUN apt-get update && \
     apt-get install -yq --no-install-recommends libgomp1 curl ca-certificates && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-COPY --from=build /app/lib/ /app
-
-# Stage 3: Full
-FROM base AS full
-COPY --from=build /app/full /app
-RUN mkdir -p /app/build/src
-COPY --from=build /app/build/src /app/build/src
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+ENV LD_LIBRARY_PATH=/app/lib
+COPY --from=build /app/dist/lib /app/lib
+
+# Stage 3: Full (Python/Dev Tools)
+FROM base AS full
+COPY --from=build /app/dist/full /app
 RUN apt-get update && \
     apt-get install -yq --no-install-recommends git python3 python3-pip && \
     pip install --break-system-packages -r requirements.txt && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-ENTRYPOINT ["/app/full/tools.sh"]
+    rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["/app/tools.sh"]
 
 # Stage 4: Server
 FROM base AS server
 ENV LLAMA_ARG_HOST=0.0.0.0
-ENV LD_LIBRARY_PATH=/app/lib
-COPY --from=build /app/lib /app/lib
-COPY --from=build /app/full/llama-server /app/llama-server
-WORKDIR /app
+COPY --from=build /app/dist/bin/llama-server /app/llama-server
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD [ "curl", "-f", "http://localhost:8080/health" ]
 ENTRYPOINT [ "/app/llama-server" ]
@@ -83,9 +87,8 @@ FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
 ARG LS_VER=199
 RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
-    -o "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
-    && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
-    && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
+    | tar -xz && \
+    mv llama-swap /app/llama-swap
 COPY --from=build /app/docker/ik_llama-cpu-swap.config.yaml /app/config.yaml
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD [ "curl", "-f", "http://localhost:8080"]
