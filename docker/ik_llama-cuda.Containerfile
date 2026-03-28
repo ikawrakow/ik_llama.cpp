@@ -23,8 +23,8 @@ RUN apt-get update && apt-get install -yq --no-install-recommends \
 WORKDIR /app
 COPY . .
 
+# 2. Run the build using the files already in /app
 RUN --mount=type=cache,target=/ccache \
-    --mount=type=bind,source=.git,target=.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         ccache -z; \

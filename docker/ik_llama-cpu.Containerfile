@@ -24,24 +24,20 @@ ARG GGML_AVX2=ON
 WORKDIR /app
 COPY . .
 
+# 2. Run the build using the files already in /app
 RUN --mount=type=cache,target=/ccache \
-    --mount=type=bind,source=.git,target=.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
-        echo "--- CCACHE STARTING STATS ---"; \
         ccache -z; \
     fi && \
     BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 0) && \
     LLAMA_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) && \
     cmake -B build \
         -DGGML_NATIVE=${GGML_NATIVE} \
-        -DGGML_AVX2=${GGML_AVX2} \
         -DLLAMA_CURL=ON \
-        -DGGML_IQK_FA_ALL_QUANTS=ON \
         -DBUILD_NUMBER=$BUILD_NUMBER -DBUILD_COMMIT=$LLAMA_COMMIT && \
     cmake --build build --config Release -j$(nproc) && \
     if [ "${USE_CCACHE}" = "true" ]; then \
-        echo "--- CCACHE FINAL STATS ---"; \
         ccache -s; \
     fi
 

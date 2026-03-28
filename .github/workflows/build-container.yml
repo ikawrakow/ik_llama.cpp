@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -66,6 +68,7 @@ jobs:
               ".buildkit-cache": "/ccache"
             }
           skip-extraction: ${{ github.event_name == 'pull_request' }}
+
       # 5.3 Build and push using the cache
       - name: Build and Push
         uses: docker/bake-action@v7
