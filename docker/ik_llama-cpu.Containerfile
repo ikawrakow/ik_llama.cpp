@@ -21,7 +21,6 @@ WORKDIR /app
 
 # Use a cache mount for /ccache and .git to persist objects between builds
 RUN --mount=type=cache,target=/ccache \
-    --mount=type=bind,source=.git,target=.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         echo "ccache enabled. Current stats:"; \

@@ -8,6 +8,8 @@ FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 ARG CUDA_DOCKER_ARCH=86 # CUDA architecture to build for
 # Add the toggle for ccache
 ARG USE_CCACHE=false
+ARG BUILD_NUMBER
+ARG LLAMA_COMMIT
 ENV CCACHE_DIR=/ccache
 ENV CCACHE_UMASK=000
 ENV CCACHE_MAXSIZE=1G
@@ -18,18 +20,21 @@ RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev c
 COPY . /app
 WORKDIR /app
 
-# We use a cache mount for /ccache and .git to persist objects between builds
+# We use a cache mount for /ccache only (git is copied with COPY .)
 RUN --mount=type=cache,target=/ccache \
-    --mount=type=bind,source=.git,target=.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         echo "ccache enabled. Current stats:"; \
         ccache -s; \
     fi && \
+    # Calculate build info from git
+    BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 0) && \
+    LLAMA_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) && \
     if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
         export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
-    cmake -B build -DGGML_NATIVE=ON -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined && \
+    cmake -B build -DGGML_NATIVE=ON -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+        -DBUILD_NUMBER=$BUILD_NUMBER -DBUILD_COMMIT=$LLAMA_COMMIT && \
     cmake --build build --config Release -j$(nproc) && \
     if [ "${USE_CCACHE}" = "true" ]; then \
         echo "Build finished. Updated stats:"; \
