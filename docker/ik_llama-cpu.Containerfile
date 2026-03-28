@@ -6,8 +6,8 @@ ENV LLAMA_CURL=1
 ENV LC_ALL=C.utf8
 # Add the toggle for ccache
 ARG USE_CCACHE=false
-ARG BUILD_NUMBER=0
-ARG LLAMA_COMMIT=unknown
+ARG BUILD_NUMBER
+ARG LLAMA_COMMIT
 ENV CCACHE_DIR=/ccache
 ENV CCACHE_UMASK=000
 ENV CCACHE_MAXSIZE=1G
@@ -27,9 +27,9 @@ RUN --mount=type=cache,target=/ccache \
         echo "ccache enabled. Current stats:"; \
         ccache -s; \
     fi && \
-    # Set build info from environment variables (passed from CI) or git
-    export BUILD_NUMBER=${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 0)} && \
-    export LLAMA_COMMIT=${LLAMA_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)} && \
+    # Calculate build info from git
+    BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 0) && \
+    LLAMA_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) && \
     cmake -B build -DGGML_NATIVE=ON -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON \
         -DBUILD_NUMBER=$BUILD_NUMBER -DBUILD_COMMIT=$LLAMA_COMMIT && \
     cmake --build build --config Release -j$(nproc) && \
