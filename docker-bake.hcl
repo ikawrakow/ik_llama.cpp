@@ -21,6 +21,8 @@ target "settings" {
   context = "."
   inherits = ["cache_settings"]
   args = {
+    BUILD_NUMBER     = "${BUILD_NUMBER}"
+    LLAMA_COMMIT     = "${LLAMA_COMMIT}"
     CUDA_VERSION     = "${CUDA_VERSION}"
     CUDA_DOCKER_ARCH = "${CUDA_DOCKER_ARCH}"
     USE_CCACHE       = "${USE_CCACHE}"
