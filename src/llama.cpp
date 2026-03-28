@@ -29,7 +29,7 @@
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_cpu_ops.h"
 
-#define IK_PRINT_TIMING 2
+#define IK_PRINT_TIMING 0
 
 #ifdef GGML_USE_RPC
 #  include "ggml-rpc.h"
@@ -585,7 +585,8 @@ int llama_context::find_reusable_graph(const llama_batch & u_batch) {
             if (i == active_graph_slot) {
                 return i;
             }
-            if (slot.n_splits > 4 && !slot.original_srcs.empty() && cross_slot_candidate < 0) {
+            // Avoiding Cross-slot for high-split graphs as its causes logit corruption.
+            if (slot.n_splits <= 4 && !slot.original_srcs.empty() && cross_slot_candidate < 0) {
                 cross_slot_candidate = i;
             }
         }
@@ -4269,8 +4270,7 @@ static int llama_decode_internal(
             printf("build_graph(...): %d us\n", int(tim2-tim1));
 #endif
             const bool will_store = (u_batch.embd == nullptr
-                                     && lctx.cparams.n_graph_reuse > 1
-                                     && cparams.mtp_op_type == MTP_OP_NONE);
+                                     && lctx.cparams.n_graph_reuse > 1);
             if (will_store) {
                 lctx.save_graph_original_srcs(gf);
             }
@@ -4283,8 +4283,7 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            if (u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0
-                && cparams.mtp_op_type == MTP_OP_NONE) {
+            if (u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
                 lctx.store_graph_slot(u_batch, gf);
 #if IK_PRINT_TIMING
                 printf("graph_store(slot=%d, mtp=%d, ntok=%d, splits=%d)\n",
