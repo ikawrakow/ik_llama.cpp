@@ -18,9 +18,10 @@ ENV CCACHE_MAXSIZE=1G
 RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git
 
 COPY . /app
+COPY .git /app/.git
 WORKDIR /app
 
-# We use a cache mount for /ccache only (git is copied with COPY .)
+# We use a cache mount for /ccache only (git is copied)
 RUN --mount=type=cache,target=/ccache \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \

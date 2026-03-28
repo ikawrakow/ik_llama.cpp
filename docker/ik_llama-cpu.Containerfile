@@ -17,9 +17,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 COPY . /app
+COPY .git /app/.git
 WORKDIR /app
 
-# Use a cache mount for /ccache and .git to persist objects between builds
+# Use a cache mount for /ccache only (git is copied)
 RUN --mount=type=cache,target=/ccache \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
