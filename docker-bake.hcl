@@ -1,6 +1,8 @@
 variable "REPO_OWNER" {}
 variable "VARIANT" {}
 variable "SHA_SHORT" {}
+variable "BUILD_NUMBER" {}
+variable "LLAMA_COMMIT" {}
 variable "CUDA_VERSION" {}
 variable "CUDA_DOCKER_ARCH" { default = "86;90" }
 variable "USE_CCACHE" { default = "true" }
@@ -29,7 +31,8 @@ target "full" {
   inherits = ["settings"]
   target = "full"
   tags = [
-    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full-${SHA_SHORT}",
+    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full-${BUILD_NUMBER}-${LLAMA_COMMIT}",
+    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full",
     "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full"
   ]
 }
@@ -38,7 +41,8 @@ target "swap" {
   inherits = ["settings"]
   target = "swap"
   tags = [
-    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap-${SHA_SHORT}",
+    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap-${BUILD_NUMBER}-${LLAMA_COMMIT}",
+    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap",
     "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap"
   ]
 }

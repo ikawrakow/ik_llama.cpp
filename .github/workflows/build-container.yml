@@ -44,7 +44,8 @@ jobs:
       - name: Prepare Environment
         id: prep
         run: |
-          echo "SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> $GITHUB_ENV
+          echo "LLAMA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Build and Push
@@ -52,7 +53,8 @@ jobs:
         env:
           REPO_OWNER: ${{ env.REPO_LOWER }}
           VARIANT: ${{ matrix.variant }}
-          SHA_SHORT: ${{ env.SHA_SHORT }}
+          BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
+          LLAMA_COMMIT: ${{ env.LLAMA_COMMIT }}
           CUDA_VERSION: ${{ matrix.cuda_version }}
           USE_CCACHE: "true"
         with:
