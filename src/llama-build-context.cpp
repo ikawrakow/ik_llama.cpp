@@ -95,6 +95,11 @@ void llm_build_context::init() {
 
     ctx0 = ggml_init(params);
 
+    // clear cache_copies to avoid stale entries from previous builds.
+    for (auto & cc : lctx.cache_copies) {
+        cc.cpy = nullptr;
+    }
+
     lctx.inp_tokens      = nullptr;
     lctx.inp_embd        = nullptr;
     lctx.inp_pos         = nullptr;

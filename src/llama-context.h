@@ -191,6 +191,7 @@ struct llama_context {
     // memory buffers used to evaluate the model
     std::vector<uint8_t> buf_compute_meta;
     ggml_backend_sched_t sched = nullptr;
+    ggml_backend_sched_t sched_mtp = nullptr; // dedicated scheduler for MTP graphs
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
@@ -234,12 +235,14 @@ struct llama_context {
         int               all_seq_id = 0;
         int               n_outputs  = 0;
         int               n_kv       = 0;
+        int               n_splits   = 0; // scheduler splits; cross-slot reuse safe when <= 1
         llama_mtp_op_type mtp_op_type = MTP_OP_NONE;
         ggml_cgraph *     graph = nullptr;
 
         // For n_graph_reuse > 1: per-slot copies of buf_compute_meta, cache_copies, and input tensor ptrs.
         std::vector<uint8_t>   buf_compute_meta;
         std::vector<CacheCopy> cache_copies;
+        std::vector<ggml_tensor *> original_srcs; // [node * GGML_MAX_SRC + src_idx]
         // Input tensor pointers
         ggml_tensor * inp_tokens      = nullptr;
         ggml_tensor * inp_embd        = nullptr;
@@ -263,13 +266,17 @@ struct llama_context {
 
     std::vector<GraphSlot> graph_slots;
     int      active_graph_slot = -1;
+    int      active_graph_slot_mtp = -1;
     uint64_t graph_slot_counter = 0;   // monotonic counter for LRU
+    std::vector<ggml_tensor *> graph_srcs_pending;
 
     void  reset_scheduler();
     int   find_reusable_graph(const llama_batch & u_batch);
     bool  can_reuse_graph(const llama_batch & u_batch);
     bool  update_cache_copies();
     bool  update_cache_copies_for_slot(int slot_idx);
+    void  save_graph_original_srcs(ggml_cgraph * gf);
+    void  restore_graph_original_srcs(GraphSlot & slot);
     void  store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf);
     void  activate_graph_slot(int slot_idx);
     void  save_input_tensors_to_slot(GraphSlot & slot);

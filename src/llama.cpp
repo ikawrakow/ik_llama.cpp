@@ -559,12 +559,15 @@ void llama_context::invalidate_graph_slots() {
         slot.valid = false;
     }
     active_graph_slot = -1;
+    active_graph_slot_mtp = -1;
 }
 
 int llama_context::find_reusable_graph(const llama_batch & u_batch) {
     if (u_batch.n_tokens > 1) return -1;
     if (u_batch.embd)         return -1;
     if (cparams.n_graph_reuse <= 0) return -1;
+
+    int cross_slot_candidate = -1;
 
     for (int i = 0; i < (int)graph_slots.size(); ++i) {
         auto & slot = graph_slots[i];
@@ -579,10 +582,15 @@ int llama_context::find_reusable_graph(const llama_batch & u_batch) {
                 return i;
             }
         } else {
-            return i;
+            if (i == active_graph_slot) {
+                return i;
+            }
+            if (slot.n_splits <= 4 && !slot.original_srcs.empty() && cross_slot_candidate < 0) {
+                cross_slot_candidate = i;
+            }
         }
     }
-    return -1;
+    return cross_slot_candidate;
 }
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
@@ -764,6 +772,26 @@ void llama_context::restore_input_tensors_from_slot(GraphSlot & slot) {
     inp_mtp_states  = slot.inp_mtp_states;
 }
 
+void llama_context::save_graph_original_srcs(ggml_cgraph * gf) {
+    const int n = gf->n_nodes;
+    graph_srcs_pending.resize(n * GGML_MAX_SRC);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            graph_srcs_pending[i * GGML_MAX_SRC + j] = gf->nodes[i]->src[j];
+        }
+    }
+}
+
+void llama_context::restore_graph_original_srcs(GraphSlot & slot) {
+    ggml_cgraph * gf = slot.graph;
+    GGML_ASSERT((int)slot.original_srcs.size() == gf->n_nodes * GGML_MAX_SRC);
+    for (int i = 0; i < gf->n_nodes; i++) {
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            gf->nodes[i]->src[j] = slot.original_srcs[i * GGML_MAX_SRC + j];
+        }
+    }
+}
+
 void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf) {
     const int n_slots = (int)graph_slots.size();
 
@@ -805,12 +833,14 @@ void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * 
     slot.all_seq_id  = (int)u_batch.all_seq_id;
     slot.n_outputs   = (int)n_outputs;
     slot.n_kv        = (int)kv_self.n;
+    slot.n_splits    = ggml_backend_sched_get_n_splits(sched);
     slot.mtp_op_type = cparams.mtp_op_type;
     slot.graph       = gf;
 
     if (cparams.n_graph_reuse > 1) {
         std::swap(buf_compute_meta, slot.buf_compute_meta);
         std::swap(cache_copies, slot.cache_copies);
+        std::swap(graph_srcs_pending, slot.original_srcs);
         save_input_tensors_to_slot(slot);
 
         if (buf_compute_meta.size() < slot.buf_compute_meta.size()) {
@@ -834,21 +864,36 @@ void llama_context::activate_graph_slot(int slot_idx) {
     auto & slot = graph_slots[slot_idx];
     GGML_ASSERT(slot.valid && slot.graph);
 
-    LLAMA_LOG_DEBUG("%s: reusing slot %d (mtp_op=%d, n_kv=%d, lru=%" PRIu64 ", cross_slot=%s)\n",
-                    __func__, slot_idx, (int)slot.mtp_op_type, slot.n_kv, graph_slot_counter + 1,
-                    (cparams.n_graph_reuse > 1 && slot_idx != active_graph_slot) ? "yes" : "no");
+    LLAMA_LOG_DEBUG("%s: reusing slot %d (mtp_op=%d, n_kv=%d, lru=%" PRIu64 ")\n",
+                    __func__, slot_idx, (int)slot.mtp_op_type, slot.n_kv, graph_slot_counter + 1);
     slot.last_used = ++graph_slot_counter;
 
-    if (cparams.n_graph_reuse > 1 && slot_idx != active_graph_slot) {
-        restore_input_tensors_from_slot(slot);
+    if (cparams.n_graph_reuse > 1) {
+        const bool cross_slot = (slot_idx != active_graph_slot);
 
-        ggml_backend_sched_reset(sched);
-        ggml_backend_sched_alloc_graph(sched, slot.graph);
+        if (cross_slot) {
+            GGML_ASSERT(!slot.original_srcs.empty());
+            restore_graph_original_srcs(slot);
 
-        if (!update_cache_copies_for_slot(slot_idx)) {
-            slot.valid = false;
-            active_graph_slot = -1;
-            return;
+            std::swap(buf_compute_meta, slot.buf_compute_meta);
+            restore_input_tensors_from_slot(slot);
+
+            ggml_backend_sched_reset(sched);
+            ggml_backend_sched_alloc_graph(sched, slot.graph);
+
+            std::swap(buf_compute_meta, slot.buf_compute_meta);
+
+            if (!update_cache_copies_for_slot(slot_idx)) {
+                slot.valid = false;
+                active_graph_slot = -1;
+                return;
+            }
+        } else {
+            if (!update_cache_copies_for_slot(slot_idx)) {
+                slot.valid = false;
+                active_graph_slot = -1;
+                return;
+            }
         }
     }
 
@@ -868,11 +913,25 @@ llama_context::llama_context(const llama_model & model)
 void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
+    // swap to/from the dedicated MTP scheduler.
+    if (sched_mtp) {
+        const bool was_mtp = (cparams.mtp_op_type != MTP_OP_NONE);
+        const bool is_mtp  = (value != MTP_OP_NONE);
+        if (is_mtp && !was_mtp) {
+            std::swap(sched, sched_mtp);
+            std::swap(active_graph_slot, active_graph_slot_mtp);
+        } else if (!is_mtp && was_mtp) {
+            std::swap(sched, sched_mtp);
+            std::swap(active_graph_slot, active_graph_slot_mtp);
+        }
+    }
+
     cparams.mtp_op_type = value;
 }
 
 llama_context::~llama_context() {
     ggml_backend_sched_free(sched);
+    ggml_backend_sched_free(sched_mtp);
 
     for (ggml_backend_t backend : backends) {
         ggml_backend_free(backend);
@@ -3862,7 +3921,25 @@ static void llama_graph_compute(
 
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
 
-    // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
+#ifndef NDEBUG
+    {
+        static int log_count = 0;
+        if (log_count < 50) {
+            const char * mtp_name = "UNKNOWN";
+            switch (lctx.cparams.mtp_op_type) {
+                case MTP_OP_NONE:      mtp_name = "NONE"; break;
+                case MTP_OP_WARMUP:    mtp_name = "WARMUP"; break;
+                case MTP_OP_DRAFT_GEN: mtp_name = "DRAFT_GEN"; break;
+            }
+            fprintf(stderr, "[DIAG] splits: %d, copies: %d, nodes: %d, mtp_op: %s\n",
+                ggml_backend_sched_get_n_splits(lctx.sched),
+                ggml_backend_sched_get_n_copies(lctx.sched),
+                gf->n_nodes,
+                mtp_name);
+            ++log_count;
+        }
+    }
+#endif
 }
 
 static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
@@ -4142,15 +4219,31 @@ static int llama_decode_internal(
         int reuse_slot = lctx.find_reusable_graph(u_batch);
 
         if (reuse_slot >= 0) {
+            bool was_cross = (reuse_slot != lctx.active_graph_slot);
             lctx.activate_graph_slot(reuse_slot);
             if (lctx.active_graph_slot >= 0) {
                 gf = lctx.graph_slots[reuse_slot].graph;
+#if IK_PRINT_TIMING
+                tim2 = ggml_time_us();
+                printf("graph_reuse(slot=%d, %s, mtp=%d, ntok=%d): %d us\n",
+                       reuse_slot, was_cross ? "cross" : "same", (int)cparams.mtp_op_type,
+                       (int)n_tokens, int(tim2-tim1));
+#endif
             } else {
                 reuse_slot = -1;
             }
         }
 
         if (reuse_slot < 0) {
+#if IK_PRINT_TIMING
+            {
+                const char * reason = "no_match";
+                if (n_tokens > 1) reason = "multi_tok";
+                else if (lctx.cparams.n_graph_reuse <= 0) reason = "disabled";
+                printf("graph_new(mtp=%d, ntok=%d, reason=%s, active=%d)\n",
+                       (int)cparams.mtp_op_type, (int)n_tokens, reason, lctx.active_graph_slot);
+            }
+#endif
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
@@ -4166,6 +4259,11 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("build_graph(...): %d us\n", int(tim2-tim1));
 #endif
+            const bool will_store = (u_batch.n_tokens == 1 && u_batch.embd == nullptr
+                                     && lctx.cparams.n_graph_reuse > 1);
+            if (will_store) {
+                lctx.save_graph_original_srcs(gf);
+            }
 
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
@@ -4177,6 +4275,11 @@ static int llama_decode_internal(
 #endif
             if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
                 lctx.store_graph_slot(u_batch, gf);
+#if IK_PRINT_TIMING
+                printf("graph_store(slot=%d, mtp=%d, splits=%d)\n",
+                       lctx.active_graph_slot, (int)cparams.mtp_op_type,
+                       lctx.graph_slots[lctx.active_graph_slot].n_splits);
+#endif
             }
         }
 
@@ -6012,6 +6115,45 @@ struct llama_context * llama_init_from_model(
             int n_splits = ggml_backend_sched_get_n_splits(ctx->sched);
             LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, gf->n_nodes);
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits);
+
+            // create dedicated MTP scheduler if MTP is available
+            if (model->hparams.nextn_predict_layers > 0 && ctx->cparams.mtp) {
+                ctx->sched_mtp = ggml_backend_sched_new(
+                    ctx->backends.data(), backend_buft.data(),
+                    ctx->backends.size(), max_nodes, false);
+
+                auto saved_mtp_op = ctx->cparams.mtp_op_type;
+                ctx->cparams.mtp_op_type = MTP_OP_DRAFT_GEN;
+
+                std::vector<uint8_t> buf_mtp_meta(ggml_tensor_overhead() * max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+                std::swap(ctx->buf_compute_meta, buf_mtp_meta);
+
+                ggml_cgraph * gf_mtp = llm_build_context::llama_build_graph(
+                    *ctx, llama_batch_get_one(&token, 1, n_past, 0), true);
+
+                std::swap(ctx->buf_compute_meta, buf_mtp_meta);
+                ctx->cparams.mtp_op_type = saved_mtp_op;
+
+                if (!ggml_backend_sched_reserve(ctx->sched_mtp, gf_mtp)) {
+                    LLAMA_LOG_WARN("%s: failed to reserve MTP scheduler, falling back to shared scheduler\n", __func__);
+                    ggml_backend_sched_free(ctx->sched_mtp);
+                    ctx->sched_mtp = nullptr;
+                } else {
+                    int n_splits_mtp = ggml_backend_sched_get_n_splits(ctx->sched_mtp);
+                    LLAMA_LOG_INFO("%s: MTP graph nodes  = %d\n", __func__, gf_mtp->n_nodes);
+                    LLAMA_LOG_INFO("%s: MTP graph splits = %d\n", __func__, n_splits_mtp);
+                    for (size_t i = 0; i < ctx->backends.size(); i++) {
+                        ggml_backend_t backend = ctx->backends[i];
+                        ggml_backend_buffer_type_t buft_i = backend_buft[i];
+                        size_t size = ggml_backend_sched_get_buffer_size(ctx->sched_mtp, backend);
+                        if (size > 1) {
+                            LLAMA_LOG_INFO("%s: %10s MTP compute buffer size = %8.2f MiB\n", __func__,
+                                    ggml_backend_buft_name(buft_i),
+                                    size / 1024.0 / 1024.0);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -6025,12 +6167,18 @@ struct llama_context * llama_init_from_model(
                         ggml_op_name(ggml_op(op)), on_off ? "ON" : "OFF");
             }
             ggml_backend_sched_set_op_offload(ctx->sched, ggml_op(op), on_off);
+            if (ctx->sched_mtp) {
+                ggml_backend_sched_set_op_offload(ctx->sched_mtp, ggml_op(op), on_off);
+            }
         }
     }
 
     if (params.only_active_experts) {
         LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
+        if (ctx->sched_mtp) {
+            ggml_backend_sched_set_only_active_experts(ctx->sched_mtp, true);
+        }
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);
