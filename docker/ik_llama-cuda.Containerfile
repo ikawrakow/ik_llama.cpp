@@ -85,8 +85,8 @@ FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
 ARG LS_VER=199
 RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
-    | tar -xz && \
-    mv llama-swap /app/llama-swap
+    | tar -xz 
+
 COPY --from=build /app/docker/ik_llama-cuda-swap.config.yaml /app/config.yaml
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD [ "curl", "-f", "http://localhost:8080"]
