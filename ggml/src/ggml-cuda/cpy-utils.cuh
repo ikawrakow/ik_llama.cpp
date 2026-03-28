@@ -191,6 +191,7 @@ static __device__ void quantize_f32_iq4_nl_block(const float * __restrict__ x, b
         sumq2 += w0*v0*v0 + w1*v1*v1;
     }
 
+    //y->d = d;
     y->d = sumq2 > 0 ? sumqx/sumq2 : d;
 }
 
