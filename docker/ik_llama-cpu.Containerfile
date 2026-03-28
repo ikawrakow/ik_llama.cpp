@@ -26,16 +26,14 @@ COPY . .
 
 # 2. Run the build using the files already in /app
 RUN --mount=type=cache,target=/ccache \
+    --mount=type=bind,source=.git,target=.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         ccache -z; \
     fi && \
-    BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 0) && \
-    LLAMA_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) && \
     cmake -B build \
         -DGGML_NATIVE=${GGML_NATIVE} \
-        -DLLAMA_CURL=ON \
-        -DBUILD_NUMBER=$BUILD_NUMBER -DBUILD_COMMIT=$LLAMA_COMMIT && \
+        -DLLAMA_CURL=ON && \
     cmake --build build --config Release -j$(nproc) && \
     if [ "${USE_CCACHE}" = "true" ]; then \
         ccache -s; \
