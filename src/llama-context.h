@@ -233,9 +233,10 @@ struct llama_context {
         bool     valid = false;
         uint64_t last_used = 0;     // LRU counter
         int               all_seq_id = 0;
+        int               n_tokens   = 0;
         int               n_outputs  = 0;
         int               n_kv       = 0;
-        int               n_splits   = 0; // scheduler splits; cross-slot reuse safe when <= 1
+        int               n_splits   = 0;
         llama_mtp_op_type mtp_op_type = MTP_OP_NONE;
         ggml_cgraph *     graph = nullptr;
 
@@ -275,6 +276,7 @@ struct llama_context {
     bool  can_reuse_graph(const llama_batch & u_batch);
     bool  update_cache_copies();
     bool  update_cache_copies_for_slot(int slot_idx);
+    bool  rebuild_cache_copies_for_slot(int slot_idx);
     void  save_graph_original_srcs(ggml_cgraph * gf);
     void  restore_graph_original_srcs(GraphSlot & slot);
     void  store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf);

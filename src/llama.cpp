@@ -29,7 +29,7 @@
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_cpu_ops.h"
 
-#define IK_PRINT_TIMING 0
+#define IK_PRINT_TIMING 2
 
 #ifdef GGML_USE_RPC
 #  include "ggml-rpc.h"
@@ -563,7 +563,6 @@ void llama_context::invalidate_graph_slots() {
 }
 
 int llama_context::find_reusable_graph(const llama_batch & u_batch) {
-    if (u_batch.n_tokens > 1) return -1;
     if (u_batch.embd)         return -1;
     if (cparams.n_graph_reuse <= 0) return -1;
 
@@ -573,6 +572,7 @@ int llama_context::find_reusable_graph(const llama_batch & u_batch) {
         auto & slot = graph_slots[i];
         if (!slot.valid || !slot.graph) continue;
         if (slot.mtp_op_type != cparams.mtp_op_type) continue;
+        if (slot.n_tokens != (int)u_batch.n_tokens)  continue;
         if (u_batch.all_seq_id != slot.all_seq_id)   continue;
         if (kv_self.head == 0)                        continue;
         if ((int)kv_self.n != slot.n_kv)              continue;
@@ -585,7 +585,7 @@ int llama_context::find_reusable_graph(const llama_batch & u_batch) {
             if (i == active_graph_slot) {
                 return i;
             }
-            if (slot.n_splits <= 4 && !slot.original_srcs.empty() && cross_slot_candidate < 0) {
+            if (slot.n_splits > 4 && !slot.original_srcs.empty() && cross_slot_candidate < 0) {
                 cross_slot_candidate = i;
             }
         }
@@ -794,12 +794,14 @@ void llama_context::restore_graph_original_srcs(GraphSlot & slot) {
 
 void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf) {
     const int n_slots = (int)graph_slots.size();
+    const int n_tok = (int)u_batch.n_tokens;
 
-    // Find an existing slot for a graph
+    // Find the best slot for this graph.
     int target = -1;
-
     for (int i = 0; i < n_slots; ++i) {
-        if (graph_slots[i].valid && graph_slots[i].mtp_op_type == cparams.mtp_op_type) {
+        if (graph_slots[i].valid &&
+            graph_slots[i].mtp_op_type == cparams.mtp_op_type &&
+            graph_slots[i].n_tokens == n_tok) {
             target = i;
             break;
         }
@@ -831,6 +833,7 @@ void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * 
     slot.valid       = true;
     slot.last_used   = ++graph_slot_counter;
     slot.all_seq_id  = (int)u_batch.all_seq_id;
+    slot.n_tokens    = (int)u_batch.n_tokens;
     slot.n_outputs   = (int)n_outputs;
     slot.n_kv        = (int)kv_self.n;
     slot.n_splits    = ggml_backend_sched_get_n_splits(sched);
@@ -879,7 +882,12 @@ void llama_context::activate_graph_slot(int slot_idx) {
             restore_input_tensors_from_slot(slot);
 
             ggml_backend_sched_reset(sched);
-            ggml_backend_sched_alloc_graph(sched, slot.graph);
+            if (!ggml_backend_sched_alloc_graph(sched, slot.graph)) {
+                std::swap(buf_compute_meta, slot.buf_compute_meta);
+                slot.valid = false;
+                active_graph_slot = -1;
+                return;
+            }
 
             std::swap(buf_compute_meta, slot.buf_compute_meta);
 
@@ -889,6 +897,8 @@ void llama_context::activate_graph_slot(int slot_idx) {
                 return;
             }
         } else {
+            restore_input_tensors_from_slot(slot);
+
             if (!update_cache_copies_for_slot(slot_idx)) {
                 slot.valid = false;
                 active_graph_slot = -1;
@@ -4238,8 +4248,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             {
                 const char * reason = "no_match";
-                if (n_tokens > 1) reason = "multi_tok";
-                else if (lctx.cparams.n_graph_reuse <= 0) reason = "disabled";
+                if (lctx.cparams.n_graph_reuse <= 0) reason = "disabled";
                 printf("graph_new(mtp=%d, ntok=%d, reason=%s, active=%d)\n",
                        (int)cparams.mtp_op_type, (int)n_tokens, reason, lctx.active_graph_slot);
             }
@@ -4259,8 +4268,9 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("build_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            const bool will_store = (u_batch.n_tokens == 1 && u_batch.embd == nullptr
-                                     && lctx.cparams.n_graph_reuse > 1);
+            const bool will_store = (u_batch.embd == nullptr
+                                     && lctx.cparams.n_graph_reuse > 1
+                                     && cparams.mtp_op_type == MTP_OP_NONE);
             if (will_store) {
                 lctx.save_graph_original_srcs(gf);
             }
@@ -4273,11 +4283,13 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
+            if (u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0
+                && cparams.mtp_op_type == MTP_OP_NONE) {
                 lctx.store_graph_slot(u_batch, gf);
 #if IK_PRINT_TIMING
-                printf("graph_store(slot=%d, mtp=%d, splits=%d)\n",
+                printf("graph_store(slot=%d, mtp=%d, ntok=%d, splits=%d)\n",
                        lctx.active_graph_slot, (int)cparams.mtp_op_type,
+                       (int)n_tokens,
                        lctx.graph_slots[lctx.active_graph_slot].n_splits);
 #endif
             }
