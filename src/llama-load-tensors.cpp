@@ -3945,7 +3945,12 @@ bool create_tensors_helper::create_tensors() {
             throw std::runtime_error("unknown architecture");
     }
 
-    use_mmap_buffer &= !has_buft_overrides;
+    // NUMA distribute/numactl modes rely on mmap for page placement across nodes
+    bool numa_needs_mmap = (
+        ggml_get_numa_strategy() == GGML_NUMA_STRATEGY_DISTRIBUTE ||
+        ggml_get_numa_strategy() == GGML_NUMA_STRATEGY_NUMACTL
+    );
+    use_mmap_buffer &= !has_buft_overrides || numa_needs_mmap;
 
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.mtp ? model.layers.size()

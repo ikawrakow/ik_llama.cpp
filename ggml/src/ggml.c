@@ -4662,6 +4662,10 @@ bool ggml_is_numa(void) {
     return g_state.numa.n_nodes > 1;
 }
 
+enum ggml_numa_strategy ggml_get_numa_strategy(void) {
+    return g_state.numa.numa_strategy;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void ggml_print_object(const struct ggml_object * obj) {
