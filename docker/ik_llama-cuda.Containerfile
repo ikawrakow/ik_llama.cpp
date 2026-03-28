@@ -13,7 +13,7 @@ ENV CCACHE_UMASK=000
 ENV CCACHE_MAXSIZE=1G
 
 # Install build dependencies + ccache
-RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git libnccl-dev
+RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git
 
 COPY . /app
 WORKDIR /app
