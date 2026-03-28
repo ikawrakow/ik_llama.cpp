@@ -2353,7 +2353,8 @@ static bool llm_load_tensors(
         }
         LLAMA_LOG_INFO("Memory required for model tensors + cache: %.f MiB\n", required_mem/(1024.*1024.));
         LLAMA_LOG_INFO("Memory available on all devices - compute: %.f MiB\n", available_mem/(1024.*1024.));
-        if (required_mem > available_mem) {
+        // Do not adjust the splits if the use has provided their own
+        if (required_mem > available_mem && !tensor_split) {
             float sum = 0;
             for (int id = 0; id < device_count; ++id) {
                 device_mem[id] = device_mem[id] > max_compute ? device_mem[id] - max_compute : 0;
@@ -2449,21 +2450,23 @@ static bool llm_load_tensors(
                     throw std::runtime_error("Unable to auto-fit model");
                 }
                 device_mem[id] -= layer_sizes[id];
-                float sum = 0;
-                for (int id = 0; id < int(model.splits.size()); ++id) {
-                    sum += device_mem[id];
-                    model.splits[id] = sum;
-                }
-                if (sum > 0) {
-                    LLAMA_LOG_INFO("=== Adjusted device splits for split mode graph:\n");
-                    float last_split = 0;
+                if (!tensor_split) {
+                    float sum = 0;
                     for (int id = 0; id < int(model.splits.size()); ++id) {
-                        model.splits[id] /= sum;
-                        LLAMA_LOG_INFO("Device %2d: %zu MiB -> split = %g\n", id, device_mem[id]/(1024*1024), model.splits[id] - last_split);
-                        last_split = model.splits[id];
+                        sum += device_mem[id];
+                        model.splits[id] = sum;
                     }
-                } else {
-                    throw std::runtime_error("Unable to auto-fit model");
+                    if (sum > 0) {
+                        LLAMA_LOG_INFO("=== Adjusted device splits for split mode graph:\n");
+                        float last_split = 0;
+                        for (int id = 0; id < int(model.splits.size()); ++id) {
+                            model.splits[id] /= sum;
+                            LLAMA_LOG_INFO("Device %2d: %zu MiB -> split = %g\n", id, device_mem[id]/(1024*1024), model.splits[id] - last_split);
+                            last_split = model.splits[id];
+                        }
+                    } else {
+                        throw std::runtime_error("Unable to auto-fit model");
+                    }
                 }
             } else {
                 for (int id = 0; id < device_count; ++id) {
@@ -2546,13 +2549,9 @@ static bool llm_load_tensors(
     if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
         for (int i = i_gpu_start; i < n_layer; ++i) {
             model.buft_layer[i] = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
-            //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
-            //model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
-            //int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - model.splits.begin();
-            //model.buft_output = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
             model.buft_output = llama_default_buffer_type_offload(model, model.default_layer_device[n_layer]);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
@@ -2566,7 +2565,6 @@ static bool llm_load_tensors(
             // LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_LAYER in backends where it is not supported
             split_buft = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         }
-        //auto buft_layer = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         // assign the repeating layers
         for (int i = i_gpu_start; i < n_layer; ++i) {
             auto buft_layer = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
