@@ -1,5 +1,6 @@
 *.o
 *.a
+*.md
 .cache/
 .github/
 .gitignore
