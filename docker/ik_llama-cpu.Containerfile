@@ -25,6 +25,8 @@ RUN --mount=type=cache,target=/ccache \
         echo "ccache enabled. Current stats:"; \
         ccache -s; \
     fi && \
+    # Fetch full git history for accurate BUILD_NUMBER
+    git fetch --unshallow 2>/dev/null || true && \
     cmake -B build -DGGML_NATIVE=ON -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON && \
     cmake --build build --config Release -j$(nproc) && \
     if [ "${USE_CCACHE}" = "true" ]; then \
