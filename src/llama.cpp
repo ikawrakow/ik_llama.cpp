@@ -5308,6 +5308,30 @@ struct llama_context * llama_init_from_model(
         params.v_cache_hadamard = false;
     }
 
+    // Hybrid Mamba/attention models (Qwen3.5, Qwen3-Next) require q8_0 minimum for KV cache
+    // Lower-bit quantization causes NaN accumulation in SSM state or attention-recurrent interaction
+    if (llm_arch_is_hybrid(model->arch)) {
+        bool need_upgrade_k = ggml_is_quantized(params.type_k) &&
+                              params.type_k != GGML_TYPE_Q8_0 &&
+                              params.type_k != GGML_TYPE_Q8_1 &&
+                              params.type_k != GGML_TYPE_Q8_KV;
+        bool need_upgrade_v = ggml_is_quantized(params.type_v) &&
+                              params.type_v != GGML_TYPE_Q8_0 &&
+                              params.type_v != GGML_TYPE_Q8_1 &&
+                              params.type_v != GGML_TYPE_Q8_KV;
+
+        if (need_upgrade_k) {
+            LLAMA_LOG_WARN("%s: hybrid Mamba/attention models require q8_0 minimum for K cache (requested: %s). Upgrading to q8_0\n",
+                __func__, ggml_type_name(params.type_k));
+            params.type_k = GGML_TYPE_Q8_0;
+        }
+        if (need_upgrade_v) {
+            LLAMA_LOG_WARN("%s: hybrid Mamba/attention models require q8_0 minimum for V cache (requested: %s). Upgrading to q8_0\n",
+                __func__, ggml_type_name(params.type_v));
+            params.type_v = GGML_TYPE_Q8_0;
+        }
+    }
+
     llama_context * ctx = new llama_context(*model);
 
     // add devices to ctx->cparams from model
