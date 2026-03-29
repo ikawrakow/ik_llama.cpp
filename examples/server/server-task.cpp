@@ -719,15 +719,13 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
 
-    bool has_thinking = !oaicompat_msg.reasoning_content.empty();
-    bool has_text = !oaicompat_msg.content.empty();
     size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
     size_t thinking_block_index = 0;
-    size_t text_block_index = has_thinking ? 1 : 0;
+    size_t text_block_index = anthropic_thinking_block_started ? 1 : 0;
 
-    bool thinking_block_started = false;
-    bool text_block_started = false;
+    bool thinking_block_started = anthropic_thinking_block_started;
+    bool text_block_started = anthropic_text_block_started;
     std::set<size_t> tool_calls_started;
 
     for (const auto& diff : oaicompat_msg_diffs) {
@@ -790,7 +788,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
 
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + diff.tool_call_index;
+            size_t content_block_index = (thinking_block_started ? 1 : 0) + (text_block_started ? 1 : 0) + diff.tool_call_index;
 
             if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
                 const auto& full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
@@ -826,7 +824,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
     }
 
-    if (has_thinking) {
+    if (thinking_block_started) {
         events.push_back({
             {"event", "content_block_delta"},
             {"data", {
@@ -847,7 +845,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
             });
     }
 
-    if (has_text) {
+    if (text_block_started) {
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
@@ -858,7 +856,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
     }
 
     for (size_t i = 0; i < num_tool_calls; i++) {
-        size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + i;
+        size_t content_block_index = (thinking_block_started ? 1 : 0) + (text_block_started ? 1 : 0) + i;
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {

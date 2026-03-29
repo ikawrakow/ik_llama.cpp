@@ -249,6 +249,9 @@ struct server_task_result_cmpl_final : server_task_result {
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
 
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     virtual bool is_stop() override {
         return true;
     }
