@@ -559,7 +559,7 @@ void llama_context::invalidate_graph_slots() {
         slot.valid = false;
     }
     active_graph_slot = -1;
-    active_graph_slot_mtp = -1;
+    active_graph_slot_draft = -1;
 }
 
 int llama_context::find_reusable_graph(const llama_batch & u_batch) {
@@ -585,7 +585,7 @@ int llama_context::find_reusable_graph(const llama_batch & u_batch) {
             if (i == active_graph_slot) {
                 return i;
             }
-            // Avoiding Cross-slot for high-split graphs as its causes logit corruption.
+            // Avoid Cross-slot for high-split graphs as its causes logit corruption.
             if (slot.n_splits <= 4 && !slot.original_srcs.empty() && cross_slot_candidate < 0) {
                 cross_slot_candidate = i;
             }
@@ -797,7 +797,8 @@ void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * 
     const int n_slots = (int)graph_slots.size();
     const int n_tok = (int)u_batch.n_tokens;
 
-    // Find the best slot for this graph.
+    // Slot selection strategy: 1) reuse existing slot with same (op_type, n_tokens),
+    // 2) use an empty slot, 3) evict the least-recently-used slot.
     int target = -1;
     for (int i = 0; i < n_slots; ++i) {
         if (graph_slots[i].valid &&
@@ -829,7 +830,7 @@ void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * 
 
     GGML_ASSERT(target >= 0);
     auto & slot = graph_slots[target];
-    LLAMA_LOG_DEBUG("%s: storing graph in slot %d (mtp_op=%d, n_kv=%d, n_out=%d, lru=%" PRIu64 ")\n",
+    LLAMA_LOG_DEBUG("%s: storing graph in slot %d (spec_op=%d, n_kv=%d, n_out=%d, lru=%" PRIu64 ")\n",
                     __func__, target, (int)cparams.mtp_op_type, (int)kv_self.n, (int)n_outputs, graph_slot_counter + 1);
     slot.valid       = true;
     slot.last_used   = ++graph_slot_counter;
@@ -868,7 +869,7 @@ void llama_context::activate_graph_slot(int slot_idx) {
     auto & slot = graph_slots[slot_idx];
     GGML_ASSERT(slot.valid && slot.graph);
 
-    LLAMA_LOG_DEBUG("%s: reusing slot %d (mtp_op=%d, n_kv=%d, lru=%" PRIu64 ")\n",
+    LLAMA_LOG_DEBUG("%s: reusing slot %d (spec_op=%d, n_kv=%d, lru=%" PRIu64 ")\n",
                     __func__, slot_idx, (int)slot.mtp_op_type, slot.n_kv, graph_slot_counter + 1);
     slot.last_used = ++graph_slot_counter;
 
@@ -925,15 +926,15 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     // swap to/from the dedicated MTP scheduler.
-    if (sched_mtp) {
+    if (sched_draft) {
         const bool was_mtp = (cparams.mtp_op_type != MTP_OP_NONE);
         const bool is_mtp  = (value != MTP_OP_NONE);
         if (is_mtp && !was_mtp) {
-            std::swap(sched, sched_mtp);
-            std::swap(active_graph_slot, active_graph_slot_mtp);
+            std::swap(sched, sched_draft);
+            std::swap(active_graph_slot, active_graph_slot_draft);
         } else if (!is_mtp && was_mtp) {
-            std::swap(sched, sched_mtp);
-            std::swap(active_graph_slot, active_graph_slot_mtp);
+            std::swap(sched, sched_draft);
+            std::swap(active_graph_slot, active_graph_slot_draft);
         }
     }
 
@@ -942,7 +943,7 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
 
 llama_context::~llama_context() {
     ggml_backend_sched_free(sched);
-    ggml_backend_sched_free(sched_mtp);
+    ggml_backend_sched_free(sched_draft);
 
     for (ggml_backend_t backend : backends) {
         ggml_backend_free(backend);
@@ -3931,26 +3932,6 @@ static void llama_graph_compute(
 #endif
 
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
-
-#ifndef NDEBUG
-    {
-        static int log_count = 0;
-        if (log_count < 50) {
-            const char * mtp_name = "UNKNOWN";
-            switch (lctx.cparams.mtp_op_type) {
-                case MTP_OP_NONE:      mtp_name = "NONE"; break;
-                case MTP_OP_WARMUP:    mtp_name = "WARMUP"; break;
-                case MTP_OP_DRAFT_GEN: mtp_name = "DRAFT_GEN"; break;
-            }
-            fprintf(stderr, "[DIAG] splits: %d, copies: %d, nodes: %d, mtp_op: %s\n",
-                ggml_backend_sched_get_n_splits(lctx.sched),
-                ggml_backend_sched_get_n_copies(lctx.sched),
-                gf->n_nodes,
-                mtp_name);
-            ++log_count;
-        }
-    }
-#endif
 }
 
 static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
@@ -4236,7 +4217,7 @@ static int llama_decode_internal(
                 gf = lctx.graph_slots[reuse_slot].graph;
 #if IK_PRINT_TIMING
                 tim2 = ggml_time_us();
-                printf("graph_reuse(slot=%d, %s, mtp=%d, ntok=%d): %d us\n",
+                printf("graph_reuse(slot=%d, %s, spec_op=%d, ntok=%d): %d us\n",
                        reuse_slot, was_cross ? "cross" : "same", (int)cparams.mtp_op_type,
                        (int)n_tokens, int(tim2-tim1));
 #endif
@@ -4250,7 +4231,7 @@ static int llama_decode_internal(
             {
                 const char * reason = "no_match";
                 if (lctx.cparams.n_graph_reuse <= 0) reason = "disabled";
-                printf("graph_new(mtp=%d, ntok=%d, reason=%s, active=%d)\n",
+                printf("graph_new(spec_op=%d, ntok=%d, reason=%s, active=%d)\n",
                        (int)cparams.mtp_op_type, (int)n_tokens, reason, lctx.active_graph_slot);
             }
 #endif
@@ -4286,7 +4267,7 @@ static int llama_decode_internal(
             if (u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
                 lctx.store_graph_slot(u_batch, gf);
 #if IK_PRINT_TIMING
-                printf("graph_store(slot=%d, mtp=%d, ntok=%d, splits=%d)\n",
+                printf("graph_store(slot=%d, spec_op=%d, ntok=%d, splits=%d)\n",
                        lctx.active_graph_slot, (int)cparams.mtp_op_type,
                        (int)n_tokens,
                        lctx.graph_slots[lctx.active_graph_slot].n_splits);
@@ -6127,38 +6108,38 @@ struct llama_context * llama_init_from_model(
             LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, gf->n_nodes);
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits);
 
-            // create dedicated MTP scheduler if MTP is available
+            // Create a dedicated scheduler for speculative graphs.
             if (model->hparams.nextn_predict_layers > 0 && ctx->cparams.mtp) {
-                ctx->sched_mtp = ggml_backend_sched_new(
+                ctx->sched_draft = ggml_backend_sched_new(
                     ctx->backends.data(), backend_buft.data(),
                     ctx->backends.size(), max_nodes, false);
 
                 auto saved_mtp_op = ctx->cparams.mtp_op_type;
                 ctx->cparams.mtp_op_type = MTP_OP_DRAFT_GEN;
 
-                std::vector<uint8_t> buf_mtp_meta(ggml_tensor_overhead() * max_nodes + ggml_graph_overhead_custom(max_nodes, false));
-                std::swap(ctx->buf_compute_meta, buf_mtp_meta);
+                std::vector<uint8_t> buf_draft_meta(ggml_tensor_overhead() * max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+                std::swap(ctx->buf_compute_meta, buf_draft_meta);
 
-                ggml_cgraph * gf_mtp = llm_build_context::llama_build_graph(
+                ggml_cgraph * gf_draft = llm_build_context::llama_build_graph(
                     *ctx, llama_batch_get_one(&token, 1, n_past, 0), true);
 
-                std::swap(ctx->buf_compute_meta, buf_mtp_meta);
+                std::swap(ctx->buf_compute_meta, buf_draft_meta);
                 ctx->cparams.mtp_op_type = saved_mtp_op;
 
-                if (!ggml_backend_sched_reserve(ctx->sched_mtp, gf_mtp)) {
-                    LLAMA_LOG_WARN("%s: failed to reserve MTP scheduler, falling back to shared scheduler\n", __func__);
-                    ggml_backend_sched_free(ctx->sched_mtp);
-                    ctx->sched_mtp = nullptr;
+                if (!ggml_backend_sched_reserve(ctx->sched_draft, gf_draft)) {
+                    LLAMA_LOG_WARN("%s: failed to reserve draft scheduler, falling back to shared scheduler\n", __func__);
+                    ggml_backend_sched_free(ctx->sched_draft);
+                    ctx->sched_draft = nullptr;
                 } else {
-                    int n_splits_mtp = ggml_backend_sched_get_n_splits(ctx->sched_mtp);
-                    LLAMA_LOG_INFO("%s: MTP graph nodes  = %d\n", __func__, gf_mtp->n_nodes);
-                    LLAMA_LOG_INFO("%s: MTP graph splits = %d\n", __func__, n_splits_mtp);
+                    int n_splits_draft = ggml_backend_sched_get_n_splits(ctx->sched_draft);
+                    LLAMA_LOG_INFO("%s: draft graph nodes  = %d\n", __func__, gf_draft->n_nodes);
+                    LLAMA_LOG_INFO("%s: draft graph splits = %d\n", __func__, n_splits_draft);
                     for (size_t i = 0; i < ctx->backends.size(); i++) {
                         ggml_backend_t backend = ctx->backends[i];
                         ggml_backend_buffer_type_t buft_i = backend_buft[i];
-                        size_t size = ggml_backend_sched_get_buffer_size(ctx->sched_mtp, backend);
+                        size_t size = ggml_backend_sched_get_buffer_size(ctx->sched_draft, backend);
                         if (size > 1) {
-                            LLAMA_LOG_INFO("%s: %10s MTP compute buffer size = %8.2f MiB\n", __func__,
+                            LLAMA_LOG_INFO("%s: %10s draft compute buffer size = %8.2f MiB\n", __func__,
                                     ggml_backend_buft_name(buft_i),
                                     size / 1024.0 / 1024.0);
                         }
@@ -6178,8 +6159,8 @@ struct llama_context * llama_init_from_model(
                         ggml_op_name(ggml_op(op)), on_off ? "ON" : "OFF");
             }
             ggml_backend_sched_set_op_offload(ctx->sched, ggml_op(op), on_off);
-            if (ctx->sched_mtp) {
-                ggml_backend_sched_set_op_offload(ctx->sched_mtp, ggml_op(op), on_off);
+            if (ctx->sched_draft) {
+                ggml_backend_sched_set_op_offload(ctx->sched_draft, ggml_op(op), on_off);
             }
         }
     }
@@ -6187,8 +6168,8 @@ struct llama_context * llama_init_from_model(
     if (params.only_active_experts) {
         LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
-        if (ctx->sched_mtp) {
-            ggml_backend_sched_set_only_active_experts(ctx->sched_mtp, true);
+        if (ctx->sched_draft) {
+            ggml_backend_sched_set_only_active_experts(ctx->sched_draft, true);
         }
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
