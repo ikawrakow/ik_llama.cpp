@@ -31,7 +31,7 @@ WORKDIR /app
 
 # Build using ccache and optional custom commit
 RUN --mount=type=cache,target=/ccache \
-    if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT"; fi && \
+    if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT" || true; fi && \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         ccache -z; \
