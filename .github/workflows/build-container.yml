@@ -107,33 +107,3 @@ jobs:
           container: ik-llama-cpp
           keep-younger-than: 0
           untagged-only: true
-  
-  prune-cache:
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    permissions:
-      actions: write # Required to delete caches
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Cleanup old caches (commented out)
-        shell: bash
-        run: |
-          # gh extension install actions/gh-actions-cache
-
-          # echo "Fetching list of caches..."
-          # cacheKeys=$(gh actions-cache list --limit 100 --order desc --sort created-at | cut -f 1)
-
-          # ## Logic: Keep the last 10 caches, delete the rest
-          # ## Or: Delete caches older than 24 hours
-          # for cacheKey in $cacheKeys; do
-          #   # Example: If there are more than 20 caches, start deleting the oldest
-          #   # This is safer than a blind delete
-          #   echo "Checking cache: $cacheKey"
-          #   # gh actions-cache delete "$cacheKey" --confirm
-          # done
-
-          echo "Cache pruning skipped - disabled."
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
