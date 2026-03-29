@@ -69,6 +69,12 @@ jobs:
             }
           skip-extraction: ${{ github.event_name == 'pull_request' }}
 
+      # Ensure .git is accessible for build (remove from dockerignore context)
+      - name: Verify .git exists
+        run: |
+          echo "Checking .git directory..."
+          ls -la .git || echo ".git not found"
+
       # 5.3 Build and push using the cache
       - name: Build and Push
         uses: docker/bake-action@v7
