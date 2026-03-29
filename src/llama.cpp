@@ -546,16 +546,19 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
 
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
-    if (cparams.n_graph_reuse <= 1) {
-        invalidate_graph_slots();
-    } else {
+    if (sched_draft || cparams.n_graph_reuse > 1) {
         active_graph_slot = -1;
+    } else {
+        invalidate_graph_slots();
     }
 }
 
 void llama_context::invalidate_graph_slots() {
-    LLAMA_LOG_DEBUG("%s: invalidating all %d graph slots\n", __func__, (int)graph_slots.size());
+    LLAMA_LOG_DEBUG("%s: invalidating all %d + %d graph slots\n", __func__, (int)graph_slots.size(), (int)graph_slots_draft.size());
     for (auto & slot : graph_slots) {
+        slot.valid = false;
+    }
+    for (auto & slot : graph_slots_draft) {
         slot.valid = false;
     }
     active_graph_slot = -1;
@@ -565,6 +568,7 @@ void llama_context::invalidate_graph_slots() {
 int llama_context::find_reusable_graph(const llama_batch & u_batch) {
     if (u_batch.embd)         return -1;
     if (cparams.n_graph_reuse <= 0) return -1;
+    if (graph_slots.empty())  return -1;
 
     int cross_slot_candidate = -1;
 
@@ -577,7 +581,7 @@ int llama_context::find_reusable_graph(const llama_batch & u_batch) {
         if (kv_self.head == 0)                        continue;
         if ((int)kv_self.n != slot.n_kv)              continue;
         if (n_outputs != slot.n_outputs)              continue;
-        if (cparams.n_graph_reuse == 1) {
+        if (cparams.n_graph_reuse == 1 && !sched_draft) {
             if (update_cache_copies()) {
                 return i;
             }
@@ -794,6 +798,7 @@ void llama_context::restore_graph_original_srcs(GraphSlot & slot) {
 }
 
 void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf) {
+    if (graph_slots.empty()) return;
     const int n_slots = (int)graph_slots.size();
     const int n_tok = (int)u_batch.n_tokens;
 
@@ -842,7 +847,7 @@ void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * 
     slot.mtp_op_type = cparams.mtp_op_type;
     slot.graph       = gf;
 
-    if (cparams.n_graph_reuse > 1) {
+    if (cparams.n_graph_reuse > 1 || sched_draft) {
         std::swap(buf_compute_meta, slot.buf_compute_meta);
         std::swap(cache_copies, slot.cache_copies);
         std::swap(graph_srcs_pending, slot.original_srcs);
@@ -873,7 +878,7 @@ void llama_context::activate_graph_slot(int slot_idx) {
                     __func__, slot_idx, (int)slot.mtp_op_type, slot.n_kv, graph_slot_counter + 1);
     slot.last_used = ++graph_slot_counter;
 
-    if (cparams.n_graph_reuse > 1) {
+    if (cparams.n_graph_reuse > 1 || sched_draft) {
         const bool cross_slot = (slot_idx != active_graph_slot);
 
         if (cross_slot) {
@@ -932,9 +937,17 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
         if (is_mtp && !was_mtp) {
             std::swap(sched, sched_draft);
             std::swap(active_graph_slot, active_graph_slot_draft);
+            std::swap(graph_slots, graph_slots_draft);
+            std::swap(buf_compute_meta, buf_compute_meta_draft);
+            std::swap(cache_copies, cache_copies_draft);
+            gr_stats.n_sched_swap++;
         } else if (!is_mtp && was_mtp) {
             std::swap(sched, sched_draft);
             std::swap(active_graph_slot, active_graph_slot_draft);
+            std::swap(graph_slots, graph_slots_draft);
+            std::swap(buf_compute_meta, buf_compute_meta_draft);
+            std::swap(cache_copies, cache_copies_draft);
+            gr_stats.n_sched_swap++;
         }
     }
 
@@ -5770,7 +5783,17 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: n_graph_reuse = %d\n",     __func__, cparams.n_graph_reuse);
     if (cparams.n_graph_reuse > 0) {
         const int n_slots = std::min(cparams.n_graph_reuse, (int)llama_context::GRAPH_SLOTS_MAX);
-        ctx->graph_slots.resize(n_slots);
+        const bool has_mtp = model->hparams.nextn_predict_layers > 0 && cparams.mtp;
+        if (has_mtp && n_slots >= 1) {
+            const int main_slots  = 1;
+            const int draft_slots = n_slots - 1;
+            ctx->graph_slots.resize(main_slots);
+            ctx->graph_slots_draft.resize(draft_slots);
+            LLAMA_LOG_INFO("%s: graph slots   = %d main + %d draft\n", __func__, main_slots, draft_slots);
+        } else {
+            ctx->graph_slots.resize(n_slots);
+            LLAMA_LOG_INFO("%s: graph slots   = %d\n", __func__, n_slots);
+        }
     }
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: v_cache_hadam = %d\n",     __func__, cparams.v_cache_hadamard);
@@ -6109,7 +6132,7 @@ struct llama_context * llama_init_from_model(
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits);
 
             // Create a dedicated scheduler for speculative graphs.
-            if (model->hparams.nextn_predict_layers > 0 && ctx->cparams.mtp) {
+            if (cparams.n_graph_reuse >= 1 && model->hparams.nextn_predict_layers > 0 && ctx->cparams.mtp) {
                 ctx->sched_draft = ggml_backend_sched_new(
                     ctx->backends.data(), backend_buft.data(),
                     ctx->backends.size(), max_nodes, false);
@@ -6119,12 +6142,18 @@ struct llama_context * llama_init_from_model(
 
                 std::vector<uint8_t> buf_draft_meta(ggml_tensor_overhead() * max_nodes + ggml_graph_overhead_custom(max_nodes, false));
                 std::swap(ctx->buf_compute_meta, buf_draft_meta);
+                auto saved_cache_copies = std::move(ctx->cache_copies);
+                ctx->cache_copies.resize(saved_cache_copies.size());
 
                 ggml_cgraph * gf_draft = llm_build_context::llama_build_graph(
                     *ctx, llama_batch_get_one(&token, 1, n_past, 0), true);
 
                 std::swap(ctx->buf_compute_meta, buf_draft_meta);
                 ctx->cparams.mtp_op_type = saved_mtp_op;
+
+                ctx->buf_compute_meta_draft = std::move(buf_draft_meta);
+                ctx->cache_copies_draft = std::move(ctx->cache_copies);
+                ctx->cache_copies = std::move(saved_cache_copies);
 
                 if (!ggml_backend_sched_reserve(ctx->sched_draft, gf_draft)) {
                     LLAMA_LOG_WARN("%s: failed to reserve draft scheduler, falling back to shared scheduler\n", __func__);

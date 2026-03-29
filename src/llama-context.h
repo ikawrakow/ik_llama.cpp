@@ -190,6 +190,7 @@ struct llama_context {
 
     // memory buffers used to evaluate the model
     std::vector<uint8_t> buf_compute_meta;
+    std::vector<uint8_t> buf_compute_meta_draft;
     ggml_backend_sched_t sched = nullptr;
     ggml_backend_sched_t sched_draft = nullptr; // dedicated scheduler for speculative graphs
 
@@ -225,6 +226,7 @@ struct llama_context {
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+    std::vector<CacheCopy> cache_copies_draft;
 
     // --- Speculative graph reuse ---
     // Caches up to n_graph_reuse compute graphs to avoid rebuilding them on every decode.
@@ -267,6 +269,7 @@ struct llama_context {
     };
 
     std::vector<GraphSlot> graph_slots;
+    std::vector<GraphSlot> graph_slots_draft;
     int      active_graph_slot = -1;
     int      active_graph_slot_draft = -1;
     uint64_t graph_slot_counter = 0;   // monotonic counter for LRU
