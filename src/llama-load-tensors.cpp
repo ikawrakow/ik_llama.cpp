@@ -3945,7 +3945,9 @@ bool create_tensors_helper::create_tensors() {
             throw std::runtime_error("unknown architecture");
     }
 
-    use_mmap_buffer &= !has_buft_overrides;
+    if (getenv("GGML_CUDA_NO_PINNED") == nullptr) {
+        use_mmap_buffer &= !has_buft_overrides;
+    }
 
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.mtp ? model.layers.size()
