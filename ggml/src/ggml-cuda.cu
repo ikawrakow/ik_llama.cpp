@@ -522,7 +522,7 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 #ifdef USE_CUDA_GRAPH
     // Let's leave this debug log in for now, so we have a trace in case
     // number of CUDA graphs goes crazy
-    printf("%s: have %d graphs\n", __func__, int(cuda_graphs.size()));
+    GGML_CUDA_LOG_INFO("%s: have %d graphs\n", __func__, int(cuda_graphs.size()));
 #endif
 
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
