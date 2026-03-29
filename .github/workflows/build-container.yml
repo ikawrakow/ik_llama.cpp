@@ -87,7 +87,6 @@ jobs:
             *.dockerfile=./docker/${{ matrix.containerfile }}
             *.cache-from=type=gha,scope=ccache-${{ matrix.variant }}
             *.cache-to=type=gha,mode=max,scope=ccache-${{ matrix.variant }}
-            *.mounts=type=bind,source=.git,target=.git
 
   cleanup:
     runs-on: ubuntu-latest
