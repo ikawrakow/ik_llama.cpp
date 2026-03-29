@@ -857,6 +857,34 @@ int main(int argc, char ** argv) {
             }}}
         };
 
+        if (data.contains("graph_reuse")) {
+            const auto & gr = data.at("graph_reuse");
+            const int32_t reuse_main = gr.at("n_reuse_main");
+            const int32_t new_main   = gr.at("n_new_main");
+            const int32_t reuse_mtp  = gr.at("n_reuse_mtp");
+            const int32_t new_mtp    = gr.at("n_new_mtp");
+            const int32_t total_all  = reuse_main + new_main + reuse_mtp + new_mtp;
+            const int32_t reuse_all  = reuse_main + reuse_mtp;
+
+            auto & counters = all_metrics_def["counter"];
+            counters.push_back({{"name", "graph_reuse_total"},       {"help", "Total graph reuse hits."},         {"value", (uint64_t)reuse_all}});
+            counters.push_back({{"name", "graph_new_total"},         {"help", "Total new graph builds."},         {"value", (uint64_t)(new_main + new_mtp)}});
+            counters.push_back({{"name", "graph_reuse_main"},        {"help", "Graph reuse hits (main model)."},  {"value", (uint64_t)reuse_main}});
+            counters.push_back({{"name", "graph_new_main"},          {"help", "New graph builds (main model)."},  {"value", (uint64_t)new_main}});
+            counters.push_back({{"name", "graph_reuse_mtp"},         {"help", "Graph reuse hits (MTP/draft)."},   {"value", (uint64_t)reuse_mtp}});
+            counters.push_back({{"name", "graph_new_mtp"},           {"help", "New graph builds (MTP/draft)."},   {"value", (uint64_t)new_mtp}});
+            counters.push_back({{"name", "graph_reuse_cross_slot"},  {"help", "Cross-slot graph reuses."},        {"value", (uint64_t)(int32_t)gr.at("n_reuse_cross")}});
+            counters.push_back({{"name", "sched_swaps_total"},       {"help", "Scheduler main/draft swaps."},     {"value", (uint64_t)(int32_t)gr.at("n_sched_swap")}});
+
+            auto & gauges = all_metrics_def["gauge"];
+            gauges.push_back({{"name", "graph_reuse_rate"},          {"help", "Graph reuse hit rate (0-1)."},     {"value", total_all > 0 ? 1.0 * reuse_all / total_all : 0.0}});
+            gauges.push_back({{"name", "graph_reuse_rate_main"},     {"help", "Graph reuse rate main model."},    {"value", (reuse_main + new_main) > 0 ? 1.0 * reuse_main / (reuse_main + new_main) : 0.0}});
+            gauges.push_back({{"name", "graph_reuse_rate_mtp"},      {"help", "Graph reuse rate MTP/draft."},     {"value", (reuse_mtp + new_mtp) > 0 ? 1.0 * reuse_mtp / (reuse_mtp + new_mtp) : 0.0}});
+            gauges.push_back({{"name", "graph_reuse_seconds"},       {"help", "Time in graph reuse path (s)."},   {"value", (int64_t)gr.at("t_reuse_us") / 1.e6}});
+            gauges.push_back({{"name", "graph_build_seconds"},       {"help", "Time building new graphs (s)."},   {"value", (int64_t)gr.at("t_build_us") / 1.e6}});
+            gauges.push_back({{"name", "sched_reset_seconds"},       {"help", "Time in scheduler reset (s)."},    {"value", (int64_t)gr.at("t_sched_reset_us") / 1.e6}});
+        }
+
         std::stringstream prometheus;
 
         for (const auto & el : all_metrics_def.items()) {
@@ -879,6 +907,65 @@ int main(int argc, char ** argv) {
 
         res.set_content(prometheus.str(), "text/plain; version=0.0.4");
         res.status = 200; // HTTP OK
+    };
+
+    const auto handle_graph_reuse_stats = [&ctx_server](const httplib::Request &, httplib::Response & res) {
+        server_task task;
+        task.id = ctx_server.queue_tasks.get_new_id();
+        task.id_multi  = -1;
+        task.id_target = -1;
+        task.type = SERVER_TASK_TYPE_METRICS;
+
+        ctx_server.queue_results.add_waiting_task_id(task.id);
+        ctx_server.queue_tasks.post(std::move(task));
+
+        server_task_result result = ctx_server.queue_results.recv(task.id);
+        ctx_server.queue_results.remove_waiting_task_id(task.id);
+
+        json data = result.data;
+        json response;
+
+        if (data.contains("graph_reuse")) {
+            const auto & gr = data.at("graph_reuse");
+            const int32_t reuse_main = gr.at("n_reuse_main");
+            const int32_t new_main   = gr.at("n_new_main");
+            const int32_t reuse_mtp  = gr.at("n_reuse_mtp");
+            const int32_t new_mtp    = gr.at("n_new_mtp");
+            const int32_t total_main = reuse_main + new_main;
+            const int32_t total_mtp  = reuse_mtp + new_mtp;
+            const int32_t total_all  = total_main + total_mtp;
+            const int32_t reuse_all  = reuse_main + reuse_mtp;
+            const int64_t t_reuse    = gr.at("t_reuse_us");
+            const int64_t t_build    = gr.at("t_build_us");
+            const int64_t t_reset    = gr.at("t_sched_reset_us");
+
+            response = {
+                {"reuse_rate",      total_all  > 0 ? 1.0 * reuse_all / total_all : 0.0},
+                {"reuse_rate_main", total_main > 0 ? 1.0 * reuse_main / total_main : 0.0},
+                {"reuse_rate_mtp",  total_mtp  > 0 ? 1.0 * reuse_mtp / total_mtp : 0.0},
+                {"counts", {
+                    {"reuse_main",   reuse_main},
+                    {"new_main",     new_main},
+                    {"reuse_mtp",    reuse_mtp},
+                    {"new_mtp",      new_mtp},
+                    {"reuse_cross",  (int32_t)gr.at("n_reuse_cross")},
+                    {"sched_swaps",  (int32_t)gr.at("n_sched_swap")},
+                }},
+                {"time_ms", {
+                    {"reuse",        t_reuse / 1000.0},
+                    {"build",        t_build / 1000.0},
+                    {"sched_reset",  t_reset / 1000.0},
+                    {"saved_by_reuse", t_build > 0 && reuse_all > 0
+                        ? (t_build / (double)(new_main + new_mtp)) * reuse_all / 1000.0
+                        : 0.0},
+                }},
+            };
+        } else {
+            response = {{"error", "graph reuse not active"}};
+        }
+
+        res.set_content(response.dump(2), MIMETYPE_JSON);
+        res.status = 200;
     };
 
     const auto handle_slots_save = [&ctx_server, &params](const httplib::Request & req, httplib::Response & res, int id_slot) {
@@ -2041,6 +2128,7 @@ int main(int argc, char ** argv) {
     // register API routes
     svr->Get ("/health",              handle_health);
     svr->Get ("/metrics",             handle_metrics);
+    svr->Get ("/graph-reuse-stats",   handle_graph_reuse_stats);
     svr->Get ("/props",               handle_props);
     svr->Get("/v1/props",             handle_props_simple);
     svr->Get ("/v1/models",           handle_models);

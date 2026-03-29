@@ -275,6 +275,19 @@ struct llama_context {
     uint64_t graph_slot_counter = 0;   // monotonic counter for LRU
     std::vector<ggml_tensor *> graph_srcs_pending;
 
+    // Graph reuse performance counters
+    struct {
+        int32_t n_graph_reuse_main  = 0;
+        int32_t n_graph_new_main    = 0;
+        int32_t n_graph_reuse_mtp   = 0;
+        int32_t n_graph_new_mtp     = 0;
+        int32_t n_graph_reuse_cross = 0;
+        int32_t n_sched_swap        = 0;
+        int64_t t_graph_reuse_us    = 0;
+        int64_t t_graph_build_us    = 0;
+        int64_t t_sched_reset_us    = 0;
+    } gr_stats;
+
     void  reset_scheduler();
     int   find_reusable_graph(const llama_batch & u_batch);
     bool  can_reuse_graph(const llama_batch & u_batch);

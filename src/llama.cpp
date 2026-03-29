@@ -4222,17 +4222,23 @@ static int llama_decode_internal(
 #endif
         ggml_cgraph * gf = nullptr;
         int reuse_slot = lctx.find_reusable_graph(u_batch);
+        const bool is_mtp_op = (cparams.mtp_op_type != MTP_OP_NONE);
+        const int64_t t_gr_start = ggml_time_us();
 
         if (reuse_slot >= 0) {
             bool was_cross = (reuse_slot != lctx.active_graph_slot);
             lctx.activate_graph_slot(reuse_slot);
             if (lctx.active_graph_slot >= 0) {
                 gf = lctx.graph_slots[reuse_slot].graph;
+                const int64_t t_gr_end = ggml_time_us();
+                lctx.gr_stats.t_graph_reuse_us += (t_gr_end - t_gr_start);
+                if (is_mtp_op) { lctx.gr_stats.n_graph_reuse_mtp++; }
+                else           { lctx.gr_stats.n_graph_reuse_main++; }
+                if (was_cross) { lctx.gr_stats.n_graph_reuse_cross++; }
 #if IK_PRINT_TIMING
-                tim2 = ggml_time_us();
                 printf("graph_reuse(slot=%d, %s, spec_op=%d, ntok=%d): %d us\n",
                        reuse_slot, was_cross ? "cross" : "same", (int)cparams.mtp_op_type,
-                       (int)n_tokens, int(tim2-tim1));
+                       (int)n_tokens, int(t_gr_end - t_gr_start));
 #endif
             } else {
                 reuse_slot = -1;
@@ -4248,11 +4254,12 @@ static int llama_decode_internal(
                        (int)cparams.mtp_op_type, (int)n_tokens, reason, lctx.active_graph_slot);
             }
 #endif
+            const int64_t t_reset_start = ggml_time_us();
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
+            lctx.gr_stats.t_sched_reset_us += (ggml_time_us() - t_reset_start);
 #if IK_PRINT_TIMING
-            tim2 = ggml_time_us();
-            printf("sched_reset(...): %d us\n", int(tim2-tim1));
+            printf("sched_reset(...): %d us\n", int(ggml_time_us() - t_reset_start));
 #endif
 
 #if IK_PRINT_TIMING
@@ -4264,7 +4271,8 @@ static int llama_decode_internal(
             printf("build_graph(...): %d us\n", int(tim2-tim1));
 #endif
             const bool will_store = (u_batch.embd == nullptr
-                                     && lctx.cparams.n_graph_reuse > 1);
+                                     && !lctx.graph_slots.empty()
+                                     && (lctx.cparams.n_graph_reuse > 1 || lctx.sched_draft));
             if (will_store) {
                 lctx.save_graph_original_srcs(gf);
             }
@@ -4280,12 +4288,19 @@ static int llama_decode_internal(
             if (u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
                 lctx.store_graph_slot(u_batch, gf);
 #if IK_PRINT_TIMING
+                if (lctx.active_graph_slot >= 0) {
                 printf("graph_store(slot=%d, spec_op=%d, ntok=%d, splits=%d)\n",
                        lctx.active_graph_slot, (int)cparams.mtp_op_type,
                        (int)n_tokens,
                        lctx.graph_slots[lctx.active_graph_slot].n_splits);
+                }
 #endif
             }
+
+            const int64_t t_build_end = ggml_time_us();
+            lctx.gr_stats.t_graph_build_us += (t_build_end - t_gr_start);
+            if (is_mtp_op) { lctx.gr_stats.n_graph_new_mtp++; }
+            else           { lctx.gr_stats.n_graph_new_main++; }
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
@@ -9379,6 +9394,25 @@ void llama_reset_timings(struct llama_context * ctx) {
     ctx->t_p_eval_us = ctx->n_p_eval = 0;
 
     ctx->sampling.reset_timings();
+}
+
+struct llama_graph_reuse_stats llama_get_graph_reuse_stats(struct llama_context * ctx) {
+    auto & s = ctx->gr_stats;
+    return {
+        s.n_graph_reuse_main,
+        s.n_graph_new_main,
+        s.n_graph_reuse_mtp,
+        s.n_graph_new_mtp,
+        s.n_graph_reuse_cross,
+        s.n_sched_swap,
+        s.t_graph_reuse_us,
+        s.t_graph_build_us,
+        s.t_sched_reset_us,
+    };
+}
+
+void llama_reset_graph_reuse_stats(struct llama_context * ctx) {
+    ctx->gr_stats = {};
 }
 
 const char * llama_print_system_info(void) {

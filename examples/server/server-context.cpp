@@ -2107,6 +2107,8 @@ void server_context::process_single_task(server_task&& task) {
         res.id_multi = task.id_multi;
         res.stop = true;
         res.error = false;
+
+        const auto gr = llama_get_graph_reuse_stats(ctx);
         res.data = {
             { "idle",                            n_idle_slots       },
             { "processing",                      n_processing_slots },
@@ -2125,6 +2127,18 @@ void server_context::process_single_task(server_task&& task) {
 
             { "kv_cache_tokens_count",           llama_get_kv_cache_token_count(ctx)},
             { "kv_cache_used_cells",             llama_get_kv_cache_used_cells(ctx)},
+
+            { "graph_reuse", {
+                { "n_reuse_main",   gr.n_graph_reuse_main },
+                { "n_new_main",     gr.n_graph_new_main },
+                { "n_reuse_mtp",    gr.n_graph_reuse_mtp },
+                { "n_new_mtp",      gr.n_graph_new_mtp },
+                { "n_reuse_cross",  gr.n_graph_reuse_cross },
+                { "n_sched_swap",   gr.n_sched_swap },
+                { "t_reuse_us",     gr.t_graph_reuse_us },
+                { "t_build_us",     gr.t_graph_build_us },
+                { "t_sched_reset_us", gr.t_sched_reset_us },
+            }},
 
             { "slots",                           slots_data },
         };
