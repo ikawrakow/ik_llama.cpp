@@ -5,27 +5,33 @@ ARG BASE_CUDA_RUN_CONTAINER=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu
 
 # Stage 1: Build
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
-ARG CUDA_DOCKER_ARCH="86;90"
-ARG USE_CCACHE=false
-ARG GGML_NATIVE=ON
 
-# ccache tuning for large CUDA objects
+# Build arguments
+ARG CUDA_DOCKER_ARCH="86;90"
+ARG GGML_NATIVE=ON
+ARG CUSTOM_COMMIT
+ARG USE_CCACHE=false
+
+# Environment variables for portability and GitHub Actions
 ENV CCACHE_DIR=/ccache
 ENV CCACHE_UMASK=000
 ENV CCACHE_MAXSIZE=5G
 ENV CCACHE_COMPRESS=1
 ENV CCACHE_BASEDIR=/app
 
-RUN apt-get update && apt-get install -yq --no-install-recommends \
-    build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
+RUN apt-get update && \
+    apt-get install -yq --no-install-recommends \
+    ca-certificates build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-COPY . .
+# Clone repository for build with optional custom commit
+RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
 
-# 2. Run the build using the files already in /app
+WORKDIR /app
+
+# Build using ccache and optional custom commit
 RUN --mount=type=cache,target=/ccache \
-    --mount=type=bind,source=.git,target=.git \
+    if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT"; fi && \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         ccache -z; \
@@ -41,7 +47,7 @@ RUN --mount=type=cache,target=/ccache \
         ccache -s; \
     fi
 
-# Structured artifact collection
+# Collect build artifacts
 RUN mkdir -p /app/dist/lib /app/dist/full /app/dist/bin && \
     find build -name "*.so" -exec cp {} /app/dist/lib \; && \
     cp build/bin/* /app/dist/bin/ && \
@@ -52,21 +58,21 @@ RUN mkdir -p /app/dist/lib /app/dist/full /app/dist/bin && \
     cp requirements.txt /app/dist/full/ && \
     cp .devops/tools.sh /app/dist/tools.sh
 
-# Stage 2: base
+# Stage 2: Base (Shared Runtime)
 FROM ${BASE_CUDA_RUN_CONTAINER} AS base
-RUN apt-get update && apt-get install -yq --no-install-recommends \
-    libgomp1 curl ca-certificates && \
+RUN apt-get update && \
+    apt-get install -yq --no-install-recommends libgomp1 curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV LD_LIBRARY_PATH=/app/lib
 COPY --from=build /app/dist/lib /app/lib
 
-# Stage 3: full
+# Stage 3: Full (Python/Dev Tools)
 FROM base AS full
 COPY --from=build /app/dist/full /app
-RUN apt-get update && apt-get install -yq --no-install-recommends \
-    git python3 python3-pip && \
-    pip3 install --break-system-packages -r requirements.txt && \
+RUN apt-get update && \
+    apt-get install -yq --no-install-recommends git python3 python3-pip && \
+    pip install --break-system-packages -r requirements.txt && \
     rm -rf /var/lib/apt/lists/*
 ENTRYPOINT ["/app/tools.sh"]
 
@@ -83,7 +89,7 @@ FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
 ARG LS_VER=199
 RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
-    | tar -xz 
+    | tar -xz
 
 COPY --from=build /app/docker/ik_llama-cuda-swap.config.yaml /app/config.yaml
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

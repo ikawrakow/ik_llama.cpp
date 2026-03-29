@@ -2,31 +2,37 @@ ARG UBUNTU_VERSION=24.04
 
 # Stage 1: Build
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
+
+# Build arguments
+ARG GGML_NATIVE=ON
+ARG GGML_AVX2=ON
+ARG CUSTOM_COMMIT
+ARG USE_CCACHE=false
+
+# Environment variables for portability and GitHub Actions
 ENV LLAMA_CURL=1
 ENV LC_ALL=C.utf8
-# Tuning for portability and GitHub Actions
-ARG USE_CCACHE=false
+
+# ccache configuration
 ENV CCACHE_DIR=/ccache
 ENV CCACHE_MAXSIZE=1G
 ENV CCACHE_COMPRESS=1
 ENV CCACHE_COMPRESSLEVEL=6
 # This is CRITICAL for GitHub Actions: it ignores the absolute path of the runner
-ENV CCACHE_BASEDIR=/app 
+ENV CCACHE_BASEDIR=/app
 
 RUN apt-get update && \
-    apt-get install -yq --no-install-recommends build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
+    apt-get install -yq --no-install-recommends ca-certificates build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
     rm -rf /var/lib/apt/lists/*
 
-# New ARGs for flexible optimization
-ARG GGML_NATIVE=ON
-ARG GGML_AVX2=ON
+# Clone repository for build with optional custom commit
+RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
 
 WORKDIR /app
-COPY . .
 
-# 2. Run the build using the files already in /app
+# Build using ccache and optional custom commit
 RUN --mount=type=cache,target=/ccache \
-    --mount=type=bind,source=.git,target=.git \
+    if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT"; fi && \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         ccache -z; \
@@ -39,7 +45,7 @@ RUN --mount=type=cache,target=/ccache \
         ccache -s; \
     fi
 
-# Prepare structured artifacts
+# Collect build artifacts
 RUN mkdir -p /app/dist/lib /app/dist/full /app/dist/bin && \
     find build -name "*.so" -exec cp {} /app/dist/lib \; && \
     cp build/bin/* /app/dist/bin/ && \
