@@ -5307,6 +5307,8 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
         /*.n_graph_reuse               =*/ 1,
+        /*.n_graph_reuse_main          =*/ -1,
+        /*.n_graph_reuse_draft         =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
@@ -5689,7 +5691,9 @@ struct llama_context * llama_init_from_model(
     cparams.fused_up_gate    = params.fused_up_gate;
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
-    cparams.n_graph_reuse   = params.n_graph_reuse;
+    cparams.n_graph_reuse       = params.n_graph_reuse;
+    cparams.n_graph_reuse_main  = params.n_graph_reuse_main;
+    cparams.n_graph_reuse_draft = params.n_graph_reuse_draft;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
@@ -5797,17 +5801,32 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
     LLAMA_LOG_INFO("%s: n_graph_reuse = %d\n",     __func__, cparams.n_graph_reuse);
     if (cparams.n_graph_reuse > 0) {
-        const int n_slots = std::min(cparams.n_graph_reuse, (int)llama_context::GRAPH_SLOTS_MAX);
         const bool has_mtp = model->hparams.nextn_predict_layers > 0 && cparams.mtp;
-        if (has_mtp && n_slots >= 1) {
-            const int main_slots  = 1;
-            const int draft_slots = n_slots - 1;
+        int main_slots, draft_slots;
+        if (cparams.n_graph_reuse_main >= 0 && cparams.n_graph_reuse_draft >= 0) {
+            main_slots  = std::min(cparams.n_graph_reuse_main,  (int)llama_context::GRAPH_SLOTS_MAX);
+            draft_slots = has_mtp ? std::min(cparams.n_graph_reuse_draft, (int)llama_context::GRAPH_SLOTS_MAX) : 0;
+        } else {
+            // TODO: Deactivate backwards logic
+            const int n_slots = std::min(cparams.n_graph_reuse, (int)llama_context::GRAPH_SLOTS_MAX);
+            if (has_mtp && n_slots >= 1) {
+                main_slots  = 1;
+                draft_slots = n_slots - 1;
+            } else {
+                main_slots  = n_slots;
+                draft_slots = 0;
+            }
+        }
+        if (main_slots > 0) {
             ctx->graph_slots.resize(main_slots);
+        }
+        if (draft_slots > 0) {
             ctx->graph_slots_draft.resize(draft_slots);
+        }
+        if (draft_slots > 0 || (has_mtp && main_slots > 0)) {
             LLAMA_LOG_INFO("%s: graph slots   = %d main + %d draft\n", __func__, main_slots, draft_slots);
         } else {
-            ctx->graph_slots.resize(n_slots);
-            LLAMA_LOG_INFO("%s: graph slots   = %d\n", __func__, n_slots);
+            LLAMA_LOG_INFO("%s: graph slots   = %d\n", __func__, main_slots);
         }
     }
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);

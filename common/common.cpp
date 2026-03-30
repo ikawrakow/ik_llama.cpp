@@ -1330,7 +1330,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-gr" || arg == "--graph-reuse") {
         CHECK_ARG
-        params.n_graph_reuse = std::stoi(argv[i]);
+        std::string val = argv[i];
+        auto comma = val.find(',');
+        if (comma != std::string::npos) {
+            params.n_graph_reuse_main  = std::stoi(val.substr(0, comma));
+            params.n_graph_reuse_draft = std::stoi(val.substr(comma + 1));
+            params.n_graph_reuse = params.n_graph_reuse_main + params.n_graph_reuse_draft;
+        } else {
+            params.n_graph_reuse = std::stoi(val);
+        }
         return true;
     }
     if (arg == "-no-gr" || arg == "--no-graph-reuse") {
@@ -2313,7 +2321,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
     //options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
-    options.push_back({ "*",           "-gr,  --graph-reuse",           "number of cached graphs for reuse (default: %d, 0 = disabled)", params.n_graph_reuse });
+    options.push_back({ "*",           "-gr,  --graph-reuse",           "graph reuse slots: N (auto split) or M,D (main,draft) (default: %d)", params.n_graph_reuse });
     options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (same as -gr 0)" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
@@ -3427,7 +3435,9 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.fused_up_gate     = params.fused_up_gate;
     cparams.fused_mmad        = params.fused_mmad;
     cparams.rope_cache        = params.rope_cache;
-    cparams.n_graph_reuse    = params.n_graph_reuse;
+    cparams.n_graph_reuse       = params.n_graph_reuse;
+    cparams.n_graph_reuse_main  = params.n_graph_reuse_main;
+    cparams.n_graph_reuse_draft = params.n_graph_reuse_draft;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
     cparams.v_cache_hadamard  = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;

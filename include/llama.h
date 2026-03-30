@@ -460,7 +460,9 @@ extern "C" {
         bool fused_up_gate;     // whether to use fused up/gate op [EXPERIMENTAL]
         bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
         bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
-        int  n_graph_reuse;     // number of graphs to cache for reuse (0=disable, 1=default, >1=multi-graph) [EXPERIMENTAL]
+        int  n_graph_reuse;       // total graph reuse slots (backward compat, 0=disable) [EXPERIMENTAL]
+        int  n_graph_reuse_main;  // main scheduler graph slots (-1 = auto) [EXPERIMENTAL]
+        int  n_graph_reuse_draft; // draft/MTP scheduler graph slots (-1 = auto) [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
         bool only_active_experts;
