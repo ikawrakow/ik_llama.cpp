@@ -782,6 +782,9 @@ class GGUFWriter:
     def add_nextn_predict_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
 
+    def add_full_attention_interval(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), value)
+
     def add_swin_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
 

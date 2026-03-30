@@ -138,6 +138,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "layers.{bid}.attention.wqkv",
+            "model.layers.{bid}.linear_attn.in_proj_qkv",              # qwen3.5
         ),
 
         # Attention query
@@ -375,6 +376,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.experts.down_proj",      # qwen2moe (merged)
         ),
 
+        MODEL_TENSOR.FFN_GATE_UP_EXPS: (
+            "model.layers.{bid}.mlp.experts.gate_up_proj",     # qwen3.5moe (pre-stacked gate+up)
+        ),
+
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
             "model.layers.{bid}.mlp.shared_expert.down_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.down_proj", # deepseek2
@@ -421,6 +426,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_CONV1D: (
             "model.layers.{bid}.conv1d",
             "backbone.layers.{bid}.mixer.conv1d",
+            "model.layers.{bid}.linear_attn.conv1d",        # qwen3.5
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -431,6 +437,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_DT: (
             "model.layers.{bid}.dt_proj",
             "backbone.layers.{bid}.mixer.dt_proj",
+            "model.layers.{bid}.linear_attn.dt_bias",       # qwen3.5 (bias only)
         ),
 
         MODEL_TENSOR.SSM_A: (
@@ -438,14 +445,35 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.A_log",
         ),
 
+        MODEL_TENSOR.SSM_A_NOSCAN: (
+            "model.layers.{bid}.linear_attn.A_log",         # qwen3.5
+        ),
+
         MODEL_TENSOR.SSM_D: (
             "model.layers.{bid}.D",
             "backbone.layers.{bid}.mixer.D",
         ),
 
+        MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.linear_attn.norm",          # qwen3.5
+        ),
+
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",
             "backbone.layers.{bid}.mixer.out_proj",
+            "model.layers.{bid}.linear_attn.out_proj",      # qwen3.5
+        ),
+
+        MODEL_TENSOR.SSM_BETA: (
+            "model.layers.{bid}.linear_attn.in_proj_b",     # qwen3.5
+        ),
+
+        MODEL_TENSOR.SSM_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_a",     # qwen3.5
+        ),
+
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.linear_attn.in_proj_z",     # qwen3.5
         ),
 
         MODEL_TENSOR.ATTN_Q_A: (

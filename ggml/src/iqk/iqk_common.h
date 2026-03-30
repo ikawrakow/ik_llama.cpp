@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "iqk_config.h"
 
 #if defined IQK_IMPLEMENT
@@ -16,7 +17,6 @@
 #include <cstring>
 #include <type_traits>
 #include <vector>
-#include <cstdint>
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
