@@ -273,6 +273,8 @@ struct cmd_params {
     bool sas = false;
     int  max_gpu = 0;
     bool print_overrides = false;
+    bool fit = false;
+    int  fit_margin = 0;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -319,6 +321,8 @@ static const cmd_params cmd_params_defaults = {
     /* sas                  */ false,
     /* max_gpu              */ 0,
     /* print_overrides      */ false,
+    /* fit                  */ false,
+    /* fit_margin           */ 0,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -371,6 +375,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -no-fug, --no-fused-up-gate <0|1>   (default: %s)\n", cmd_params_defaults.no_fug? "1" : "0");
     printf("  -no-ooae, --no-offload-only-active-experts <0|1>   (default: %s)\n", cmd_params_defaults.no_ooae? "1" : "0");
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
+    printf("  --fit <0|1>                         (default: %s)\n", cmd_params_defaults.fit ? "1" : "0");
+    printf("  --fit-margin N                      (default: %d)\n", cmd_params_defaults.fit_margin);
     printf("  --max-gpu <N>                       (default: %d)\n", cmd_params_defaults.max_gpu);
     printf("        --print-overrides <0|1>       (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
@@ -813,6 +819,18 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.sas = std::stoi(argv[i]);
+        } else if (arg == "--fit") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.fit = std::stoi(argv[i]);
+        } else if (arg == "--fit-margin") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.fit_margin = std::stoi(argv[i]);
         } else if (arg == "--max-gpu") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -966,6 +984,8 @@ struct cmd_params_instance {
     bool rcache = false;
     bool sas = false;
     int max_gpu = 0;
+    bool fit = false;
+    int  fit_margin = 0;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -986,6 +1006,10 @@ struct cmd_params_instance {
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
         mparams.max_gpu = max_gpu;
+        mparams.fit = fit;
+        mparams.fit_margin = fit_margin;
+        mparams.type_k = type_k;
+        mparams.type_v = type_v;
 
         return mparams;
     }
@@ -1002,6 +1026,8 @@ struct cmd_params_instance {
                muge == other.muge &&
                use_thp == other.use_thp &&
                sas == other.sas &&
+               fit == other.fit &&
+               fit_margin == other.fit_margin &&
                max_gpu == other.max_gpu &&
                tensor_split == other.tensor_split;
     }
@@ -1096,6 +1122,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1140,6 +1168,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1184,6 +1214,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1228,6 +1260,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
+                /* .fit          = */ params.fit,
+                /* .git_margin   = */ params.fit_margin,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1283,6 +1317,8 @@ struct test {
     bool rcache = false;
     bool sas = false;
     bool max_gpu = 0;
+    bool fit = false;
+    int  fit_margin = 0;
     std::string override_tensor;
     int n_prompt;
     int n_gen;
@@ -1325,6 +1361,8 @@ struct test {
         rcache = inst.rcache;
         sas = inst.sas;
         max_gpu = inst.max_gpu;
+        fit = inst.fit;
+        fit_margin = inst.fit_margin;
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
