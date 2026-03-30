@@ -138,7 +138,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "layers.{bid}.attention.wqkv",
-            "model.layers.{bid}.linear_attn.in_proj_qkv",              # qwen3.5
+            "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
         ),
 
         # Attention query
