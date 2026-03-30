@@ -2418,6 +2418,9 @@ class Qwen35Model(Model):
             while len(mrope_section) < 4:
                 mrope_section.append(0)
             self.gguf_writer.add_rope_dimension_sections(mrope_section)
+            # M-RoPE dimension count = sum of sections * 2
+            rope_dim = sum(mrope_section) * 2
+            self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         self.gguf_writer.add_ssm_conv_kernel(hparams.get("linear_conv_kernel_dim", 4))
 
