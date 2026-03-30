@@ -71,7 +71,8 @@ class Model:
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
-                 split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False):
+                 split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+                 is_mmproj: bool = False):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
@@ -82,6 +83,7 @@ class Model:
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
         self.lazy = not eager
+        self.is_mmproj = is_mmproj
         self.part_names = Model.get_model_part_names(self.dir_model, "model", ".safetensors")
         self.is_safetensors = len(self.part_names) > 0
         if not self.is_safetensors:
@@ -106,7 +108,8 @@ class Model:
                 self.ftype = gguf.LlamaFileType.MOSTLY_BF16
 
         # Configure GGUF Writer
-        self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
+        arch_name = "clip" if is_mmproj else gguf.MODEL_ARCH_NAMES[self.model_arch]
+        self.gguf_writer = gguf.GGUFWriter(path=None, arch=arch_name, endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
     @classmethod
@@ -594,6 +597,9 @@ class Model:
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
+        if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
+            # ref: https://huggingface.co/Qwen/Qwen3.5-9B, https://huggingface.co/Qwen/Qwen3.5-35B-A3B
+            res = "qwen35"
         if chkhsh == "b6dc8df998e1cfbdc4eac8243701a65afe638679230920b50d6f17d81c098166":
             # ref: https://huggingface.co/allenai/OLMo-1.7-7B-hf
             res = "olmo"
@@ -2253,6 +2259,339 @@ class Qwen3Model(Qwen2Model):
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("Qwen3_5ForConditionalGeneration")
+class Qwen35Model(Model):
+    """Qwen3.5 dense and MoE variants."""
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+    _mmproj_tensor_map: dict[str, str] = {
+        "visual.patch_embed.proj.bias":   "v.patch_embd.bias",
+        "visual.pos_embed.weight":        "v.position_embd.weight",
+        "visual.merger.norm.weight":      "v.post_ln.weight",
+        "visual.merger.norm.bias":        "v.post_ln.bias",
+        "visual.merger.linear_fc1.weight": "mm.0.weight",
+        "visual.merger.linear_fc1.bias":  "mm.0.bias",
+        "visual.merger.linear_fc2.weight": "mm.2.weight",
+        "visual.merger.linear_fc2.bias":  "mm.2.bias",
+    }
+
+    _mmproj_block_map: dict[str, str] = {
+        "attn.qkv.weight":       "attn_qkv.weight",
+        "attn.qkv.bias":         "attn_qkv.bias",
+        "attn.proj.weight":      "attn_out.weight",
+        "attn.proj.bias":        "attn_out.bias",
+        "norm1.weight":           "ln1.weight",
+        "norm1.bias":             "ln1.bias",
+        "norm2.weight":           "ln2.weight",
+        "norm2.bias":             "ln2.bias",
+        "mlp.linear_fc1.weight": "ffn_up.weight",
+        "mlp.linear_fc1.bias":   "ffn_up.bias",
+        "mlp.linear_fc2.weight": "ffn_down.weight",
+        "mlp.linear_fc2.bias":   "ffn_down.bias",
+    }
+
+    def __init__(self, *args, **kwargs):
+        # Qwen3.5 nests model params under text_config; merge them up so the base class finds them
+        _orig_load = Model.load_hparams
+        @staticmethod
+        def _patched_load(dir_model: Path):
+            config = _orig_load(dir_model)
+            if "text_config" in config:
+                for k, v in config["text_config"].items():
+                    if k not in config:
+                        config[k] = v
+            return config
+        Model.load_hparams = _patched_load
+        try:
+            super().__init__(*args, **kwargs)
+        finally:
+            Model.load_hparams = _orig_load
+
+    def set_type(self):
+        if not self.is_mmproj:
+            super().set_type()
+
+    def set_vocab(self):
+        if self.is_mmproj:
+            return  # mmproj files don't need a vocabulary
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        if self.is_mmproj:
+            self._set_gguf_parameters_mmproj()
+        else:
+            self._set_gguf_parameters_text()
+
+    def _set_gguf_parameters_mmproj(self):
+        config = self.hparams
+        vision_config = config.get("vision_config", {})
+        text_config = config.get("text_config", {})
+
+        hidden_size = vision_config.get("hidden_size", 1152)
+        intermediate_size = vision_config.get("intermediate_size", 4304)
+        num_heads = vision_config.get("num_heads", 16)
+        depth = vision_config.get("depth", 27)
+        patch_size = vision_config.get("patch_size", 16)
+        spatial_merge_size = vision_config.get("spatial_merge_size", 2)
+        num_position_embeddings = vision_config.get("num_position_embeddings", 2304)
+        out_hidden_size = vision_config.get("out_hidden_size", text_config.get("hidden_size", 4096))
+        deepstack_indexes = vision_config.get("deepstack_visual_indexes", [])
+
+        image_size = int(num_position_embeddings ** 0.5) * patch_size
+
+        preproc_path = self.dir_model / "preprocessor_config.json"
+        if preproc_path.exists():
+            with open(preproc_path, "r") as f:
+                preproc = json.load(f)
+            image_mean = preproc.get("image_mean", [0.48145466, 0.4578275, 0.40821073])
+            image_std = preproc.get("image_std", [0.26862954, 0.26130258, 0.27577711])
+        else:
+            image_mean = [0.48145466, 0.4578275, 0.40821073]
+            image_std = [0.26862954, 0.26130258, 0.27577711]
+
+        ftype = 1 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else 0
+        self.gguf_writer.add_uint32("general.file_type", ftype)
+        self.gguf_writer.add_string("general.type", "mmproj")
+        self.gguf_writer.add_bool("clip.has_vision_encoder", True)
+        self.gguf_writer.add_string("clip.projector_type", "qwen3vl_merger")
+        self.gguf_writer.add_uint32("clip.vision.image_size", image_size)
+        self.gguf_writer.add_uint32("clip.vision.patch_size", patch_size)
+        self.gguf_writer.add_uint32("clip.vision.embedding_length", hidden_size)
+        self.gguf_writer.add_uint32("clip.vision.feed_forward_length", intermediate_size)
+        self.gguf_writer.add_uint32("clip.vision.block_count", depth)
+        self.gguf_writer.add_uint32("clip.vision.attention.head_count", num_heads)
+        self.gguf_writer.add_float32("clip.vision.attention.layer_norm_epsilon",
+                                     text_config.get("rms_norm_eps", 1e-6))
+        self.gguf_writer.add_uint32("clip.vision.projection_dim", out_hidden_size)
+        self.gguf_writer.add_array("clip.vision.image_mean", image_mean)
+        self.gguf_writer.add_array("clip.vision.image_std", image_std)
+        self.gguf_writer.add_bool("clip.use_gelu", True)
+        self.gguf_writer.add_uint32("clip.vision.spatial_merge_size", spatial_merge_size)
+
+        is_deepstack_layers = [i in deepstack_indexes for i in range(depth)]
+        self.gguf_writer.add_array("clip.vision.is_deepstack_layers", is_deepstack_layers)
+
+    def _set_gguf_parameters_text(self):
+        hparams = self.hparams
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 262144))
+
+        n_embd = hparams["hidden_size"]
+        self.gguf_writer.add_embedding_length(n_embd)
+
+        n_head = hparams["num_attention_heads"]
+        self.gguf_writer.add_head_count(n_head)
+
+        n_head_kv = hparams.get("num_key_value_heads", n_head)
+        self.gguf_writer.add_head_count_kv(n_head_kv)
+
+        head_dim = hparams.get("head_dim", n_embd // n_head)
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
+
+        self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-6))
+        self.gguf_writer.add_file_type(self.ftype)
+
+        if (intermediate_size := hparams.get("intermediate_size")) is not None:
+            self.gguf_writer.add_feed_forward_length(intermediate_size)
+
+        n_experts = hparams.get("num_experts")
+        if n_experts is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+            self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
+
+            if (moe_intermediate_size := hparams.get("moe_intermediate_size")) is not None:
+                self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+
+            if (shared_expert_intermediate_size := hparams.get("shared_expert_intermediate_size")) is not None:
+                self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size)
+
+        rope_params = hparams.get("rope_parameters", {})
+        rope_theta = rope_params.get("rope_theta", hparams.get("rope_theta", 10000000))
+        self.gguf_writer.add_rope_freq_base(rope_theta)
+
+        mrope_section = rope_params.get("mrope_section", [])
+        if mrope_section:
+            # C++ expects exactly 4 sections
+            while len(mrope_section) < 4:
+                mrope_section.append(0)
+            self.gguf_writer.add_rope_dimension_sections(mrope_section)
+            # M-RoPE dimension count = sum of sections * 2
+            rope_dim = sum(mrope_section) * 2
+            self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        self.gguf_writer.add_ssm_conv_kernel(hparams.get("linear_conv_kernel_dim", 4))
+
+        ssm_d_state = hparams.get("linear_key_head_dim", 128)
+        self.gguf_writer.add_ssm_state_size(ssm_d_state)
+
+        linear_value_head_dim = hparams.get("linear_value_head_dim", 128)
+        linear_num_value_heads = hparams.get("linear_num_value_heads", 32)
+        ssm_d_inner = linear_value_head_dim * linear_num_value_heads
+        self.gguf_writer.add_ssm_inner_size(ssm_d_inner)
+
+        self.gguf_writer.add_ssm_time_step_rank(linear_num_value_heads)
+
+        linear_num_key_heads = hparams.get("linear_num_key_heads", 16)
+        self.gguf_writer.add_ssm_group_count(linear_num_key_heads)
+
+        full_attn_interval = hparams.get("full_attention_interval", 4)
+        self.gguf_writer.add_full_attention_interval(full_attn_interval)
+
+    def _map_mmproj_tensor_name(self, name: str) -> str | None:
+        short = name[len("model."):] if name.startswith("model.") else name
+
+        if short in self._mmproj_tensor_map:
+            return self._mmproj_tensor_map[short]
+
+        m = re.match(r"visual\.blocks\.(\d+)\.(.*)", short)
+        if m:
+            block_id = int(m.group(1))
+            rest = m.group(2)
+            if rest in self._mmproj_block_map:
+                return f"v.blk.{block_id}.{self._mmproj_block_map[rest]}"
+
+        return None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.is_mmproj:
+            return self._modify_tensors_mmproj(data_torch, name)
+        return self._modify_tensors_text(data_torch, name, bid)
+
+    def _modify_tensors_mmproj(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
+        if not name.startswith("model.visual."):
+            return []
+
+        # Split Conv3D [C_out, C_in, T, H, W] into T separate Conv2D tensors
+        if "patch_embed.proj.weight" in name and data_torch.dim() == 5:
+            results = []
+            for t_idx in range(data_torch.shape[2]):
+                slice_data = data_torch[:, :, t_idx, :, :].contiguous()
+                slice_data = slice_data.to(torch.float16)
+                gguf_name = "v.patch_embd.weight" if t_idx == 0 else f"v.patch_embd.weight.{t_idx}"
+                results.append((gguf_name, slice_data))
+            return results
+
+        gguf_name = self._map_mmproj_tensor_name(name)
+        if gguf_name is None:
+            logger.warning(f"skipping unmapped vision tensor: {name}")
+            return []
+
+        # Keep position embeddings and biases in F32 for precision
+        is_pos_embd = "pos_embed" in name
+        if data_torch.dtype == torch.bfloat16:
+            data_torch = data_torch.to(torch.float32 if (data_torch.dim() <= 1 or is_pos_embd) else torch.float16)
+        elif data_torch.dtype == torch.float32 and (data_torch.dim() <= 1 or is_pos_embd):
+            pass
+        elif data_torch.dtype == torch.float32:
+            data_torch = data_torch.to(torch.float16)
+
+        return [(gguf_name, data_torch)]
+
+    @staticmethod
+    def _reorder_v_heads(data: Tensor, dim: int, n_k_heads: int, n_v_per_k: int, head_dim: int) -> Tensor:
+        """Reorder V heads from grouped-by-K to interleaved layout expected by C++."""
+        # data shape along dim: [n_k_heads * n_v_per_k * head_dim]
+        # Reshape to [n_k_heads, n_v_per_k, head_dim], transpose to [n_v_per_k, n_k_heads, head_dim],
+        # then flatten back
+        shape = list(data.shape)
+        total = shape[dim]
+        assert total == n_k_heads * n_v_per_k * head_dim, f"Mismatch: {total} != {n_k_heads}*{n_v_per_k}*{head_dim}"
+        new_shape = shape[:dim] + [n_k_heads, n_v_per_k, head_dim] + shape[dim + 1:]
+        data = data.reshape(new_shape)
+        data = data.transpose(dim, dim + 1).contiguous()
+        result_shape = shape[:dim] + [total] + shape[dim + 1:]
+        return data.reshape(result_shape)
+
+    def _modify_tensors_text(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("model.visual.") or name.startswith("mtp."):
+            return []
+
+        if name.startswith("model.language_model."):
+            name = name.replace("language_model.", "")
+
+        # Reorder V heads when num_k_heads != num_v_heads (required by C++ delta-net kernel)
+        num_k_heads = self.hparams.get("linear_num_key_heads", 0)
+        num_v_heads = self.hparams.get("linear_num_value_heads", 0)
+        if num_k_heads > 0 and num_v_heads > 0 and num_k_heads != num_v_heads and "linear_attn." in name:
+            head_k_dim = self.hparams["linear_key_head_dim"]
+            head_v_dim = self.hparams["linear_value_head_dim"]
+            n_v_per_k = num_v_heads // num_k_heads
+
+            if ".in_proj_qkv." in name:
+                q_dim = head_k_dim * num_k_heads
+                k_dim = head_k_dim * num_k_heads
+                q, k, v = data_torch.split([q_dim, k_dim, data_torch.shape[0] - q_dim - k_dim], dim=0)
+                v = self._reorder_v_heads(v, 0, num_k_heads, n_v_per_k, head_v_dim)
+                data_torch = torch.cat([q, k, v], dim=0)
+            elif ".in_proj_z." in name:
+                data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, n_v_per_k, head_v_dim)
+            elif ".in_proj_b." in name or ".in_proj_a." in name:
+                data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, n_v_per_k, 1)
+            elif ".A_log" in name or ".dt_bias" in name:
+                if data_torch.ndim == 1:
+                    data_torch = self._reorder_v_heads(data_torch.unsqueeze(-1), 0, num_k_heads, n_v_per_k, 1).squeeze(-1)
+                else:
+                    data_torch = self._reorder_v_heads(data_torch, -1, num_k_heads, n_v_per_k, 1)
+            elif ".conv1d" in name:
+                data = data_torch.squeeze()
+                qk_channels = head_k_dim * num_k_heads * 2
+                qk_part = data[:qk_channels]
+                v_part = data[qk_channels:]
+                v_part = self._reorder_v_heads(v_part, 0, num_k_heads, n_v_per_k, head_v_dim)
+                data_torch = torch.cat([qk_part, v_part], dim=0)
+            elif ".out_proj." in name:
+                data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, n_v_per_k, head_v_dim)
+
+        # Transform A_log to -exp(A_log) as expected by the C++ delta-net kernel
+        if ".A_log" in name:
+            data_torch = -torch.exp(data_torch.float())
+
+        # Qwen3.5 stores RMS norm weights as (weight - 1), add 1 back for C++ RMS norm
+        # Exclude ssm_norm (linear_attn.norm) which does not need the +1 offset
+        if ("layernorm" in name or "norm.weight" in name) and "linear_attn.norm" not in name:
+            data_torch = data_torch.float() + 1.0
+
+        # Squeeze out the middle dim: [conv_dim, 1, kernel] -> [conv_dim, kernel]
+        # Force F32 because the C++ SSM conv kernel requires float32
+        if "conv1d.weight" in name and data_torch.dim() == 3:
+            data_torch = data_torch.squeeze(1)
+        if "conv1d.weight" in name:
+            data_torch = data_torch.to(torch.float32)
+
+        # 3D expert tensors: add .weight suffix and force F16 (can't be quantized by numpy)
+        if "experts.gate_up_proj" in name or ("experts.down_proj" in name and "shared_expert" not in name):
+            new_name = self.map_tensor_name(name)
+            if not new_name.endswith(".weight"):
+                new_name += ".weight"
+            data_torch = data_torch.to(torch.float16)
+            return [(new_name, data_torch)]
+
+        if name.endswith(".dt_bias"):
+            new_name = self.map_tensor_name(name)
+            if not new_name.endswith(".bias"):
+                new_name += ".bias"
+            return [(new_name, data_torch)]
+
+        new_name = self.map_tensor_name(name)
+
+        return [(new_name, data_torch)]
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        # Expert 3D tensors can't be quantized - keep in F16
+        if n_dims == 3:
+            return gguf.GGMLQuantizationType.F16
+        # SSM conv1d weights must be F32 (required by the C++ SSM kernel)
+        if "ssm_conv1d" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+
+@Model.register("Qwen3_5MoeForConditionalGeneration")
+class Qwen35MoeModel(Qwen35Model):
+    model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
@@ -4767,6 +5106,10 @@ def parse_args() -> argparse.Namespace:
         "--metadata", type=Path,
         help="Specify the path for an authorship metadata override file"
     )
+    parser.add_argument(
+        "--mmproj", action="store_true",
+        help="extract only the vision encoder (mmproj) for multimodal models",
+    )
 
     return parser.parse_args()
 
@@ -4846,12 +5189,17 @@ def main() -> None:
                                      metadata_override=args.metadata, model_name=args.model_name,
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
-                                     small_first_shard=args.no_tensor_first_split)
+                                     small_first_shard=args.no_tensor_first_split,
+                                     is_mmproj=args.mmproj)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")
             model_instance.write_vocab()
             logger.info(f"Model vocab successfully exported to {model_instance.fname_out}")
+        elif args.mmproj:
+            logger.info("Exporting mmproj (vision encoder)...")
+            model_instance.write()
+            logger.info(f"mmproj successfully exported to {model_instance.fname_out}")
         else:
             logger.info("Exporting model...")
             model_instance.write()
