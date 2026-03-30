@@ -257,8 +257,6 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_beta_gate(llama_context
         cb(beta, "beta", il);
         beta = ggml_reshape_4d(ctx0, beta, num_v_heads, 1, n_tok, 1);
         cb(beta, "beta_reshaped", il);
-        beta = ggml_sigmoid(ctx0, beta);
-        cb(beta, "beta_sigmoid", il);
         alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_alpha, cur);
         cb(alpha, "alpha", il);
         alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
