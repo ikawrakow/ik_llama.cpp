@@ -708,7 +708,8 @@ void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, in
 }
 
 void quantize_row_q4_0(const float * restrict x, void * restrict y, int64_t k) {
-    quantize_row_q4_0_ref(x, y, k);
+    iqk_quantize_q4_0(x, y, k);
+    //quantize_row_q4_0_ref(x, y, k);
 }
 
 
