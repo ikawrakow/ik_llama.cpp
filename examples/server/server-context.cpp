@@ -393,6 +393,9 @@ void server_slot::reset() {
     json_schema = json();
     generated_tool_call_ids.clear();
 
+    anthropic_thinking_block_started = false;
+    anthropic_text_block_started = false;
+
     oai_resp_thinking_block_started = false;
     oai_resp_text_block_started = false;
     oai_resp_id.clear();
@@ -1834,6 +1837,8 @@ void server_context::send_final_response(server_slot& slot) {
     res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
     res->oai_resp_message_id = slot.oai_resp_message_id;
     res->n_decoded = slot.n_decoded;
+    res->anthropic_thinking_block_started = slot.anthropic_thinking_block_started;
+    res->anthropic_text_block_started = slot.anthropic_text_block_started;
     res->n_prompt_tokens = slot.n_prompt_tokens;
     res->oaicompat_model = slot.task->params.oaicompat_model;
     res->data = json{
