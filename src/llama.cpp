@@ -4654,12 +4654,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         // TODO: extract to a function
         // build worst-case graph
         int n_tokens = (int)std::min(lctx.cparams.n_ctx, lctx.cparams.n_ubatch);
-        if (lctx.cparams.worst_graph_tokens > 0) {
-            n_tokens = std::min(n_tokens, lctx.cparams.worst_graph_tokens);
-        }
         int n_past = lctx.cparams.n_ctx - n_tokens;
         llama_token token = llama_token_bos(&lctx.model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-        ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true);
+        ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, lctx.cparams.worst_graph_tokens);
 
         // initialize scheduler with the worst-case graph
         lctx.reset_scheduler();
@@ -5758,12 +5755,9 @@ struct llama_context * llama_init_from_model(
             llama_repack_up_gate_exps(*ctx);
 
             // build worst-case graph
-            if (cparams.worst_graph_tokens > 0) {
-                n_tokens = std::min(n_tokens, cparams.worst_graph_tokens);
-            }
             int n_past = cparams.n_ctx - n_tokens;
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-            ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true);
+            ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, cparams.worst_graph_tokens);
 
             // initialize scheduler with the worst-case graph
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
