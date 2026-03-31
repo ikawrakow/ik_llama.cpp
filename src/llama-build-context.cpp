@@ -7719,43 +7719,20 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_unrolled(
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "mtp_ffn_inp", il);
 
-        cur = llm_build_norm(ctx0, ffn_inp, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_post_norm", il);
-
-        {
-            ggml_tensor * routed_out = llm_build_std_moe_ffn(ctx0, lctx,
-                            NULL, // norm handled above
-                            cur,
-                            mtp_layer.ffn_gate_inp,  NULL,
-                            mtp_layer.ffn_up_exps,   NULL,
-                            mtp_layer.ffn_gate_exps, NULL,
-                            mtp_layer.ffn_down_exps, NULL,
-                            mtp_layer.ffn_exp_probs_b,
-                            nullptr,    nullptr,
-                            nullptr,  nullptr,
-                            nullptr,  nullptr,
-                            n_expert, n_expert_used,
-                            LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
-                            (llm_expert_gating_func_type) hparams.expert_gating_func,
-                            LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
-            cb(routed_out, "ffn_moe_out", il);
-
-            ggml_tensor * shared_out = llm_build_ffn(ctx0, lctx,
-                            NULL, // norm handled above
-                            cur,
-                            mtp_layer.ffn_up_shexp,   NULL, NULL,
-                            mtp_layer.ffn_gate_shexp, NULL, NULL,
-                            mtp_layer.ffn_down_shexp, NULL, NULL,
-                            NULL,
-                            LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
-            cb(shared_out, "ffn_shexp_out", il);
-
-            cur = ggml_add(ctx0, routed_out, shared_out);
-            cb(cur, "ffn_out", il);
-
-            cur = ggml_add(ctx0, cur, ffn_inp);
-            cb(cur, "mtp_ffn_out_resid", il);
-        }
+        cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
+                        mtp_layer.ffn_gate_inp,  NULL,
+                        mtp_layer.ffn_up_exps,   NULL,
+                        mtp_layer.ffn_gate_exps, NULL,
+                        mtp_layer.ffn_down_exps, NULL,
+                        mtp_layer.ffn_exp_probs_b,
+                        mtp_layer.ffn_up_shexp,    nullptr,
+                        mtp_layer.ffn_gate_shexp,  nullptr,
+                        mtp_layer.ffn_down_shexp,  nullptr,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
+                        (llm_expert_gating_func_type) hparams.expert_gating_func,
+                        LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
+        cb(cur, "ffn_out", il);
 
         cur = llm_build_norm(ctx0, cur, hparams,
             mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
