@@ -380,6 +380,7 @@ extern "C" {
         int32_t  amb;
         int32_t  fit_margin;
         bool     fit;
+        int32_t  worst_graph_tokens;
 
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
@@ -426,6 +427,7 @@ extern "C" {
         uint32_t n_threads;         // number of threads to use for generation
         uint32_t n_threads_batch;   // number of threads to use for batch processing
         int32_t  max_extra_alloc;   // Max. additional VRAM the scheduler is allowed to allocate
+        int32_t  worst_case_tokens; // number of tokens to use when reserving worst case graphs
 
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
