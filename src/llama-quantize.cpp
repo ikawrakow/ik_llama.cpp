@@ -165,6 +165,19 @@ static void llama_tensor_dequantize_internal(
         return;
     }
 
+    auto num_rows = interleaved_properties(tensor->type).second;
+    if (num_rows > 1) {
+        int nrows = ggml_nrows(tensor);
+        auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+        auto qsrc = (const char *)tensor->data;
+        for (int row = 0; row < nrows; row += num_rows) {
+            qtype.to_float(qsrc, f32_output, num_rows*tensor->ne[0]);
+            qsrc += num_rows*row_size;
+            f32_output += num_rows*tensor->ne[0];
+        }
+        return;
+    }
+
     size_t block_size;
     if (tensor->type == GGML_TYPE_F16 ||
         tensor->type == GGML_TYPE_BF16) {
