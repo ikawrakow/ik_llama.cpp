@@ -1192,9 +1192,43 @@ std::vector<llama_token> mtp_gen_draft(
             goto done;
         }
     }
-    {
-        llama_batch single_batch = llama_batch_init(1, 0, 1);
 
+    {
+        const int remaining_draft = n_draft - draft_start;
+        if (remaining_draft <= 0) goto done;
+
+#if 1 // UNROLLED PATH
+        llama_batch mtp_batch = llama_batch_init(remaining_draft, 0, 1);
+        for (int i = 0; i < remaining_draft; ++i) {
+            common_batch_add(mtp_batch, (i == 0) ? current_input_id : 0, current_n_past + i, {seq_id}, true);
+        }
+
+        // Tell the graph builder to use the unrolled path
+        llama_set_mtp_n_draft(ctx, remaining_draft);
+
+        if (llama_decode(ctx, mtp_batch) != 0) {
+            llama_batch_free(mtp_batch);
+            llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+            llama_set_mtp_n_draft(ctx, 0);
+            return drafts;
+        }
+
+        for (int i = 0; i < remaining_draft; ++i) {
+            float prob;
+            llama_token id_next = common_sampler_sample_speculative(smpl, ctx, i, &prob);
+            drafts.push_back(id_next);
+
+            if (prob < p_min) {
+                break;
+            }
+        }
+
+        llama_batch_free(mtp_batch);
+        llama_set_mtp_n_draft(ctx, 0);
+
+        llama_kv_cache_seq_rm(ctx, seq_id, current_n_past, current_n_past + remaining_draft);
+#else // STANDARD SINGLE-TOKEN PATH
+        llama_batch single_batch = llama_batch_init(1, 0, 1);
         for (int i = draft_start; i < n_draft; ++i) {
             single_batch.n_tokens = 0;
             common_batch_add(single_batch, current_input_id, current_n_past, {seq_id}, true);
@@ -1220,13 +1254,14 @@ std::vector<llama_token> mtp_gen_draft(
             }
         }
         llama_batch_free(single_batch);
+#endif
     }
 
 done:
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
-    // Purge draft metadata to prevent cache state corruption
-    if (!drafts.empty()) {
+    // Purge all MTP draft KV cells (combined batch + single-token loop)
+    if (!drafts.empty() && current_n_past > n_past) {
         llama_kv_cache_seq_rm(ctx, seq_id, n_past, current_n_past);
     }
 

@@ -1031,7 +1031,8 @@ static bool llama_kv_cache_init(
 static bool llama_kv_cache_find_slot(
            struct llama_kv_cache & cache,
         const struct llama_batch & batch,
-        enum llama_mtp_op_type  op_type) {
+        enum llama_mtp_op_type  op_type,
+        int32_t mtp_n_draft = 0) {
     const uint32_t n_tokens = batch.n_tokens;
 
     if (cache.recurrent) {
@@ -1082,8 +1083,10 @@ static bool llama_kv_cache_find_slot(
     }
     // otherwise, one cell per token.
 
-    // For MTP operations, it is necessary to use existing cells
-    if (op_type == MTP_OP_WARMUP || (op_type == MTP_OP_DRAFT_GEN && n_tokens > 1)) {
+    // For MTP operations, it is necessary to use existing cells.
+    const bool mtp_reuse_cells = (op_type == MTP_OP_WARMUP) ||
+        (op_type == MTP_OP_DRAFT_GEN && n_tokens > 1 && mtp_n_draft <= 1);
+    if (mtp_reuse_cells) {
         const llama_pos target_pos = batch.pos[0];
         const llama_seq_id target_seq = batch.seq_id[0][0];
 
@@ -3674,6 +3677,55 @@ static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
     }
 
     ggml_backend_tensor_set(dst, src, 0, ggml_nbytes(dst));
+
+    if (!lctx.inp_KQ_mask_draft.empty()) {
+        const auto & kv_self = lctx.kv_self;
+        const auto & cparams = lctx.cparams;
+        const int64_t n_kv = kv_self.n;
+        const int n_draft = (int)lctx.inp_KQ_mask_draft.size();
+
+        for (int iter = 0; iter < n_draft; iter++) {
+            ggml_tensor * mask = lctx.inp_KQ_mask_draft[iter];
+            if (!mask || !mask->buffer) continue;
+
+            GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
+
+            const llama_pos iter_pos = kv_self.cells[kv_self.head + iter].pos;
+            const llama_seq_id seq_id = kv_self.cells[kv_self.head + iter].seq_id.empty()
+                ? 0 : *kv_self.cells[kv_self.head + iter].seq_id.begin();
+
+            if (cparams.flash_attn) {
+                ggml_half * data = (ggml_half *)mask->data;
+                const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
+                const ggml_half h_zero = ggml_fp32_to_fp16(0.0f);
+
+                for (int i = 0; i < n_kv; ++i) {
+                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > iter_pos)
+                        ? h_inf : h_zero;
+                }
+                const int64_t n_pad = mask->ne[1];
+                for (int64_t j = 1; j < n_pad; ++j) {
+                    for (int i = 0; i < n_kv; ++i) {
+                        data[j * n_kv + i] = h_inf;
+                    }
+                }
+            } else {
+                float * data = (float *)mask->data;
+
+                for (int i = 0; i < n_kv; ++i) {
+                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > iter_pos)
+                        ? -INFINITY : 0.0f;
+                }
+                const int64_t n_pad = mask->ne[1];
+                for (int64_t j = 1; j < n_pad; ++j) {
+                    for (int i = 0; i < n_kv; ++i) {
+                        data[j * n_kv + i] = -INFINITY;
+                    }
+                }
+            }
+        }
+    }
+
     return true;
 }
 
@@ -3899,7 +3951,7 @@ static int llama_decode_internal(
                 kv_self.head = 0;
             }
 
-            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type)) {
+            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type, lctx.mtp_n_draft)) {
                 return 1;
             }
 
@@ -4089,7 +4141,7 @@ static int llama_decode_internal(
         }
 
         // extract embeddings
-        if (embd && (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) { 
+        if (embd && (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) {
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
@@ -7772,6 +7824,10 @@ int32_t llama_decode(
 
 void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
     ctx->set_mtp_op_type(mtp_op_type);
+}
+
+void llama_set_mtp_n_draft(llama_context * ctx, int32_t n_draft) {
+    ctx->mtp_n_draft = n_draft;
 }
 
 void llama_synchronize(struct llama_context * ctx) {

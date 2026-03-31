@@ -1509,6 +1509,9 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
+    // Set the number of draft tokens for unrolled MTP draft generation.
+    LLAMA_API void llama_set_mtp_n_draft(struct llama_context * ctx, int32_t n_draft);
+
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
 #ifdef __cplusplus
