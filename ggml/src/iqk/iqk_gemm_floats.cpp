@@ -519,7 +519,7 @@ void set_mul_mat_bf16_r16(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
 bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels) {
 
     if (typeA == GGML_TYPE_BF16) {
-        if (ne00 % 32) return false;
+        if (ne00 % 16) return false;
         switch (typeB) {
 #ifdef __AVX512BF16__
             case GGML_TYPE_BF16: set_mul_mat_bf16(kernels); break;
