@@ -99,6 +99,22 @@ void common_init() {
 #endif
 // ======================= end compat ================================
 
+static ggml_type ggml_type_from_str(const std::string & s) {
+    if (s == "f32") {
+        return GGML_TYPE_F32;
+    }
+    if (s == "f16") {
+        return GGML_TYPE_F16;
+    }
+    if (s == "bf16") {
+        return GGML_TYPE_BF16;
+    }
+    if (s == "q8_0") {
+        return GGML_TYPE_Q8_0;
+    }
+    throw std::runtime_error("Invalid cache type: " + s);
+}
+
 struct mtmd_cli_context {
     mtmd::context_ptr ctx_vision;
     common_init_result llama_init;
@@ -171,6 +187,7 @@ struct mtmd_cli_context {
         mparams.flash_attn_type = params.flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
+        mparams.kq_type          = ggml_type_from_str(params.mtmd_kq_type);
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
