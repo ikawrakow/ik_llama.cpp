@@ -2451,7 +2451,9 @@ private:
                         q = ggml_pad(ctx0, q, nbs - q->ne[0], 0, 0, 0);
                     }
                     k = ggml_cast(ctx0, k, ctx->kq_type);
-                    q = ggml_cast(ctx0, q, ctx->kq_type);
+                    if (!ggml_is_quantized(ctx->kq_type)) {
+                        q = ggml_cast(ctx0, q, ctx->kq_type);
+                    }
                 }
 
                 if (q->ne[3] == 1 && q->ne[2] > 1 && q->ne[2] == k->ne[2] && q->ne[2] == v->ne[2] && q->ne[1]*k->ne[1]*q->ne[2]/1024./1024. >= 256.) {
