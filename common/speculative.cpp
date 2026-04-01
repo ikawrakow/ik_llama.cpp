@@ -1203,13 +1203,9 @@ std::vector<llama_token> mtp_gen_draft(
             common_batch_add(mtp_batch, (i == 0) ? current_input_id : 0, current_n_past + i, {seq_id}, true);
         }
 
-        // Tell the graph builder to use the unrolled path
-        llama_set_mtp_n_draft(ctx, remaining_draft);
-
         if (llama_decode(ctx, mtp_batch) != 0) {
             llama_batch_free(mtp_batch);
             llama_set_mtp_op_type(ctx, MTP_OP_NONE);
-            llama_set_mtp_n_draft(ctx, 0);
             return drafts;
         }
 
@@ -1224,7 +1220,6 @@ std::vector<llama_token> mtp_gen_draft(
         }
 
         llama_batch_free(mtp_batch);
-        llama_set_mtp_n_draft(ctx, 0);
 
         llama_kv_cache_seq_rm(ctx, seq_id, current_n_past, current_n_past + remaining_draft);
 #else // STANDARD SINGLE-TOKEN PATH

@@ -3943,6 +3943,16 @@ static int llama_decode_internal(
                 return ret;
             }
 
+            if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && u_batch.logits) {
+                bool all_logits_true = true;
+                for (uint32_t i = 0; i < n_tokens; i++) {
+                    if (!u_batch.logits[i]) { all_logits_true = false; break; }
+                }
+                lctx.mtp_n_draft = all_logits_true ? (int32_t)n_tokens : 0;
+            } else {
+                lctx.mtp_n_draft = 0;
+            }
+
             // if we have enough unused cells before the current head ->
             //   better to start searching from the beginning of the cache, hoping to fill it
             if (kv_self.head > kv_self.used + 2*n_tokens) {
@@ -7830,10 +7840,6 @@ int32_t llama_decode(
 
 void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
     ctx->set_mtp_op_type(mtp_op_type);
-}
-
-void llama_set_mtp_n_draft(llama_context * ctx, int32_t n_draft) {
-    ctx->mtp_n_draft = n_draft;
 }
 
 void llama_synchronize(struct llama_context * ctx) {
