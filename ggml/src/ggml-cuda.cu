@@ -94,7 +94,7 @@ static void ggml_cuda_default_log_callback(enum ggml_log_level level, const char
 ggml_log_callback ggml_cuda_log_callback = ggml_cuda_default_log_callback;
 void * ggml_cuda_log_user_data = NULL;
 
-GGML_API void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data) {
+GGML_CALL void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data) {
     ggml_cuda_log_callback = log_callback;
     ggml_cuda_log_user_data = user_data;
 }
