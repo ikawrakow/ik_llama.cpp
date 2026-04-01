@@ -34,7 +34,8 @@ llm_build_context::llm_build_context(
     const llama_batch  & batch,
     const llm_build_cb & cb,
     bool   worst_case,
-    bool   warmup) :
+    bool   warmup,
+    int    n_outputs_) :
         model            (lctx.model),
         lctx             (lctx),
         hparams          (model.hparams),
@@ -63,7 +64,7 @@ llm_build_context::llm_build_context(
         norm_rms_eps     (hparams.f_norm_rms_eps),
         n_tokens         (batch.n_tokens),
         n_kv             (worst_case ? kv_self.size : kv_self.n),
-        n_outputs        (worst_case ? n_tokens : lctx.n_outputs),
+        n_outputs        (worst_case ? n_outputs_ > 0 ? n_outputs_ : n_tokens : lctx.n_outputs),
         n_outputs_enc    (worst_case ? n_tokens : lctx.embd_enc.size() / hparams.n_embd),
         kv_head          (worst_case ? (kv_self.recurrent ? 0 : kv_self.size - n_tokens) : kv_self.head),
         n_ctx_orig       (cparams.n_ctx_orig_yarn),
@@ -308,17 +309,17 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
 
     if (batch.token) {
         lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
-        
+
         cb(lctx.inp_tokens, "inp_tokens", -1);
         ggml_set_input(lctx.inp_tokens);
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
     } else {
-        return nullptr; 
+        return nullptr;
     }
 
     cb(cur, "inp_embd", -1);
-    
+
     return cur;
 }
 
@@ -9597,7 +9598,8 @@ struct ggml_cgraph * llm_build_context::llama_build_graph_s_copy(llama_context &
 ggml_cgraph * llm_build_context::llama_build_graph(
          llama_context & lctx,
      const llama_batch & batch,
-                  bool   worst_case) {
+                  bool   worst_case,
+                  int    n_outputs) {
     const auto & model = lctx.model;
 
 #if IK_PRINT_TIMING
@@ -9654,7 +9656,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     llama_token bos = vocab->token_bos();
     llama_token eos = vocab->token_eos();
     bool is_warming_up = lctx.n_eval == 0 && (batch.n_tokens == 1 && (batch.token[0] == ((bos != -1) ? bos : eos)));
-    struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up);
+    struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up, n_outputs);
 
     llm.init();
 
