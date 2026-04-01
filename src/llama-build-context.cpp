@@ -7353,40 +7353,23 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
     if (cparams.mtp_op_type != MTP_OP_NONE) {
-        ggml_tensor* hidden_states_from_main_model;
+        const int n_draft = (cparams.mtp_op_type == MTP_OP_DRAFT_GEN) ? lctx.mtp_n_draft : 0;
 
-        // For unrolled draft gen, hidden state is 1D (single hidden state from main model)
-        if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && lctx.mtp_n_draft > 1) {
+        ggml_tensor* hidden_states_from_main_model;
+        if (n_draft > 0) {
             hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
         } else {
             hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
         }
         ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
         ggml_set_input(hidden_states_from_main_model);
-
         lctx.inp_mtp_states = hidden_states_from_main_model;
 
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && lctx.mtp_n_draft > 1) {
-            ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
-            if (mtp_embd_weights == nullptr) {
-                mtp_embd_weights = model.tok_embd;
-            }
-
-            lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-            cb(lctx.inp_tokens, "inp_tokens", -1);
-            ggml_set_input(lctx.inp_tokens);
-
-            ggml_tensor * first_token_id = ggml_view_1d(ctx0, lctx.inp_tokens, 1, 0);
-            ggml_tensor * initial_token_emb = ggml_get_rows(ctx0, mtp_embd_weights, first_token_id);
-
-            cur = build_mtp_tail_unrolled(mtp_layer, hidden_states_from_main_model,
-                initial_token_emb, n_embd_head, gf, inp_pos, n_tokens);
-        } else {
-            cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model, n_embd_head, gf, inp_pos, rope_cache);
-        }
+        cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model,
+            n_embd_head, gf, inp_pos, rope_cache, n_draft);
 
     } else {
         struct ggml_tensor * inpL;
@@ -7511,129 +7494,98 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
 }
 
 struct ggml_tensor * llm_build_context::build_mtp_tail(
-    const llama_layer & mtp_layer, 
-    struct ggml_tensor * prev_embeddings, 
-    int64_t n_embd_head, 
-    struct ggml_cgraph * gf,
-    struct ggml_tensor * inp_pos,
-    struct ggml_tensor * rope_cache
-) {
-    const int il = hparams.n_layer - 1;
-
-    struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
-
-    struct ggml_tensor * inp_out_ids = build_inp_out_ids();
-
-    // If nextn.embed_tokens is missing (GLM-4.6), use model.tok_embd
-    ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
-    if (mtp_embd_weights == nullptr) {
-        mtp_embd_weights = model.tok_embd;
-    }
-    ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
-
-    ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
-    ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
-    
-    ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
-    cb(combined, "mtp_concat", il);
-    ggml_tensor* cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
-
-    struct ggml_tensor * inpSA = cur;
-
-    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
-    cb(cur, "attn_norm", il);
-
-    // Self-Attention
-    {
-        auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
-                nullptr, nullptr, // wqkv, bqkv (not used in GLM usually?)
-                nullptr, nullptr, // wqk, bqk
-                mtp_layer.wq, mtp_layer.bq,
-                mtp_layer.wk, mtp_layer.bk,
-                mtp_layer.wv, mtp_layer.bv,
-                mtp_layer.attn_q_norm, mtp_layer.attn_k_norm, 
-                0.f, il);
-
-        // RoPE
-        if (rope_cache) {
-            Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
-            Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
-        } else {
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-        }
-        
-        cb(Qcur, "Qcur", il);
-        cb(Kcur, "Kcur", il);
-        cb(Vcur, "Vcur", il);
-
-        // KV Cache & Attention
-        cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                        model.layers[il].wo, NULL,
-                        Kcur, Vcur, Qcur, KQ_mask,
-                        n_tokens, kv_head, n_kv,
-                        1.0f/sqrtf(float(n_embd_head)), cb, il);
-    }
-
-    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-    cb(ffn_inp, "mtp_ffn_inp", il);
-
-    cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
-                    mtp_layer.ffn_gate_inp,  NULL,
-                    mtp_layer.ffn_up_exps,   NULL,
-                    mtp_layer.ffn_gate_exps, NULL,
-                    mtp_layer.ffn_down_exps, NULL,
-                    mtp_layer.ffn_exp_probs_b,
-                    mtp_layer.ffn_up_shexp,    nullptr,
-                    mtp_layer.ffn_gate_shexp,  nullptr,
-                    mtp_layer.ffn_down_shexp,  nullptr,
-                    n_expert, n_expert_used,
-                    LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
-                    (llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
-    cb(cur, "ffn_out", il);
-
-    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
-    cb(cur, "result_norm", -1);
-
-    if (inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    }
-
-    // If nextn.shared_head_head is missing (GLM-4.6), use model.output (Main LM Head)
-    ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;
-    if (mtp_head_weights == nullptr) {
-        mtp_head_weights = model.output;
-    }
-    cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
-    cb(cur, "result_output", -1);
-
-    return cur;
-}
-
-// ============================================================================
-// IK's idea: unroll N MTP draft iterations into a single ggml graph,
-// eliminating N-1 GPU synchronization round-trips.
-// ============================================================================
-struct ggml_tensor * llm_build_context::build_mtp_tail_unrolled(
     const llama_layer & mtp_layer,
-    struct ggml_tensor * initial_hidden_state,  // [n_embd] from main model
-    struct ggml_tensor * initial_token_emb,     // [n_embd, 1] first token embedding
+    struct ggml_tensor * hidden_states,
     int64_t n_embd_head,
     struct ggml_cgraph * gf,
-    struct ggml_tensor * inp_pos,               // [n_draft] position tensor
+    struct ggml_tensor * inp_pos,
+    struct ggml_tensor * rope_cache,
     int n_draft
 ) {
     const int il = hparams.n_layer - 1;
 
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
-    if (mtp_embd_weights == nullptr) {
-        mtp_embd_weights = model.tok_embd;
-    }
+    if (!mtp_embd_weights) mtp_embd_weights = model.tok_embd;
 
     ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;
-    if (mtp_head_weights == nullptr) {
-        mtp_head_weights = model.output;
+    if (!mtp_head_weights) mtp_head_weights = model.output;
+
+    if (n_draft <= 0) {
+        struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+        struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
+
+        ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
+        ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, hidden_states, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
+
+        ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
+        cb(combined, "mtp_concat", il);
+        ggml_tensor * cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
+
+        struct ggml_tensor * inpSA = cur;
+
+        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
+
+        {
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                    nullptr, nullptr,
+                    nullptr, nullptr,
+                    mtp_layer.wq, mtp_layer.bq,
+                    mtp_layer.wk, mtp_layer.bk,
+                    mtp_layer.wv, mtp_layer.bv,
+                    mtp_layer.attn_q_norm, mtp_layer.attn_k_norm,
+                    0.f, il);
+
+            if (rope_cache) {
+                Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
+                Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
+            } else {
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            }
+
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
+            cb(Vcur, "Vcur", il);
+
+            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                            model.layers[il].wo, NULL,
+                            Kcur, Vcur, Qcur, KQ_mask,
+                            n_tokens, kv_head, n_kv,
+                            1.0f/sqrtf(float(n_embd_head)), cb, il);
+        }
+
+        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+        cb(ffn_inp, "mtp_ffn_inp", il);
+
+        cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
+                        mtp_layer.ffn_gate_inp,  NULL,
+                        mtp_layer.ffn_up_exps,   NULL,
+                        mtp_layer.ffn_gate_exps, NULL,
+                        mtp_layer.ffn_down_exps, NULL,
+                        mtp_layer.ffn_exp_probs_b,
+                        mtp_layer.ffn_up_shexp,    nullptr,
+                        mtp_layer.ffn_gate_shexp,  nullptr,
+                        mtp_layer.ffn_down_shexp,  nullptr,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
+                        (llm_expert_gating_func_type) hparams.expert_gating_func,
+                        LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
+        cb(cur, "ffn_out", il);
+
+        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "result_norm", -1);
+
+        if (inp_out_ids) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        }
+
+        cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
+        cb(cur, "result_output", -1);
+
+        return cur;
     }
 
     const int32_t n_batch_pad = GGML_PAD(1, GGML_KQ_MASK_PAD);
@@ -7651,8 +7603,13 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_unrolled(
     lctx.inp_KQ_mask_swa = nullptr;
     lctx.inp_out_ids = nullptr;
 
-    ggml_tensor * token_emb = initial_token_emb;
-    ggml_tensor * prev_hidden = initial_hidden_state;
+    lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    cb(lctx.inp_tokens, "inp_tokens", -1);
+    ggml_set_input(lctx.inp_tokens);
+
+    ggml_tensor * first_token_id = ggml_view_1d(ctx0, lctx.inp_tokens, 1, 0);
+    ggml_tensor * token_emb = ggml_get_rows(ctx0, mtp_embd_weights, first_token_id);
+    ggml_tensor * prev_hidden = hidden_states;
     ggml_tensor * all_logits = nullptr;
 
     for (int iter = 0; iter < n_draft; iter++) {
@@ -7738,7 +7695,6 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_unrolled(
             mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
 
         ggml_tensor * logits = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
-        // logits shape: [n_vocab, 1]
 
         if (all_logits == nullptr) {
             all_logits = logits;
