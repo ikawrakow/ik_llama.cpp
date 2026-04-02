@@ -443,6 +443,7 @@ struct clip_ctx {
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
+    ggml_type kq_type = GGML_TYPE_F32;
 
     // for debugging
     bool debug_graph = false;
@@ -450,6 +451,7 @@ struct clip_ctx {
 
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
+        kq_type = ctx_params.kq_type;
         debug_graph = std::getenv("MTMD_DEBUG_GRAPH") != nullptr;
         //backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         backend_cpu = ggml_backend_cpu_init();
@@ -1011,7 +1013,9 @@ struct clip_graph {
             // self-attention
             {
                 cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
+                cb(cur, "qkv_w", il);
                 cur = ggml_add(ctx0, cur, layer.qkv_b);
+                cb(cur, "qkv_b", il);
 
                 ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos, d_head*sizeof(float),
                     cur->nb[1], 0);
@@ -1072,12 +1076,14 @@ struct clip_graph {
                     nullptr, nullptr,
                     layer.deepstack_fc2_w, layer.deepstack_fc2_b,
                     ffn_op_type::FFN_GELU, il);
+                cb(feat, "ffn_feat", il);
 
                 if(!deepstack_features) {
                     deepstack_features = feat;
                 } else {
                     // concat along the feature dimension
                     deepstack_features = ggml_concat(ctx0, deepstack_features, feat, 0);
+                    cb(deepstack_features, "feat_concat", il);
                 }
             }
 
@@ -1098,9 +1104,11 @@ struct clip_graph {
             nullptr, nullptr,
             model.mm_1_w, model.mm_1_b,
             ffn_op_type::FFN_GELU, -1);
+        cb(embeddings, "ffn_postl", -1);
 
         if (deepstack_features) {
             embeddings = ggml_concat(ctx0, embeddings, deepstack_features, 0); // concat along the feature dimension
+            cb(embeddings, "ffn_postl_concat", -1);
         }
 
         // build the graph
@@ -2425,6 +2433,22 @@ private:
             ggml_tensor * v = ggml_permute(ctx0, v_cur, 1, 2, 0, 3);
             v = ggml_cont(ctx0, v);
 
+            if (ctx->kq_type != k->type) {
+                auto bs = ggml_blck_size(ctx->kq_type);
+                if (k->ne[0] % bs != 0) {
+                    int nbs = bs*((k->ne[0] + bs - 1)/bs);
+                    k = ggml_pad(ctx0, k, nbs - k->ne[0], 0, 0, 0);
+                }
+                if (q->ne[0] % bs != 0) {
+                    int nbs = bs*((q->ne[0] + bs - 1)/bs);
+                    q = ggml_pad(ctx0, q, nbs - q->ne[0], 0, 0, 0);
+                }
+                k = ggml_cast(ctx0, k, ctx->kq_type);
+                if (!ggml_is_quantized(ctx->kq_type)) {
+                    q = ggml_cast(ctx0, q, ctx->kq_type);
+                }
+            }
+
             if (q->ne[3] == 1 && q->ne[2] > 1 && q->ne[2] == k->ne[2] && q->ne[2] == v->ne[2] && q->ne[1]*k->ne[1]*q->ne[2]/1024./1024. >= 256.) {
                 cur = nullptr;
                 for (int64_t i2 = 0; i2 < q->ne[2]; ++i2) {
@@ -2432,10 +2456,14 @@ private:
                     auto ki = ggml_view_2d(ctx0, k, k->ne[0], k->ne[1], k->nb[1], k->nb[2]*i2);
                     auto vi = ggml_view_2d(ctx0, v, v->ne[0], v->ne[1], v->nb[1], v->nb[2]*i2);
                     auto kq = ggml_mul_mat(ctx0, ki, qi);
+                    cb(kq, "kq_i", il);
                     kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
+                    cb(kq, "softmax(kq_i)", il);
                     auto kqv = ggml_mul_mat(ctx0, vi, kq);
+                    cb(kqv, "kqv_i", il);
                     if (cur) {
                         cur = ggml_concat(ctx0, cur, kqv, 0);
+                        cb(cur, "kqv_i_concat", il);
                     } else {
                         cur = kqv;
                     }

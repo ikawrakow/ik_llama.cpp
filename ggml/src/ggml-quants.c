@@ -708,7 +708,8 @@ void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, in
 }
 
 void quantize_row_q4_0(const float * restrict x, void * restrict y, int64_t k) {
-    quantize_row_q4_0_ref(x, y, k);
+    iqk_quantize_q4_0(x, y, k);
+    //quantize_row_q4_0_ref(x, y, k);
 }
 
 
@@ -15434,6 +15435,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_IQ2_KT: break;
         case GGML_TYPE_IQ3_KT: break;
         case GGML_TYPE_IQ4_KT: break;
+        case GGML_TYPE_Q1_0_G128: break;
         case GGML_TYPE_IQ3_K: break;
         case GGML_TYPE_IQ3_KS: break;
         case GGML_TYPE_IQ2_KL: break;

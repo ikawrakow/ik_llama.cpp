@@ -102,7 +102,8 @@ struct llm_build_context {
     const llama_batch  & batch,
     const llm_build_cb & cb,
     bool   worst_case,
-    bool   warmup);
+    bool   warmup,
+    int    n_outputs = 0);
 
     void init();
 
@@ -428,7 +429,7 @@ llm_expert_gating_func_type   gating_op,
 
     static ggml_cgraph * llama_build_graph_s_copy(llama_context & lctx);
 
-    static ggml_cgraph * llama_build_graph(llama_context & lctx, const llama_batch & batch, bool worst_case);
+    static ggml_cgraph * llama_build_graph(llama_context & lctx, const llama_batch & batch, bool worst_case, int n_outputs = 0);
 
     ggml_tensor * build_std_attention(ggml_cgraph * gf, ggml_tensor * attn_norm, ggml_tensor * cur,
             ggml_tensor * inp_pos, ggml_tensor * inp_out_ids, ggml_tensor * rope_factors,

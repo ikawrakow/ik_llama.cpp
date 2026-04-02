@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cmath>
+#include <unordered_set>
 
 namespace {
 inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
@@ -106,6 +107,36 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
     return size;
 }
 
+static inline const std::unordered_set<ggml_type> & supported_kv_types() {
+#ifdef GGML_IQK_FA_ALL_QUANTS
+    static std::unordered_set<ggml_type> k_supported = {
+        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL
+    };
+#else
+    static std::unordered_set<ggml_type> k_supported = {
+        GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q8_KV, GGML_TYPE_Q6_0,
+    };
+#endif
+    return k_supported;
+}
+
+static inline bool are_kv_types_supported(ggml_type type_k, ggml_type type_v) {
+    if (type_k == GGML_TYPE_BF16) {
+        if (type_v != type_k) {
+            return false;
+        }
+#ifdef __AVX512BF16__
+        return true;
+#else
+        return false;
+#endif
+    }
+    auto & supported = supported_kv_types();
+    auto it_k = supported.find(type_k);
+    auto it_v = supported.find(type_v);
+    return it_k != supported.end() && it_v != supported.end();
+}
+
 // TODO: get the ggml_type enum here without polution
 //
 extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
@@ -136,7 +167,24 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
 
     if (type_q != 0 || type_mask != 1 || max_bias > 0) return false;
 
-    if (n_swa > 0) {
+    if (auto type_k = ggml_type(int_type_k_in), type_v = ggml_type(int_type_v); !are_kv_types_supported(type_k, type_v)) {
+        if (ith == 0) {
+            fprintf(stderr, "\n==================== KV cache types %s, %s are not supported on the CPU\n",
+                    ggml_type_name(type_k), ggml_type_name(type_v));
+            auto & supported = supported_kv_types();
+            fprintf(stderr, "Sopprted types are:\n");
+            for (auto type : supported) {
+                fprintf(stderr, "    %s\n", ggml_type_name(type));
+            }
+#ifdef __AVX512BF16__
+            fprintf(stderr, "    %s, but only if K and V are both %s\n", ggml_type_name(GGML_TYPE_BF16), ggml_type_name(GGML_TYPE_BF16));
+#endif
+        }
+        barrier(barrier_data);
+        GGML_ABORT("Fatal error");
+    }
+
+    if (n_swa > 0 && mask) {
         constexpr int kMinBatch = 256;
         int ntokens = std::max(kMinBatch, neq1);
         int nblock  = (ntokens + n_swa + kMinBatch - 1)/kMinBatch;
@@ -155,7 +203,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     int rv3 = neq3/nev3;
 
     int first_k = 0, last_k = nek1;
-    if (neq3 == 1 && rk2 > 1 && neq1 == 1 && nek1 > 256) {
+    if (neq3 == 1 && rk2 > 1 && neq1 == 1 && nek1 > 256 && mask) {
         // This is a quick hack for SWA models.
         // Given that the mask is the same for all layers, ideally we should determine the
         // cache bounds once, and reuse for the whole graph. But even with this simple hack
@@ -223,7 +271,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             auto kth = (const char *)k + kv_offset*stride_k;
             auto vth = (const char *)v + kv_offset*stride_v;
             auto qth = (const char *)q;
-            auto mth = (const char *)mask + kv_offset*sizeof(uint16_t); // we don't have ggml_half available here
+            auto mth = mask ? (const char *)mask + kv_offset*sizeof(uint16_t) : nullptr; // we don't have ggml_half available here
 
             auto work = (char *)work_buffer;
             auto size_thread = (Dv + 16)*rk2*sizeof(float);
@@ -274,7 +322,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 auto vth = (const char *)v + ith_k*(nek1/gcd_k)*stride_v;
                 auto q_offset = ith_q < ith_mid ? ith_q*nq_per_thread*nbq2 : (ith_mid*nq_per_thread + (ith_q - ith_mid)*nq_this_thread)*nbq2;
                 auto qth = (const char *)q + q_offset;
-                auto mth = (const char *)mask + ith_k*(nek1/gcd_k)*sizeof(uint16_t); // we don't have ggml_half available here
+                auto mth = mask ? (const char *)mask + ith_k*(nek1/gcd_k)*sizeof(uint16_t) : nullptr; // we don't have ggml_half available here
 
                 // Each thread will produce a result of size Dv*nq_this_thread*sizeof(float)
                 // In addition, we need M, S for the nq_this_thread rows the thread is processing
@@ -355,7 +403,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             auto this_q = (const float *)((const char *)q + ik02*rk2*nbq2);
             auto this_k = (const char *)k + ik01*stride_k + ik02*nbk2;
             auto this_v = (const char *)v + ik01*stride_v + ik02*nbv2;
-            auto this_m = (const char *)mask + ik01*sizeof(uint16_t); // we don't have ggml_half available here
+            auto this_m = mask ? (const char *)mask + ik01*sizeof(uint16_t) : nullptr; // we don't have ggml_half available here
             if (!iqk_flash_attn_impl(int_type_k, int_type_v,
                      Dk, Dv, rk2, this_nk, nbq2, stride_k, stride_v, 0, Dv,
                      this_q, (const void *)this_k, (const void *)this_v, (const void *)this_m, nullptr, 0,
@@ -425,7 +473,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                         (const float *)((const char *)q + iq2*nbq2 + iq3*nbq3 + iq1*stride_q),
                         (const void  *)((const char *)k + iq2/rk2*nbk2 + iq3/rk3*nbk3),
                         (const void  *)((const char *)v + iq2/rv2*nbv2 + iq3/rv3*nbv3),
-                        (const void  *)((const char *)mask + iq1*stride_m), sinksf, 1,
+                        mask ? (const void  *)((const char *)mask + iq1*stride_m) : nullptr, sinksf, 1,
                         scale, softcap,
                         (float *)((char *)qkv + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1), nullptr, nullptr)) return false;
                 }

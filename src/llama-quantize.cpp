@@ -165,6 +165,19 @@ static void llama_tensor_dequantize_internal(
         return;
     }
 
+    auto num_rows = interleaved_properties(tensor->type).second;
+    if (num_rows > 1) {
+        int nrows = ggml_nrows(tensor);
+        auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+        auto qsrc = (const char *)tensor->data;
+        for (int row = 0; row < nrows; row += num_rows) {
+            qtype.to_float(qsrc, f32_output, num_rows*tensor->ne[0]);
+            qsrc += num_rows*row_size;
+            f32_output += num_rows*tensor->ne[0];
+        }
+        return;
+    }
+
     size_t block_size;
     if (tensor->type == GGML_TYPE_F16 ||
         tensor->type == GGML_TYPE_BF16) {
@@ -975,6 +988,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_Q6_0_R4: default_type = GGML_TYPE_Q6_0_R4; break;
         case LLAMA_FTYPE_MOSTLY_Q8_0_R8: default_type = GGML_TYPE_Q8_0_R8; break;
         case LLAMA_FTYPE_MOSTLY_MXFP4:   default_type = GGML_TYPE_MXFP4;   break;
+        case LLAMA_FTYPE_MOSTLY_Q1_0_G128: default_type = GGML_TYPE_Q1_0_G128; break;
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  default_type = GGML_TYPE_IQ4_XS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS:  default_type = GGML_TYPE_IQ4_KS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R4:default_type = GGML_TYPE_IQ4_KS_R4;break;
