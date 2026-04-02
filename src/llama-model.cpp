@@ -1861,6 +1861,9 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
         if (tensor_name.find(this_name) == 0) {
             return entry.first;
         }
+        if (tensor_name.find(base_name) == 0) {
+            return entry.first;
+        }
     }
     return LLM_TENSOR_UNKNOWN;
 }
