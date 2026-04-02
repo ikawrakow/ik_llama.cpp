@@ -2343,6 +2343,15 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
 
 template <int nrc_y>
 static void mul_mat_q1_0_g128_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        auto x = (const block_q1_0_g128 *)((const char *)vx + ix*bx);
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            float s;
+            vec_dot_q1_0_g128_q8_0(n, &s, 0, x, bx, q8.y[iy], 0, 1);
+            info.store(ix, iy, s);
+        }
+    }
 }
 
 template <int nrc_y>
@@ -2899,7 +2908,7 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             break;
         case GGML_TYPE_Q1_0_G128:
             if (ne00 % QK1_0_G128 != 0) return false;
-            expected_typeB = GGML_TYPE_Q8_0_X4;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q1_0_g128_q8_0, funcs);
             break;
         default:
