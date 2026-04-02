@@ -42,10 +42,8 @@ void common_speculative_print_stats(const common_speculative * spec);
 
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
 std::vector<llama_token> mtp_gen_draft(
-    struct common_sampler * smpl,
     struct llama_context * ctx,
     int n_draft,
-    float p_min,
     const std::vector<llama_token> & accepted_ids,
     int32_t n_past_base,
     llama_token id_last,

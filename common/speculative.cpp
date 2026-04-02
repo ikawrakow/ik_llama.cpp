@@ -148,7 +148,6 @@ struct common_speculative_state {
 
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
-    common_sampler * smpl;
     std::vector<llama_token> pending_accepted_ids;
     int32_t pending_n_past_base = 0;
 
@@ -158,15 +157,6 @@ struct common_speculative_state_mtp : public common_speculative_state {
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
     {
-        struct common_params_sampling params;
-        params.samplers_sequence = {
-            llama_sampler_type::DIST,
-        };
-        smpl = common_sampler_init(llama_get_model(ctx_tgt), params);
-    }
-
-    ~common_speculative_state_mtp() override {
-        common_sampler_free(smpl);
     }
 
     void begin(const llama_tokens & prompt) override {
@@ -189,7 +179,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         }
 
         result = mtp_gen_draft(
-            smpl, ctx_tgt, params.n_max, params.p_min,
+            ctx_tgt, params.n_max,
             pending_accepted_ids, pending_n_past_base,
             id_last, n_past, seq_id
         );
@@ -1135,10 +1125,8 @@ void common_speculative_print_stats(const common_speculative * spec) {
 // MTP
 // ----------------------------------------------------------------------------
 std::vector<llama_token> mtp_gen_draft(
-    struct common_sampler * smpl,
     struct llama_context * ctx,
     int n_draft,
-    float p_min,
     const std::vector<llama_token> & accepted_ids,
     int32_t n_past_base,
     llama_token id_last,
@@ -1148,9 +1136,6 @@ std::vector<llama_token> mtp_gen_draft(
     llama_tokens drafts;
     drafts.reserve(n_draft);
 
-    if (!smpl) return drafts;
-
-    common_sampler_reset(smpl);
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
     int32_t current_n_past = n_past;
@@ -1173,31 +1158,20 @@ std::vector<llama_token> mtp_gen_draft(
             return drafts;
         }
 
-        float prob;
-        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, n_combined - 1, &prob);
+        llama_token id_next = common_sampler_argmax(ctx, n_combined - 1);
         drafts.push_back(id_next);
-
-        const float * emb = llama_get_embeddings_ith(ctx, n_combined - 1);
-        if (emb) {
-            llama_set_draft_input_hidden_state(ctx, emb);
-        }
 
         llama_batch_free(combined_batch);
 
         current_input_id = id_next;
         current_n_past = n_past + 1;
         draft_start = 1;
-
-        if (prob < p_min) {
-            goto done;
-        }
     }
 
     {
         const int remaining_draft = n_draft - draft_start;
         if (remaining_draft <= 0) goto done;
 
-#if 1 // UNROLLED PATH
         llama_batch mtp_batch = llama_batch_init(remaining_draft, 0, 1);
         for (int i = 0; i < remaining_draft; ++i) {
             common_batch_add(mtp_batch, (i == 0) ? current_input_id : 0, current_n_past + i, {seq_id}, true);
@@ -1210,46 +1184,12 @@ std::vector<llama_token> mtp_gen_draft(
         }
 
         for (int i = 0; i < remaining_draft; ++i) {
-            float prob;
-            llama_token id_next = common_sampler_sample_speculative(smpl, ctx, i, &prob);
-            drafts.push_back(id_next);
-
-            if (prob < p_min) {
-                break;
-            }
+            drafts.push_back(common_sampler_argmax(ctx, i));
         }
 
         llama_batch_free(mtp_batch);
 
         llama_kv_cache_seq_rm(ctx, seq_id, current_n_past, current_n_past + remaining_draft);
-#else // STANDARD SINGLE-TOKEN PATH
-        llama_batch single_batch = llama_batch_init(1, 0, 1);
-        for (int i = draft_start; i < n_draft; ++i) {
-            single_batch.n_tokens = 0;
-            common_batch_add(single_batch, current_input_id, current_n_past, {seq_id}, true);
-
-            if (llama_decode(ctx, single_batch) != 0) {
-                break;
-            }
-
-            float prob;
-            llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, &prob);
-            drafts.push_back(id_next);
-
-            const float * emb = llama_get_embeddings_ith(ctx, 0);
-            if (emb) {
-                llama_set_draft_input_hidden_state(ctx, emb);
-            }
-
-            current_input_id = id_next;
-            current_n_past++;
-
-            if (prob < p_min) {
-                break;
-            }
-        }
-        llama_batch_free(single_batch);
-#endif
     }
 
 done:
