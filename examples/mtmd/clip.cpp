@@ -2433,21 +2433,21 @@ private:
             ggml_tensor * v = ggml_permute(ctx0, v_cur, 1, 2, 0, 3);
             v = ggml_cont(ctx0, v);
 
-                if (ctx->kq_type != k->type) {
-                    auto bs = ggml_blck_size(ctx->kq_type);
-                    if (k->ne[0] % bs != 0) {
-                        int nbs = bs*((k->ne[0] + bs - 1)/bs);
-                        k = ggml_pad(ctx0, k, nbs - k->ne[0], 0, 0, 0);
-                    }
-                    if (q->ne[0] % bs != 0) {
-                        int nbs = bs*((q->ne[0] + bs - 1)/bs);
-                        q = ggml_pad(ctx0, q, nbs - q->ne[0], 0, 0, 0);
-                    }
-                    k = ggml_cast(ctx0, k, ctx->kq_type);
-                    if (!ggml_is_quantized(ctx->kq_type)) {
-                        q = ggml_cast(ctx0, q, ctx->kq_type);
-                    }
+            if (ctx->kq_type != k->type) {
+                auto bs = ggml_blck_size(ctx->kq_type);
+                if (k->ne[0] % bs != 0) {
+                    int nbs = bs*((k->ne[0] + bs - 1)/bs);
+                    k = ggml_pad(ctx0, k, nbs - k->ne[0], 0, 0, 0);
                 }
+                if (q->ne[0] % bs != 0) {
+                    int nbs = bs*((q->ne[0] + bs - 1)/bs);
+                    q = ggml_pad(ctx0, q, nbs - q->ne[0], 0, 0, 0);
+                }
+                k = ggml_cast(ctx0, k, ctx->kq_type);
+                if (!ggml_is_quantized(ctx->kq_type)) {
+                    q = ggml_cast(ctx0, q, ctx->kq_type);
+                }
+            }
 
             if (q->ne[3] == 1 && q->ne[2] > 1 && q->ne[2] == k->ne[2] && q->ne[2] == v->ne[2] && q->ne[1]*k->ne[1]*q->ne[2]/1024./1024. >= 256.) {
                 cur = nullptr;
@@ -2456,14 +2456,14 @@ private:
                     auto ki = ggml_view_2d(ctx0, k, k->ne[0], k->ne[1], k->nb[1], k->nb[2]*i2);
                     auto vi = ggml_view_2d(ctx0, v, v->ne[0], v->ne[1], v->nb[1], v->nb[2]*i2);
                     auto kq = ggml_mul_mat(ctx0, ki, qi);
-                        cb(kq, "kq_i", il);
+                    cb(kq, "kq_i", il);
                     kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
-                        cb(kq, "softmax(kq_i)", il);
+                    cb(kq, "softmax(kq_i)", il);
                     auto kqv = ggml_mul_mat(ctx0, vi, kq);
-                        cb(kqv, "kqv_i", il);
+                    cb(kqv, "kqv_i", il);
                     if (cur) {
                         cur = ggml_concat(ctx0, cur, kqv, 0);
-                            cb(cur, "kqv_i_concat", il);
+                        cb(cur, "kqv_i_concat", il);
                     } else {
                         cur = kqv;
                     }
