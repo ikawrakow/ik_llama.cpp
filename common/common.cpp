@@ -1181,6 +1181,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.mmproj_use_gpu = false;
         return true;
     }
+    if (arg == "--mtmd-kq-type") {
+        CHECK_ARG
+        params.mtmd_kq_type = argv[i];
+        return true;
+    }
     if (arg == "--image" || arg == "--audio") {
         CHECK_ARG
         params.image.emplace_back(argv[i]);
@@ -2489,9 +2494,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "multi-modality" });
     options.push_back({ "*",           "       --mmproj FILE",          "path to a multimodal projector file for LLaVA. see examples/llava/README.md" });
     options.push_back({ "*",           "       --image FILE",           "path to an image file. use with multimodal models. Specify multiple times for batching" });
-    options.push_back({ "*",           "       --image-min-tokens N",           "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)"});
-    options.push_back({ "*",           "       --image-max-tokens N",           "maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)" });
-    options.push_back({ "*",           "       --no-context-shift",           "disable context-shift." });
+    options.push_back({ "*",           "       --image-min-tokens N",   "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)"});
+    options.push_back({ "*",           "       --image-max-tokens N",   "maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)" });
+    options.push_back({ "*",           "       --mtmd-kq-type TYPE",    "data type for multimodality K*Q (default: %s)", params.mtmd_kq_type.c_str() });
+    options.push_back({ "*",           "       --no-context-shift",     "disable context-shift." });
     options.push_back({ "*",           "--context-shift (auto|on|off|0|1)", "set context-shift (default: %s)", params.ctx_shift ? "on" : "off" });
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
