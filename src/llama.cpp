@@ -1032,7 +1032,7 @@ static bool llama_kv_cache_find_slot(
            struct llama_kv_cache & cache,
         const struct llama_batch & batch,
         enum llama_mtp_op_type  op_type,
-        int32_t mtp_n_draft = 0) {
+        int32_t mtp_n_accepted = 0) {
     const uint32_t n_tokens = batch.n_tokens;
 
     if (cache.recurrent) {
@@ -1085,7 +1085,7 @@ static bool llama_kv_cache_find_slot(
 
     // For MTP KV Cache operations, it is necessary to use existing cells.
     const bool mtp_reuse_cells = (op_type == MTP_OP_WARMUP) ||
-        (op_type == MTP_OP_DRAFT_GEN && mtp_n_draft < (int32_t)n_tokens);
+        (op_type == MTP_OP_DRAFT_GEN && mtp_n_accepted > 0);
     if (mtp_reuse_cells) {
         const llama_pos target_pos = batch.pos[0];
         const llama_seq_id target_seq = batch.seq_id[0][0];
@@ -1126,7 +1126,8 @@ static bool llama_kv_cache_find_slot(
         }
 
         if (op_type == MTP_OP_DRAFT_GEN) {
-            const uint32_t n_accepted = n_tokens - (uint32_t)mtp_n_draft;
+            const uint32_t n_accepted = (uint32_t)mtp_n_accepted;
+            const uint32_t n_draft    = n_tokens - n_accepted;
             for (uint32_t i = 0; i < n_accepted; ++i) {
                 if (cache.cells[cache.head + i].pos != batch.pos[i]) {
                     LLAMA_LOG_ERROR("%s: MTP DRAFT_GEN - cell %d has pos %d, expected %d\n",
@@ -1143,7 +1144,7 @@ static bool llama_kv_cache_find_slot(
                     draft_cell.seq_id.insert(batch.seq_id[i][j]);
                 }
             }
-            cache.used += (uint32_t)mtp_n_draft;
+            cache.used += n_draft;
         }
 
         return true;
@@ -3973,15 +3974,13 @@ static int llama_decode_internal(
             }
 
             if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && u_batch.logits) {
-                // Count logits=true (draft) and logits=false (accepted) tokens
-                int32_t n_draft_count = 0;
+                // Count logits=false (accepted) tokens
+                int32_t n_accepted_count = 0;
                 for (uint32_t i = 0; i < n_tokens; i++) {
-                    if (u_batch.logits[i]) n_draft_count++;
+                    if (!u_batch.logits[i]) n_accepted_count++;
                 }
-                lctx.mtp_n_draft    = n_draft_count;
-                lctx.mtp_n_accepted = (int32_t)n_tokens - n_draft_count;
+                lctx.mtp_n_accepted = n_accepted_count;
             } else {
-                lctx.mtp_n_draft    = 0;
                 lctx.mtp_n_accepted = 0;
             }
 
@@ -3991,7 +3990,7 @@ static int llama_decode_internal(
                 kv_self.head = 0;
             }
 
-            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type, lctx.mtp_n_draft)) {
+            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type, lctx.mtp_n_accepted)) {
                 return 1;
             }
 
