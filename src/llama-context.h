@@ -196,7 +196,8 @@ struct llama_context {
     void *              abort_callback_data = nullptr;
 
     const float * draft_input_hidden_state = nullptr;
-    int32_t mtp_n_draft = 0;  // > 1 means unrolled MTP draft mode
+    int32_t mtp_n_draft    = 0;
+    int32_t mtp_n_accepted = 0;
 
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]

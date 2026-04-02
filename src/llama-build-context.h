@@ -445,6 +445,7 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_cgraph * gf,
         struct ggml_tensor * inp_pos,
         struct ggml_tensor * rope_cache,
-        int n_draft = 0
+        int n_draft = 0,
+        int n_accepted = 0
     );
 };

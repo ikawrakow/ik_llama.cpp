@@ -1083,9 +1083,9 @@ static bool llama_kv_cache_find_slot(
     }
     // otherwise, one cell per token.
 
-    // For MTP operations, it is necessary to use existing cells.
+    // For MTP KV Cache operations, it is necessary to use existing cells.
     const bool mtp_reuse_cells = (op_type == MTP_OP_WARMUP) ||
-        (op_type == MTP_OP_DRAFT_GEN && n_tokens > 1 && mtp_n_draft <= 1);
+        (op_type == MTP_OP_DRAFT_GEN && mtp_n_draft < (int32_t)n_tokens);
     if (mtp_reuse_cells) {
         const llama_pos target_pos = batch.pos[0];
         const llama_seq_id target_seq = batch.seq_id[0][0];
@@ -1125,23 +1125,25 @@ static bool llama_kv_cache_find_slot(
             return false;
         }
 
-        // Assign the new draft cell
         if (op_type == MTP_OP_DRAFT_GEN) {
-            const uint32_t n_accepted = n_tokens - 1;
+            const uint32_t n_accepted = n_tokens - (uint32_t)mtp_n_draft;
             for (uint32_t i = 0; i < n_accepted; ++i) {
                 if (cache.cells[cache.head + i].pos != batch.pos[i]) {
-                    LLAMA_LOG_ERROR("%s: MTP DRAFT_GEN combined - cell %d has pos %d, expected %d\n",
+                    LLAMA_LOG_ERROR("%s: MTP DRAFT_GEN - cell %d has pos %d, expected %d\n",
                         __func__, cache.head + i, (int)cache.cells[cache.head + i].pos, (int)batch.pos[i]);
                     return false;
                 }
             }
 
-            auto & draft_cell = cache.cells[cache.head + n_accepted];
-            draft_cell.pos = batch.pos[n_accepted];
-            for (int32_t j = 0; j < batch.n_seq_id[n_accepted]; j++) {
-                draft_cell.seq_id.insert(batch.seq_id[n_accepted][j]);
+            // Allocate new cells for all draft positions
+            for (uint32_t i = n_accepted; i < n_tokens; ++i) {
+                auto & draft_cell = cache.cells[cache.head + i];
+                draft_cell.pos = batch.pos[i];
+                for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
+                    draft_cell.seq_id.insert(batch.seq_id[i][j]);
+                }
             }
-            cache.used += 1;
+            cache.used += (uint32_t)mtp_n_draft;
         }
 
         return true;
@@ -3681,43 +3683,70 @@ static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
         const auto & cparams = lctx.cparams;
         const int64_t n_kv = kv_self.n;
         const int n_draft = (int)lctx.inp_KQ_mask_draft.size();
+        const int n_accepted = lctx.mtp_n_accepted;
+
+        // Fill a single-token mask row
+        auto fill_mask_row = [&](void * row_data, int64_t n_kv, llama_pos pos, llama_seq_id seq_id, bool is_f16) {
+            if (is_f16) {
+                ggml_half * data = (ggml_half *)row_data;
+                const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
+                const ggml_half h_zero = ggml_fp32_to_fp16(0.0f);
+                for (int64_t i = 0; i < n_kv; ++i) {
+                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > pos)
+                        ? h_inf : h_zero;
+                }
+            } else {
+                float * data = (float *)row_data;
+                for (int64_t i = 0; i < n_kv; ++i) {
+                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > pos)
+                        ? -INFINITY : 0.0f;
+                }
+            }
+        };
 
         for (int iter = 0; iter < n_draft; iter++) {
             ggml_tensor * mask = lctx.inp_KQ_mask_draft[iter];
             if (!mask || !mask->buffer) continue;
 
             GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
+            const bool is_f16 = cparams.flash_attn;
+            const size_t row_bytes = n_kv * ggml_element_size(mask);
 
-            const llama_pos iter_pos = kv_self.cells[kv_self.head + iter].pos;
-            const llama_seq_id seq_id = kv_self.cells[kv_self.head + iter].seq_id.empty()
-                ? 0 : *kv_self.cells[kv_self.head + iter].seq_id.begin();
-
-            if (cparams.flash_attn) {
-                ggml_half * data = (ggml_half *)mask->data;
-                const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
-                const ggml_half h_zero = ggml_fp32_to_fp16(0.0f);
-
-                for (int i = 0; i < n_kv; ++i) {
-                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > iter_pos)
-                        ? h_inf : h_zero;
+            if (n_accepted > 0 && iter == 0) {
+                // Case 1: n_accepted+1 rows for accepted tokens + 1st draft
+                const int n_rows = n_accepted + 1;
+                for (int j = 0; j < n_rows; ++j) {
+                    const uint32_t cell_idx = kv_self.head + j;
+                    const llama_pos    pos    = kv_self.cells[cell_idx].pos;
+                    const llama_seq_id seq_id = kv_self.cells[cell_idx].seq_id.empty()
+                        ? 0 : *kv_self.cells[cell_idx].seq_id.begin();
+                    fill_mask_row((char *)mask->data + j * row_bytes, n_kv, pos, seq_id, is_f16);
                 }
                 const int64_t n_pad = mask->ne[1];
-                for (int64_t j = 1; j < n_pad; ++j) {
-                    for (int i = 0; i < n_kv; ++i) {
-                        data[j * n_kv + i] = h_inf;
+                for (int64_t j = n_rows; j < n_pad; ++j) {
+                    if (is_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill((ggml_half *)mask->data + j * n_kv, (ggml_half *)mask->data + (j + 1) * n_kv, h_inf);
+                    } else {
+                        std::fill((float *)mask->data + j * n_kv, (float *)mask->data + (j + 1) * n_kv, -INFINITY);
                     }
                 }
             } else {
-                float * data = (float *)mask->data;
+                // Case 2 for unrolled iteration
+                const uint32_t cell_idx = kv_self.head + n_accepted + iter;
+                const llama_pos    pos    = kv_self.cells[cell_idx].pos;
+                const llama_seq_id seq_id = kv_self.cells[cell_idx].seq_id.empty()
+                    ? 0 : *kv_self.cells[cell_idx].seq_id.begin();
 
-                for (int i = 0; i < n_kv; ++i) {
-                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > iter_pos)
-                        ? -INFINITY : 0.0f;
-                }
+                fill_mask_row(mask->data, n_kv, pos, seq_id, is_f16);
+
                 const int64_t n_pad = mask->ne[1];
                 for (int64_t j = 1; j < n_pad; ++j) {
-                    for (int i = 0; i < n_kv; ++i) {
-                        data[j * n_kv + i] = -INFINITY;
+                    if (is_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill((ggml_half *)mask->data + j * n_kv, (ggml_half *)mask->data + (j + 1) * n_kv, h_inf);
+                    } else {
+                        std::fill((float *)mask->data + j * n_kv, (float *)mask->data + (j + 1) * n_kv, -INFINITY);
                     }
                 }
             }
@@ -3944,13 +3973,16 @@ static int llama_decode_internal(
             }
 
             if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && u_batch.logits) {
-                bool all_logits_true = true;
+                // Count logits=true (draft) and logits=false (accepted) tokens
+                int32_t n_draft_count = 0;
                 for (uint32_t i = 0; i < n_tokens; i++) {
-                    if (!u_batch.logits[i]) { all_logits_true = false; break; }
+                    if (u_batch.logits[i]) n_draft_count++;
                 }
-                lctx.mtp_n_draft = all_logits_true ? (int32_t)n_tokens : 0;
+                lctx.mtp_n_draft    = n_draft_count;
+                lctx.mtp_n_accepted = (int32_t)n_tokens - n_draft_count;
             } else {
-                lctx.mtp_n_draft = 0;
+                lctx.mtp_n_draft    = 0;
+                lctx.mtp_n_accepted = 0;
             }
 
             // if we have enough unused cells before the current head ->

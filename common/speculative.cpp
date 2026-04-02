@@ -1138,67 +1138,34 @@ std::vector<llama_token> mtp_gen_draft(
 
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
-    int32_t current_n_past = n_past;
-    llama_token current_input_id = id_last;
-    int draft_start = 0;
+    const int32_t n_accepted = (int32_t)accepted_ids.size();
+    const int32_t n_total = n_accepted + n_draft;
 
-    if (!accepted_ids.empty()) {
-        const int32_t n_accepted = (int32_t)accepted_ids.size();
-        const int32_t n_combined = n_accepted + 1;
+    llama_batch batch = llama_batch_init(n_total, 0, 1);
 
-        llama_batch combined_batch = llama_batch_init(n_combined, 0, 1);
-        for (int32_t i = 0; i < n_accepted; ++i) {
-            common_batch_add(combined_batch, accepted_ids[i], n_past_base + i, {seq_id}, false);
-        }
-        common_batch_add(combined_batch, id_last, n_past_base + n_accepted, {seq_id}, true);
-
-        if (llama_decode(ctx, combined_batch) != 0) {
-            llama_batch_free(combined_batch);
-            llama_set_mtp_op_type(ctx, MTP_OP_NONE);
-            return drafts;
-        }
-
-        llama_token id_next = common_sampler_argmax(ctx, n_combined - 1);
-        drafts.push_back(id_next);
-
-        llama_batch_free(combined_batch);
-
-        current_input_id = id_next;
-        current_n_past = n_past + 1;
-        draft_start = 1;
+    for (int32_t i = 0; i < n_accepted; ++i) {
+        common_batch_add(batch, accepted_ids[i], n_past_base + i, {seq_id}, false);
+    }
+    for (int i = 0; i < n_draft; ++i) {
+        common_batch_add(batch, (i == 0) ? id_last : 0, n_past_base + n_accepted + i, {seq_id}, true);
     }
 
-    {
-        const int remaining_draft = n_draft - draft_start;
-        if (remaining_draft <= 0) goto done;
-
-        llama_batch mtp_batch = llama_batch_init(remaining_draft, 0, 1);
-        for (int i = 0; i < remaining_draft; ++i) {
-            common_batch_add(mtp_batch, (i == 0) ? current_input_id : 0, current_n_past + i, {seq_id}, true);
-        }
-
-        if (llama_decode(ctx, mtp_batch) != 0) {
-            llama_batch_free(mtp_batch);
-            llama_set_mtp_op_type(ctx, MTP_OP_NONE);
-            return drafts;
-        }
-
-        for (int i = 0; i < remaining_draft; ++i) {
-            drafts.push_back(common_sampler_argmax(ctx, i));
-        }
-
-        llama_batch_free(mtp_batch);
-
-        llama_kv_cache_seq_rm(ctx, seq_id, current_n_past, current_n_past + remaining_draft);
+    if (llama_decode(ctx, batch) != 0) {
+        llama_batch_free(batch);
+        llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+        return drafts;
     }
 
-done:
+    for (int i = 0; i < n_draft; ++i) {
+        drafts.push_back(common_sampler_argmax(ctx, n_accepted + i));
+    }
+
+    llama_batch_free(batch);
+
+    // Remove all drafted KV positions
+    llama_kv_cache_seq_rm(ctx, seq_id, n_past, n_past + n_draft);
+
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
-
-    // Purge all MTP draft KV cells (combined batch + single-token loop)
-    if (!drafts.empty() && current_n_past > n_past) {
-        llama_kv_cache_seq_rm(ctx, seq_id, n_past, current_n_past);
-    }
 
     return drafts;
 }
