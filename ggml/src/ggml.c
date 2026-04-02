@@ -1686,7 +1686,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q1_0_g128,
         .from_float_ref           = (ggml_from_float_t)quantize_row_q1_0_g128_ref,
         .vec_dot                  = vec_dot_q1_0_g128_q8_0,
+#if defined __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
+#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
