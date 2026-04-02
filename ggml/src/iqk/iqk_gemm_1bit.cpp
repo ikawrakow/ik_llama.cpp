@@ -2344,13 +2344,52 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
 template <int nrc_y>
 static void mul_mat_q1_0_g128_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     Q8<nrc_y, block_q8_0_x4> q8(info);
+    const uint8x16_t shuffle[8] = {
+        vcombine_u8(vdup_n_u8( 0), vdup_n_u8( 1)), vcombine_u8(vdup_n_u8( 2), vdup_n_u8( 3)),
+        vcombine_u8(vdup_n_u8( 4), vdup_n_u8( 5)), vcombine_u8(vdup_n_u8( 6), vdup_n_u8( 7)),
+        vcombine_u8(vdup_n_u8( 8), vdup_n_u8( 9)), vcombine_u8(vdup_n_u8(10), vdup_n_u8(11)),
+        vcombine_u8(vdup_n_u8(12), vdup_n_u8(13)), vcombine_u8(vdup_n_u8(14), vdup_n_u8(15)),
+    };
+    auto mask = vreinterpretq_u8_u64(vdupq_n_u64(0x8040201008040201));
+    auto m2 = vdupq_n_s8(2);
+    auto m1 = vdupq_n_s8(1);
+    int nb = n / QK1_0_G128;
+    int8x16_t qx[8];
+    int32x4_t sumi[4];
     for (int ix = 0; ix < nrc_x; ++ix) {
         auto x = (const block_q1_0_g128 *)((const char *)vx + ix*bx);
-        for (int iy = 0; iy < nrc_y; ++iy) {
-            float s;
-            vec_dot_q1_0_g128_q8_0(n, &s, 0, x, bx, q8.y[iy], 0, 1);
-            info.store(ix, iy, s);
+        float32x4_t acc[nrc_y] = {};
+        for (int ib = 0; ib < nb; ++ib) {
+            auto dx = vdupq_n_f32(GGML_FP16_TO_FP32(x[ib].d));
+            auto bits = vld1q_u8(x[ib].qs);
+            for (int k = 0; k < 8; ++k) {
+                auto val = vqtbl1q_u8(bits, shuffle[k]);
+                val = vceqq_u8(vandq_u8(val, mask), mask);
+                qx[k] = vsubq_s8(vandq_s8(val, m2), m1);
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto dy = vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][ib].d));
+                auto vd = vmulq_f32(dx, dy);
+                auto qy1 = vld1q_s8_x4(q8.y[iy][ib].qs+ 0);
+                auto qy2 = vld1q_s8_x4(q8.y[iy][ib].qs+64);
+                for (int k = 0; k < 2; ++k) {
+                    sumi[k+0] = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[2*k+0], qy1.val[2*k+0]), qx[2*k+1], qy1.val[2*k+1]);
+                    sumi[k+2] = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[2*k+4], qy2.val[2*k+0]), qx[2*k+5], qy2.val[2*k+1]);
+                }
+                sumi[0] = vpaddq_s32(sumi[0], sumi[1]);
+                sumi[2] = vpaddq_s32(sumi[2], sumi[3]);
+                sumi[0] = vpaddq_s32(sumi[0], sumi[2]);
+                acc[iy] = vfmaq_f32(acc[iy], vd, vcvtq_f32_s32(sumi[0]));
+            }
         }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, vaddvq_f32(acc[iy]));
+        }
+        //for (int iy = 0; iy < nrc_y; ++iy) {
+        //    float s;
+        //    vec_dot_q1_0_g128_q8_0(n, &s, 0, x, bx, q8.y[iy], 0, 1);
+        //    info.store(ix, iy, s);
+        //}
     }
 }
 
