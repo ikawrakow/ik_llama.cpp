@@ -93,6 +93,7 @@ jobs:
           push: true
           files: ./docker-bake.hcl
           set: |
+            *.context=.
             *.dockerfile=./docker/${{ matrix.containerfile }}
             *.cache-from=type=gha,scope=ccache-${{ matrix.variant }}
             *.cache-to=type=gha,mode=max,scope=ccache-${{ matrix.variant }}
