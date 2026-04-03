@@ -9872,6 +9872,91 @@ void vec_dot_iq4_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 
 }
 
+void quantize_row_q1_0_g128_ref(const float * x, block_q1_0_g128  * y, int64_t k) {
+    quantize_row_q1_0_g128(x, y, k);
+}
+
+void quantize_row_q1_0_g128(const float * x, void * vy, int64_t k) {
+    assert(k % QK1_0_G128 == 0);
+    int nb = k / QK1_0_G128;
+    auto y = (block_q1_0_g128 *)vy;
+    for (int ib = 0; ib < nb; ++ib) {
+        float sum = 0;
+        for (int j = 0; j < QK1_0_G128; ++j) sum += std::abs(x[j]);
+        float d = sum / QK1_0_G128;
+        y[ib].d = GGML_FP32_TO_FP16(d);
+        std::memset(y[ib].qs, 0, QK1_0_G128/8);
+        for (int j = 0; j < QK1_0_G128; ++j) {
+            if (x[j] >= 0.0f) {
+                y[ib].qs[j / 8] |= (1 << (j % 8));
+            }
+        }
+        x += QK1_0_G128;
+    }
+}
+
+size_t quantize_q1_0_g128(const float * src, void * dst, int64_t nrows, int64_t n_per_row, [[maybe_unused]] const float * imatrix) {
+    GGML_ASSERT(n_per_row % QK1_0_G128 == 0);
+    int64_t ntot = nrows * n_per_row;
+    quantize_row_q1_0_g128(src, dst, ntot);
+    int64_t nblock = ntot / QK1_0_G128;
+    return nblock * sizeof(block_q1_0_g128);
+}
+
+void dequantize_row_q1_0_g128(const block_q1_0_g128  * x, float * y, int64_t k) {
+    assert(k % QK1_0_G128 == 0);
+    constexpr uint8_t k_mask[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+    int nb = k / QK1_0_G128;
+    for (int ib = 0; ib < nb; ++ib) {
+        float d = GGML_FP16_TO_FP32(x[ib].d);
+        for (int i = 0; i < QK1_0_G128/8; ++i) {
+            for (int j = 0; j < 8; ++j) {
+                *y++ = x[ib].qs[i] & k_mask[j] ? d : -d;
+            }
+        }
+    }
+}
+
+void vec_dot_q1_0_g128_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    assert(n % QK1_0_G128 == 0);
+    assert(nrc == 1);
+    GGML_UNUSED(nrc);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(bs);
+    int nb = n / QK1_0_G128;
+
+    constexpr uint8_t k_mask[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+
+    constexpr int n4 = QK1_0_G128 / QK8_0;
+
+    auto x = (const block_q1_0_g128 *)vx;
+    auto y = (const block_q8_0_x4 *)vy;
+    int16_t sumi[QK1_0_G128/8];
+    float sumf = 0;
+    for (int ib = 0; ib < nb; ++ib) {
+        auto dx = GGML_FP16_TO_FP32(x[ib].d);
+        auto qx = x[ib].qs;
+        auto qy = y[ib].qs;
+        for (int k = 0; k < QK1_0_G128/8; ++k) {
+            uint8_t bits = qx[k];
+            int16_t s = 0;
+            for (int j = 0; j < 8; ++j) {
+                s += (bits & k_mask[j] ? qy[j] : -qy[j]);
+            }
+            qy += 8;
+            sumi[k] = s;
+        }
+        auto s = sumi;
+        for (int k = 0; k < n4; ++k) {
+            float dy = GGML_FP16_TO_FP32(y[ib].d[k]);
+            sumf += dx*dy*(s[0] + s[1] + s[2] + s[3]);
+            s += 4;
+        }
+    }
+    *s = sumf;
+}
+
 namespace {
 template <typename Block>
 inline int check_row_for_blocks_256_fp16(int nblock, const Block * x) {
