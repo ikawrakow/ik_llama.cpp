@@ -44,27 +44,6 @@ First, set the CUDA version and GPU architecture in `ik_llama-cuda.Containerfile
 VARIANT=cu12 docker buildx bake --builder ik-llama-builder full swap
 ```
 
-### Using Local Build Script
-
-The `build-local.sh` script provides a convenient wrapper for local builds:
-
-```bash
-# CPU variant (default target: full)
-./build-local.sh cpu [target]
-
-# CUDA variant
-./build-local.sh cuda [target]
-```
-
-Targets: `full`, `server`, `swap` (default: `full`)
-
-Example with custom tags:
-
-```bash
-REPO_OWNER=local ./build-local.sh cpu full
-REPO_OWNER=local ./build-local.sh cuda swap
-```
-
 ### Build Targets
 
 Builds two image tags per variant:
