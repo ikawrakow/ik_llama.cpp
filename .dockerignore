@@ -2,7 +2,6 @@
 *.a
 *.md
 .cache/
-# .git
 .github/
 .gitignore
 .vs/
