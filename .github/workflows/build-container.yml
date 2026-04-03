@@ -33,15 +33,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify .git directory exists
-        run: |
-          echo "Checking .git directory..."
-          ls -la .git
-          if [ ! -d ".git" ]; then
-            echo "ERROR: .git directory not found!"
-            exit 1
-          fi
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
