@@ -2,6 +2,9 @@
 *.a
 *.md
 .cache/
+
+# Ensure .git is NOT ignored so it can be mounted/copied
+!.git
 .github/
 .gitignore
 .vs/
