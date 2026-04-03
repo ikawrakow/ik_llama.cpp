@@ -238,6 +238,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_gemma3();
 
+    ggml_cgraph * build_gemma4();
+
     ggml_cgraph * build_starcoder2();
 
     ggml_cgraph * build_mamba();
@@ -371,7 +373,7 @@ struct llm_build_context {
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false,
-         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr);
+         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr, ggml_tensor * input_logits = nullptr);
 
     static ggml_tensor * llm_build_moe_ffn(ggml_context * ctx, llama_context & lctx,
          ggml_tensor * cur,
@@ -388,7 +390,7 @@ llm_expert_gating_func_type   gating_op,
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false,
-         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr) {
+         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr, ggml_tensor * input_logits = nullptr) {
         return llm_build_moe_ffn(ctx, lctx, cur,
                 gate_inp,   nullptr,
                 up_exps,    nullptr,
@@ -397,7 +399,7 @@ llm_expert_gating_func_type   gating_op,
                 exp_probs_b,
                 n_expert, n_expert_used,
                 type_op, norm_w, scale_w, w_scale,
-                gating_op, cb, il, graph, add_input, up_gate_exps, up_gate_exps_b);
+                gating_op, cb, il, graph, add_input, up_gate_exps, up_gate_exps_b, input_logits);
     }
 
     static ggml_tensor * llm_build_std_moe_ffn(ggml_context * ctx, llama_context & lctx,
