@@ -29,8 +29,8 @@ struct llama_hparams {
     uint32_t n_rot_swa;
     uint32_t n_swa = 0; // sliding window attention (SWA)
     uint32_t n_swa_pattern = 1; // by default, all layers use non-sliding-window attention
-    uint32_t n_embd_head_k; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
-    uint32_t n_embd_head_v; // dimension of values (d_v) aka n_embd_head
+    uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
+    uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
     uint32_t n_embd_head_k_swa;
     uint32_t n_embd_head_v_swa;
     uint32_t n_expert = 0;
@@ -155,8 +155,8 @@ struct llama_hparams {
         if (this->n_rot         != other.n_rot)         return true;
         if (this->n_swa         != other.n_swa)         return true;
         if (this->n_swa_pattern != other.n_swa_pattern) return false;
-        if (this->n_embd_head_k != other.n_embd_head_k) return true;
-        if (this->n_embd_head_v != other.n_embd_head_v) return true;
+        if (this->n_embd_head_k_full != other.n_embd_head_k_full) return true;
+        if (this->n_embd_head_v_full != other.n_embd_head_v_full) return true;
         if (this->n_expert      != other.n_expert)      return true;
         if (this->n_expert_used != other.n_expert_used) return true;
 
@@ -249,18 +249,16 @@ struct llama_hparams {
         return n_head/n_head_kv;
     }
 
-    uint32_t n_embd_k_gqa(uint32_t il = 0) const { // dimension of key embeddings across all k-v heads
-        const uint32_t n_head_kv = this->n_head_kv(il);
-        const uint32_t n_embd_head_k = this->swa_layers[il] ? this->n_embd_head_k_swa : this->n_embd_head_k;
+    uint32_t n_embd_head_k(int il) const { return swa_layers[il] ? n_embd_head_k_swa : n_embd_head_k_full; }
 
-        return n_embd_head_k * n_head_kv;
+    uint32_t n_embd_head_v(int il) const { return swa_layers[il] ? n_embd_head_v_swa : n_embd_head_v_full; }
+
+    uint32_t n_embd_k_gqa(uint32_t il = 0) const { // dimension of key embeddings across all k-v heads
+        return n_head_kv(il) * n_embd_head_k(il);
     }
 
     uint32_t n_embd_v_gqa(uint32_t il = 0) const { // dimension of value embeddings across all k-v heads
-        const uint32_t n_head_kv = this->n_head_kv(il);
-        const uint32_t n_embd_head_v = this->swa_layers[il] ? this->n_embd_head_v_swa : this->n_embd_head_v;
-
-        return n_embd_head_v * n_head_kv;
+        return n_head_kv(il) * n_embd_head_v(il);
     }
 
     uint32_t n_embd_k_s() const { // dimension of the rolling state embeddings

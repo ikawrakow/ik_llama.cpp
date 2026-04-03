@@ -1925,7 +1925,7 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint3
         return size;
     }
     auto n_head_kv = hparams.n_head_kv(il);
-    auto k_size = ggml_row_size(type_k, hparams.n_embd_head_k) * n_head_kv*kv_size;
+    auto k_size = ggml_row_size(type_k, hparams.n_embd_head_k(il)) * n_head_kv*kv_size;
     auto v_size = ggml_row_size(type_v, hparams.n_embd_v_gqa(il)) * kv_size;
     return k_size + v_size;
 }
