@@ -6063,14 +6063,14 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     // static const int sliding_window_pattern = 6;
 
     for (int il = 0; il < n_layer; ++il) {
-        const bool is_sliding          = hparams.swa_layers[il] ? true : false;
-        const float freq_base_l        = is_sliding ? 10000.0f    : freq_base;
-        const float freq_scale_l       = is_sliding ? 1.0f        : freq_scale;
-        const int   n_rot_l            = is_sliding ? hparams.n_rot_swa : hparams.n_rot;
-        const int   n_embd_head        = hparams.n_embd_head_k(il);
-        const int   n_swa              = is_sliding ? hparams.n_swa : 0;
-        const int   n_head             = hparams.n_head(il);
-        const int   n_head_kv          = hparams.n_head_kv(il);
+        const bool is_sliding    = hparams.swa_layers[il] ? true : false;
+        const float freq_base_l  = is_sliding ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
+        const float freq_scale_l = is_sliding ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
+        const int   n_rot_l      = is_sliding ? hparams.n_rot_swa : hparams.n_rot;
+        const int   n_swa        = is_sliding ? hparams.n_swa : 0;
+        const int   n_embd_head  = hparams.n_embd_head_k(il);
+        const int   n_head       = hparams.n_head(il);
+        const int   n_head_kv    = hparams.n_head_kv(il);
 
         struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
