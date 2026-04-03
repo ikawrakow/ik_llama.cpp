@@ -6,8 +6,7 @@ FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 # Build arguments
 ARG GGML_NATIVE=ON
 ARG GGML_AVX2=ON
-ARG CUSTOM_COMMIT
-ARG USE_CCACHE=false
+ARG USE_CCACHE=true
 
 # Environment variables for portability and GitHub Actions
 ENV LLAMA_CURL=1
@@ -25,14 +24,14 @@ RUN apt-get update && \
     apt-get install -yq --no-install-recommends ca-certificates build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
     rm -rf /var/lib/apt/lists/*
 
-# Clone repository for build with optional custom commit
-RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
+# Copy source code (excluding hidden files/dirs via .dockerignore)
+COPY . /app
 
 WORKDIR /app
 
 # Build using ccache and optional custom commit
 RUN --mount=type=cache,target=/ccache \
-    if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT" || true; fi && \
+    --mount=type=bind,source=.git,target=/.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         ccache -z; \
@@ -54,7 +53,7 @@ RUN mkdir -p /app/dist/lib /app/dist/full /app/dist/bin && \
     cp -r gguf-py /app/dist/full/ && \
     cp -r requirements /app/dist/full/ && \
     cp requirements.txt /app/dist/full/ && \
-    cp .devops/tools.sh /app/dist/tools.sh
+    cp .devops/tools.sh /app/dist/full/
 
 # Stage 2: Base (Shared Runtime)
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS base

@@ -2,13 +2,12 @@
 *.a
 *.md
 .cache/
-.git
+# .git
 .github/
 .gitignore
 .vs/
 .vscode/
 .DS_Store
-
 build*/
 
 models/*

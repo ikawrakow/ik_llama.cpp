@@ -1,8 +1,7 @@
-variable "REPO_OWNER" {}
-variable "VARIANT" {}
-variable "SHA_SHORT" {}
-variable "BUILD_NUMBER" {}
-variable "LLAMA_COMMIT" {}
+variable "REPO_OWNER" { default = "local" }
+variable "VARIANT" { default = "cpu" }
+variable "BUILD_NUMBER" { default = "0" }
+variable "LLAMA_COMMIT" { default = "local-dev" }
 variable "CUDA_VERSION" {}
 variable "CUDA_DOCKER_ARCH" { default = "86;90" }
 variable "USE_CCACHE" { default = "true" }
@@ -23,7 +22,7 @@ target "settings" {
   inherits = ["cache_settings"]
   args = {
     BUILD_NUMBER     = "${BUILD_NUMBER}"
-    LLAMA_COMMIT     = "${LLAMA_COMMIT}"
+    BUILD_COMMIT     = "${LLAMA_COMMIT}"
     CUDA_VERSION     = "${CUDA_VERSION}"
     CUDA_DOCKER_ARCH = "${CUDA_DOCKER_ARCH}"
     GGML_NATIVE      = "${GGML_NATIVE}"

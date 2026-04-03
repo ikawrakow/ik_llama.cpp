@@ -9,8 +9,7 @@ FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 # Build arguments
 ARG CUDA_DOCKER_ARCH="86;90"
 ARG GGML_NATIVE=ON
-ARG CUSTOM_COMMIT
-ARG USE_CCACHE=false
+ARG USE_CCACHE=true
 
 # Environment variables for portability and GitHub Actions
 ENV CCACHE_DIR=/ccache
@@ -24,14 +23,14 @@ RUN apt-get update && \
     ca-certificates build-essential libcurl4-openssl-dev curl libgomp1 cmake ccache git && \
     rm -rf /var/lib/apt/lists/*
 
-# Clone repository for build with optional custom commit
-RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
+# Copy non-hidden files first
+COPY . /app
 
 WORKDIR /app
 
 # Build using ccache and optional custom commit
 RUN --mount=type=cache,target=/ccache \
-    if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT" || true; fi && \
+    --mount=type=bind,source=.git,target=/.git \
     if [ "${USE_CCACHE}" = "true" ]; then \
         export PATH="/usr/lib/ccache:$PATH"; \
         ccache -z; \
@@ -56,7 +55,7 @@ RUN mkdir -p /app/dist/lib /app/dist/full /app/dist/bin && \
     cp -r gguf-py /app/dist/full/ && \
     cp -r requirements /app/dist/full/ && \
     cp requirements.txt /app/dist/full/ && \
-    cp .devops/tools.sh /app/dist/tools.sh
+    cp .devops/tools.sh /app/dist/full/
 
 # Stage 2: Base (Shared Runtime)
 FROM ${BASE_CUDA_RUN_CONTAINER} AS base
