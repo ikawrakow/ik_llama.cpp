@@ -253,7 +253,11 @@ struct MulMat {
             case GGML_TYPE_IQ1_M  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q2_K   : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q3_K   : return nrc_y >= 32 ? q8_k_type : type;
+#ifdef HAVE_FANCY_SIMD
+            case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q4_K_R16 : type;
+#else
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
+#endif
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q6_K   : return nrc_y >= 64 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_IQ2_KS : return nrc_y >= 32 ? q8_k_type : type;
@@ -357,6 +361,7 @@ struct MulMat {
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_Q8_K_R16:
+            case GGML_TYPE_Q4_K_R16:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
@@ -884,6 +889,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_KV_R8:
         case GGML_TYPE_Q8_K_R16:
+        case GGML_TYPE_Q4_K_R16:
             return iqk_set_kernels_kquants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:

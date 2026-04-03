@@ -967,7 +967,9 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q4_K,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_K_ref,
         .vec_dot                  = ggml_vec_dot_q4_K_q8_K,
-#ifdef __AVX2__
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+#elif defined(__AVX2__)
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_1_X4,
@@ -985,6 +987,19 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_k_r4_ref,
         .vec_dot                  = vec_dot_q4_k_r4_q8_k,
         .vec_dot_type             = GGML_TYPE_Q8_K32,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_Q4_K_R16] = {
+        .type_name                = "q4_k_r16",
+        .blck_size                = QK_K,
+        .type_size                = sizeof(block_q4_k_r16)/16,
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q4_k_r16,
+        .from_float               = quantize_row_q4_k_r16,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q4_k_r16_ref,
+        .vec_dot                  = vec_dot_q4_k_r16_q8_k,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1955,7 +1970,7 @@ ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type) {
 }
 
 static inline int ggml_packed_rows(enum ggml_type type) {
-    return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 ? 16
+    return type == GGML_TYPE_BF16_R16 || type == GGML_TYPE_Q8_K_R16 || type == GGML_TYPE_Q4_K_R16 ? 16
          : type == GGML_TYPE_Q8_K_R8 || type == GGML_TYPE_Q8_KV_R8 ||
            type == GGML_TYPE_Q8_0_R8 || type == GGML_TYPE_Q4_0_R8 ||
            type == GGML_TYPE_IQ4_XS_R8 ? 8
@@ -12795,6 +12810,7 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_Q3_K_R4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q4_K_R16:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K:
@@ -13349,6 +13365,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_Q3_K_R4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q4_K_R16:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K:
@@ -13529,6 +13546,7 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_Q3_K_R4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q4_K_R16:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K:
@@ -17855,6 +17873,7 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_Q3_K_R4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q4_K_R16:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K:
@@ -18279,6 +18298,7 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_Q3_K_R4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q4_K_R16:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K:
@@ -18609,6 +18629,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q3_K_R4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q4_K_R16:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K:
@@ -19366,6 +19387,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_Q3_K_R4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q4_K_R16:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q5_K_R4:
         case GGML_TYPE_Q6_K:

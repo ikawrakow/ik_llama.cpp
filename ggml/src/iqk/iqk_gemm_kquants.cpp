@@ -1930,6 +1930,89 @@ static void mul_mat_q8_k_r16_q8_k(int n, const void * vx, size_t bx, const DataI
         }
     }
 }
+
+template <int nrc_y>
+static void mul_mat_q4_k_r16_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%16 == 0);
+    Q8<nrc_y, block_q8_K> q8(info);
+    int nbl = n / QK_K;
+    auto mf = _mm512_set1_epi8(0xf);
+
+    __m512  acc[nrc_y] = {};
+    __m512i isum[nrc_y] = {};
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        const block_q4_k_r16 * iq4 = (const block_q4_k_r16 *)((const char *)vx + ix*bx);
+        for (int ibl = 0; ibl < nbl; ++ibl) {
+            auto d16  = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)iq4[ibl].d));
+            auto dm16 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)iq4[ibl].dmin));
+            auto dm16_neg = _mm512_mul_ps(_mm512_set1_ps(-1.0f), dm16);
+
+            // Process mins using bsums from block_q8_K
+            for (int ib = 0; ib < 4; ++ib) {
+                auto mins0_i32 = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)iq4[ibl].mins[2*ib+0]));
+                auto mins1_i32 = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)iq4[ibl].mins[2*ib+1]));
+                auto dm_mins0 = _mm512_mul_ps(dm16_neg, _mm512_cvtepi32_ps(mins0_i32));
+                auto dm_mins1 = _mm512_mul_ps(dm16_neg, _mm512_cvtepi32_ps(mins1_i32));
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    int16_t bs0 = q8.y[iy][ibl].bsums[4*ib+0] + q8.y[iy][ibl].bsums[4*ib+1];
+                    int16_t bs1 = q8.y[iy][ibl].bsums[4*ib+2] + q8.y[iy][ibl].bsums[4*ib+3];
+                    float q8d = q8.scale(iy, ibl);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_set1_ps(q8d * bs0), dm_mins0, acc[iy]);
+                    acc[iy] = _mm512_fmadd_ps(_mm512_set1_ps(q8d * bs1), dm_mins1, acc[iy]);
+                }
+            }
+
+            // Main dot product: accumulate scale*dot across sub-blocks in integer
+            const uint8_t * qs_base = iq4[ibl].qs;
+            for (int ib = 0; ib < 8; ++ib) {
+                auto scales_i32 = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *)iq4[ibl].scales[ib]));
+
+                auto packed0 = _mm512_loadu_si512((const __m512i *)(qs_base +  0));
+                auto packed1 = _mm512_loadu_si512((const __m512i *)(qs_base + 64));
+                auto packed2 = _mm512_loadu_si512((const __m512i *)(qs_base + 128));
+                auto packed3 = _mm512_loadu_si512((const __m512i *)(qs_base + 192));
+                qs_base += 256;
+
+                auto qx_lo0 = _mm512_and_si512(packed0, mf);
+                auto qx_hi0 = _mm512_and_si512(_mm512_srli_epi16(packed0, 4), mf);
+                auto qx_lo1 = _mm512_and_si512(packed1, mf);
+                auto qx_hi1 = _mm512_and_si512(_mm512_srli_epi16(packed1, 4), mf);
+                auto qx_lo2 = _mm512_and_si512(packed2, mf);
+                auto qx_hi2 = _mm512_and_si512(_mm512_srli_epi16(packed2, 4), mf);
+                auto qx_lo3 = _mm512_and_si512(packed3, mf);
+                auto qx_hi3 = _mm512_and_si512(_mm512_srli_epi16(packed3, 4), mf);
+
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y128 = _mm_loadu_si128((const __m128i*)q8.y[iy][ibl].qs + 2*ib);
+                    auto y512 = _mm512_broadcast_i32x4(y128);
+                    auto sumi = _mm512_setzero_si512();
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_lo0, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0x00)));
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_hi0, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0x55)));
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_lo1, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0xaa)));
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_hi1, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0xff)));
+
+                    y128 = _mm_loadu_si128((const __m128i*)q8.y[iy][ibl].qs + 2*ib + 1);
+                    y512 = _mm512_broadcast_i32x4(y128);
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_lo2, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0x00)));
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_hi2, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0x55)));
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_lo3, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0xaa)));
+                    sumi = _mm512_dpbusd_epi32(sumi, qx_hi3, _mm512_shuffle_epi32(y512, _MM_PERM_ENUM(0xff)));
+
+                    isum[iy] = _mm512_add_epi32(isum[iy], _mm512_mullo_epi32(scales_i32, sumi));
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto d4y = _mm512_mul_ps(d16, _mm512_set1_ps(q8.scale(iy, ibl)));
+                acc[iy] = _mm512_fmadd_ps(d4y, _mm512_cvtepi32_ps(isum[iy]), acc[iy]);
+                isum[iy] = _mm512_setzero_si512();
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            acc[iy] = _mm512_setzero_ps();
+        }
+    }
+}
 #endif
 
 template <int nrc_y>
@@ -2188,6 +2271,61 @@ void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
         y += nb;
     }
 }
+
+#ifdef HAVE_FANCY_SIMD
+void iqk_convert_q4_k_q4_k_r16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n % QK_K == 0);
+    GGML_ASSERT(nrc_x % 16 == 0);
+
+    int nb = n / QK_K;
+    const block_q4_K * x16[16];
+    block_q4_k_r16 * y = (block_q4_k_r16 *)vy;
+    uint32_t utmp[4];
+    const uint8_t * u8 = (const uint8_t *)utmp;
+
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        for (int k = 0; k < 16; ++k) {
+            x16[k] = (const block_q4_K *)((const char *)vx + (ix + k) * bx);
+        }
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 16; ++k) {
+                y[i].d[k] = x16[k][i].d;
+                y[i].dmin[k] = x16[k][i].dmin;
+                make_q4_scales(x16[k][i].scales, utmp);
+                for (int ib = 0; ib < 8; ++ib) {
+                    y[i].scales[ib][k] = u8[ib];
+                    y[i].mins[ib][k]   = u8[ib + 8];
+                }
+            }
+            // Repack qs: interleave 16 rows for AVX-512 loads
+            // Layout: qs[(ib*4+g)*64 + 4*k + j] where ib=sub-block, g=group, k=row, j=byte
+            // byte j: low nibble = element 8g+j, high nibble = element 8g+4+j (within sub-block)
+            for (int k = 0; k < 16; ++k) {
+                const uint8_t * src = x16[k][i].qs;
+                for (int ib = 0; ib < 8; ++ib) {
+                    int base = 32 * (ib / 2);
+                    bool odd = (ib & 1);
+                    for (int g = 0; g < 4; ++g) {
+                        uint8_t * dst = y[i].qs + (ib * 4 + g) * 64 + 4 * k;
+                        for (int j = 0; j < 4; ++j) {
+                            uint8_t lo, hi;
+                            if (!odd) {
+                                lo = src[base + 8*g + j]     & 0xf;
+                                hi = src[base + 8*g + 4 + j] & 0xf;
+                            } else {
+                                lo = src[base + 8*g + j]     >> 4;
+                                hi = src[base + 8*g + 4 + j] >> 4;
+                            }
+                            dst[j] = lo | (hi << 4);
+                        }
+                    }
+                }
+            }
+        }
+        y += nb;
+    }
+}
+#endif
 
 void iqk_convert_q4_k_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
@@ -2674,10 +2812,16 @@ void iqk_convert_iq4_xs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
 bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
 
     auto etypeA = ggml_type(typeA);
-    auto expected_type_B = etypeA == GGML_TYPE_IQ4_XS_R8 || etypeA == GGML_TYPE_Q4_K_R4 || etypeA == GGML_TYPE_Q5_K_R4 ? GGML_TYPE_Q8_K32
+    auto expected_type_B = etypeA == GGML_TYPE_IQ4_XS_R8 || etypeA == GGML_TYPE_Q4_K_R4 || etypeA == GGML_TYPE_Q5_K_R4
+                           ? GGML_TYPE_Q8_K32
+                         : etypeA == GGML_TYPE_Q4_K_R16 ? GGML_TYPE_Q8_K
                          //: etypeA == GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_KR8
                          : etypeA == GGML_TYPE_Q8_KV || etypeA == GGML_TYPE_Q8_KV_R8 ? GGML_TYPE_Q8_KV
+#ifdef HAVE_FANCY_SIMD
+                         : etypeA == GGML_TYPE_Q5_K ||
+#else
                          : etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K ||
+#endif
                            etypeA == GGML_TYPE_Q6_K  ? GGML_TYPE_Q8_2_X4
                            //etypeA == GGML_TYPE_Q6_K  || etypeA == GGML_TYPE_Q3_K ? GGML_TYPE_Q8_2_X4
                          //: etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K ? GGML_TYPE_Q8_2_X4
@@ -2698,8 +2842,11 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
             //IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qY_K_q8_2_X4_T, DequantizerQ3K_AVX2, kernels);
             break;
         case GGML_TYPE_Q4_K:
+#ifdef HAVE_FANCY_SIMD
+            set_functions<DequantizerQ4K>(kernels);
+#else
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_2_X4_T, DequantizerQ4K_AVX2, kernels);
-            //set_functions<DequantizerQ4K>(kernels);
+#endif
             break;
         case GGML_TYPE_Q5_K:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_2_X4_T, DequantizerQ5K_AVX2, kernels);
@@ -2740,6 +2887,9 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
         case GGML_TYPE_Q8_K_R16:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_k_r16_q8_k, kernels)
             break;
+        case GGML_TYPE_Q4_K_R16:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q4_k_r16_q8_k, kernels)
+            break;
 #endif
         case GGML_TYPE_Q8_KV:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_KV_q8_KV, kernels)
@@ -2762,7 +2912,11 @@ bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, voi
     switch (ggml_type(type)) {
         case GGML_TYPE_Q2_K: iqk_convert_q2_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q3_K: iqk_convert_q3_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
+#ifdef HAVE_FANCY_SIMD
+        case GGML_TYPE_Q4_K: iqk_convert_q4_k_q4_k_r16(n, vx, bx, vy, nrc_x); break;
+#else
         case GGML_TYPE_Q4_K: iqk_convert_q4_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
+#endif
         case GGML_TYPE_Q5_K: iqk_convert_q5_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_K: iqk_convert_q6_k_q8_0_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_XS: iqk_convert_iq4_xs_q8_k_r8(n, vx, bx, vy, nrc_x); break;

@@ -9,6 +9,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+#define IQK_NORETURN [[noreturn]]
+#else
+#define IQK_NORETURN _Noreturn
+#endif
+
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 
@@ -180,6 +186,11 @@ void   quantize_row_q4_k_r4(const float * GGML_RESTRICT x, void * GGML_RESTRICT 
 size_t quantize_q4_k_r4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 void   dequantize_row_q4_k_r4(const block_q4_k_r4  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_q4_k_r4_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
+IQK_NORETURN void quantize_row_q4_k_r16_ref(const float * GGML_RESTRICT x, block_q4_k_r16 * GGML_RESTRICT y, int64_t k);
+IQK_NORETURN void quantize_row_q4_k_r16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+IQK_NORETURN void dequantize_row_q4_k_r16(const block_q4_k_r16 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void   vec_dot_q4_k_r16_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
 void   quantize_row_q5_k_r4_ref(const float * GGML_RESTRICT x, block_q5_k_r4  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_q5_k_r4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);

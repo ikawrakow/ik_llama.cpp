@@ -354,6 +354,15 @@ typedef struct {
 } block_q4_k_r4;
 static_assert(sizeof(block_q4_k_r4) == 8*sizeof(ggml_half) + QK_K/16 + QK_K/8 + QK_K*2, "wrong q4_k_r4 block size/padding");
 
+typedef struct {
+    ggml_half d[16];          // delta per row
+    ggml_half dmin[16];       // dmin per row
+    uint8_t scales[8][16];    // pre-unpacked scales[sub_block][row]
+    uint8_t mins[8][16];      // pre-unpacked mins[sub_block][row]
+    uint8_t qs[16*QK_K/2];   // packed 4-bit quants, interleaved for 16 rows
+} block_q4_k_r16;
+static_assert(sizeof(block_q4_k_r16) == 32*sizeof(ggml_half) + 2*8*16 + 16*QK_K/2, "wrong q4_k_r16 block size/padding");
+
 // 5-bit quantization
 // 8 blocks of 32 elements each
 // weight is represented as x = a * q + b

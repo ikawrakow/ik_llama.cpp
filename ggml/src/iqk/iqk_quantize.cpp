@@ -5729,6 +5729,31 @@ void vec_dot_q4_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
     GGML_UNUSED(by);
 }
 
+IQK_NORETURN void quantize_row_q4_k_r16_ref(const float *, block_q4_k_r16 *, int64_t) {
+    GGML_ABORT("q4_k_r16 is a runtime-only format");
+}
+
+IQK_NORETURN void quantize_row_q4_k_r16(const float *, void *, int64_t) {
+    GGML_ABORT("q4_k_r16 is a runtime-only format");
+}
+
+IQK_NORETURN void dequantize_row_q4_k_r16(const block_q4_k_r16 *, float *, int64_t) {
+    GGML_ABORT("q4_k_r16 dequantize not implemented");
+}
+
+void vec_dot_q4_k_r16_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q4_K_R16, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
 //
 // ========================================= q6_k_r4
 //

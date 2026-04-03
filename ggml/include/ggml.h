@@ -481,6 +481,7 @@ extern "C" {
         GGML_TYPE_IQ5_K_R4  = 340,
         GGML_TYPE_IQ4_KS_R4 = 344,
         GGML_TYPE_IQ5_KS_R4 = 352,
+        GGML_TYPE_Q4_K_R16  = 396,
         GGML_TYPE_Q8_K_R16  = 397,
         GGML_TYPE_Q8_KV_R8  = 398,
         GGML_TYPE_Q8_K_R8   = 399,
