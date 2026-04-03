@@ -4,7 +4,7 @@ Built on top of [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.c
 
 All commands are provided for Podman and Docker.
 
-CPU or CUDA sections under [Build](#Build) and [Run]($Run) are enough to get up and running. 
+CPU or CUDA sections under [Build](#Build) and [Run]($Run) are enough to get up and running.
 
 ## Overview
 
@@ -16,51 +16,83 @@ CPU or CUDA sections under [Build](#Build) and [Run]($Run) are enough to get up 
 
 ## Build
 
-Builds two image tags:
+### Using docker-bake (Recommended)
 
-- `swap`: Includes only `llama-swap` and `llama-server`.
-- `full`: Includes `llama-server`, `llama-quantize`, and other utilities.
+The project uses Docker Bake for building multiple targets efficiently.
 
-### Start:
+#### CPU Variant
 
-1. Clone the repository as `git clone https://github.com/ikawrakow/ik_llama.cpp`
-2. Enter the repo: `cd ik_llama.cpp`, then follow the next steps.
-
-### CPU
-
-```
-podman image build --format Dockerfile --file ./docker/ik_llama-cpu.Containerfile --target full --tag ik_llama-cpu:full . && podman image build --format Dockerfile --file ./docker/ik_llama-cpu.Containerfile --target swap --tag ik_llama-cpu:swap .
+```bash
+docker buildx bake --builder ik-llama-builder full swap
 ```
 
-```
-docker image build --file ./docker/ik_llama-cpu.Containerfile --target full --tag ik_llama-cpu:full . && docker image build --file ./docker/ik_llama-cpu.Containerfile --target swap --tag ik_llama-cpu:swap .
+Or with custom tags:
+
+```bash
+REPO_OWNER=yourname docker buildx bake --builder ik-llama-builder \
+  -f ./docker-bake.hcl \
+  full swap
 ```
 
-### CUDA
+#### CUDA Variant
 
-```
-podman image build --format Dockerfile --file ./docker/ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && podman image build --format Dockerfile --file ./docker/ik_llama-cuda.Containerfile --target swap --tag ik_llama-cuda:swap .
+First, set the CUDA version and GPU architecture in `ik_llama-cuda.Containerfile`:
+- `CUDA_DOCKER_ARCH`: Your GPU's compute capability (e.g., `86` for RTX 30*, `89` for RTX 40*, `12.0` for RTX 50*)
+- `CUDA_VERSION`: CUDA Toolkit version (e.g., `12.6.2`, `13.1.1`)
+
+```bash
+VARIANT=cu12 docker buildx bake --builder ik-llama-builder full swap
 ```
 
+### Using Local Build Script
+
+The `build-local.sh` script provides a convenient wrapper for local builds:
+
+```bash
+# CPU variant (default target: full)
+./build-local.sh cpu [target]
+
+# CUDA variant
+./build-local.sh cuda [target]
 ```
-docker image build --file ./docker/ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && docker image build --file ./docker/ik_llama-cuda.Containerfile --target swap --tag ik_llama-cuda:swap .
+
+Targets: `full`, `server`, `swap` (default: `full`)
+
+Example with custom tags:
+
+```bash
+REPO_OWNER=local ./build-local.sh cpu full
+REPO_OWNER=local ./build-local.sh cuda swap
 ```
+
+### Build Targets
+
+Builds two image tags per variant:
+
+- **`full`**: Includes `llama-server`, `llama-quantize`, and other utilities.
+- **`swap`**: Includes only `llama-swap` and `llama-server`.
+
+### Local Development
+
+1. Clone the repository: `git clone https://github.com/ikawrakow/ik_llama.cpp`
+2. Enter the repo: `cd ik_llama.cpp`
+3. Use either docker-bake or build-local.sh as shown above.
 
 ## Run
 
-- Download `.gguf` model files to your favorite directory (e.g. `/my_local_files/gguf`).
+- Download `.gguf` model files to your favorite directory (e.g., `/my_local_files/gguf`).
 - Map it to `/models` inside the container.
 - Open browser `http://localhost:9292` and enjoy the features.
 - API endpoints are available at `http://localhost:9292/v1` for use in other applications.
 
 ### CPU
 
-```
+```bash
 podman run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro localhost/ik_llama-cpu:swap
 ```
 
-```
-docker run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro ik_llama-cpu:swap
+```bash
+docker run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro localhost/ik_llama-cpu:swap
 ```
 
 ### CUDA
@@ -68,16 +100,16 @@ docker run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models
 - Install Nvidia Drivers and CUDA on the host.
 - For Docker, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 - For Podman, install [CDI Container Device Interface](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html)
-- Identify for your GPU:
-  - [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus) (e.g. `8.6` for `RTX30*0`, `8.9` for `RTX40*0`, `12.0` for `RTX50*0`) then change `CUDA_DOCKER_ARCH` in `ik_llama-cuda.Containerfile` to your GPU architecture (e.g. `CUDA_DOCKER_ARCH=86` for `RTX30*0`, `CUDA_DOCKER_ARCH=89` for `RTX40*0`, `CUDA_DOCKER_ARCH=120` for `RTX50*0`). If you have a mix of different GPUs add them like `CUDA_DOCKER_ARCH=86;89;120`).
-  - [CUDA Toolkit supported version](https://developer.nvidia.com/cuda-toolkit-archive) then adjust `CUDA_VERSION` in `ik_llama-cuda.Containerfile` to your GPU (e.g. `CUDA_VERSION=13.1` for `RTX50*0`).
+- Identify your GPU:
+  - [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus) (e.g., `8.6` for RTX30*, `8.9` for RTX40*, `12.0` for RTX50*)
+  - [CUDA Toolkit supported version](https://developer.nvidia.com/cuda-toolkit-archive)
 
-```
+```bash
 podman run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro --device nvidia.com/gpu=all --security-opt=label=disable localhost/ik_llama-cuda:swap
 ```
 
-```
-docker run  -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro --runtime nvidia ik_llama-cuda:swap
+```bash
+docker run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro --runtime nvidia localhost/ik_llama-cuda:swap
 ```
 
 ## Troubleshooting
@@ -88,19 +120,15 @@ docker run  -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/model
 
 ## Extra
 
-- `CUSTOM_COMMIT` can be used to build a specific `ik_llama.cpp` commit (e.g. `1ec12b8`).
+- **Custom commit**: Build a specific `ik_llama.cpp` commit by modifying the Containerfile or using build args.
 
-```
-podman image build --format Dockerfile --file ik_llama-cpu.Containerfile --target full --build-arg CUSTOM_COMMIT="1ec12b8" --tag ik_llama-cpu-1ec12b8:full && podman image build --format Dockerfile --file ik_llama-cpu.Containerfile --target swap --build-arg CUSTOM_COMMIT="1ec12b8" --tag ik_llama-cpu-1ec12b8:swap
-```
-
-```
-docker image build --file ik_llama-cuda.Containerfile --target full --build-arg CUSTOM_COMMIT="1ec12b8" --tag ik_llama-cuda-1ec12b8:full . && docker image build --file ik_llama-cuda.Containerfile --target swap --build-arg CUSTOM_COMMIT="1ec12b8" --tag ik_llama-cuda-1ec12b8:swap .
+```bash
+docker buildx bake --builder ik-llama-builder --set full.args.BUILD_COMMIT=1ec12b8 full
 ```
 
-- Using the tools in the `full` image:
+- **Using the tools in the `full` image**:
 
-```
+```bash
 $ podman run -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --entrypoint bash localhost/ik_llama-cpu:full
 # ./llama-quantize ...
 # python3 gguf-py/scripts/gguf_dump.py ...
@@ -108,28 +136,40 @@ $ podman run -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --
 # ./llama-sweep-bench ...
 ```
 
-```
-docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --runtime nvidia --entrypoint bash ik_llama-cuda:full
+```bash
+docker run -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --runtime nvidia --entrypoint bash localhost/ik_llama-cuda:full
 # ./llama-quantize ...
 # python3 gguf-py/scripts/gguf_dump.py ...
 # ./llama-perplexity ...
 # ./llama-sweep-bench ...
 ```
 
-- Customize `llama-swap` config: save the `./docker/ik_llama-cpu-swap.config.yaml` or `./docker/ik_llama-cuda-swap.config.yaml` localy  (e.g. under `/my_local_files/`) then map it to `/app/config.yaml` inside the container appending `-v /my_local_files/ik_llama-cpu-swap.config.yaml:/app/config.yaml:ro` to your`podman run ...` or `docker run ...`.
-- To run the container in background, replace `-it` with `-d`: `podman run -d ...` or `docker run -d ...`. To stop it: `podman stop ik_llama` or `docker stop ik_llama`.
-- If you build the image on a diferent machine, change `-DGGML_NATIVE=ON` to `-DGGML_NATIVE=OFF` in the `.Containerfile`.
-- If you build only for your GPU architecture and want to make use of more KV quantization types, build with `-DGGML_IQK_FA_ALL_QUANTS=ON`.
-- If you experiment with several `CUDA_VERSION`, remember to identify with `podman image ls` or `docker image ls` then delete (e.g.`podman image rm docker.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04 && podman image rm docker.io/nvidia/cuda:12.4.0-devel-ubuntu22.04` or `docker image rm docker.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04 && docker image rm docker.io/nvidia/cuda:12.4.0-devel-ubuntu22.04` the unused images as they have several GB.
-- If you want to build without `llama-swap`, change `--target swap` to `--target server` in `ik_llama Containerfiles`, e.g. `docker image build --file ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && docker image build --file ik_llama-cuda.Containerfile --target server --tag ik_llama-cuda:server .`
-- Look for premade quants (and imatrix files) that work well on most standard systems and are designed around ik_llama.cpp (with helpful metrics in the model card) from [ubergarm](https://huggingface.co/ubergarm/models).
-- Usefull graphs and numbers on @magikRUKKOLA [Perplexity vs Size Graphs for the recent quants (GLM-4.7, Kimi-K2-Thinking, Deepseek-V3.1-Terminus, Deepseek-R1, Qwen3-Coder, Kimi-K2, Chimera etc.)](https://github.com/ikawrakow/ik_llama.cpp/discussions/715) topic.
-- Build custom quants with [Thireus](https://github.com/Thireus/GGUF-Tool-Suite)'s tools.
-- Download from [ik_llama.cpp's Thireus fork with release builds for macOS/Windows/Ubuntu CPU and Windows CUDA](https://github.com/Thireus/ik_llama.cpp) if you cannot build.
-- For a KoboldCPP experience [Croco.Cpp is fork of KoboldCPP infering GGML/GGUF models on CPU/Cuda with KoboldAI's UI. It's powered partly by IK_LLama.cpp, and compatible with most of Ikawrakow's quants except Bitnet. ](https://github.com/Nexesenex/croco.cpp)
+- **Customize `llama-swap` config**: Save the `./docker/ik_llama-cpu-swap.config.yaml` or `./docker/ik_llama-cuda-swap.config.yaml` locally (e.g., under `/my_local_files/`) then map it to `/app/config.yaml` inside the container appending `-v /my_local_files/ik_llama-cpu-swap.config.yaml:/app/config.yaml:ro` to your `podman run ...` or `docker run ...`.
+
+- **Run in background**: Replace `-it` with `-d`: `podman run -d ...` or `docker run -d ...`. To stop it: `podman stop ik_llama` or `docker stop ik_llama`.
+
+- **GGML_NATIVE**: If you build the image on a different machine, change `-DGGML_NATIVE=ON` to `-DGGML_NATIVE=OFF` in the `.Containerfile`.
+
+- **KV quantization types**: To use more KV quantization types, build with `-DGGML_IQK_FA_ALL_QUANTS=ON`.
+
+- **Cleanup unused CUDA images**: If you experiment with several `CUDA_VERSION`, delete unused images (they are several GB):
+  ```bash
+  podman image rm docker.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04 && \
+    podman image rm docker.io/nvidia/cuda:12.4.0-devel-ubuntu22.04
+  ```
+
+- **Build without `llama-swap`**: Change `--target swap` to `--target server` in docker-bake or Containerfiles.
+
+- **Pre-made quants**: Look for premade quants from [ubergarm](https://huggingface.co/ubergarm/models).
+
+- **GGUF tools**: Build custom quants with [Thireus](https://github.com/Thireus/GGUF-Tool-Suite)'s tools.
+
+- **Download prebuilt binaries**: Download from [ik_llama.cpp's Thireus fork with release builds for macOS/Windows/Ubuntu CPU and Windows CUDA](https://github.com/Thireus/ik_llama.cpp).
+
+- **KoboldCPP experience**: [Croco.Cpp is a fork of KoboldCPP inferring GGUF/GGML models on CPU/Cuda with KoboldAI's UI. It's powered partly by IK_LLama.cpp, and compatible with most of Ikawrakow's quants except Bitnet.](https://github.com/Nexesenex/croco.cpp)
 
 ## Credits
 
-All credits to the awesome community:  
+All credits to the awesome community:
 
 [llama-swap](https://github.com/mostlygeek/llama-swap)
