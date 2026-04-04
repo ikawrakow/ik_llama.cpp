@@ -1968,8 +1968,6 @@ bool create_tensors_helper::create_gemma4_tensors(const LLM_TN & tn) {
         const int64_t n_embd_k    = hparams.n_embd_k_gqa(i);
         const int64_t n_embd_v    = hparams.n_embd_v_gqa(i);
 
-        printf("Layer %2d: is_swa = %d, n_head = %ld, n_embd_head = %ld, n_embd_k = %ld, n_embd_v = %ld\n", i, hparams.swa_layers[i], n_head, n_embd_head, n_embd_k, n_embd_v);
-
         layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         // note: use_alternative_attention (v_proj is optional, if it's not present, use k_proj)
