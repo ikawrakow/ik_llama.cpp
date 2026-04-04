@@ -94,10 +94,6 @@ set(GGML_SANITIZE_UNDEFINED ${LLAMA_SANITIZE_UNDEFINED})
 set(GGML_ALL_WARNINGS       ${LLAMA_ALL_WARNINGS})
 set(GGML_FATAL_WARNINGS     ${LLAMA_FATAL_WARNINGS})
 
-if(GGML_MAX_CONTEXTS)
-    add_compile_definitions(GGML_MAX_CONTEXTS=${GGML_MAX_CONTEXTS})
-endif()
-
 # change the default for these ggml options
 if (NOT DEFINED GGML_LLAMAFILE)
     set(GGML_LLAMAFILE ON)
@@ -105,6 +101,10 @@ endif()
 
 if (NOT DEFINED GGML_CUDA_USE_GRAPHS)
     set(GGML_CUDA_USE_GRAPHS ON)
+endif()
+
+if (GGML_MAX_CONTEXTS)
+    add_compile_definitions(GGML_MAX_CONTEXTS=${GGML_MAX_CONTEXTS})
 endif()
 
 # transition helpers
