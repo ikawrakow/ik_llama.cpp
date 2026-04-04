@@ -31,7 +31,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 100 # Enough for rev-list, but saves GBs of history
+      
+      - name: Free Disk Space (Ubuntu)
+        run: |
+          echo "Listing initial disk usage..."
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf /usr/lib/jvm
+          sudo docker image prune -af
+          echo "Listing disk usage after cleanup..."
+          df -h
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
