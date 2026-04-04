@@ -2122,7 +2122,7 @@ template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
 
-    if constexpr (DKQ == 576 && ncols2 <= 4) {
+    if constexpr ((DKQ == 576 || DKQ == 512) && ncols2 <= 4) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 4, ncols2>(ctx, dst);
     } else {
 
@@ -2255,8 +2255,15 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         return;
     }
     if (Q->ne[0] == 512 && K->ne[0] == 512 && V->ne[0] == 512) {
-        GGML_ASSERT(gqa_ratio % 8 == 0);
-        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 8>(ctx, dst);
+        if (gqa_ratio == 8) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 8>(ctx, dst);
+        }
+        else if (gqa_ratio == 4) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 4>(ctx, dst);
+        }
+        else {
+            GGML_ABORT("Fatal error");
+        }
         return;
     }
     GGML_ASSERT(Q->ne[0] == 576 && K->ne[0] == 576 && V->ne[0] == 512);

@@ -876,6 +876,11 @@ static bool llama_kv_cache_init(
             n_mla++;
         }
         else {
+            if (!hparams.has_kv(i)) {
+                cache.k_l.push_back(nullptr);
+                cache.v_l.push_back(nullptr);
+                continue;
+            }
             if (qnext_recurrent) {
                 s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
                 auto s_name = std::string{"cache_s_l"} + std::to_string(i);
