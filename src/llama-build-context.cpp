@@ -6243,6 +6243,10 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     // lm_head
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
 
+    if (hparams.f_final_logit_softcapping > 0) {
+        cur = ggml_softcap(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping, hparams.f_final_logit_softcapping);
+    }
+
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);

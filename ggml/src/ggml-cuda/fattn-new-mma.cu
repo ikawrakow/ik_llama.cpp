@@ -333,6 +333,38 @@ struct fattn_mma_f16_config<192, 192> {
 };
 
 template <>
+struct fattn_mma_f16_config<512, 512> {
+    static constexpr int  nbatch_fa      = 64;
+    static constexpr int  nwarps_max     = 4;
+    static constexpr bool Q_in_reg       = false;
+    static constexpr int  nstages_target = 1;
+
+    static int get_nbatch_K2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+        return 256;
+    }
+
+    static constexpr __device__ int get_nbatch_K2_device([[maybe_unused]] int ncols) {
+        return 256;
+    }
+
+    static int get_nbatch_V2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+        return 256;
+    }
+
+    static constexpr __device__ int get_nbatch_V2_device([[maybe_unused]] int ncols) {
+        return 256;
+    }
+
+    static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
+        return 256;
+    }
+
+    static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
+        return 256;
+    }
+};
+
+template <>
 struct fattn_mma_f16_config<576, 512> {
     static constexpr int  nbatch_fa      = 32;
     static constexpr int  nwarps_max     = 8;
@@ -2025,7 +2057,8 @@ static void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ct
     const int nstages = cp_async_available(cc) ? c::nstages_target : 0;
 
     constexpr int ncols         = ncols1 * ncols2;
-    constexpr int ntiles        = ncols <= 8 && DKQ < 576 ? 1 : 2; // Number of tiles per warp.
+    //constexpr int ntiles        = DKQ == 512 ? 2 : ncols <= 8 && DKQ < 576 ? 1 : 2; // Number of tiles per warp.
+    constexpr int ntiles        = ncols <= 8 && DKQ < 512 ? 1 : 2; // Number of tiles per warp.
     constexpr int cols_per_warp = ntiles * tile_B::I;
     constexpr int nwarps_max_x  = (ncols + cols_per_warp - 1) / cols_per_warp;
     constexpr int nwarps_max_y  = c::nbatch_fa / tile_A::I;
@@ -2094,10 +2127,19 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
     } else {
 
     if constexpr (ncols2 <= 8) {
+        //if constexpr (DKQ == 512) {
+        //    ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 2, ncols2>(ctx, dst);
+        //    return;
+        //} else {
         if (Q->ne[1] <= 8/ncols2) {
-            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 8/ncols2, ncols2>(ctx, dst);
+            if constexpr (DKQ == 512) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 2, ncols2>(ctx, dst);
+            } else {
+                ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 8/ncols2, ncols2>(ctx, dst);
+            }
             return;
         }
+        //}
     }
 
     if (Q->ne[1] <= 16/ncols2) {
@@ -2109,8 +2151,11 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 32/ncols2, ncols2>(ctx, dst);
         return;
     }
-
-    ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 64/ncols2, ncols2>(ctx, dst);
+    if constexpr (DKQ == 512) {
+        ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 4, ncols2>(ctx, dst);
+    } else {
+        ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 64/ncols2, ncols2>(ctx, dst);
+    }
     }
 }
 
@@ -2207,6 +2252,11 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
     if (Q->ne[0] == 320 && K->ne[0] == 320 && V->ne[0] == 256) {
         GGML_ASSERT(gqa_ratio % 16 == 0);
         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<320, 256, 16>(ctx, dst);
+        return;
+    }
+    if (Q->ne[0] == 512 && K->ne[0] == 512 && V->ne[0] == 512) {
+        GGML_ASSERT(gqa_ratio % 8 == 0);
+        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 8>(ctx, dst);
         return;
     }
     GGML_ASSERT(Q->ne[0] == 576 && K->ne[0] == 576 && V->ne[0] == 512);
