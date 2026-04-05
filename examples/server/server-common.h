@@ -253,6 +253,7 @@ struct server_chat_params {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    bool parallel_tool_calls = false;
 };
 
 // used by /chat/completions endpoint
