@@ -103,6 +103,10 @@ if (NOT DEFINED GGML_CUDA_USE_GRAPHS)
     set(GGML_CUDA_USE_GRAPHS ON)
 endif()
 
+if (GGML_MAX_CONTEXTS)
+    add_compile_definitions(GGML_MAX_CONTEXTS=${GGML_MAX_CONTEXTS})
+endif()
+
 # transition helpers
 function (llama_option_depr TYPE OLD NEW)
     if (${OLD})
