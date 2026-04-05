@@ -380,6 +380,10 @@ struct gpt_params {
     int image_max_tokens = -1;
     std::string mtmd_kq_type = "f32";
 
+    // mmproj KV cache for recurrent models
+    bool mmproj_kv_cache_enabled = true;  // enable KV cache for multimodal images
+    int mmproj_kv_cache_max_mb = 1024;    // max KV cache size in MB (default: 1GB)
+
     // embedding
     bool embedding         = false; // get only sentence embedding
     int32_t embd_normalize = 2;     // normalisation for embendings (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
