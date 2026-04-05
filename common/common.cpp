@@ -1698,9 +1698,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.white_bin_kw = argv[i];
         return true;
     }
-    if (arg == "--whitelist-binning-keyword-count") {
+    if (arg == "--whitelist-binning-threshold") {
         CHECK_ARG
-        params.white_bin_kw_count = std::stoul(argv[i]);
+        params.white_bin_thresh = std::stoul(argv[i]);
         return true;
     }
     if (arg == "--temporary-bias") {
@@ -2470,6 +2470,28 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
     options.push_back({ "*",           "       --banned-string-file",   "file path of the list of banned strings on each line" });
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
+    options.push_back({ "*",           "       --whitelist-unicode-rule",
+                                                                        "rule for whitelisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
+                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
+                                                                        "tokens containing characters without applicable rule is blacklisted (BIAS=-999)\n"
+                                                                        "`--whitelist-unicode-rule ascii` is valid as special case\n"
+                                                                        "e.g. `--whitelist-unicode-rule ascii:42` == `--whitelist-unicode-rule 0..127,common:42 --whitelist-unicode-rule 0..127,latin:42`" });
+    options.push_back({ "*",           "       --whitelist-no-defer-common",
+                                                                        "common characters not in any rule defer to other characters in the token instead of blacklisting (default: %s)", params.white_df_common ? "true" : "false" });
+    options.push_back({ "*",           "       --whitelist-each-piece", "whitelist each token in argument. inherits max BIAS in --whitelist-unicode-rule. overrides --whitelist-unicode-rule" });
+    options.push_back({ "*",           "       --whitelist-piece",      "whitelist if and only if argument tokenizes to a single token\n"
+                                                                        "inherits max BIAS in --whitelist-unicode-rule. overrides --whitelist-unicode-rule and --whitelist-each-piece" });
+    options.push_back({ "*",           "       --whitelist-binning-keyword",
+                                                                        "keyword to trigger whitelist binning if matched during generation (default: \"%s\", \"\" = disabled)\n"
+                                                                        "binning: BIAS>=0 -> 0, BIAS<0 -> -999", params.white_bin_kw.c_str() });
+    options.push_back({ "*",           "       --whitelist-binning-threshold",
+                                                                        "# keyword match > threshold triggers binning (default: %zu)", params.white_bin_thresh });
+    options.push_back({ "*",           "       --temporary-bias",       "modifies token likelihood temporarily. applies to subsequent --temporary-piece. can be specified multiple times" });
+    options.push_back({ "*",           "       --temporary-piece",      "apply most immediate previous --temporary-bias to argument. no-op if argument tokenizes to multiple tokens" });
+    options.push_back({ "*",           "       --temporary-bias-duration",
+                                                                        "number of tokens to apply bias from the start of generation (default: %zu, 0 = disabled)", params.tmp_bias_duration });
+    options.push_back({ "*",           "       --temporary-bias-keyword",
+                                                                        "keyword to trigger deactivating temporary bias, if matched within duration" });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });

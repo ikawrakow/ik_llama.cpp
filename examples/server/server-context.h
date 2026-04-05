@@ -65,7 +65,6 @@ struct server_slot {
     server_tokens cache_tokens;
 
     std::string generated_text;
-    std::string sent_text;
 
     // idx of draft tokens in the main batch
     // non-empty if we went to evaluate draft tokens
@@ -111,7 +110,7 @@ struct server_slot {
     std::vector<std::string> white_each_pieces;
     std::vector<std::string> white_pieces;
     std::string white_bin_kw;
-    size_t white_bin_kw_count = 0;
+    size_t white_bin_thresh = 0;
     size_t white_bin_kw_counter = 0;
     size_t white_bin_kw_pos = 0;
     std::vector<float> white_biases;
@@ -293,8 +292,6 @@ struct server_context {
     bool load_model(const gpt_params& params_);
 
     void init();
-
-    std::vector<float> get_whitelist_biases(std::vector<std::string>& tokens);
 
     std::vector<llama_token> tokenize(const json& json_prompt, bool add_special) const;
 

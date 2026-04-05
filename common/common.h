@@ -286,23 +286,16 @@ struct gpt_params {
     size_t n_buffer 				 =  0; // number of token buffers for string ban
     bool can_ban_phrases             = true;  // whether to ban strings
 
-    // struct white_rule {
-    //     uint32_t    first;
-    //     uint32_t    last;
-    //     std::string script;
-    //     float       bias;
-    // };
-    // std::vector<white_rule> white_rules;
-    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> white_rules;
-    std::vector<std::string> white_each_pieces;     // string -> tokens -> whitelist
-    std::vector<std::string> white_pieces;          // whitelist iff string is single token
-    bool white_df_common = true;
-    std::string white_bin_kw;
-    size_t white_bin_kw_count = 0;
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> white_rules;    // rules for unicode whitelist
+    std::vector<std::string> white_each_pieces;     // piece -> tokens -> whitelist
+    std::vector<std::string> white_pieces;          // whitelist iff piece is single token
+    bool white_df_common = true;    // common characters without rule defer to other characters in a token
+    std::string white_bin_kw;       // binning keyword
+    size_t white_bin_thresh = 0;    // keyword match threshold for binning
 
-    std::unordered_map<std::string, float> tmp_piece_bias;
-    size_t tmp_bias_duration = 0;
-    std::string tmp_bias_kw;
+    std::unordered_map<std::string, float> tmp_piece_bias;  // temporary biases for pieces (token strings)
+    size_t tmp_bias_duration = 0;   // temporary bias duration in tokens
+    std::string tmp_bias_kw;        // keyword to terminate temporary bias, if matched earlier
 
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
