@@ -286,8 +286,7 @@ extern "C" {
     enum llama_mtp_op_type {
         MTP_OP_NONE             = 0,
         MTP_OP_WARMUP           = 1,
-        MTP_OP_UPDATE_ACCEPTED  = 2,
-        MTP_OP_DRAFT_GEN        = 3,
+        MTP_OP_DRAFT_GEN        = 2,
     };
 
     typedef struct llama_token_data {

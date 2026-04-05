@@ -1031,7 +1031,8 @@ static bool llama_kv_cache_init(
 static bool llama_kv_cache_find_slot(
            struct llama_kv_cache & cache,
         const struct llama_batch & batch,
-        enum llama_mtp_op_type  op_type) {
+        enum llama_mtp_op_type  op_type,
+        int32_t mtp_n_accepted = 0) {
     const uint32_t n_tokens = batch.n_tokens;
 
     if (cache.recurrent) {
@@ -1082,9 +1083,10 @@ static bool llama_kv_cache_find_slot(
     }
     // otherwise, one cell per token.
 
-    bool is_mtp_special_op = (op_type == MTP_OP_WARMUP || 
-                              op_type == MTP_OP_UPDATE_ACCEPTED);
-    if (is_mtp_special_op) {
+    // For MTP KV Cache operations, it is necessary to use existing cells.
+    const bool mtp_reuse_cells = (op_type == MTP_OP_WARMUP) ||
+        (op_type == MTP_OP_DRAFT_GEN && mtp_n_accepted > 0);
+    if (mtp_reuse_cells) {
         const llama_pos target_pos = batch.pos[0];
         const llama_seq_id target_seq = batch.seq_id[0][0];
 
@@ -1105,7 +1107,6 @@ static bool llama_kv_cache_find_slot(
             for (uint32_t i = 0; i < cache.size; ++i) {
                 if (cache.cells[i].pos == target_pos &&
                     cache.cells[i].has_seq_id(target_seq)) {
-
                     cache.head = i;
                     found = true;
                     break;
@@ -1114,14 +1115,36 @@ static bool llama_kv_cache_find_slot(
         }
 
         if (!found) {
-            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n",
+            LLAMA_LOG_ERROR("%s: MTP find_slot failed - slot for seq %d pos %d not found\n",
                 __func__, target_seq, target_pos);
             return false;
         }
 
         if (cache.head + n_tokens > cache.size) {
-             LLAMA_LOG_ERROR("%s: MTP Update out of bounds\n", __func__);
-             return false;
+            LLAMA_LOG_ERROR("%s: MTP find_slot out of bounds\n", __func__);
+            return false;
+        }
+
+        if (op_type == MTP_OP_DRAFT_GEN) {
+            const uint32_t n_accepted = (uint32_t)mtp_n_accepted;
+            const uint32_t n_draft    = n_tokens - n_accepted;
+            for (uint32_t i = 0; i < n_accepted; ++i) {
+                if (cache.cells[cache.head + i].pos != batch.pos[i]) {
+                    LLAMA_LOG_ERROR("%s: MTP DRAFT_GEN - cell %d has pos %d, expected %d\n",
+                        __func__, cache.head + i, (int)cache.cells[cache.head + i].pos, (int)batch.pos[i]);
+                    return false;
+                }
+            }
+
+            // Allocate new cells for all draft positions
+            for (uint32_t i = n_accepted; i < n_tokens; ++i) {
+                auto & draft_cell = cache.cells[cache.head + i];
+                draft_cell.pos = batch.pos[i];
+                for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
+                    draft_cell.seq_id.insert(batch.seq_id[i][j]);
+                }
+            }
+            cache.used += n_draft;
         }
 
         return true;
@@ -3660,6 +3683,82 @@ static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
     }
 
     ggml_backend_tensor_set(dst, src, 0, ggml_nbytes(dst));
+
+    if (!lctx.inp_KQ_mask_draft.empty()) {
+        const auto & kv_self = lctx.kv_self;
+        const auto & cparams = lctx.cparams;
+        const int64_t n_kv = kv_self.n;
+        const int n_draft = (int)lctx.inp_KQ_mask_draft.size();
+        const int n_accepted = lctx.mtp_n_accepted;
+
+        // Fill a single-token mask row
+        auto fill_mask_row = [&](void * row_data, int64_t n_kv, llama_pos pos, llama_seq_id seq_id, bool is_f16) {
+            if (is_f16) {
+                ggml_half * data = (ggml_half *)row_data;
+                const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
+                const ggml_half h_zero = ggml_fp32_to_fp16(0.0f);
+                for (int64_t i = 0; i < n_kv; ++i) {
+                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > pos)
+                        ? h_inf : h_zero;
+                }
+            } else {
+                float * data = (float *)row_data;
+                for (int64_t i = 0; i < n_kv; ++i) {
+                    data[i] = (!kv_self.cells[i].has_seq_id(seq_id) || kv_self.cells[i].pos > pos)
+                        ? -INFINITY : 0.0f;
+                }
+            }
+        };
+
+        for (int iter = 0; iter < n_draft; iter++) {
+            ggml_tensor * mask = lctx.inp_KQ_mask_draft[iter];
+            if (!mask || !mask->buffer) continue;
+
+            GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
+            const bool is_f16 = cparams.flash_attn;
+            const size_t row_bytes = n_kv * ggml_element_size(mask);
+
+            if (n_accepted > 0 && iter == 0) {
+                // Case 1: n_accepted+1 rows for accepted tokens + 1st draft
+                const int n_rows = n_accepted + 1;
+                for (int j = 0; j < n_rows; ++j) {
+                    const uint32_t cell_idx = kv_self.head + j;
+                    const llama_pos    pos    = kv_self.cells[cell_idx].pos;
+                    const llama_seq_id seq_id = kv_self.cells[cell_idx].seq_id.empty()
+                        ? 0 : *kv_self.cells[cell_idx].seq_id.begin();
+                    fill_mask_row((char *)mask->data + j * row_bytes, n_kv, pos, seq_id, is_f16);
+                }
+                const int64_t n_pad = mask->ne[1];
+                for (int64_t j = n_rows; j < n_pad; ++j) {
+                    if (is_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill((ggml_half *)mask->data + j * n_kv, (ggml_half *)mask->data + (j + 1) * n_kv, h_inf);
+                    } else {
+                        std::fill((float *)mask->data + j * n_kv, (float *)mask->data + (j + 1) * n_kv, -INFINITY);
+                    }
+                }
+            } else {
+                // Case 2 for unrolled iteration
+                const uint32_t cell_idx = kv_self.head + n_accepted + iter;
+                const llama_pos    pos    = kv_self.cells[cell_idx].pos;
+                const llama_seq_id seq_id = kv_self.cells[cell_idx].seq_id.empty()
+                    ? 0 : *kv_self.cells[cell_idx].seq_id.begin();
+
+                fill_mask_row(mask->data, n_kv, pos, seq_id, is_f16);
+
+                const int64_t n_pad = mask->ne[1];
+                for (int64_t j = 1; j < n_pad; ++j) {
+                    if (is_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill((ggml_half *)mask->data + j * n_kv, (ggml_half *)mask->data + (j + 1) * n_kv, h_inf);
+                    } else {
+                        std::fill((float *)mask->data + j * n_kv, (float *)mask->data + (j + 1) * n_kv, -INFINITY);
+                    }
+                }
+            }
+        }
+    }
+
     return true;
 }
 
@@ -3879,13 +3978,24 @@ static int llama_decode_internal(
                 return ret;
             }
 
+            if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && u_batch.logits) {
+                // Count logits=false (accepted) tokens
+                int32_t n_accepted_count = 0;
+                for (uint32_t i = 0; i < n_tokens; i++) {
+                    if (!u_batch.logits[i]) n_accepted_count++;
+                }
+                lctx.mtp_n_accepted = n_accepted_count;
+            } else {
+                lctx.mtp_n_accepted = 0;
+            }
+
             // if we have enough unused cells before the current head ->
             //   better to start searching from the beginning of the cache, hoping to fill it
             if (kv_self.head > kv_self.used + 2*n_tokens) {
                 kv_self.head = 0;
             }
 
-            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type)) {
+            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type, lctx.mtp_n_accepted)) {
                 return 1;
             }
 
@@ -4038,9 +4148,8 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            // Do not process logits if MTP is only updating the KV cache.
-            if (cparams.mtp_op_type != MTP_OP_WARMUP &&
-                cparams.mtp_op_type != MTP_OP_UPDATE_ACCEPTED) {
+            // Do not process logits if MTP is only warming up the KV cache.
+            if (cparams.mtp_op_type != MTP_OP_WARMUP) {
                 ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(lctx.sched, res);
                 GGML_ASSERT(backend_res != nullptr);
                 GGML_ASSERT(lctx.logits != nullptr);
@@ -4076,7 +4185,7 @@ static int llama_decode_internal(
         }
 
         // extract embeddings
-        if (embd && (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) { 
+        if (embd && (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) {
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
@@ -7856,6 +7965,20 @@ float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {
     try {
         if (ctx->embd == nullptr) {
             throw std::runtime_error("no embeddings");
+        }
+
+        const bool has_mtp = ctx->cparams.mtp && ctx->model.hparams.nextn_predict_layers > 0;
+
+        if (has_mtp) {
+            // For MTP use position-based indexing
+            int32_t idx = i;
+            if (idx < 0) {
+                idx = ctx->n_outputs + idx;
+            }
+            if (idx < 0 || (size_t)(idx + 1) * ctx->model.hparams.n_embd > ctx->embd_size) {
+                throw std::runtime_error(format("MTP embedding index %d out of range", i));
+            }
+            return ctx->embd + idx * ctx->model.hparams.n_embd;
         }
 
         if (i < 0) {
