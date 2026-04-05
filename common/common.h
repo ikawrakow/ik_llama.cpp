@@ -382,7 +382,7 @@ struct gpt_params {
 
     // mmproj KV cache for recurrent models
     bool mmproj_kv_cache_enabled = true;  // enable KV cache for multimodal images
-    int mmproj_kv_cache_max_mb = 1024;    // max KV cache size in MB (default: 1GB)
+    int mmproj_kv_cache_max_mb = 4096;    // max KV cache size in MB (default: 4GB)
 
     // embedding
     bool embedding         = false; // get only sentence embedding
