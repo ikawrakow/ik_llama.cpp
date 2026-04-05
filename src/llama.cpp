@@ -544,35 +544,135 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     GGML_UNUSED(device);
 }
 
-struct llama_context::Prev {
-    int all_seq_id;
-    int n_outputs;
-    int n_kv;
-    llama_mtp_op_type mtp_op_type;
-    ggml_cgraph * graph;
-};
-
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
-    prev.reset();
+    if (sched_draft || cparams.n_graph_reuse > 1) {
+        active_graph_slot = -1;
+    } else {
+        invalidate_graph_slots();
+    }
+}
+
+void llama_context::invalidate_graph_slots() {
+    LLAMA_LOG_DEBUG("%s: invalidating all %d + %d graph slots\n", __func__, (int)graph_slots.size(), (int)graph_slots_draft.size());
+    for (auto & slot : graph_slots) {
+        slot.valid = false;
+    }
+    for (auto & slot : graph_slots_draft) {
+        slot.valid = false;
+    }
+    active_graph_slot = -1;
+    active_graph_slot_draft = -1;
+}
+
+int llama_context::find_reusable_graph(const llama_batch & u_batch) {
+    if (u_batch.embd)         return -1;
+    if (cparams.n_graph_reuse <= 0) return -1;
+    if (graph_slots.empty())  return -1;
+
+    int cross_slot_candidate = -1;
+
+    for (int i = 0; i < (int)graph_slots.size(); ++i) {
+        auto & slot = graph_slots[i];
+        if (!slot.valid || !slot.graph) continue;
+        if (slot.mtp_op_type != cparams.mtp_op_type) continue;
+        if (slot.n_tokens != (int)u_batch.n_tokens)  continue;
+        if (u_batch.all_seq_id != slot.all_seq_id)   continue;
+        if (kv_self.head == 0)                        continue;
+        if ((int)kv_self.n != slot.n_kv)              continue;
+        if (n_outputs != slot.n_outputs)              continue;
+        if (cparams.n_graph_reuse == 1 && !sched_draft) {
+            if (update_cache_copies()) {
+                return i;
+            }
+        } else {
+            if (i == active_graph_slot) {
+                return i;
+            }
+            // Avoid Cross-slot for high-split graphs as its causes logit corruption.
+            if (slot.n_splits <= 4 && !slot.original_srcs.empty() && cross_slot_candidate < 0) {
+                cross_slot_candidate = i;
+            }
+        }
+    }
+    return cross_slot_candidate;
 }
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
-    if (!prev || !prev->graph) return false;
-    if (u_batch.n_tokens > 1) return false;
-    if (u_batch.embd) return false;
-    if (!cparams.graph_reuse) return false;
-    return u_batch.all_seq_id == prev->all_seq_id &&
-           kv_self.head > 0 &&
-           kv_self.n == prev->n_kv &&
-           n_outputs == prev->n_outputs &&
-           cparams.mtp_op_type == prev->mtp_op_type &&
-           update_cache_copies();
+    return find_reusable_graph(u_batch) >= 0;
+}
+
+bool llama_context::update_cache_copies_for_slot(int slot_idx) {
+    auto & cc = graph_slots[slot_idx].cache_copies;
+    const int n_layer = model.mtp ? model.hparams.n_layer
+                                  : model.hparams.n_layer - model.hparams.nextn_predict_layers;
+    auto layer_has_attention_kv = [&](int il) {
+        return !model.hparams.is_recurrent(il);
+    };
+    if ((int)kv_self.k_l.size() != n_layer) return false;
+    if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
+    for (int il = 0; il < n_layer; ++il) {
+        if (!layer_has_attention_kv(il) || kv_self.k_l[il] == nullptr) {
+            continue;
+        }
+        auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
+        if (kl) {
+            GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+            GGML_ASSERT(model.splits.size() > 1);
+            auto vl = !kv_self.v_l.empty() && kv_self.v_l[il] ? (ggml_split_tensor_t *)kv_self.v_l[il]->extra : nullptr;
+            GGML_ASSERT(kl && (!kv_self.v_l[il] || vl));
+            if (vl) {
+                GGML_ASSERT(kl->n_device == vl->n_device);
+            }
+            for (int id = 0; id < kl->n_device; ++id) {
+                if (!kl->splits[id]) continue;
+                auto& c = cc[2*model.splits.size()*il + 2*id + 0];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kl->splits[id]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kl->splits[id]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+            if (!vl) continue;
+            for (int id = 0; id < vl->n_device; ++id) {
+                if (!vl->splits[id]) continue;
+                auto& c = cc[2*model.splits.size()*il + 2*id + 1];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != vl->splits[id]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)vl->splits[id]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+        } else {
+            for (int jl = 0; jl < n_layer; ++jl) {
+                if (!layer_has_attention_kv(jl) || kv_self.k_l[jl] == nullptr) continue;
+                if (kv_self.k_l[jl]->extra) continue;
+                auto& c = cc[2*jl+0];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[jl]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kv_self.k_l[jl]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+            if (kv_self.v_l.empty()) return true;
+            for (int jl = 0; jl < n_layer; ++jl) {
+                if (!layer_has_attention_kv(jl) || kv_self.v_l[jl] == nullptr) continue;
+                if (kv_self.v_l[jl]->extra) continue;
+                auto& c = cc[2*jl+1];
+                if (!c.cpy) continue;
+                if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[jl]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kv_self.v_l[jl]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+        }
+    }
+    return true;
 }
 
 bool llama_context::update_cache_copies() {
     const int n_layer = model.mtp ? model.hparams.n_layer
-                                  : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
+                                  : model.hparams.n_layer - model.hparams.nextn_predict_layers;
     auto layer_has_attention_kv = [&](int il) {
         return !model.hparams.is_recurrent(il);
     };
@@ -635,6 +735,188 @@ bool llama_context::update_cache_copies() {
     return true;
 }
 
+void llama_context::save_input_tensors_to_slot(GraphSlot & slot) {
+    slot.inp_tokens      = inp_tokens;
+    slot.inp_embd        = inp_embd;
+    slot.inp_pos         = inp_pos;
+    slot.inp_out_ids     = inp_out_ids;
+    slot.inp_KQ_mask     = inp_KQ_mask;
+    slot.inp_KQ_mask_swa = inp_KQ_mask_swa;
+    slot.inp_K_shift     = inp_K_shift;
+    slot.inp_mean        = inp_mean;
+    slot.inp_cls         = inp_cls;
+    slot.inp_s_copy      = inp_s_copy;
+    slot.inp_s_mask      = inp_s_mask;
+    slot.inp_s_seq       = inp_s_seq;
+    slot.inp_s_seq_qnext = inp_s_seq_qnext;
+    slot.inp_pos_bucket  = inp_pos_bucket;
+    slot.inp_embd_enc    = inp_embd_enc;
+    slot.inp_KQ_mask_cross = inp_KQ_mask_cross;
+    slot.inp_scale       = inp_scale;
+    slot.inp_mtp_states  = inp_mtp_states;
+}
+
+void llama_context::restore_input_tensors_from_slot(GraphSlot & slot) {
+    inp_tokens      = slot.inp_tokens;
+    inp_embd        = slot.inp_embd;
+    inp_pos         = slot.inp_pos;
+    inp_out_ids     = slot.inp_out_ids;
+    inp_KQ_mask     = slot.inp_KQ_mask;
+    inp_KQ_mask_swa = slot.inp_KQ_mask_swa;
+    inp_K_shift     = slot.inp_K_shift;
+    inp_mean        = slot.inp_mean;
+    inp_cls         = slot.inp_cls;
+    inp_s_copy      = slot.inp_s_copy;
+    inp_s_mask      = slot.inp_s_mask;
+    inp_s_seq       = slot.inp_s_seq;
+    inp_s_seq_qnext = slot.inp_s_seq_qnext;
+    inp_pos_bucket  = slot.inp_pos_bucket;
+    inp_embd_enc    = slot.inp_embd_enc;
+    inp_KQ_mask_cross = slot.inp_KQ_mask_cross;
+    inp_scale       = slot.inp_scale;
+    inp_mtp_states  = slot.inp_mtp_states;
+}
+
+void llama_context::save_graph_original_srcs(ggml_cgraph * gf) {
+    const int n = gf->n_nodes;
+    graph_srcs_pending.resize(n * GGML_MAX_SRC);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            graph_srcs_pending[i * GGML_MAX_SRC + j] = gf->nodes[i]->src[j];
+        }
+    }
+}
+
+void llama_context::restore_graph_original_srcs(GraphSlot & slot) {
+    ggml_cgraph * gf = slot.graph;
+    GGML_ASSERT((int)slot.original_srcs.size() == gf->n_nodes * GGML_MAX_SRC);
+    for (int i = 0; i < gf->n_nodes; i++) {
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            gf->nodes[i]->src[j] = slot.original_srcs[i * GGML_MAX_SRC + j];
+        }
+    }
+}
+
+void llama_context::store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf) {
+    if (graph_slots.empty()) return;
+    const int n_slots = (int)graph_slots.size();
+    const int n_tok = (int)u_batch.n_tokens;
+
+    // Slot selection strategy: 1) reuse existing slot with same (op_type, n_tokens),
+    // 2) use an empty slot, 3) evict the least-recently-used slot.
+    int target = -1;
+    for (int i = 0; i < n_slots; ++i) {
+        if (graph_slots[i].valid &&
+            graph_slots[i].mtp_op_type == cparams.mtp_op_type &&
+            graph_slots[i].n_tokens == n_tok) {
+            target = i;
+            break;
+        }
+    }
+
+    if (target < 0) {
+        for (int i = 0; i < n_slots; ++i) {
+            if (!graph_slots[i].valid) {
+                target = i;
+                break;
+            }
+        }
+    }
+
+    if (target < 0) {
+        uint64_t min_used = UINT64_MAX;
+        for (int i = 0; i < n_slots; ++i) {
+            if (graph_slots[i].last_used < min_used) {
+                min_used = graph_slots[i].last_used;
+                target = i;
+            }
+        }
+    }
+
+    GGML_ASSERT(target >= 0);
+    auto & slot = graph_slots[target];
+    LLAMA_LOG_DEBUG("%s: storing graph in slot %d (spec_op=%d, n_kv=%d, n_out=%d, lru=%" PRIu64 ")\n",
+                    __func__, target, (int)cparams.mtp_op_type, (int)kv_self.n, (int)n_outputs, graph_slot_counter + 1);
+    slot.valid       = true;
+    slot.last_used   = ++graph_slot_counter;
+    slot.all_seq_id  = (int)u_batch.all_seq_id;
+    slot.n_tokens    = (int)u_batch.n_tokens;
+    slot.n_outputs   = (int)n_outputs;
+    slot.n_kv        = (int)kv_self.n;
+    slot.n_splits    = ggml_backend_sched_get_n_splits(sched);
+    slot.mtp_op_type = cparams.mtp_op_type;
+    slot.graph       = gf;
+
+    if (cparams.n_graph_reuse > 1 || sched_draft) {
+        std::swap(buf_compute_meta, slot.buf_compute_meta);
+        std::swap(cache_copies, slot.cache_copies);
+        std::swap(graph_srcs_pending, slot.original_srcs);
+        save_input_tensors_to_slot(slot);
+
+        if (buf_compute_meta.size() < slot.buf_compute_meta.size()) {
+            buf_compute_meta.resize(slot.buf_compute_meta.size());
+        }
+        const auto & hparams = model.hparams;
+        size_t needed = ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)
+                         && model.splits.size() > 1)
+                        ? 2 * model.splits.size() * hparams.n_layer
+                        : 2 * hparams.n_layer;
+        if (cache_copies.size() < needed) {
+            cache_copies.resize(needed);
+        }
+    }
+
+    active_graph_slot = target;
+}
+
+void llama_context::activate_graph_slot(int slot_idx) {
+    GGML_ASSERT(slot_idx >= 0 && slot_idx < (int)graph_slots.size());
+    auto & slot = graph_slots[slot_idx];
+    GGML_ASSERT(slot.valid && slot.graph);
+
+    LLAMA_LOG_DEBUG("%s: reusing slot %d (spec_op=%d, n_kv=%d, lru=%" PRIu64 ")\n",
+                    __func__, slot_idx, (int)slot.mtp_op_type, slot.n_kv, graph_slot_counter + 1);
+    slot.last_used = ++graph_slot_counter;
+
+    if (cparams.n_graph_reuse > 1 || sched_draft) {
+        const bool cross_slot = (slot_idx != active_graph_slot);
+
+        if (cross_slot) {
+            GGML_ASSERT(!slot.original_srcs.empty());
+            restore_graph_original_srcs(slot);
+
+            std::swap(buf_compute_meta, slot.buf_compute_meta);
+            restore_input_tensors_from_slot(slot);
+
+            ggml_backend_sched_reset(sched);
+            if (!ggml_backend_sched_alloc_graph(sched, slot.graph)) {
+                std::swap(buf_compute_meta, slot.buf_compute_meta);
+                slot.valid = false;
+                active_graph_slot = -1;
+                return;
+            }
+
+            std::swap(buf_compute_meta, slot.buf_compute_meta);
+
+            if (!update_cache_copies_for_slot(slot_idx)) {
+                slot.valid = false;
+                active_graph_slot = -1;
+                return;
+            }
+        } else {
+            restore_input_tensors_from_slot(slot);
+
+            if (!update_cache_copies_for_slot(slot_idx)) {
+                slot.valid = false;
+                active_graph_slot = -1;
+                return;
+            }
+        }
+    }
+
+    active_graph_slot = slot_idx;
+}
+
 llama_context::llama_context(const llama_model & model)
     : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
     const auto & hparams = model.hparams;
@@ -648,11 +930,33 @@ llama_context::llama_context(const llama_model & model)
 void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
+    // swap to/from the dedicated MTP scheduler.
+    if (sched_draft) {
+        const bool was_mtp = (cparams.mtp_op_type != MTP_OP_NONE);
+        const bool is_mtp  = (value != MTP_OP_NONE);
+        if (is_mtp && !was_mtp) {
+            std::swap(sched, sched_draft);
+            std::swap(active_graph_slot, active_graph_slot_draft);
+            std::swap(graph_slots, graph_slots_draft);
+            std::swap(buf_compute_meta, buf_compute_meta_draft);
+            std::swap(cache_copies, cache_copies_draft);
+            gr_stats.n_sched_swap++;
+        } else if (!is_mtp && was_mtp) {
+            std::swap(sched, sched_draft);
+            std::swap(active_graph_slot, active_graph_slot_draft);
+            std::swap(graph_slots, graph_slots_draft);
+            std::swap(buf_compute_meta, buf_compute_meta_draft);
+            std::swap(cache_copies, cache_copies_draft);
+            gr_stats.n_sched_swap++;
+        }
+    }
+
     cparams.mtp_op_type = value;
 }
 
 llama_context::~llama_context() {
     ggml_backend_sched_free(sched);
+    ggml_backend_sched_free(sched_draft);
 
     for (ggml_backend_t backend : backends) {
         ggml_backend_free(backend);
@@ -3646,8 +3950,6 @@ static void llama_graph_compute(
 #endif
 
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
-
-    // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
 static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
@@ -3924,12 +4226,45 @@ static int llama_decode_internal(
         tim1 = ggml_time_us();
 #endif
         ggml_cgraph * gf = nullptr;
-        if (!lctx.can_reuse_graph(u_batch)) {
+        int reuse_slot = lctx.find_reusable_graph(u_batch);
+        const bool is_mtp_op = (cparams.mtp_op_type != MTP_OP_NONE);
+        const int64_t t_gr_start = ggml_time_us();
+
+        if (reuse_slot >= 0) {
+            bool was_cross = (reuse_slot != lctx.active_graph_slot);
+            lctx.activate_graph_slot(reuse_slot);
+            if (lctx.active_graph_slot >= 0) {
+                gf = lctx.graph_slots[reuse_slot].graph;
+                const int64_t t_gr_end = ggml_time_us();
+                lctx.gr_stats.t_graph_reuse_us += (t_gr_end - t_gr_start);
+                if (is_mtp_op) { lctx.gr_stats.n_graph_reuse_mtp++; }
+                else           { lctx.gr_stats.n_graph_reuse_main++; }
+                if (was_cross) { lctx.gr_stats.n_graph_reuse_cross++; }
+#if IK_PRINT_TIMING
+                printf("graph_reuse(slot=%d, %s, spec_op=%d, ntok=%d): %d us\n",
+                       reuse_slot, was_cross ? "cross" : "same", (int)cparams.mtp_op_type,
+                       (int)n_tokens, int(t_gr_end - t_gr_start));
+#endif
+            } else {
+                reuse_slot = -1;
+            }
+        }
+
+        if (reuse_slot < 0) {
+#if IK_PRINT_TIMING
+            {
+                const char * reason = "no_match";
+                if (lctx.cparams.n_graph_reuse <= 0) reason = "disabled";
+                printf("graph_new(spec_op=%d, ntok=%d, reason=%s, active=%d)\n",
+                       (int)cparams.mtp_op_type, (int)n_tokens, reason, lctx.active_graph_slot);
+            }
+#endif
+            const int64_t t_reset_start = ggml_time_us();
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
+            lctx.gr_stats.t_sched_reset_us += (ggml_time_us() - t_reset_start);
 #if IK_PRINT_TIMING
-            tim2 = ggml_time_us();
-            printf("sched_reset(...): %d us\n", int(tim2-tim1));
+            printf("sched_reset(...): %d us\n", int(ggml_time_us() - t_reset_start));
 #endif
 
 #if IK_PRINT_TIMING
@@ -3940,6 +4275,12 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("build_graph(...): %d us\n", int(tim2-tim1));
 #endif
+            const bool will_store = (u_batch.embd == nullptr
+                                     && !lctx.graph_slots.empty()
+                                     && (lctx.cparams.n_graph_reuse > 1 || lctx.sched_draft));
+            if (will_store) {
+                lctx.save_graph_original_srcs(gf);
+            }
 
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
@@ -3949,14 +4290,22 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
-                lctx.prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
-                        (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
-                        cparams.mtp_op_type, gf});
+            if (u_batch.embd == nullptr && lctx.cparams.n_graph_reuse > 0) {
+                lctx.store_graph_slot(u_batch, gf);
+#if IK_PRINT_TIMING
+                if (lctx.active_graph_slot >= 0) {
+                printf("graph_store(slot=%d, spec_op=%d, ntok=%d, splits=%d)\n",
+                       lctx.active_graph_slot, (int)cparams.mtp_op_type,
+                       (int)n_tokens,
+                       lctx.graph_slots[lctx.active_graph_slot].n_splits);
+                }
+#endif
             }
-        } else {
-            //printf("Reusing graph\n");
-            gf = lctx.prev->graph;
+
+            const int64_t t_build_end = ggml_time_us();
+            lctx.gr_stats.t_graph_build_us += (t_build_end - t_gr_start);
+            if (is_mtp_op) { lctx.gr_stats.n_graph_new_mtp++; }
+            else           { lctx.gr_stats.n_graph_new_main++; }
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
@@ -4131,7 +4480,7 @@ static int llama_decode_internal(
             // We need to discard this graph. Otherwise, iwith CUDA graphs enabled, the graph will get resused and this will reset the
             // recurrent state for each new token. This is probably not very relevant in practice because we basically never run TG with
             // empty context, but for the sake of correctness let's just do it.
-            lctx.prev.reset();
+            lctx.invalidate_graph_slots();
         }
     }
 
@@ -4158,7 +4507,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    if (!lctx.prev) {
+    if (lctx.active_graph_slot < 0) {
         lctx.reset_scheduler();
     }
 #if IK_PRINT_TIMING
@@ -4964,7 +5313,9 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_up_gate               =*/ true,
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
-        /*.graph_reuse                 =*/ true,
+        /*.n_graph_reuse               =*/ 1,
+        /*.n_graph_reuse_main          =*/ -1,
+        /*.n_graph_reuse_draft         =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
@@ -5347,7 +5698,9 @@ struct llama_context * llama_init_from_model(
     cparams.fused_up_gate    = params.fused_up_gate;
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
-    cparams.graph_reuse      = params.graph_reuse;
+    cparams.n_graph_reuse       = params.n_graph_reuse;
+    cparams.n_graph_reuse_main  = params.n_graph_reuse_main;
+    cparams.n_graph_reuse_draft = params.n_graph_reuse_draft;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
@@ -5454,7 +5807,36 @@ struct llama_context * llama_init_from_model(
     LLAMA_LOG_INFO("%s: fused_up_gate = %d\n",     __func__, cparams.fused_up_gate);
     LLAMA_LOG_INFO("%s: fused_mmad    = %d\n",     __func__, cparams.fused_mmad);
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
-    LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
+    LLAMA_LOG_INFO("%s: n_graph_reuse = %d\n",     __func__, cparams.n_graph_reuse);
+    if (cparams.n_graph_reuse > 0) {
+        const bool has_mtp = model->hparams.nextn_predict_layers > 0 && cparams.mtp;
+        int main_slots, draft_slots;
+        if (cparams.n_graph_reuse_main >= 0 && cparams.n_graph_reuse_draft >= 0) {
+            main_slots  = std::min(cparams.n_graph_reuse_main,  (int)llama_context::GRAPH_SLOTS_MAX);
+            draft_slots = has_mtp ? std::min(cparams.n_graph_reuse_draft, (int)llama_context::GRAPH_SLOTS_MAX) : 0;
+        } else {
+            // TODO: Deactivate backwards logic
+            const int n_slots = std::min(cparams.n_graph_reuse, (int)llama_context::GRAPH_SLOTS_MAX);
+            if (has_mtp && n_slots >= 1) {
+                main_slots  = 1;
+                draft_slots = n_slots - 1;
+            } else {
+                main_slots  = n_slots;
+                draft_slots = 0;
+            }
+        }
+        if (main_slots > 0) {
+            ctx->graph_slots.resize(main_slots);
+        }
+        if (draft_slots > 0) {
+            ctx->graph_slots_draft.resize(draft_slots);
+        }
+        if (draft_slots > 0 || (has_mtp && main_slots > 0)) {
+            LLAMA_LOG_INFO("%s: graph slots   = %d main + %d draft\n", __func__, main_slots, draft_slots);
+        } else {
+            LLAMA_LOG_INFO("%s: graph slots   = %d\n", __func__, main_slots);
+        }
+    }
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: v_cache_hadam = %d\n",     __func__, cparams.v_cache_hadamard);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);
@@ -5790,6 +6172,51 @@ struct llama_context * llama_init_from_model(
             int n_splits = ggml_backend_sched_get_n_splits(ctx->sched);
             LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, gf->n_nodes);
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits);
+
+            // Create a dedicated scheduler for speculative graphs.
+            if (cparams.n_graph_reuse >= 1 && model->hparams.nextn_predict_layers > 0 && ctx->cparams.mtp) {
+                ctx->sched_draft = ggml_backend_sched_new(
+                    ctx->backends.data(), backend_buft.data(),
+                    ctx->backends.size(), max_nodes, false);
+
+                auto saved_mtp_op = ctx->cparams.mtp_op_type;
+                ctx->cparams.mtp_op_type = MTP_OP_DRAFT_GEN;
+
+                std::vector<uint8_t> buf_draft_meta(ggml_tensor_overhead() * max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+                std::swap(ctx->buf_compute_meta, buf_draft_meta);
+                auto saved_cache_copies = std::move(ctx->cache_copies);
+                ctx->cache_copies.resize(saved_cache_copies.size());
+
+                ggml_cgraph * gf_draft = llm_build_context::llama_build_graph(
+                    *ctx, llama_batch_get_one(&token, 1, n_past, 0), true);
+
+                std::swap(ctx->buf_compute_meta, buf_draft_meta);
+                ctx->cparams.mtp_op_type = saved_mtp_op;
+
+                ctx->buf_compute_meta_draft = std::move(buf_draft_meta);
+                ctx->cache_copies_draft = std::move(ctx->cache_copies);
+                ctx->cache_copies = std::move(saved_cache_copies);
+
+                if (!ggml_backend_sched_reserve(ctx->sched_draft, gf_draft)) {
+                    LLAMA_LOG_WARN("%s: failed to reserve draft scheduler, falling back to shared scheduler\n", __func__);
+                    ggml_backend_sched_free(ctx->sched_draft);
+                    ctx->sched_draft = nullptr;
+                } else {
+                    int n_splits_draft = ggml_backend_sched_get_n_splits(ctx->sched_draft);
+                    LLAMA_LOG_INFO("%s: draft graph nodes  = %d\n", __func__, gf_draft->n_nodes);
+                    LLAMA_LOG_INFO("%s: draft graph splits = %d\n", __func__, n_splits_draft);
+                    for (size_t i = 0; i < ctx->backends.size(); i++) {
+                        ggml_backend_t backend = ctx->backends[i];
+                        ggml_backend_buffer_type_t buft_i = backend_buft[i];
+                        size_t size = ggml_backend_sched_get_buffer_size(ctx->sched_draft, backend);
+                        if (size > 1) {
+                            LLAMA_LOG_INFO("%s: %10s draft compute buffer size = %8.2f MiB\n", __func__,
+                                    ggml_backend_buft_name(buft_i),
+                                    size / 1024.0 / 1024.0);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -5803,12 +6230,18 @@ struct llama_context * llama_init_from_model(
                         ggml_op_name(ggml_op(op)), on_off ? "ON" : "OFF");
             }
             ggml_backend_sched_set_op_offload(ctx->sched, ggml_op(op), on_off);
+            if (ctx->sched_draft) {
+                ggml_backend_sched_set_op_offload(ctx->sched_draft, ggml_op(op), on_off);
+            }
         }
     }
 
     if (params.only_active_experts) {
         LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
+        if (ctx->sched_draft) {
+            ggml_backend_sched_set_only_active_experts(ctx->sched_draft, true);
+        }
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);
@@ -8988,6 +9421,25 @@ void llama_reset_timings(struct llama_context * ctx) {
     ctx->t_p_eval_us = ctx->n_p_eval = 0;
 
     ctx->sampling.reset_timings();
+}
+
+struct llama_graph_reuse_stats llama_get_graph_reuse_stats(struct llama_context * ctx) {
+    auto & s = ctx->gr_stats;
+    return {
+        s.n_graph_reuse_main,
+        s.n_graph_new_main,
+        s.n_graph_reuse_mtp,
+        s.n_graph_new_mtp,
+        s.n_graph_reuse_cross,
+        s.n_sched_swap,
+        s.t_graph_reuse_us,
+        s.t_graph_build_us,
+        s.t_sched_reset_us,
+    };
+}
+
+void llama_reset_graph_reuse_stats(struct llama_context * ctx) {
+    ctx->gr_stats = {};
 }
 
 const char * llama_print_system_info(void) {

@@ -190,7 +190,9 @@ struct llama_context {
 
     // memory buffers used to evaluate the model
     std::vector<uint8_t> buf_compute_meta;
+    std::vector<uint8_t> buf_compute_meta_draft;
     ggml_backend_sched_t sched = nullptr;
+    ggml_backend_sched_t sched_draft = nullptr; // dedicated scheduler for speculative graphs
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
@@ -219,19 +221,85 @@ struct llama_context {
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
-    struct Prev;
-    std::unique_ptr<Prev> prev;
-
-    void reset_scheduler();
-    bool can_reuse_graph(const llama_batch & u_batch);
-
     struct CacheCopy {
         ggml_tensor * cpy = nullptr;
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+    std::vector<CacheCopy> cache_copies_draft;
 
-    bool update_cache_copies();
+    // --- Speculative graph reuse ---
+    // Caches up to n_graph_reuse compute graphs to avoid rebuilding them on every decode.
+    static constexpr int GRAPH_SLOTS_MAX = 8;
+
+    struct GraphSlot {
+        bool     valid = false;
+        uint64_t last_used = 0;     // monotonic LRU counter (higher = more recent)
+        int               all_seq_id = 0;
+        int               n_tokens   = 0;
+        int               n_outputs  = 0;
+        int               n_kv       = 0;
+        int               n_splits   = 0;
+        llama_mtp_op_type mtp_op_type = MTP_OP_NONE;
+        ggml_cgraph *     graph = nullptr;
+
+        // For n_graph_reuse > 1: per-slot snapshot of build context for cross-slot restoration.
+        std::vector<uint8_t>   buf_compute_meta;
+        std::vector<CacheCopy> cache_copies;
+        std::vector<ggml_tensor *> original_srcs; // [node * GGML_MAX_SRC + src_idx]
+        // Input tensor pointers
+        ggml_tensor * inp_tokens      = nullptr;
+        ggml_tensor * inp_embd        = nullptr;
+        ggml_tensor * inp_pos         = nullptr;
+        ggml_tensor * inp_out_ids     = nullptr;
+        ggml_tensor * inp_KQ_mask     = nullptr;
+        ggml_tensor * inp_KQ_mask_swa = nullptr;
+        ggml_tensor * inp_K_shift     = nullptr;
+        ggml_tensor * inp_mean        = nullptr;
+        ggml_tensor * inp_cls         = nullptr;
+        ggml_tensor * inp_s_copy      = nullptr;
+        ggml_tensor * inp_s_mask      = nullptr;
+        ggml_tensor * inp_s_seq       = nullptr;
+        ggml_tensor * inp_s_seq_qnext = nullptr;
+        ggml_tensor * inp_pos_bucket  = nullptr;
+        ggml_tensor * inp_embd_enc    = nullptr;
+        ggml_tensor * inp_KQ_mask_cross = nullptr;
+        ggml_tensor * inp_scale       = nullptr;
+        ggml_tensor * inp_mtp_states  = nullptr;
+    };
+
+    std::vector<GraphSlot> graph_slots;
+    std::vector<GraphSlot> graph_slots_draft;
+    int      active_graph_slot = -1;
+    int      active_graph_slot_draft = -1;
+    uint64_t graph_slot_counter = 0;   // monotonic counter for LRU
+    std::vector<ggml_tensor *> graph_srcs_pending;
+
+    // Graph reuse performance counters
+    struct {
+        int32_t n_graph_reuse_main  = 0;
+        int32_t n_graph_new_main    = 0;
+        int32_t n_graph_reuse_mtp   = 0;
+        int32_t n_graph_new_mtp     = 0;
+        int32_t n_graph_reuse_cross = 0;
+        int32_t n_sched_swap        = 0;
+        int64_t t_graph_reuse_us    = 0;
+        int64_t t_graph_build_us    = 0;
+        int64_t t_sched_reset_us    = 0;
+    } gr_stats;
+
+    void  reset_scheduler();
+    int   find_reusable_graph(const llama_batch & u_batch);
+    bool  can_reuse_graph(const llama_batch & u_batch);
+    bool  update_cache_copies();
+    bool  update_cache_copies_for_slot(int slot_idx);
+    void  save_graph_original_srcs(ggml_cgraph * gf);
+    void  restore_graph_original_srcs(GraphSlot & slot);
+    void  store_graph_slot(const llama_batch & u_batch, ggml_cgraph * gf);
+    void  activate_graph_slot(int slot_idx);
+    void  save_input_tensors_to_slot(GraphSlot & slot);
+    void  restore_input_tensors_from_slot(GraphSlot & slot);
+    void  invalidate_graph_slots();
 
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);

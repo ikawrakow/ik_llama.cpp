@@ -1334,11 +1334,20 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-gr" || arg == "--graph-reuse") {
-        params.graph_reuse = true;
+        CHECK_ARG
+        std::string val = argv[i];
+        auto comma = val.find(',');
+        if (comma != std::string::npos) {
+            params.n_graph_reuse_main  = std::stoi(val.substr(0, comma));
+            params.n_graph_reuse_draft = std::stoi(val.substr(comma + 1));
+            params.n_graph_reuse = params.n_graph_reuse_main + params.n_graph_reuse_draft;
+        } else {
+            params.n_graph_reuse = std::stoi(val);
+        }
         return true;
     }
     if (arg == "-no-gr" || arg == "--no-graph-reuse") {
-        params.graph_reuse = false;
+        params.n_graph_reuse = 0;
         return true;
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
@@ -2322,8 +2331,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
     //options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
-    options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
-    options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-gr,  --graph-reuse",           "graph reuse slots: N (auto split) or M,D (main,draft) (default: %d)", params.n_graph_reuse });
+    options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (same as -gr 0)" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts,","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
@@ -3440,7 +3449,9 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.fused_up_gate     = params.fused_up_gate;
     cparams.fused_mmad        = params.fused_mmad;
     cparams.rope_cache        = params.rope_cache;
-    cparams.graph_reuse       = params.graph_reuse;
+    cparams.n_graph_reuse       = params.n_graph_reuse;
+    cparams.n_graph_reuse_main  = params.n_graph_reuse_main;
+    cparams.n_graph_reuse_draft = params.n_graph_reuse_draft;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
     cparams.v_cache_hadamard  = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
@@ -4457,7 +4468,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "fused_up_gate: %s # default: true\n", params.fused_up_gate ? "true" : "false");
     fprintf(stream, "fused_mmad: %s # default: true\n", params.fused_mmad ? "true" : "false");
     fprintf(stream, "rope_cache: %s # default: false\n", params.rope_cache ? "true" : "false");
-    fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
+    fprintf(stream, "n_graph_reuse: %d\n", params.n_graph_reuse);
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "v_cache_hadamard: %s # default: false\n", params.v_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_mode_graph_scheduling: %s # default: false\n", params.split_mode_graph_scheduling ? "true" : "false");

@@ -466,7 +466,9 @@ extern "C" {
         bool fused_up_gate;     // whether to use fused up/gate op [EXPERIMENTAL]
         bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
         bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
-        bool graph_reuse;       // whether to reuse graphs when possible [EXPERIMENTAL]
+        int  n_graph_reuse;       // total graph reuse slots (backward compat, 0=disable) [EXPERIMENTAL]
+        int  n_graph_reuse_main;  // main scheduler graph slots (-1 = auto) [EXPERIMENTAL]
+        int  n_graph_reuse_draft; // draft/MTP scheduler graph slots (-1 = auto) [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
         bool only_active_experts;
@@ -534,6 +536,21 @@ extern "C" {
         int32_t n_sample;
         int32_t n_p_eval;
         int32_t n_eval;
+    };
+
+    struct llama_graph_reuse_stats {
+        // Reuse rates (graph_reuse / (graph_reuse + graph_new) = hit rate)
+        int32_t n_graph_reuse_main;
+        int32_t n_graph_new_main;     // new graph builds for main model
+        int32_t n_graph_reuse_mtp;    // graphs reused for MTP/draft operations
+        int32_t n_graph_new_mtp;      // new graph builds for MTP/draft
+        int32_t n_graph_reuse_cross;  // cross-slot reuses
+        int32_t n_sched_swap;         // scheduler swaps (sched <-> sched_draft)
+
+        // Time accounting
+        int64_t t_graph_reuse_us;     // total time in graph reuse path
+        int64_t t_graph_build_us;     // total time in new graph build + alloc path
+        int64_t t_sched_reset_us;     // time spent in reset_scheduler
     };
 
     // used in chat template
@@ -1498,6 +1515,10 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     LLAMA_API void llama_print_timings(struct llama_context * ctx);
     LLAMA_API void llama_reset_timings(struct llama_context * ctx);
+
+    // Graph reuse metrics
+    LLAMA_API struct llama_graph_reuse_stats llama_get_graph_reuse_stats(struct llama_context * ctx);
+    LLAMA_API void llama_reset_graph_reuse_stats(struct llama_context * ctx);
 
     // Print system information
     LLAMA_API const char * llama_print_system_info(void);
