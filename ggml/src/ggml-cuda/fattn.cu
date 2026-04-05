@@ -122,6 +122,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     if (new_mma_available(cc) &&
             ((K->ne[0] == 576 && V->ne[0] == 512) ||
              (K->ne[0] == 320 && V->ne[0] == 256) ||
+             (K->ne[0] == 512 && V->ne[0] == 512) ||
              (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
         //printf("Using ggml_cuda_flash_attn_ext_mma_new\n");
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
@@ -194,8 +195,8 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
     }
 
     if (new_mma_available(cc) &&
-            (Q->ne[0] == 576 || Q->ne[0] == 320 || (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
-        if (Q->ne[0] == 576 || Q->ne[0] == 320) {
+            (Q->ne[0] == 576 || Q->ne[0] == 320 || Q->ne[0] == 512 || (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
+        if (Q->ne[0] == 576 || Q->ne[0] == 512 || Q->ne[0] == 320) {
             int gqa_ratio = Q->ne[2]/K->ne[2];
             return (gqa_ratio % 4) == 0;
         }
