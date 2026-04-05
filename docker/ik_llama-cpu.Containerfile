@@ -51,7 +51,7 @@ RUN apt-get update && apt-get install -yq \
     && rm -rf /tmp/* /var/tmp/* \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
-ENTRYPOINT ["/app/full/tools.sh"]
+ENTRYPOINT ["/app/tools.sh"]
 
 # Stage 4: Server
 FROM base AS server
