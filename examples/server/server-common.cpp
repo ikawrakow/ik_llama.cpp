@@ -2164,6 +2164,47 @@ server_tokens server_tokens::clone() const {
     return res;
 }
 
+json server_tokens::to_json() const
+{
+    json j;
+    std::vector<nlohmann::json> media_array;
+    for (auto & [idx, chunk_ptr] : map_idx_to_media) { // or direct access if friend
+        if (chunk_ptr) {
+            nlohmann::json obj;
+            obj["index"] = idx;
+            json j;
+            mtmd_input_chunk_to_json(chunk_ptr.get(), j);
+            obj["chunk"] = j;
+            media_array.push_back(std::move(obj));
+        }
+    }
+    j = nlohmann::json{
+        {"has_mtmd", has_mtmd},
+        {"map_idx_to_media", media_array},
+        {"tokens", tokens}
+    };
+    return j;
+}
+
+void server_tokens::from_json(const json & j) {
+    clear();
+    map_idx_to_media.clear();
+    has_mtmd = j.value("has_mtmd", has_mtmd);
+    tokens = j.value("tokens", tokens);
+    map_idx_to_media.clear();
+    json media_array = j.at("map_idx_to_media");
+    if (media_array.is_array()) {
+        for (const auto & entry : media_array) {
+            size_t idx = entry.at("index");
+            json chunk_json = entry.at("chunk");
+            mtmd_input_chunk * chunk = mtmd_input_chunk_from_json(chunk_json);
+            map_idx_to_media[idx] = mtmd::input_chunk_ptr(chunk);
+        }
+    }
+
+}
+
+
 // Keep the first n_keep and remove n_discard tokens from tokens
 void server_tokens::discard_n_tokens(int32_t n_keep, int32_t n_discard) {
 

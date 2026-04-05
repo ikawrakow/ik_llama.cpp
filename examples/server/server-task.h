@@ -355,6 +355,22 @@ struct server_prompt_checkpoint {
     size_t size() const {
         return data.size();
     }
+
+    json to_json() {
+        json j;
+        j["pos_min"] = pos_min;
+        j["pos_max"] = pos_max;
+        j["pos_min_prompt"] = pos_min_prompt;
+        j["pos_max_prompt"] = pos_max_prompt;
+        return j;
+    }
+
+    void from_json(const json & j) {
+        pos_min = j.value<llama_pos>("pos_min", 0);
+        pos_max = j.value<llama_pos>("pos_max", 0);
+        pos_min_prompt = j.value<llama_pos>("pos_min_prompt", 0);
+        pos_max_prompt = j.value<llama_pos>("pos_max_prompt", 0);
+    }
 };
 
 
@@ -383,6 +399,22 @@ struct server_prompt {
             data,
             checkpoints
         };
+    }
+
+    json to_json()
+    {
+        json j;
+        j["tokens"] = tokens.to_json();
+        j["n_kept_prompt"] = n_kept_prompt;
+        j["n_discarded_prompt"] = n_discarded_prompt;
+        return j;
+    }
+
+    void from_json(const json & j) {
+        tokens.from_json(j.at("tokens"));
+        n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
+        n_discarded_prompt = j.value<llama_pos>("n_discarded_prompt", 0);
+        n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
     }
 };
 
