@@ -344,6 +344,10 @@ if (GGML_CUDA)
 
         file(GLOB   GGML_SOURCES_CUDA "ggml-cuda/*.cu")
         list(APPEND GGML_SOURCES_CUDA "ggml-cuda.cu")
+        # Phase 3.2 (Mamba-2 backport): explicit listing to guarantee inclusion
+        # even when cmake's GLOB cache hasn't been refreshed.
+        list(APPEND GGML_SOURCES_CUDA "ggml-cuda/ssm-scan.cu")
+        list(REMOVE_DUPLICATES GGML_SOURCES_CUDA)
         file(GLOB   SRCS "ggml-cuda/template-instances/fattn-wmma*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
         file(GLOB   SRCS "ggml-cuda/template-instances/fattn-mma*.cu")
