@@ -199,6 +199,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_STATE_SIZE,                "%s.ssm.state_size"     },
     { LLM_KV_SSM_TIME_STEP_RANK,            "%s.ssm.time_step_rank" },
     { LLM_KV_SSM_GROUP_COUNT,               "%s.ssm.group_count"    },
+    { LLM_KV_SSM_DT_B_C_RMS,                "%s.ssm.dt_b_c_rms"     },
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },

@@ -739,6 +739,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
                 ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_DT_B_C_RMS,     hparams.ssm_dt_b_c_rms, false);
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
@@ -760,6 +761,75 @@ void llm_load_hparams(
                             case 2560: model.type = e_model::MODEL_3B; break;
                             default: model.type = e_model::MODEL_UNKNOWN;
                         } break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_MAMBA2:
+            {
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+                ml.get_key(LLM_KV_SSM_DT_B_C_RMS,     hparams.ssm_dt_b_c_rms, false);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // Mamba-2 is fully recurrent: every layer is an SSM layer.
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = true;
+                }
+
+                switch (hparams.n_layer) {
+                    case 24:
+                        switch (hparams.n_embd) {
+                            case 768: model.type = e_model::MODEL_SMALL; break;
+                            default: model.type = e_model::MODEL_UNKNOWN;
+                        } break;
+                    case 48:
+                        switch (hparams.n_embd) {
+                            case 1024: model.type = e_model::MODEL_MEDIUM; break;
+                            case 1536: model.type = e_model::MODEL_LARGE; break;
+                            case 2048: model.type = e_model::MODEL_XL; break;
+                            default: model.type = e_model::MODEL_UNKNOWN;
+                        } break;
+                    case 64:
+                        switch (hparams.n_embd) {
+                            case 2560: model.type = e_model::MODEL_3B; break;
+                            case 4096: model.type = e_model::MODEL_7B; break;
+                            default: model.type = e_model::MODEL_UNKNOWN;
+                        } break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_NEMOTRON_H_MOE:
+            {
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+                ml.get_key(LLM_KV_SSM_DT_B_C_RMS,     hparams.ssm_dt_b_c_rms, false);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp,             false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp,           false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared,      false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm,  false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+
+                // A layer is recurrent (SSM) IFF it has neither KV heads nor FFN.
+                // Attention layers  : n_head_kv(i) != 0 && n_ff(i) == 0
+                // SSM layers        : n_head_kv(i) == 0 && n_ff(i) == 0
+                // Dense/MoE FFN     : n_head_kv(i) == 0 && n_ff(i) != 0
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
+                }
+
+                switch (hparams.n_layer) {
+                    case 52: model.type = e_model::MODEL_30B_A3B; break; // Nemotron-3-Nano-30B-A3B
+                    case 56: model.type = e_model::MODEL_9B; break;      // Nemotron-H-9B
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
