@@ -787,6 +787,18 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+                // Defensive sanity bounds on loaded SSM hparams.
+                // These prevent divide-by-zero in tensor allocation
+                // (d_inner / n_group in create_mamba2_tensors) and catch
+                // obviously malformed GGUFs before they OOM the system.
+                GGML_ASSERT(hparams.ssm_n_group > 0      && "Mamba-2: ssm_n_group must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner > 0      && "Mamba-2: ssm_d_inner must be > 0");
+                GGML_ASSERT(hparams.ssm_d_state > 0      && "Mamba-2: ssm_d_state must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner % hparams.ssm_n_group == 0
+                            && "Mamba-2: ssm_d_inner must be divisible by ssm_n_group");
+                GGML_ASSERT(hparams.ssm_d_inner <= 65536 && "Mamba-2: ssm_d_inner out of sane range");
+                GGML_ASSERT(hparams.ssm_d_state <= 2048  && "Mamba-2: ssm_d_state out of sane range");
+
                 // Mamba-2 is fully recurrent: every layer is an SSM layer.
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                     hparams.recurrent_layer_arr[i] = true;
@@ -824,6 +836,16 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_DT_B_C_RMS,     hparams.ssm_dt_b_c_rms, false);
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // Same defensive bounds as Mamba-2 (Nemotron-H inherits the
+                // Mamba-2 SSM block).
+                GGML_ASSERT(hparams.ssm_n_group > 0      && "Nemotron-H: ssm_n_group must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner > 0      && "Nemotron-H: ssm_d_inner must be > 0");
+                GGML_ASSERT(hparams.ssm_d_state > 0      && "Nemotron-H: ssm_d_state must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner % hparams.ssm_n_group == 0
+                            && "Nemotron-H: ssm_d_inner must be divisible by ssm_n_group");
+                GGML_ASSERT(hparams.ssm_d_inner <= 65536 && "Nemotron-H: ssm_d_inner out of sane range");
+                GGML_ASSERT(hparams.ssm_d_state <= 2048  && "Nemotron-H: ssm_d_state out of sane range");
 
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp,             false);
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp,           false);
