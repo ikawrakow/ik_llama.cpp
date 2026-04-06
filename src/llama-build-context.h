@@ -241,6 +241,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_mamba();
 
+    ggml_cgraph * build_nemotron_h_moe();
+
     ggml_cgraph * build_command_r();
 
     ggml_cgraph * build_olmo();

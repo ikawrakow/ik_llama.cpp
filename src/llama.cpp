@@ -876,14 +876,30 @@ static bool llama_kv_cache_init(
         }
         else {
             if (qnext_recurrent) {
+                // Phase 3.3: for standard Mamba layout (Mamba-1 / Mamba-2 / Nemotron-H)
+                // we keep the rolling conv state in cache.k_l[i] (1D tensor of size
+                // n_embd_r * n_slots) and the recurrent SSM state in cache.s_l[i]
+                // (2D tensor of n_embd_s × n_slots). The qnext GDN layout
+                // (use_qnext_state_layout=true) puts everything in s_l (n_embd_r=0,
+                // n_embd_s holds conv+ssm packed) and keeps k_l/v_l null.
+                const uint32_t embd_r = hparams.n_embd_r();
                 s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_s(), qnext_state_slots);
                 auto s_name = std::string{"cache_s_l"} + std::to_string(i);
                 ggml_set_name(s, s_name.c_str());
                 cache.s_l[i] = s;
-                cache.k_l.push_back(nullptr);
+                if (embd_r > 0) {
+                    // Standard Mamba layout: allocate the conv state slot in k_l[i].
+                    ggml_tensor * kc = ggml_new_tensor_1d(ctx, GGML_TYPE_F32,
+                            (int64_t) embd_r * qnext_state_slots);
+                    auto k_name = std::string{"cache_k_l"} + std::to_string(i);
+                    ggml_set_name(kc, k_name.c_str());
+                    cache.k_l.push_back(kc);
+                } else {
+                    cache.k_l.push_back(nullptr);
+                }
                 cache.v_l.push_back(nullptr);
                 LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
-                if (split_cache && model.layers[i].ssm_out->extra) {
+                if (split_cache && model.layers[i].ssm_out && model.layers[i].ssm_out->extra) {
                     auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
                     GGML_ASSERT(split_ssm_out);
                     int num_v_heads = hparams.ssm_dt_rank;
@@ -3094,6 +3110,20 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         for (int64_t j = 0; j < n_tokens; ++j) {
             // qwen3next linear-attention path uses a single local recurrent state slot.
             data[j] = 0;
+        }
+    }
+
+    if (lctx.inp_ssm_ids && cparams.mtp_op_type == MTP_OP_NONE) {
+        // Phase 3.3: ggml_ssm_scan needs a {n_seqs} int32 tensor with the source state
+        // index per sequence. Phase 3.3 always treats the entire batch as one logical
+        // sequence (n_seqs = 1), so the kernel reads from the recurrent slot at
+        // kv_self.head, which is the min seq_id of the current batch (see
+        // llama_kv_cache_find_slot recurrent branch).
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_ssm_ids->buffer));
+        int32_t * data = (int32_t *) lctx.inp_ssm_ids->data;
+        const int64_t n_seqs = lctx.inp_ssm_ids->ne[0];
+        for (int64_t s = 0; s < n_seqs; ++s) {
+            data[s] = (int32_t) kv_self.head + (int32_t) s;
         }
     }
 

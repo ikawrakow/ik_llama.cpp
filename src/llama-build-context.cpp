@@ -108,6 +108,7 @@ void llm_build_context::init() {
     lctx.inp_s_mask      = nullptr;
     lctx.inp_s_seq       = nullptr;
     lctx.inp_s_seq_qnext = nullptr;
+    lctx.inp_ssm_ids     = nullptr;
     lctx.inp_pos_bucket    = nullptr;
     lctx.inp_embd_enc      = nullptr;
     lctx.inp_KQ_mask_cross = nullptr;
@@ -1146,7 +1147,36 @@ llm_expert_gating_func_type   gating_op,
     } else {
     GGML_ASSERT(!up_gate_exps && !up_gate_exps_b);
 
-    if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
+    if (gate_exps == nullptr) {
+        // Phase 3.3 (Nemotron-H): gateless MoE — apply activation to up_exps directly,
+        // no gate * up combination. Currently used by NEMOTRON_H_MOE with LLM_FFN_RELU_SQR.
+        ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts);
+        cb(up, "ffn_moe_up", il);
+        if (graph) {
+            ggml_build_forward_expand(graph, up);
+        }
+        if (up_exps_b) {
+            up = ggml_add_id(ctx, up, up_exps_b, selected_experts);
+            cb(up, "ffn_moe_up_biased", il);
+        }
+        switch (type_op) {
+            case LLM_FFN_RELU:
+                par = ggml_relu(ctx, up);
+                break;
+            case LLM_FFN_RELU_SQR:
+                par = ggml_relu(ctx, up);
+                par = ggml_sqr(ctx, par);
+                break;
+            case LLM_FFN_SILU:
+                par = ggml_silu(ctx, up);
+                break;
+            case LLM_FFN_GELU:
+                par = ggml_gelu(ctx, up);
+                break;
+            default:
+                GGML_ABORT("gateless moe: unsupported activation");
+        }
+    } else if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
         if (up_exps_b || gate_exps_b) {
             par = ggml_moe_up_gate_ext(ctx, up_exps, gate_exps, cur, selected_experts, up_exps_b, gate_exps_b,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
@@ -6101,16 +6131,27 @@ ggml_cgraph * llm_build_context::build_starcoder2() {
     return gf;
 }
 
-// Phase 3.2 prep: this Mamba-1 build graph references the OLD ggml_ssm_scan
-// signature (sq=state_seq as the 8th arg, with 2D x/B/C shapes). Phase 3.2
-// replaces ggml_ssm_scan with the upstream unified Mamba-1+Mamba-2 signature
-// (4D shapes, ids as the 8th arg), so the body below would no longer compile.
+// Phase 3.3: rewritten Mamba-1 / Mamba-2 / Nemotron-H build graph backport.
 //
-// Mamba-1 has NEVER worked end-to-end in ik_llama: there is no CUDA kernel for
-// the old scan op, the function is partially stubbed, and no production path
-// (Qwen3.5 / Nemotron / etc.) calls it. Stubbing it here is safe — Phase 3.3
-// will rebuild build_mamba() on top of the new ssm_scan API and add
-// build_mamba2() + build_nemotron_h_moe() as siblings.
+// The legacy Mamba-1 body (inside `#if 0` below) used the OLD ggml_ssm_scan
+// signature (sq=state_seq as the 8th arg, with 2D x/B/C shapes). It is kept
+// here as a textual reference for the per-step layout — DO NOT compile it.
+//
+// Phase 3.2 replaced ggml_ssm_scan with the upstream unified Mamba-1 + Mamba-2
+// signature (4D x/B/C, ids 1D `{n_seqs}` int32). Phase 3.3 builds on top of
+// that op via two helpers (build_mamba2_layer / build_mamba1_layer below) and
+// dispatches to them from build_mamba() and build_nemotron_h_moe().
+//
+// Recurrent state layout (single batch, n_seqs == 1) for Mamba-2 / Nemotron-H:
+//   * `kv_self.s_l[il]` is the per-layer recurrent slot tensor of shape
+//     `{n_embd_r() + n_embd_s(), qnext_state_slots}`. The first `n_embd_r()`
+//     rows are the rolling 1-D conv state, the remaining `n_embd_s()` rows are
+//     the SSM state. See the Phase 3.3 patch in `llama_kv_cache_init` in
+//     src/llama.cpp.
+//   * `kv_head` is the source slot index (== min seq_id of the current batch
+//     for the recurrent path; 0 for n_seq_max==1).
+//   * `inp_ssm_ids` is a 1-D `{n_seqs}` int32 tensor filled with `kv_head + s`,
+//     consumed by ggml_ssm_scan as the source state index per output sequence.
 #if 0
 ggml_cgraph * llm_build_context::build_mamba() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
@@ -6256,16 +6297,440 @@ ggml_cgraph * llm_build_context::build_mamba() {
 
     return gf;
 }
-#endif // build_mamba (Phase 3.2 prep stub — Phase 3.3 will rewrite)
+#endif // build_mamba reference (Phase 3.3 — kept for documentation only)
 
-// Phase 3.2 prep: stub build_mamba so the dispatch in llama_build_graph still
-// links. The body aborts at runtime. No production GGUF reaches this code.
+// ===========================================================================
+// Phase 3.3 helpers — Mamba-2 / Nemotron-H build graph
+// ===========================================================================
+
+namespace {
+
+// Build the per-layer Mamba-2 SSM mixer block. Ported from upstream
+// llama.cpp `llm_build_mamba_base::build_mamba2_layer` and adapted to the
+// ik_llama recurrent-state slot layout (s_l[il] = conv|ssm packed).
+//
+// Inputs:
+//   ctx0      - graph build context
+//   gf        - graph being built
+//   lctx      - llama_context (for cb / kv access)
+//   cb        - debug callback for tensor names
+//   cur       - input tensor of shape {n_embd, n_tokens} (already attn-normed)
+//   layer     - the per-layer weight bundle
+//   ssm_ids   - 1D {n_seqs} int32 ids tensor for ggml_ssm_scan
+//   n_tokens  - tokens in the current batch
+//   kv_head   - cache slot index where the new state should be written
+//   il        - layer index (for cb naming)
+// Returns the post-mixer tensor of shape {n_embd, n_tokens}.
+static struct ggml_tensor * build_mamba2_layer(
+        struct ggml_context        * ctx0,
+        struct ggml_cgraph         * gf,
+        struct llama_context       & lctx,
+        const llm_build_cb         & cb,
+        struct ggml_tensor         * cur,
+        const struct llama_layer   & layer,
+        struct ggml_tensor         * ssm_ids,
+        int32_t                      n_tokens,
+        int32_t                      /*kv_head*/, // unused — SSM slot is always 0 in Phase 3.3
+        int                          il) {
+    const auto & hparams = lctx.model.hparams;
+    const auto & kv_self = lctx.kv_self;
+
+    const int64_t d_conv   = hparams.ssm_d_conv;
+    const int64_t d_inner  = hparams.ssm_d_inner;
+    const int64_t d_state  = hparams.ssm_d_state;
+    const int64_t n_head   = hparams.ssm_dt_rank;       // Mamba-2: dt_rank == n_ssm_heads
+    const int64_t head_dim = d_inner / n_head;
+    const int64_t n_group  = hparams.ssm_n_group;
+    const int64_t d_inner_eff = d_inner + 2 * n_group * d_state; // wide channel count for conv1d
+    const int64_t n_seqs   = ssm_ids->ne[0];            // Phase 3.3 invariant: 1
+    const int64_t n_seq_tokens = n_tokens / n_seqs;
+    GGML_ASSERT(n_seqs * n_seq_tokens == n_tokens);
+
+    // Phase 3.3 cache layout: conv (rolling) state in k_l, ssm state in s_l.
+    GGML_ASSERT(kv_self.s_l.size() > (size_t) il && kv_self.s_l[il] != nullptr);
+    GGML_ASSERT(kv_self.k_l.size() > (size_t) il && kv_self.k_l[il] != nullptr);
+    struct ggml_tensor * conv_states_all = kv_self.k_l[il]; // 1D, embd_r * n_slots
+    struct ggml_tensor * ssm_states_all  = kv_self.s_l[il]; // 2D, embd_s × n_slots
+
+    const uint32_t embd_r = hparams.n_embd_r();
+    GGML_ASSERT(embd_r == (uint32_t)((d_conv - 1) * d_inner_eff));
+    const int64_t n_slots = ssm_states_all->ne[1];
+
+    // Reshape the 1D conv cache slot to the 3D layout the OLD ggml_ssm_conv expects.
+    struct ggml_tensor * conv_state_3d = ggml_reshape_3d(
+            ctx0, conv_states_all, d_conv - 1, d_inner_eff, n_slots);
+
+    // d_in_proj = 2*d_inner + 2*n_group*d_state + n_head
+    // Phase 3.3 keeps the input as 2D {n_embd, n_tokens} (single seq path);
+    // upstream uses 3D {n_embd, n_seq_tokens, n_seqs} but for n_seqs=1 the layouts coincide.
+    struct ggml_tensor * zxBCdt = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.ssm_in, cur);
+    cb(zxBCdt, "ssm_in_proj", il);
+    // shape: {d_in_proj, n_tokens}
+
+    // Split out z, xBC, dt as 2D views (n_seqs == 1).
+    // z   : {d_inner, n_tokens}                                @ offset 0
+    // xBC : {d_inner_eff, n_tokens}                             @ offset d_inner
+    // dt  : {n_head, n_tokens}                                  @ offset 2*d_inner + 2*n_group*d_state
+    struct ggml_tensor * z = ggml_view_2d(
+            ctx0, zxBCdt, d_inner, n_tokens, zxBCdt->nb[1], 0);
+    struct ggml_tensor * xBC = ggml_view_2d(
+            ctx0, zxBCdt, d_inner_eff, n_tokens, zxBCdt->nb[1],
+            d_inner * ggml_element_size(zxBCdt));
+    struct ggml_tensor * dt = ggml_view_2d(
+            ctx0, zxBCdt, n_head, n_tokens, zxBCdt->nb[1],
+            (2 * d_inner + 2 * n_group * d_state) * ggml_element_size(zxBCdt));
+
+    // 1D conv. We piggy-back on the OLD ik_llama ggml_ssm_conv (Mamba-1 era):
+    //   - It treats `d_inner_eff` as the channel dim
+    //   - It reads/shifts the rolling state from `conv_state_3d` and writes the new
+    //     state into the trailing region of the output, which we then memcpy back
+    //     into the cache slot.
+    //   - state_seq is `{n_kv=n_slots, n_tokens}` int32 — for the smoke test we always
+    //     write into slot 0, and ik_llama already creates `inp_s_seq_qnext` of shape
+    //     {1, n_tokens} filled with zeros (set by llama_set_inputs).
+    //
+    // Phase 3.3 only supports n_slots == 1. The cache slot for recurrent state is
+    // always 0 (the only slot when n_seq_max==1). We deliberately ignore the global
+    // `kv_head` here because for hybrid arches the cache treats SSM and attention
+    // layers separately — `kv_head` reflects the attention KV slot, not the SSM slot.
+    const int64_t r_kv_head = 0;
+    {
+        GGML_ASSERT(n_slots == 1);
+        struct ggml_tensor * state_seq = lctx.inp_s_seq_qnext; // {1, n_tokens} int32 zeros
+        if (state_seq == nullptr) {
+            // Create a lazy zero-filled state_seq if the calling graph hasn't already.
+            lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
+            ggml_set_input(lctx.inp_s_seq_qnext);
+            state_seq = lctx.inp_s_seq_qnext;
+        }
+
+        // ggml_ssm_conv returns a flat tensor packing:
+        //   [0 .. d_inner_eff*n_tokens)                                        result rows
+        //   [d_inner_eff*n_tokens .. d_inner_eff*n_tokens + d_conv*d_inner_eff*n_slots)  new states
+        // The "new state" portion has shape {d_conv, d_inner_eff, n_slots} and the actual
+        // rolling state to keep is its last (d_conv-1) columns.
+        struct ggml_tensor * x_conv = ggml_ssm_conv(
+                ctx0, conv_state_3d, xBC, layer.ssm_conv1d, state_seq);
+        cb(x_conv, "ssm_conv_out", il);
+
+        // Write back the last (d_conv-1) columns of the new state to the cache slot.
+        ggml_build_forward_expand(gf, ggml_cpy(
+                ctx0,
+                ggml_view_2d(ctx0, x_conv,
+                             d_conv - 1, d_inner_eff * n_slots,
+                             d_conv * ggml_element_size(x_conv),
+                             (1 + d_inner_eff * n_tokens) * ggml_element_size(x_conv)),
+                ggml_view_1d(ctx0, conv_states_all,
+                             (d_conv - 1) * d_inner_eff * n_slots,
+                             0)));
+
+        // Extract the conv result rows.
+        xBC = ggml_view_2d(ctx0, x_conv, d_inner_eff, n_tokens,
+                           d_inner_eff * ggml_element_size(x_conv), 0);
+
+        if (layer.ssm_conv1d_b) {
+            xBC = ggml_add(ctx0, xBC, layer.ssm_conv1d_b);
+        }
+        xBC = ggml_silu(ctx0, xBC);
+        cb(xBC, "ssm_xBC", il);
+    }
+
+    // SSM scan
+    {
+        // We materialise xBC contiguous so we can take 4D views with cleanly nested
+        // strides. xBC after ssm_conv is {d_inner_eff, n_tokens} → make it contiguous.
+        struct ggml_tensor * xBC_c = ggml_cont(ctx0, xBC);
+        const size_t es = ggml_element_size(xBC_c);
+
+        // x  : {head_dim, n_head, n_seq_tokens, n_seqs}     starts at offset 0
+        // B  : {d_state,  n_group, n_seq_tokens, n_seqs}    starts at d_inner
+        // C  : {d_state,  n_group, n_seq_tokens, n_seqs}    starts at d_inner + n_group*d_state
+        struct ggml_tensor * x = ggml_view_4d(
+                ctx0, xBC_c, head_dim, n_head, n_seq_tokens, n_seqs,
+                head_dim * es,                          // nb[1]
+                d_inner_eff * es,                       // nb[2] (one column = one token)
+                d_inner_eff * n_seq_tokens * es,        // nb[3] (one seq)
+                0);
+        struct ggml_tensor * B = ggml_view_4d(
+                ctx0, xBC_c, d_state, n_group, n_seq_tokens, n_seqs,
+                d_state * es,
+                d_inner_eff * es,
+                d_inner_eff * n_seq_tokens * es,
+                d_inner * es);
+        struct ggml_tensor * C = ggml_view_4d(
+                ctx0, xBC_c, d_state, n_group, n_seq_tokens, n_seqs,
+                d_state * es,
+                d_inner_eff * es,
+                d_inner_eff * n_seq_tokens * es,
+                (d_inner + n_group * d_state) * es);
+
+        // dt: {n_head, n_tokens} (view into zxBCdt) → make contiguous, reshape to
+        // {n_head, n_seq_tokens, n_seqs}, add bias.
+        struct ggml_tensor * dt_3d = ggml_cont(ctx0, dt);
+        dt_3d = ggml_reshape_3d(ctx0, dt_3d, n_head, n_seq_tokens, n_seqs);
+        dt_3d = ggml_add(ctx0, dt_3d, layer.ssm_dt_b);
+
+        struct ggml_tensor * A = layer.ssm_a;
+
+        // ssm cache rows: {n_embd_s, n_slots} == {d_state * head_dim * n_head, n_slots}
+        // → {d_state, head_dim, n_head, n_slots}
+        struct ggml_tensor * ssm = ggml_reshape_4d(
+                ctx0, ssm_states_all, d_state, head_dim, n_head, n_slots);
+
+        // ggml_ssm_scan returns a flat tensor packing:
+        //   nelements(x)           = head_dim * n_head * n_seq_tokens * n_seqs   (y values)
+        //   d_state * head_dim * n_head * n_seqs                                 (new ssm states)
+        struct ggml_tensor * y_ssm = ggml_ssm_scan(ctx0, ssm, x, dt_3d, A, B, C, ssm_ids);
+        cb(y_ssm, "ssm_scan_out", il);
+
+        // write the new ssm states back into the cache slot (slot r_kv_head, always 0
+        // for the Phase 3.3 single-seq smoke path).
+        ggml_build_forward_expand(gf, ggml_cpy(
+                ctx0,
+                ggml_view_1d(ctx0, y_ssm, d_state * d_inner * n_seqs,
+                             head_dim * n_head * n_seq_tokens * n_seqs * ggml_element_size(y_ssm)),
+                ggml_view_1d(ctx0, ssm_states_all,
+                             d_state * d_inner * n_seqs,
+                             r_kv_head * d_state * d_inner *
+                                 ggml_element_size(ssm_states_all))));
+
+        // y = first nelements(x) elements of y_ssm, viewed as the same 4D x shape
+        struct ggml_tensor * y = ggml_view_4d(
+                ctx0, y_ssm, head_dim, n_head, n_seq_tokens, n_seqs,
+                head_dim * ggml_element_size(y_ssm),
+                head_dim * n_head * ggml_element_size(y_ssm),
+                head_dim * n_head * n_seq_tokens * ggml_element_size(y_ssm),
+                0);
+
+        // y = y + x * D   (D is per-head scalar, broadcast over head_dim)
+        y = ggml_add(ctx0, y, ggml_mul(ctx0, x, layer.ssm_d));
+
+        // y = swiglu(z, y)  — z is the head-dim partition of zxBCdt; reshape z to match.
+        struct ggml_tensor * z_4d = ggml_reshape_4d(ctx0, ggml_cont(ctx0, z), head_dim, n_head, n_seq_tokens, n_seqs);
+        y = ggml_swiglu_split(ctx0, z_4d, y);
+
+        // grouped RMS norm (always present for Mamba-2 / Nemotron-H in our loaders)
+        if (layer.ssm_norm) {
+            y = ggml_reshape_4d(ctx0, y, d_inner / n_group, n_group, n_seq_tokens, n_seqs);
+            y = llm_build_context::llm_build_norm(
+                    ctx0, y, hparams, layer.ssm_norm, NULL, LLM_NORM_RMS, cb, il);
+        }
+
+        // → {d_inner, n_seq_tokens, n_seqs} → {d_inner, n_tokens}
+        y = ggml_reshape_3d(ctx0, ggml_cont(ctx0, y), d_inner, n_seq_tokens, n_seqs);
+
+        // out projection: {d_inner, n_embd}
+        cur = llm_build_context::llm_build_lora_mm(lctx, ctx0, layer.ssm_out, y);
+    }
+
+    // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
+    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], n_seq_tokens * n_seqs);
+    return cur;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Phase 3.3: build_mamba — handles both LLM_ARCH_MAMBA and LLM_ARCH_MAMBA2.
+//
+// LLM_ARCH_MAMBA (Mamba-1) currently aborts at the per-layer dispatch: ik_llama
+// has no production GGUF / smoke target for it, and the legacy `#if 0` body
+// above predates the new ggml_ssm_scan signature. Mamba-2 follows the upstream
+// unified path described at the top of this file.
 ggml_cgraph * llm_build_context::build_mamba() {
-    GGML_ABORT(
-        "build_mamba() temporarily stubbed during Phase 3 backport — Mamba-1 "
-        "had no working scan kernel in ik_llama and is being rebuilt on top "
-        "of the upstream ggml_ssm_scan API in Phase 3.3."
-    );
+    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
+
+    // {n_embd, n_tokens}
+    struct ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+
+    // ggml_ssm_scan ids tensor — Phase 3.3 always treats the batch as one logical seq
+    lctx.inp_ssm_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    cb(lctx.inp_ssm_ids, "inp_ssm_ids", -1);
+    ggml_set_input(lctx.inp_ssm_ids);
+
+    struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+
+    for (int il = 0; il < n_layer; ++il) {
+        // norm
+        struct ggml_tensor * cur = llm_build_norm(
+                ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
+
+        if (model.arch == LLM_ARCH_MAMBA2) {
+            cur = build_mamba2_layer(
+                    ctx0, gf, lctx, cb, cur, model.layers[il], lctx.inp_ssm_ids,
+                    n_tokens, kv_head, il);
+        } else {
+            // Mamba-1: no smoke-tested code path in ik_llama yet — abort cleanly.
+            GGML_ABORT("LLM_ARCH_MAMBA (Mamba-1) build path not implemented in Phase 3.3");
+        }
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur  = ggml_get_rows(ctx0, cur, inp_out_ids);
+            inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+        }
+
+        // residual
+        cur = ggml_add(ctx0, cur, inpL);
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+
+        inpL = cur;
+    }
+
+    // final RMSNorm + lm_head
+    struct ggml_tensor * cur = llm_build_norm(
+            ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+    cb(cur, "result_norm", -1);
+
+    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cb(cur, "result_output", -1);
+
+    ggml_build_forward_expand(gf, cur);
+    return gf;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3.3: build_nemotron_h_moe — hybrid Mamba-2 + attention + (dense|MoE)
+// architecture used by NVIDIA Nemotron-H / Nemotron-3-Nano-30B-A3B.
+//
+// Per-layer dispatch (matches upstream nemotron-h.cpp):
+//   - hparams.is_recurrent(il)        => Mamba-2 SSM mixer
+//   - hparams.n_ff(il) == 0           => self-attention (no RoPE, no FFN follow-up)
+//   - else                             => dense FFN or MoE FFN (+shared expert)
+ggml_cgraph * llm_build_context::build_nemotron_h_moe() {
+    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
+
+    const int64_t n_embd_head = hparams.n_embd_head_v;
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+
+    // {n_embd, n_tokens}
+    struct ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+    ggml_build_forward_expand(gf, inpL);
+
+    // ssm_scan ids
+    lctx.inp_ssm_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    cb(lctx.inp_ssm_ids, "inp_ssm_ids", -1);
+    ggml_set_input(lctx.inp_ssm_ids);
+
+    // KQ_mask for the standard attention layers
+    struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+
+    struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+
+    for (int il = 0; il < n_layer; ++il) {
+        struct ggml_tensor * inpSA = inpL;
+
+        // pre-block norm (shared by all three layer kinds)
+        struct ggml_tensor * cur = llm_build_norm(
+                ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
+
+        if (hparams.is_recurrent(il)) {
+            // SSM (Mamba-2) layer
+            cur = build_mamba2_layer(
+                    ctx0, gf, lctx, cb, cur, model.layers[il], lctx.inp_ssm_ids,
+                    n_tokens, kv_head, il);
+        } else if (hparams.n_ff(il) == 0) {
+            // Attention layer (no RoPE, no FFN)
+            const int64_t n_head_il    = hparams.n_head(il);
+            const int64_t n_head_kv_il = hparams.n_head_kv(il);
+
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(
+                    gf, cur,
+                    model.layers[il].wq, model.layers[il].bq,
+                    model.layers[il].wk, model.layers[il].bk,
+                    model.layers[il].wv, model.layers[il].bv,
+                    0.0f, il);
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head_il,    n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv_il, n_tokens);
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
+
+            const float kq_scale = hparams.f_attention_scale == 0.0f
+                ? 1.0f / sqrtf(float(n_embd_head))
+                : hparams.f_attention_scale;
+
+            cur = llm_build_kv(
+                    ctx0, lctx, kv_self, gf,
+                    model.layers[il].wo, model.layers[il].bo,
+                    Kcur, Vcur, Qcur, KQ_mask,
+                    n_tokens, kv_head, n_kv, kq_scale, cb, il);
+            cb(cur, "attn_out", il);
+        } else {
+            // FFN / MoE FFN
+            if (model.layers[il].ffn_gate_inp == nullptr) {
+                // dense FFN — Nemotron-H uses ReLU² with up/down only (no gate)
+                cur = llm_build_ffn(
+                        ctx0, lctx, /*ffn_norm*/ nullptr, cur,
+                        model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   nullptr,
+                        nullptr,                    nullptr,                    nullptr,
+                        model.layers[il].ffn_down, model.layers[il].ffn_down_b, nullptr,
+                        nullptr,
+                        LLM_FFN_RELU_SQR, LLM_FFN_PAR, cb, il);
+                cb(cur, "ffn_out", il);
+            } else {
+                // routed MoE + (optional) shared expert
+                struct ggml_tensor * ffn_inp = cur;
+
+                struct ggml_tensor * moe_out = llm_build_moe_ffn(
+                        ctx0, lctx, ffn_inp,
+                        model.layers[il].ffn_gate_inp, nullptr,
+                        model.layers[il].ffn_up_exps,   nullptr,
+                        nullptr,                        nullptr,   // no gate (Nemotron-H is gateless)
+                        model.layers[il].ffn_down_exps, nullptr,
+                        model.layers[il].ffn_exp_probs_b,
+                        n_expert, n_expert_used,
+                        LLM_FFN_RELU_SQR,
+                        hparams.expert_weights_norm,
+                        true,
+                        hparams.expert_weights_scale,
+                        LLM_EXPERT_GATING_FUNC_SIGMOID,
+                        cb, il, gf, false,
+                        /*up_gate_exps=*/ nullptr);
+                cb(moe_out, "ffn_moe_out", il);
+
+                if (model.layers[il].ffn_up_shexp && model.layers[il].ffn_down_shexp) {
+                    struct ggml_tensor * shexp = llm_build_ffn(
+                            ctx0, lctx, /*ffn_norm*/ nullptr, ffn_inp,
+                            model.layers[il].ffn_up_shexp,   nullptr, nullptr,
+                            nullptr,                          nullptr, nullptr,
+                            model.layers[il].ffn_down_shexp, nullptr, nullptr,
+                            nullptr,
+                            LLM_FFN_RELU_SQR, LLM_FFN_PAR, cb, il);
+                    cb(shexp, "ffn_shexp", il);
+                    cur = ggml_add(ctx0, moe_out, shexp);
+                } else {
+                    cur = moe_out;
+                }
+                cb(cur, "ffn_out", il);
+            }
+        }
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
+            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+        }
+
+        // residual
+        cur = ggml_add(ctx0, cur, inpSA);
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+
+        inpL = cur;
+    }
+
+    // final RMSNorm + lm_head
+    struct ggml_tensor * cur = llm_build_norm(
+            ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+    cb(cur, "result_norm", -1);
+
+    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cb(cur, "result_output", -1);
+
+    ggml_build_forward_expand(gf, cur);
+    return gf;
 }
 
 ggml_cgraph * llm_build_context::build_command_r() {
@@ -9875,8 +10340,13 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_starcoder2();
             } break;
         case LLM_ARCH_MAMBA:
+        case LLM_ARCH_MAMBA2:
             {
                 result = llm.build_mamba();
+            } break;
+        case LLM_ARCH_NEMOTRON_H_MOE:
+            {
+                result = llm.build_nemotron_h_moe();
             } break;
         case LLM_ARCH_XVERSE:
             {
