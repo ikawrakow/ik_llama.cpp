@@ -389,13 +389,13 @@ void server_slot::reset() {
     ban_regex.clear();
     ban_regex_ci.clear();
 
-    white_rules.clear();
-    white_df_common = false;
-    white_each_pieces.clear();
-    white_pieces.clear();
-    white_bin_kw = "";
-    white_bin_thresh = 0;
-    white_bin_kw_counter = 0;
+    allow_rules.clear();
+    allow_df_common = false;
+    allow_each_pieces.clear();
+    allow_pieces.clear();
+    allow_bin_kw = "";
+    allow_bin_thresh = 0;
+    allow_bin_kw_counter = 0;
 
     tmp_bias_duration = 0;
     tmp_bias_kw = "";
@@ -1383,20 +1383,20 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);
     }
 
-    do  // populate whitelist biases
+    do  // populate allowlist biases
     {
-        slot.white_rules = params_base.white_rules;
-        slot.white_df_common = params_base.white_df_common;
-        const auto& whitelist_unicode_rule_array = data.find("whitelist_unicode_rule_array");
-        if ((whitelist_unicode_rule_array != data.end()) && whitelist_unicode_rule_array->is_array()) {
-            slot.white_rules.clear();
-            for (size_t j = 0; j < whitelist_unicode_rule_array->size(); ++j) {
-                if (!whitelist_unicode_rule_array->at(j).is_string()) {
+        slot.allow_rules = params_base.allow_rules;
+        slot.allow_df_common = params_base.allow_df_common;
+        const auto& allowlist_unicode_rule_array = data.find("allowlist_unicode_rule_array");
+        if ((allowlist_unicode_rule_array != data.end()) && allowlist_unicode_rule_array->is_array()) {
+            slot.allow_rules.clear();
+            for (size_t j = 0; j < allowlist_unicode_rule_array->size(); ++j) {
+                if (!allowlist_unicode_rule_array->at(j).is_string()) {
                     continue;
                 }
 
                 // bias; arg format: `:BIAS`
-                const auto rule = whitelist_unicode_rule_array->at(j).get<std::string>();
+                const auto rule = allowlist_unicode_rule_array->at(j).get<std::string>();
                 auto subs = string_split(rule, ":");
                 float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
 
@@ -1406,7 +1406,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                     return std::isalpha(c);
                 }) ? string_lower(subs.back()) : "*";
                 if (script == "ascii") {
-                    slot.white_rules.push_back({ 0x000000, 0x00007F, "*", bias });
+                    slot.allow_rules.push_back({ 0x000000, 0x00007F, "*", bias });
                     continue;
                 }
 
@@ -1424,42 +1424,42 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
 
                 // complete format: `LOWER..UPPER,SCRIPT:BIAS`
-                slot.white_rules.push_back({ first, last, script, bias });
+                slot.allow_rules.push_back({ first, last, script, bias });
             }
-            slot.white_df_common = data.find("whitelist_no_defer_common") == data.end();
+            slot.allow_df_common = data.find("allowlist_no_defer_common") == data.end();
         }
 
-        if (slot.white_rules.empty()) {
-            slot.white_biases.clear();
-            slot.white_bin_biases.clear();
+        if (slot.allow_rules.empty()) {
+            slot.allow_biases.clear();
+            slot.allow_bin_biases.clear();
             break;
         }
 
-        slot.white_each_pieces = params_base.white_each_pieces;
-        const auto& whitelist_each_piece_array = data.find("whitelist_each_piece_array");
-        if (whitelist_each_piece_array != data.end() && whitelist_each_piece_array->is_array()) {
-            slot.white_each_pieces.clear();
-            for (const auto& piece: *whitelist_each_piece_array) {
+        slot.allow_each_pieces = params_base.allow_each_pieces;
+        const auto& allowlist_each_piece_array = data.find("allowlist_each_piece_array");
+        if (allowlist_each_piece_array != data.end() && allowlist_each_piece_array->is_array()) {
+            slot.allow_each_pieces.clear();
+            for (const auto& piece: *allowlist_each_piece_array) {
                 if (piece.is_string()) {
-                    slot.white_each_pieces.push_back(piece.get<std::string>());
+                    slot.allow_each_pieces.push_back(piece.get<std::string>());
                 }
             }
         }
 
-        slot.white_pieces = params_base.white_pieces;
-        const auto& whitelist_piece_array = data.find("whitelist_piece_array");
-        if (whitelist_piece_array != data.end() && whitelist_piece_array->is_array()) {
-            slot.white_pieces.clear();
-            for (const auto& piece: *whitelist_piece_array) {
+        slot.allow_pieces = params_base.allow_pieces;
+        const auto& allowlist_piece_array = data.find("allowlist_piece_array");
+        if (allowlist_piece_array != data.end() && allowlist_piece_array->is_array()) {
+            slot.allow_pieces.clear();
+            for (const auto& piece: *allowlist_piece_array) {
                 if (piece.is_string()) {
-                    slot.white_pieces.push_back(piece.get<std::string>());
+                    slot.allow_pieces.push_back(piece.get<std::string>());
                 }
             }
         }
 
-        slot.white_bin_kw = json_value(data, "whitelist_binning_keyword", params_base.white_bin_kw);
-        slot.white_bin_thresh = json_value(data, "whitelist_binning_threshold", params_base.white_bin_thresh);
-        // end of whitelist criteria update
+        slot.allow_bin_kw = json_value(data, "allowlist_binning_keyword", params_base.allow_bin_kw);
+        slot.allow_bin_thresh = json_value(data, "allowlist_binning_threshold", params_base.allow_bin_thresh);
+        // end of allowlist criteria update
 
         const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
         if (vocab_pieces.size() != n_vocab) {
@@ -1470,9 +1470,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             }
         }
 
-        if ((slot.white_rules != slot.white_rules_prev) && (slot.white_df_common ^ slot.white_df_common_prev)) {
-            LLAMA_LOG_DEBUG("%s: applying new whitelist rules\n", __func__);
-            slot.white_biases.resize(n_vocab);
+        if ((slot.allow_rules != slot.allow_rules_prev) && (slot.allow_df_common ^ slot.allow_df_common_prev)) {
+            LLAMA_LOG_DEBUG("%s: applying new allowlist rules\n", __func__);
+            slot.allow_biases.resize(n_vocab);
 
             std::vector<uint32_t> cpts;
             std::vector<std::string> scripts;
@@ -1485,7 +1485,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                     bool in_rule = false;
 
                     // at least one rule
-                    for (const auto& rule: slot.white_rules) {
+                    for (const auto& rule: slot.allow_rules) {
                         const bool in_range = (std::get<0>(rule) <= cpts[j]) && (cpts[j] <= std::get<1>(rule));
                         in_rule = in_range && ((std::get<2>(rule) == "*") || std::get<2>(rule) == scripts[j]);
                         if (in_rule) {
@@ -1495,7 +1495,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                         }
                     }
                     if (!in_rule) {
-                        if (slot.white_df_common && (scripts[j] == "common")) {
+                        if (slot.allow_df_common && (scripts[j] == "common")) {
                             // for common codepoints (e.g. whitespace), defer to other codepoints in the token
                             continue;
                         }
@@ -1505,40 +1505,40 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                         break;
                     }
                 }
-                slot.white_biases[id] = bias;
+                slot.allow_biases[id] = bias;
             }
         }
 
         float max_bias = -INFINITY;
-        for (const auto& rule: slot.white_rules) {
+        for (const auto& rule: slot.allow_rules) {
             max_bias = std::max(max_bias, std::get<3>(rule));
         }
-        for (const auto& piece: slot.white_each_pieces) {
+        for (const auto& piece: slot.allow_each_pieces) {
             for (const auto token: common_tokenize(model, piece, false, true)) {
-                slot.white_biases[token] = max_bias;
+                slot.allow_biases[token] = max_bias;
             }
         }
-        for (const auto& piece: slot.white_pieces) {
+        for (const auto& piece: slot.allow_pieces) {
             const auto tokens = common_tokenize(model, piece, false, true);
             if (tokens.size() == 1) {
-                slot.white_biases[tokens[0]] = max_bias;
+                slot.allow_biases[tokens[0]] = max_bias;
             } else {
                 LLAMA_LOG_WARN("%s: skipping `%s`, .size = %zu\n", __func__, piece.c_str(), tokens.size());
             }
         }
 
-        if (!slot.white_bin_kw.empty()) {
-            LLAMA_LOG_INFO("%s: preparing binned whitelist\n", __func__);
-            slot.white_bin_biases.resize(n_vocab);
+        if (!slot.allow_bin_kw.empty()) {
+            LLAMA_LOG_INFO("%s: preparing binned allowlist\n", __func__);
+            slot.allow_bin_biases.resize(n_vocab);
             for (int32_t id = 0; id < n_vocab; ++id) {
-                if (slot.white_biases[id] < 0) {
-                    slot.white_bin_biases[id] = -999;
+                if (slot.allow_biases[id] < 0) {
+                    slot.allow_bin_biases[id] = -999;
                 }
             }
         }
     } while (false);
-    slot.white_rules_prev = slot.white_rules;
-    slot.white_df_common_prev = slot.white_df_common;
+    slot.allow_rules_prev = slot.allow_rules;
+    slot.allow_df_common_prev = slot.allow_df_common;
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         params_base.can_ban_phrases = false;
@@ -2136,9 +2136,9 @@ void server_context::send_embedding(const server_slot& slot, const llama_batch& 
 void server_context::apply_server_biases(server_slot& slot) {
     auto& server_biases = slot.ctx_sampling->server_biases;
 
-    server_biases = slot.white_bin_kw_counter > slot.white_bin_thresh
-        ? &slot.white_bin_biases
-        : &slot.white_biases;
+    server_biases = slot.allow_bin_kw_counter > slot.allow_bin_thresh
+        ? &slot.allow_bin_biases
+        : &slot.allow_biases;
 }
 
 void server_context::request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens&& inputs) {
@@ -3622,7 +3622,7 @@ void server_context::speculative_decoding_accept() {
         size_t n_draft = slot.drafted.size();
 
         update_temporary_biases(slot);
-        update_whitelist_binning(slot);
+        update_allowlist_binning(slot);
         apply_server_biases(slot);
 
         // the accepted tokens from the speculation
@@ -3969,15 +3969,15 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
 }
 
-void server_context::update_whitelist_binning(server_slot& slot) {
-    const auto& kw = slot.white_bin_kw;
+void server_context::update_allowlist_binning(server_slot& slot) {
+    const auto& kw = slot.allow_bin_kw;
     if (kw.empty()) {
         // disabled
         return;
     }
 
-    auto& kw_counter = slot.white_bin_kw_counter;
-    if (kw_counter > slot.white_bin_thresh) {
+    auto& kw_counter = slot.allow_bin_kw_counter;
+    if (kw_counter > slot.allow_bin_thresh) {
         return;
     }
 
@@ -4130,7 +4130,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             update_temporary_biases(slot);
-            update_whitelist_binning(slot);
+            update_allowlist_binning(slot);
             apply_server_biases(slot);
 
             completion_token_output result;

@@ -1650,7 +1650,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.banned_n = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--whitelist-unicode-rule") {
+    if (arg == "--allowlist-unicode-rule") {
         CHECK_ARG
         auto subs = string_split(argv[i], ":");
         float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
@@ -1660,7 +1660,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             return std::isalpha(c);
         }) ? string_lower(subs.back()) : "*";
         if (script == "ascii") {
-            params.white_rules.push_back({ 0x000000, 0x00007F, "*", bias });
+            params.allow_rules.push_back({ 0x000000, 0x00007F, "*", bias });
             return true;
         }
 
@@ -1676,31 +1676,31 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             }
         }
 
-        params.white_rules.push_back({ first, last, script, bias });
+        params.allow_rules.push_back({ first, last, script, bias });
         return true;
     }
-    if (arg == "--whitelist-no-defer-common") {
-        params.white_df_common = false;
+    if (arg == "--allowlist-no-defer-common") {
+        params.allow_df_common = false;
         return true;
     }
-    if (arg == "--whitelist-each-piece") {
+    if (arg == "--allowlist-each-piece") {
         CHECK_ARG
-        params.white_each_pieces.push_back(argv[i]);
+        params.allow_each_pieces.push_back(argv[i]);
         return true;
     }
-    if (arg == "--whitelist-piece") {
+    if (arg == "--allowlist-piece") {
         CHECK_ARG
-        params.white_pieces.push_back(argv[i]);
+        params.allow_pieces.push_back(argv[i]);
         return true;
     }
-    if (arg == "--whitelist-binning-keyword") {
+    if (arg == "--allowlist-binning-keyword") {
         CHECK_ARG
-        params.white_bin_kw = argv[i];
+        params.allow_bin_kw = argv[i];
         return true;
     }
-    if (arg == "--whitelist-binning-threshold") {
+    if (arg == "--allowlist-binning-threshold") {
         CHECK_ARG
-        params.white_bin_thresh = std::stoul(argv[i]);
+        params.allow_bin_thresh = std::stoul(argv[i]);
         return true;
     }
     if (arg == "--temporary-bias") {
@@ -2470,22 +2470,22 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
     options.push_back({ "*",           "       --banned-string-file",   "file path of the list of banned strings on each line" });
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
-    options.push_back({ "*",           "       --whitelist-unicode-rule",
-                                                                        "rule for whitelisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
+    options.push_back({ "*",           "       --allowlist-unicode-rule",
+                                                                        "rule for allowlisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
                                                                         "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
                                                                         "tokens containing characters without applicable rule is blacklisted (BIAS=-999)\n"
-                                                                        "`--whitelist-unicode-rule ascii` is valid as special case\n"
-                                                                        "e.g. `--whitelist-unicode-rule ascii:42` == `--whitelist-unicode-rule 0..127,common:42 --whitelist-unicode-rule 0..127,latin:42`" });
-    options.push_back({ "*",           "       --whitelist-no-defer-common",
-                                                                        "common characters not in any rule defer to other characters in the token instead of blacklisting (default: %s)", params.white_df_common ? "true" : "false" });
-    options.push_back({ "*",           "       --whitelist-each-piece", "whitelist each token in argument. inherits max BIAS in --whitelist-unicode-rule. overrides --whitelist-unicode-rule" });
-    options.push_back({ "*",           "       --whitelist-piece",      "whitelist if and only if argument tokenizes to a single token\n"
-                                                                        "inherits max BIAS in --whitelist-unicode-rule. overrides --whitelist-unicode-rule and --whitelist-each-piece" });
-    options.push_back({ "*",           "       --whitelist-binning-keyword",
-                                                                        "keyword to trigger whitelist binning if matched during generation (default: \"%s\", \"\" = disabled)\n"
-                                                                        "binning: BIAS>=0 -> 0, BIAS<0 -> -999", params.white_bin_kw.c_str() });
-    options.push_back({ "*",           "       --whitelist-binning-threshold",
-                                                                        "# keyword match > threshold triggers binning (default: %zu)", params.white_bin_thresh });
+                                                                        "`--allowlist-unicode-rule ascii` is valid as special case\n"
+                                                                        "e.g. `--allowlist-unicode-rule ascii:42` == `--allowlist-unicode-rule 0..127,common:42 --allowlist-unicode-rule 0..127,latin:42`" });
+    options.push_back({ "*",           "       --allowlist-no-defer-common",
+                                                                        "common characters not in any rule defer to other characters in the token instead of blacklisting (default: %s)", params.allow_df_common ? "true" : "false" });
+    options.push_back({ "*",           "       --allowlist-each-piece", "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
+    options.push_back({ "*",           "       --allowlist-piece",      "allowlist if and only if argument tokenizes to a single token\n"
+                                                                        "inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule and --allowlist-each-piece" });
+    options.push_back({ "*",           "       --allowlist-binning-keyword",
+                                                                        "keyword to trigger allowlist binning if matched during generation (default: \"%s\", \"\" = disabled)\n"
+                                                                        "binning: BIAS>=0 -> 0, BIAS<0 -> -999", params.allow_bin_kw.c_str() });
+    options.push_back({ "*",           "       --allowlist-binning-threshold",
+                                                                        "# keyword match > threshold triggers binning (default: %zu)", params.allow_bin_thresh });
     options.push_back({ "*",           "       --temporary-bias",       "modifies token likelihood temporarily. applies to subsequent --temporary-piece. can be specified multiple times" });
     options.push_back({ "*",           "       --temporary-piece",      "apply most immediate previous --temporary-bias to argument. no-op if argument tokenizes to multiple tokens" });
     options.push_back({ "*",           "       --temporary-bias-duration",

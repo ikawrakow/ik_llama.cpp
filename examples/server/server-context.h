@@ -103,18 +103,18 @@ struct server_slot {
     int32_t banned_n = 1;
 	std::map<int32_t, std::set<llama_token>> positional_bans;
 
-    // whitelist
-    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> white_rules;
-    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> white_rules_prev;
-    bool white_df_common = false;
-    bool white_df_common_prev = false;
-    std::vector<std::string> white_each_pieces;
-    std::vector<std::string> white_pieces;
-    std::string white_bin_kw;
-    size_t white_bin_thresh = 0;
-    size_t white_bin_kw_counter = 0;
-    std::vector<float> white_biases;
-    std::vector<float> white_bin_biases;
+    // allowlist
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> allow_rules;
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> allow_rules_prev;
+    bool allow_df_common = false;
+    bool allow_df_common_prev = false;
+    std::vector<std::string> allow_each_pieces;
+    std::vector<std::string> allow_pieces;
+    std::string allow_bin_kw;
+    size_t allow_bin_thresh = 0;
+    size_t allow_bin_kw_counter = 0;
+    std::vector<float> allow_biases;
+    std::vector<float> allow_bin_biases;
 
     // temporary logit bias
     size_t tmp_bias_duration = 0;
@@ -383,7 +383,7 @@ struct server_context {
 
     void buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
 
-    void update_whitelist_binning(server_slot& slot);
+    void update_allowlist_binning(server_slot& slot);
 
     void update_temporary_biases(server_slot& slot);
 
