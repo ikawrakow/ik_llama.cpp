@@ -3114,16 +3114,22 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     }
 
     if (lctx.inp_ssm_ids && cparams.mtp_op_type == MTP_OP_NONE) {
-        // Phase 3.3: ggml_ssm_scan needs a {n_seqs} int32 tensor with the source state
-        // index per sequence. Phase 3.3 always treats the entire batch as one logical
-        // sequence (n_seqs = 1), so the kernel reads from the recurrent slot at
-        // kv_self.head, which is the min seq_id of the current batch (see
-        // llama_kv_cache_find_slot recurrent branch).
+        // Phase 3.3: ggml_ssm_scan needs a {n_seqs} int32 tensor with the source
+        // state slot index per sequence. With n_seq_max = 1 (Phase 3.3 invariant)
+        // the recurrent state cache has exactly one slot, and build_mamba2_layer
+        // unconditionally writes the new state back to slot 0 (see r_kv_head=0
+        // in src/llama-build-context.cpp). The READ side must therefore also
+        // source from slot 0..n_seqs-1, NOT from kv_self.head — kv_self.head is
+        // a position counter (advances by n_tokens after every decode in
+        // src/llama.cpp:3652), not a slot index, and reading at offset
+        // kv_self.head * src0->nb[3] would walk past the single allocated slot
+        // and produce out-of-bounds reads on every token after the first
+        // prefill.
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_ssm_ids->buffer));
         int32_t * data = (int32_t *) lctx.inp_ssm_ids->data;
         const int64_t n_seqs = lctx.inp_ssm_ids->ne[0];
         for (int64_t s = 0; s < n_seqs; ++s) {
-            data[s] = (int32_t) kv_self.head + (int32_t) s;
+            data[s] = (int32_t) s;
         }
     }
 
