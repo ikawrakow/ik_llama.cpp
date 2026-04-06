@@ -64,6 +64,7 @@ struct server_slot {
     server_tokens prompt_tokens;
     server_tokens cache_tokens;
 
+    size_t last_gentxt_size = 0;
     std::string generated_text;
 
     // idx of draft tokens in the main batch
@@ -112,14 +113,12 @@ struct server_slot {
     std::string white_bin_kw;
     size_t white_bin_thresh = 0;
     size_t white_bin_kw_counter = 0;
-    size_t white_bin_kw_pos = 0;
     std::vector<float> white_biases;
     std::vector<float> white_bin_biases;
 
     // temporary logit bias
     size_t tmp_bias_duration = 0;
     std::string tmp_bias_kw;
-    size_t tmp_bias_kw_pos = 0;
 
     server_prompt server_cached_prompt;
 

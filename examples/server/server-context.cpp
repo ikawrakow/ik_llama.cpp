@@ -355,6 +355,7 @@ void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_to
 
 void server_slot::reset() {
     n_prompt_tokens = 0;
+    last_gentxt_size = 0;
     generated_text = "";
     truncated = false;
     stopped_eos = false;
@@ -395,11 +396,9 @@ void server_slot::reset() {
     white_bin_kw = "";
     white_bin_thresh = 0;
     white_bin_kw_counter = 0;
-    white_bin_kw_pos = 0;
 
     tmp_bias_duration = 0;
     tmp_bias_kw = "";
-    tmp_bias_kw_pos = 0;
 
     // Reset speculative decoding stats
     n_draft_total = 0;
@@ -1384,8 +1383,8 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);
     }
 
+    do  // populate whitelist biases
     {
-        // apply whitelist
         slot.white_rules = params_base.white_rules;
         slot.white_df_common = params_base.white_df_common;
         const auto& whitelist_unicode_rule_array = data.find("whitelist_unicode_rule_array");
@@ -1427,8 +1426,13 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 // complete format: `LOWER..UPPER,SCRIPT:BIAS`
                 slot.white_rules.push_back({ first, last, script, bias });
             }
-
             slot.white_df_common = data.find("whitelist_no_defer_common") == data.end();
+        }
+
+        if (slot.white_rules.empty()) {
+            slot.white_biases.clear();
+            slot.white_bin_biases.clear();
+            break;
         }
 
         slot.white_each_pieces = params_base.white_each_pieces;
@@ -1448,13 +1452,14 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             slot.white_pieces.clear();
             for (const auto& piece: *whitelist_piece_array) {
                 if (piece.is_string()) {
-                    slot.white_each_pieces.push_back(piece.get<std::string>());
+                    slot.white_pieces.push_back(piece.get<std::string>());
                 }
             }
         }
 
         slot.white_bin_kw = json_value(data, "whitelist_binning_keyword", params_base.white_bin_kw);
         slot.white_bin_thresh = json_value(data, "whitelist_binning_threshold", params_base.white_bin_thresh);
+        // end of whitelist criteria update
 
         const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
         if (vocab_pieces.size() != n_vocab) {
@@ -1531,10 +1536,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
         }
-
-        slot.white_rules_prev = slot.white_rules;
-        slot.white_df_common_prev = slot.white_df_common;
-    }
+    } while (false);
+    slot.white_rules_prev = slot.white_rules;
+    slot.white_df_common_prev = slot.white_df_common;
 
     if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
         params_base.can_ban_phrases = false;
@@ -1696,6 +1700,7 @@ bool server_context::process_token(completion_token_output& result, server_slot&
     slot.sampled = result.tok;
 
     // search stop word and delete it
+    slot.last_gentxt_size = slot.generated_text.size();
     slot.generated_text += token_str;
     slot.has_next_token = true;
 
@@ -3977,12 +3982,10 @@ void server_context::update_whitelist_binning(server_slot& slot) {
     }
 
     // search for keyword
-    auto& kw_pos = slot.white_bin_kw_pos;
-    auto pos = slot.generated_text.find(kw, kw_pos + 1);
+    auto pos = slot.generated_text.find(kw, slot.last_gentxt_size);
     while (pos != std::string::npos) {
         ++kw_counter;
-        kw_pos = pos;
-        pos = slot.generated_text.find(kw, kw_pos + 1);
+        pos = slot.generated_text.find(kw, pos + 1);
     }
 }
 
@@ -3999,10 +4002,7 @@ void server_context::update_temporary_biases(server_slot& slot) {
     }
 
     const auto& kw = slot.tmp_bias_kw;
-    auto& kw_pos = slot.tmp_bias_kw_pos;
-    if (kw.empty() || (slot.generated_text.find(kw, kw_pos) == std::string::npos)) {
-        kw_pos = slot.generated_text.size();
-    } else {
+    if (!kw.empty() && (slot.generated_text.find(kw, slot.last_gentxt_size) != std::string::npos)) {
         LLAMA_LOG_DEBUG("%s: found keyword\n", __func__);
         logit_bias.clear();
         return;
