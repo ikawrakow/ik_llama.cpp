@@ -1957,7 +1957,7 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint3
     if (il < 0 || il >= hparams.n_layer) return 0;
     if (hparams.recurrent_layer_arr[il]) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
-        return hparams.n_embd_v_s() * state_sots * sizeof(float);
+        return hparams.n_embd_s() * state_sots * sizeof(float);
     }
     bool is_mla_attn = arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
     if (is_mla_attn && mla_attn) {

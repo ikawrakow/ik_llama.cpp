@@ -6886,8 +6886,10 @@ ggml_cgraph * llm_build_context::build_mamba() {
 ggml_cgraph * llm_build_context::build_nemotron_h_moe() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
 
-    const int64_t n_embd_head = hparams.n_embd_head_v;
-    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+    // Per-layer in upstream API; Nemotron-H has uniform head_dim across attention
+    // layers (no SWA), so layer 0 is representative.
+    const int64_t n_embd_head = hparams.n_embd_head_v(0);
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
 
     // {n_embd, n_tokens}
     struct ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
