@@ -907,7 +907,14 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         cur = tmp;
     }
 
-    if (type_gate == LLM_FFN_PAR &&
+    // Phase 3.4 fix 2026-04-06: only apply the parallel-gate fused mul when a
+    // gate weight is actually present. For gateless FFNs (Nemotron-H shared
+    // expert: relu²(up_proj) only) `cur` already equals `tmp`, so the original
+    // unconditional `mul(cur, tmp)` would compute `op(up)*up` instead of
+    // `op(up)`. All previous callers of LLM_FFN_PAR happened to also pass a
+    // gate, so this codepath was untested for the gateless case until
+    // Nemotron-H.
+    if (gate && type_gate == LLM_FFN_PAR &&
        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         cur = ggml_fused_mul_unary(ctx, cur, tmp, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                                                   type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU);
@@ -960,7 +967,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             GGML_ABORT("fatal error");
     }
 
-    if (type_gate == LLM_FFN_PAR) {
+    // Phase 3.4 fix 2026-04-06: see the matching guard above. Only fold the
+    // up projection back in via a parallel gate when we actually had a gate.
+    if (gate && type_gate == LLM_FFN_PAR) {
         cur = ggml_mul(ctx, cur, tmp);
         cb(cur, "ffn_gate_par", il);
     }
