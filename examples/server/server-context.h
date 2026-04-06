@@ -304,6 +304,8 @@ struct server_context {
 
     server_slot* get_available_slot(const server_task& task);
 
+    int32_t populate_vocab_pieces();
+
     bool launch_slot_with_task(server_slot& slot, server_task& task);
 
     void kv_cache_clear();
@@ -383,9 +385,9 @@ struct server_context {
 
     void buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
 
-    void update_allowlist_binning(server_slot& slot);
+    void update_allowlist_state(server_slot& slot);
 
-    void update_temporary_biases(server_slot& slot);
+    void update_temporary_bias_state(server_slot& slot);
 
     json model_meta() const;
 

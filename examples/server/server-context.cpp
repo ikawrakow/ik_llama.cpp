@@ -856,6 +856,19 @@ server_slot* server_context::get_available_slot(const server_task& task) {
     return ret;
 }
 
+int32_t server_context::populate_vocab_pieces() {
+    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    if (vocab_pieces.size() == n_vocab) {
+        return n_vocab;
+    }
+    vocab_pieces.clear();
+    vocab_pieces.reserve(n_vocab);
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        vocab_pieces.push_back(common_token_to_piece(ctx, id, true));
+    }
+    return n_vocab;
+}
+
 bool server_context::launch_slot_with_task(server_slot& slot, server_task& task) {
     slot_params defaults;
     defaults.speculative = params_base.speculative;
@@ -1461,14 +1474,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.allow_bin_thresh = json_value(data, "allowlist_binning_threshold", params_base.allow_bin_thresh);
         // end of allowlist criteria update
 
-        const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-        if (vocab_pieces.size() != n_vocab) {
-            vocab_pieces.clear();
-            vocab_pieces.reserve(n_vocab);
-            for (int32_t id = 0; id < n_vocab; ++id) {
-                vocab_pieces.push_back(common_token_to_piece(ctx, id, true));
-            }
-        }
+        const int32_t n_vocab = populate_vocab_pieces();
 
         if ((slot.allow_rules != slot.allow_rules_prev) && (slot.allow_df_common ^ slot.allow_df_common_prev)) {
             LLAMA_LOG_DEBUG("%s: applying new allowlist rules\n", __func__);
@@ -3621,8 +3627,8 @@ void server_context::speculative_decoding_accept() {
 
         size_t n_draft = slot.drafted.size();
 
-        update_temporary_biases(slot);
-        update_allowlist_binning(slot);
+        update_temporary_bias_state(slot);
+        update_allowlist_state(slot);
         apply_server_biases(slot);
 
         // the accepted tokens from the speculation
@@ -3969,7 +3975,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
 }
 
-void server_context::update_allowlist_binning(server_slot& slot) {
+void server_context::update_allowlist_state(server_slot& slot) {
     const auto& kw = slot.allow_bin_kw;
     if (kw.empty()) {
         // disabled
@@ -3989,7 +3995,7 @@ void server_context::update_allowlist_binning(server_slot& slot) {
     }
 }
 
-void server_context::update_temporary_biases(server_slot& slot) {
+void server_context::update_temporary_bias_state(server_slot& slot) {
     auto& logit_bias = slot.ctx_sampling->params.tmp_logit_bias;
     if (logit_bias.size() == 0) {
         return;
@@ -4129,8 +4135,8 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
 
-            update_temporary_biases(slot);
-            update_allowlist_binning(slot);
+            update_temporary_bias_state(slot);
+            update_allowlist_state(slot);
             apply_server_biases(slot);
 
             completion_token_output result;
