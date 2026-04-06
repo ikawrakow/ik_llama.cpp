@@ -64,6 +64,7 @@ struct server_slot {
     server_tokens prompt_tokens;
     server_tokens cache_tokens;
 
+    size_t last_gentxt_size = 0;
     std::string generated_text;
 
     // idx of draft tokens in the main batch
@@ -101,6 +102,23 @@ struct server_slot {
     float ban_phrases_bias = 0;
     int32_t banned_n = 1;
 	std::map<int32_t, std::set<llama_token>> positional_bans;
+
+    // whitelist
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> white_rules;
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> white_rules_prev;
+    bool white_df_common = false;
+    bool white_df_common_prev = false;
+    std::vector<std::string> white_each_pieces;
+    std::vector<std::string> white_pieces;
+    std::string white_bin_kw;
+    size_t white_bin_thresh = 0;
+    size_t white_bin_kw_counter = 0;
+    std::vector<float> white_biases;
+    std::vector<float> white_bin_biases;
+
+    // temporary logit bias
+    size_t tmp_bias_duration = 0;
+    std::string tmp_bias_kw;
 
     server_prompt server_cached_prompt;
 
@@ -222,6 +240,8 @@ struct server_context {
     std::vector<llama_lora_adapter_container> lora_adapters;
     std::vector<control_vector_container> control_vectors;
 
+    std::vector<std::string> vocab_pieces;
+
     gpt_params params_base;
 
     llama_batch batch;
@@ -313,6 +333,8 @@ struct server_context {
 
     void send_embedding(const server_slot& slot, const llama_batch& batch);
 
+    void apply_server_biases(server_slot& slot);
+
     void request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens&& inputs);
 
     void request_cancel(int id_task);
@@ -360,6 +382,10 @@ struct server_context {
     void send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n = 0);
 
     void buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
+
+    void update_whitelist_binning(server_slot& slot);
+
+    void update_temporary_biases(server_slot& slot);
 
     json model_meta() const;
 

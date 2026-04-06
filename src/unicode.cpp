@@ -19,6 +19,37 @@
 #include <utility>
 #include <vector>
 
+
+size_t unicode_fill_from_utf8(std::string* utf8, std::vector<uint32_t>* dst_cpts, std::vector<std::string>* dst_scripts) {
+    if (utf8 == nullptr) {
+        return 0;
+    }
+
+    const auto cpts = unicode_cpts_from_utf8(*utf8);
+    const size_t n_cpt = cpts.size();
+
+    std::vector<std::string> scripts;
+    scripts.reserve(n_cpt);
+
+    for (const auto& cpt: cpts) {
+        const auto it = std::lower_bound(unicode_script_lasts.begin(), unicode_script_lasts.end(), cpt);
+        if (it != unicode_script_lasts.end()) {
+            scripts.push_back(unicode_scripts[std::distance(unicode_script_lasts.begin(), it)]);
+        } else {
+            printf("%s: %u is unknown\n", __func__, cpt);
+        }
+    }
+
+    if (dst_cpts != nullptr) {
+        *dst_cpts = cpts;
+    }
+    if (dst_scripts != nullptr) {
+        *dst_scripts = scripts;
+    }
+
+    return n_cpt;
+}
+
 size_t unicode_len_utf8(char src) {
     const size_t lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4 };
     uint8_t highbits = static_cast<uint8_t>(src) >> 4;

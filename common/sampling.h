@@ -106,6 +106,8 @@ typedef struct common_params_sampling {
 
     std::vector<llama_token> penalty_prompt_tokens;
     bool                     use_penalty_prompt_tokens = false;
+
+    std::unordered_map<llama_token, float> tmp_logit_bias;
 } llama_sampling_params;
 
 // general sampler context
@@ -134,6 +136,8 @@ struct common_sampler {
     llama_token_data_array cur_p; // current candidates
 
     std::mt19937 rng;
+
+    std::vector<float>* server_biases;
 };
 
 

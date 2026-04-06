@@ -9106,3 +9106,6 @@ void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float 
     ctx->draft_input_hidden_state = hidden_state;
 }
 
+size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts) {
+    return unicode_fill_from_utf8((std::string*)utf8, (std::vector<uint32_t>*)cpts, (std::vector<std::string>*)scripts);
+}
