@@ -6377,6 +6377,17 @@ ggml_cgraph * llm_build_context::build_starcoder2() {
     return gf;
 }
 
+// Phase 3.2 prep: this Mamba-1 build graph references the OLD ggml_ssm_scan
+// signature (sq=state_seq as the 8th arg, with 2D x/B/C shapes). Phase 3.2
+// replaces ggml_ssm_scan with the upstream unified Mamba-1+Mamba-2 signature
+// (4D shapes, ids as the 8th arg), so the body below would no longer compile.
+//
+// Mamba-1 has NEVER worked end-to-end in ik_llama: there is no CUDA kernel for
+// the old scan op, the function is partially stubbed, and no production path
+// (Qwen3.5 / Nemotron / etc.) calls it. Stubbing it here is safe — Phase 3.3
+// will rebuild build_mamba() on top of the new ssm_scan API and add
+// build_mamba2() + build_nemotron_h_moe() as siblings.
+#if 0
 ggml_cgraph * llm_build_context::build_mamba() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model, n_tokens), false);
 
@@ -6520,6 +6531,17 @@ ggml_cgraph * llm_build_context::build_mamba() {
     ggml_build_forward_expand(gf, cur);
 
     return gf;
+}
+#endif // build_mamba (Phase 3.2 prep stub — Phase 3.3 will rewrite)
+
+// Phase 3.2 prep: stub build_mamba so the dispatch in llama_build_graph still
+// links. The body aborts at runtime. No production GGUF reaches this code.
+ggml_cgraph * llm_build_context::build_mamba() {
+    GGML_ABORT(
+        "build_mamba() temporarily stubbed during Phase 3 backport — Mamba-1 "
+        "had no working scan kernel in ik_llama and is being rebuilt on top "
+        "of the upstream ggml_ssm_scan API in Phase 3.3."
+    );
 }
 
 ggml_cgraph * llm_build_context::build_command_r() {
