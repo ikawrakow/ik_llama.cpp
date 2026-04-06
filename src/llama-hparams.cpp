@@ -1430,3 +1430,60 @@ void llm_load_hparams(
 
     hparams.rope_type = llama_rope_type(&model);
 }
+
+// ---------------------------------------------------------------------------
+// Recurrent state size accessors (Mamba family + Qwen3.5 GDN)
+// ---------------------------------------------------------------------------
+//
+// Renamed from n_embd_k_s / n_embd_v_s / n_embd_v_s_id to match the upstream
+// llama.cpp naming (n_embd_r = rolling state, n_embd_s = recurrent state).
+//
+// Phase 3.1.B.1 keeps the existing GDN (qnext) and Mamba-1 branches verbatim.
+// Phase 3.1.B.2 will add LLM_ARCH_MAMBA2 + LLM_ARCH_NEMOTRON_H_MOE branches
+// — but this commit only renames; behaviour is byte-equivalent for every
+// arch already supported.
+
+uint32_t llama_hparams::n_embd_r() const {
+    if (ssm_n_group > 0) {
+        // qwen3next / Qwen3.5 GDN: keeps all recurrent state in the V-cache tail
+        return 0;
+    }
+    // corresponds to Mamba-1's conv_states size
+    // TODO: maybe support other convolution strides than 1
+    // NOTE: since the first column of the conv_state is shifted out each time,
+    //       it's not actually needed
+    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * ssm_d_inner;
+}
+
+uint32_t llama_hparams::n_embd_s() const {
+    if (ssm_n_group > 0) {
+        // qnext recurrent state packs together:
+        //   1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
+        //   2) delta-net state: head_v_dim * head_v_dim * num_v_heads
+        const uint32_t key_dim        = ssm_d_state * ssm_n_group;
+        const uint32_t value_dim      = ssm_d_inner;
+        const uint32_t conv_dim       = 2 * key_dim + value_dim;
+        const uint32_t conv_state_dim = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * conv_dim;
+        const uint32_t head_v_dim     = ssm_dt_rank > 0 ? ssm_d_inner / ssm_dt_rank : 0;
+        const uint32_t ssm_state_dim  = head_v_dim * head_v_dim * ssm_dt_rank;
+        return conv_state_dim + ssm_state_dim;
+    }
+    // corresponds to Mamba-1's ssm_states size
+    return ssm_d_state * ssm_d_inner;
+}
+
+uint32_t llama_hparams::n_embd_s_id(int nv) const {
+    if (ssm_n_group <= 0 || nv < 1 || ssm_dt_rank < 1) return 0;
+    int num_v_heads = ssm_dt_rank;
+    int num_k_heads = ssm_n_group;
+    int gqa_ratio   = num_v_heads / num_k_heads;
+    GGML_ASSERT(nv <= num_v_heads);
+    GGML_ASSERT(nv % gqa_ratio == 0);
+    int nk = nv / gqa_ratio;
+    int head_k_dim  = ssm_d_state;
+    int head_v_dim  = ssm_d_inner / num_v_heads;
+    uint32_t conv_dim       = 2 * nk * head_k_dim + nv * head_v_dim;
+    uint32_t conv_state_dim = conv_dim * (ssm_d_conv - 1);
+    uint32_t ssm_state_dim  = head_v_dim * head_v_dim * nv;
+    return conv_state_dim + ssm_state_dim;
+}

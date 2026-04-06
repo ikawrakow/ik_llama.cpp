@@ -31,7 +31,7 @@ delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_
     const int64_t conv_dim       = key_dim * 2 + value_dim;
     const int64_t conv_state_dim = (hparams.ssm_d_conv - 1) * conv_dim;
     const int64_t state_dim      = conv_state_dim + ssm_state_dim;
-    GGML_ASSERT(hparams.n_embd_v_s() == (uint32_t) state_dim);
+    GGML_ASSERT(hparams.n_embd_s() == (uint32_t) state_dim);
 
     const bool has_explicit_seq_info = batch.n_seq_id != nullptr && batch.seq_id != nullptr;
     token_seq_ids.resize(batch.n_tokens, 0);

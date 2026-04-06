@@ -200,8 +200,8 @@ ggml_cgraph * llm_build_context::build_s_copy() {
 
     for (int il = 0; il < n_layer; ++il) {
         if (kv_self.recurrent) {
-            struct ggml_tensor * conv_states = ggml_reshape_2d(ctx0, kv_self.k_l[il], hparams.n_embd_k_s(), kv_self.size);
-            struct ggml_tensor * ssm_states  = ggml_reshape_2d(ctx0, kv_self.v_l[il], hparams.n_embd_v_s(), kv_self.size);
+            struct ggml_tensor * conv_states = ggml_reshape_2d(ctx0, kv_self.k_l[il], hparams.n_embd_r(), kv_self.size);
+            struct ggml_tensor * ssm_states  = ggml_reshape_2d(ctx0, kv_self.v_l[il], hparams.n_embd_s(), kv_self.size);
 
             conv_states = ggml_get_rows(ctx0, conv_states, state_copy);
             ssm_states  = ggml_get_rows(ctx0,  ssm_states, state_copy);
@@ -213,7 +213,7 @@ ggml_cgraph * llm_build_context::build_s_copy() {
         }
 
         if (kv_self.s_l.size() > (size_t) il && kv_self.s_l[il] != nullptr) {
-            struct ggml_tensor * qnext_states_all = ggml_reshape_2d(ctx0, kv_self.s_l[il], hparams.n_embd_v_s(), kv_self.s_l[il]->ne[1]);
+            struct ggml_tensor * qnext_states_all = ggml_reshape_2d(ctx0, kv_self.s_l[il], hparams.n_embd_s(), kv_self.s_l[il]->ne[1]);
             GGML_ASSERT((uint32_t) qnext_states_all->ne[1] == qnext_state_slots);
             struct ggml_tensor * qnext_state_copy = ggml_view_1d(ctx0, state_copy, qnext_state_slots, 0);
             struct ggml_tensor * qnext_states = ggml_get_rows(ctx0, qnext_states_all, qnext_state_copy);
@@ -6398,8 +6398,8 @@ ggml_cgraph * llm_build_context::build_mamba() {
 
     for (int il = 0; il < n_layer; ++il) {
         // (ab)using the KV cache to store the states
-        struct ggml_tensor * conv_states = ggml_reshape_2d(ctx0, kv_self.k_l[il], hparams.n_embd_k_s(), kv_self.size);
-        struct ggml_tensor * ssm_states  = ggml_reshape_2d(ctx0, kv_self.v_l[il], hparams.n_embd_v_s(), kv_self.size);
+        struct ggml_tensor * conv_states = ggml_reshape_2d(ctx0, kv_self.k_l[il], hparams.n_embd_r(), kv_self.size);
+        struct ggml_tensor * ssm_states  = ggml_reshape_2d(ctx0, kv_self.v_l[il], hparams.n_embd_s(), kv_self.size);
 
         // clear states of sequences which are starting at the beginning of this batch
         {

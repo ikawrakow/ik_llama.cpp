@@ -679,7 +679,7 @@ static inline uint32_t llama_kv_v_row_embd(
         return hparams.n_embd_v_gqa(il);
     }
 
-    return hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+    return hparams.n_embd_v_gqa(il) + hparams.n_embd_s();
 }
 
 static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
@@ -882,7 +882,7 @@ static bool llama_kv_cache_init(
                 continue;
             }
             if (qnext_recurrent) {
-                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
+                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_s(), qnext_state_slots);
                 auto s_name = std::string{"cache_s_l"} + std::to_string(i);
                 ggml_set_name(s, s_name.c_str());
                 cache.s_l[i] = s;
@@ -902,7 +902,7 @@ static bool llama_kv_cache_init(
                         if (!split) continue;
                         GGML_ASSERT(split->ne[0] % head_v_dim == 0);
                         int nv = split->ne[0] / head_v_dim;
-                        auto size = hparams.n_embd_v_s_id(nv);
+                        auto size = hparams.n_embd_s_id(nv);
                         split_s_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, size, qnext_state_slots);
                         auto split_name = s_name + '.' + std::to_string(is);
                         ggml_set_name(split_s_l.tensor_splits[is], split_name.c_str());
@@ -6511,7 +6511,7 @@ struct llama_data_write {
         // Iterate and write all the keys first, each row is a cell
         // Get whole range at a time
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_r();
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
@@ -6916,7 +6916,7 @@ struct llama_data_read {
 
         // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_r();
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
