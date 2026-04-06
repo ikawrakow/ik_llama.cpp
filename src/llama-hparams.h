@@ -91,6 +91,9 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for Mamba-2: apply RMSNorm to dt, B, C projections
+    bool ssm_dt_b_c_rms = false;
+
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
@@ -174,6 +177,7 @@ struct llama_hparams {
         if (this->ssm_d_state != other.ssm_d_state) return true;
         if (this->ssm_dt_rank != other.ssm_dt_rank) return true;
         if (this->ssm_n_group != other.ssm_n_group) return true;
+        if (this->ssm_dt_b_c_rms != other.ssm_dt_b_c_rms) return true;
         if (this->recurrent_layer_arr != other.recurrent_layer_arr) return true;
 
         if (this->dec_start_token_id != other.dec_start_token_id) return true;
