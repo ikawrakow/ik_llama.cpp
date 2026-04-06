@@ -2239,6 +2239,7 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
                          float       * qkv, const float * sinkf, float * M, float * S)
 
 IQK_FA_CASE(iqk_fa_576_512);
+IQK_FA_CASE(iqk_fa_512_512);
 IQK_FA_CASE(iqk_fa_320_256);
 IQK_FA_CASE(iqk_fa_192_128);
 IQK_FA_CASE(iqk_fa_192_192);

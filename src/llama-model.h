@@ -157,6 +157,11 @@ struct llama_layer {
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc = nullptr;
     struct ggml_tensor * wqkv_gate = nullptr;
+    struct ggml_tensor * ffn_post_norm_1 = nullptr; // gemma4
+    struct ggml_tensor * ffn_post_norm_2 = nullptr; // gemma4
+    struct ggml_tensor * ffn_pre_norm_2  = nullptr; // gemma4
+    struct ggml_tensor * ffn_gate_inp_s  = nullptr; // gemma4
+
 
     // attention
     struct ggml_tensor * wq = nullptr;
@@ -275,6 +280,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_exps_b_dup = nullptr;
     struct ggml_tensor * ffn_down_exps_b_dup = nullptr;
     struct ggml_tensor * ffn_up_exps_b_dup = nullptr;
+    struct ggml_tensor * ffn_down_exps_s = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
@@ -305,6 +311,11 @@ struct llama_layer {
     llama_split_tensor split_ffn_up_b;
     llama_split_tensor split_ffn_act;
     llama_split_tensor split_ffn_exp_probs_b;
+
+    // misc
+    struct ggml_tensor * per_layer_inp_gate;
+    struct ggml_tensor * per_layer_proj;
+    struct ggml_tensor * per_layer_post_norm;
 
     // mamba proj
     struct ggml_tensor * ssm_in = nullptr;
@@ -347,6 +358,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_scale = nullptr;
     struct ggml_tensor * ffn_up_scale = nullptr;
     struct ggml_tensor * ffn_down_scale = nullptr;
+    struct ggml_tensor * out_scale = nullptr; // gemma4 layer output scale
 
     struct llama_layer_nextn nextn;
 
@@ -379,6 +391,10 @@ struct llama_model {
     struct ggml_tensor * pos_embd;
     struct ggml_tensor * tok_norm;
     struct ggml_tensor * tok_norm_b;
+
+    struct ggml_tensor * tok_embd_per_layer = nullptr;
+    struct ggml_tensor * per_layer_model_proj = nullptr;
+    struct ggml_tensor * per_layer_proj_norm = nullptr;
 
     struct ggml_tensor * output_norm;
     struct ggml_tensor * output_norm_b;

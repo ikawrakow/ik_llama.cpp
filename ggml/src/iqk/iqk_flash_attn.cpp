@@ -215,6 +215,9 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
         for (; last_k > first_k; --last_k) {
             if (umask[last_k-1] == 0) break;
         }
+        int non = 32*((last_k - first_k + 31)/32);
+        first_k = std::max(0, last_k - non);
+        last_k = std::min(first_k + non, nek1);
         //printf("nek1 = %d, first = %d, last = %d\n", nek1, first, last);
         if (last_k - first_k <= 3*nek1/4 && (last_k - first_k)%32 == 0) {
             //printf("Reducing from %d to %d\n", nek1, last_k - first_k);
