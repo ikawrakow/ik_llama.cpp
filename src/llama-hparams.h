@@ -94,6 +94,25 @@ struct llama_hparams {
     // for Mamba-2: apply RMSNorm to dt, B, C projections
     bool ssm_dt_b_c_rms = false;
 
+    // Recurrent state layout discriminator.
+    //
+    // ik_llama hosts two incompatible packings of the per-layer recurrent
+    // state for hybrid SSM models, both signaled by `ssm_n_group > 0`:
+    //
+    //   - Qwen3.5 Gated DeltaNet ("qnext"): conv state is packed inside
+    //     the V-cache slot together with a head_v² × num_v_heads delta-net
+    //     matrix. n_embd_r() returns 0; n_embd_s() returns the packed sum.
+    //
+    //   - Mamba-2 / Nemotron-H standard SSM: conv state lives in the K-cache
+    //     slot with shape (d_conv-1) * (d_inner + 2*n_group*d_state); the
+    //     recurrent state lives in the V-cache slot with shape d_state * d_inner.
+    //
+    // Default is `false` so any pure-Mamba arch (incl. Mamba-1, where
+    // n_group=0 collapses the formula back to (d_conv-1)*d_inner) gets
+    // the standard layout. The three Qwen3.5 GDN cases in llm_load_hparams
+    // explicitly set this to `true`.
+    bool use_qnext_state_layout = false;
+
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 

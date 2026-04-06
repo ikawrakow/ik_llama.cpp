@@ -467,6 +467,10 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
+                // QWEN3NEXT uses the GDN packed state layout (n_embd_r = 0,
+                // delta-net matrix in the V-cache). See llama_hparams::n_embd_r/s.
+                hparams.use_qnext_state_layout = true;
+
                 // Upstream convention: every 4th layer is full attention, others are recurrent.
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                     hparams.recurrent_layer_arr[i] = ((i + 1) % 4 != 0);
@@ -491,6 +495,10 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                // QWEN35MOE uses the GDN packed state layout (Qwen3.5-A3B
+                // production target). See llama_hparams::n_embd_r/s.
+                hparams.use_qnext_state_layout = true;
 
                 // NextN/MTP parameters (read before recurrent layer marking)
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
@@ -530,6 +538,10 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                // QWEN35 (dense Qwen3.5) uses the GDN packed state layout.
+                // See llama_hparams::n_embd_r/s.
+                hparams.use_qnext_state_layout = true;
 
                 // Mark recurrent layers (linear attention layers)
                 {
@@ -1411,25 +1423,30 @@ void llm_load_hparams(
 // Renamed from n_embd_k_s / n_embd_v_s / n_embd_v_s_id to match the upstream
 // llama.cpp naming (n_embd_r = rolling state, n_embd_s = recurrent state).
 //
-// Phase 3.1.B.1 keeps the existing GDN (qnext) and Mamba-1 branches verbatim.
-// Phase 3.1.B.2 will add LLM_ARCH_MAMBA2 + LLM_ARCH_NEMOTRON_H_MOE branches
-// — but this commit only renames; behaviour is byte-equivalent for every
-// arch already supported.
+// Phase 3.1.B.2 adds first-class Mamba-2 / Nemotron-H support. The two
+// layouts (qnext GDN vs standard Mamba SSM) are selected by the explicit
+// `use_qnext_state_layout` flag in llama_hparams, which the loader sets to
+// true exactly for the three Qwen3.5 GDN arches (QWEN3NEXT, QWEN35MOE,
+// QWEN35). Mamba-1 / Mamba-2 / Nemotron-H all leave it false (default) and
+// fall through to the upstream Mamba formula. Mamba-1 stays byte-equivalent
+// because for it n_group=0 collapses (d_inner + 2*n_group*d_state) back to
+// d_inner.
 
 uint32_t llama_hparams::n_embd_r() const {
-    if (ssm_n_group > 0) {
-        // qwen3next / Qwen3.5 GDN: keeps all recurrent state in the V-cache tail
+    if (use_qnext_state_layout) {
+        // qwen3next / Qwen3.5 GDN keeps all recurrent state in the V-cache tail
         return 0;
     }
-    // corresponds to Mamba-1's conv_states size
+    // Standard Mamba family conv-state size.
+    //   Mamba-1 :  n_group = 0  =>  (d_conv - 1) * d_inner               (legacy)
+    //   Mamba-2 :  n_group > 0  =>  (d_conv - 1) * (d_inner + 2*g*d_st)  (Mamba-2 ext.)
+    //   Nemotron-H : same formula as Mamba-2 (it inherits the SSM block).
     // TODO: maybe support other convolution strides than 1
-    // NOTE: since the first column of the conv_state is shifted out each time,
-    //       it's not actually needed
-    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * ssm_d_inner;
+    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2 * ssm_n_group * ssm_d_state);
 }
 
 uint32_t llama_hparams::n_embd_s() const {
-    if (ssm_n_group > 0) {
+    if (use_qnext_state_layout) {
         // qnext recurrent state packs together:
         //   1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
         //   2) delta-net state: head_v_dim * head_v_dim * num_v_heads
@@ -1441,7 +1458,10 @@ uint32_t llama_hparams::n_embd_s() const {
         const uint32_t ssm_state_dim  = head_v_dim * head_v_dim * ssm_dt_rank;
         return conv_state_dim + ssm_state_dim;
     }
-    // corresponds to Mamba-1's ssm_states size
+    // Standard Mamba family recurrent state: d_state * d_inner.
+    // Identical for Mamba-1, Mamba-2, and Nemotron-H — only the SCAN is
+    // different (chunked associative scan for Mamba-2 / Nemotron-H, naive
+    // sequential for Mamba-1). State *size* is the same.
     return ssm_d_state * ssm_d_inner;
 }
 
