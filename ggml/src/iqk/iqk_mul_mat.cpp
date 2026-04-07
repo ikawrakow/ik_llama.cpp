@@ -352,10 +352,10 @@ struct MulMat {
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_KV_R8:
-            case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
+            case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -1387,6 +1387,10 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 
     if (Dk == 576 && Dv == 512) {
         return iqk_fa_576_512(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
+                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+    }
+    if (Dk == 512 && Dv == 512) {
+        return iqk_fa_512_512(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
                 q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
     }
     if (Dk == 320 && Dv == 256) {

@@ -52,6 +52,9 @@
 #define LLAMA_STATE_SEQ_MAGIC   LLAMA_FILE_MAGIC_GGSQ
 #define LLAMA_STATE_SEQ_VERSION 3
 
+#define LLAMA_SERVER_MAGIC 0x6c6d7376u // 'lmsv'
+#define LLAMA_SERVER_VERSION 1 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
