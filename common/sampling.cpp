@@ -519,10 +519,6 @@ static llama_token_data_array llama_sampling_prepare_impl(
 
     llama_token_data_array & cur_p = ctx_sampling->cur_p;
 
-    for (const auto& it: params.tmp_logit_bias) {
-        cur_p.data[it.first].logit = logits[it.first] + it.second;
-    }
-
     // apply penalties
     const auto& penalty_tokens = params.use_penalty_prompt_tokens ? params.penalty_prompt_tokens : prev;
     const int penalty_tokens_used_size = std::min((int)penalty_tokens.size(), penalty_last_n);

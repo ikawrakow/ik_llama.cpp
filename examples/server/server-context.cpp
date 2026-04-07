@@ -397,9 +397,6 @@ void server_slot::reset() {
     allow_bin_thresh = 0;
     allow_bin_kw_counter = 0;
 
-    tmp_bias_duration = 0;
-    tmp_bias_kw = "";
-
     // Reset speculative decoding stats
     n_draft_total = 0;
     n_draft_accepted = 0;
@@ -1249,46 +1246,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (json_value(data, "ignore_eos", false) && has_eos_token) {
             slot.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
         }
-
-        // apply temporary logit bias
-        slot.sparams.tmp_logit_bias.clear();
-        const auto& temporary_logit_bias = data.find("temporary_logit_bias");
-        if ((temporary_logit_bias != data.end()) && temporary_logit_bias->is_array()) {
-            std::vector<llama_token> tokens;
-            for (const auto& elem: *temporary_logit_bias) {
-                if (!elem.is_array() || (elem.size() != 2)) {
-                    LLAMA_LOG_WARN("%s: temporary_logit_bias: skipping invalid element, .size = %zu\n", __func__, elem.size());
-                    continue;
-                } else if (!elem[0].is_string()) {
-                    LLAMA_LOG_WARN("%s: temporary_logit_bias: piece arg is not a string\n", __func__);
-                    continue;
-                } else if (!elem[1].is_number()) {
-                    LLAMA_LOG_WARN("%s: temporary_logit_bias: bias arg is not a number\n", __func__);
-                    continue;
-                }
-
-                const auto piece = elem[0].get<std::string>();
-                tokens = common_tokenize(model, piece, false, true);
-                if (tokens.size() == 1) {
-                    slot.sparams.tmp_logit_bias[tokens[0]] = elem[0].get<float>();
-                } else {
-                    LLAMA_LOG_WARN("%s: temporary_logit_bias: skipping `%s`, .size = %zu\n", __func__, piece.c_str(), tokens.size());
-                }
-            }
-        } else if (params_base.tmp_piece_bias.size() > 0) {
-            std::vector<llama_token> tokens;
-            for (const auto& piece_bias: params_base.tmp_piece_bias) {
-                tokens = common_tokenize(model, piece_bias.first, false, true);
-                if (tokens.size() == 1) {
-                    slot.sparams.tmp_logit_bias[tokens[0]] = piece_bias.second;
-                } else if (tokens.size() > 1) {
-                    LLAMA_LOG_WARN("%s: tmp_logit_bias: skipping `%s`, .size = %zu\n", __func__, piece_bias.first.c_str(), tokens.size());
-                }
-            }
-        }
-
-        slot.tmp_bias_duration = json_value(data, "temporary_bias_duration", params_base.tmp_bias_duration);
-        slot.tmp_bias_kw = json_value(data, "temporary_bias_keyword", params_base.tmp_bias_kw);
     }
 
     {
@@ -3627,7 +3584,6 @@ void server_context::speculative_decoding_accept() {
 
         size_t n_draft = slot.drafted.size();
 
-        update_temporary_bias_state(slot);
         update_allowlist_state(slot);
         apply_server_biases(slot);
 
@@ -3995,26 +3951,6 @@ void server_context::update_allowlist_state(server_slot& slot) {
     }
 }
 
-void server_context::update_temporary_bias_state(server_slot& slot) {
-    auto& logit_bias = slot.ctx_sampling->params.tmp_logit_bias;
-    if (logit_bias.size() == 0) {
-        return;
-    }
-
-    if (slot.n_decoded >= slot.tmp_bias_duration) {
-        LLAMA_LOG_DEBUG("%s: expired\n", __func__);
-        logit_bias.clear();
-        return;
-    }
-
-    const auto& kw = slot.tmp_bias_kw;
-    if (!kw.empty() && (slot.generated_text.find(kw, slot.last_gentxt_size) != std::string::npos)) {
-        LLAMA_LOG_DEBUG("%s: found keyword\n", __func__);
-        logit_bias.clear();
-        return;
-    }
-}
-
 void server_context::process_batch_tokens(int32_t & n_batch) {
     for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
         const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
@@ -4135,7 +4071,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
 
-            update_temporary_bias_state(slot);
             update_allowlist_state(slot);
             apply_server_biases(slot);
 

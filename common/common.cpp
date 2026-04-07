@@ -1703,26 +1703,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.allow_bin_thresh = std::stoul(argv[i]);
         return true;
     }
-    if (arg == "--temporary-bias") {
-        CHECK_ARG
-        params.tmp_piece_bias[""] = std::stof(argv[i]);
-        return true;
-    }
-    if (arg == "--temporary-piece") {
-        CHECK_ARG
-        params.tmp_piece_bias[argv[i]] = params.tmp_piece_bias.at("");
-        return true;
-    }
-    if (arg == "--temporary-bias-duration") {
-        CHECK_ARG
-        params.tmp_bias_duration = std::stoul(argv[i]);
-        return true;
-    }
-    if (arg == "--temporary-bias-keyword") {
-        CHECK_ARG
-        params.tmp_bias_kw = argv[i];
-        return true;
-    }
     if (arg == "-ld" || arg == "--logdir") {
         CHECK_ARG
         params.logdir = argv[i];
@@ -2486,12 +2466,6 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "binning: BIAS>=0 -> 0, BIAS<0 -> -999", params.allow_bin_kw.c_str() });
     options.push_back({ "*",           "       --allowlist-binning-threshold",
                                                                         "# keyword match > threshold triggers binning (default: %zu)", params.allow_bin_thresh });
-    options.push_back({ "*",           "       --temporary-bias",       "modifies token likelihood temporarily. applies to subsequent --temporary-piece. can be specified multiple times" });
-    options.push_back({ "*",           "       --temporary-piece",      "apply most immediate previous --temporary-bias to argument. no-op if argument tokenizes to multiple tokens" });
-    options.push_back({ "*",           "       --temporary-bias-duration",
-                                                                        "number of tokens to apply bias from the start of generation (default: %zu, 0 = disabled)", params.tmp_bias_duration });
-    options.push_back({ "*",           "       --temporary-bias-keyword",
-                                                                        "keyword to trigger deactivating temporary bias, if matched within duration" });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });

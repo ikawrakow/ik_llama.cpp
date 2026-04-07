@@ -116,10 +116,6 @@ struct server_slot {
     std::vector<float> allow_biases;
     std::vector<float> allow_bin_biases;
 
-    // temporary logit bias
-    size_t tmp_bias_duration = 0;
-    std::string tmp_bias_kw;
-
     server_prompt server_cached_prompt;
 
     void prompt_save(server_prompt_cache& prompt_cache) const;
@@ -386,8 +382,6 @@ struct server_context {
     void buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
 
     void update_allowlist_state(server_slot& slot);
-
-    void update_temporary_bias_state(server_slot& slot);
 
     json model_meta() const;
 
