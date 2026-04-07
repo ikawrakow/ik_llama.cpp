@@ -1246,6 +1246,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (json_value(data, "ignore_eos", false) && has_eos_token) {
             slot.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
         }
+
     }
 
     {
