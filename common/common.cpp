@@ -1652,31 +1652,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--allowlist-unicode-rule") {
         CHECK_ARG
-        auto subs = string_split(argv[i], ":");
-        float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
-
-        subs = string_split(subs[0], ",");
-        std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
-            return std::isalpha(c);
-        }) ? string_lower(subs.back()) : "*";
-        if (script == "ascii") {
-            params.allow_rules.push_back({ 0x000000, 0x00007F, "*", bias });
-            return true;
-        }
-
-        uint32_t first = 0;
-        uint32_t last = -1;
-        if ((script == "*") || (subs.size() > 1)) {
-            subs = string_split(subs.front(), ".");
-            if (!subs.front().empty()) {
-                first = std::stoul(subs.front());
-            }
-            if (!subs.back().empty()) {
-                last = std::stoul(subs.back());
-            }
-        }
-
-        params.allow_rules.push_back({ first, last, script, bias });
+        params.allow_rules.push_back(argparse_allowlist_unicode_rule(argv[i]));
         return true;
     }
     if (arg == "--allowlist-no-defer-common") {
@@ -4550,4 +4526,38 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "adaptive_updt_w_cur: %s # default: false\n", sparams.adaptive_updt_w_cur ? "true" : "false");
     fprintf(stream, "verbose_prompt: %s # default: false\n", params.verbose_prompt ? "true" : "false");
     fprintf(stream, "display_prompt: %s # default: true\n", params.display_prompt ? "true" : "false");
+}
+
+//
+// Argparse utils
+//
+
+std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_rule(std::string argstr) {
+    // format:
+    //   LOWER..UPPER,SCRIPT:BIAS
+
+    auto subs = string_split(argstr, ":");
+    float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
+
+    subs = string_split(subs[0], ",");
+    std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
+        return std::isalpha(c);
+    }) ? string_lower(subs.back()) : "*";
+    if (script == "ascii") {
+        return { 0x000000, 0x00007F, "*", bias };
+    }
+
+    uint32_t first = 0;
+    uint32_t last = -1;
+    if ((script == "*") || (subs.size() > 1)) {
+        subs = string_split(subs.front(), ".");
+        if (!subs.front().empty()) {
+            first = std::stoul(subs.front());
+        }
+        if (!subs.back().empty()) {
+            last = std::stoul(subs.back());
+        }
+    }
+
+    return { std::min(first, last), std::max(first, last), script, bias };
 }

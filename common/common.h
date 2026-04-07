@@ -731,3 +731,9 @@ void yaml_dump_non_result_info(
     const std::string & timestamp, const std::vector<int> & prompt_tokens, const char * model_desc);
 
 std::string string_format(const char* fmt, ...);
+
+//
+// Argparse utils
+//
+
+std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_rule(std::string argstr);

@@ -1364,37 +1364,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 if (!allowlist_unicode_rule_array->at(j).is_string()) {
                     continue;
                 }
-
-                // bias; arg format: `:BIAS`
-                const auto rule = allowlist_unicode_rule_array->at(j).get<std::string>();
-                auto subs = string_split(rule, ":");
-                float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
-
-                // script name; arg format: `,SCRIPT`
-                subs = string_split(subs[0], ",");
-                std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
-                    return std::isalpha(c);
-                }) ? string_lower(subs.back()) : "*";
-                if (script == "ascii") {
-                    slot.allow_rules.push_back({ 0x000000, 0x00007F, "*", bias });
-                    continue;
-                }
-
-                // codepoint range; arg format: `LOWER..UPPER`
-                uint32_t first = 0;
-                uint32_t last = -1;
-                if ((script == "*") || (subs.size() > 1)) {
-                    subs = string_split(subs.front(), ".");
-                    if (!subs.front().empty()) {
-                        first = std::stoul(subs.front());
-                    }
-                    if (!subs.back().empty()) {
-                        last = std::stoul(subs.back());
-                    }
-                }
-
-                // complete format: `LOWER..UPPER,SCRIPT:BIAS`
-                slot.allow_rules.push_back({ first, last, script, bias });
+                slot.allow_rules.push_back(argparse_allowlist_unicode_rule(allowlist_unicode_rule_array->at(j).get<std::string>()));
             }
             slot.allow_df_common = data.find("allowlist_no_defer_common") == data.end();
         }
