@@ -596,7 +596,8 @@ void server_slot::print_timings() const {
             draft_ratio, n_draft_accepted, n_draft_total
         );
     }
-    common_speculative_print_stats(spec, n_gen_second, n_decoded);
+    common_speculative_print_stats(spec, n_gen_second, n_decoded, n_past,
+        const_cast<common_params_speculative *>(&params.speculative));
 }
 
 void server_metrics::init() {
@@ -2717,8 +2718,8 @@ void server_context::add_sampled_tokens() {
         // generate draft tokens in speculative decoding mode
         // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
         //       perform the speculative drafting for all sequences at the same time in a single batch
-        const int n_draft_max = slot.get_n_draft_max();
-        if (n_draft_max > 0) {
+        const int n_draft_max_pre = slot.get_n_draft_max();
+        if (n_draft_max_pre > 0) {
             if (mctx) {
                 // we should never reach this, as speculative is automatically disabled if mmproj is loaded
                 GGML_ABORT("not supported by multimodal");
@@ -2747,8 +2748,13 @@ void server_context::add_sampled_tokens() {
 
             llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
+            // recompute n_draft_max AFTER draft — tuner's propose() may have changed n_max
+            const int n_draft_max = slot.get_n_draft_max();
+
             if (draft.size() > (size_t)n_draft_max) {
-                SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                // When autotune is active this is expected near end-of-response
+                // (n_remaining → 0), not a configuration error — log at DBG level only.
+                SLT_DBG(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
                 draft.resize(n_draft_max);
             }
 
