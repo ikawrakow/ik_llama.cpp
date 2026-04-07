@@ -2748,13 +2748,15 @@ void server_context::add_sampled_tokens() {
 
             llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
-            // recompute n_draft_max AFTER draft — tuner's propose() may have changed n_max
             const int n_draft_max = slot.get_n_draft_max();
 
             if (draft.size() > (size_t)n_draft_max) {
-                // When autotune is active this is expected near end-of-response
-                // (n_remaining → 0), not a configuration error — log at DBG level only.
-                SLT_DBG(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                if (slot.params.speculative.autotune) {
+                    // expected near end-of-response when autotune shrinks n_max
+                    SLT_DBG(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                } else {
+                    SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                }
                 draft.resize(n_draft_max);
             }
 
