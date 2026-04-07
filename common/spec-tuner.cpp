@@ -7,8 +7,6 @@
 #include <iomanip>
 #include <random>
 
-// spec_tuner_coord
-
 int spec_tuner_coord::find_nearest_arm(float value) const {
     int idx = 0;
     float best_dist = 1e30f;
@@ -93,8 +91,6 @@ void spec_tuner_coord::build_grid_int(int lo, int hi, int step, int user_value) 
         });
     }
 }
-
-// spec_tuner
 
 void spec_tuner::reset_exploration() {
     n_resets++;

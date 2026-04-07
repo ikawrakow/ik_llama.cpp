@@ -4,10 +4,6 @@
 #include "common.h"
 #include "spec-tuner.h"
 
-#include <vector>
-#include <string>
-#include <memory>
-
 struct common_speculative;
 
 // comma separated list of all types
@@ -42,6 +38,7 @@ llama_tokens common_speculative_draft(
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
+// print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0, int n_past = 0, common_params_speculative * active_params = nullptr);
 
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.

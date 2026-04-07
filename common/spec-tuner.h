@@ -2,11 +2,6 @@
 
 #include "common.h"
 
-#include <string>
-#include <vector>
-#include <cstdint>
-
-
 struct spec_tuner_arm {
     float  value;
     double Q     = 0.0; // mean per-step Tokens-Per-Second (TPS)
