@@ -596,7 +596,7 @@ void server_slot::print_timings() const {
             draft_ratio, n_draft_accepted, n_draft_total
         );
     }
-    common_speculative_print_stats(spec);
+    common_speculative_print_stats(spec, n_gen_second, n_decoded);
 }
 
 void server_metrics::init() {
@@ -2726,7 +2726,7 @@ void server_context::add_sampled_tokens() {
 
             const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
 
-            const auto & params_spec = slot.params.speculative;
+            auto & params_spec = slot.params.speculative;
 
             if (slot.has_mtp) {
                 if (!slot.mtp_hidden_state.empty()) {

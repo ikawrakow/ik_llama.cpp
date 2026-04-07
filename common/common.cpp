@@ -1021,6 +1021,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.p_min = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--spec-autotune") {
+        params.speculative.autotune = true;
+        return true;
+    }
     if (arg == "--chunks") {
         CHECK_ARG
         params.n_chunks = std::stoi(argv[i]);
@@ -2578,6 +2582,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
 
     options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
+    options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
 
     options.push_back({ "retrieval" });
     options.push_back({ "retrieval",   "       --context-file FNAME",   "file to load context from (repeat to specify multiple files)" });

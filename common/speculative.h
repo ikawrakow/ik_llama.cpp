@@ -3,6 +3,12 @@
 #include "llama.h"
 #include "common.h"
 
+#include <vector>
+#include <string>
+#include <memory>
+#include <cmath>
+#include <cstdint>
+
 struct common_speculative;
 
 // comma separated list of all types
@@ -30,15 +36,70 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 // sample up to n_draft tokens and add them to the batch using the draft model
 llama_tokens common_speculative_draft(
                      common_speculative * spec,
-        const common_params_speculative & params,
+                     common_params_speculative & params,
                      const llama_tokens & prompt,
                             llama_token   id_last);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
-// print statistics about the speculative decoding
-void common_speculative_print_stats(const common_speculative * spec);
+void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0);
+
+
+// Speculative Auto-Tuner (Coordinate UCB with Discounting)
+struct spec_tuner_arm {
+    float  value;
+    double Q       = 0.0;   // discounted mean reward (t/s)
+    double N       = 1e-9;  // discounted visit count
+};
+
+struct spec_tuner_coord {
+    std::string name;
+    std::vector<spec_tuner_arm> arms;
+    int current_idx = 0;
+
+    float  best_value = 0.0f;
+    double best_Q     = 0.0;
+
+    int select_ucb(double c, double N_total) const;
+
+    void update(double reward, double gamma);
+
+    void warm_start(float user_value, double init_Q, double init_N);
+
+    void build_grid_float(float lo, float hi, int n_points, float user_value);
+    void build_grid_int(int lo, int hi, int step, int user_value);
+};
+
+struct spec_tuner {
+    bool     enabled     = false;
+    double   gamma       = 0.97;
+    double   c           = 2.0;
+    double   ema_tps     = 0.0;
+    double   ema_alpha   = 0.3;
+    uint64_t total_n     = 0;
+    int      min_tokens  = 10;
+    int64_t  t_tuner_us  = 0;
+
+    double   tps_history[8] = {};
+    int      tps_idx        = 0;
+    bool     boosted        = false;
+    double   c_base         = 2.0;
+    double   c_boost        = 4.0;
+
+    common_speculative_type spec_type = COMMON_SPECULATIVE_TYPE_NONE;
+    std::vector<spec_tuner_coord> coords;
+
+    void init(common_speculative_type type, const common_params_speculative & user_params);
+
+    void propose(common_params_speculative & params);
+
+    void feedback(double slot_tps, int n_decoded, common_params_speculative & active_params);
+
+    void enforce_constraints(common_params_speculative & params);
+
+    void print_best() const;
+};
 
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
 std::vector<llama_token> mtp_speculative_gen_draft(

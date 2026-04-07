@@ -10,9 +10,11 @@
 #include "sampling.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <map>
+#include <sstream>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -774,6 +776,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
+    std::unique_ptr<spec_tuner> tuner;
 };
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
@@ -1009,6 +1012,19 @@ common_speculative * common_speculative_init(
         /* .impls = */ std::move(impls)
     };
 
+    // initialize autotune if requested
+    if (params.autotune && params.type != COMMON_SPECULATIVE_TYPE_NONE &&
+                           params.type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
+        result->tuner = std::make_unique<spec_tuner>();
+        result->tuner->init(params.type, params);
+        LOG_INF("Autotune initialized for %s, tuning %zu parameters\n",
+                common_speculative_type_to_str(params.type).c_str(),
+                result->tuner->coords.size());
+    } else if (params.autotune) {
+        LOG_WRN("Autotune disabled — speculative type %s is not supported for autotuning\n",
+                common_speculative_type_to_str(params.type).c_str());
+    }
+
     return result;
 }
 
@@ -1034,10 +1050,14 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 
 llama_tokens common_speculative_draft(
         common_speculative * spec,
-        const common_params_speculative & params,
+        common_params_speculative & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last) {
     llama_tokens result;
+
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->tuner->propose(params);
+    }
 
     spec->curr_impl = nullptr; // reset current implementation
 
@@ -1085,7 +1105,7 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     }
 }
 
-void common_speculative_print_stats(const common_speculative * spec) {
+void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded) {
     if (spec == nullptr) {
         return;
     }
@@ -1110,6 +1130,13 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 impl->n_gen_tokens,
                 impl->n_acc_tokens,
                 str_perf.c_str());
+    }
+
+    // autotune feedback
+    if (spec->tuner && spec->tuner->enabled && slot_tps > 0.0 && n_decoded > 0) {
+        auto * mutable_spec = const_cast<common_speculative *>(spec);
+        common_params_speculative tmp_params;
+        mutable_spec->tuner->feedback(slot_tps, n_decoded, tmp_params);
     }
 }
 
@@ -1215,4 +1242,338 @@ void mtp_accept_tokens(
     mtp_update_kv_cache(ctx, accepted_batch, false);
 
     llama_batch_free(accepted_batch);
+}
+
+// Speculative Auto-Tuner Implementation
+
+int spec_tuner_coord::select_ucb(double c, double N_total) const {
+    int best_idx = 0;
+    double best_score = -1e30;
+
+    for (int i = 0; i < (int)arms.size(); i++) {
+        double exploit = arms[i].Q;
+        double explore = c * std::sqrt(std::log(N_total + 1.0) / (arms[i].N + 1e-9));
+        double score   = exploit + explore;
+        if (score > best_score) {
+            best_score = score;
+            best_idx   = i;
+        }
+    }
+    return best_idx;
+}
+
+void spec_tuner_coord::update(double reward, double gamma) {
+    auto & arm = arms[current_idx];
+    arm.N += 1.0;
+    arm.Q += (reward - arm.Q) / arm.N;
+
+    // track best
+    if (arm.Q > best_Q) {
+        best_Q     = arm.Q;
+        best_value = arm.value;
+    }
+
+    for (auto & a : arms) {
+        a.N *= gamma;
+    }
+}
+
+void spec_tuner_coord::warm_start(float user_value, double init_Q, double init_N) {
+    // find nearest arm to user's value
+    int best_idx = 0;
+    float best_dist = 1e30f;
+    for (int i = 0; i < (int)arms.size(); i++) {
+        float dist = std::fabs(arms[i].value - user_value);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_idx  = i;
+        }
+    }
+    arms[best_idx].Q = init_Q;
+    arms[best_idx].N = init_N;
+    best_value = arms[best_idx].value;
+    best_Q     = init_Q;
+}
+
+void spec_tuner_coord::build_grid_float(float lo, float hi, int n_points, float user_value) {
+    arms.clear();
+
+    for (int i = 0; i < n_points; i++) {
+        float v = lo + (hi - lo) * i / std::max(1, n_points - 1);
+        arms.push_back({v, 0.0, 1e-9});
+    }
+
+    // ensure user value is in the grid
+    bool found = false;
+    for (auto & a : arms) {
+        if (std::fabs(a.value - user_value) < 1e-6f) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        arms.push_back({user_value, 0.0, 1e-9});
+        std::sort(arms.begin(), arms.end(), [](const spec_tuner_arm & a, const spec_tuner_arm & b) {
+            return a.value < b.value;
+        });
+    }
+}
+
+void spec_tuner_coord::build_grid_int(int lo, int hi, int step, int user_value) {
+    arms.clear();
+
+    for (int v = lo; v <= hi; v += step) {
+        arms.push_back({(float)v, 0.0, 1e-9});
+    }
+    if (arms.empty() || (int)arms.back().value != hi) {
+        arms.push_back({(float)hi, 0.0, 1e-9});
+    }
+
+    bool found = false;
+    for (auto & a : arms) {
+        if ((int)a.value == user_value) {
+            found = true;
+            break;
+        }
+    }
+    if (!found && user_value >= lo && user_value <= hi) {
+        arms.push_back({(float)user_value, 0.0, 1e-9});
+        std::sort(arms.begin(), arms.end(), [](const spec_tuner_arm & a, const spec_tuner_arm & b) {
+            return a.value < b.value;
+        });
+    }
+}
+
+void spec_tuner::init(common_speculative_type type, const common_params_speculative & user_params) {
+    enabled   = true;
+    spec_type = type;
+    coords.clear();
+    total_n   = 0;
+    ema_tps   = 0.0;
+    t_tuner_us = 0;
+
+    // all types get n_max
+    {
+        spec_tuner_coord coord;
+        coord.name = "n_max";
+        coord.build_grid_int(1, 16, 1, user_params.n_max);
+        coords.push_back(std::move(coord));
+    }
+
+    if (type == COMMON_SPECULATIVE_TYPE_DRAFT) {
+        {
+            spec_tuner_coord coord;
+            coord.name = "p_min";
+            coord.build_grid_float(0.0f, 1.0f, 11, user_params.p_min); // 0.0, 0.1, 0.2, ..., 1.0
+            coords.push_back(std::move(coord));
+        }
+        {
+            spec_tuner_coord coord;
+            coord.name = "n_min";
+            coord.build_grid_int(0, 5, 1, user_params.n_min);
+            coords.push_back(std::move(coord));
+        }
+    }
+
+    if (type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE ||
+        type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K  ||
+        type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) {
+        {
+            spec_tuner_coord coord;
+            coord.name = "ngram_size_n";
+            coord.build_grid_int(4, 24, 2, user_params.ngram_size_n);
+            coords.push_back(std::move(coord));
+        }
+    }
+
+    if (type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K ||
+        type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) {
+        {
+            spec_tuner_coord coord;
+            coord.name = "ngram_size_m";
+            coord.build_grid_int(8, 64, 4, user_params.ngram_size_m);
+            coords.push_back(std::move(coord));
+        }
+        {
+            spec_tuner_coord coord;
+            coord.name = "ngram_min_hits";
+            coord.build_grid_int(1, 5, 1, user_params.ngram_min_hits);
+            coords.push_back(std::move(coord));
+        }
+    }
+
+    LOG_INF("Autotune parameters to tune:\n");
+    for (const auto & coord : coords) {
+        std::ostringstream oss;
+        oss << "  " << coord.name << ": [";
+        for (size_t i = 0; i < coord.arms.size(); i++) {
+            if (i > 0) oss << ", ";
+            oss << coord.arms[i].value;
+        }
+        oss << "]";
+        LOG_INF("%s\n", oss.str().c_str());
+    }
+}
+
+void spec_tuner::propose(common_params_speculative & params) {
+    int64_t t_start = ggml_time_us();
+
+    for (auto & coord : coords) {
+        coord.current_idx = coord.select_ucb(c, (double)(total_n + 1));
+
+        float val = coord.arms[coord.current_idx].value;
+
+        if (coord.name == "n_max")          params.n_max          = (int32_t)val;
+        else if (coord.name == "p_min")     params.p_min          = val;
+        else if (coord.name == "n_min")     params.n_min          = (int32_t)val;
+        else if (coord.name == "ngram_size_n") params.ngram_size_n = (uint16_t)val;
+        else if (coord.name == "ngram_size_m") params.ngram_size_m = (uint16_t)val;
+        else if (coord.name == "ngram_min_hits") params.ngram_min_hits = (uint16_t)val;
+    }
+
+    enforce_constraints(params);
+
+    t_tuner_us += (ggml_time_us() - t_start);
+}
+
+void spec_tuner::enforce_constraints(common_params_speculative & params) {
+    if (params.n_min < 0) params.n_min = 0;
+    if (params.n_max < 1) params.n_max = 1;
+    if (params.n_max < params.n_min) params.n_max = params.n_min;
+
+    if (params.p_min < 0.0f) params.p_min = 0.0f;
+    if (params.p_min > 1.0f) params.p_min = 1.0f;
+
+    if (params.ngram_size_n < 1) params.ngram_size_n = 1;
+    if (params.ngram_size_m < 1) params.ngram_size_m = 1;
+    if (params.ngram_min_hits < 1) params.ngram_min_hits = 1;
+}
+
+void spec_tuner::feedback(double slot_tps, int n_decoded, common_params_speculative & active_params) {
+    GGML_UNUSED(active_params);
+
+    int64_t t_start = ggml_time_us();
+
+    // skip very short slots
+    if (n_decoded < min_tokens) {
+        t_tuner_us += (ggml_time_us() - t_start);
+        return;
+    }
+
+    total_n++;
+
+    if (ema_tps <= 0.0) {
+        ema_tps = slot_tps;
+    } else {
+        ema_tps = ema_alpha * slot_tps + (1.0 - ema_alpha) * ema_tps;
+    }
+
+    tps_history[tps_idx % 8] = slot_tps;
+    tps_idx++;
+
+    if (tps_idx >= 8) {
+        double sum = 0.0, sum2 = 0.0;
+        for (int i = 0; i < 8; i++) {
+            sum  += tps_history[i];
+            sum2 += tps_history[i] * tps_history[i];
+        }
+        double mean = sum / 8.0;
+        double var  = sum2 / 8.0 - mean * mean;
+        double std  = std::sqrt(std::max(0.0, var));
+
+        if (mean > 0.0 && std / mean > 0.20) {
+            if (!boosted) {
+                LOG_INF("Autotune high variance detected (σ/μ = %.1f%%), boosting exploration\n",
+                        100.0 * std / mean);
+            }
+            c = c_boost;
+            boosted = true;
+        } else if (boosted) {
+            LOG_INF("Autotune variance stabilized, reverting to normal exploration\n");
+            c = c_base;
+            boosted = false;
+        }
+    }
+
+    for (auto & coord : coords) {
+        coord.update(slot_tps, gamma);
+    }
+
+    // warm-start on first feedback
+    if (total_n == 1) {
+        for (auto & coord : coords) {
+            for (int i = 0; i < (int)coord.arms.size(); i++) {
+                if (i != coord.current_idx && coord.arms[i].N < 0.5) {
+                    coord.arms[i].Q = slot_tps * 0.9; // slightly pessimistic prior
+                    coord.arms[i].N = 0.5;
+                }
+            }
+        }
+    }
+
+    t_tuner_us += (ggml_time_us() - t_start);
+
+    if (total_n <= 5 || total_n % 10 == 0) {
+        print_best();
+    }
+}
+
+void spec_tuner::print_best() const {
+    std::ostringstream oss;
+    oss << "Autotune iter=" << total_n << " ema_tps=" << std::fixed << std::setprecision(2) << ema_tps;
+
+    if (boosted) {
+        oss << " [EXPLORING]";
+    }
+
+    oss << " best:";
+    for (const auto & coord : coords) {
+        oss << " " << coord.name << "=";
+        bool is_int = (coord.name == "n_max" || coord.name == "n_min" ||
+                       coord.name == "ngram_size_n" || coord.name == "ngram_size_m" ||
+                       coord.name == "ngram_min_hits");
+        if (is_int) {
+            oss << (int)coord.best_value;
+        } else {
+            oss << std::fixed << std::setprecision(2) << coord.best_value;
+        }
+        oss << "(Q=" << std::fixed << std::setprecision(1) << coord.best_Q << ")";
+    }
+
+    oss << " current:";
+    for (const auto & coord : coords) {
+        bool is_int = (coord.name == "n_max" || coord.name == "n_min" ||
+                       coord.name == "ngram_size_n" || coord.name == "ngram_size_m" ||
+                       coord.name == "ngram_min_hits");
+        oss << " " << coord.name << "=";
+        if (is_int) {
+            oss << (int)coord.arms[coord.current_idx].value;
+        } else {
+            oss << std::fixed << std::setprecision(2) << coord.arms[coord.current_idx].value;
+        }
+    }
+
+    oss << " tuner_overhead=" << std::fixed << std::setprecision(3) << t_tuner_us / 1000.0 << "ms";
+
+    oss << "\n[autotune] reuse: ";
+    for (const auto & coord : coords) {
+        bool is_int = (coord.name == "n_max" || coord.name == "n_min" ||
+                       coord.name == "ngram_size_n" || coord.name == "ngram_size_m" ||
+                       coord.name == "ngram_min_hits");
+        if (coord.name == "n_max")             oss << "--draft-max ";
+        else if (coord.name == "p_min")        oss << "--draft-p-min ";
+        else if (coord.name == "n_min")        oss << "--draft-min ";
+        else if (coord.name == "ngram_size_n") oss << "--spec-ngram-size-n ";
+        else if (coord.name == "ngram_size_m") oss << "--spec-ngram-size-m ";
+        else if (coord.name == "ngram_min_hits") oss << "--spec-ngram-min-hits ";
+        else oss << "--" << coord.name << " ";
+
+        if (is_int) {
+            oss << (int)coord.best_value << " ";
+        } else {
+            oss << std::fixed << std::setprecision(2) << coord.best_value << " ";
+        }
+    }
+
+    LOG_INF("%s\n", oss.str().c_str());
 }

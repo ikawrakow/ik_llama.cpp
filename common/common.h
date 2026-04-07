@@ -200,6 +200,8 @@ struct common_params_speculative {
     std::string cache_type_k = ""; // KV cache data type for K for the draft model
     std::string cache_type_v = ""; // KV cache data type for V for the draft model
 
+    bool autotune = false; // automatically optimize speculative params for max tokens/sec
+
     bool has_dft() const {
         return !model.empty() || !params.empty();
         //return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();
