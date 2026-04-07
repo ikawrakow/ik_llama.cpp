@@ -1,8 +1,14 @@
 // generated with scripts/gen-unicode-script-data.py
 
+#include "unicode.h"
 #include "unicode-data.h"
 
-const std::vector<std::string> unicode_scripts = {
+size_t unicode_fill_from_utf8(std::string* utf8, std::vector<uint32_t>* dst_cpts, std::vector<std::string>* dst_scripts) {
+    if (utf8 == nullptr) {
+        return 0;
+    }
+
+static const std::vector<std::string> unicode_scripts = {
     "common",
     "latin",
     "common",
@@ -988,7 +994,7 @@ const std::vector<std::string> unicode_scripts = {
     "common",
     "inherited",
 };
-const std::vector<uint32_t> unicode_script_lasts = {
+static const std::vector<uint32_t> unicode_script_lasts = {
     0x000040,
     0x00005A,
     0x000060,
@@ -1974,3 +1980,26 @@ const std::vector<uint32_t> unicode_script_lasts = {
     0x0E007F,
     0x0E01EF,
 };
+    const auto cpts = unicode_cpts_from_utf8(*utf8);
+    const size_t n_cpt = cpts.size();
+
+    std::vector<std::string> scripts;
+    scripts.reserve(n_cpt);
+
+    for (const auto& cpt: cpts) {
+        const auto it = std::lower_bound(unicode_script_lasts.begin(), unicode_script_lasts.end(), cpt);
+        if (it != unicode_script_lasts.end()) {
+            scripts.push_back(unicode_scripts[std::distance(unicode_script_lasts.begin(), it)]);
+        }
+    }
+
+    if (dst_cpts != nullptr) {
+        *dst_cpts = cpts;
+    }
+    if (dst_scripts != nullptr) {
+        *dst_scripts = scripts;
+    }
+
+    return n_cpt;
+}
+

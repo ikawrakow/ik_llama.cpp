@@ -54,25 +54,57 @@ for cpt_lower, cpt_upper, script in cptL_cptU_script[1:]:
         cptL_cptU_script[im] = [cpt_lower, cpt_upper, script]
 del cptL_cptU_script[im + 1:]
 
-# Generate 'unicode-script-data.cpp':
-#   python ik_llama.cpp/scripts/gen-unicode-script-data.py > ik_llama.cpp/src/unicode-script-data.cpp
-
 def out(line=""):
     print(line, end='\n')  # noqa
 
+# Generate 'unicode-script-data.cpp':
+#   python scripts/gen-unicode-script-data.py > src/unicode-script-data.cpp
 
 out("""\
 // generated with scripts/gen-unicode-script-data.py
 
+#include "unicode.h"
 #include "unicode-data.h"
 """)
 
-out("const std::vector<std::string> unicode_scripts = {")
+out("""\
+size_t unicode_fill_from_utf8(std::string* utf8, std::vector<uint32_t>* dst_cpts, std::vector<std::string>* dst_scripts) {
+    if (utf8 == nullptr) {
+        return 0;
+    }
+""")
+
+out("static const std::vector<std::string> unicode_scripts = {")
 for _, _, script in cptL_cptU_script:
     out("    \"%s\"," % script)
 out("};")
 
-out("const std::vector<uint32_t> unicode_script_lasts = {")
+out("static const std::vector<uint32_t> unicode_script_lasts = {")
 for _, cpt_upper, _ in cptL_cptU_script:
     out("    0x%06X," % cpt_upper)
 out("};")
+
+out("""\
+    const auto cpts = unicode_cpts_from_utf8(*utf8);
+    const size_t n_cpt = cpts.size();
+
+    std::vector<std::string> scripts;
+    scripts.reserve(n_cpt);
+
+    for (const auto& cpt: cpts) {
+        const auto it = std::lower_bound(unicode_script_lasts.begin(), unicode_script_lasts.end(), cpt);
+        if (it != unicode_script_lasts.end()) {
+            scripts.push_back(unicode_scripts[std::distance(unicode_script_lasts.begin(), it)]);
+        }
+    }
+
+    if (dst_cpts != nullptr) {
+        *dst_cpts = cpts;
+    }
+    if (dst_scripts != nullptr) {
+        *dst_scripts = scripts;
+    }
+
+    return n_cpt;
+}
+""")

@@ -19,6 +19,3 @@ extern const std::unordered_set<uint32_t> unicode_set_whitespace;
 extern const std::unordered_map<uint32_t, uint32_t> unicode_map_lowercase;
 extern const std::unordered_map<uint32_t, uint32_t> unicode_map_uppercase;
 extern const std::vector<range_nfd> unicode_ranges_nfd;
-
-extern const std::vector<std::string> unicode_scripts;
-extern const std::vector<uint32_t> unicode_script_lasts;
