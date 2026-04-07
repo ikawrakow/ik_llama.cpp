@@ -73,10 +73,11 @@ struct spec_tuner_coord {
 
 struct spec_tuner {
     bool     enabled     = false;
-    double   gamma       = 0.97;
+    bool     proposed    = false;
+    double   gamma       = 0.85;    // aggressive discount factor
     double   c           = 2.0;
-    double   ema_tps     = 0.0;
-    double   ema_alpha   = 0.3;
+    double   ema_tps     = 0.0;     // exponential moving avg of absolute t/s (baseline for relative reward)
+    double   ema_alpha   = 0.5;
     uint64_t total_n     = 0;
     int      min_tokens  = 10;
     int64_t  t_tuner_us  = 0;

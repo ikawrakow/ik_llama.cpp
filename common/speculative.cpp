@@ -1041,6 +1041,10 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
         return;
     }
 
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->tuner->proposed = false;
+    }
+
     for (auto & impl : spec->impls) {
         common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
         impl->begin(prompt);
@@ -1356,7 +1360,8 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
     {
         spec_tuner_coord coord;
         coord.name = "n_max";
-        coord.build_grid_int(1, 16, 1, user_params.n_max);
+        int hi = std::max(8, (int)user_params.n_max);
+        coord.build_grid_int(1, hi, 1, user_params.n_max);
         coords.push_back(std::move(coord));
     }
 
@@ -1364,7 +1369,7 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
         {
             spec_tuner_coord coord;
             coord.name = "p_min";
-            coord.build_grid_float(0.0f, 1.0f, 11, user_params.p_min); // 0.0, 0.1, 0.2, ..., 1.0
+            coord.build_grid_float(0.0f, 1.0f, 11, user_params.p_min);
             coords.push_back(std::move(coord));
         }
         {
@@ -1416,6 +1421,20 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
 }
 
 void spec_tuner::propose(common_params_speculative & params) {
+    if (proposed) {
+        for (auto & coord : coords) {
+            float val = coord.arms[coord.current_idx].value;
+            if (coord.name == "n_max")          params.n_max          = (int32_t)val;
+            else if (coord.name == "p_min")     params.p_min          = val;
+            else if (coord.name == "n_min")     params.n_min          = (int32_t)val;
+            else if (coord.name == "ngram_size_n") params.ngram_size_n = (uint16_t)val;
+            else if (coord.name == "ngram_size_m") params.ngram_size_m = (uint16_t)val;
+            else if (coord.name == "ngram_min_hits") params.ngram_min_hits = (uint16_t)val;
+        }
+        enforce_constraints(params);
+        return;
+    }
+
     int64_t t_start = ggml_time_us();
 
     for (auto & coord : coords) {
@@ -1432,6 +1451,7 @@ void spec_tuner::propose(common_params_speculative & params) {
     }
 
     enforce_constraints(params);
+    proposed = true;
 
     t_tuner_us += (ggml_time_us() - t_start);
 }
@@ -1454,7 +1474,8 @@ void spec_tuner::feedback(double slot_tps, int n_decoded, common_params_speculat
 
     int64_t t_start = ggml_time_us();
 
-    // skip very short slots
+    proposed = false;
+
     if (n_decoded < min_tokens) {
         t_tuner_us += (ggml_time_us() - t_start);
         return;
@@ -1464,11 +1485,16 @@ void spec_tuner::feedback(double slot_tps, int n_decoded, common_params_speculat
 
     if (ema_tps <= 0.0) {
         ema_tps = slot_tps;
-    } else {
-        ema_tps = ema_alpha * slot_tps + (1.0 - ema_alpha) * ema_tps;
+        LOG_INF("Autotune calibration: baseline TPS = %.2f (no arm update)\n", slot_tps);
+        t_tuner_us += (ggml_time_us() - t_start);
+        return;
     }
 
-    tps_history[tps_idx % 8] = slot_tps;
+    double reward = slot_tps / ema_tps;
+
+    ema_tps = ema_alpha * slot_tps + (1.0 - ema_alpha) * ema_tps;
+
+    tps_history[tps_idx % 8] = reward;
     tps_idx++;
 
     if (tps_idx >= 8) {
@@ -1481,39 +1507,28 @@ void spec_tuner::feedback(double slot_tps, int n_decoded, common_params_speculat
         double var  = sum2 / 8.0 - mean * mean;
         double std  = std::sqrt(std::max(0.0, var));
 
-        if (mean > 0.0 && std / mean > 0.20) {
+        if (mean > 0.0 && std / mean > 0.15) {
             if (!boosted) {
-                LOG_INF("Autotune high variance detected (σ/μ = %.1f%%), boosting exploration\n",
+                LOG_INF("Autotune high reward variance detected (σ/μ = %.1f%%), boosting exploration\n",
                         100.0 * std / mean);
             }
             c = c_boost;
             boosted = true;
         } else if (boosted) {
-            LOG_INF("Autotune variance stabilized, reverting to normal exploration\n");
+            LOG_INF("Autotune reward variance stabilized, reverting to normal exploration\n");
             c = c_base;
             boosted = false;
         }
     }
 
     for (auto & coord : coords) {
-        coord.update(slot_tps, gamma);
-    }
-
-    // warm-start on first feedback
-    if (total_n == 1) {
-        for (auto & coord : coords) {
-            for (int i = 0; i < (int)coord.arms.size(); i++) {
-                if (i != coord.current_idx && coord.arms[i].N < 0.5) {
-                    coord.arms[i].Q = slot_tps * 0.9; // slightly pessimistic prior
-                    coord.arms[i].N = 0.5;
-                }
-            }
-        }
+        coord.update(reward, gamma);
     }
 
     t_tuner_us += (ggml_time_us() - t_start);
 
-    if (total_n <= 5 || total_n % 10 == 0) {
+    size_t n_arms = coords.empty() ? 1 : coords[0].arms.size();
+    if (total_n <= n_arms + 5 || total_n % 5 == 0) {
         print_best();
     }
 }
@@ -1523,7 +1538,7 @@ void spec_tuner::print_best() const {
     oss << "Autotune iter=" << total_n << " ema_tps=" << std::fixed << std::setprecision(2) << ema_tps;
 
     if (boosted) {
-        oss << " [EXPLORING]";
+        oss << " Exploring";
     }
 
     oss << " best:";
@@ -1537,7 +1552,8 @@ void spec_tuner::print_best() const {
         } else {
             oss << std::fixed << std::setprecision(2) << coord.best_value;
         }
-        oss << "(Q=" << std::fixed << std::setprecision(1) << coord.best_Q << ")";
+        double pct = (coord.best_Q - 1.0) * 100.0;
+        oss << "(" << (pct >= 0 ? "+" : "") << std::fixed << std::setprecision(1) << pct << "%)";
     }
 
     oss << " current:";
@@ -1555,7 +1571,7 @@ void spec_tuner::print_best() const {
 
     oss << " tuner_overhead=" << std::fixed << std::setprecision(3) << t_tuner_us / 1000.0 << "ms";
 
-    oss << "\n[autotune] reuse: ";
+    oss << "\nAutotune reuse: ";
     for (const auto & coord : coords) {
         bool is_int = (coord.name == "n_max" || coord.name == "n_min" ||
                        coord.name == "ngram_size_n" || coord.name == "ngram_size_m" ||
