@@ -40,6 +40,9 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 
+// get the MTP context from the speculative object (nullptr if not MTP type)
+llama_context * common_speculative_get_mtp_ctx(common_speculative * spec);
+
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,

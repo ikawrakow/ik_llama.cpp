@@ -148,6 +148,7 @@ struct common_speculative_state {
 
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
+    llama_context * ctx_mtp = nullptr;
     common_sampler * smpl;
 
     common_speculative_state_mtp(
@@ -161,10 +162,38 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_sampler_type::DIST,
         };
         smpl = common_sampler_init(llama_get_model(ctx_tgt), params);
+
+        const llama_model * model = llama_get_model(ctx_tgt);
+        struct llama_context_params mtp_params = llama_context_default_params();
+
+        // Just for test
+        mtp_params.n_ctx        = llama_n_ctx(ctx_tgt);
+        mtp_params.n_batch      = llama_n_batch(ctx_tgt);
+        mtp_params.n_ubatch     = llama_n_batch(ctx_tgt);
+        mtp_params.n_threads    = 4;
+        mtp_params.n_threads_batch = 4;
+        mtp_params.flash_attn   = true;
+        mtp_params.mtp          = true;
+        mtp_params.mtp_context  = true;
+        mtp_params.mtp_op_type  = MTP_OP_NONE;
+        mtp_params.embeddings   = true;
+        mtp_params.offload_kqv  = true;
+        mtp_params.graph_reuse  = true;
+
+        ctx_mtp = llama_init_from_model(const_cast<llama_model *>(model), mtp_params);
+        if (ctx_mtp) {
+            LOG_INF("%s: created MTP context with separate scheduler (n_ctx=%d)\n",
+                    __func__, llama_n_ctx(ctx_mtp));
+        } else {
+            LOG_ERR("%s: failed to create MTP context, falling back to shared context\n", __func__);
+        }
     }
 
     ~common_speculative_state_mtp() override {
         common_sampler_free(smpl);
+        if (ctx_mtp) {
+            llama_free(ctx_mtp);
+        }
     }
 
     void begin(const llama_tokens & prompt) override {
@@ -178,12 +207,13 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_tokens & result) override {
 
         int32_t n_past = (int32_t)prompt_tgt.size();
-
         llama_seq_id seq_id = 0;
+
+        llama_context * ctx = ctx_mtp ? ctx_mtp : ctx_tgt;
 
         result = mtp_speculative_gen_draft(
             smpl,
-            ctx_tgt,
+            ctx,
             params.n_max,
             params.p_min,
             id_last,
@@ -1116,6 +1146,21 @@ void common_speculative_print_stats(const common_speculative * spec) {
 // ----------------------------------------------------------------------------
 // MTP
 // ----------------------------------------------------------------------------
+
+llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
+    if (!spec) return nullptr;
+
+    for (auto & impl : spec->impls) {
+        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
+            auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get());
+            if (mtp_state) {
+                return mtp_state->ctx_mtp;
+            }
+        }
+    }
+    return nullptr;
+}
+
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,

@@ -842,7 +842,16 @@ static bool llama_kv_cache_init(
     }
 
     int n_mla = 0;
+    const int64_t n_mtp_first_layer = n_layer - hparams.nextn_predict_layers;
     for (int i = 0; i < (int) n_layer; i++) {
+        // For MTP-only context, skip KV allocation for non-MTP layers
+        if (cparams.mtp_context && i < (int)n_mtp_first_layer) {
+            cache.k_l.push_back(nullptr);
+            if (!is_mla_attn || !cparams.mla_attn || (cparams.mla_attn == 1 && !cparams.flash_attn)) {
+                cache.v_l.push_back(nullptr);
+            }
+            continue;
+        }
         const bool qnext_recurrent = llama_is_recurrent_layer(hparams, i);
         const uint32_t n_embd_v_row = llama_kv_v_row_embd(model, hparams, i);
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
@@ -3930,6 +3939,7 @@ static int llama_decode_internal(
 #endif
         ggml_cgraph * gf = nullptr;
         if (!lctx.can_reuse_graph(u_batch)) {
+            lctx.n_graph_new++;
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
@@ -3960,6 +3970,7 @@ static int llama_decode_internal(
                         cparams.mtp_op_type, gf});
             }
         } else {
+            lctx.n_graph_reuse++;
             //printf("Reusing graph\n");
             gf = lctx.prev->graph;
         }
@@ -4979,6 +4990,7 @@ struct llama_context_params llama_context_default_params() {
         // /*.split_mode_f16           =*/ true,
         /*.scheduler_async             =*/ false,
         /*.mtp                         =*/ false,
+        /*.mtp_context                 =*/ false,
         /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
@@ -5362,6 +5374,7 @@ struct llama_context * llama_init_from_model(
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
     cparams.mtp              = params.mtp;
+    cparams.mtp_context      = params.mtp_context;
     cparams.worst_graph_tokens = params.worst_case_tokens;
 
     cparams.reduce_type      = params.type_reduce;
@@ -5442,6 +5455,11 @@ struct llama_context * llama_init_from_model(
 
     if (model->arch != LLM_ARCH_GLM4_MOE && cparams.mtp != 0) {
         cparams.mtp = 0;
+    }
+
+    if (cparams.mtp_context && !cparams.mtp) {
+        LLAMA_LOG_WARN("%s: mtp_context requires mtp=true, enabling mtp\n", __func__);
+        cparams.mtp = true;
     }
 
     cparams.mtp_op_type = params.mtp_op_type;
@@ -5760,9 +5778,16 @@ struct llama_context * llama_init_from_model(
             llama_repack_up_gate_exps(*ctx);
 
             // build worst-case graph
+            llama_mtp_op_type saved_mtp_op = cparams.mtp_op_type;
+            if (cparams.mtp_context) {
+                cparams.mtp_op_type = MTP_OP_WARMUP;
+            }
             int n_past = cparams.n_ctx - n_tokens;
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
             ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, cparams.worst_graph_tokens);
+            if (cparams.mtp_context) {
+                cparams.mtp_op_type = saved_mtp_op;
+            }
 
             // initialize scheduler with the worst-case graph
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
