@@ -2627,6 +2627,9 @@ void server_context::discard_n_kv_and_cache_tokens(llama_context* ctx, server_sl
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     llama_kv_cache_seq_rm(ctx, slot.id, kv_keep, kv_keep + kv_discard);
     llama_kv_cache_seq_add(ctx, slot.id, kv_keep + kv_discard, kv_past, -kv_discard);
+    if (slot.has_mtp && slot.spec) {
+        common_speculative_context_shift(slot.spec, slot.id, kv_keep, kv_discard, kv_past);
+    }
     if (slot.params.cache_prompt) {
         slot.cache_tokens.discard_n_tokens(n_keep, n_discard);
     }

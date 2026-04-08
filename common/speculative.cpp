@@ -194,9 +194,9 @@ struct common_speculative_state_mtp : public common_speculative_state {
         llama_seq_id seq_id = 0;
 
         if (ctx_mtp) {
-            int32_t mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
+            llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
             if (mtp_pos_max >= n_past) {
-                llama_kv_cache_seq_rm(ctx_mtp, seq_id, -1, -1);
+                llama_kv_cache_seq_rm(ctx_mtp, seq_id, n_past, -1);
             }
         }
 
@@ -1153,6 +1153,25 @@ llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
     return nullptr;
 }
 
+void common_speculative_context_shift(
+        common_speculative * spec,
+        llama_seq_id         seq_id,
+        llama_pos            kv_keep,
+        llama_pos            kv_discard,
+        llama_pos            kv_past) {
+    if (!spec) return;
+
+    for (auto & impl : spec->impls) {
+        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
+            auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get());
+            if (mtp_state && mtp_state->ctx_mtp) {
+                llama_kv_cache_seq_rm (mtp_state->ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
+                llama_kv_cache_seq_add(mtp_state->ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
+            }
+        }
+    }
+}
+
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,
@@ -1218,13 +1237,15 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
         return;
     }
 
-    if (is_prompt_warmup && batch.n_tokens > 0) {
-        llama_seq_id seq_id = batch.seq_id[0][0];
-        llama_pos start_pos = batch.pos[0];
+    llama_seq_id seq_id   = batch.seq_id[0][0];
+    llama_pos    start_pos = batch.pos[0];
+
+    if (llama_kv_cache_seq_pos_max(ctx, seq_id) >= start_pos) {
         llama_kv_cache_seq_rm(ctx, seq_id, start_pos, -1);
     }
 
-    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
+    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens from pos %d...\n",
+            is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens, (int)start_pos);
 
     llama_batch mtp_batch = batch;
     if (is_prompt_warmup) {
