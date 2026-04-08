@@ -476,7 +476,6 @@ extern "C" {
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
         bool mtp;   // Activate MTP if supported
-        bool mtp_context; // if true, create a context for MTP
         enum llama_mtp_op_type mtp_op_type;
 
         // Abort callback

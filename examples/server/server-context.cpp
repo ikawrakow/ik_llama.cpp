@@ -214,9 +214,15 @@ void server_context::init() {
                 params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
                 params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
+                params_base.speculative.cparams_dft = common_context_params_to_llama(params_base);
+                params_base.speculative.cparams_dft.mtp          = true;
+                params_base.speculative.cparams_dft.mtp_op_type  = MTP_OP_WARMUP; // Need to check if this will mix the first decode call for main model
+                params_base.speculative.cparams_dft.embeddings   = true;
+
                 slot.has_mtp = true;
                 slot.params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
                 slot.params.speculative.n_min = 0;
+                slot.params.speculative.cparams_dft = params_base.speculative.cparams_dft;
 
                 slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
                 SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
@@ -2360,7 +2366,6 @@ void server_context::process_single_task(server_task&& task) {
         // Erase token cache
         const size_t n_erased = slot->cache_tokens.size();
         llama_kv_cache_seq_rm(ctx, slot->id, -1, -1);
-        common_speculative_kv_seq_rm(slot->spec, slot->id, -1, -1);
         slot->cache_tokens.keep_first(0);
         //slot->cache_tokens.clear();
         slot->server_cached_prompt.checkpoints.clear();
@@ -2622,8 +2627,6 @@ void server_context::discard_n_kv_and_cache_tokens(llama_context* ctx, server_sl
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     llama_kv_cache_seq_rm(ctx, slot.id, kv_keep, kv_keep + kv_discard);
     llama_kv_cache_seq_add(ctx, slot.id, kv_keep + kv_discard, kv_past, -kv_discard);
-    common_speculative_kv_seq_rm (slot.spec, slot.id, kv_keep, kv_keep + kv_discard);
-    common_speculative_kv_seq_add(slot.spec, slot.id, kv_keep + kv_discard, kv_past, -kv_discard);
     if (slot.params.cache_prompt) {
         slot.cache_tokens.discard_n_tokens(n_keep, n_discard);
     }
@@ -3234,11 +3237,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 slot.cache_tokens.keep_first(slot.n_past);
                 int p0 = (int)system_tokens.size() + slot.n_past;
                 p0 = system_tokens.size() + slot.cache_tokens.pos_next();
-                common_speculative_kv_seq_rm(slot.spec, slot.id, p0, -1);
                 if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
                     // could not partially delete (likely using a non-Transformer model)
                     llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
-                    common_speculative_kv_seq_rm(slot.spec, slot.id, -1, -1);
 
                     p0 = (int)system_tokens.size();
                     if (p0 != 0) {
@@ -3683,7 +3684,6 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     
     // Remove from KV cache
     llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.n_past, -1);
-    common_speculative_kv_seq_rm(slot.spec, slot.id, slot.n_past, -1);
 
     // Truncate buffer
     slot.token_buffer.resize(n_keep_buffer);

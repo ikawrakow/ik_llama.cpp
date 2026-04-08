@@ -153,7 +153,8 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
     common_speculative_state_mtp(
             enum common_speculative_type type,
-            llama_context * ctx_tgt)
+            llama_context * ctx_tgt,
+            const llama_context_params & mtp_cparams)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
     {
@@ -164,26 +165,9 @@ struct common_speculative_state_mtp : public common_speculative_state {
         smpl = common_sampler_init(llama_get_model(ctx_tgt), params);
 
         const llama_model * model = llama_get_model(ctx_tgt);
-        struct llama_context_params mtp_params = llama_context_default_params();
-
-        // Just for test
-        mtp_params.n_ctx        = llama_n_ctx(ctx_tgt);
-        mtp_params.n_batch      = llama_n_batch(ctx_tgt);
-        mtp_params.n_ubatch     = llama_n_batch(ctx_tgt);
-        mtp_params.n_threads    = 4;
-        mtp_params.n_threads_batch = 4;
-        mtp_params.flash_attn   = true;
-        mtp_params.mtp          = true;
-        mtp_params.mtp_context  = true;
-        mtp_params.mtp_op_type  = MTP_OP_NONE;
-        mtp_params.embeddings   = true;
-        mtp_params.offload_kqv  = true;
-        mtp_params.graph_reuse  = true;
-
-        ctx_mtp = llama_init_from_model(const_cast<llama_model *>(model), mtp_params);
+        ctx_mtp = llama_init_from_model(const_cast<llama_model *>(model), mtp_cparams);
         if (ctx_mtp) {
-            LOG_INF("%s: created MTP context with separate scheduler (n_ctx=%d)\n",
-                    __func__, llama_n_ctx(ctx_mtp));
+            LOG_INF("%s: created MTP context (n_ctx=%d)\n", __func__, llama_n_ctx(ctx_mtp));
         } else {
             LOG_ERR("%s: failed to create MTP context, falling back to shared context\n", __func__);
         }
@@ -208,6 +192,13 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
         int32_t n_past = (int32_t)prompt_tgt.size();
         llama_seq_id seq_id = 0;
+
+        if (ctx_mtp) {
+            int32_t mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
+            if (mtp_pos_max >= n_past) {
+                llama_kv_cache_seq_rm(ctx_mtp, seq_id, -1, -1);
+            }
+        }
 
         llama_context * ctx = ctx_mtp ? ctx_mtp : ctx_tgt;
 
@@ -981,7 +972,8 @@ common_speculative * common_speculative_init(
             }
             case COMMON_SPECULATIVE_TYPE_MTP: {
                 impls.push_back(std::make_unique<common_speculative_state_mtp>(config.type,
-                    /* .ctx_tgt      = */ ctx_tgt
+                    /* .ctx_tgt      = */ ctx_tgt,
+                    /* .mtp_cparams  = */ params.cparams_dft
                 ));
                 break;
             }
@@ -1161,20 +1153,6 @@ llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
     return nullptr;
 }
 
-// ----------------------------------------------------------------------------
-// MTP
-// ----------------------------------------------------------------------------
-
-void common_speculative_kv_seq_rm(common_speculative * spec, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    llama_context * mc = common_speculative_get_mtp_ctx(spec);
-    if (mc) llama_kv_cache_seq_rm(mc, seq_id, p0, p1);
-}
-
-void common_speculative_kv_seq_add(common_speculative * spec, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
-    llama_context * mc = common_speculative_get_mtp_ctx(spec);
-    if (mc) llama_kv_cache_seq_add(mc, seq_id, p0, p1, delta);
-}
-
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,
@@ -1238,6 +1216,12 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup) {
     if (batch.n_tokens == 0) {
         return;
+    }
+
+    if (is_prompt_warmup && batch.n_tokens > 0) {
+        llama_seq_id seq_id = batch.seq_id[0][0];
+        llama_pos start_pos = batch.pos[0];
+        llama_kv_cache_seq_rm(ctx, seq_id, start_pos, -1);
     }
 
     LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);

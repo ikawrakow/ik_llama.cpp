@@ -47,7 +47,6 @@ struct llama_cparams {
     int  min_experts;
     float thresh_experts;
     bool mtp;
-    bool mtp_context; // if true, this is MTP-only context
     int  worst_graph_tokens;
 
     enum ggml_type reduce_type;
