@@ -1045,7 +1045,8 @@ static bool llama_kv_cache_init(
 static bool llama_kv_cache_find_slot(
            struct llama_kv_cache & cache,
         const struct llama_batch & batch,
-        enum llama_mtp_op_type  op_type) {
+        enum llama_mtp_op_type  op_type,
+        bool separate_mtp_kv = false) {
     const uint32_t n_tokens = batch.n_tokens;
 
     if (cache.recurrent) {
@@ -1096,7 +1097,9 @@ static bool llama_kv_cache_find_slot(
     }
     // otherwise, one cell per token.
 
-    bool is_mtp_special_op = (op_type == MTP_OP_WARMUP || 
+    // Skip this logic for now as MTP have it own context
+    bool is_mtp_special_op = !separate_mtp_kv &&
+                             (op_type == MTP_OP_WARMUP || 
                               op_type == MTP_OP_UPDATE_ACCEPTED);
     if (is_mtp_special_op) {
         const llama_pos target_pos = batch.pos[0];
@@ -3899,7 +3902,7 @@ static int llama_decode_internal(
                 kv_self.head = 0;
             }
 
-            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type)) {
+            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type, cparams.mtp_context)) {
                 return 1;
             }
 
@@ -6816,7 +6819,7 @@ struct llama_data_read {
                 batch.n_seq_id[i] = 1;
                 batch.seq_id[i][0] = dest_seq_id;
             }
-            if (!llama_kv_cache_find_slot(kv_self, batch, ctx->cparams.mtp_op_type)) {
+            if (!llama_kv_cache_find_slot(kv_self, batch, ctx->cparams.mtp_op_type, ctx->cparams.mtp_context)) {
                 llama_batch_free(batch);
                 LLAMA_LOG_ERROR("%s: failed to find available cells in kv cache\n", __func__);
                 return false;
