@@ -43,6 +43,10 @@ void common_speculative_print_stats(const common_speculative * spec);
 // get the MTP context from the speculative object (nullptr if not MTP type)
 llama_context * common_speculative_get_mtp_ctx(common_speculative * spec);
 
+// KV cache operations on Spec context
+void common_speculative_kv_seq_rm (common_speculative * spec, llama_seq_id seq_id, llama_pos p0, llama_pos p1);
+void common_speculative_kv_seq_add(common_speculative * spec, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta);
+
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,

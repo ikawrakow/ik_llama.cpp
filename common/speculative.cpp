@@ -1161,6 +1161,20 @@ llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
     return nullptr;
 }
 
+// ----------------------------------------------------------------------------
+// MTP
+// ----------------------------------------------------------------------------
+
+void common_speculative_kv_seq_rm(common_speculative * spec, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    llama_context * mc = common_speculative_get_mtp_ctx(spec);
+    if (mc) llama_kv_cache_seq_rm(mc, seq_id, p0, p1);
+}
+
+void common_speculative_kv_seq_add(common_speculative * spec, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+    llama_context * mc = common_speculative_get_mtp_ctx(spec);
+    if (mc) llama_kv_cache_seq_add(mc, seq_id, p0, p1, delta);
+}
+
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,
