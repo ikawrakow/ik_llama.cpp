@@ -216,7 +216,7 @@ void server_context::init() {
 
                 params_base.speculative.cparams_dft = common_context_params_to_llama(params_base);
                 params_base.speculative.cparams_dft.mtp          = true;
-                params_base.speculative.cparams_dft.mtp_op_type  = MTP_OP_WARMUP; // Need to check if this will mix the first decode call for main model
+                params_base.speculative.cparams_dft.mtp_op_type  = MTP_OP_WARMUP;
                 params_base.speculative.cparams_dft.embeddings   = true;
 
                 slot.has_mtp = true;
