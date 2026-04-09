@@ -1021,6 +1021,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.p_min = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--spec-autotune") {
+        params.speculative.autotune = true;
+        return true;
+    }
     if (arg == "--chunks") {
         CHECK_ARG
         params.n_chunks = std::stoi(argv[i]);
@@ -1254,6 +1258,50 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ctv" || arg == "--cache-type-v") {
         params.cache_type_v = argv[++i];
+        return true;
+    }
+    if (arg == "-ctk-first" || arg == "--cache-type-k-first") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_k_first = p[0];
+            params.n_k_first = std::stoi(p[1].c_str());
+        }
+        return true;
+    }
+    if (arg == "-ctk-last" || arg == "--cache-type-k-last") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_k_last = p[0];
+            params.n_k_last = std::stoi(p[1].c_str());
+        }
+        return true;
+    }
+    if (arg == "-ctv-first" || arg == "--cache-type-v-first") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_v_first = p[0];
+            params.n_v_first = std::stoi(p[1].c_str());
+        }
+        return true;
+    }
+    if (arg == "-ctv-last" || arg == "--cache-type-v-last") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_v_last = p[0];
+            params.n_v_last = std::stoi(p[1].c_str());
+        }
         return true;
     }
     if (arg == "-ctkd" || arg == "--cache-type-k-draft") {
@@ -2466,6 +2514,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-nkvo, --no-kv-offload",        "disable KV offload" });
     options.push_back({ "*",           "-ctk,  --cache-type-k TYPE",    "KV cache data type for K (default: %s)", params.cache_type_k.c_str() });
     options.push_back({ "*",           "-ctv,  --cache-type-v TYPE",    "KV cache data type for V (default: %s)", params.cache_type_v.c_str() });
+    options.push_back({ "*",           "-ctk-first, --cache-type-k-first TYPE,N", "KV cache data type for the first N layers of K (default: %s,-1)", params.type_k_first.c_str() });
+    options.push_back({ "*",           "-ctv-last,  --cache-type-k-last  TYPE,N", "KV cache data type for the last N layers of K  (default: %s,-1)", params.type_k_last.c_str() });
+    options.push_back({ "*",           "-ctv-first, --cache-type-v-first TYPE,N", "KV cache data type for the first N layers of V (default: %s,-1)", params.type_v_first.c_str() });
+    options.push_back({ "*",           "-ctk-last,  --cache-type-v-last  TYPE,N", "KV cache data type for the last N layers of V  (default: %s,-1)", params.type_v_last.c_str() });
     options.push_back({ "*",           "-ctkd, --cache-type-k-draft TYPE", "KV cache data type for K for the draft model" });
     options.push_back({ "*",           "-ctvd, --cache-type-v-draft TYPE", "KV cache data type for V for the draft model" });
 
@@ -2578,6 +2630,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
 
     options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
+    options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
 
     options.push_back({ "retrieval" });
     options.push_back({ "retrieval",   "       --context-file FNAME",   "file to load context from (repeat to specify multiple files)" });
@@ -3352,6 +3405,14 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.worst_graph_tokens = params.worst_graph_tokens;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
+    mparams.type_k_first    = kv_cache_type_from_str(params.type_k_first);
+    mparams.type_k_last     = kv_cache_type_from_str(params.type_k_last );
+    mparams.type_v_first    = kv_cache_type_from_str(params.type_v_first);
+    mparams.type_v_last     = kv_cache_type_from_str(params.type_v_last );
+    mparams.n_k_first       = params.n_k_first;
+    mparams.n_k_last        = params.n_k_last;
+    mparams.n_v_first       = params.n_v_first;
+    mparams.n_v_last        = params.n_v_last;
     mparams.max_ctx_size    = params.n_ctx;
     mparams.n_seq_max       = params.n_parallel;
     mparams.n_ubatch        = get_batch_ubatch(params).second;
@@ -3457,6 +3518,20 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
     cparams.type_reduce = ggml_type_from_str(params.reduce_type);
     if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v)) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
+    cparams.type_k_first    = kv_cache_type_from_str(params.type_k_first);
+    cparams.type_k_last     = kv_cache_type_from_str(params.type_k_last );
+    cparams.type_v_first    = kv_cache_type_from_str(params.type_v_first);
+    cparams.type_v_last     = kv_cache_type_from_str(params.type_v_last );
+    cparams.n_k_first       = params.n_k_first;
+    cparams.n_k_last        = params.n_k_last;
+    cparams.n_v_first       = params.n_v_first;
+    cparams.n_v_last        = params.n_v_last;
+    if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v_first) && cparams.n_v_first > 0) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
+    if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v_last) && cparams.n_v_last > 0) {
         throw std::runtime_error("Quantized V cache cannot be used without flash attention");
     }
 

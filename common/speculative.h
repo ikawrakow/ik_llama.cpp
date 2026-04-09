@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "common.h"
+#include "spec-tuner.h"
 
 struct common_speculative;
 
@@ -30,7 +31,7 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 // sample up to n_draft tokens and add them to the batch using the draft model
 llama_tokens common_speculative_draft(
                      common_speculative * spec,
-        const common_params_speculative & params,
+                     common_params_speculative & params,
                      const llama_tokens & prompt,
                             llama_token   id_last);
 
@@ -38,7 +39,7 @@ llama_tokens common_speculative_draft(
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
 // print statistics about the speculative decoding
-void common_speculative_print_stats(const common_speculative * spec);
+void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0, int n_past = 0, common_params_speculative * active_params = nullptr);
 
 // Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
 std::vector<llama_token> mtp_speculative_gen_draft(

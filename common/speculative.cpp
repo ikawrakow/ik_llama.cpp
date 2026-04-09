@@ -774,6 +774,9 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
+    std::unique_ptr<spec_tuner> tuner;
+    int last_n_drafted = 0;
+    int64_t t_step_start_us = 0;
 };
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
@@ -1009,6 +1012,22 @@ common_speculative * common_speculative_init(
         /* .impls = */ std::move(impls)
     };
 
+    // initialize autotune if requested
+    if (params.autotune && !result->impls.empty()) {
+        auto actual_type = result->impls[0]->type;
+        if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
+            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
+            result->tuner = std::make_unique<spec_tuner>();
+            result->tuner->init(actual_type, params);
+            LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
+                    common_speculative_type_to_str(actual_type).c_str(),
+                    result->tuner->coords.size());
+        } else {
+            LOG_WRN("Autotune disabled — speculative type %s is not supported for autotuning\n",
+                    common_speculative_type_to_str(actual_type).c_str());
+        }
+    }
+
     return result;
 }
 
@@ -1034,10 +1053,17 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 
 llama_tokens common_speculative_draft(
         common_speculative * spec,
-        const common_params_speculative & params,
+        common_params_speculative & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last) {
     llama_tokens result;
+
+    spec->t_step_start_us = ggml_time_us();
+
+    // apply autotune proposal if enabled
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->tuner->propose(params);
+    }
 
     spec->curr_impl = nullptr; // reset current implementation
 
@@ -1061,10 +1087,24 @@ llama_tokens common_speculative_draft(
         }
     }
 
+    // store draft count for tuner feedback
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->last_n_drafted = (int)result.size();
+    }
+
     return result;
 }
 
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
+    if (spec->tuner && spec->tuner->enabled && spec->t_step_start_us > 0) {
+        int64_t step_time_us = ggml_time_us() - spec->t_step_start_us;
+        double step_tps = (step_time_us > 100)
+            ? (n_accepted + 1.0) * 1e6 / (double)step_time_us
+            : 0.0;
+        spec->tuner->accept_feedback(n_accepted, spec->last_n_drafted, step_tps);
+        spec->t_step_start_us = 0;
+    }
+
     if (n_accepted == 0) {
         return;
     }
@@ -1085,7 +1125,7 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     }
 }
 
-void common_speculative_print_stats(const common_speculative * spec) {
+void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded, int n_past, common_params_speculative * active_params) {
     if (spec == nullptr) {
         return;
     }
@@ -1110,6 +1150,16 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 impl->n_gen_tokens,
                 impl->n_acc_tokens,
                 str_perf.c_str());
+    }
+
+    if (spec->tuner && spec->tuner->enabled && slot_tps > 0.0 && n_decoded > 0) {
+        auto * mutable_spec = const_cast<common_speculative *>(spec);
+        if (active_params) {
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, *active_params);
+        } else {
+            common_params_speculative tmp_params;
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, tmp_params);
+        }
     }
 }
 

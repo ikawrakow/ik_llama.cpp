@@ -385,6 +385,14 @@ extern "C" {
         int32_t  fit_margin;
         bool     fit;
         int32_t  worst_graph_tokens;
+        enum ggml_type type_k_first;
+        enum ggml_type type_k_last;
+        enum ggml_type type_v_first;
+        enum ggml_type type_v_last;
+        int32_t n_k_first;
+        int32_t n_k_last;
+        int32_t n_v_first;
+        int32_t n_v_last;
 
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
@@ -453,6 +461,14 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
+        enum ggml_type type_k_first;
+        enum ggml_type type_k_last;
+        enum ggml_type type_v_first;
+        enum ggml_type type_v_last;
+        int32_t n_k_first;
+        int32_t n_k_last;
+        int32_t n_v_first;
+        int32_t n_v_last;
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool logits_all;  // the llama_decode() call computes all logits, not just the last one (DEPRECATED - set llama_batch.logits instead)
