@@ -1159,16 +1159,9 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past) {
-    if (!spec) return;
-
-    for (auto & impl : spec->impls) {
-        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
-            auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get());
-            if (mtp_state && mtp_state->ctx_mtp) {
-                llama_kv_cache_seq_rm (mtp_state->ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
-                llama_kv_cache_seq_add(mtp_state->ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
-            }
-        }
+    if (auto * ctx_mtp = common_speculative_get_mtp_ctx(spec); ctx_mtp != nullptr) {
+        llama_kv_cache_seq_rm (ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
+        llama_kv_cache_seq_add(ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
     }
 }
 
