@@ -40,6 +40,8 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         int ntokens = std::max(FATTN_KQ_STRIDE, int(Q->ne[1]));
         int nton = FATTN_KQ_STRIDE*((ntokens + n_swa + FATTN_KQ_STRIDE - 1)/FATTN_KQ_STRIDE);
         int first = K->ne[1] - nton;
+        local_dst = *dst;
+        local_dst.op_params[4] = 0;
         if (first > 0) {
             local_dst = *dst;
             Kl = *K; Kl.ne[1] = nton; Kl.data = (char *)K->data + K->nb[1]*first;
@@ -51,6 +53,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             local_dst.op_params[4] = 0;
             dst = &local_dst;
         }
+        dst = &local_dst;
     }
 
     // On AMD the tile kernels perform poorly, use the vec kernel instead:

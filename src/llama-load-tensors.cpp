@@ -4057,12 +4057,6 @@ bool create_tensors_helper::create_tensors() {
         if (model.tok_embd_per_layer) {
             supported = false;
         }
-        for (auto & l : model.layers) {
-            if (l.ffn_gate_inp) {
-                supported = false;
-                break;
-            }
-        }
         if (!supported) {
             LLAMA_LOG_WARN("\n=========================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for this Gemma4 variant\n");
@@ -4266,6 +4260,31 @@ bool create_tensors_helper::create_tensors() {
             if (layer.ffn_post_norm) {
                 if (auto it = split_tensors.find(layer.ffn_post_norm); it != split_tensors.end()) {
                     prepare_split_tensors(-1, ctx_split, layer.ffn_post_norm, layer.split_ffn_post_norm, mirror, mem_used);
+                }
+            }
+            if (layer.ffn_post_norm_1) {
+                if (auto it = split_tensors.find(layer.ffn_post_norm_1); it != split_tensors.end()) {
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_post_norm_1, layer.split_ffn_post_norm_1, mirror, mem_used);
+                }
+            }
+            if (layer.ffn_post_norm_2) {
+                if (auto it = split_tensors.find(layer.ffn_post_norm_2); it != split_tensors.end()) {
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_post_norm_2, layer.split_ffn_post_norm_2, mirror, mem_used);
+                }
+            }
+            if (layer.ffn_pre_norm_2) {
+                if (auto it = split_tensors.find(layer.ffn_pre_norm_2); it != split_tensors.end()) {
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_pre_norm_2, layer.split_ffn_pre_norm_2, mirror, mem_used);
+                }
+            }
+            if (layer.ffn_down_exps_s) {
+                if (auto it = split_tensors.find(layer.ffn_down_exps_s); it != split_tensors.end()) {
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_down_exps_s, layer.split_ffn_down_exps_s, mirror, mem_used);
+                }
+            }
+            if (layer.ffn_gate_inp_s) {
+                if (auto it = split_tensors.find(layer.ffn_gate_inp_s); it != split_tensors.end()) {
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_s, layer.split_ffn_gate_inp_s, mirror, mem_used);
                 }
             }
 

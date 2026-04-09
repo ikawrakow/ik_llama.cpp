@@ -850,7 +850,16 @@ static bool llama_kv_cache_init(
     }
 
     int n_mla = 0;
+    const int64_t n_mtp_first_layer = n_layer - hparams.nextn_predict_layers;
     for (int i = 0; i < (int) n_layer; i++) {
+        // For MTP-only context, skip KV allocation for non-MTP layers
+        if (cparams.mtp_op_type != MTP_OP_NONE && i < (int)n_mtp_first_layer) {
+            cache.k_l.push_back(nullptr);
+            if (!is_mla_attn || !cparams.mla_attn || (cparams.mla_attn == 1 && !cparams.flash_attn)) {
+                cache.v_l.push_back(nullptr);
+            }
+            continue;
+        }
         const bool qnext_recurrent = llama_is_recurrent_layer(hparams, i);
         const uint32_t n_embd_v_row = llama_kv_v_row_embd(model, hparams, i);
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
@@ -1066,8 +1075,7 @@ static bool llama_kv_cache_init(
 // to the first cell of the slot.
 static bool llama_kv_cache_find_slot(
            struct llama_kv_cache & cache,
-        const struct llama_batch & batch,
-        enum llama_mtp_op_type  op_type) {
+        const struct llama_batch & batch) {
     const uint32_t n_tokens = batch.n_tokens;
 
     if (cache.recurrent) {
@@ -1117,51 +1125,6 @@ static bool llama_kv_cache_find_slot(
         return max >= min;
     }
     // otherwise, one cell per token.
-
-    bool is_mtp_special_op = (op_type == MTP_OP_WARMUP || 
-                              op_type == MTP_OP_UPDATE_ACCEPTED);
-    if (is_mtp_special_op) {
-        const llama_pos target_pos = batch.pos[0];
-        const llama_seq_id target_seq = batch.seq_id[0][0];
-
-        bool found = false;
-
-        if (cache.mtp_kv_head_hint < cache.size &&
-            cache.cells[cache.mtp_kv_head_hint].pos == target_pos &&
-            cache.cells[cache.mtp_kv_head_hint].has_seq_id(target_seq)) {
-            cache.head = cache.mtp_kv_head_hint;
-            found = true;
-        }
-        else if (cache.head < cache.size &&
-            cache.cells[cache.head].pos == target_pos &&
-            cache.cells[cache.head].has_seq_id(target_seq)) {
-            found = true;
-        }
-        else {
-            for (uint32_t i = 0; i < cache.size; ++i) {
-                if (cache.cells[i].pos == target_pos &&
-                    cache.cells[i].has_seq_id(target_seq)) {
-
-                    cache.head = i;
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        if (!found) {
-            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n",
-                __func__, target_seq, target_pos);
-            return false;
-        }
-
-        if (cache.head + n_tokens > cache.size) {
-             LLAMA_LOG_ERROR("%s: MTP Update out of bounds\n", __func__);
-             return false;
-        }
-
-        return true;
-    }
 
     if (n_tokens > cache.size) {
         LLAMA_LOG_ERROR("%s: n_tokens=%d > cache.size=%d\n", __func__, n_tokens, cache.size);
@@ -3922,12 +3885,8 @@ static int llama_decode_internal(
                 kv_self.head = 0;
             }
 
-            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type)) {
+            if (!llama_kv_cache_find_slot(kv_self, u_batch)) {
                 return 1;
-            }
-
-            if (cparams.mtp_op_type == MTP_OP_NONE) {
-                kv_self.mtp_kv_head_hint = kv_self.head;
             }
 
             if (!kv_self.recurrent) {
@@ -6842,7 +6801,7 @@ struct llama_data_read {
                 batch.n_seq_id[i] = 1;
                 batch.seq_id[i][0] = dest_seq_id;
             }
-            if (!llama_kv_cache_find_slot(kv_self, batch, ctx->cparams.mtp_op_type)) {
+            if (!llama_kv_cache_find_slot(kv_self, batch)) {
                 llama_batch_free(batch);
                 LLAMA_LOG_ERROR("%s: failed to find available cells in kv cache\n", __func__);
                 return false;
