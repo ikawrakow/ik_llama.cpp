@@ -40,6 +40,8 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         int ntokens = std::max(FATTN_KQ_STRIDE, int(Q->ne[1]));
         int nton = FATTN_KQ_STRIDE*((ntokens + n_swa + FATTN_KQ_STRIDE - 1)/FATTN_KQ_STRIDE);
         int first = K->ne[1] - nton;
+        local_dst = *dst;
+        local_dst.op_params[4] = 0;
         if (first > 0) {
             local_dst = *dst;
             Kl = *K; Kl.ne[1] = nton; Kl.data = (char *)K->data + K->nb[1]*first;
@@ -51,6 +53,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             local_dst.op_params[4] = 0;
             dst = &local_dst;
         }
+        dst = &local_dst;
     }
 
     // On AMD the tile kernels perform poorly, use the vec kernel instead:
@@ -122,6 +125,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     if (new_mma_available(cc) &&
             ((K->ne[0] == 576 && V->ne[0] == 512) ||
              (K->ne[0] == 320 && V->ne[0] == 256) ||
+             (K->ne[0] == 512 && V->ne[0] == 512) ||
              (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
         //printf("Using ggml_cuda_flash_attn_ext_mma_new\n");
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
@@ -194,8 +198,8 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
     }
 
     if (new_mma_available(cc) &&
-            (Q->ne[0] == 576 || Q->ne[0] == 320 || (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
-        if (Q->ne[0] == 576 || Q->ne[0] == 320) {
+            (Q->ne[0] == 576 || Q->ne[0] == 320 || Q->ne[0] == 512 || (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
+        if (Q->ne[0] == 576 || Q->ne[0] == 512 || Q->ne[0] == 320) {
             int gqa_ratio = Q->ne[2]/K->ne[2];
             return (gqa_ratio % 4) == 0;
         }

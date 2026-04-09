@@ -62,6 +62,7 @@ Some often used terms.
 | `-h, --help, --usage` | Print usage and exit | - | - |
 | `--fit` | Automatically fit to available VRAM | off | Loads as many tensors to the GPU(s) as available VRAM will permit. [PR 1501](https://github.com/ikawrakow/ik_llama.cpp/pull/1501) [PR 1504](https://github.com/ikawrakow/ik_llama.cpp/pull/1504) |
 | `--fit-margin N` | Safety VRAM margin in MiB when using `--fit` | 1024 | Increase this value in case of CUDA OOM when loading the model. Decrease to less than 1024 if the model loads successfully and you feel that too much VRAM has been left unused |  
+| `-wgt, --worst-graph-tokens N` | Number of tokens to use for worst-case graph | - | Control compute buffer sizes for large batches. Provided "as is" for users that understand the limitations, please don't open issues when using this. [PR 1560](https://github.com/ikawrakow/ik_llama.cpp/pull/1560) |
 | `-t, --threads N` | Number of threads to use during generation | 4 | Try to match the number of physical CPU cores. Avoid odd numbers (e.g. 1,3,...). |
 | `-tb, --threads-batch N` | Number of threads to use during batch and prompt processing | Same as `--threads` | Same as `--threads` When doing full GPU offload, use a lower number (e.g. 2) |
 | `-c, --ctx-size N` | Size of the prompt context | 0 (loaded from model) | Influences the size of KV size (memory) therefore look for a value that fits your system then increase as needed (2048, 4096,…). If you use parallel slots, this context size will be split across the slots. |
@@ -176,6 +177,7 @@ The context (a.k.a. KV cache) is stored on the device where the associated atten
 | `-nkvo, --no-kv-offload` | Disable KV offload | - | Keep KV on CPU. |
 | `-ctk, --cache-type-k TYPE` | KV cache data type for K | f16 | Reduces K size in KV which improves speed and reduces memory requirements, but may reduce output quality. |
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V | f16 | See: `-ctk` |
+| `--mtmd-kq-type type` | Define the type used for the `K*Q` matrix multiplication | - | Use une of `f16`/`bf16` instead of `f32` to improve speed up multimodal |
 | `--no-context-shift` | Disable context-shift | - |  |
 | `--context-shift` | Set context-shift | on | auto / on / off / 0 / 1 [PR 973](https://github.com/ikawrakow/ik_llama.cpp/pull/973) |
 
@@ -261,7 +263,8 @@ llama_new_context_with_model: KV self size  =   59.50 MiB, K (q8_0):   29.75 MiB
 - K-cache may need better quant than V-cache to reduce quality loss, they can be specified separately `--cache-type-k q8_0 --cache-type-v q8_0`
 - It needs FA `--flash-attn` flag, which is already turned on by default.
 - Fast quant type Q8_KV `-ctk q8_KV` [PR 208](https://github.com/ikawrakow/ik_llama.cpp/pull/208)
-- Using `--k-cache-hadamard` on quants lower than `Q6_0` may give better results. Additionally, `ik_llama.cpp` provides `--v-cache-hadamard` for the V-cache.
+- Using `--k-cache-hadamard` on quants lower than `Q6_0` may give better results. Additionally, `ik_llama.cpp` provides `--v-cache-hadamard` for the V-cache. Example: `--cache-type-k q6_0 --k-cache-hadamard --cache-type-v q6_0 --v-cache-hadamard`
+- `Q4_0` achieves low perplexity even without Hadamard.
 
 3. Offload less to the GPU. Try to find a mix of parameters that better suits your system that default.
 

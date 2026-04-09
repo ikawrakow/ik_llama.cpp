@@ -1824,6 +1824,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                             SET_CAUSE(tensor_copy, "4.cpy");
                         }
                         int n_inputs = split->n_inputs++;
+                        if (n_inputs >= GGML_SCHED_MAX_SPLIT_INPUTS) {
+                            printf("======================== Oops, too many inputs (%d)\n", n_inputs+1);
+                            for (int k = 0; k < n_inputs; ++k) printf("Input %2d: %s\n", k, split->inputs[k]->name);
+                        }
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
                         }

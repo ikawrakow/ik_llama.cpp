@@ -349,6 +349,10 @@ public:
 
     server_tokens(const llama_tokens& tokens, bool has_mtmd);
 
+    json to_json() const;
+
+    void from_json(const json & j);
+
     // the next position after n_tokens. if n_tokens < 0, return the next position after all tokens.
     llama_pos pos_next(int64_t n_tokens = -1) const;
 

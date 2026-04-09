@@ -1267,12 +1267,15 @@ static void * ggml_cuda_host_malloc(size_t size) {
     double size_GiB = size/(1024.*1024.*1024.);
     auto tim1 = ggml_time_us();
     if (size_GiB > k_warn_limit) {
-        GGML_CUDA_LOG_INFO("Allocating %.2f GiB of pinned host memory, this can take a while...\n", size_GiB);
+        GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory, this may take a while.\n", size_GiB);
+        GGML_CUDA_LOG_INFO("Using pinned host memory improves PP performance by a significant margin.\n");
+        GGML_CUDA_LOG_INFO("But if it takes too long for your model and amount of patience, kill the process and run using\n\n");
+        GGML_CUDA_LOG_INFO("GGML_CUDA_NO_PINNED=1 your_command_goes_here\n");
     }
     cudaError_t err = cudaMallocHost((void **) &ptr, size);
     if (size_GiB > k_warn_limit) {
         auto tim2 = ggml_time_us();
-        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n", size_GiB, 1e-3*(tim2-tim1));
+        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
     }
     if (err != cudaSuccess) {
         // clear the error
@@ -4613,8 +4616,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_ARGMAX:
             return true;
         case GGML_OP_HADAMARD:
-            return (op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256) && op->ne[0] % op->op_params[0] == 0 &&
-                op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
+            return (op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512)
+                && op->ne[0] % op->op_params[0] == 0 && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_CONCAT:

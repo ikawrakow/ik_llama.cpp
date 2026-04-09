@@ -169,15 +169,19 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
 
     if (auto type_k = ggml_type(int_type_k_in), type_v = ggml_type(int_type_v); !are_kv_types_supported(type_k, type_v)) {
         if (ith == 0) {
-            fprintf(stderr, "\n==================== KV cache types %s, %s are not supported on the CPU\n",
+            fprintf(stderr, "\n==================== K cache %s coupled with V cache %s is not a supported combination on the CPU backend.\n",
                     ggml_type_name(type_k), ggml_type_name(type_v));
             auto & supported = supported_kv_types();
-            fprintf(stderr, "Sopprted types are:\n");
+            fprintf(stderr, "Supported types are:\n");
             for (auto type : supported) {
                 fprintf(stderr, "    %s\n", ggml_type_name(type));
             }
+            fprintf(stderr, "    Warning: ik_llama.cpp does not support Q5_0 or Q5_1 KV cache on the CPU.\n");
 #ifdef __AVX512BF16__
             fprintf(stderr, "    %s, but only if K and V are both %s\n", ggml_type_name(GGML_TYPE_BF16), ggml_type_name(GGML_TYPE_BF16));
+#endif
+#ifndef GGML_IQK_FA_ALL_QUANTS
+            fprintf(stderr, "    To enable q4_0, q4_1, and iq4_nl KV cache types, recompile with -DGGML_IQK_FA_ALL_QUANTS=ON\n");
 #endif
         }
         barrier(barrier_data);
@@ -215,6 +219,9 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
         for (; last_k > first_k; --last_k) {
             if (umask[last_k-1] == 0) break;
         }
+        int non = 32*((last_k - first_k + 31)/32);
+        first_k = std::max(0, last_k - non);
+        last_k = std::min(first_k + non, nek1);
         //printf("nek1 = %d, first = %d, last = %d\n", nek1, first, last);
         if (last_k - first_k <= 3*nek1/4 && (last_k - first_k)%32 == 0) {
             //printf("Reducing from %d to %d\n", nek1, last_k - first_k);
