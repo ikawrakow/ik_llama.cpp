@@ -8019,46 +8019,29 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
 
-    // Clear per-iteration draft masks from previous builds
-    lctx.inp_KQ_mask_draft.clear();
-
     ggml_tensor * cur;
 
     // position embeddings
     struct ggml_tensor * inp_pos = build_inp_pos();
 
-    auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
-        ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
-
     if (cparams.mtp_op_type != MTP_OP_NONE) {
-        // count the number of tokens to update the KV cache and for the draft
         const int n_accepted = (cparams.mtp_op_type == MTP_OP_DRAFT_GEN) ? lctx.mtp_n_accepted : n_tokens;
-        const int n_draft    = n_tokens - n_accepted;
 
-        ggml_tensor* hidden_states_from_main_model;
-        if (n_accepted > 0 && n_draft > 0) {
-            // Kv-cache+draft: need hidden states for accepted + 1st draft token
-            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_accepted + 1);
-        } else if (n_draft > 0) {
-            // draft only: single hidden state
-            hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
-        } else {
-            // Kv-cache: per-token hidden states
-            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-        }
-        ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
-        ggml_set_input(hidden_states_from_main_model);
-        lctx.inp_mtp_states = hidden_states_from_main_model;
+        ggml_tensor * hidden_states = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+        ggml_set_name(hidden_states, "result_embd_pooled");
+        ggml_set_input(hidden_states);
+        lctx.inp_mtp_states = hidden_states;
 
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        cur = build_mtp_tail(mtp_layer, hidden_states_from_main_model,
-            n_embd_head, gf, inp_pos, n_accepted);
-
+        cur = build_mtp_tail(mtp_layer, hidden_states, n_embd_head, gf, inp_pos, n_accepted);
     } else {
         struct ggml_tensor * inpL;
+
+        auto rope_cache = model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
+            ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
         // input embeddings
         inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
@@ -8161,7 +8144,6 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
             }
 
             // residual and context vector
-            //cur = ggml_add(ctx0, cur, ffn_inp);
             cur = lctx.cvec.apply_to(ctx0, cur, il);
             cb(cur, "l_out", il);
 
@@ -8191,7 +8173,7 @@ struct ggml_tensor * llm_build_context::build_glm_mtp_graph(
     struct ggml_cgraph * gf
 ) {
     const int il = hparams.n_layer - 1;
-    const int64_t n_embd_head_k = hparams.n_embd_head_k;
+    const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
 
     ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams,
         mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
@@ -8342,7 +8324,9 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
         ggml_tensor * batched_token_emb = ggml_get_rows(ctx0, mtp_embd_weights, batched_token_ids);
         ggml_tensor * batched_pos = ggml_view_1d(ctx0, inp_pos, n_batched, 0);
 
-        ggml_tensor * cur = build_glm_mtp_graph(mtp_layer, batched_token_emb, hidden_states,
+        ggml_tensor * batched_hidden = ggml_view_2d(ctx0, hidden_states,
+            hparams.n_embd, n_batched, hidden_states->nb[1], 0);
+        ggml_tensor * cur = build_glm_mtp_graph(mtp_layer, batched_token_emb, batched_hidden,
             batched_pos, lctx.inp_KQ_mask_draft[0], n_embd_head, n_batched, kv_head, gf);
 
         ggml_tensor * last_hidden = ggml_view_1d(ctx0, cur,
@@ -8362,7 +8346,7 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
         // Draft only: start from first token
         ggml_tensor * first_token_id = ggml_view_1d(ctx0, lctx.inp_tokens, 1, 0);
         token_emb = ggml_get_rows(ctx0, mtp_embd_weights, first_token_id);
-        prev_hidden = hidden_states;
+        prev_hidden = ggml_view_1d(ctx0, hidden_states, hparams.n_embd, 0);
         unroll_start = 0;
     }
 

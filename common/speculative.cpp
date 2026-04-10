@@ -159,12 +159,6 @@ struct common_speculative_state_mtp : public common_speculative_state {
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
     {
-        struct common_params_sampling params;
-        params.samplers_sequence = {
-            llama_sampler_type::DIST,
-        };
-        smpl = common_sampler_init(llama_get_model(ctx_tgt), params);
-
         const llama_model * model = llama_get_model(ctx_tgt);
         ctx_mtp = llama_init_from_model(const_cast<llama_model *>(model), mtp_cparams);
         if (ctx_mtp) {
@@ -175,7 +169,6 @@ struct common_speculative_state_mtp : public common_speculative_state {
     }
 
     ~common_speculative_state_mtp() override {
-        common_sampler_free(smpl);
         if (ctx_mtp) {
             llama_free(ctx_mtp);
         }
@@ -1148,20 +1141,6 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
 
         impl->accept(n_accepted);
         impl->n_call_accept++;
-    }
-}
-
-void common_speculative_mtp_set_accepted(
-        common_speculative * spec,
-        const std::vector<llama_token> & ids,
-        int32_t n_past_base) {
-    for (auto & impl : spec->impls) {
-        auto * mtp = dynamic_cast<common_speculative_state_mtp *>(impl.get());
-        if (mtp) {
-            mtp->pending_accepted_ids = ids;
-            mtp->pending_n_past_base = n_past_base;
-            return;
-        }
     }
 }
 

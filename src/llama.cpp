@@ -4058,7 +4058,7 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 && lctx.model.mtp;
-            if (cparams.embeddings || has_mtp) {
+            if ((cparams.embeddings || has_mtp) && cparams.mtp_op_type == MTP_OP_NONE) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
                     if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
                         embd = gf->nodes[i];
@@ -4158,7 +4158,7 @@ static int llama_decode_internal(
         }
 
         // extract embeddings
-        if (embd && (cparams.mtp_op_type == MTP_OP_NONE || cparams.mtp_op_type == MTP_OP_DRAFT_GEN)) {
+        if (embd && cparams.mtp_op_type == MTP_OP_NONE) {
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
