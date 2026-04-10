@@ -111,8 +111,13 @@ jobs:
       - name: Delete untagged images
         uses: vlaurin/action-ghcr-prune@v0.6.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use a PAT if GITHUB_TOKEN continues to return "Not Found"
+          token: ${{ secrets.GITHUB_TOKEN }} 
+          # Ensure this matches the package owner (user or org)
           organization: ${{ github.repository_owner }}
           container: ik-llama-cpp
-          keep-younger-than: 0
-          untagged-only: true
+          # Changed from untagged-only to the valid input
+          untagged: true
+          # Optional: Keep the most recent untagged if needed, 
+          # otherwise 0 deletes all untagged.
+          keep-last: 0
