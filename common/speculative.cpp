@@ -148,11 +148,13 @@ struct common_speculative_state {
 
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
+    llama_context * ctx_mtp = nullptr;
     common_sampler * smpl;
 
     common_speculative_state_mtp(
             enum common_speculative_type type,
-            llama_context * ctx_tgt)
+            llama_context * ctx_tgt,
+            const llama_context_params & mtp_cparams)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
     {
@@ -161,10 +163,21 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_sampler_type::DIST,
         };
         smpl = common_sampler_init(llama_get_model(ctx_tgt), params);
+
+        const llama_model * model = llama_get_model(ctx_tgt);
+        ctx_mtp = llama_init_from_model(const_cast<llama_model *>(model), mtp_cparams);
+        if (ctx_mtp) {
+            LOG_INF("%s: created MTP context (n_ctx=%d)\n", __func__, llama_n_ctx(ctx_mtp));
+        } else {
+            LOG_ERR("%s: failed to create MTP context, falling back to shared context\n", __func__);
+        }
     }
 
     ~common_speculative_state_mtp() override {
         common_sampler_free(smpl);
+        if (ctx_mtp) {
+            llama_free(ctx_mtp);
+        }
     }
 
     void begin(const llama_tokens & prompt) override {
@@ -178,12 +191,20 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_tokens & result) override {
 
         int32_t n_past = (int32_t)prompt_tgt.size();
-
         llama_seq_id seq_id = 0;
+
+        if (ctx_mtp) {
+            llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
+            if (mtp_pos_max >= n_past) {
+                llama_kv_cache_seq_rm(ctx_mtp, seq_id, n_past, -1);
+            }
+        }
+
+        llama_context * ctx = ctx_mtp ? ctx_mtp : ctx_tgt;
 
         result = mtp_speculative_gen_draft(
             smpl,
-            ctx_tgt,
+            ctx,
             params.n_max,
             params.p_min,
             id_last,
@@ -774,6 +795,9 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
+    std::unique_ptr<spec_tuner> tuner;
+    int last_n_drafted = 0;
+    int64_t t_step_start_us = 0;
 };
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
@@ -951,7 +975,8 @@ common_speculative * common_speculative_init(
             }
             case COMMON_SPECULATIVE_TYPE_MTP: {
                 impls.push_back(std::make_unique<common_speculative_state_mtp>(config.type,
-                    /* .ctx_tgt      = */ ctx_tgt
+                    /* .ctx_tgt      = */ ctx_tgt,
+                    /* .mtp_cparams  = */ params.cparams_dft
                 ));
                 break;
             }
@@ -1009,6 +1034,22 @@ common_speculative * common_speculative_init(
         /* .impls = */ std::move(impls)
     };
 
+    // initialize autotune if requested
+    if (params.autotune && !result->impls.empty()) {
+        auto actual_type = result->impls[0]->type;
+        if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
+            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
+            result->tuner = std::make_unique<spec_tuner>();
+            result->tuner->init(actual_type, params);
+            LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
+                    common_speculative_type_to_str(actual_type).c_str(),
+                    result->tuner->coords.size());
+        } else {
+            LOG_WRN("Autotune disabled — speculative type %s is not supported for autotuning\n",
+                    common_speculative_type_to_str(actual_type).c_str());
+        }
+    }
+
     return result;
 }
 
@@ -1034,10 +1075,17 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 
 llama_tokens common_speculative_draft(
         common_speculative * spec,
-        const common_params_speculative & params,
+        common_params_speculative & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last) {
     llama_tokens result;
+
+    spec->t_step_start_us = ggml_time_us();
+
+    // apply autotune proposal if enabled
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->tuner->propose(params);
+    }
 
     spec->curr_impl = nullptr; // reset current implementation
 
@@ -1061,10 +1109,24 @@ llama_tokens common_speculative_draft(
         }
     }
 
+    // store draft count for tuner feedback
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->last_n_drafted = (int)result.size();
+    }
+
     return result;
 }
 
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
+    if (spec->tuner && spec->tuner->enabled && spec->t_step_start_us > 0) {
+        int64_t step_time_us = ggml_time_us() - spec->t_step_start_us;
+        double step_tps = (step_time_us > 100)
+            ? (n_accepted + 1.0) * 1e6 / (double)step_time_us
+            : 0.0;
+        spec->tuner->accept_feedback(n_accepted, spec->last_n_drafted, step_tps);
+        spec->t_step_start_us = 0;
+    }
+
     if (n_accepted == 0) {
         return;
     }
@@ -1085,7 +1147,7 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     }
 }
 
-void common_speculative_print_stats(const common_speculative * spec) {
+void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded, int n_past, common_params_speculative * active_params) {
     if (spec == nullptr) {
         return;
     }
@@ -1111,11 +1173,48 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 impl->n_acc_tokens,
                 str_perf.c_str());
     }
+
+    if (spec->tuner && spec->tuner->enabled && slot_tps > 0.0 && n_decoded > 0) {
+        auto * mutable_spec = const_cast<common_speculative *>(spec);
+        if (active_params) {
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, *active_params);
+        } else {
+            common_params_speculative tmp_params;
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, tmp_params);
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
 // MTP
 // ----------------------------------------------------------------------------
+
+llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
+    if (!spec) return nullptr;
+
+    for (auto & impl : spec->impls) {
+        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
+            auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get());
+            if (mtp_state) {
+                return mtp_state->ctx_mtp;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void common_speculative_context_shift(
+        common_speculative * spec,
+        llama_seq_id         seq_id,
+        llama_pos            kv_keep,
+        llama_pos            kv_discard,
+        llama_pos            kv_past) {
+    if (auto * ctx_mtp = common_speculative_get_mtp_ctx(spec); ctx_mtp != nullptr) {
+        llama_kv_cache_seq_rm (ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
+        llama_kv_cache_seq_add(ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
+    }
+}
+
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,
@@ -1181,7 +1280,15 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
         return;
     }
 
-    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
+    llama_seq_id seq_id   = batch.seq_id[0][0];
+    llama_pos    start_pos = batch.pos[0];
+
+    if (llama_kv_cache_seq_pos_max(ctx, seq_id) >= start_pos) {
+        llama_kv_cache_seq_rm(ctx, seq_id, start_pos, -1);
+    }
+
+    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens from pos %d...\n",
+            is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens, (int)start_pos);
 
     llama_batch mtp_batch = batch;
     if (is_prompt_warmup) {

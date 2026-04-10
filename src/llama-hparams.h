@@ -332,7 +332,7 @@ struct llama_hparams {
 
     uint32_t rope_n_rot(uint32_t il) const {
         const uint32_t v = rope_dim_per_layer[il];
-        return v ? v : n_rot;
+        return v ? v : swa_layers[il] ? n_rot_swa : n_rot;
     }
 
     static const char * rope_scaling_type_name(llama_rope_scaling_type);

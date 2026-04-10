@@ -80,6 +80,8 @@ add_library(${TARGET} STATIC
 	peg-parser.cpp
     peg-parser.h
 	speculative.cpp
+    spec-tuner.cpp
+    spec-tuner.h
     unicode.cpp
     unicode.h
     ngram-mod.cpp
