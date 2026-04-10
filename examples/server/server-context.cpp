@@ -1363,6 +1363,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     {
         // TODO: JSON parsing for rules and keywords
         slot.allow_ruless = params_base.allow_ruless;
+        if (slot.allow_ruless.size() == 0) {
+            slot.allow_biasess.clear();
+            break;
+        }
         slot.allow_kws = params_base.allow_kws;
 
         slot.allow_pieces = params_base.allow_pieces;
