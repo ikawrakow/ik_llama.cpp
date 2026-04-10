@@ -64,7 +64,7 @@ struct server_slot {
     server_tokens prompt_tokens;
     server_tokens cache_tokens;
 
-    size_t last_gentxt_size = 0;
+    int32_t last_gentxt_size = 0;
     std::string generated_text;
 
     // idx of draft tokens in the main batch
@@ -104,17 +104,13 @@ struct server_slot {
 	std::map<int32_t, std::set<llama_token>> positional_bans;
 
     // allowlist
-    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> allow_rules;
-    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> allow_rules_prev;
-    bool allow_df_common = false;
-    bool allow_df_common_prev = false;
-    std::vector<std::string> allow_each_pieces;
+    std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> allow_ruless_prev;
+    std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> allow_ruless;
     std::vector<std::string> allow_pieces;
-    std::string allow_bin_kw;
-    size_t allow_bin_thresh = 0;
-    size_t allow_bin_kw_counter = 0;
-    std::vector<float> allow_biases;
-    std::vector<float> allow_bin_biases;
+    std::vector<std::string> allow_kws;
+    size_t allow_kw_delay = 0;
+    std::vector<std::vector<float>> allow_biasess;
+    size_t allow_idx = 0;
 
     server_prompt server_cached_prompt;
 

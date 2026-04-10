@@ -1652,31 +1652,26 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--allowlist-unicode-rule") {
         CHECK_ARG
-        params.allow_rules.push_back(argparse_allowlist_unicode_rule(argv[i]));
+        if (params.allow_ruless.size() == 0) {
+            params.allow_ruless.push_back({});
+        }
+        params.allow_ruless.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
         return true;
     }
-    if (arg == "--allowlist-no-defer-common") {
-        params.allow_df_common = false;
-        return true;
-    }
-    if (arg == "--allowlist-each-piece") {
-        CHECK_ARG
-        params.allow_each_pieces.push_back(argv[i]);
-        return true;
-    }
-    if (arg == "--allowlist-piece") {
+    if (arg == "--allowlist-pieces") {
         CHECK_ARG
         params.allow_pieces.push_back(argv[i]);
         return true;
     }
-    if (arg == "--allowlist-binning-keyword") {
+    if (arg == "--allowlist-keyword") {
         CHECK_ARG
-        params.allow_bin_kw = argv[i];
+        params.allow_kws.push_back(argv[i]);
+        params.allow_ruless.push_back({});
         return true;
     }
-    if (arg == "--allowlist-binning-threshold") {
+    if (arg == "--allowlist-keyword-delay") {
         CHECK_ARG
-        params.allow_bin_thresh = std::stoul(argv[i]);
+        params.allow_kw_delay = std::stoul(argv[i]);
         return true;
     }
     if (arg == "-ld" || arg == "--logdir") {
@@ -2428,20 +2423,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
     options.push_back({ "*",           "       --allowlist-unicode-rule",
                                                                         "rule for allowlisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
-                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n"
-                                                                        "tokens containing characters without applicable rule is blacklisted (BIAS=-999)\n"
-                                                                        "`--allowlist-unicode-rule ascii` is valid as special case\n"
-                                                                        "e.g. `--allowlist-unicode-rule ascii:42` == `--allowlist-unicode-rule 0..127,common:42 --allowlist-unicode-rule 0..127,latin:42`" });
-    options.push_back({ "*",           "       --allowlist-no-defer-common",
-                                                                        "common characters not in any rule defer to other characters in the token instead of blacklisting (default: %s)", params.allow_df_common ? "true" : "false" });
-    options.push_back({ "*",           "       --allowlist-each-piece", "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
-    options.push_back({ "*",           "       --allowlist-piece",      "allowlist if and only if argument tokenizes to a single token\n"
-                                                                        "inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule and --allowlist-each-piece" });
-    options.push_back({ "*",           "       --allowlist-binning-keyword",
-                                                                        "keyword to trigger allowlist binning if matched during generation (default: \"%s\", \"\" = disabled)\n"
-                                                                        "binning: BIAS>=0 -> 0, BIAS<0 -> -999", params.allow_bin_kw.c_str() });
-    options.push_back({ "*",           "       --allowlist-binning-threshold",
-                                                                        "# keyword match > threshold triggers binning (default: %zu)", params.allow_bin_thresh });
+                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n" });
+    options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
+    options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
+    options.push_back({ "*",           "       --allowlist-keyword-delay",
+                                                                        "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });

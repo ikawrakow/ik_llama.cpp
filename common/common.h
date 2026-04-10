@@ -286,12 +286,15 @@ struct gpt_params {
     size_t n_buffer 				 =  0; // number of token buffers for string ban
     bool can_ban_phrases             = true;  // whether to ban strings
 
-    std::vector<std::tuple<uint32_t, uint32_t, std::string, float>> allow_rules;    // rules for unicode allowlist
-    std::vector<std::string> allow_each_pieces;     // piece -> tokens -> allowlist
-    std::vector<std::string> allow_pieces;          // allowlist iff piece is single token
-    bool allow_df_common = true;    // common characters without rule defer to other characters in a token
-    std::string allow_bin_kw;       // binning keyword
-    size_t allow_bin_thresh = 0;    // keyword match threshold for binning
+    std::vector<std::vector<std::tuple<
+        uint32_t        // lower codepoint
+        ,uint32_t       // upper codepoint
+        ,std::string    // unicode script name
+        ,float          // bias
+    >>> allow_ruless;
+    std::vector<std::string> allow_pieces;  // each token to allowlist
+    std::vector<std::string> allow_kws;     // keywords
+    size_t allow_kw_delay;  // minimum n_decoded before first keyword is active
 
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
