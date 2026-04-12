@@ -3691,48 +3691,53 @@ static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
             ggml_tensor * mask = lctx.inp_KQ_mask_draft[iter];
             if (!mask || !mask->buffer) continue;
 
-            GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
             const bool is_f16 = cparams.flash_attn;
             const size_t row_bytes = n_kv * ggml_element_size(mask);
+            const size_t mask_bytes = ggml_nbytes(mask);
+
+            std::vector<uint8_t> mask_buf(mask_bytes);
+            uint8_t * buf = mask_buf.data();
 
             if (n_accepted > 0 && iter == 0) {
-                // Case 1: n_accepted+1 rows for accepted tokens + 1st draft
+                // n_accepted+1 rows for accepted tokens + 1st draft
                 const int n_rows = n_accepted + 1;
                 for (int j = 0; j < n_rows; ++j) {
                     const uint32_t cell_idx = kv_self.head + j;
                     const llama_pos    pos    = kv_self.cells[cell_idx].pos;
                     const llama_seq_id seq_id = kv_self.cells[cell_idx].seq_id.empty()
                         ? 0 : *kv_self.cells[cell_idx].seq_id.begin();
-                    fill_mask_row((char *)mask->data + j * row_bytes, n_kv, pos, seq_id, is_f16);
+                    fill_mask_row(buf + j * row_bytes, n_kv, pos, seq_id, is_f16);
                 }
                 const int64_t n_pad = mask->ne[1];
                 for (int64_t j = n_rows; j < n_pad; ++j) {
                     if (is_f16) {
                         ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
-                        std::fill((ggml_half *)mask->data + j * n_kv, (ggml_half *)mask->data + (j + 1) * n_kv, h_inf);
+                        std::fill((ggml_half *)(buf + j * row_bytes), (ggml_half *)(buf + (j + 1) * row_bytes), h_inf);
                     } else {
-                        std::fill((float *)mask->data + j * n_kv, (float *)mask->data + (j + 1) * n_kv, -INFINITY);
+                        std::fill((float *)(buf + j * row_bytes), (float *)(buf + (j + 1) * row_bytes), -INFINITY);
                     }
                 }
             } else {
-                // Case 2 for unrolled iteration
+                // for unrolled iteration
                 const uint32_t cell_idx = kv_self.head + n_accepted + iter;
                 const llama_pos    pos    = kv_self.cells[cell_idx].pos;
                 const llama_seq_id seq_id = kv_self.cells[cell_idx].seq_id.empty()
                     ? 0 : *kv_self.cells[cell_idx].seq_id.begin();
 
-                fill_mask_row(mask->data, n_kv, pos, seq_id, is_f16);
+                fill_mask_row(buf, n_kv, pos, seq_id, is_f16);
 
                 const int64_t n_pad = mask->ne[1];
                 for (int64_t j = 1; j < n_pad; ++j) {
                     if (is_f16) {
                         ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
-                        std::fill((ggml_half *)mask->data + j * n_kv, (ggml_half *)mask->data + (j + 1) * n_kv, h_inf);
+                        std::fill((ggml_half *)(buf + j * row_bytes), (ggml_half *)(buf + (j + 1) * row_bytes), h_inf);
                     } else {
-                        std::fill((float *)mask->data + j * n_kv, (float *)mask->data + (j + 1) * n_kv, -INFINITY);
+                        std::fill((float *)(buf + j * row_bytes), (float *)(buf + (j + 1) * row_bytes), -INFINITY);
                     }
                 }
             }
+
+            ggml_backend_tensor_set(mask, buf, 0, mask_bytes);
         }
     }
 
