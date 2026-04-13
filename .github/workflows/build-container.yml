@@ -33,8 +33,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 100 # Enough for rev-list, but saves GBs of history
       
       - name: Free Disk Space (Ubuntu)
         run: |
