@@ -105,16 +105,13 @@ jobs:
     needs: build-and-push
     if: success()
     steps:
-      - name: Delete untagged images
-        uses: vlaurin/action-ghcr-prune@v0.6.0
+      - name: Prune Images
+        uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          # Use a PAT if GITHUB_TOKEN continues to return "Not Found"
-          token: ${{ secrets.GITHUB_TOKEN }} 
-          # Ensure this matches the package owner (user or org)
-          organization: ${{ github.repository_owner }}
-          container: ik-llama-cpp
-          # Changed from untagged-only to the valid input
-          untagged: true
-          # Optional: Keep the most recent untagged if needed, 
-          # otherwise 0 deletes all untagged.
-          keep-last: 0
+          token: ${{ secrets.YOUR_PAT }} # Requires delete:packages scope
+          package: your-container
+          # Matches your previous logic:
+          delete-untagged: true
+          keep-n-tagged: 2
+          older-than: 7 days
+          dry-run: true
