@@ -117,6 +117,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }} # Requires delete:packages scope
           package: ik-llama-cpp
           delete-untagged: true
-          keep-n-tagged: 2
           older-than: 7 days
-          dry-run: true
