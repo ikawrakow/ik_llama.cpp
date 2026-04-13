@@ -114,9 +114,8 @@ jobs:
       - name: Prune Images
         uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          token: ${{ secrets.YOUR_PAT }} # Requires delete:packages scope
-          package: your-container
-          # Matches your previous logic:
+          token: ${{ secrets.GITHUB_TOKEN }} # Requires delete:packages scope
+          package: ik-llama-cpp
           delete-untagged: true
           keep-n-tagged: 2
           older-than: 7 days
