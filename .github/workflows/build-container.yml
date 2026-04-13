@@ -33,6 +33,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 0 indicates all history for all branches and tags
       
       - name: Free Disk Space (Ubuntu)
         run: |
