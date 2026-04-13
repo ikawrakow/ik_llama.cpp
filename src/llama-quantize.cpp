@@ -1037,7 +1037,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         kv_overrides = v->data();
     }
     llama_model_loader ml(fname_inp, 0, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false,
-            /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false, kv_overrides, nullptr);
+            /* use_thp */ false, /* merge_qkv */ false, /* merge_up_gate_exps */ false,
+            /* defer_experts */ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
     llama_model model;

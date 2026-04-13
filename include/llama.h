@@ -426,6 +426,7 @@ extern "C" {
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
         bool flash_attn;
+        bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

@@ -269,6 +269,7 @@ struct cmd_params {
     bool no_ooae = false;
     bool mqkv = false;
     bool muge = false;
+    bool defer_experts = false;
     bool rcache = false;
     bool sas = false;
     int  max_gpu = 0;
@@ -317,6 +318,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_ooae              */ false,
     /* mqkv                 */ false,
     /* muge                 */ false,
+    /* defer_experts        */ false,
     /* rcache               */ false,
     /* sas                  */ false,
     /* max_gpu              */ 0,
@@ -367,6 +369,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.cuda_params.c_str());
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
     printf("  -muge, --merge-up-gate-experts      (default: %s)\n", cmd_params_defaults.muge ? "1" : "0");
+    printf("  --defer-experts                     (Linux only, default: %s)\n", cmd_params_defaults.defer_experts ? "1" : "0");
     printf("  -rcache, --rope-cache               (default: %s)\n", cmd_params_defaults.rcache ? "1" : "0");
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
     printf("  -ot, --override-tensor pattern      (default: none)\n");
@@ -813,6 +816,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.muge = std::stoi(argv[i]);
+        } else if (arg == "--defer-experts") {
+            params.defer_experts = true;
         } else if (arg == "-sas" || arg == "--scheduler-async") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -981,6 +986,7 @@ struct cmd_params_instance {
     bool no_ooae = false;
     bool mqkv = false;
     bool muge = false;
+    bool defer_experts = false;
     bool rcache = false;
     bool sas = false;
     int max_gpu = 0;
@@ -1003,6 +1009,7 @@ struct cmd_params_instance {
         mparams.use_thp = use_thp;
         mparams.merge_qkv = mqkv;
         mparams.merge_up_gate_exps = muge;
+        mparams.defer_experts = defer_experts;
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
         mparams.max_gpu = max_gpu;
@@ -1024,6 +1031,7 @@ struct cmd_params_instance {
                repack == other.repack &&
                mqkv == other.mqkv &&
                muge == other.muge &&
+               defer_experts == other.defer_experts &&
                use_thp == other.use_thp &&
                sas == other.sas &&
                fit == other.fit &&
@@ -1119,6 +1127,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
+                /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
@@ -1165,6 +1174,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
+                /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
@@ -1211,6 +1221,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
+                /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
@@ -1257,6 +1268,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
+                /* .defer_experts= */ params.defer_experts,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
@@ -1314,6 +1326,7 @@ struct test {
     bool no_ooae = false;
     bool mqkv = false;
     bool muge = false;
+    bool defer_experts = false;
     bool rcache = false;
     bool sas = false;
     bool max_gpu = 0;
@@ -1356,6 +1369,7 @@ struct test {
         repack = inst.repack;
         mqkv = inst.mqkv;
         muge = inst.muge;
+        defer_experts = inst.defer_experts;
         fmoe = inst.fmoe;
         ger = inst.ger;
         rcache = inst.rcache;
@@ -1474,7 +1488,7 @@ struct test {
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
-            field == "rcache" || field == "reuse" || field == "muge" || field == "sas") {
+            field == "rcache" || field == "reuse" || field == "muge" || field == "defer_experts" || field == "sas") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1517,7 +1531,7 @@ struct test {
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(fmoe), std::to_string(ger),
+            std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             std::to_string(max_gpu),
             cuda_params, override_tensor,
@@ -1539,7 +1553,7 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
-            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "fused_moe", "grouped_er",
+            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
             "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
@@ -1727,6 +1741,9 @@ struct markdown_printer : public printer {
         if (field == "muge") {
             return 4;
         }
+        if (field == "defer_experts") {
+            return 5;
+        }
         if (field == "sas") {
             return 3;
         }
@@ -1802,6 +1819,9 @@ struct markdown_printer : public printer {
         }
         if (field == "muge") {
             return "muge";
+        }
+        if (field == "defer_experts") {
+            return "defer";
         }
         if (field == "sas") {
             return "sas";
@@ -1924,6 +1944,9 @@ struct markdown_printer : public printer {
         }
         if (params.muge != cmd_params_defaults.muge) {
             fields.emplace_back("muge");
+        }
+        if (params.defer_experts != cmd_params_defaults.defer_experts) {
+            fields.emplace_back("defer_experts");
         }
         if (params.use_thp != cmd_params_defaults.use_thp) {
             fields.emplace_back("use_thp");

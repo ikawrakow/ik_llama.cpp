@@ -1559,6 +1559,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.fit = true;
         return true;
     }
+    if (arg == "--defer-experts") {
+        params.defer_experts = true;
+        return true;
+    }
     if (arg == "--fit-margin") {
         CHECK_ARG;
         int32_t margin = std::stoi(argv[i]);
@@ -2595,6 +2599,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-wgt, --worst-graph-tokens N",  "number of tokens to use for worst-case graph"});
     options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
@@ -3460,6 +3465,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
+    mparams.defer_experts   = params.defer_experts;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -4527,6 +4533,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
     fprintf(stream, "merge_up_gate_exps: %s # default: false\n", params.merge_up_gate_exps ? "true" : "false");
+    fprintf(stream, "defer_experts: %s # default: false\n", params.defer_experts ? "true" : "false");
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);

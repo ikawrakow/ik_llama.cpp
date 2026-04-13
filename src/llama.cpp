@@ -2665,9 +2665,19 @@ static bool llm_load_tensors(
         ml.use_mmap = false;
     }
 
+    bool defer_expert_mmap = ml.should_defer_expert_mmaps();
+    if (defer_expert_mmap && use_mlock) {
+        LLAMA_LOG_WARN("%s: deferred expert loading disabled because mlock keeps mmap ranges resident\n", __func__);
+        defer_expert_mmap = false;
+    }
+    if (defer_expert_mmap && (ml.check_tensors || validate_quants)) {
+        LLAMA_LOG_WARN("%s: deferred expert loading disabled because tensor validation would fault expert pages eagerly\n", __func__);
+        defer_expert_mmap = false;
+    }
+
     ml.done_getting_tensors();
 
-    ml.init_mappings(true, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
+    ml.init_mappings(!defer_expert_mmap, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
     model.mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -2804,6 +2814,10 @@ static bool llm_load_tensors(
                 return false;
             }
         }
+
+        if (defer_expert_mmap) {
+            ml.drop_mmap_expert_pages();
+        }
     }
 
     if (model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_MISTRAL4) {
@@ -2840,6 +2854,14 @@ static bool llm_load_tensors(
             LLAMA_LOG_ERROR("Found %d bad tensors in model\n", nbad);
             throw std::runtime_error("Bad tensors in model");
         }
+    }
+
+    if (defer_expert_mmap && !dry_run) {
+        LLAMA_LOG_INFO("%s: dense parameters loaded in %.2fs (%.2f GiB), expert parameters deferred (%.2f GiB)\n",
+                __func__,
+                (ggml_time_us() - model.t_start_us) / 1000000.0,
+                ml.expert_tensor_index.dense_bytes / 1024.0 / 1024.0 / 1024.0,
+                ml.expert_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
     }
 
     if (!ml.use_mmap && ml.repack_tensors) {
@@ -2899,6 +2921,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
     try {
         llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
+                params.defer_experts,
                 params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
@@ -2912,6 +2935,13 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             llm_load_hparams(ml, model);
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
+        }
+        if (params.defer_experts && params.use_mmap) {
+#ifdef __linux__
+            ml.build_expert_tensor_index(model.hparams);
+#else
+            LLAMA_LOG_WARN("%s: deferred expert loading is only supported on Linux; ignoring defer_experts\n", __func__);
+#endif
         }
         try {
             LLM_KV kv(model.arch);
@@ -4973,6 +5003,7 @@ struct llama_model_params llama_model_default_params() {
         /*.mtp                         =*/ false,
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
+        /*.defer_experts               =*/ false,
     };
 
 #ifdef GGML_USE_METAL
