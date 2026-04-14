@@ -766,8 +766,7 @@ static bool llama_kv_cache_init(
     bool is_mla_attn = model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_MISTRAL4;
 
     bool split_cache   = false;
-    const bool is_mtp_ctx = (cparams.mtp_op_type != MTP_OP_NONE);
-    if (!is_mtp_ctx && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
         if (llama_model_has_recurrent(&model)) {

@@ -8196,59 +8196,65 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     cb(combined, "mtp_concat", il);
     ggml_tensor* cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
 
-    struct ggml_tensor * inpSA = cur;
-
-    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
-    cb(cur, "attn_norm", il);
-
     // Self-Attention
-    {
+    const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+    ggml_tensor * ffn_inp;
+    if (rope_cache == nullptr) {
+        cur = build_std_attention(gf, mtp_layer.attn_norm, cur,
+                inp_pos, nullptr, nullptr,
+                KQ_mask, nullptr, nullptr,
+                kq_scale, 0.0f, 0, il, true, false, true, false, false, nullptr);
+        ffn_inp = cur;
+    } else {
+        struct ggml_tensor * inpSA = cur;
+        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
         auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
-                nullptr, nullptr, // wqkv, bqkv (not used in GLM usually?)
-                nullptr, nullptr, // wqk, bqk
+                nullptr, nullptr,
+                nullptr, nullptr,
                 mtp_layer.wq, mtp_layer.bq,
                 mtp_layer.wk, mtp_layer.bk,
                 mtp_layer.wv, mtp_layer.bv,
-                mtp_layer.attn_q_norm, mtp_layer.attn_k_norm, 
+                mtp_layer.attn_q_norm, mtp_layer.attn_k_norm,
                 0.f, il);
-
-        // RoPE
-        if (rope_cache) {
-            Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
-            Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
-        } else {
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-        }
-        
+        Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
+        Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
-
-        // KV Cache & Attention
         cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                        model.layers[il].wo, NULL,
+                        mtp_layer.wo, NULL,
                         Kcur, Vcur, Qcur, KQ_mask,
                         n_tokens, kv_head, n_kv,
-                        1.0f/sqrtf(float(n_embd_head)), cb, il);
+                        kq_scale, cb, il);
+        ffn_inp = ggml_add(ctx0, cur, inpSA);
+        cb(ffn_inp, "mtp_ffn_inp", il);
     }
 
-    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-    cb(ffn_inp, "mtp_ffn_inp", il);
-
-    cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
-                    mtp_layer.ffn_gate_inp,  NULL,
-                    mtp_layer.ffn_up_exps,   NULL,
-                    mtp_layer.ffn_gate_exps, NULL,
-                    mtp_layer.ffn_down_exps, NULL,
-                    mtp_layer.ffn_exp_probs_b,
-                    mtp_layer.ffn_up_shexp,    nullptr,
-                    mtp_layer.ffn_gate_shexp,  nullptr,
-                    mtp_layer.ffn_down_shexp,  nullptr,
-                    n_expert, n_expert_used,
-                    LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
-                    (llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
+    // FFN
+    if ((uint32_t) il < hparams.n_layer_dense_lead) {
+        cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
+                mtp_layer.ffn_up,   NULL, NULL,
+                mtp_layer.ffn_gate, NULL, NULL,
+                mtp_layer.ffn_down, NULL, NULL,
+                NULL,
+                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
+    } else {
+        cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
+                mtp_layer.ffn_gate_inp,  NULL,
+                mtp_layer.ffn_up_exps,   NULL,
+                mtp_layer.ffn_gate_exps, NULL,
+                mtp_layer.ffn_down_exps, NULL,
+                mtp_layer.ffn_exp_probs_b,
+                mtp_layer.ffn_up_shexp,    nullptr,
+                mtp_layer.ffn_gate_shexp,  nullptr,
+                mtp_layer.ffn_down_shexp,  nullptr,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
+                (llm_expert_gating_func_type) hparams.expert_gating_func,
+                LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
+    }
+    cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
 
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);

@@ -309,17 +309,12 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         }
     }
 
-    // For now don't split MTP layer tensor.
+    // Split MTP layer's to graph
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) &&
             model.hparams.nextn_predict_layers > 0 && model.splits.size() > 1) {
         int mtp_first = n_layer - model.hparams.nextn_predict_layers;
-        auto buft_gpu = model.buft_layer[mtp_first].buft;
-        for (int i = mtp_first; i < n_layer; ++i) {
-            std::string pattern = "blk\\." + std::to_string(i) + "\\..*";
-            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft_gpu));
-        }
-        LLAMA_LOG_DEBUG("%s: MTP layer(s) %d-%d pinned to %s (graph split not supported for MTP)\n",
-                __func__, mtp_first, n_layer - 1, ggml_backend_buft_name(buft_gpu));
+        LLAMA_LOG_DEBUG("%s: MTP layer(s) %d-%d: split attention+FFN, nextn on per-device CUDA\n",
+                __func__, mtp_first, n_layer - 1);
     }
 
     auto n_tensors = ml.n_tensors;
@@ -2629,35 +2624,32 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
             layer.ffn_down = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, flags);
             layer.ffn_up   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, flags);
         }
-        // --- NextN / MTP tensors (preserved but unused), on the final layer ---
+        // --- NextN / MTP tensors on the final layer ---
         if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
             const int final_layer = n_layer - 1;
-            // EH_PROJ: [2*embd, embd]
-            layer.nextn.eh_proj          = create_tensor(ctx_for_layer(final_layer),
+            auto nextn_ctx      = ctx_for_layer(final_layer);
+            auto nextn_host_ctx = ctx_input;
+            layer.nextn.eh_proj          = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", final_layer),
                     { 2*n_embd, n_embd },
                     flags);
-            // EMBED_TOKENS: [embd, vocab]
-            layer.nextn.embed_tokens     = create_tensor(ctx_for_layer(final_layer),
+            layer.nextn.embed_tokens     = create_tensor(nextn_host_ctx,
                     tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", final_layer),
                     { n_embd, n_vocab },
                     flags | llama_model_loader::TENSOR_NOT_REQUIRED);
-            // ENORM, HNORM: [embd]
-            layer.nextn.enorm            = create_tensor(ctx_for_layer(final_layer),
+            layer.nextn.enorm            = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer),
                     { n_embd },
                     flags);
-            layer.nextn.hnorm            = create_tensor(ctx_for_layer(final_layer),
+            layer.nextn.hnorm            = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_HNORM, "weight", final_layer),
                     { n_embd },
                     flags);
-            // SHARED_HEAD_HEAD: [embd, vocab]
-            layer.nextn.shared_head_head = create_tensor(ctx_for_layer(final_layer),
+            layer.nextn.shared_head_head = create_tensor(nextn_host_ctx,
                     tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", final_layer),
                     { n_embd, n_vocab },
                     flags | llama_model_loader::TENSOR_NOT_REQUIRED);
-            // SHARED_HEAD_NORM: [embd]
-            layer.nextn.shared_head_norm = create_tensor(ctx_for_layer(final_layer),
+            layer.nextn.shared_head_norm = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", final_layer),
                     { n_embd },
                     flags | llama_model_loader::TENSOR_NOT_REQUIRED);

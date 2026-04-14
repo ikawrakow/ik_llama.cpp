@@ -169,7 +169,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         if (ctx_mtp) {
             LOG_INF("%s: created MTP context (n_ctx=%d)\n", __func__, llama_n_ctx(ctx_mtp));
         } else {
-            LOG_ERR("%s: failed to create MTP context, falling back to shared context\n", __func__);
+            LOG_ERR("%s: failed to create MTP context\n", __func__);
         }
     }
 
@@ -193,14 +193,12 @@ struct common_speculative_state_mtp : public common_speculative_state {
         int32_t n_past = (int32_t)prompt_tgt.size();
         llama_seq_id seq_id = 0;
 
-        if (ctx_mtp) {
-            llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
-            if (mtp_pos_max >= n_past) {
-                llama_kv_cache_seq_rm(ctx_mtp, seq_id, n_past, -1);
-            }
+        llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
+        if (mtp_pos_max >= n_past) {
+            llama_kv_cache_seq_rm(ctx_mtp, seq_id, n_past, -1);
         }
 
-        llama_context * ctx = ctx_mtp ? ctx_mtp : ctx_tgt;
+        llama_context * ctx = ctx_mtp;
 
         result = mtp_speculative_gen_draft(
             smpl,
@@ -974,10 +972,15 @@ common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_MTP: {
-                impls.push_back(std::make_unique<common_speculative_state_mtp>(config.type,
+                auto mtp_state = std::make_unique<common_speculative_state_mtp>(config.type,
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .mtp_cparams  = */ params.cparams_dft
-                ));
+                );
+                if (!mtp_state->ctx_mtp) {
+                    LOG_ERR("%s: failed to create MTP context\n", __func__);
+                    return nullptr;
+                }
+                impls.push_back(std::move(mtp_state));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
@@ -1280,7 +1283,7 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
         return;
     }
 
-    llama_seq_id seq_id   = batch.seq_id[0][0];
+    llama_seq_id seq_id    = batch.seq_id[0][0];
     llama_pos    start_pos = batch.pos[0];
 
     if (llama_kv_cache_seq_pos_max(ctx, seq_id) >= start_pos) {

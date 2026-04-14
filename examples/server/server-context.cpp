@@ -255,7 +255,8 @@ void server_context::init() {
                 SLT_INF(slot, "%s", "speculative decoding context initialized\n");
             } else {
                 if (slot.has_mtp) {
-                    SRV_ERR("%s", "failed to initialize MTP speculative context\n");
+                    SRV_ERR("%s", "failed to initialize MTP speculative context, aborting\n");
+                    GGML_ABORT("MTP context creation failed");
                 } else {
                     SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
                 }
