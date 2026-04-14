@@ -1,17 +1,13 @@
 name: Build and Push Docker Image
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  # Allows manual triggering of the workflow
+  workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
-  actions: read
+  id-token: write
 
 jobs:
   build-and-push:
@@ -111,10 +107,15 @@ jobs:
     needs: build-and-push
     if: success()
     steps:
-      - name: Prune Images
-        uses: dataaxiom/ghcr-cleanup-action@v1
+      # - name: Prune Images
+      #   uses: dataaxiom/ghcr-cleanup-action@v1
+      #   with:
+      #     token: ${{ secrets.GITHUB_TOKEN }} # Requires delete:packages scope
+      #     package: ik-llama-cpp
+      #     delete-untagged: true
+      #     older-than: 7 days
+      - uses: actions/delete-package-versions@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }} # Requires delete:packages scope
-          package: ik-llama-cpp
-          delete-untagged: true
-          older-than: 7 days
+          package-name: 'ik-llama-cpp'
+          package-type: 'container'
+          delete-only-untagged-versions: 'true'
