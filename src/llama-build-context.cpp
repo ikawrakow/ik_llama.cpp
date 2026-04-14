@@ -8232,28 +8232,20 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     }
 
     // FFN
-    if ((uint32_t) il < hparams.n_layer_dense_lead) {
-        cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
-                mtp_layer.ffn_up,   NULL, NULL,
-                mtp_layer.ffn_gate, NULL, NULL,
-                mtp_layer.ffn_down, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
-    } else {
-        cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
-                mtp_layer.ffn_gate_inp,  NULL,
-                mtp_layer.ffn_up_exps,   NULL,
-                mtp_layer.ffn_gate_exps, NULL,
-                mtp_layer.ffn_down_exps, NULL,
-                mtp_layer.ffn_exp_probs_b,
-                mtp_layer.ffn_up_shexp,    nullptr,
-                mtp_layer.ffn_gate_shexp,  nullptr,
-                mtp_layer.ffn_down_shexp,  nullptr,
-                n_expert, n_expert_used,
-                LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
-                (llm_expert_gating_func_type) hparams.expert_gating_func,
-                LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
-    }
+    cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
+            mtp_layer.ffn_gate_inp,  NULL,
+            mtp_layer.ffn_up_exps,   NULL,
+            mtp_layer.ffn_gate_exps, NULL,
+            mtp_layer.ffn_down_exps, NULL,
+            mtp_layer.ffn_exp_probs_b,
+            mtp_layer.ffn_up_shexp,    nullptr,
+            mtp_layer.ffn_gate_shexp,  nullptr,
+            mtp_layer.ffn_down_shexp,  nullptr,
+            n_expert, n_expert_used,
+            LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
+            (llm_expert_gating_func_type) hparams.expert_gating_func,
+            LLM_FFN_SILU, cb, il, gf, true, mtp_layer.ffn_up_gate_exps);
+
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
 
