@@ -309,6 +309,19 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         }
     }
 
+    // For now don't split MTP layer tensor.
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) &&
+            model.hparams.nextn_predict_layers > 0 && model.splits.size() > 1) {
+        int mtp_first = n_layer - model.hparams.nextn_predict_layers;
+        auto buft_gpu = model.buft_layer[mtp_first].buft;
+        for (int i = mtp_first; i < n_layer; ++i) {
+            std::string pattern = "blk\\." + std::to_string(i) + "\\..*";
+            this->overrides.emplace_back(std::make_pair(std::regex(pattern), buft_gpu));
+        }
+        LLAMA_LOG_DEBUG("%s: MTP layer(s) %d-%d pinned to %s (graph split not supported for MTP)\n",
+                __func__, mtp_first, n_layer - 1, ggml_backend_buft_name(buft_gpu));
+    }
+
     auto n_tensors = ml.n_tensors;
     if (ml.merge_qkv) n_tensors += n_layer;
     if (ml.merge_up_gate_exps) n_tensors += n_layer;
