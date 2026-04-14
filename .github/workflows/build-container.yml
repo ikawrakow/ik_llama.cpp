@@ -118,4 +118,5 @@ jobs:
         with:
           package-name: 'ik-llama-cpp'
           package-type: 'container'
+          token: ${{ secrets.GITHUB_TOKEN }}
           delete-only-untagged-versions: 'true'
