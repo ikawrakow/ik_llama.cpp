@@ -8,6 +8,7 @@
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
+#include "suffix-tree.h"
 
 #include <algorithm>
 #include <cstring>
@@ -26,7 +27,8 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
-    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,
+    COMMON_SPECULATIVE_TYPE_SUFFIX
 };
 
 const std::map<std::string, enum common_speculative_type> common_speculative_type_from_name_map = {
@@ -38,7 +40,8 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
     {"ngram_mod",     COMMON_SPECULATIVE_TYPE_NGRAM_MOD},
-    {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
+    {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE},
+    {"suffix",        COMMON_SPECULATIVE_TYPE_SUFFIX}
 };
 
 struct common_speculative_config {
@@ -792,6 +795,60 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
     }
 };
 
+struct common_speculative_state_suffix : public common_speculative_state {
+    common_suffix_tree tree;
+    size_t cache_size = 0; // tokens already indexed in current request
+
+    common_speculative_state_suffix(
+            enum common_speculative_type type,
+            int max_depth)
+        : common_speculative_state(type)
+        , tree(max_depth)
+    {}
+
+    void begin(const llama_tokens & prompt) override {
+        cache_size = 0;
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+
+        if (cache_size < prompt_tgt.size() + 1) {
+            llama_tokens tokens_new;
+            tokens_new.reserve(prompt_tgt.size() + 1 - cache_size);
+            for (size_t j = cache_size; j < prompt_tgt.size(); ++j) {
+                tokens_new.push_back(prompt_tgt[j]);
+            }
+            tokens_new.push_back(id_last);
+
+            tree.extend(tokens_new.data(), (int)tokens_new.size());
+            cache_size = prompt_tgt.size() + 1;
+        }
+
+        const int ctx_len = std::min((int)(prompt_tgt.size() + 1), tree.max_depth());
+        llama_tokens context;
+        context.reserve(ctx_len);
+        const int ctx_start = (int)prompt_tgt.size() + 1 - ctx_len;
+        for (int j = ctx_start; j < (int)prompt_tgt.size(); ++j) {
+            context.push_back(prompt_tgt[j]);
+        }
+        context.push_back(id_last);
+
+        result = tree.speculate(
+            context.data(), (int)context.size(),
+            params.n_max,
+            params.p_min);
+    }
+
+    void accept(uint16_t n_accepted) override {
+        GGML_UNUSED(n_accepted);
+    }
+};
+
 struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
@@ -845,6 +902,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:     return "ngram_mod";
         case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:   return "ngram_cache";
+        case COMMON_SPECULATIVE_TYPE_SUFFIX:        return "suffix";
         default:                                    return "unknown";
     }
 }
@@ -914,6 +972,7 @@ common_speculative * common_speculative_init(
         bool has_ngram_map_k   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
         bool has_ngram_map_k4v = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
         bool has_ngram_mod     = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
+        bool has_suffix        = (params.type == COMMON_SPECULATIVE_TYPE_SUFFIX);
 
         // In a more complex implementation we could use the same implementation but with different parameters.
         // This was initially used in PR-18471 but removed to simplify the code.
@@ -946,6 +1005,9 @@ common_speculative * common_speculative_init(
         }
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
+        }
+        if (has_suffix) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_SUFFIX, params));
         }
         if (has_mtp) {
              configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_MTP, params));
@@ -1018,6 +1080,11 @@ common_speculative * common_speculative_init(
                 auto state = create_state_ngram_cache(
                         params.lookup_cache_static, params.lookup_cache_dynamic, config);
                 impls.push_back(std::make_unique<common_speculative_state_ngram_cache>(state));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_SUFFIX: {
+                int depth = config.params.ngram_size_n > 0 ? config.params.ngram_size_n : 64;
+                impls.push_back(std::make_unique<common_speculative_state_suffix>(config.type, depth));
                 break;
             }
             default:
