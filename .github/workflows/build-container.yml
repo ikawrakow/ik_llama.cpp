@@ -105,18 +105,17 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: success()
+    permissions:
+      packages: write
     steps:
-      # - name: Prune Images
-      #   uses: dataaxiom/ghcr-cleanup-action@v1
-      #   with:
-      #     token: ${{ secrets.GITHUB_TOKEN }} # Requires delete:packages scope
-      #     package: ik-llama-cpp
-      #     delete-untagged: true
-      #     older-than: 7 days
-      - uses: actions/delete-package-versions@v5
+      - name: Delete untagged images
+        uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          package-name: 'ik-llama-cpp'
-          package-type: 'container'
           token: ${{ secrets.GITHUB_TOKEN }}
-          delete-only-untagged-versions: 'true'
+          # Use the lower-case owner env you created earlier if possible, 
+          # or just github.repository_owner
+          owner: ${{ github.repository_owner }}
+          package: ik-llama-cpp
+          delete-untagged: true
+          # This helps avoid the "Package not found" error during high-volume deletion
+          validate: false
