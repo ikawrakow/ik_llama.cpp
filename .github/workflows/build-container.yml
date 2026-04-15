@@ -59,7 +59,6 @@ jobs:
         id: prep
         run: |
           echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> $GITHUB_ENV
-          echo "LLAMA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
       
       # 5.1 Restore the cache from GitHub's storage to a host folder
@@ -88,7 +87,6 @@ jobs:
           REPO_OWNER: ${{ env.REPO_LOWER }}
           VARIANT: ${{ matrix.variant }}
           BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
-          LLAMA_COMMIT: ${{ env.LLAMA_COMMIT }}
           CUDA_VERSION: ${{ matrix.cuda_version }}
           GGML_NATIVE: "OFF" # Force OFF for CI portability
           USE_CCACHE: "true"

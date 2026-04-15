@@ -1,7 +1,6 @@
 variable "REPO_OWNER" { default = "local" }
 variable "VARIANT" { default = "cpu" }
 variable "BUILD_NUMBER" { default = "0" }
-variable "LLAMA_COMMIT" { default = "local-dev" }
 variable "CUDA_VERSION" {}
 variable "CUDA_DOCKER_ARCH" { default = "86;90" }
 variable "USE_CCACHE" { default = "true" }
@@ -22,7 +21,6 @@ target "settings" {
   inherits = ["cache_settings"]
   args = {
     BUILD_NUMBER     = "${BUILD_NUMBER}"
-    BUILD_COMMIT     = "${LLAMA_COMMIT}"
     CUDA_VERSION     = "${CUDA_VERSION}"
     CUDA_DOCKER_ARCH = "${CUDA_DOCKER_ARCH}"
     GGML_NATIVE      = "${GGML_NATIVE}"
@@ -43,7 +41,7 @@ target "full" {
   inherits = ["settings"]
   target = "full"
   tags = [
-    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full-${BUILD_NUMBER}-${LLAMA_COMMIT}",
+    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full-${BUILD_NUMBER}",
     "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-full"
   ]
 }
@@ -52,7 +50,7 @@ target "swap" {
   inherits = ["settings"]
   target = "swap"
   tags = [
-    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap-${BUILD_NUMBER}-${LLAMA_COMMIT}",
+    "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap-${BUILD_NUMBER}",
     "ghcr.io/${REPO_OWNER}/ik-llama-cpp:${VARIANT}-swap"
   ]
 }
