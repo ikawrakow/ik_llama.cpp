@@ -4340,11 +4340,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
-    // Update the global context pointer for this device so that cross-device ops
-    // use the correct streams for the currently active context.
-    auto & info_mut = const_cast<ggml_cuda_device_info &>(ggml_cuda_info());
-    info_mut.all_ctx[cuda_ctx->device] = cuda_ctx;
-
     ggml_cuda_set_device(cuda_ctx->device);
 
 #ifdef USE_CUDA_GRAPH
