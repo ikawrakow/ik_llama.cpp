@@ -10014,12 +10014,14 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 //printf("Qcur: %ld x %ld x %ld x %ld, q_norm: %ld x %ld x %ld x %ld\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3], q_norm->splits[id]->ne[0], q_norm->splits[id]->ne[1], q_norm->splits[id]->ne[2], q_norm->splits[id]->ne[3]);
                 Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
                 Qcur->src[2] = qsum;
+                Qcur->op_params[1] = model.layers[il].wq->ne[1];
                 cb(Qcur, "Qcur_normed", il_id);
 
                 auto Kcur = k_all[id];
                 //printf("Kcur: %ld x %ld x %ld x %ld, k_norm: %ld x %ld x %ld x %ld\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3], k_norm->splits[id]->ne[0], k_norm->splits[id]->ne[1], k_norm->splits[id]->ne[2], k_norm->splits[id]->ne[3]);
                 Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
                 Kcur->src[2] = ksum;
+                Kcur->op_params[1] = model.layers[il].wk->ne[1];
                 cb(Kcur, "Kcur_normed", il_id);
 
                 auto Vcur = v_all[id];

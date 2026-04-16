@@ -365,11 +365,11 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
 }
 
 template <int block_size, typename src_t>
-static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, const float * sum, float * dst, const int ncols, float eps) {
+static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, const float * sum, float * dst, const int ncols, float eps, float norm) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
-    const float mean = sum[row] / ncols;
+    const float mean = sum[row] * norm;
     const float scale = rsqrtf(mean + eps);
 
     if constexpr (std::is_same_v<src_t, block_q8_0>) {
@@ -559,26 +559,26 @@ static void fused_rms_norm_f32_cuda(const src_t * x, const float * y, float * ds
 
 template <typename src_t>
 static void fused_rms_norm_f32_cuda(const src_t * x, const float * y, const float * sum, float * dst,
-        const int ncols, const int nrows, float eps, cudaStream_t stream) {
+        const int ncols, const int nrows, float eps, float norm, cudaStream_t stream) {
     constexpr int kBlockSize = 256;
     GGML_ASSERT(ncols % WARP_SIZE == 0);
     if (ncols < kBlockSize) {
         switch (ncols) {
-            case  32: fused_rms_norm_f32< 32><<<nrows,  32, 0, stream>>>(x, y, sum, dst, ncols, eps); break;
-            case  64: fused_rms_norm_f32< 64><<<nrows,  64, 0, stream>>>(x, y, sum, dst, ncols, eps); break;
-            case  96: fused_rms_norm_f32< 96><<<nrows,  96, 0, stream>>>(x, y, sum, dst, ncols, eps); break;
-            case 128: fused_rms_norm_f32<128><<<nrows, 128, 0, stream>>>(x, y, sum, dst, ncols, eps); break;
-            case 160: fused_rms_norm_f32<160><<<nrows, 160, 0, stream>>>(x, y, sum, dst, ncols, eps); break;
-            case 192: fused_rms_norm_f32<192><<<nrows, 192, 0, stream>>>(x, y, sum, dst, ncols, eps); break;
-            default : fused_rms_norm_f32<224><<<nrows, 224, 0, stream>>>(x, y, sum, dst, ncols, eps); break;
+            case  32: fused_rms_norm_f32< 32><<<nrows,  32, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case  64: fused_rms_norm_f32< 64><<<nrows,  64, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case  96: fused_rms_norm_f32< 96><<<nrows,  96, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case 128: fused_rms_norm_f32<128><<<nrows, 128, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case 160: fused_rms_norm_f32<160><<<nrows, 160, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case 192: fused_rms_norm_f32<192><<<nrows, 192, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            default : fused_rms_norm_f32<224><<<nrows, 224, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
         }
     }
     else if (ncols < 1024) {
         const dim3 block_dims(kBlockSize, 1, 1);
-        fused_rms_norm_f32<kBlockSize><<<nrows, block_dims, 0, stream>>>(x, y, sum, dst, ncols, eps);
+        fused_rms_norm_f32<kBlockSize><<<nrows, block_dims, 0, stream>>>(x, y, sum, dst, ncols, eps, norm);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        fused_rms_norm_f32<1024><<<nrows, block_dims, 0, stream>>>(x, y, sum, dst, ncols, eps);
+        fused_rms_norm_f32<1024><<<nrows, block_dims, 0, stream>>>(x, y, sum, dst, ncols, eps, norm);
     }
 }
 
@@ -731,9 +731,12 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
         GGML_ASSERT(src0->type == GGML_TYPE_F32);
         GGML_ASSERT(src2->type == GGML_TYPE_F32);
         GGML_ASSERT(ggml_is_contiguous(src0));
+        int ntot_cols = dst->op_params[1];
+        GGML_ASSERT(ntot_cols > 0);
+        float norm = 1.f/ntot_cols;
         const int64_t nrows = ggml_nrows(src0);
         GGML_ASSERT(src2->ne[0] == nrows);
-        fused_rms_norm_f32_cuda(src0_d, src1_d, (const float *)src2->data, dst_d, ne00, nrows, eps, stream);
+        fused_rms_norm_f32_cuda(src0_d, src1_d, (const float *)src2->data, dst_d, ne00, nrows, eps, norm, stream);
         return;
     }
 
