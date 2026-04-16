@@ -164,7 +164,6 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         return;
     }
 #endif
-    printf("Not using NCCL\n");
     GGML_ASSERT(dst->data == dst->src[ctx.device]->data);
     auto nbytes = ggml_nbytes(dst);
     int idx[GGML_CUDA_MAX_DEVICES];
@@ -436,7 +435,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         }
         return;
     }
-    if (dst->ne[1] < 32 && ctx.p2p_enabled) {
+    if (dst->ne[1] < 32 && ctx.p2p_enabled && ggml_nelements(dst) >= 8*nhave) {
         GGML_ASSERT(dst->type != GGML_TYPE_Q8_0);
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
