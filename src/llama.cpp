@@ -4130,7 +4130,7 @@ static int llama_decode_internal(
                 if (n_outputs_new) {
                     GGML_ASSERT( n_outputs_prev + n_outputs_new <= n_outputs);
                     GGML_ASSERT((n_outputs_prev + n_outputs_new)*n_vocab <= (int64_t) lctx.logits_size);
-                    
+
                     if (res->ne[1] == n_tokens && n_outputs_new < n_tokens) {
                         int32_t i_out = 0;
                         if (u_batch.logits && !embd_pooled) {

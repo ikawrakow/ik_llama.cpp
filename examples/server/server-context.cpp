@@ -111,6 +111,15 @@ bool server_context::load_model(const gpt_params& params_) {
     }
     // Load draft model for speculative decoding if specified
     if (has_draft_model) {
+
+        if (llama_model_has_recurrent(model)) {
+            LLAMA_LOG_WARN("\n=======================================================================\n");
+            LLAMA_LOG_WARN(" Speculative decodong is not suported for recurrent/hybrid models\n");
+            LLAMA_LOG_WARN(" --> bailing out\n");
+            LLAMA_LOG_WARN("========================================================================\n\n");
+            GGML_ABORT("Fatal error");
+        }
+
         LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n");
 
         gpt_params params_dft;
@@ -1470,9 +1479,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         //
         // TODO: try to make this conditional on the context or the memory module, instead of the model type
         params_base.do_checkpoint = do_checkpoint;
-		if (slot.n_buffer != 0) {
-        	LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
-		}
+        if (slot.n_buffer != 0) {
+            LLAMA_LOG_WARN("banned strings is not supported by recurrent model, it will be disabled.\n");
+        }
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
