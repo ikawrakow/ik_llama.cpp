@@ -4163,39 +4163,24 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_DEBUG("  split_kq:"); for ([[maybe_unused]] auto s : split_kq) LLAMA_LOG_DEBUG(" %d", s);
                 LLAMA_LOG_DEBUG("\n");
 
-                //if (layer.attn_q_norm && layer.attn_q_norm->ne[0] == wq_ne1) {
-                //    // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
-                //    // entire Q tensor (e.g., MiniMax-2), we need to have a copy of the entire wq and attn_q_norm tensors
-                //    // on each participating GPU.
-                //    prepare_split_tensors(-1, ctx_split, layer.wq, layer.split_wq, split_vo, mem_used);
-                //    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_vo, mem_used);
-                //    if (layer.bq) {
-                //        prepare_split_tensors(-1, ctx_split, layer.bq, layer.split_bq, split_vo, mem_used);
-                //    }
-                //    LLAMA_LOG_DEBUG("Not splitting wq, attn_q_norm in layer layer %d because of RMS norm\n", il);
-                //} else {
-                    prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
-                    if (layer.attn_q_norm) {
-                        printf("attn_q_norm: %ld x %ld, wq_ne1 = %d\n", layer.attn_q_norm->ne[0], layer.attn_q_norm->ne[1], wq_ne1);
-                        if (layer.attn_q_norm->ne[1] > 1) {
-                            // 2D per-head norm (e.g., Command-R+): split along the Q-head dimension
-                            auto split_q_heads = split_kq;
-                            for (auto & s : split_q_heads) s /= hparams.n_embd_head_k(il);
-                            prepare_split_tensors(1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_q_heads, mem_used);
-                        }
-                        else if (layer.attn_q_norm->ne[0] == wq_ne1) {
-                            printf("Splitting q_norm on dim 0\n");
-                            // MiniMax-M2
-                            prepare_split_tensors( 0, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
-                        } else {
-                            printf("Mirroring q_norm\n");
-                            prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
-                        }
+                prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
+                if (layer.attn_q_norm) {
+                    if (layer.attn_q_norm->ne[1] > 1) {
+                        // 2D per-head norm (e.g., Command-R+): split along the Q-head dimension
+                        auto split_q_heads = split_kq;
+                        for (auto & s : split_q_heads) s /= hparams.n_embd_head_k(il);
+                        prepare_split_tensors(1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_q_heads, mem_used);
                     }
-                    if (layer.bq) {
-                        prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
+                    else if (layer.attn_q_norm->ne[0] == wq_ne1) {
+                        // MiniMax-M2
+                        prepare_split_tensors( 0, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                    } else {
+                        prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
                     }
-                //}
+                }
+                if (layer.bq) {
+                    prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
+                }
                 prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split_vo, mem_used);
                 if (layer.bo) {
                     prepare_split_tensors(-1, ctx_split, layer.bo, layer.split_bo, split_vo, mem_used);
@@ -4223,41 +4208,26 @@ bool create_tensors_helper::create_tensors() {
                     for (auto & s : split_kq) s /= gqa_ratio;
                 }
                 for (auto & s : split_vo) s /= gqa_ratio;
-                //if (layer.attn_k_norm && layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
-                //    // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
-                //    // entire K tensor (e.g., MiniMax-2), we need to have a copy of the entire wk and attn_k_norm tensors
-                //    // on each participating GPU.
-                //    prepare_split_tensors(-1, ctx_split, layer.wk, layer.split_wk, split_vo, mem_used);
-                //    prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_vo, mem_used);
-                //    if (layer.bk) {
-                //        prepare_split_tensors(-1, ctx_split, layer.bk, layer.split_bk, split_vo, mem_used);
-                //    }
-                //    LLAMA_LOG_DEBUG("Not splitting wk, attn_k_norm in layer layer %d because of RMS norm\n", il);
-                //} else {
-                    prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
-                    if (layer.bk) {
-                        prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
+                prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
+                if (layer.bk) {
+                    prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
+                }
+                if (layer.attn_k_norm) {
+                    if (layer.attn_k_norm->ne[1] > 1) {
+                        // 2D per-head norm (e.g., Command-R+): split along the KV-head dimension
+                        // split_kq has already been divided by gqa_ratio, so values are in
+                        // (n_embd_head_k * n_head_kv) units; divide again to get head units
+                        auto split_k_heads = split_kq;
+                        for (auto & s : split_k_heads) s /= hparams.n_embd_head_k(il);
+                        prepare_split_tensors(1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_k_heads, mem_used);
                     }
-                    if (layer.attn_k_norm) {
-                        printf("attn_k_norm: %ld x %ld, wq_ne1 = %d\n", layer.attn_k_norm->ne[0], layer.attn_q_norm->ne[1], wq_ne1);
-                        if (layer.attn_k_norm->ne[1] > 1) {
-                            // 2D per-head norm (e.g., Command-R+): split along the KV-head dimension
-                            // split_kq has already been divided by gqa_ratio, so values are in
-                            // (n_embd_head_k * n_head_kv) units; divide again to get head units
-                            auto split_k_heads = split_kq;
-                            for (auto & s : split_k_heads) s /= hparams.n_embd_head_k(il);
-                            prepare_split_tensors(1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_k_heads, mem_used);
-                        }
-                        else if (layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
-                            printf("Splitting k_norm on dim 0\n");
-                            // MiniMax-M2
-                            prepare_split_tensors( 0, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
-                        } else {
-                            printf("Mirroring k_norm\n");
-                            prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
-                        }
+                    else if (layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
+                        // MiniMax-M2
+                        prepare_split_tensors( 0, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                    } else {
+                        prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
                     }
-                //}
+                }
                 if (layer.wv) {
                     prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
                     if (layer.bv) {
