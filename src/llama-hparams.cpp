@@ -523,6 +523,14 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
                 ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
+                // NextN/MTP parameters
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (model.mtp) {
+                    hparams.n_layer_kv_from_start = hparams.n_layer;
+                } else {
+                    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                }
+
                 // Load linear attention (gated delta net) parameters
                 ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
                 ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
@@ -531,18 +539,26 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
                 // Mark recurrent layers (linear attention layers)
+                // MTP layers always use standard attention, not delta-net
                 {
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+                    const uint32_t n_main_layers = hparams.n_layer - hparams.nextn_predict_layers;
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                        hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        if (i < n_main_layers) {
+                            hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                        } else {
+                            hparams.recurrent_layer_arr[i] = false;
+                        }
                     }
                 }
 
                 switch (hparams.n_layer) {
                     case 24: model.type = hparams.n_embd == 1024 ? e_model::MODEL_0_8B : e_model::MODEL_2B; break;
                     case 32: model.type = hparams.n_embd == 2560 ? e_model::MODEL_4B   : e_model::MODEL_9B; break;
-                    case 64: model.type = e_model::MODEL_27B; break;
+                    case 64: // without MTP layer
+                    case 65: // with MTP layer (64 main + 1 MTP)
+                        model.type = e_model::MODEL_27B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
