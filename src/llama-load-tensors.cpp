@@ -4176,6 +4176,7 @@ bool create_tensors_helper::create_tensors() {
                 //} else {
                     prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                     if (layer.attn_q_norm) {
+                        printf("attn_q_norm: %ld x %ld, wq_ne1 = %d\n", layer.attn_q_norm->ne[0], layer.attn_q_norm->ne[1], wq_ne1);
                         if (layer.attn_q_norm->ne[1] > 1) {
                             // 2D per-head norm (e.g., Command-R+): split along the Q-head dimension
                             auto split_q_heads = split_kq;
@@ -4183,9 +4184,11 @@ bool create_tensors_helper::create_tensors() {
                             prepare_split_tensors(1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_q_heads, mem_used);
                         }
                         else if (layer.attn_q_norm->ne[0] == wq_ne1) {
+                            printf("Splitting q_norm on dim 0\n");
                             // MiniMax-M2
                             prepare_split_tensors( 0, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
                         } else {
+                            printf("Mirroring q_norm\n");
                             prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
                         }
                     }
@@ -4236,6 +4239,7 @@ bool create_tensors_helper::create_tensors() {
                         prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
                     }
                     if (layer.attn_k_norm) {
+                        printf("attn_k_norm: %ld x %ld, wq_ne1 = %d\n", layer.attn_k_norm->ne[0], layer.attn_q_norm->ne[1], wq_ne1);
                         if (layer.attn_k_norm->ne[1] > 1) {
                             // 2D per-head norm (e.g., Command-R+): split along the KV-head dimension
                             // split_kq has already been divided by gqa_ratio, so values are in
@@ -4245,9 +4249,11 @@ bool create_tensors_helper::create_tensors() {
                             prepare_split_tensors(1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_k_heads, mem_used);
                         }
                         else if (layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
+                            printf("Splitting k_norm on dim 0\n");
                             // MiniMax-M2
                             prepare_split_tensors( 0, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
                         } else {
+                            printf("Mirroring k_norm\n");
                             prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
                         }
                     }

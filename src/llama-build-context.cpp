@@ -1980,21 +1980,61 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
     }
 
     auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, wq, bq, wk, bk, wv, bv, attention_scale, il, add_graph_split);
-    auto Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head_k, Q->ne[0]/n_embd_head_k, n_tokens);
-    // Command-R/R+ uses LayerNorm (not RMSNorm) for per-head Q/K normalisation
-    const auto qk_norm_type = (model.arch == LLM_ARCH_COMMAND_R) ? LLM_NORM : LLM_NORM_RMS;
+
+    auto qk_norm_type = (model.arch == LLM_ARCH_COMMAND_R) ? LLM_NORM : LLM_NORM_RMS;
     if (q_norm) {
-        Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, qk_norm_type, cb, il);
-        cb(Qcur, "Qcur_normed", il);
+        if (q_norm->ne[0] == n_embd_head_k) {
+            Q = ggml_reshape_3d(ctx0, Q, n_embd_head_k, Q->ne[0]/n_embd_head_k, n_tokens);
+            Q = llm_build_norm(ctx0, Q, hparams, q_norm, NULL, qk_norm_type, cb, il);
+            cb(Q, "Q_normed", il);
+        }
+        else if (q_norm->ne[0] == Q->ne[0]) {
+            Q = llm_build_norm(ctx0, Q, hparams, q_norm, NULL, qk_norm_type, cb, il);
+            Q = ggml_reshape_3d(ctx0, Q, n_embd_head_k, Q->ne[0]/n_embd_head_k, n_tokens);
+            cb(Q, "Q_normed", il);
+        }
+        else {
+            LLAMA_LOG_ERROR("Unexpected q_norm size %ld. Q is %ld x %ld x %ld x %ld\n", q_norm->ne[0], Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3]);
+            GGML_ABORT("Fatal error");
+        }
+    } else {
+        Q = ggml_reshape_3d(ctx0, Q, n_embd_head_k, Q->ne[0]/n_embd_head_k, n_tokens);
     }
 
-    auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head_k, K->ne[0]/n_embd_head_k, n_tokens);
     if (k_norm) {
-        Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, qk_norm_type, cb, il);
-        cb(Kcur, "Kcur_normed", il);
+        if (k_norm->ne[0] == n_embd_head_k) {
+            K = ggml_reshape_3d(ctx0, K, n_embd_head_k, K->ne[0]/n_embd_head_k, n_tokens);
+            K = llm_build_norm(ctx0, K, hparams, q_norm, NULL, qk_norm_type, cb, il);
+            cb(K, "K_normed", il);
+        }
+        else if (k_norm->ne[0] == K->ne[0]) {
+            K = llm_build_norm(ctx0, K, hparams, q_norm, NULL, qk_norm_type, cb, il);
+            K = ggml_reshape_3d(ctx0, K, n_embd_head_k, K->ne[0]/n_embd_head_k, n_tokens);
+            cb(K, "K_normed", il);
+        }
+        else {
+            LLAMA_LOG_ERROR("Unexpected k_norm size %ld. K is %ld x %ld x %ld x %ld\n", k_norm->ne[0], K->ne[0], K->ne[1], K->ne[2], K->ne[3]);
+            GGML_ABORT("Fatal error");
+        }
+    } else {
+        K = ggml_reshape_3d(ctx0, K, n_embd_head_k, K->ne[0]/n_embd_head_k, n_tokens);
     }
-    auto Vcur = V;
-    return {Qcur, Kcur, Vcur};
+    return {Q, K, V};
+
+    //auto Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head_k, Q->ne[0]/n_embd_head_k, n_tokens);
+    //// Command-R/R+ uses LayerNorm (not RMSNorm) for per-head Q/K normalisation
+    //if (q_norm) {
+    //    Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, qk_norm_type, cb, il);
+    //    cb(Qcur, "Qcur_normed", il);
+    //}
+
+    //auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head_k, K->ne[0]/n_embd_head_k, n_tokens);
+    //if (k_norm) {
+    //    Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, qk_norm_type, cb, il);
+    //    cb(Kcur, "Kcur_normed", il);
+    //}
+    //auto Vcur = V;
+    //return {Qcur, Kcur, Vcur};
 }
 
 static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, const llm_build_cb & cb) {
@@ -9928,7 +9968,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 cb(Vcur, "Vcur", il_id);
 
                 q_all[id] = Qcur;
-                q_all[id] = Kcur;
+                k_all[id] = Kcur;
                 v_all[id] = Vcur;
 
                 auto Qsqr = ggml_mul(ctx0, Qcur, Qcur);
@@ -9942,6 +9982,8 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 q_k_all[id] = ggml_concat(ctx0, Qsum, Ksum, 0);
             }
             auto kq_sum = ggml_reduce(ctx0, q_k_all.data(), n_device, GGML_OP_ADD);
+            cb(kq_sum, "kq_sum", il);
+            ggml_build_forward_expand(gf, kq_sum);
 
             std::vector<ggml_tensor *> attn(n_device, nullptr);
             bool input_added = false;
@@ -9968,11 +10010,15 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 //ggml_build_forward_expand(gf, Kcur);
                 //ggml_build_forward_expand(gf, Vcur);
 
-                auto Qcur = llm_build_norm(ctx0, q_all[id], hparams, q_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
+                auto Qcur = q_all[id];
+                //printf("Qcur: %ld x %ld x %ld x %ld, q_norm: %ld x %ld x %ld x %ld\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3], q_norm->splits[id]->ne[0], q_norm->splits[id]->ne[1], q_norm->splits[id]->ne[2], q_norm->splits[id]->ne[3]);
+                Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
                 Qcur->src[2] = qsum;
                 cb(Qcur, "Qcur_normed", il_id);
 
-                auto Kcur = llm_build_norm(ctx0, k_all[id], hparams, k_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
+                auto Kcur = k_all[id];
+                //printf("Kcur: %ld x %ld x %ld x %ld, k_norm: %ld x %ld x %ld x %ld\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3], k_norm->splits[id]->ne[0], k_norm->splits[id]->ne[1], k_norm->splits[id]->ne[2], k_norm->splits[id]->ne[3]);
+                Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
                 Kcur->src[2] = ksum;
                 cb(Kcur, "Kcur_normed", il_id);
 

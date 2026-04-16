@@ -164,6 +164,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         return;
     }
 #endif
+    printf("Not using NCCL\n");
     GGML_ASSERT(dst->data == dst->src[ctx.device]->data);
     auto nbytes = ggml_nbytes(dst);
     int idx[GGML_CUDA_MAX_DEVICES];
