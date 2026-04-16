@@ -9911,8 +9911,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
             int head_count    = 0;
             int head_count_kv = 0;
             int n_device = wq->n_device;
-            std::vector<ggml_tensor *> attn(n_device, nullptr);
-            bool input_added = false;
+            std::vector<ggml_tensor *> q_all(n_device, nullptr), k_all(n_device, nullptr), v_all(n_device, nullptr), q_k_all(n_device, nullptr);
             for (int id = 0; id < n_device; ++id) {
                 if (!wq->splits[id]) continue;
                 int il_id = 1000*il + id;
@@ -9928,28 +9927,68 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 auto Vcur = llm_build_lora_mm(lctx, ctx0, wv->splits[id], cur);
                 cb(Vcur, "Vcur", il_id);
 
-                // Do this here so Q, K, V matrix multiplications may be fused
-                ggml_build_forward_expand(gf, Qcur);
-                ggml_build_forward_expand(gf, Kcur);
-                ggml_build_forward_expand(gf, Vcur);
+                q_all[id] = Qcur;
+                q_all[id] = Kcur;
+                v_all[id] = Vcur;
 
-                Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
+                auto Qsqr = ggml_mul(ctx0, Qcur, Qcur);
+                auto Qsum = ggml_sum_rows(ctx0, Qsqr);
+                Qsum = ggml_reshape_1d(ctx0, Qsum, Qsum->ne[1]);
+
+                auto Ksqr = ggml_mul(ctx0, Kcur, Kcur);
+                auto Ksum = ggml_sum_rows(ctx0, Ksqr);
+                Ksum = ggml_reshape_1d(ctx0, Ksum, Ksum->ne[1]);
+
+                q_k_all[id] = ggml_concat(ctx0, Qsum, Ksum, 0);
+            }
+            auto kq_sum = ggml_reduce(ctx0, q_k_all.data(), n_device, GGML_OP_ADD);
+
+            std::vector<ggml_tensor *> attn(n_device, nullptr);
+            bool input_added = false;
+            for (int id = 0; id < n_device; ++id) {
+                if (!wq->splits[id]) continue;
+                int il_id = 1000*il + id;
+                auto kq = get_input_tensor_sm_graph(ctx0, kq_sum, id);
+                auto qsum = ggml_view_1d(ctx0, kq, n_tokens, 0);
+                auto ksum = ggml_view_1d(ctx0, kq, n_tokens, n_tokens*ggml_element_size(kq));
+                auto input = get_input_tensor_sm_graph(ctx0, inpL, id);
+                //cur = llm_build_norm(ctx0, input, hparams, attn_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
+
+                //auto Qcur = llm_build_lora_mm(lctx, ctx0, wq->splits[id], cur);
+                //cb(Qcur, "Qcur", il_id);
+
+                //auto Kcur = llm_build_lora_mm(lctx, ctx0, wk->splits[id], cur);
+                //cb(Kcur, "Kcur", il_id);
+
+                //auto Vcur = llm_build_lora_mm(lctx, ctx0, wv->splits[id], cur);
+                //cb(Vcur, "Vcur", il_id);
+
+                //// Do this here so Q, K, V matrix multiplications may be fused
+                //ggml_build_forward_expand(gf, Qcur);
+                //ggml_build_forward_expand(gf, Kcur);
+                //ggml_build_forward_expand(gf, Vcur);
+
+                auto Qcur = llm_build_norm(ctx0, q_all[id], hparams, q_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
+                Qcur->src[2] = qsum;
                 cb(Qcur, "Qcur_normed", il_id);
 
-                Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
+                auto Kcur = llm_build_norm(ctx0, k_all[id], hparams, k_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il_id);
+                Kcur->src[2] = ksum;
                 cb(Kcur, "Kcur_normed", il_id);
 
-                // reshape for multi-head
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                auto Vcur = v_all[id];
 
                 int gqa_ratio   = n_head / n_head_kv;
                 int nhead_kv_id = Vcur->ne[0] / n_embd_head_v;
                 int nhead_id    = nhead_kv_id * gqa_ratio;
                 GGML_ASSERT(nhead_kv_id > 0 && nhead_kv_id <= n_head_kv);
 
-                Qcur = ggml_view_3d(ctx0, Qcur, n_embd_head_k, nhead_id,    n_tokens, Qcur->nb[1], Qcur->nb[2], head_count*Qcur->nb[1]);
-                Kcur = ggml_view_3d(ctx0, Kcur, n_embd_head_k, nhead_kv_id, n_tokens, Kcur->nb[1], Kcur->nb[2], head_count_kv*Kcur->nb[1]);
+                // reshape for multi-head
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, nhead_id,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, nhead_kv_id, n_tokens);
+
+                //Qcur = ggml_view_3d(ctx0, Qcur, n_embd_head_k, nhead_id,    n_tokens, Qcur->nb[1], Qcur->nb[2], head_count*Qcur->nb[1]);
+                //Kcur = ggml_view_3d(ctx0, Kcur, n_embd_head_k, nhead_kv_id, n_tokens, Kcur->nb[1], Kcur->nb[2], head_count_kv*Kcur->nb[1]);
                 head_count    += nhead_id;
                 head_count_kv += nhead_kv_id;
 
