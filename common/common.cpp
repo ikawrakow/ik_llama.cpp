@@ -1561,6 +1561,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--defer-experts") {
         params.defer_experts = true;
+        params.warmup = false;
         return true;
     }
     if (arg == "--fit-margin") {
