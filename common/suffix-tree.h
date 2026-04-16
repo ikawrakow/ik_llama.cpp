@@ -3,7 +3,9 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -36,7 +38,15 @@ public:
     std::vector<llama_token> speculate(
             const llama_token * context, int n_context,
             int max_spec_tokens,
-            float min_token_prob = 0.1f) const;
+            float min_token_prob  = 0.1f,
+            int   min_match_count = 1,
+            int   min_match_len   = 5) const;
+
+    // Load an offline corpus to pre-warm the tree before any request.
+    // Supported formats (.json or .bin)
+    bool load_corpus(
+            const std::string & path,
+            std::function<std::vector<llama_token>(const std::string &)> tokenize_fn = {});
 
     int  max_depth()   const { return _max_depth; }
     int  token_count() const { return (int)_tokens.size(); }

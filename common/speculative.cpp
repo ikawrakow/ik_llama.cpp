@@ -797,17 +797,42 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 
 struct common_speculative_state_suffix : public common_speculative_state {
     common_suffix_tree tree;
-    size_t cache_size = 0; // tokens already indexed in current request
+    common_suffix_tree corpus_tree;
+    bool has_corpus = false;
+    size_t cache_size   = 0;
+
+    // Acceptance feedback
+    size_t n_draft_last  = 0;
+    bool   had_accept    = false;
+    int    n_low         = 0;
+    float  base_p_min    = 0.1f;
+    float  eff_p_min     = 0.1f;
 
     common_speculative_state_suffix(
             enum common_speculative_type type,
-            int max_depth)
+            int max_depth,
+            const std::string & corpus_path,
+            const llama_model * model)
         : common_speculative_state(type)
         , tree(max_depth)
-    {}
+        , corpus_tree(max_depth)
+    {
+        if (!corpus_path.empty()) {
+            std::function<std::vector<llama_token>(const std::string &)> tokenize_fn;
+            if (model) {
+                tokenize_fn = [model](const std::string & text) -> std::vector<llama_token> {
+                    return common_tokenize(model, text, false, true);
+                };
+            }
+            has_corpus = corpus_tree.load_corpus(corpus_path, tokenize_fn);
+        }
+    }
 
     void begin(const llama_tokens & prompt) override {
-        cache_size = 0;
+        cache_size   = 0;
+        n_draft_last = 0;
+        had_accept   = false;
+        n_low        = 0;
         GGML_UNUSED(prompt);
     }
 
@@ -816,6 +841,15 @@ struct common_speculative_state_suffix : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
+
+        base_p_min = params.p_min;
+        if (n_draft_last > 0 && !had_accept) {
+            if (++n_low >= 3) {
+                eff_p_min = std::min(eff_p_min + 0.1f, 0.5f);
+                n_low     = 0;
+            }
+        }
+        had_accept = false;
 
         if (cache_size < prompt_tgt.size() + 1) {
             llama_tokens tokens_new;
@@ -837,15 +871,47 @@ struct common_speculative_state_suffix : public common_speculative_state {
             context.push_back(prompt_tgt[j]);
         }
         context.push_back(id_last);
+        const int min_match_len = std::max(1, params.suffix_min_match_len);
 
         result = tree.speculate(
             context.data(), (int)context.size(),
             params.n_max,
-            params.p_min);
+            eff_p_min,
+            1,
+            min_match_len);
+
+        if (has_corpus) {
+            auto corpus_result = corpus_tree.speculate(
+                context.data(), (int)context.size(),
+                params.n_max,
+                eff_p_min,
+                1,
+                min_match_len);
+            if (corpus_result.size() > result.size()) {
+                result = std::move(corpus_result);
+            }
+        }
+
+        n_draft_last = result.size();
     }
 
     void accept(uint16_t n_accepted) override {
-        GGML_UNUSED(n_accepted);
+        if (n_draft_last == 0) {
+            return;
+        }
+        had_accept = true;
+        const double f_acc = (double)n_accepted / (double)n_draft_last;
+        if (f_acc < 0.5) {
+            if (++n_low >= 3) {
+                eff_p_min = std::min(eff_p_min + 0.1f, 0.5f);
+                n_low     = 0;
+            }
+        } else {
+            n_low = 0;
+            if (eff_p_min > base_p_min) {
+                eff_p_min = std::max(eff_p_min - 0.05f, base_p_min);
+            }
+        }
     }
 };
 
@@ -1083,8 +1149,10 @@ common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_SUFFIX: {
-                int depth = config.params.ngram_size_n > 0 ? config.params.ngram_size_n : 64;
-                impls.push_back(std::make_unique<common_speculative_state_suffix>(config.type, depth));
+                int depth = config.params.suffix_max_depth > 0 ? config.params.suffix_max_depth : 64;
+                const llama_model * model = llama_get_model(ctx_tgt);
+                impls.push_back(std::make_unique<common_speculative_state_suffix>(
+                    config.type, depth, config.params.suffix_corpus, model));
                 break;
             }
             default:

@@ -183,6 +183,11 @@ struct common_params_speculative {
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
 
+    // suffix-decoding specific
+    int32_t     suffix_min_match_len = 5;  // minimum context match length
+    int32_t     suffix_max_depth     = 64; // suffix tree maximum depth
+    std::string suffix_corpus;             // path to corpus file for offline pre-warming (.json or .bin)
+
     std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding          // NOLINT
 
