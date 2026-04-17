@@ -1977,6 +1977,7 @@ void server_context::send_final_response(server_slot& slot) {
     res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
     res->oai_resp_message_id = slot.oai_resp_message_id;
     res->n_decoded = slot.n_decoded;
+    res->n_prompt_tokens_cache = slot.n_prompt_tokens_cache;
     res->anthropic_thinking_block_started = slot.anthropic_thinking_block_started;
     res->anthropic_text_block_started = slot.anthropic_text_block_started;
     res->n_prompt_tokens = slot.n_prompt_tokens;
@@ -3321,16 +3322,16 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past0 =  %d, n_past1 =  %d, n_past_prompt1 = %d,  n_past2 =  %d, n_past_prompt2 =  %d\n", (int32_t)slot.cache_tokens.size(), (int32_t)n_past0, (int32_t)prefix.first, (int32_t)prefix.second, (int32_t)prefix_nonexact.first, (int32_t)prefix_nonexact.second);
                             int32_t size_threshold = 20;
                             if (prefix.first + size_threshold < prefix_nonexact.first) {
-                                LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
+                                // LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
                                 prefix = prefix_nonexact;
                             }
                             slot.n_past = prefix.first;
                             slot.n_past_prompt = prefix.second;
                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
 
-                            if (slot.n_past != slot.n_past_prompt) {
-                                LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
-                            }
+                            //if (slot.n_past != slot.n_past_prompt) {
+                            //    LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
+                            //}
                             if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
                             {
                                 LLAMA_LOG_WARN("Common part does not match fully\n");
@@ -3360,7 +3361,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             slot.n_past_se--;
                         }
                     }
-
+                    slot.n_prompt_tokens_cache = slot.n_past_prompt;
                     slot.n_prompt_tokens_processed = 0;
                 }
 
