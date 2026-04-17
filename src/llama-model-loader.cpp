@@ -724,8 +724,8 @@ bool llama_model_loader::get_arr(const std::string & key, std::vector<T> & resul
 
     result.resize(arr_info.length);
     if (arr_info.gt == GGUF_TYPE_BOOL) {
-        std::transform((const bool *)arr_info.data, (const bool *)arr_info.data + arr_info.length, result.begin(),
-                [] (bool x) { return static_cast<T>(x); });
+        std::transform((const int8_t *)arr_info.data, (const int8_t *)arr_info.data + arr_info.length, result.begin(),
+                [] (int8_t x) { return static_cast<T>(x != 0); });
 
     } else {
         result.assign((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length);
@@ -762,8 +762,8 @@ bool llama_model_loader::get_arr(const std::string & key, std::array<T, N_MAX> &
     }
 
     if (arr_info.gt == GGUF_TYPE_BOOL) {
-        std::transform((const bool *)arr_info.data, (const bool *)arr_info.data + arr_info.length, result.begin(),
-                [] (bool x) { return static_cast<T>(x); });
+        std::transform((const int8_t *)arr_info.data, (const int8_t *)arr_info.data + arr_info.length, result.begin(),
+                [] (int8_t x) { return static_cast<T>(x != 0); });
     } else {
         std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
     }

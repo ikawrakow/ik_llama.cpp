@@ -6439,7 +6439,7 @@ static struct ggml_tensor * ggml_sub_impl(
         struct ggml_tensor * a,
         struct ggml_tensor * b,
         bool inplace) {
-    GGML_ASSERT(ggml_are_same_shape(a, b));
+    GGML_ASSERT(ggml_can_repeat(b, a));
 
     bool is_node = false;
 
@@ -13637,7 +13637,8 @@ static void ggml_compute_forward_sub_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->ne[0] == src1->ne[0]);
 
     int ith = params->ith;
     int nth = params->nth;
@@ -13655,21 +13656,24 @@ static void ggml_compute_forward_sub_f32(
     if (nb10 == sizeof(float)) {
         for (int ir = first; ir < last; ++ir) {
             // src0, src1 and dst are same shape => same indices
-            const int i3 = ir/(ne2*ne1);
-            const int i2 = (ir - i3*ne2*ne1)/ne1;
-            const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
+            const int i03 = ir/(ne2*ne1);
+            const int i02 = (ir - i03*ne2*ne1)/ne1;
+            const int i01 = (ir - i03*ne2*ne1 - i02*ne1);
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
 
 #ifdef GGML_USE_ACCELERATE
             vDSP_vsub(
-                    (float *) ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11), 1,
-                    (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01), 1,
-                    (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 ), 1,
+                    (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), 1,
+                    (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01), 1,
+                    (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 ), 1,
                     ne0);
 #else
             ggml_vec_sub_f32(ne0,
-                    (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 ),
-                    (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01),
-                    (float *) ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11));
+                    (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 ),
+                    (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01),
+                    (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11));
 #endif
                 // }
             // }
@@ -13678,13 +13682,16 @@ static void ggml_compute_forward_sub_f32(
         // src1 is not contiguous
         for (int ir = 0; ir < nr; ++ir) {
             // src0, src1 and dst are same shape => same indices
-            const int i3 = ir/(ne2*ne1);
-            const int i2 = (ir - i3*ne2*ne1)/ne1;
-            const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
+            const int i03 = ir/(ne2*ne1);
+            const int i02 = (ir - i03*ne2*ne1)/ne1;
+            const int i01 = (ir - i03*ne2*ne1 - i02*ne1);
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
 
-            float * dst_ptr  = (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 );
-            float * src0_ptr = (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
-            char  * src1_ptr = (char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11;
+            float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+            float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+            char  * src1_ptr = (char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11;
             for (int i0 = 0; i0 < ne0; i0++) {
                 dst_ptr[i0] = src0_ptr[i0] - *(float *)(src1_ptr + i0*nb10);
             }

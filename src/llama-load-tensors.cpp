@@ -312,7 +312,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
     // Split MTP layer's to graph
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) &&
             model.hparams.nextn_predict_layers > 0 && model.splits.size() > 1) {
-        int mtp_first = n_layer - model.hparams.nextn_predict_layers;
+        [[maybe_unused]] int mtp_first = n_layer - model.hparams.nextn_predict_layers;
         LLAMA_LOG_DEBUG("%s: MTP layer(s) %d-%d: split attention+FFN, nextn on per-device CUDA\n",
                 __func__, mtp_first, n_layer - 1);
     }

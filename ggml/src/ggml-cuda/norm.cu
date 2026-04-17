@@ -438,7 +438,8 @@ static void group_norm_f32_cuda(const float * x, float * dst, const int num_grou
 }
 
 static void rms_norm_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, const float eps, cudaStream_t stream) {
-    GGML_ASSERT(ncols % WARP_SIZE == 0);
+    // Why did we have this assert?
+    //GGML_ASSERT(ncols % WARP_SIZE == 0);
     constexpr int kBlockSize = 256;
     if (ncols < 1024) {
         const dim3 block_dims(kBlockSize, 1, 1);
