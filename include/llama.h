@@ -798,6 +798,12 @@ extern "C" {
     LLAMA_API void llama_kv_cache_clear(
             struct llama_context * ctx);
 
+    // GPU-resident checkpoint for speculative decoding (exclusive from hybrid models)
+    LLAMA_API bool llama_kv_cache_checkpoint_save(struct llama_context * ctx);
+    LLAMA_API bool llama_kv_cache_checkpoint_restore(struct llama_context * ctx);
+    LLAMA_API void llama_kv_cache_checkpoint_delete(struct llama_context * ctx);
+    LLAMA_API bool llama_kv_cache_checkpoint_supported(struct llama_context * ctx);
+
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
     // seq_id < 0 : match any sequence

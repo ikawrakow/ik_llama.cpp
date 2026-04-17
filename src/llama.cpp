@@ -1204,6 +1204,207 @@ static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache, uin
     return 0;
 }
 
+bool llama_kv_cache::checkpoint_supported() const {
+    for (const auto * s : s_l) {
+        if (s != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool llama_kv_cache::checkpoint_alloc_shadows() {
+    if (ckpt.allocated) {
+        return true;
+    }
+
+    const uint32_t n_layer = (uint32_t)s_l.size();
+    ckpt.s_l_shadow.resize(n_layer, nullptr);
+
+    struct tensor_entry {
+        ggml_tensor * primary;
+        uint32_t      il;
+        int           split_idx; // -1 for non-split
+    };
+
+    std::map<ggml_backend_buffer_type_t, std::vector<tensor_entry>> buft_entries;
+
+    uint32_t split_s_idx = 0;
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr) {
+            continue;
+        }
+
+        auto * extra = s_l[il]->extra;
+        if (extra != nullptr) {
+            // Split tensor — shadow each per-device split tensor individually
+            auto * split_info = (const ggml_split_tensor_t *)extra;
+            for (int d = 0; d < split_info->n_device; ++d) {
+                if (split_info->splits[d] == nullptr) continue;
+                ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(split_info->splits[d]->buffer);
+                buft_entries[buft].push_back({split_info->splits[d], il, d});
+            }
+            split_s_idx++;
+        } else {
+            // Non-split tensor
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(s_l[il]->buffer);
+            buft_entries[buft].push_back({s_l[il], il, -1});
+        }
+    }
+
+    // Allocate shadow tensors grouped by buffer type
+    for (auto & [buft, entries] : buft_entries) {
+        ggml_init_params params = {
+            /*.mem_size   =*/ entries.size() * ggml_tensor_overhead(),
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context * ctx = ggml_init(params);
+        if (!ctx) {
+            LLAMA_LOG_ERROR("%s: failed to create ggml context for shadow tensors\n", __func__);
+            return false;
+        }
+
+        for (auto & entry : entries) {
+            ggml_tensor * shadow = ggml_dup_tensor(ctx, entry.primary);
+            ggml_format_name(shadow, "shadow_s_l%d_d%d", entry.il, entry.split_idx);
+            entry.primary = shadow; // temporarily store shadow in entry for buffer allocation
+        }
+
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+        if (!buf) {
+            LLAMA_LOG_ERROR("%s: failed to allocate buffer for shadow tensors\n", __func__);
+            ggml_free(ctx);
+            return false;
+        }
+        ggml_backend_buffer_clear(buf, 0);
+        LLAMA_LOG_INFO("%s: %10s shadow buffer size = %8.2f MiB\n", __func__,
+                       ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+        ckpt.shadow_ctxs.push_back(ctx);
+        ckpt.shadow_bufs.push_back(buf);
+    }
+
+    // Build shadow lookup: for non-split layers, store directly in s_l_shadow
+    for (auto & [buft, entries] : buft_entries) {
+        for (auto & entry : entries) {
+            if (entry.split_idx == -1) {
+                ckpt.s_l_shadow[entry.il] = entry.primary;
+            }
+        }
+    }
+
+    // Build shadow split tensors
+    ckpt.split_s_l_shadow.resize(split_s_l.size());
+    split_s_idx = 0;
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr || s_l[il]->extra == nullptr) {
+            continue;
+        }
+
+        auto * split_info = (const ggml_split_tensor_t *)s_l[il]->extra;
+        auto & shadow_split = ckpt.split_s_l_shadow[split_s_idx];
+        shadow_split.resize(split_info->n_device, nullptr);
+
+        for (int d = 0; d < split_info->n_device; ++d) {
+            if (split_info->splits[d] == nullptr) continue;
+            // Find corresponding shadow tensor from buft_entries
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(split_info->splits[d]->buffer);
+            for (auto & entry : buft_entries[buft]) {
+                if (entry.il == il && entry.split_idx == d) {
+                    shadow_split[d] = entry.primary;
+                    break;
+                }
+            }
+        }
+        split_s_idx++;
+    }
+
+    ckpt.allocated = true;
+    return true;
+}
+
+bool llama_kv_cache::checkpoint_save() {
+    if (!checkpoint_alloc_shadows()) {
+        return false;
+    }
+
+    const uint32_t n_layer = (uint32_t)s_l.size();
+
+    // 1. Snapshot cell metadata (small, host-side)
+    ckpt.cells_snapshot = cells;
+    ckpt.head_snapshot  = head;
+    ckpt.used_snapshot  = used;
+
+    // 2. Copy tensors: primary -> shadow (GPU-to-GPU when on same device)
+    uint32_t split_s_idx = 0;
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr) {
+            continue;
+        }
+
+        if (s_l[il]->extra != nullptr) {
+            // Split tensor — copy per-device splits individually
+            auto * split_info = (const ggml_split_tensor_t *)s_l[il]->extra;
+            auto & shadow_split = ckpt.split_s_l_shadow[split_s_idx];
+            for (int d = 0; d < split_info->n_device; ++d) {
+                if (split_info->splits[d] && shadow_split[d]) {
+                    ggml_backend_tensor_copy(split_info->splits[d], shadow_split[d]);
+                }
+            }
+            split_s_idx++;
+        } else {
+            // Non-split tensor
+            ggml_backend_tensor_copy(s_l[il], ckpt.s_l_shadow[il]);
+        }
+    }
+
+    ckpt.saved = true;
+    return true;
+}
+
+bool llama_kv_cache::checkpoint_restore() {
+    if (!ckpt.saved) {
+        LLAMA_LOG_ERROR("%s: no checkpoint saved\n", __func__);
+        return false;
+    }
+
+    const uint32_t n_layer = (uint32_t)s_l.size();
+
+    // 1. Restore cell metadata
+    cells = ckpt.cells_snapshot;
+    head  = ckpt.head_snapshot;
+    used  = ckpt.used_snapshot;
+
+    // 2. Copy tensors: shadow -> primary (GPU-to-GPU)
+    uint32_t split_s_idx = 0;
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr) {
+            continue;
+        }
+
+        if (s_l[il]->extra != nullptr) {
+            // Split tensor — copy per-device splits individually
+            auto * split_info = (const ggml_split_tensor_t *)s_l[il]->extra;
+            auto & shadow_split = ckpt.split_s_l_shadow[split_s_idx];
+            for (int d = 0; d < split_info->n_device; ++d) {
+                if (split_info->splits[d] && shadow_split[d]) {
+                    ggml_backend_tensor_copy(shadow_split[d], split_info->splits[d]);
+                }
+            }
+            split_s_idx++;
+        } else {
+            // Non-split tensor
+            ggml_backend_tensor_copy(ckpt.s_l_shadow[il], s_l[il]);
+        }
+    }
+
+    return true;
+}
+
+void llama_kv_cache::checkpoint_delete() {
+    ckpt.saved = false;
+}
+
 static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     for (int32_t i = 0; i < (int32_t) cache.size; ++i) {
         cache.cells[i].pos = -1;
@@ -6406,6 +6607,22 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
 }
 
+bool llama_kv_cache_checkpoint_save(struct llama_context * ctx) {
+    return ctx->kv_self.checkpoint_save();
+}
+
+bool llama_kv_cache_checkpoint_restore(struct llama_context * ctx) {
+    return ctx->kv_self.checkpoint_restore();
+}
+
+void llama_kv_cache_checkpoint_delete(struct llama_context * ctx) {
+    ctx->kv_self.checkpoint_delete();
+}
+
+bool llama_kv_cache_checkpoint_supported(struct llama_context * ctx) {
+    return ctx->kv_self.checkpoint_supported();
+}
+
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     return llama_kv_cache_seq_rm(ctx->kv_self, seq_id, p0, p1);
 }
@@ -9001,18 +9218,17 @@ void llama_sampler_dry_free(struct llama_sampler_dry* smpl) {
 }
 
 struct llama_sampler_dry* llama_sampler_dry_clone(struct llama_sampler_dry* smpl) {
-    // nullptr is passed as vocab because it is only needed for raw sequence breaker processing, which we have already done and will be copying
-    auto* result = llama_sampler_init_dry(nullptr, smpl->dry_multiplier, smpl->dry_base, smpl->dry_allowed_length, smpl->dry_penalty_last_n, NULL, 0);
-    // Copy the state, including the processed breakers
-    {
-        auto* result_ctx = smpl;
-        result_ctx->dry_processed_breakers = smpl->dry_processed_breakers;
-        result_ctx->dry_repeat_count = smpl->dry_repeat_count;
-        result_ctx->dry_max_token_repeat = smpl->dry_max_token_repeat;
-        result_ctx->last_tokens = smpl->last_tokens;
-    }
-
-    return result;
+    return new llama_sampler_dry {
+        /* .total_context_size     = */ smpl->total_context_size,
+        /* .dry_multiplier         = */ smpl->dry_multiplier,
+        /* .dry_base               = */ smpl->dry_base,
+        /* .dry_allowed_length     = */ smpl->dry_allowed_length,
+        /* .dry_penalty_last_n     = */ smpl->dry_penalty_last_n,
+        /* .dry_processed_breakers = */ smpl->dry_processed_breakers,
+        /* .dry_repeat_count       = */ smpl->dry_repeat_count,
+        /* .dry_max_token_repeat   = */ smpl->dry_max_token_repeat,
+        /* .last_tokens            = */ smpl->last_tokens,
+    };
 }
 
 void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token) {

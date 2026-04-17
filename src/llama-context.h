@@ -74,6 +74,40 @@ struct llama_kv_cache {
         return size;
     }
 
+    // GPU-resident checkpoint for speculative decoding (exclusive from hybrid models)
+    struct gpu_checkpoint {
+        std::vector<llama_kv_cell> cells_snapshot;
+        uint32_t head_snapshot = 0;
+        uint32_t used_snapshot = 0;
+
+        std::vector<ggml_tensor *> s_l_shadow;
+
+        std::vector<std::vector<ggml_tensor *>> split_s_l_shadow;
+
+        std::vector<struct ggml_context *>   shadow_ctxs;
+        std::vector<ggml_backend_buffer_t>   shadow_bufs;
+
+        bool allocated = false;
+        bool saved     = false;
+
+        ~gpu_checkpoint() {
+            for (struct ggml_context * ctx : shadow_ctxs) {
+                ggml_free(ctx);
+            }
+            for (ggml_backend_buffer_t buf : shadow_bufs) {
+                ggml_backend_buffer_free(buf);
+            }
+        }
+    };
+
+    gpu_checkpoint ckpt;
+
+    bool checkpoint_alloc_shadows();
+    bool checkpoint_supported() const;
+    bool checkpoint_save();
+    bool checkpoint_restore();
+    void checkpoint_delete();
+
     ~llama_kv_cache() {
         for (struct ggml_context * ctx : ctxs) {
             ggml_free(ctx);
