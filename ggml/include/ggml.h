@@ -2450,6 +2450,15 @@ extern "C" {
             struct ggml_tensor  * c,
             struct ggml_tensor  * sq);
 
+    // ported from upstream llama.cpp: unified Mamba-1 + Mamba-2 SSM scan op.
+    // Shape conventions (Phase 3.2 Mamba-2 backport):
+    //   s   : {d_state, head_dim, n_head, kv_size}
+    //   x   : {head_dim, n_head, n_seq_tokens, n_seqs}
+    //   dt  : {n_head, n_seq_tokens, n_seqs}
+    //   A   : {d_state, n_head} (Mamba-1) or {1, n_head} (Mamba-2)
+    //   B,C : {d_state, n_group, n_seq_tokens, n_seqs}
+    //   ids : {n_seqs}, GGML_TYPE_I32 — per-sequence source state index into s
+    // For the legacy Mamba-1 case set head_dim = d_inner and n_head = 1.
     GGML_API struct ggml_tensor * ggml_ssm_scan(
             struct ggml_context * ctx,
             struct ggml_tensor  * s,
@@ -2458,7 +2467,7 @@ extern "C" {
             struct ggml_tensor  * A,
             struct ggml_tensor  * B,
             struct ggml_tensor  * C,
-            struct ggml_tensor  * sq);
+            struct ggml_tensor  * ids);
 
     // partition into non-overlapping windows with padding if needed
     // example:

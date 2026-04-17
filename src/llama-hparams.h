@@ -94,6 +94,28 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for Mamba-2: apply RMSNorm to dt, B, C projections
+    bool ssm_dt_b_c_rms = false;
+
+    // Recurrent state layout discriminator.
+    //
+    // ik_llama hosts two incompatible packings of the per-layer recurrent
+    // state for hybrid SSM models, both signaled by `ssm_n_group > 0`:
+    //
+    //   - Qwen3.5 Gated DeltaNet ("qnext"): conv state is packed inside
+    //     the V-cache slot together with a head_v² × num_v_heads delta-net
+    //     matrix. n_embd_r() returns 0; n_embd_s() returns the packed sum.
+    //
+    //   - Mamba-2 / Nemotron-H standard SSM: conv state lives in the K-cache
+    //     slot with shape (d_conv-1) * (d_inner + 2*n_group*d_state); the
+    //     recurrent state lives in the V-cache slot with shape d_state * d_inner.
+    //
+    // Default is `false` so any pure-Mamba arch (incl. Mamba-1, where
+    // n_group=0 collapses the formula back to (d_conv-1)*d_inner) gets
+    // the standard layout. The three Qwen3.5 GDN cases in llm_load_hparams
+    // explicitly set this to `true`.
+    bool use_qnext_state_layout = false;
+
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
@@ -180,6 +202,7 @@ struct llama_hparams {
         if (this->ssm_d_state != other.ssm_d_state) return true;
         if (this->ssm_dt_rank != other.ssm_dt_rank) return true;
         if (this->ssm_n_group != other.ssm_n_group) return true;
+        if (this->ssm_dt_b_c_rms != other.ssm_dt_b_c_rms) return true;
         if (this->recurrent_layer_arr != other.recurrent_layer_arr) return true;
 
         if (this->dec_start_token_id != other.dec_start_token_id) return true;
@@ -261,50 +284,19 @@ struct llama_hparams {
         return n_head_kv(il) * n_embd_head_v(il);
     }
 
-    uint32_t n_embd_k_s() const { // dimension of the rolling state embeddings
-        if (ssm_n_group > 0) {
-            // qwen3next keeps all recurrent state in the V-cache tail
-            return 0;
-        }
-        // corresponds to Mamba's conv_states size
-        // TODO: maybe support other convolution strides than 1
-        // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
-        return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * ssm_d_inner;
-    }
+    // dimension of the rolling state embeddings
+    // (corresponds to Mamba's conv_states; for qnext/GDN it's packed inside the
+    //  recurrent state and this returns 0 — see llama-hparams.cpp)
+    uint32_t n_embd_r() const;
 
-    uint32_t n_embd_v_s() const { // dimension of the recurrent state embeddings
-        if (ssm_n_group > 0) {
-            // qwen3next recurrent state packs:
-            // 1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
-            // 2) delta-net state: head_v_dim * head_v_dim * num_v_heads
-            const uint32_t key_dim        = ssm_d_state * ssm_n_group;
-            const uint32_t value_dim      = ssm_d_inner;
-            const uint32_t conv_dim       = 2 * key_dim + value_dim;
-            const uint32_t conv_state_dim = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * conv_dim;
-            const uint32_t head_v_dim     = ssm_dt_rank > 0 ? ssm_d_inner / ssm_dt_rank : 0;
-            const uint32_t ssm_state_dim  = head_v_dim * head_v_dim * ssm_dt_rank;
-            return conv_state_dim + ssm_state_dim;
-        }
-        // corresponds to Mamba's ssm_states size
-        return ssm_d_state * ssm_d_inner;
-    }
+    // dimension of the recurrent state embeddings
+    // (Mamba: ssm_states size = d_state * d_inner;
+    //  qnext/GDN: conv state + head_v² * num_v_heads packed together)
+    uint32_t n_embd_s() const;
 
-    uint32_t n_embd_v_s_id(int nv) const {
-        if (ssm_n_group <= 0 || nv < 1 || ssm_dt_rank < 1) return 0;
-        int num_v_heads = ssm_dt_rank;
-        int num_k_heads = ssm_n_group;
-        int gqa_ratio   = num_v_heads / num_k_heads;
-        GGML_ASSERT(nv <= num_v_heads);
-        GGML_ASSERT(nv % gqa_ratio == 0);
-        int nk = nv / gqa_ratio;
-        int head_k_dim  = ssm_d_state;
-        int head_v_dim  = ssm_d_inner / num_v_heads;
-        uint32_t conv_dim       = 2 * nk * head_k_dim + nv * head_v_dim;
-        uint32_t conv_state_dim = conv_dim * (ssm_d_conv - 1);
-        uint32_t ssm_state_dim  = head_v_dim * head_v_dim * nv;
-        return conv_state_dim + ssm_state_dim;
-
-    }
+    // qnext-specific helper: state size when only `nv` v-heads are active
+    // (kept here for Qwen3.5-A3B's per-slot scheduler — not used for Mamba arches)
+    uint32_t n_embd_s_id(int nv) const;
 
     bool is_recurrent(uint32_t il) const {
         return il < n_layer ? recurrent_layer_arr[il] : false;

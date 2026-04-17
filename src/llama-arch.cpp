@@ -44,6 +44,8 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA3,          "gemma3"       },
     { LLM_ARCH_STARCODER2,      "starcoder2"   },
     { LLM_ARCH_MAMBA,           "mamba"        },
+    { LLM_ARCH_MAMBA2,          "mamba2"       },
+    { LLM_ARCH_NEMOTRON_H_MOE,  "nemotron_h_moe" },
     { LLM_ARCH_XVERSE,          "xverse"       },
     { LLM_ARCH_COMMAND_R,       "command-r"    },
     { LLM_ARCH_DBRX,            "dbrx"         },
@@ -197,6 +199,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_STATE_SIZE,                "%s.ssm.state_size"     },
     { LLM_KV_SSM_TIME_STEP_RANK,            "%s.ssm.time_step_rank" },
     { LLM_KV_SSM_GROUP_COUNT,               "%s.ssm.group_count"    },
+    { LLM_KV_SSM_DT_B_C_RMS,                "%s.ssm.dt_b_c_rms"     },
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
@@ -257,6 +260,7 @@ const char * llama_model_arch_name(llm_arch arch) {
 bool llm_arch_is_recurrent(const llm_arch & arch) {
     switch (arch) {
     case LLM_ARCH_MAMBA:
+    case LLM_ARCH_MAMBA2:
         return true;
     default:
         return false;
@@ -268,6 +272,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_QWEN3NEXT:
     case LLM_ARCH_QWEN35MOE:
     case LLM_ARCH_QWEN35:
+    case LLM_ARCH_NEMOTRON_H_MOE:
         return true;
     default:
         return false;

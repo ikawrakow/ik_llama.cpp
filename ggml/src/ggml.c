@@ -10391,7 +10391,12 @@ struct ggml_tensor * ggml_ssm_conv(
 }
 
 // ggml_ssm_scan
-
+//
+// Ported from upstream llama.cpp (ggml/src/ggml.c) for Mamba-2 / Nemotron-H
+// support (Phase 3.2 of the backport). Unified Mamba-1 + Mamba-2 op:
+//   - Mamba-2 case: A->ne[0] == 1 (scalar decay per head)
+//   - Mamba-1 case: A->ne[0] == d_state (element-wise decay per state)
+//
 struct ggml_tensor * ggml_ssm_scan(
         struct ggml_context * ctx,
         struct ggml_tensor  * s,
@@ -10400,39 +10405,55 @@ struct ggml_tensor * ggml_ssm_scan(
         struct ggml_tensor  * A,
         struct ggml_tensor  * B,
         struct ggml_tensor  * C,
-        struct ggml_tensor  * sq) {
+        struct ggml_tensor  * ids) {
     GGML_ASSERT(ggml_is_contiguous(s));
-    GGML_ASSERT(ggml_is_contiguous(x));
     GGML_ASSERT(ggml_is_contiguous(dt));
     GGML_ASSERT(ggml_is_contiguous(A));
-    GGML_ASSERT(sq->type == GGML_TYPE_I32);
+    GGML_ASSERT(x->nb[0] == ggml_type_size(x->type));
     GGML_ASSERT(B->nb[0] == ggml_type_size(B->type));
     GGML_ASSERT(C->nb[0] == ggml_type_size(C->type));
-    GGML_ASSERT(ggml_are_same_shape(x, dt));
+    GGML_ASSERT(x->nb[1] == x->ne[0]*x->nb[0]);
+    GGML_ASSERT(B->nb[1] == B->ne[0]*B->nb[0]);
+    GGML_ASSERT(C->nb[1] == C->ne[0]*C->nb[0]);
+    GGML_ASSERT(ggml_are_same_shape(B, C));
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
 
     {
-        const int64_t d_state  = s->ne[0];
-        const int64_t d_inner  = s->ne[1];
-        const int64_t n_tokens = x->ne[1];
+        const int64_t d_state      = s->ne[0];
+        const int64_t head_dim     = x->ne[0];
+        const int64_t n_head       = x->ne[1];
+        const int64_t n_seq_tokens = x->ne[2];
+        const int64_t n_seqs       = x->ne[3];
 
-        GGML_ASSERT(x->ne[0] == d_inner);
-        GGML_ASSERT(A->ne[0] == d_state);
-        GGML_ASSERT(A->ne[1] == d_inner);
+        GGML_ASSERT(dt->ne[0] == n_head);
+        GGML_ASSERT(dt->ne[1] == n_seq_tokens);
+        GGML_ASSERT(dt->ne[2] == n_seqs);
+        GGML_ASSERT(ggml_is_3d(dt));
+        GGML_ASSERT(s->ne[1] == head_dim);
+        GGML_ASSERT(s->ne[2] == n_head);
         GGML_ASSERT(B->ne[0] == d_state);
-        GGML_ASSERT(B->ne[1] == n_tokens);
-        GGML_ASSERT(C->ne[0] == d_state);
-        GGML_ASSERT(C->ne[1] == n_tokens);
+        GGML_ASSERT(B->ne[2] == n_seq_tokens);
+        GGML_ASSERT(B->ne[3] == n_seqs);
+        GGML_ASSERT(ids->ne[0] == n_seqs);
+        GGML_ASSERT(ggml_is_vector(ids));
+        GGML_ASSERT(A->ne[1] == n_head);
+        GGML_ASSERT(ggml_is_matrix(A));
+
+        if (A->ne[0] != 1) {
+            // Mamba-1 has more granular decay factors
+            GGML_ASSERT(A->ne[0] == d_state);
+        }
     }
 
     bool is_node = false;
 
-    if (s->grad || x->grad || dt->grad || A->grad || B->grad || C->grad || sq->grad) {
+    if (s->grad || x->grad || dt->grad || A->grad || B->grad || C->grad || ids->grad) {
         GGML_ABORT("fatal error"); // TODO: implement
         is_node = true;
     }
 
-    // 2-in-1 concatenated y and ssm_states, {d_inner, n_tokens} with {d_state, d_inner, n_kv}
-    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ggml_nelements(x) + ggml_nelements(s));
+    // concatenated y + ssm_states
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ggml_nelements(x) + s->ne[0]*s->ne[1]*s->ne[2]*ids->ne[0]);
 
     result->op   = GGML_OP_SSM_SCAN;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -10442,7 +10463,7 @@ struct ggml_tensor * ggml_ssm_scan(
     result->src[3] = A;
     result->src[4] = B;
     result->src[5] = C;
-    result->src[6] = sq;
+    result->src[6] = ids;
 
     return result;
 }
@@ -22437,107 +22458,162 @@ static int ggml_compute_forward_ssm_conv(const struct ggml_compute_params * para
 }
 
 // ggml_compute_forward_ssm_scan
-
+//
+// Ported from upstream llama.cpp (ggml/src/ggml-cpu/ops.cpp::ggml_compute_forward_ssm_scan_f32)
+// for Mamba-2 / Nemotron-H support (Phase 3.2 of the backport).
+// Uses 4D shape conventions and dispatches Mamba-1 vs Mamba-2 inside the loop
+// based on src3->ne[0] (A->ne[0] == 1 for Mamba-2).
+// SIMD path uses GGML_F32_VEC_* macros which are present in ik_llama too.
+//
 static void ggml_compute_forward_ssm_scan_f32(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
-    const struct ggml_tensor * src0 = dst->src[0]; // s
-    const struct ggml_tensor * src1 = dst->src[1]; // x
-    const struct ggml_tensor * src2 = dst->src[2]; // dt
-    const struct ggml_tensor * src3 = dst->src[3]; // A
-    const struct ggml_tensor * src4 = dst->src[4]; // B
-    const struct ggml_tensor * src5 = dst->src[5]; // C
-    const struct ggml_tensor * src6 = dst->src[6]; // sq
+    const struct ggml_tensor * src0 = dst->src[0]; // s   {d_state, dim, n_head, kv_size}
+    const struct ggml_tensor * src1 = dst->src[1]; // x   {dim, n_head, n_seq_tokens, n_seqs}
+    const struct ggml_tensor * src2 = dst->src[2]; // dt  {n_head, n_seq_tokens, n_seqs}
+    const struct ggml_tensor * src3 = dst->src[3]; // A   {d_state, n_head} or {1, n_head}
+    const struct ggml_tensor * src4 = dst->src[4]; // B   {d_state, n_group, n_seq_tokens, n_seqs}
+    const struct ggml_tensor * src5 = dst->src[5]; // C   {d_state, n_group, n_seq_tokens, n_seqs}
+    const struct ggml_tensor * src6 = dst->src[6]; // ids {n_seqs}
 
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int64_t nc   = src0->ne[0]; // d_state
-    const int64_t nr   = src0->ne[1]; // d_inner
-    const int64_t n_t  = src1->ne[1]; // number of tokens in the batch
-    const int64_t n_kv = src0->ne[2]; // max number of sequences in the batch
+    const int64_t nc = src0->ne[0]; // d_state
+    const int64_t nr = src0->ne[1]; // dim (head_dim)
+    const int64_t nh = src1->ne[1]; // n_head
+    const int64_t ng = src4->ne[1]; // n_group
+    const int64_t nt = src1->ne[2]; // number of tokens per sequence
+    const int64_t ns = src1->ne[3]; // number of sequences in the batch
 
-    GGML_ASSERT(ggml_nelements(src1) + ggml_nelements(src0) == ggml_nelements(dst));
+    // can't use ggml_nbytes because src1 is not necessarily contiguous
+    const int64_t s_off = ggml_nelements(src1) * ggml_element_size(src1);
+
+    GGML_ASSERT(ggml_nelements(src1) + nc*nr*nh*ns == ggml_nelements(dst));
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
     GGML_ASSERT(src2->nb[0] == sizeof(float));
     GGML_ASSERT(src3->nb[0] == sizeof(float));
     GGML_ASSERT(src4->nb[0] == sizeof(float));
     GGML_ASSERT(src5->nb[0] == sizeof(float));
-    // required for the dot product between s and C, and when copying the states
-    GGML_ASSERT(src0->nb[1] == src0->ne[0]*sizeof(float));
-    // required for per-sequence offsets for states
-    GGML_ASSERT(src0->nb[2] == src0->ne[0]*src0->ne[1]*sizeof(float));
-    // required to get correct offset for state destination (i.e. src1->nb[2])
-    GGML_ASSERT(src1->nb[2] == src1->ne[0]*src1->ne[1]*sizeof(float));
+    GGML_ASSERT(src6->nb[0] == sizeof(int32_t));
+    GGML_ASSERT(nh % ng == 0);
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    // heads per thread
+    const int dh = (nh + nth - 1)/nth;
 
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
-    const int ir  = ir1 - ir0;
+    // head range for this thread
+    const int ih0 = dh*ith;
+    const int ih1 = MIN(ih0 + dh, nh);
 
-    if (n_kv > 1) {
-        // it's hard to know if the source states have already been copied
-        // when there are multiple, so copy them already.
-        for (int i3 = 0; i3 < n_kv; ++i3) {
-            float * s0 = (float *) ((char *) src0->data + ir0*(src0->nb[1]) + i3*(src0->nb[2]));
-            float * s  = (float *) ((char *)  dst->data + ir0*(src0->nb[1]) + i3*(src0->nb[2]) + src1->nb[2]);
-            memcpy(s, s0, nc*ir*sizeof(float));
-        }
-    }
+    const int32_t * ids = (const int32_t *) src6->data;
 
-    for (int i2 = 0; i2 < n_t; ++i2) {
-        int32_t * sq = (int32_t *) ((char *) src6->data +  i2*(src6->nb[1])); // {n_kv, n_tokens}
-        float *   y  = (float *)   ((char *)  dst->data + ir0*(src1->nb[0]) +    i2*(src1->nb[1])); // {d_inner, n_tokens}
-        float *   s  = (float *)   ((char *)  dst->data + ir0*(src0->nb[1]) + sq[0]*(src0->nb[2]) + src1->nb[2]); // {d_state, d_inner, n_kv}
-        float *   s0;
-        float *   x  = (float *)   ((char *) src1->data + ir0*(src1->nb[0]) + i2*(src1->nb[1])); // {d_inner, n_tokens}
-        float *   dt = (float *)   ((char *) src2->data + ir0*(src2->nb[0]) + i2*(src2->nb[1])); // {d_inner, n_tokens}
-        float *   A  = (float *)   ((char *) src3->data + ir0*(src3->nb[1])); // {d_state, d_inner}
-        float *   B  = (float *)   ((char *) src4->data +  i2*(src4->nb[1])); // {d_state, n_tokens}
-        float *   C  = (float *)   ((char *) src5->data +  i2*(src5->nb[1])); // {d_state, n_tokens}
+    for (int i3 = 0; i3 < ns; ++i3) {
+        const float * s0 = (const float *) ((const char *) src0->data + ids[i3]*(src0->nb[3])); // {d_state, dim, nh, ns}
+              float * s  = (      float *) ((      char *) dst->data  + i3*(src0->nb[3]) + s_off); // {d_state, dim, nh, ns}
 
-        GGML_ASSERT(0 <= sq[0] && sq[0] < n_kv);
+        for (int i2 = 0; i2 < nt; ++i2) {
+            const float * x  = (const float *) ((const char *) src1->data + i2*(src1->nb[2]) + i3*(src1->nb[3])); // {dim, nh, nt, ns}
+            const float * dt = (const float *) ((const char *) src2->data + i2*(src2->nb[1]) + i3*(src2->nb[2])); // {nh, nt, ns}
+            const float * A  = (const float *) ((const char *) src3->data); // {d_state, nh} or {1, nh}
+            const float * B  = (const float *) ((const char *) src4->data + i2*(src4->nb[2]) + i3*(src4->nb[3])); // {d_state, ng, nt, ns}
+            const float * C  = (const float *) ((const char *) src5->data + i2*(src5->nb[2]) + i3*(src5->nb[3])); // {d_state, ng, nt, ns}
+                  float * y  = (      float *) ((      char *) dst->data + i2*(nh*nr*sizeof(float)) + i3*(nt*nh*nr*sizeof(float))); // {dim, nh, nt, ns}
 
-        // avoid needing to copy the state for the first token
-        if (i2 == 0) {
-            s0 = (float *) ((char *) src0->data + ir0*(src0->nb[1]) + sq[0]*(src0->nb[2])); // {d_state, d_inner, n_kv}
-        } else {
-            // otherwise the source is the same as the destination
-            s0 = s;
-        }
+            if (src3->ne[0] == 1) {
+                // Mamba-2 has a scalar decay factor per head; dA can be outside the state-wise loop
 
-        // d_inner
-        for (int i1 = 0; i1 < ir; ++i1) {
-            // ref: https://github.com/state-spaces/mamba/blob/34076d664838588a3c97727b263478ab9f621a07/mamba_ssm/ops/triton/selective_state_update.py#L78
-            float dt_soft_plus = dt[i1] <= 20.0f ? log1pf(expf(dt[i1])) : dt[i1];
-            float x_dt = x[i1] * dt_soft_plus;
-            float sumf = 0.0f;
-            // d_state
-            for (int i0 = 0; i0 < nc; ++i0) {
-                int i = i0 + i1*nc;
-                // state = prev_state * dA + dB * x
-                float state = (s0[i] * expf(dt_soft_plus * A[i])) + (B[i0] * x_dt);
-                // y = rowwise_dotprod(state, C)
-                sumf += state * C[i0];
-                s[i] = state;
-            }
-            y[i1] = sumf;
-        }
+                // n_head
+                for (int h = ih0; h < ih1; ++h) {
+                    // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
+                    const float dA = expf(dt_soft_plus * A[h]);
+                    const int g = h / (nh / ng); // repeat_interleave
 
-        // handle copies when there are multiple output states
-        for (int i3 = 1; i3 < n_kv; ++i3) {
-            int32_t seq = sq[i3];
-            if (0 <= seq && seq < n_kv) {
-                float * s1 = s + (seq - sq[0])*nc*nr;
-                memcpy(s1, s, nc*ir*sizeof(float));
+                    // dim
+                    for (int i1 = 0; i1 < nr; ++i1) {
+                        const int ii = i1 + h*nr;
+                        const float x_dt = x[ii] * dt_soft_plus;
+                        float sumf = 0.0f;
+#if defined(GGML_SIMD)
+                        const int np = (nc & ~(GGML_F32_STEP - 1));
+
+                        GGML_F32_VEC sum[GGML_F32_ARR] = { GGML_F32_VEC_ZERO };
+
+                        GGML_F32_VEC adA = GGML_F32_VEC_SET1(dA);
+                        GGML_F32_VEC axdt = GGML_F32_VEC_SET1(x_dt);
+
+                        GGML_F32_VEC ax[GGML_F32_ARR];
+                        GGML_F32_VEC ay[GGML_F32_ARR];
+                        GGML_F32_VEC az[GGML_F32_ARR];
+
+                        for (int i = 0; i < np; i += GGML_F32_STEP) {
+                            for (int j = 0; j < GGML_F32_ARR; j++) {
+                                ax[j] = GGML_F32_VEC_LOAD(s0 + i + j*GGML_F32_EPR + ii*nc);
+                                ay[j] = GGML_F32_VEC_LOAD(B + i + j*GGML_F32_EPR + g*nc);
+                                az[j] = GGML_F32_VEC_LOAD(C + i + j*GGML_F32_EPR + g*nc);
+
+                                ax[j] = GGML_F32_VEC_MUL(ax[j], adA);
+                                ay[j] = GGML_F32_VEC_MUL(ay[j], axdt);
+
+                                ax[j] = GGML_F32_VEC_ADD(ax[j], ay[j]);
+
+                                sum[j] = GGML_F32_VEC_FMA(sum[j], ax[j], az[j]);
+
+                                GGML_F32_VEC_STORE(s + i + j*GGML_F32_EPR + ii*nc, ax[j]);
+                            }
+                        }
+
+                        // reduce sum0..sum3 to sum0
+                        GGML_F32_VEC_REDUCE(sumf, sum);
+#else
+                        const int np = 0;
+#endif
+                        // d_state
+                        for (int i0 = np; i0 < nc; ++i0) {
+                            const int i = i0 + ii*nc;
+                            const int ig = i0 + g*nc;
+                            // state = prev_state * dA + dB * x
+                            const float state = (s0[i] * dA) + (B[ig] * x_dt);
+                            // y = rowwise_dotprod(state, C)
+                            sumf += state * C[ig];
+                            s[i] = state;
+                        }
+                        y[ii] = sumf;
+                    }
+                }
             } else {
-                // stop at negative or too big seq_ids
-                break;
+                // Mamba-1 has an element-wise decay factor for the states
+
+                // n_head
+                for (int h = ih0; h < ih1; ++h) {
+                    // ref: https://github.com/state-spaces/mamba/blob/62db608da60f6fc790b8ed9f4b3225e95ca15fde/mamba_ssm/ops/triton/softplus.py#L16
+                    const float dt_soft_plus = ggml_compute_softplus_f32(dt[h]);
+                    const int g = h / (nh / ng); // repeat_interleave
+
+                    // dim
+                    for (int i1 = 0; i1 < nr; ++i1) {
+                        const int ii = i1 + h*nr;
+                        const float x_dt = x[ii] * dt_soft_plus;
+                        float sumf = 0.0f;
+                        // NOTE: can't really use GGML_SIMD here because d_state is usually 16
+                        //       and also because expf is used within the loop.
+                        // d_state
+                        for (int i0 = 0; i0 < nc; ++i0) {
+                            const int i = i0 + ii*nc;
+                            const int ig = i0 + g*nc;
+                            // state = prev_state * dA + dB * x
+                            const float state = (s0[i] * expf(dt_soft_plus * A[i0 + h*nc])) + (B[ig] * x_dt);
+                            // y = rowwise_dotprod(state, C)
+                            sumf += state * C[ig];
+                            s[i] = state;
+                        }
+                        y[ii] = sumf;
+                    }
+                }
             }
+            // use the output as the source when it's not the first token-wise iteration
+            s0 = s;
         }
     }
 }

@@ -679,7 +679,7 @@ static inline uint32_t llama_kv_v_row_embd(
         return hparams.n_embd_v_gqa(il);
     }
 
-    return hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+    return hparams.n_embd_v_gqa(il) + hparams.n_embd_s();
 }
 
 static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
@@ -899,14 +899,30 @@ static bool llama_kv_cache_init(
                 continue;
             }
             if (qnext_recurrent) {
-                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
+                // Phase 3.3: for standard Mamba layout (Mamba-1 / Mamba-2 / Nemotron-H)
+                // we keep the rolling conv state in cache.k_l[i] (1D tensor of size
+                // n_embd_r * n_slots) and the recurrent SSM state in cache.s_l[i]
+                // (2D tensor of n_embd_s × n_slots). The qnext GDN layout
+                // (use_qnext_state_layout=true) puts everything in s_l (n_embd_r=0,
+                // n_embd_s holds conv+ssm packed) and keeps k_l/v_l null.
+                const uint32_t embd_r = hparams.n_embd_r();
+                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_s(), qnext_state_slots);
                 auto s_name = std::string{"cache_s_l"} + std::to_string(i);
                 ggml_set_name(s, s_name.c_str());
                 cache.s_l[i] = s;
-                cache.k_l.push_back(nullptr);
+                if (embd_r > 0) {
+                    // Standard Mamba layout: allocate the conv state slot in k_l[i].
+                    ggml_tensor * kc = ggml_new_tensor_1d(ctx, GGML_TYPE_F32,
+                            (int64_t) embd_r * qnext_state_slots);
+                    auto k_name = std::string{"cache_k_l"} + std::to_string(i);
+                    ggml_set_name(kc, k_name.c_str());
+                    cache.k_l.push_back(kc);
+                } else {
+                    cache.k_l.push_back(nullptr);
+                }
                 cache.v_l.push_back(nullptr);
                 LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
-                if (split_cache && model.layers[i].ssm_out->extra) {
+                if (split_cache && model.layers[i].ssm_out && model.layers[i].ssm_out->extra) {
                     auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
                     GGML_ASSERT(split_ssm_out);
                     int num_v_heads = hparams.ssm_dt_rank;
@@ -919,7 +935,7 @@ static bool llama_kv_cache_init(
                         if (!split) continue;
                         GGML_ASSERT(split->ne[0] % head_v_dim == 0);
                         int nv = split->ne[0] / head_v_dim;
-                        auto size = hparams.n_embd_v_s_id(nv);
+                        auto size = hparams.n_embd_s_id(nv);
                         split_s_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, size, qnext_state_slots);
                         auto split_name = s_name + '.' + std::to_string(is);
                         ggml_set_name(split_s_l.tensor_splits[is], split_name.c_str());
@@ -3627,6 +3643,26 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
+    if (lctx.inp_ssm_ids && cparams.mtp_op_type == MTP_OP_NONE) {
+        // Phase 3.3: ggml_ssm_scan needs a {n_seqs} int32 tensor with the source
+        // state slot index per sequence. With n_seq_max = 1 (Phase 3.3 invariant)
+        // the recurrent state cache has exactly one slot, and build_mamba2_layer
+        // unconditionally writes the new state back to slot 0 (see r_kv_head=0
+        // in src/llama-build-context.cpp). The READ side must therefore also
+        // source from slot 0..n_seqs-1, NOT from kv_self.head — kv_self.head is
+        // a position counter (advances by n_tokens after every decode in
+        // src/llama.cpp:3652), not a slot index, and reading at offset
+        // kv_self.head * src0->nb[3] would walk past the single allocated slot
+        // and produce out-of-bounds reads on every token after the first
+        // prefill.
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_ssm_ids->buffer));
+        int32_t * data = (int32_t *) lctx.inp_ssm_ids->data;
+        const int64_t n_seqs = lctx.inp_ssm_ids->ne[0];
+        for (int64_t s = 0; s < n_seqs; ++s) {
+            data[s] = (int32_t) s;
+        }
+    }
+
     if (lctx.inp_pos_bucket) {
         const int64_t n_tokens = batch.n_tokens;
 
@@ -6022,6 +6058,8 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_REFACT:
         case LLM_ARCH_BLOOM:
         case LLM_ARCH_MAMBA:
+        case LLM_ARCH_MAMBA2:
+        case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
@@ -6656,7 +6694,7 @@ struct llama_data_write {
         // Iterate and write all the keys first, each row is a cell
         // Get whole range at a time
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_r();
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
@@ -7061,7 +7099,7 @@ struct llama_data_read {
 
         // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_r();
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;

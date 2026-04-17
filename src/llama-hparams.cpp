@@ -477,6 +477,10 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
+                // QWEN3NEXT uses the GDN packed state layout (n_embd_r = 0,
+                // delta-net matrix in the V-cache). See llama_hparams::n_embd_r/s.
+                hparams.use_qnext_state_layout = true;
+
                 // Upstream convention: every 4th layer is full attention, others are recurrent.
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                     hparams.recurrent_layer_arr[i] = ((i + 1) % 4 != 0);
@@ -501,6 +505,10 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                // QWEN35MOE uses the GDN packed state layout (Qwen3.5-A3B
+                // production target). See llama_hparams::n_embd_r/s.
+                hparams.use_qnext_state_layout = true;
 
                 // Mark recurrent layers (linear attention layers)
                 {
@@ -529,6 +537,10 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                // QWEN35 (dense Qwen3.5) uses the GDN packed state layout.
+                // See llama_hparams::n_embd_r/s.
+                hparams.use_qnext_state_layout = true;
 
                 // Mark recurrent layers (linear attention layers)
                 {
@@ -739,6 +751,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
                 ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_DT_B_C_RMS,     hparams.ssm_dt_b_c_rms, false);
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
@@ -760,6 +773,97 @@ void llm_load_hparams(
                             case 2560: model.type = e_model::MODEL_3B; break;
                             default: model.type = e_model::MODEL_UNKNOWN;
                         } break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_MAMBA2:
+            {
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+                ml.get_key(LLM_KV_SSM_DT_B_C_RMS,     hparams.ssm_dt_b_c_rms, false);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // Defensive sanity bounds on loaded SSM hparams.
+                // These prevent divide-by-zero in tensor allocation
+                // (d_inner / n_group in create_mamba2_tensors) and catch
+                // obviously malformed GGUFs before they OOM the system.
+                GGML_ASSERT(hparams.ssm_n_group > 0      && "Mamba-2: ssm_n_group must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner > 0      && "Mamba-2: ssm_d_inner must be > 0");
+                GGML_ASSERT(hparams.ssm_d_state > 0      && "Mamba-2: ssm_d_state must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner % hparams.ssm_n_group == 0
+                            && "Mamba-2: ssm_d_inner must be divisible by ssm_n_group");
+                GGML_ASSERT(hparams.ssm_d_inner <= 65536 && "Mamba-2: ssm_d_inner out of sane range");
+                GGML_ASSERT(hparams.ssm_d_state <= 2048  && "Mamba-2: ssm_d_state out of sane range");
+
+                // Mamba-2 is fully recurrent: every layer is an SSM layer.
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = true;
+                }
+
+                switch (hparams.n_layer) {
+                    case 24:
+                        switch (hparams.n_embd) {
+                            case 768: model.type = e_model::MODEL_SMALL; break;
+                            default: model.type = e_model::MODEL_UNKNOWN;
+                        } break;
+                    case 48:
+                        switch (hparams.n_embd) {
+                            case 1024: model.type = e_model::MODEL_MEDIUM; break;
+                            case 1536: model.type = e_model::MODEL_LARGE; break;
+                            case 2048: model.type = e_model::MODEL_XL; break;
+                            default: model.type = e_model::MODEL_UNKNOWN;
+                        } break;
+                    case 64:
+                        switch (hparams.n_embd) {
+                            case 2560: model.type = e_model::MODEL_3B; break;
+                            case 4096: model.type = e_model::MODEL_7B; break;
+                            default: model.type = e_model::MODEL_UNKNOWN;
+                        } break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_NEMOTRON_H_MOE:
+            {
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+                ml.get_key(LLM_KV_SSM_DT_B_C_RMS,     hparams.ssm_dt_b_c_rms, false);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // Same defensive bounds as Mamba-2 (Nemotron-H inherits the
+                // Mamba-2 SSM block).
+                GGML_ASSERT(hparams.ssm_n_group > 0      && "Nemotron-H: ssm_n_group must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner > 0      && "Nemotron-H: ssm_d_inner must be > 0");
+                GGML_ASSERT(hparams.ssm_d_state > 0      && "Nemotron-H: ssm_d_state must be > 0");
+                GGML_ASSERT(hparams.ssm_d_inner % hparams.ssm_n_group == 0
+                            && "Nemotron-H: ssm_d_inner must be divisible by ssm_n_group");
+                GGML_ASSERT(hparams.ssm_d_inner <= 65536 && "Nemotron-H: ssm_d_inner out of sane range");
+                GGML_ASSERT(hparams.ssm_d_state <= 2048  && "Nemotron-H: ssm_d_state out of sane range");
+
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp,             false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp,           false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared,      false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm,  false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+
+                // A layer is recurrent (SSM) IFF it has neither KV heads nor FFN.
+                // Attention layers  : n_head_kv(i) != 0 && n_ff(i) == 0
+                // SSM layers        : n_head_kv(i) == 0 && n_ff(i) == 0
+                // Dense/MoE FFN     : n_head_kv(i) == 0 && n_ff(i) != 0
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
+                }
+
+                switch (hparams.n_layer) {
+                    case 52: model.type = e_model::MODEL_30B_A3B; break; // Nemotron-3-Nano-30B-A3B
+                    case 56: model.type = e_model::MODEL_9B; break;      // Nemotron-H-9B
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -1359,4 +1463,69 @@ void llm_load_hparams(
     }
 
     hparams.rope_type = llama_rope_type(&model);
+}
+
+// ---------------------------------------------------------------------------
+// Recurrent state size accessors (Mamba family + Qwen3.5 GDN)
+// ---------------------------------------------------------------------------
+//
+// Renamed from n_embd_k_s / n_embd_v_s / n_embd_v_s_id to match the upstream
+// llama.cpp naming (n_embd_r = rolling state, n_embd_s = recurrent state).
+//
+// Phase 3.1.B.2 adds first-class Mamba-2 / Nemotron-H support. The two
+// layouts (qnext GDN vs standard Mamba SSM) are selected by the explicit
+// `use_qnext_state_layout` flag in llama_hparams, which the loader sets to
+// true exactly for the three Qwen3.5 GDN arches (QWEN3NEXT, QWEN35MOE,
+// QWEN35). Mamba-1 / Mamba-2 / Nemotron-H all leave it false (default) and
+// fall through to the upstream Mamba formula. Mamba-1 stays byte-equivalent
+// because for it n_group=0 collapses (d_inner + 2*n_group*d_state) back to
+// d_inner.
+
+uint32_t llama_hparams::n_embd_r() const {
+    if (use_qnext_state_layout) {
+        // qwen3next / Qwen3.5 GDN keeps all recurrent state in the V-cache tail
+        return 0;
+    }
+    // Standard Mamba family conv-state size.
+    //   Mamba-1 :  n_group = 0  =>  (d_conv - 1) * d_inner               (legacy)
+    //   Mamba-2 :  n_group > 0  =>  (d_conv - 1) * (d_inner + 2*g*d_st)  (Mamba-2 ext.)
+    //   Nemotron-H : same formula as Mamba-2 (it inherits the SSM block).
+    // TODO: maybe support other convolution strides than 1
+    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2 * ssm_n_group * ssm_d_state);
+}
+
+uint32_t llama_hparams::n_embd_s() const {
+    if (use_qnext_state_layout) {
+        // qnext recurrent state packs together:
+        //   1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
+        //   2) delta-net state: head_v_dim * head_v_dim * num_v_heads
+        const uint32_t key_dim        = ssm_d_state * ssm_n_group;
+        const uint32_t value_dim      = ssm_d_inner;
+        const uint32_t conv_dim       = 2 * key_dim + value_dim;
+        const uint32_t conv_state_dim = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * conv_dim;
+        const uint32_t head_v_dim     = ssm_dt_rank > 0 ? ssm_d_inner / ssm_dt_rank : 0;
+        const uint32_t ssm_state_dim  = head_v_dim * head_v_dim * ssm_dt_rank;
+        return conv_state_dim + ssm_state_dim;
+    }
+    // Standard Mamba family recurrent state: d_state * d_inner.
+    // Identical for Mamba-1, Mamba-2, and Nemotron-H — only the SCAN is
+    // different (chunked associative scan for Mamba-2 / Nemotron-H, naive
+    // sequential for Mamba-1). State *size* is the same.
+    return ssm_d_state * ssm_d_inner;
+}
+
+uint32_t llama_hparams::n_embd_s_id(int nv) const {
+    if (ssm_n_group <= 0 || nv < 1 || ssm_dt_rank < 1) return 0;
+    int num_v_heads = ssm_dt_rank;
+    int num_k_heads = ssm_n_group;
+    int gqa_ratio   = num_v_heads / num_k_heads;
+    GGML_ASSERT(nv <= num_v_heads);
+    GGML_ASSERT(nv % gqa_ratio == 0);
+    int nk = nv / gqa_ratio;
+    int head_k_dim  = ssm_d_state;
+    int head_v_dim  = ssm_d_inner / num_v_heads;
+    uint32_t conv_dim       = 2 * nk * head_k_dim + nv * head_v_dim;
+    uint32_t conv_state_dim = conv_dim * (ssm_d_conv - 1);
+    uint32_t ssm_state_dim  = head_v_dim * head_v_dim * nv;
+    return conv_state_dim + ssm_state_dim;
 }
