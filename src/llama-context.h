@@ -74,7 +74,7 @@ struct llama_kv_cache {
         return size;
     }
 
-    // GPU-resident checkpoint for speculative decoding (exclusive from hybrid models)
+    // GPU-resident checkpoint for recurrent/hybrid speculative decoding
     struct gpu_checkpoint {
         std::vector<llama_kv_cell> cells_snapshot;
         uint32_t head_snapshot = 0;

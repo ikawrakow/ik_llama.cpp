@@ -22,6 +22,15 @@ enum slot_command {
     SLOT_COMMAND_RELEASE,
 };
 
+struct server_speculative_checkpoint {
+    bool valid = false;
+    llama_pos n_past = 0;
+    std::vector<uint8_t> data;
+    common_sampler * sampler = nullptr;
+
+    void clear();
+};
+
 struct server_slot {
     int id;
     int id_task = -1;
@@ -158,12 +167,8 @@ struct server_slot {
     bool has_mtp = false;
     std::vector<float> mtp_hidden_state;
 
-    // checkpoint for hybrid model speculative decoding
-    // saves recurrent state before speculative batch so it can be restored on rejection
-    bool               spec_ckpt_valid = false;
-    llama_pos          spec_ckpt_n_past = 0;
-    std::vector<uint8_t> spec_ckpt_data;
-    common_sampler   * spec_ckpt_sampler = nullptr; // saved sampler state for checkpoint restore
+    // saves recurrent state before a speculative batch so it can be restored on rejection
+    server_speculative_checkpoint spec_ckpt;
 
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated

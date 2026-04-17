@@ -798,7 +798,7 @@ extern "C" {
     LLAMA_API void llama_kv_cache_clear(
             struct llama_context * ctx);
 
-    // GPU-resident checkpoint for speculative decoding (exclusive from hybrid models)
+    // GPU-resident checkpoint for recurrent/hybrid speculative decoding
     LLAMA_API bool llama_kv_cache_checkpoint_save(struct llama_context * ctx);
     LLAMA_API bool llama_kv_cache_checkpoint_restore(struct llama_context * ctx);
     LLAMA_API void llama_kv_cache_checkpoint_delete(struct llama_context * ctx);
