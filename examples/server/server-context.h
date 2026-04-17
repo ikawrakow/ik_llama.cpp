@@ -162,6 +162,7 @@ struct server_slot {
     bool               spec_ckpt_valid = false;
     llama_pos          spec_ckpt_n_past = 0;
     std::vector<uint8_t> spec_ckpt_data;
+    common_sampler   * spec_ckpt_sampler = nullptr; // saved sampler state for checkpoint restore
 
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
