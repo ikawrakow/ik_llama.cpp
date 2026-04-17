@@ -374,6 +374,7 @@ void server_slot::reset() {
     n_sent_text = 0;
     drafted.clear();
     i_batch_dft.clear();
+    spec_ckpt_valid = false;
     n_sent_token_probs = 0;
     infill = false;
     ga_i = 0;
@@ -3606,7 +3607,50 @@ void server_context::speculative_decoding_accept() {
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
 
-        llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
+        // for hybrid models: if any drafts were rejected, restore recurrent state
+        const bool any_rejected = (ids.size() - 1) < n_draft;
+        if (any_rejected && slot.spec_ckpt_valid) {
+            llama_state_seq_set_data(ctx, slot.spec_ckpt_data.data(), slot.spec_ckpt_data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+            llama_kv_cache_seq_rm(ctx, slot.id, slot.spec_ckpt_n_past, -1);
+
+            if (!ids.empty()) {
+                const int n_accepted = (int)ids.size();
+                llama_batch re_batch = llama_batch_init(n_accepted, 0, 1);
+                for (int j = 0; j < n_accepted; j++) {
+                    const bool is_last = (j == n_accepted - 1);
+                    common_batch_add(re_batch, ids[j], slot.spec_ckpt_n_past + j, { slot.id }, is_last);
+                }
+
+                if (slot.has_mtp) {
+                    llama_set_embeddings(ctx, true);
+                }
+
+                const int ret = llama_decode(ctx, re_batch);
+                if (ret != 0) {
+                    SLT_ERR(slot, "failed to re-decode accepted tokens after checkpoint restore: %d\n", ret);
+                }
+
+                if (slot.has_mtp) {
+                    llama_set_embeddings(ctx, false);
+                    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                    const float * emb = llama_get_embeddings_ith(ctx, -1);
+                    if (emb) {
+                        slot.mtp_hidden_state.resize(n_embd);
+                        memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                    }
+                }
+
+                llama_batch_free(re_batch);
+                SLT_DBG(slot, "spec checkpoint restored: re-decoded %d accepted tokens (rejected %d)\n",
+                    n_accepted, (int)(n_draft - (ids.size() - 1)));
+            }
+
+            slot.spec_ckpt_valid = false;
+        } else {
+            llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
+            slot.spec_ckpt_valid = false;
+        }
 
         for (size_t i = 0; i < ids.size(); ++i) {
             completion_token_output result;
@@ -4177,6 +4221,24 @@ void server_context::update_slots() {
 
     // make sure we're in the right embedding mode
     llama_set_embeddings(ctx, batch_type == 1);
+
+    if (llama_model_is_hybrid(model)) {
+        for (auto & slot : slots) {
+            if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch_dft.empty()) {
+                continue;
+            }
+            slot.spec_ckpt_n_past = slot.n_past - (int32_t)(slot.drafted.size() + 1);
+            const size_t ckpt_size = llama_state_seq_get_size(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            slot.spec_ckpt_data.resize(ckpt_size);
+            const size_t written = llama_state_seq_get_data(ctx, slot.spec_ckpt_data.data(), ckpt_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            slot.spec_ckpt_valid = (written > 0);
+            if (slot.spec_ckpt_valid) {
+                SLT_DBG(slot, "spec checkpoint saved: %zu bytes, n_past_pre_spec=%d\n", written, slot.spec_ckpt_n_past);
+            } else {
+                SLT_WRN(slot, "%s", "failed to save spec checkpoint\n");
+            }
+        }
+    }
 
     // process the created batch of tokens
     process_batch_tokens(n_batch); // Decode with batch

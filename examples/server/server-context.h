@@ -157,6 +157,12 @@ struct server_slot {
     bool has_mtp = false;
     std::vector<float> mtp_hidden_state;
 
+    // checkpoint for hybrid model speculative decoding
+    // saves recurrent state before speculative batch so it can be restored on rejection
+    bool               spec_ckpt_valid = false;
+    llama_pos          spec_ckpt_n_past = 0;
+    std::vector<uint8_t> spec_ckpt_data;
+
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
