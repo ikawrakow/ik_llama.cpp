@@ -56,6 +56,7 @@ struct server_slot {
     int32_t n_predict = -1; // TODO: disambiguate from params.n_predict
 
     int32_t n_prompt_tokens = 0;
+    int32_t n_prompt_tokens_cache = 0;
     int32_t n_prompt_tokens_processed = 0;
 
     json prompt; // can be either a string, array of strings or array of token ids

@@ -252,11 +252,11 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     return 0;
 }
 
-static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_bos = false) {
+static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_bos = false, bool use_jinja = false) {
     common_chat_templates_inputs tmpl_inputs;
     tmpl_inputs.messages = {msg};
     tmpl_inputs.add_generation_prompt = true;
-    tmpl_inputs.use_jinja = false; // jinja is buggy here
+    tmpl_inputs.use_jinja = use_jinja; // jinja is buggy here
     auto formatted_chat = common_chat_templates_apply(ctx.tmpls.get(), tmpl_inputs);
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.prompt.c_str());
 
@@ -362,7 +362,7 @@ int main(int argc, char ** argv) {
                 return 1; // error is already printed by libmtmd
             }
         }
-        if (eval_message(ctx, msg, true)) {
+        if (eval_message(ctx, msg, true, params.use_jinja)) {
             return 1;
         }
         if (!g_is_interrupted && generate_response(ctx, n_predict)) {
@@ -427,7 +427,7 @@ int main(int argc, char ** argv) {
             common_chat_msg msg;
             msg.role = "user";
             msg.content = content;
-            int ret = eval_message(ctx, msg, is_first_msg);
+            int ret = eval_message(ctx, msg, is_first_msg, params.use_jinja);
             if (ret) {
                 return 1;
             }

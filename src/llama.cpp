@@ -3598,7 +3598,28 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
             GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask->buffer));
 
-            float * data = (float *) lctx.inp_KQ_mask->data;
+            float * data     = nullptr;
+            float * data_swa = nullptr;
+            ggml_half * data_f16     = nullptr;
+            ggml_half * data_swa_f16 = nullptr;
+
+            if (lctx.inp_KQ_mask) {
+                GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask->buffer));
+                if (cparams.flash_attn) {
+                    data_f16 = (ggml_half *)lctx.inp_KQ_mask->data;
+                } else {
+                    data = (float *) lctx.inp_KQ_mask->data;
+                }
+            }
+
+            if (lctx.inp_KQ_mask_swa) {
+                GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa->buffer));
+                if (cparams.flash_attn) {
+                    data_swa_f16 = (ggml_half *) lctx.inp_KQ_mask_swa->data;
+                } else {
+                    data_swa = (float *) lctx.inp_KQ_mask_swa->data;
+                }
+            }
 
             for (int h = 0; h < 1; ++h) {
                 for (int j = 0; j < n_tokens; ++j) {
@@ -3617,11 +3638,43 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                             }
                         }
 
-                        data[h*(n_tokens*n_tokens) + j*n_stride + i] = f;
+                        if (data) {
+                            data[h*(n_tokens*n_tokens) + j*n_stride + i] = f;
+                        }
+                        if (data_f16) {
+                            data_f16[h*(n_tokens*n_tokens) + j*n_tokens + i] = ggml_fp32_to_fp16(f);
+                        }
+
+                        if (data_swa || data_swa_f16) {
+                            if (hparams.n_attn_chunk) {
+                                llama_pos pos_chunk_start = (batch.pos[i] / hparams.n_attn_chunk) * hparams.n_attn_chunk;
+                                if (lctx.kv_self.cells[i].pos < pos_chunk_start || batch.pos[i] < pos_chunk_start) {
+                                    f = -INFINITY;
+                                }
+                            } else {
+                                if (batch.pos[i] - kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                    f = -INFINITY;
+                                }
+                            }
+                            if (data_swa) {
+                                data_swa[h*(n_tokens*n_tokens) + j*n_tokens + i] = f;
+                            }
+                            if (data_swa_f16) {
+                                data_swa_f16[h*(n_tokens*n_tokens) + j*n_tokens + i] = ggml_fp32_to_fp16(f);
+                            }
+                        }
                     }
 
-                    for (int i = n_tokens; i < n_stride; ++i) {
-                        data[h*(n_tokens*n_tokens) + j*n_stride + i] = -INFINITY;
+                    if (data) {
+                        for (int i = n_tokens; i < n_stride; ++i) {
+                            data[h*(n_tokens*n_tokens) + j*n_stride + i] = -INFINITY;
+                        }
+                    }
+                    if (data_f16) {
+                        auto h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        for (int i = n_tokens; i < n_stride; ++i) {
+                            data_f16[h*(n_tokens*n_tokens) + j*n_stride + i] = h_inf;
+                        }
                     }
                 }
             }
@@ -4331,7 +4384,7 @@ static int llama_decode_internal(
                 if (n_outputs_new) {
                     GGML_ASSERT( n_outputs_prev + n_outputs_new <= n_outputs);
                     GGML_ASSERT((n_outputs_prev + n_outputs_new)*n_vocab <= (int64_t) lctx.logits_size);
-                    
+
                     if (res->ne[1] == n_tokens && n_outputs_new < n_tokens) {
                         int32_t i_out = 0;
                         if (u_batch.logits && !embd_pooled) {

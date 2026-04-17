@@ -1262,7 +1262,8 @@ int main(int argc, char ** argv) {
                      {"object",   "model"},
                      {"created",  std::time(0)},
                      {"owned_by", "llamacpp"},
-                     {"meta",     model_meta}
+                     {"meta",     model_meta},
+                     {"max_model_len", params.n_ctx}, //vllm specs
                  },
              }}
         };

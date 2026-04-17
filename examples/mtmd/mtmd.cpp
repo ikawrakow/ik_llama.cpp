@@ -301,6 +301,12 @@ struct mtmd_context {
             img_end = "<|im_end|>";
 
         }
+        else if (proj == PROJECTOR_TYPE_GEMMA4V) {
+            // <|image> ... (image embeddings) ... <image|>
+            img_beg = "<|image>";
+            img_end = "<image|>";
+            //image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+        }
     }
 
     void init_audio() {
@@ -831,8 +837,10 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 }
 
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
-    if (ctx->ctx_v && clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_GEMMA3) {
-        return true;
+    if (ctx->ctx_v) {
+        if (auto type = clip_get_projector_type(ctx->ctx_v); type == PROJECTOR_TYPE_GEMMA3 || type == PROJECTOR_TYPE_GEMMA4V) {
+            return true;
+        }
     }
     return false;
 }
