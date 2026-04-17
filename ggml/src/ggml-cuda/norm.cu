@@ -365,6 +365,30 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
 }
 
 template <int block_size, typename src_t>
+static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, const float * sum, float * dst, const int ncols, float eps, float norm) {
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    const int tid = threadIdx.x;
+
+    const float mean = sum[row] * norm;
+    const float scale = rsqrtf(mean + eps);
+
+    if constexpr (std::is_same_v<src_t, block_q8_0>) {
+        auto xr = x + (row*ncols)/QK8_0;
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+        }
+    } else if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * __bfloat162float(x[row*ncols + col]);
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * (float)x[row*ncols + col];
+        }
+    }
+}
+
+template <int block_size, typename src_t>
 static __global__ void fused_rms_norm_f32_nc(
         const src_t * x, const float * y, float * dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps) {
@@ -535,6 +559,31 @@ static void fused_rms_norm_f32_cuda(const src_t * x, const float * y, float * ds
 }
 
 template <typename src_t>
+static void fused_rms_norm_f32_cuda(const src_t * x, const float * y, const float * sum, float * dst,
+        const int ncols, const int nrows, float eps, float norm, cudaStream_t stream) {
+    constexpr int kBlockSize = 256;
+    GGML_ASSERT(ncols % WARP_SIZE == 0);
+    if (ncols < kBlockSize) {
+        switch (ncols) {
+            case  32: fused_rms_norm_f32< 32><<<nrows,  32, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case  64: fused_rms_norm_f32< 64><<<nrows,  64, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case  96: fused_rms_norm_f32< 96><<<nrows,  96, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case 128: fused_rms_norm_f32<128><<<nrows, 128, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case 160: fused_rms_norm_f32<160><<<nrows, 160, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            case 192: fused_rms_norm_f32<192><<<nrows, 192, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+            default : fused_rms_norm_f32<224><<<nrows, 224, 0, stream>>>(x, y, sum, dst, ncols, eps, norm); break;
+        }
+    }
+    else if (ncols < 1024) {
+        const dim3 block_dims(kBlockSize, 1, 1);
+        fused_rms_norm_f32<kBlockSize><<<nrows, block_dims, 0, stream>>>(x, y, sum, dst, ncols, eps, norm);
+    } else {
+        const dim3 block_dims(1024, 1, 1);
+        fused_rms_norm_f32<1024><<<nrows, block_dims, 0, stream>>>(x, y, sum, dst, ncols, eps, norm);
+    }
+}
+
+template <typename src_t>
 static void fused_rms_norm_f32_nc_cuda(
         const src_t * x, const float * y, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream) {
@@ -661,6 +710,7 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
     }
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src2 = dst->src[2];
     const float * src0_d = (const float *)src0->data;
     const float * src1_d = (const float *)src1->data;
     float * dst_d = (float *)dst->data;
@@ -677,6 +727,19 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
     memcpy(&eps, dst->op_params, sizeof(float));
 
     const int64_t ne00 = src0->ne[0];
+
+    if (src2) {
+        GGML_ASSERT(src0->type == GGML_TYPE_F32);
+        GGML_ASSERT(src2->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_is_contiguous(src0));
+        int ntot_cols = dst->op_params[1];
+        GGML_ASSERT(ntot_cols > 0);
+        float norm = 1.f/ntot_cols;
+        const int64_t nrows = ggml_nrows(src0);
+        GGML_ASSERT(src2->ne[0] == nrows);
+        fused_rms_norm_f32_cuda(src0_d, src1_d, (const float *)src2->data, dst_d, ne00, nrows, eps, norm, stream);
+        return;
+    }
 
     if (ggml_is_contiguous(src0)) {
         const int64_t nrows = ggml_nrows(src0);
