@@ -595,6 +595,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         i_last = 0;
 
         n_draft_last = 0;
+        n_low = 0;
 
         const size_t n = mod.get_n();
 
@@ -1128,10 +1129,6 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
             : 0.0;
         spec->tuner->accept_feedback(n_accepted, spec->last_n_drafted, step_tps);
         spec->t_step_start_us = 0;
-    }
-
-    if (n_accepted == 0) {
-        return;
     }
 
     common_speculative_state * impl = spec->curr_impl;

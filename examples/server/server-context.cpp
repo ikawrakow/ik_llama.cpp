@@ -3660,6 +3660,10 @@ void server_context::speculative_decoding_accept() {
                     }
                 }
 
+                for (llama_token id : ids) {
+                    common_sampler_accept(slot.ctx_sampling, ctx, id, true);
+                }
+
                 llama_batch_free(re_batch);
                 SLT_DBG(slot, "spec checkpoint restored (gpu=%s): re-decoded %d accepted tokens (rejected %d)\n",
                     gpu_ckpt ? "yes" : "no", n_accepted, (int)(n_draft - (ids.size() - 1)));
