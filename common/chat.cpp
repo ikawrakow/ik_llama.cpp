@@ -2322,7 +2322,9 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     if (!inputs.json_schema.empty()) {
         params.json_schema = json::parse(inputs.json_schema);
     }
-
+    if (!params.grammar.empty() && !params.json_schema.is_null()) {
+        throw std::runtime_error("Either \"json_schema\" or \"grammar\" can be specified, but not both");
+    }
     params.parallel_tool_calls = inputs.parallel_tool_calls;
 
     if (params.tools.is_array()) {

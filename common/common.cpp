@@ -2935,6 +2935,21 @@ std::vector<std::string> string_split(const std::string& str, char delim) {
     return values;
 }
 
+std::string string_repeat(const std::string & str, size_t n) {
+    if (n == 0) {
+        return "";
+    }
+
+    std::string result;
+    result.reserve(str.length() * n);
+
+    for (size_t i = 0; i < n; ++i) {
+        result += str;
+    }
+
+    return result;
+}
+
 static bool is_utf8_whitespace(uint8_t c) {
     // Basic ASCII whitespace
     if (c <= 0x7F) return isspace(c);

@@ -661,7 +661,7 @@ json oaicompat_chat_params_parse(
             json_schema = json_value(schema_wrapper, "schema", json::object());
         }
         else if (!response_type.empty() && response_type != "text") {
-            json_schema = json_value(json_schema, "schema", json::object());
+            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
         }
     }
 

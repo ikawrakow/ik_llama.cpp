@@ -1082,6 +1082,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         }
     }
     else {
+        slot.sparams.grammar = default_sparams.grammar;
         std::string grammar_str = json_value(data, "grammar", std::string());
         if (!grammar_str.empty()) {
             // grammar_type key is set by the server when converting chat template grammars
@@ -1453,13 +1454,13 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
         }
-
-        if (banbuffer_size > 0) {
-            slot.n_buffer = banbuffer_size;
-        } else {
-            slot.n_buffer = slot.n_buffer + 1; // buffer is longest string/regex + 1
+        if (banned_regex_ci != data.end() || banned_regex != data.end() || banned_strings != data.end()) {
+            if (banbuffer_size > 0) {
+                slot.n_buffer = banbuffer_size;
+            } else {
+                slot.n_buffer = slot.n_buffer + 1; // buffer is longest string/regex + 1
+            }
         }
-
 		slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
         slot.ban_phrases_bias = json_value(data, "banned_bias", params_base.ban_phrases_bias);
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);

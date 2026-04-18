@@ -80,12 +80,13 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                 : llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root");
             if (grmr) {
                 result->prev.resize(params.n_prev);
-                result->n_valid = 0;
-                result->grammar_str = grammar_str;
-                result->grammar_root = "root";
+
                 result->grammar = grmr;
             }
         }
+        result->n_valid = 0;
+        result->grammar_str = grammar_str;
+        result->grammar_root = "root";
     }
     
 
@@ -179,7 +180,6 @@ void common_sampler_free(struct common_sampler * ctx) {
 }
 
 static void llama_grammar_reset(common_sampler * ctx) {
-    ctx->prev.clear();
     if (!ctx->grammar) {
         return;
     }
@@ -198,7 +198,8 @@ static void llama_grammar_reset(common_sampler * ctx) {
 }
 
 void common_sampler_reset(common_sampler * ctx) {
-    llama_grammar_reset(ctx);
+    // llama_grammar_reset(ctx);
+    ctx->prev.clear();
     llama_sampler_dry_reset(ctx->smpl);
 }
 
@@ -514,7 +515,6 @@ static llama_token llama_sampling_sample_impl(
         }
     }
 
-    id = cur_p.data[cur_p.selected].id;
     if (grammar_first || !grammar_should_apply(ctx_sampling)) {
         return id;
     }
