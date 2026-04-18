@@ -182,7 +182,9 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
         llama_sampler_dry_free(dst->smpl);
         dst->smpl = nullptr;
     }
-    dst->smpl = llama_sampler_dry_clone(src->smpl);
+    if (src->smpl) {
+        dst->smpl = llama_sampler_dry_clone(src->smpl);
+    }
 
 }
 

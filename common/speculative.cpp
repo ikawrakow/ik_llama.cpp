@@ -1133,7 +1133,9 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
 
     common_speculative_state * impl = spec->curr_impl;
 
-    GGML_ASSERT(impl);
+    if (!impl) {
+        return;
+    }
 
     {
         common_time_meas tm(impl->t_accept_us, !impl->gen_perf);

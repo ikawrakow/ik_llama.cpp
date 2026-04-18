@@ -9271,6 +9271,9 @@ void llama_sampler_dry_free(struct llama_sampler_dry* smpl) {
 }
 
 struct llama_sampler_dry* llama_sampler_dry_clone(struct llama_sampler_dry* smpl) {
+    if (!smpl) {
+        return nullptr;
+    }
     return new llama_sampler_dry {
         /* .total_context_size     = */ smpl->total_context_size,
         /* .dry_multiplier         = */ smpl->dry_multiplier,

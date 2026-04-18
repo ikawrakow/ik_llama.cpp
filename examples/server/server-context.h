@@ -25,6 +25,7 @@ enum slot_command {
 struct server_speculative_checkpoint {
     bool valid = false;
     llama_pos n_past = 0;
+    llama_token sampled = LLAMA_TOKEN_NULL;
     std::vector<uint8_t> data;
     common_sampler * sampler = nullptr;
 

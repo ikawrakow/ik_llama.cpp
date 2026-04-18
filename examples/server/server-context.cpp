@@ -43,6 +43,7 @@ static void discard_speculative_checkpoint(server_slot & slot, llama_context * c
 static bool save_speculative_checkpoint(server_slot & slot, llama_model * model, llama_context * ctx, bool gpu_ckpt) {
     slot.spec_ckpt.clear();
     slot.spec_ckpt.n_past = slot.n_past - (int32_t)(slot.drafted.size() + 1);
+    slot.spec_ckpt.sampled = slot.sampled;
 
     if (gpu_ckpt) {
         slot.spec_ckpt.valid = llama_kv_cache_checkpoint_save(ctx);
@@ -3675,11 +3676,13 @@ void server_context::speculative_decoding_accept() {
             }
 
             if (!ids.empty()) {
-                const int n_accepted = (int)ids.size();
-                llama_batch re_batch = llama_batch_init(n_accepted, 0, 1);
-                for (int j = 0; j < n_accepted; j++) {
-                    const bool is_last = (j == n_accepted - 1);
-                    common_batch_add(re_batch, ids[j], slot.spec_ckpt.n_past + j, { slot.id }, is_last);
+                // Re-decode to restore the recurrent state after checkpoint restore.
+                const int n_re = (int)ids.size();
+                llama_batch re_batch = llama_batch_init(n_re, 0, 1);
+                common_batch_add(re_batch, slot.spec_ckpt.sampled, slot.spec_ckpt.n_past, { slot.id }, n_re == 1);
+                for (int j = 0; j < n_re - 1; j++) {
+                    const bool is_last = (j == n_re - 2);
+                    common_batch_add(re_batch, ids[j], slot.spec_ckpt.n_past + 1 + j, { slot.id }, is_last);
                 }
 
                 if (slot.has_mtp) {
@@ -3706,8 +3709,8 @@ void server_context::speculative_decoding_accept() {
                 }
 
                 llama_batch_free(re_batch);
-                SLT_DBG(slot, "spec checkpoint restored (gpu=%s): re-decoded %d accepted tokens (rejected %d)\n",
-                    gpu_ckpt ? "yes" : "no", n_accepted, (int)(n_draft - (ids.size() - 1)));
+                SLT_DBG(slot, "spec checkpoint restored (gpu=%s): re-decoded %d tokens (rejected %d drafts)\n",
+                    gpu_ckpt ? "yes" : "no", n_re, (int)(n_draft - (ids.size() - 1)));
             }
 
             discard_speculative_checkpoint(slot, ctx, gpu_ckpt);
