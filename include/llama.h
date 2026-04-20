@@ -798,6 +798,28 @@ extern "C" {
     LLAMA_API void llama_kv_cache_clear(
             struct llama_context * ctx);
 
+    // Unified checkpoint API for recurrent/hybrid speculative decoding.
+    enum llama_spec_ckpt_mode {
+        LLAMA_SPEC_CKPT_NONE        = -1,
+        LLAMA_SPEC_CKPT_AUTO        =  0,
+        LLAMA_SPEC_CKPT_PER_STEP    =  1,
+        LLAMA_SPEC_CKPT_GPU_FALLBACK =  2,
+        LLAMA_SPEC_CKPT_CPU         =  3,
+    };
+
+    // Initialise the checkpoint system for the upcoming speculation window.
+    LLAMA_API int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens);
+
+    // Save the current recurrent state as a speculative checkpoint.
+    LLAMA_API bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id);
+
+    // Restore the recurrent state after speculative decode.
+    LLAMA_API bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
+                                            llama_pos n_past, int accepted_step);
+
+    // Discard the saved checkpoint and reset internal mode state.
+    LLAMA_API void llama_spec_ckpt_discard(struct llama_context * ctx);
+
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
     // seq_id < 0 : match any sequence
