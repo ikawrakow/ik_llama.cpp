@@ -442,6 +442,16 @@ llm_expert_gating_func_type   gating_op,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
             bool is_multi = false, ggml_tensor * post_norm = nullptr);
 
+    static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, const llm_build_cb & cb);
+
+    static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
+            ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb);
+
+    static ggml_tensor * do_split_norm(ggml_context * ctx, ggml_tensor * cur, ggml_tensor * the_norm, const llama_hparams & hparams,
+        const llm_build_cb & cb, int id, int il_cb, bool is_norm);
+
+    static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor * input, int id);
+
     static uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self);
 
     struct ggml_tensor * build_mtp_tail(

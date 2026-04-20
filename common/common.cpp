@@ -1087,6 +1087,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
         } else if (value == "ngram-mod") {
             params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+        } else if (value == "suffix") {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_SUFFIX;
         } else {
             throw std::invalid_argument("unknown speculative decoding type without draft model");
         }
@@ -1117,6 +1119,29 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             throw std::invalid_argument("ngram min hits must be at least 1");
         }
         params.speculative.ngram_min_hits = value;
+        return true;
+    }
+    if (arg == "--suffix-pattern-len") {
+        CHECK_ARG
+        int value = std::stoi(argv[i]);
+        if (value < 1) {
+            throw std::invalid_argument("suffix pattern length must be at least 1");
+        }
+        params.speculative.suffix_min_match_len = value;
+        return true;
+    }
+    if (arg == "--suffix-max-depth") {
+        CHECK_ARG
+        int value = std::stoi(argv[i]);
+        if (value < 1) {
+            throw std::invalid_argument("suffix max depth must be at least 1");
+        }
+        params.speculative.suffix_max_depth = value;
+        return true;
+    }
+    if (arg == "--suffix-corpus") {
+        CHECK_ARG
+        params.speculative.suffix_corpus = argv[i];
         return true;
     }
     if (arg == "-a" || arg == "--alias") {
@@ -2683,12 +2708,15 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  per-step     save SSM state per draft step in VRAM; no re-decode on rejection\n"
                                                               "  gpu-fallback copy state to GPU buffer; re-decode on rejection\n"
                                                               "  cpu          serialise state via llama_state_seq; re-decode on rejection" });
-    options.push_back({ "*", "--spec-type Name [none | ngram - cache | ngram - simple | ngram - map - k | ngram - map - k4v | ngram - mod]", "type of speculative decoding to use when no draft model is provided (default: %d)\n", (int)params.speculative.type});
+    options.push_back({ "*", "--spec-type Name [none | ngram - cache | ngram - simple | ngram - map - k | ngram - map - k4v | ngram - mod | suffix]", "type of speculative decoding to use when no draft model is provided (default: %d)\n", (int)params.speculative.type});
     options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n",params.speculative.ngram_size_n });
 
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
 
     options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
+    options.push_back({ "*", "--suffix-pattern-len N",   "minimum context match length for suffix decoding (default: %d)", params.speculative.suffix_min_match_len });
+    options.push_back({ "*", "--suffix-max-depth N",     "suffix tree maximum depth for suffix decoding (default: %d)",    params.speculative.suffix_max_depth });
+    options.push_back({ "*", "--suffix-corpus PATH",     "corpus file to pre-warm the suffix tree: .json (array of strings or conversation messages) or .bin (raw int32 token IDs)" });
     options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
 
     options.push_back({ "retrieval" });

@@ -146,6 +146,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_SUFFIX,        // self-speculative suffix-decoding (arXiv:2411.04975)
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
@@ -184,6 +185,11 @@ struct common_params_speculative {
     uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
+
+    // suffix-decoding specific
+    int32_t     suffix_min_match_len = 5;  // minimum context match length
+    int32_t     suffix_max_depth     = 64; // suffix tree maximum depth
+    std::string suffix_corpus;             // path to corpus file for offline pre-warming (.json or .bin)
 
     std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding          // NOLINT

@@ -2493,7 +2493,11 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         result[il] += size;
-        if (auto pos = name.rfind(".bias"); pos < name.size() && name.size() - pos == 4) {
+        if (auto pos = name.rfind(".bias"); pos < name.size() && name.size() - pos == 5) {
+            // bias, we don't need to account for those
+            continue;
+        }
+        if (auto pos = name.rfind(".scale"); pos < name.size() && name.size() - pos == 6) {
             // bias, we don't need to account for those
             continue;
         }
@@ -2849,7 +2853,7 @@ static bool llm_load_tensors(
                     }
                     if (has_experts) {
                         LLAMA_LOG_INFO("Adding experts CPU overrides for layer %d\n", il);
-                        std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                        std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.(weight|scale))";
                         auto & o = overrides.emplace_back();
                         o.pattern = strdup(pattern.c_str());
                         o.buft = buft;
@@ -2924,7 +2928,7 @@ static bool llm_load_tensors(
                             }
                             if (has_experts) {
                                 LLAMA_LOG_INFO("Adding experts CPU overrides for layer %d in device %d\n", il, id);
-                                std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                                std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.(weight|scale))";
                                 auto & o = overrides.emplace_back();
                                 o.pattern = strdup(pattern.c_str());
                                 o.buft = buft;

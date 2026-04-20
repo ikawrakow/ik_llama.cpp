@@ -1890,14 +1890,14 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
     for (auto & entry : it->second) {
         auto base_name = ::format(entry.second.c_str(), il);
         auto this_name = base_name + ".weight";
-        if (tensor_name.find(this_name) == 0) {
+        if (tensor_name == this_name) {
             return entry.first;
         }
         this_name = base_name + ".bias";
-        if (tensor_name.find(this_name) == 0) {
+        if (tensor_name == this_name) {
             return entry.first;
         }
-        if (tensor_name.find(base_name) == 0) {
+        if (tensor_name == base_name) {
             return entry.first;
         }
     }
