@@ -798,11 +798,21 @@ extern "C" {
     LLAMA_API void llama_kv_cache_clear(
             struct llama_context * ctx);
 
-    // GPU-resident checkpoint for recurrent/hybrid speculative decoding
+    // Checkpoint for recurrent/hybrid speculative decoding
     LLAMA_API bool llama_kv_cache_checkpoint_save(struct llama_context * ctx);
     LLAMA_API bool llama_kv_cache_checkpoint_restore(struct llama_context * ctx);
     LLAMA_API void llama_kv_cache_checkpoint_delete(struct llama_context * ctx);
     LLAMA_API bool llama_kv_cache_checkpoint_supported(struct llama_context * ctx);
+
+    // Per-step SSM state checkpoints for speculative decoding
+    // Enables saving recurrent state after each token step during forward pass
+    LLAMA_API bool llama_kv_cache_set_per_step_save(struct llama_context * ctx, bool enable, int max_tokens);
+    // Restore SSM state from per-step checkpoint at given step index
+    LLAMA_API bool llama_kv_cache_per_step_restore(struct llama_context * ctx, int step);
+
+    // Update the position of a recurrent cell for a given sequence.
+    // Used by per-step restore to fix the cell's position to match the restored state.
+    LLAMA_API void llama_kv_cache_set_cell_pos(struct llama_context * ctx, llama_seq_id seq_id, llama_pos pos);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails

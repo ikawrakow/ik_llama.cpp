@@ -9940,7 +9940,8 @@ struct ggml_tensor * ggml_delta_net(
         struct ggml_tensor  * v,
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
-        struct ggml_tensor  * state) {
+        struct ggml_tensor  * state,
+        bool save_all_steps) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
     GGML_ASSERT(ggml_is_contiguous(state));
@@ -9971,9 +9972,11 @@ struct ggml_tensor * ggml_delta_net(
     const int64_t output_size = S_v * H_v * n_tokens * n_seqs;
     const int64_t state_size  = S_v * S_v * H_v * n_seqs;
 
-    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_size + state_size);
+    const int64_t state_slots = save_all_steps ? n_tokens : 1;
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_size + state_slots * state_size);
 
     result->op     = GGML_OP_DELTA_NET;
+    result->op_params[1] = save_all_steps ? 1 : 0;
     result->src[0] = q;
     result->src[1] = k;
     result->src[2] = v;
@@ -22654,17 +22657,19 @@ static void ggml_compute_forward_delta_net_f32(
     const float * beta_data = (const float *) src4->data;
     const float * state_in  = (const float *) src5->data;
     float * out_data  = (float *) dst->data;
-    float * state_out = out_data + output_size;
 
     const int ith = params->ith;
     const int nth = params->nth;
 
     int repeat_type = dst->op_params[0];
+    // op_params[1] (save_all_steps) is handled by the CUDA backend only;
+    // the CPU path always writes to the single state slot after the output.
+    float * state_working = out_data + output_size;
 
     if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
                 src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
                 q_data, k_data, v_data, g_data, beta_data, state_in,
-                out_data, state_out, ith, nth)) {
+                out_data, state_working, ith, nth)) {
         return;
     }
 
@@ -22694,10 +22699,10 @@ static void ggml_compute_forward_delta_net_f32(
         const int64_t out_token_stride = head_dim * n_heads;
 
         for (int64_t i = 0; i < head_dim * head_dim; ++i) {
-            state_out[state_head_offset + i] = state_in[state_head_offset + i];
+            state_working[state_head_offset + i] = state_in[state_head_offset + i];
         }
 
-        float * state = state_out + state_head_offset;
+        float * state = state_working + state_head_offset;
 
         for (int64_t t = 0; t < n_tokens; ++t) {
             const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;

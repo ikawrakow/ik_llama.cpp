@@ -1227,7 +1227,10 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
         int           split_idx; // -1 for non-split
     };
 
-    std::map<ggml_backend_buffer_type_t, std::vector<tensor_entry>> buft_entries;
+    const bool conv_only_shadow = save_per_step_ssm && ckpt.per_step_conv_state_dim > 0;
+    std::vector<tensor_entry> nonsplit_entries;
+
+    std::map<ggml_backend_buffer_type_t, std::vector<tensor_entry>> split_buft_entries;
 
     uint32_t split_s_idx = 0;
     for (uint32_t il = 0; il < n_layer; ++il) {
@@ -1237,25 +1240,21 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
 
         auto * extra = s_l[il]->extra;
         if (extra != nullptr) {
-            // Split tensor — shadow each per-device split tensor individually
             auto * split_info = (const ggml_split_tensor_t *)extra;
             for (int d = 0; d < split_info->n_device; ++d) {
                 if (split_info->splits[d] == nullptr) continue;
                 ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(split_info->splits[d]->buffer);
-                buft_entries[buft].push_back({split_info->splits[d], il, d});
+                split_buft_entries[buft].push_back({split_info->splits[d], il, d});
             }
             split_s_idx++;
         } else {
-            // Non-split tensor
-            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(s_l[il]->buffer);
-            buft_entries[buft].push_back({s_l[il], il, -1});
+            nonsplit_entries.push_back({s_l[il], il, -1});
         }
     }
 
-    // Allocate shadow tensors grouped by buffer type
-    for (auto & [buft, entries] : buft_entries) {
+    if (!nonsplit_entries.empty()) {
         ggml_init_params params = {
-            /*.mem_size   =*/ entries.size() * ggml_tensor_overhead(),
+            /*.mem_size   =*/ nonsplit_entries.size() * ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
@@ -1265,35 +1264,63 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
             return false;
         }
 
-        for (auto & entry : entries) {
-            ggml_tensor * shadow = ggml_dup_tensor(ctx, entry.primary);
-            ggml_format_name(shadow, "shadow_s_l%d_d%d", entry.il, entry.split_idx);
-            entry.primary = shadow; // temporarily store shadow in entry for buffer allocation
+        for (auto & entry : nonsplit_entries) {
+            // Only need the conv portion when per-step is active.
+            const int64_t nelems = conv_only_shadow
+                ? ckpt.per_step_conv_state_dim
+                : (int64_t)ggml_nelements(entry.primary);
+            ggml_tensor * shadow = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, nelems);
+            ggml_format_name(shadow, "shadow_s_l%d", entry.il);
+            ckpt.s_l_shadow[entry.il] = shadow;
         }
 
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_cpu_buffer_type());
         if (!buf) {
-            LLAMA_LOG_ERROR("%s: failed to allocate buffer for shadow tensors\n", __func__);
+            LLAMA_LOG_ERROR("%s: failed to allocate CPU buffer for shadow tensors\n", __func__);
             ggml_free(ctx);
             return false;
         }
         ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: %10s shadow buffer size = %8.2f MiB\n", __func__,
+        LLAMA_LOG_INFO("%s: CPU shadow buffer = %8.2f MiB (%s)\n", __func__,
+                       ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0,
+                       conv_only_shadow ? "conv-state only" : "full recurrent state");
+        ckpt.shadow_ctxs.push_back(ctx);
+        ckpt.shadow_bufs.push_back(buf);
+    }
+
+    // Allocate split shadows on their respective devices
+    for (auto & [buft, entries] : split_buft_entries) {
+        ggml_init_params params = {
+            /*.mem_size   =*/ entries.size() * ggml_tensor_overhead(),
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context * ctx = ggml_init(params);
+        if (!ctx) {
+            LLAMA_LOG_ERROR("%s: failed to create ggml context for split shadow tensors\n", __func__);
+            return false;
+        }
+
+        for (auto & entry : entries) {
+            ggml_tensor * shadow = ggml_dup_tensor(ctx, entry.primary);
+            ggml_format_name(shadow, "shadow_s_l%d_d%d", entry.il, entry.split_idx);
+            entry.primary = shadow;
+        }
+
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+        if (!buf) {
+            LLAMA_LOG_ERROR("%s: failed to allocate buffer for split shadow tensors\n", __func__);
+            ggml_free(ctx);
+            return false;
+        }
+        ggml_backend_buffer_clear(buf, 0);
+        LLAMA_LOG_INFO("%s: %10s split shadow buffer = %8.2f MiB\n", __func__,
                        ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
         ckpt.shadow_ctxs.push_back(ctx);
         ckpt.shadow_bufs.push_back(buf);
     }
 
-    // Build shadow lookup: for non-split layers, store directly in s_l_shadow
-    for (auto & [buft, entries] : buft_entries) {
-        for (auto & entry : entries) {
-            if (entry.split_idx == -1) {
-                ckpt.s_l_shadow[entry.il] = entry.primary;
-            }
-        }
-    }
-
-    // Build shadow split tensors
+    // Build split shadow lookup
     ckpt.split_s_l_shadow.resize(split_s_l.size());
     split_s_idx = 0;
     for (uint32_t il = 0; il < n_layer; ++il) {
@@ -1307,9 +1334,8 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
 
         for (int d = 0; d < split_info->n_device; ++d) {
             if (split_info->splits[d] == nullptr) continue;
-            // Find corresponding shadow tensor from buft_entries
             ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(split_info->splits[d]->buffer);
-            for (auto & entry : buft_entries[buft]) {
+            for (auto & entry : split_buft_entries[buft]) {
                 if (entry.il == il && entry.split_idx == d) {
                     shadow_split[d] = entry.primary;
                     break;
@@ -1330,12 +1356,10 @@ bool llama_kv_cache::checkpoint_save() {
 
     const uint32_t n_layer = (uint32_t)s_l.size();
 
-    // 1. Snapshot cell metadata (small, host-side)
     ckpt.cells_snapshot = cells;
     ckpt.head_snapshot  = head;
     ckpt.used_snapshot  = used;
 
-    // 2. Copy tensors: primary -> shadow (GPU-to-GPU when on same device)
     uint32_t split_s_idx = 0;
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (s_l[il] == nullptr) {
@@ -1343,7 +1367,6 @@ bool llama_kv_cache::checkpoint_save() {
         }
 
         if (s_l[il]->extra != nullptr) {
-            // Split tensor — copy per-device splits individually
             auto * split_info = (const ggml_split_tensor_t *)s_l[il]->extra;
             auto & shadow_split = ckpt.split_s_l_shadow[split_s_idx];
             for (int d = 0; d < split_info->n_device; ++d) {
@@ -1353,8 +1376,8 @@ bool llama_kv_cache::checkpoint_save() {
             }
             split_s_idx++;
         } else {
-            // Non-split tensor
-            ggml_backend_tensor_copy(s_l[il], ckpt.s_l_shadow[il]);
+            const size_t nbytes = ggml_nbytes(ckpt.s_l_shadow[il]);
+            ggml_backend_tensor_get(s_l[il], ckpt.s_l_shadow[il]->data, 0, nbytes);
         }
     }
 
@@ -1370,12 +1393,10 @@ bool llama_kv_cache::checkpoint_restore() {
 
     const uint32_t n_layer = (uint32_t)s_l.size();
 
-    // 1. Restore cell metadata
     cells = ckpt.cells_snapshot;
     head  = ckpt.head_snapshot;
     used  = ckpt.used_snapshot;
 
-    // 2. Copy tensors: shadow -> primary (GPU-to-GPU)
     uint32_t split_s_idx = 0;
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (s_l[il] == nullptr) {
@@ -1383,7 +1404,6 @@ bool llama_kv_cache::checkpoint_restore() {
         }
 
         if (s_l[il]->extra != nullptr) {
-            // Split tensor — copy per-device splits individually
             auto * split_info = (const ggml_split_tensor_t *)s_l[il]->extra;
             auto & shadow_split = ckpt.split_s_l_shadow[split_s_idx];
             for (int d = 0; d < split_info->n_device; ++d) {
@@ -1393,7 +1413,7 @@ bool llama_kv_cache::checkpoint_restore() {
             }
             split_s_idx++;
         } else {
-            // Non-split tensor
+            GGML_ASSERT(ggml_nbytes(ckpt.s_l_shadow[il]) == ggml_nbytes(s_l[il]));
             ggml_backend_tensor_copy(ckpt.s_l_shadow[il], s_l[il]);
         }
     }
@@ -1403,6 +1423,159 @@ bool llama_kv_cache::checkpoint_restore() {
 
 void llama_kv_cache::checkpoint_delete() {
     ckpt.saved = false;
+}
+
+bool llama_kv_cache::per_step_alloc(int max_tokens) {
+    if (ckpt.per_step_max_allocated >= max_tokens) {
+        return true;
+    }
+
+    if (!ckpt.per_step_ssm.empty()) {
+        for (struct ggml_context * ctx : ckpt.per_step_ctxs) {
+            ggml_free(ctx);
+        }
+        for (ggml_backend_buffer_t buf : ckpt.per_step_bufs) {
+            ggml_backend_buffer_free(buf);
+        }
+        ckpt.per_step_ctxs.clear();
+        ckpt.per_step_bufs.clear();
+        ckpt.per_step_ssm.clear();
+        ckpt.per_step_qkv.clear();
+        ckpt.per_step_max_allocated = 0;
+    }
+
+    const uint32_t n_layer = (uint32_t)s_l.size();
+    ckpt.per_step_ssm.resize(n_layer, nullptr);
+    ckpt.per_step_qkv.resize(n_layer, nullptr);
+
+    const int64_t ssm_state_dim = ckpt.per_step_ssm_state_size;
+    const int64_t conv_dim      = ckpt.per_step_conv_dim;
+    if (ssm_state_dim <= 0 || conv_dim <= 0) {
+        LLAMA_LOG_ERROR("%s: per_step dimensions not set (ssm=%lld, conv_dim=%lld)\n",
+                __func__, (long long)ssm_state_dim, (long long)conv_dim);
+        return false;
+    }
+
+    std::map<ggml_backend_buffer_type_t, std::vector<std::pair<uint32_t, ggml_backend_buffer_type_t>>> buft_layers;
+
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr) continue;
+        if (s_l[il]->extra != nullptr) continue;  // skip split tensors
+
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(s_l[il]->buffer);
+        buft_layers[buft].push_back({il, buft});
+    }
+
+    for (auto & [buft, layers] : buft_layers) {
+        // 2 tensors per layer: SSM states + qkv features
+        ggml_init_params params = {
+            /*.mem_size   =*/ layers.size() * 2 * ggml_tensor_overhead(),
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context * ctx = ggml_init(params);
+        if (!ctx) {
+            LLAMA_LOG_ERROR("%s: failed to create ggml context for per-step checkpoints\n", __func__);
+            return false;
+        }
+
+        for (auto & [il, bt] : layers) {
+            // SSM state: max_tokens * ssm_state_dim
+            ggml_tensor * t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * ssm_state_dim);
+            ggml_format_name(t_ssm, "per_step_ssm_l%d", il);
+            ckpt.per_step_ssm[il] = t_ssm;
+
+            // Conv features (qkv_mixed): max_tokens * conv_dim
+            ggml_tensor * t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * conv_dim);
+            ggml_format_name(t_qkv, "per_step_qkv_l%d", il);
+            ckpt.per_step_qkv[il] = t_qkv;
+        }
+
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+        if (!buf) {
+            LLAMA_LOG_ERROR("%s: failed to allocate buffer for per-step checkpoints\n", __func__);
+            ggml_free(ctx);
+            return false;
+        }
+        ggml_backend_buffer_clear(buf, 0);
+        LLAMA_LOG_INFO("%s: %10s per-step buffer = %8.2f MiB (max_tokens=%d, ssm+qkv)\n", __func__,
+                       ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, max_tokens);
+        ckpt.per_step_ctxs.push_back(ctx);
+        ckpt.per_step_bufs.push_back(buf);
+    }
+
+    ckpt.per_step_max_allocated = max_tokens;
+    return true;
+}
+
+bool llama_kv_cache::per_step_restore(int step) {
+    if (ckpt.per_step_ssm.empty() || step < 0) {
+        return false;
+    }
+
+    const int64_t ssm_state_dim  = ckpt.per_step_ssm_state_size;
+    const int64_t conv_state_dim = ckpt.per_step_conv_state_dim;
+    const int64_t conv_dim       = ckpt.per_step_conv_dim;
+    const int32_t d_conv         = ckpt.per_step_d_conv;
+    if (ssm_state_dim <= 0 || conv_dim <= 0 || d_conv <= 1) return false;
+
+    const int64_t ssm_bytes  = ssm_state_dim * sizeof(float);
+    const int64_t conv_bytes = conv_state_dim * sizeof(float);
+    const int32_t d_conv_m1  = d_conv - 1;  // number of columns in conv state
+
+    std::vector<float> ssm_buf(ssm_state_dim);
+    std::vector<float> conv_buf(conv_state_dim);      // reconstructed conv state
+    std::vector<float> old_conv_buf(conv_state_dim);   // pre-spec conv state from shadow
+    const int64_t qkv_needed = (int64_t)(step + 1) * conv_dim;
+    std::vector<float> qkv_buf(qkv_needed);
+
+    const uint32_t n_layer = (uint32_t)s_l.size();
+    int n_restored = 0;
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr || ckpt.per_step_ssm[il] == nullptr) continue;
+        if (s_l[il]->extra != nullptr) continue;
+
+        ggml_backend_tensor_get(ckpt.per_step_ssm[il], ssm_buf.data(),
+                (size_t)step * ssm_bytes, ssm_bytes);
+
+        if (ckpt.s_l_shadow[il] != nullptr) {
+            ggml_backend_tensor_get(ckpt.s_l_shadow[il], old_conv_buf.data(), 0, conv_bytes);
+        } else {
+            memset(old_conv_buf.data(), 0, conv_bytes);
+        }
+
+        if (ckpt.per_step_qkv[il] != nullptr) {
+            ggml_backend_tensor_get(ckpt.per_step_qkv[il], qkv_buf.data(), 0, qkv_needed * sizeof(float));
+        } else {
+            memset(qkv_buf.data(), 0, qkv_needed * sizeof(float));
+        }
+
+        for (int32_t col = 0; col < d_conv_m1; col++) {
+            int32_t src_token = step - (d_conv_m1 - 1) + col;  // e.g., K-2, K-1, K for d_conv=4
+            if (src_token >= 0) {
+                for (int64_t d = 0; d < conv_dim; d++) {
+                    conv_buf[col + d * d_conv_m1] = qkv_buf[d + (int64_t)src_token * conv_dim];
+                }
+            } else {
+                int32_t old_col = d_conv_m1 + src_token;  // maps to 0, 1, ... for early steps
+                if (old_col >= 0 && old_col < d_conv_m1) {
+                    for (int64_t d = 0; d < conv_dim; d++) {
+                        conv_buf[col + d * d_conv_m1] = old_conv_buf[old_col + d * d_conv_m1];
+                    }
+                } else {
+                    for (int64_t d = 0; d < conv_dim; d++) {
+                        conv_buf[col + d * d_conv_m1] = 0.0f;
+                    }
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(s_l[il], conv_buf.data(), 0, conv_bytes);
+        ggml_backend_tensor_set(s_l[il], ssm_buf.data(), conv_bytes, ssm_bytes);
+        n_restored++;
+    }
+
+    return true;
 }
 
 static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
@@ -6674,6 +6847,81 @@ void llama_kv_cache_checkpoint_delete(struct llama_context * ctx) {
 
 bool llama_kv_cache_checkpoint_supported(struct llama_context * ctx) {
     return ctx->kv_self.checkpoint_supported();
+}
+
+bool llama_kv_cache_set_per_step_save(struct llama_context * ctx, bool enable, int max_tokens) {
+    auto & kv = ctx->kv_self;
+
+    if (!enable) {
+        kv.save_per_step_ssm = false;
+        return false;
+    }
+
+    // Check if any recurrent layer has split state (graph split mode).
+    // Per-step restore can't handle split tensors — fall back to legacy path.
+    // Also require ALL recurrent layers to be on GPU (non-host backend),
+    // since per-step saves only work in the CUDA delta_net kernel.
+    // If any recurrent layer is on CPU, the per-step restore would leave
+    // CPU layers at the pre-spec position while GPU layers advance to step K.
+    bool has_gpu_layer = false;
+    bool has_cpu_layer = false;
+    for (const auto * sl : kv.s_l) {
+        if (sl == nullptr) continue;
+        if (sl->extra != nullptr) {
+            kv.save_per_step_ssm = false;
+            return false;
+        }
+        if (sl->buffer && !ggml_backend_buffer_is_host(sl->buffer)) {
+            has_gpu_layer = true;
+        } else if (sl->buffer) {
+            has_cpu_layer = true;
+        }
+    }
+    if (!has_gpu_layer || has_cpu_layer) {
+        // All recurrent layers on CPU or mixed CPU/GPU — per-step not supported.
+        if (has_cpu_layer && has_gpu_layer) {
+            LLAMA_LOG_INFO("%s: per-step disabled — mixed CPU/GPU recurrent layers\n", __func__);
+        }
+        kv.save_per_step_ssm = false;
+        return false;
+    }
+
+    // Initialize per-step checkpoint dimensions from model hparams (if not already set)
+    if (kv.ckpt.per_step_ssm_state_size <= 0) {
+        const auto & hparams = ctx->model.hparams;
+        const int64_t num_v_heads = hparams.ssm_dt_rank;
+        const int64_t head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+        const int64_t head_k_dim  = hparams.ssm_d_state;
+        const int64_t num_k_heads = hparams.ssm_n_group;
+        const int64_t key_dim     = head_k_dim * num_k_heads;
+        const int64_t value_dim   = head_v_dim * num_v_heads;
+        const int64_t conv_dim    = key_dim * 2 + value_dim;
+
+        kv.ckpt.per_step_ssm_state_size = head_v_dim * head_v_dim * num_v_heads;
+        kv.ckpt.per_step_conv_state_dim = (hparams.ssm_d_conv - 1) * conv_dim;
+        kv.ckpt.per_step_conv_dim = conv_dim;
+        kv.ckpt.per_step_d_conv = hparams.ssm_d_conv;
+    }
+
+    // Allocate (or reallocate if max_tokens is larger than current)
+    if (!kv.per_step_alloc(max_tokens)) {
+        kv.save_per_step_ssm = false;
+        return false;
+    }
+
+    kv.save_per_step_ssm = true;
+    return true;
+}
+
+bool llama_kv_cache_per_step_restore(struct llama_context * ctx, int step) {
+    return ctx->kv_self.per_step_restore(step);
+}
+
+void llama_kv_cache_set_cell_pos(struct llama_context * ctx, llama_seq_id seq_id, llama_pos pos) {
+    auto & kv = ctx->kv_self;
+    if (seq_id >= 0 && (uint32_t)seq_id < kv.size) {
+        kv.cells[seq_id].pos = pos;
+    }
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
