@@ -8,7 +8,6 @@ struct delta_net {
     delta_net(llama_context & lctx, const llama_batch & batch);
     ~delta_net();
 
-    // When true, the delta_net kernel saves recurrent state after each token step.
     // Used for speculative decoding to enable per-step state checkpoint restoration.
     bool save_per_step_states = false;
 

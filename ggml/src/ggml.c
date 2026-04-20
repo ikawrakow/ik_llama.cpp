@@ -22662,7 +22662,7 @@ static void ggml_compute_forward_delta_net_f32(
     const int nth = params->nth;
 
     int repeat_type = dst->op_params[0];
-    // op_params[1] (save_all_steps) is handled by the CUDA backend only;
+    // save_all_steps is handled by the CUDA backend only;
     // the CPU path always writes to the single state slot after the output.
     float * state_working = out_data + output_size;
 

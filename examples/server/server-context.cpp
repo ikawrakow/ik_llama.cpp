@@ -26,7 +26,6 @@ void server_speculative_checkpoint::clear() {
     per_step_enabled = false;
     n_past = 0;
     sampled = LLAMA_TOKEN_NULL;
-    data.clear();
 
     if (sampler != nullptr) {
         common_sampler_free(sampler);
@@ -34,52 +33,36 @@ void server_speculative_checkpoint::clear() {
     }
 }
 
-static void discard_speculative_checkpoint(server_slot & slot, llama_context * ctx, bool gpu_ckpt) {
+static void discard_speculative_checkpoint(server_slot & slot, llama_context * ctx) {
     slot.spec_ckpt.clear();
-
-    if (gpu_ckpt) {
-        llama_kv_cache_set_per_step_save(ctx, false, 0);
-        llama_kv_cache_checkpoint_delete(ctx);
-    }
+    llama_spec_ckpt_discard(ctx);
 }
 
-static bool save_speculative_checkpoint(server_slot & slot, llama_model * model, llama_context * ctx, bool gpu_ckpt) {
+static bool save_speculative_checkpoint(server_slot & slot, llama_model * model, llama_context * ctx, int ckpt_mode) {
     slot.spec_ckpt.clear();
     slot.spec_ckpt.n_past = slot.n_past - (int32_t)(slot.drafted.size() + 1);
     slot.spec_ckpt.sampled = slot.sampled;
 
-    if (gpu_ckpt) {
-        // Enable per-step SSM state saves for the verification forward pass.
-        // The delta_net kernel saves SSM state after each token step, allowing us
-        // to skip the expensive re-decode on rejection.
-        // Returns false if per-step is unsupported (e.g., split tensors in graph split mode).
-        const int max_tokens = (int)slot.drafted.size() + 1;
-        slot.spec_ckpt.per_step_enabled = llama_kv_cache_set_per_step_save(ctx, true, max_tokens);
-
-        // Always save full checkpoint (conv + SSM state).
-        // On rejection with per-step: restore conv from here, SSM from per-step.
-        // On rejection without per-step: full restore + re-decode (legacy path).
-        slot.spec_ckpt.valid = llama_kv_cache_checkpoint_save(ctx);
-    } else {
-        const size_t ckpt_size = llama_state_seq_get_size(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        slot.spec_ckpt.data.resize(ckpt_size);
-
-        const size_t written = llama_state_seq_get_data(ctx, slot.spec_ckpt.data.data(), ckpt_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        slot.spec_ckpt.valid = (written > 0);
+    const int max_tokens = (int)slot.drafted.size() + 1;
+    const int actual_mode = llama_spec_ckpt_init(ctx, ckpt_mode, max_tokens);
+    if (actual_mode == LLAMA_SPEC_CKPT_NONE) {
+        return false;
     }
+    slot.spec_ckpt.per_step_enabled = (actual_mode == LLAMA_SPEC_CKPT_PER_STEP);
 
+    slot.spec_ckpt.valid = llama_spec_ckpt_save(ctx, slot.id);
     if (!slot.spec_ckpt.valid) {
+        llama_spec_ckpt_discard(ctx);
         return false;
     }
 
     slot.spec_ckpt.sampler = common_sampler_init(model, slot.sparams);
     if (slot.spec_ckpt.sampler == nullptr) {
-        discard_speculative_checkpoint(slot, ctx, gpu_ckpt);
+        discard_speculative_checkpoint(slot, ctx);
         return false;
     }
 
     common_sampler_clone(slot.ctx_sampling, slot.spec_ckpt.sampler);
-
     return true;
 }
 
@@ -3611,6 +3594,72 @@ void server_context::extend_context(const int32_t n_tokens) {
     }
 }
 
+// Restore recurrent state and re-decode accepted tokens after speculative-decode rejection.
+static void restore_speculative_checkpoint(
+        server_slot & slot, llama_context * ctx, llama_model * model,
+        const std::vector<llama_token> & ids, int n_draft) {
+    if (slot.spec_ckpt.per_step_enabled) {
+        const int step = (int)ids.size() - 1;
+        llama_spec_ckpt_restore(ctx, slot.id, slot.spec_ckpt.n_past, step);
+
+        if (slot.spec_ckpt.sampler) {
+            common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
+        }
+        for (llama_token id : ids) {
+            common_sampler_accept(slot.ctx_sampling, ctx, id, true);
+        }
+
+        SLT_DBG(slot, "per-step restore: step=%d (rejected %d drafts)\n",
+            step, (int)(n_draft - (ids.size() - 1)));
+    } else {
+        // Restore pre-speculation recurrent state then re-decode accepted tokens.
+        llama_spec_ckpt_restore(ctx, slot.id, slot.spec_ckpt.n_past, 0);
+
+        if (slot.spec_ckpt.sampler) {
+            common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
+        }
+
+        if (!ids.empty()) {
+            // Re-decode to advance recurrent state to the accepted position.
+            const int n_re = (int)ids.size();
+            llama_batch re_batch = llama_batch_init(n_re, 0, 1);
+            common_batch_add(re_batch, slot.spec_ckpt.sampled, slot.spec_ckpt.n_past, { slot.id }, n_re == 1);
+            for (int j = 0; j < n_re - 1; j++) {
+                common_batch_add(re_batch, ids[j], slot.spec_ckpt.n_past + 1 + j, { slot.id }, j == n_re - 2);
+            }
+
+            if (slot.has_mtp) {
+                llama_set_embeddings(ctx, true);
+            }
+
+            const int ret = llama_decode(ctx, re_batch);
+            if (ret != 0) {
+                SLT_ERR(slot, "failed to re-decode accepted tokens after checkpoint restore: %d\n", ret);
+            }
+
+            if (slot.has_mtp) {
+                llama_set_embeddings(ctx, false);
+                const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                const float * emb = llama_get_embeddings_ith(ctx, -1);
+                if (emb) {
+                    slot.mtp_hidden_state.resize(n_embd);
+                    memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                }
+            }
+
+            for (llama_token id : ids) {
+                common_sampler_accept(slot.ctx_sampling, ctx, id, true);
+            }
+
+            llama_batch_free(re_batch);
+            SLT_DBG(slot, "spec checkpoint restored: re-decoded %d tokens (rejected %d drafts)\n",
+                n_re, (int)(n_draft - (ids.size() - 1)));
+        }
+    }
+
+    discard_speculative_checkpoint(slot, ctx);
+}
+
 void server_context::speculative_decoding_accept() {
     for (auto& slot : slots) {
         if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch_dft.empty()) {
@@ -3673,90 +3722,11 @@ void server_context::speculative_decoding_accept() {
 
         // for recurrent/hybrid models: if any drafts were rejected, restore recurrent state
         const bool any_rejected = (ids.size() - 1) < n_draft;
-        const bool gpu_ckpt = llama_kv_cache_checkpoint_supported(ctx);
-        const bool has_per_step = slot.spec_ckpt.valid && slot.spec_ckpt.per_step_enabled;
         if (any_rejected && slot.spec_ckpt.valid) {
-            if (has_per_step) {
-                const int step = (int)ids.size() - 1;
-
-                // Keep accepted attention KV from the verification pass and only fix the
-                // recurrent state plus remove rejected positions.
-                llama_kv_cache_per_step_restore(ctx, step);
-
-                const llama_pos accepted_pos = slot.spec_ckpt.n_past + step;
-                llama_kv_cache_set_cell_pos(ctx, slot.id, accepted_pos);
-                llama_kv_cache_seq_rm(ctx, slot.id, accepted_pos + 1, -1);
-
-                // Restore sampler state
-                if (slot.spec_ckpt.sampler) {
-                    common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
-                }
-                for (llama_token id : ids) {
-                    common_sampler_accept(slot.ctx_sampling, ctx, id, true);
-                }
-
-                SLT_DBG(slot, "per-step restore: step=%d (rejected %d drafts)\n",
-                    step, (int)(n_draft - (ids.size() - 1)));
-
-                discard_speculative_checkpoint(slot, ctx, gpu_ckpt);
-            } else {
-                // Legacy path: full checkpoint restore + re-decode
-                if (gpu_ckpt) {
-                    llama_kv_cache_checkpoint_restore(ctx);
-                } else {
-                    llama_state_seq_set_data(ctx, slot.spec_ckpt.data.data(), slot.spec_ckpt.data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                }
-
-                llama_kv_cache_seq_rm(ctx, slot.id, slot.spec_ckpt.n_past, -1);
-
-                // restore sampler state (RNG, grammar, prev tokens)
-                if (slot.spec_ckpt.sampler) {
-                    common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
-                }
-
-                if (!ids.empty()) {
-                    // Re-decode to restore the recurrent state after checkpoint restore.
-                    const int n_re = (int)ids.size();
-                    llama_batch re_batch = llama_batch_init(n_re, 0, 1);
-                    common_batch_add(re_batch, slot.spec_ckpt.sampled, slot.spec_ckpt.n_past, { slot.id }, n_re == 1);
-                    for (int j = 0; j < n_re - 1; j++) {
-                        const bool is_last = (j == n_re - 2);
-                        common_batch_add(re_batch, ids[j], slot.spec_ckpt.n_past + 1 + j, { slot.id }, is_last);
-                    }
-
-                    if (slot.has_mtp) {
-                        llama_set_embeddings(ctx, true);
-                    }
-
-                    const int ret = llama_decode(ctx, re_batch);
-                    if (ret != 0) {
-                        SLT_ERR(slot, "failed to re-decode accepted tokens after checkpoint restore: %d\n", ret);
-                    }
-
-                    if (slot.has_mtp) {
-                        llama_set_embeddings(ctx, false);
-                        const int n_embd = llama_model_n_embd(llama_get_model(ctx));
-                        const float * emb = llama_get_embeddings_ith(ctx, -1);
-                        if (emb) {
-                            slot.mtp_hidden_state.resize(n_embd);
-                            memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
-                        }
-                    }
-
-                    for (llama_token id : ids) {
-                        common_sampler_accept(slot.ctx_sampling, ctx, id, true);
-                    }
-
-                    llama_batch_free(re_batch);
-                    SLT_DBG(slot, "spec checkpoint restored (gpu=%s): re-decoded %d tokens (rejected %d drafts)\n",
-                        gpu_ckpt ? "yes" : "no", n_re, (int)(n_draft - (ids.size() - 1)));
-                }
-
-                discard_speculative_checkpoint(slot, ctx, gpu_ckpt);
-            }
+            restore_speculative_checkpoint(slot, ctx, model, ids, n_draft);
         } else {
             llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
-            discard_speculative_checkpoint(slot, ctx, gpu_ckpt);
+            discard_speculative_checkpoint(slot, ctx);
         }
 
         for (size_t i = 0; i < ids.size(); ++i) {
@@ -4330,15 +4300,16 @@ void server_context::update_slots() {
     llama_set_embeddings(ctx, batch_type == 1);
 
     if (llama_model_has_recurrent(model)) {
-        const bool gpu_ckpt = llama_kv_cache_checkpoint_supported(ctx);
+        const int ckpt_mode = params_base.speculative.recurrent_ckpt_mode;
 
         for (auto & slot : slots) {
             if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch_dft.empty()) {
                 continue;
             }
-            if (save_speculative_checkpoint(slot, model, ctx, gpu_ckpt)) {
-                SLT_DBG(slot, "spec checkpoint saved (gpu=%s), n_past_pre_spec=%d\n",
-                    gpu_ckpt ? "yes" : "no", slot.spec_ckpt.n_past);
+            if (save_speculative_checkpoint(slot, model, ctx, ckpt_mode)) {
+                const char * mode_name = slot.spec_ckpt.per_step_enabled ? "per-step" : "shadow/cpu";
+                SLT_DBG(slot, "spec checkpoint saved (mode=%s), n_past_pre_spec=%d\n",
+                    mode_name, slot.spec_ckpt.n_past);
             } else {
                 SLT_WRN(slot, "%s", "failed to save spec checkpoint\n");
             }

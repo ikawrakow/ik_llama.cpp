@@ -6833,95 +6833,166 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
 }
 
-bool llama_kv_cache_checkpoint_save(struct llama_context * ctx) {
-    return ctx->kv_self.checkpoint_save();
-}
-
-bool llama_kv_cache_checkpoint_restore(struct llama_context * ctx) {
-    return ctx->kv_self.checkpoint_restore();
-}
-
-void llama_kv_cache_checkpoint_delete(struct llama_context * ctx) {
-    ctx->kv_self.checkpoint_delete();
-}
-
-bool llama_kv_cache_checkpoint_supported(struct llama_context * ctx) {
-    return ctx->kv_self.checkpoint_supported();
-}
-
-bool llama_kv_cache_set_per_step_save(struct llama_context * ctx, bool enable, int max_tokens) {
-    auto & kv = ctx->kv_self;
-
-    if (!enable) {
-        kv.save_per_step_ssm = false;
-        return false;
-    }
-
-    // Check if any recurrent layer has split state (graph split mode).
-    // Per-step restore can't handle split tensors — fall back to legacy path.
-    // Also require ALL recurrent layers to be on GPU (non-host backend),
-    // since per-step saves only work in the CUDA delta_net kernel.
-    // If any recurrent layer is on CPU, the per-step restore would leave
-    // CPU layers at the pre-spec position while GPU layers advance to step K.
-    bool has_gpu_layer = false;
-    bool has_cpu_layer = false;
+// Unified speculative-checkpoint
+static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, int max_tokens) {
+    // Graph-split tensors and mixed CPU/GPU configurations are not supported.
+    bool has_gpu = false;
+    bool has_cpu = false;
     for (const auto * sl : kv.s_l) {
-        if (sl == nullptr) continue;
-        if (sl->extra != nullptr) {
+        if (!sl) continue;
+        if (sl->extra) {
             kv.save_per_step_ssm = false;
             return false;
         }
         if (sl->buffer && !ggml_backend_buffer_is_host(sl->buffer)) {
-            has_gpu_layer = true;
+            has_gpu = true;
         } else if (sl->buffer) {
-            has_cpu_layer = true;
+            has_cpu = true;
         }
     }
-    if (!has_gpu_layer || has_cpu_layer) {
-        // All recurrent layers on CPU or mixed CPU/GPU — per-step not supported.
-        if (has_cpu_layer && has_gpu_layer) {
+    if (!has_gpu || has_cpu) {
+        if (has_cpu && has_gpu) {
             LLAMA_LOG_INFO("%s: per-step disabled — mixed CPU/GPU recurrent layers\n", __func__);
         }
         kv.save_per_step_ssm = false;
         return false;
     }
 
-    // Initialize per-step checkpoint dimensions from model hparams (if not already set)
+    // Populate per-step dimensions from hparams
     if (kv.ckpt.per_step_ssm_state_size <= 0) {
-        const auto & hparams = ctx->model.hparams;
-        const int64_t num_v_heads = hparams.ssm_dt_rank;
-        const int64_t head_v_dim  = hparams.ssm_d_inner / num_v_heads;
-        const int64_t head_k_dim  = hparams.ssm_d_state;
-        const int64_t num_k_heads = hparams.ssm_n_group;
-        const int64_t key_dim     = head_k_dim * num_k_heads;
-        const int64_t value_dim   = head_v_dim * num_v_heads;
-        const int64_t conv_dim    = key_dim * 2 + value_dim;
+        const auto & hp       = model.hparams;
+        const int64_t nv      = hp.ssm_dt_rank;
+        const int64_t head_v  = hp.ssm_d_inner / nv;
+        const int64_t head_k  = hp.ssm_d_state;
+        const int64_t nk      = hp.ssm_n_group;
+        const int64_t key_dim = head_k * nk;
+        const int64_t val_dim = head_v * nv;
+        const int64_t conv_dim = key_dim * 2 + val_dim;
 
-        kv.ckpt.per_step_ssm_state_size = head_v_dim * head_v_dim * num_v_heads;
-        kv.ckpt.per_step_conv_state_dim = (hparams.ssm_d_conv - 1) * conv_dim;
-        kv.ckpt.per_step_conv_dim = conv_dim;
-        kv.ckpt.per_step_d_conv = hparams.ssm_d_conv;
+        kv.ckpt.per_step_ssm_state_size = head_v * head_v * nv;
+        kv.ckpt.per_step_conv_state_dim = (hp.ssm_d_conv - 1) * conv_dim;
+        kv.ckpt.per_step_conv_dim       = conv_dim;
+        kv.ckpt.per_step_d_conv         = hp.ssm_d_conv;
     }
 
-    // Allocate (or reallocate if max_tokens is larger than current)
     if (!kv.per_step_alloc(max_tokens)) {
         kv.save_per_step_ssm = false;
         return false;
     }
 
-    kv.save_per_step_ssm = true;
     return true;
 }
 
-bool llama_kv_cache_per_step_restore(struct llama_context * ctx, int step) {
-    return ctx->kv_self.per_step_restore(step);
+int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
+    auto & kv = ctx->kv_self;
+
+    kv.save_per_step_ssm     = false;
+    kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_NONE;
+
+    if (!kv.checkpoint_supported()) {
+        return (int)LLAMA_SPEC_CKPT_NONE;
+    }
+
+    int requested = mode;
+
+    // prefer PER_STEP → GPU_FALLBACK → CPU
+    if (requested == LLAMA_SPEC_CKPT_AUTO) {
+        requested = LLAMA_SPEC_CKPT_PER_STEP;
+    }
+
+    if (requested == LLAMA_SPEC_CKPT_PER_STEP) {
+        if (spec_ckpt_try_per_step(kv, ctx->model, max_tokens)) {
+            kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_PER_STEP;
+            return (int)LLAMA_SPEC_CKPT_PER_STEP;
+        }
+        if (mode == LLAMA_SPEC_CKPT_PER_STEP) {
+            LLAMA_LOG_WARN("%s: per-step not available, falling back to GPU fallback mode\n", __func__);
+        }
+        requested = LLAMA_SPEC_CKPT_GPU_FALLBACK;
+    }
+
+    if (requested == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
+        kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_GPU_FALLBACK;
+        return (int)LLAMA_SPEC_CKPT_GPU_FALLBACK;
+    }
+
+    kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_CPU;
+    return (int)LLAMA_SPEC_CKPT_CPU;
 }
 
-void llama_kv_cache_set_cell_pos(struct llama_context * ctx, llama_seq_id seq_id, llama_pos pos) {
+bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
     auto & kv = ctx->kv_self;
-    if (seq_id >= 0 && (uint32_t)seq_id < kv.size) {
-        kv.cells[seq_id].pos = pos;
+
+    switch (kv.ckpt.selected_spec_mode) {
+        case LLAMA_SPEC_CKPT_PER_STEP:
+            kv.save_per_step_ssm = true;
+            return kv.checkpoint_save();
+
+        case LLAMA_SPEC_CKPT_GPU_FALLBACK:
+            return kv.checkpoint_save();
+
+        case LLAMA_SPEC_CKPT_CPU: {
+            const size_t need = llama_state_seq_get_size(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            kv.ckpt.cpu_state_data.resize(need);
+            const size_t written = llama_state_seq_get_data(
+                ctx, kv.ckpt.cpu_state_data.data(), need, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            kv.ckpt.cpu_state_data.resize(written);
+            return written > 0;
+        }
+
+        default:
+            return false;
     }
+}
+
+bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
+                              llama_pos n_past, int accepted_step) {
+    auto & kv = ctx->kv_self;
+
+    switch (kv.ckpt.selected_spec_mode) {
+        case LLAMA_SPEC_CKPT_PER_STEP: {
+            if (!kv.per_step_restore(accepted_step)) {
+                return false;
+            }
+            const llama_pos accepted_pos = n_past + accepted_step;
+            if (seq_id >= 0 && (uint32_t)seq_id < kv.size) {
+                kv.cells[seq_id].pos = accepted_pos;
+            }
+            llama_kv_cache_seq_rm(kv, seq_id, accepted_pos + 1, -1);
+            return true;
+        }
+
+        case LLAMA_SPEC_CKPT_GPU_FALLBACK:
+            kv.checkpoint_restore();
+            llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
+            return false;
+
+        case LLAMA_SPEC_CKPT_CPU:
+            if (!kv.ckpt.cpu_state_data.empty()) {
+                llama_state_seq_set_data(ctx, kv.ckpt.cpu_state_data.data(),
+                                         kv.ckpt.cpu_state_data.size(), seq_id,
+                                         LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            }
+            llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
+            return false;
+
+        default:
+            return false;
+    }
+}
+
+void llama_spec_ckpt_discard(struct llama_context * ctx) {
+    auto & kv = ctx->kv_self;
+
+    if (kv.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP) {
+        kv.save_per_step_ssm = false;
+        kv.checkpoint_delete();
+    } else if (kv.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
+        kv.checkpoint_delete();
+    }
+
+    kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_NONE;
+    kv.ckpt.cpu_state_data.clear();
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {

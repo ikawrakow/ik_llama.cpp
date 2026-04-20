@@ -88,8 +88,6 @@ struct llama_kv_cache {
         std::vector<std::vector<ggml_tensor *>> split_s_l_shadow;
 
         // Per-step SSM state checkpoints for speculative decoding.
-        // One tensor per recurrent layer. Each stores up to max_spec_tokens
-        // copies of the SSM state (not conv state).
         std::vector<ggml_tensor *> per_step_ssm;
 
         // Per-step conv feature buffer: stores qkv_mixed features from the
@@ -97,14 +95,19 @@ struct llama_kv_cache {
         // One tensor per recurrent layer, each sized [conv_dim * max_tokens].
         std::vector<ggml_tensor *> per_step_qkv;
 
-        int32_t per_step_n_tokens = 0;  // actual n_tokens stored in current checkpoint
-        int32_t per_step_max_allocated = 0; // max tokens the per-step buffer can hold
-        int64_t per_step_ssm_state_size = 0; // SSM state size per step per layer
-        int64_t per_step_conv_state_dim = 0; // conv state dim (for partial restore offset)
-        int64_t per_step_conv_dim = 0;       // conv_dim = key_dim*2 + value_dim (feature vector length)
-        int32_t per_step_d_conv = 0;         // d_conv from hparams
+        int32_t per_step_n_tokens = 0;
+        int32_t per_step_max_allocated = 0;
+        int64_t per_step_ssm_state_size = 0;
+        int64_t per_step_conv_state_dim = 0;
+        int64_t per_step_conv_dim = 0;
+        int32_t per_step_d_conv = 0;
 
-        // Separate storage for per-step allocations (so we can reallocate independently)
+        int selected_spec_mode = -1;
+
+        // Serialised sequence state for CPU mode
+        std::vector<uint8_t> cpu_state_data;
+
+        // Separate storage for per-step allocations
         std::vector<struct ggml_context *>   per_step_ctxs;
         std::vector<ggml_backend_buffer_t>   per_step_bufs;
 

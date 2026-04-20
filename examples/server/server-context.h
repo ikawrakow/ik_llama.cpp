@@ -24,11 +24,10 @@ enum slot_command {
 
 struct server_speculative_checkpoint {
     bool valid = false;
-    bool per_step_enabled = false; // per-step SSM checkpoints
+    bool per_step_enabled = false; // per-step SSM checkpoints active
     llama_pos n_past = 0;
     llama_token sampled = LLAMA_TOKEN_NULL;
-    std::vector<uint8_t> data;
-    common_sampler * sampler = nullptr;
+    common_sampler * sampler = nullptr; // saved sampler state
 
     void clear();
 };

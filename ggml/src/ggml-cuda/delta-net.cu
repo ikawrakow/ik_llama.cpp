@@ -198,7 +198,7 @@ static void delta_net_f32_cuda(
     const int     save_all_states,
     size_t vnb1, size_t vnb2, size_t vnb3,
     const int device_id,
-    const int cc,
+    const int cc, // compute capability (e.g., 890 for SM 8.9, 1200 for SM 12.0)
     cudaStream_t stream) {
     GGML_UNUSED(device_id);
     GGML_UNUSED(cc);
