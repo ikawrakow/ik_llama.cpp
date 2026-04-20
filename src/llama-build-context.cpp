@@ -1558,6 +1558,9 @@ static ggml_tensor * llm_build_kqv(
     auto v_cache = lctx.model.hparams.has_kv(il) ? kv.v_l[il]
                  : lctx.model.hparams.swa_layers[il] ? kv.v_l[hparams.n_layer_kv_from_start-2] : kv.v_l[hparams.n_layer_kv_from_start-1];
 
+    GGML_ASSERT(k_cache != nullptr && "k_cache is null in llm_build_kqv");
+    GGML_ASSERT(v_cache != nullptr && "v_cache is null in llm_build_kqv");
+
     struct ggml_tensor * k =
         ggml_view_3d(ctx, k_cache,
                 n_embd_head_k, n_kv, n_head_kv,
@@ -4634,7 +4637,7 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         } else {
             hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
         }
-        ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
+        ggml_set_name(hidden_states_from_main_model, "inp_mtp_states");
         ggml_set_input(hidden_states_from_main_model);
         lctx.inp_mtp_states = hidden_states_from_main_model;
 
@@ -4680,6 +4683,12 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             inpL = cur;
         }
 
+        if (lctx.cparams.mtp) {
+            struct ggml_tensor * embd_copy = ggml_dup(ctx0, inpL);
+            cb(embd_copy, "result_mtp_embd", -1);
+            ggml_set_output(embd_copy);
+        }
+
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
         cb(cur, "result_output", -1);
     }
@@ -4702,30 +4711,51 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
 
     struct ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // Qwen 3.5 MTP uses model.tok_embd for embeddings (no separate nextn.embed_tokens)
     ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
 
     ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
     ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
 
-    ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
-    cb(combined, "mtp_concat", il);
-    ggml_tensor* cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
+    ggml_tensor * cur;
+    if (mtp_layer.nextn.eh_proj != nullptr) {
+        // Full fusion: concat + project (27B, 4B, 2B, 0.8B)
+        ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
+        cb(combined, "mtp_concat", il);
+        cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
+    } else {
+        // 9B — no fc/eh_proj
+        cur = ggml_add(ctx0, token_emb_norm, hidden_state_norm);
+    }
+    cb(cur, "mtp_fused", il);
 
-    // Self-Attention
+    // Self-Attention (wq may be shared from main model's last layer)
+    GGML_ASSERT(il < (int)kv_self.k_l.size() && il < (int)kv_self.v_l.size() && "MTP layer index out of KV cache range");
+    if (!kv_self.k_l[il] || !kv_self.v_l[il]) {
+        LLAMA_LOG_ERROR("%s: KV cache not allocated for MTP layer %d (k=%p, v=%p)\n",
+                __func__, il, (void*)kv_self.k_l[il], (void*)kv_self.v_l[il]);
+        GGML_ABORT("KV cache not allocated for MTP layer");
+    }
+    if (!model.layers[il].wq || !model.layers[il].wk || !model.layers[il].wv || !model.layers[il].wo) {
+        LLAMA_LOG_ERROR("%s: Missing attention weights for MTP layer %d (wq=%p, wk=%p, wv=%p, wo=%p)\n",
+                __func__, il, (void*)model.layers[il].wq, (void*)model.layers[il].wk,
+                (void*)model.layers[il].wv, (void*)model.layers[il].wo);
+        GGML_ABORT("Missing attention weights for MTP layer");
+    }
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
     cur = build_std_attention(gf, mtp_layer.attn_norm, cur,
             inp_pos, nullptr, nullptr,
             KQ_mask, nullptr, nullptr,
             kq_scale, 0.0f, 0, il, true, false, true, false, true, nullptr);
 
-    // Dense FFN
-    cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, cur,
-            mtp_layer.ffn_up,   NULL, NULL,
-            mtp_layer.ffn_gate, NULL, NULL,
-            mtp_layer.ffn_down, NULL, NULL,
-            NULL,
-            LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
+    // Dense FFN — optional (9B and 4B don't have FFN in MTP layer)
+    if (mtp_layer.ffn_gate != nullptr) {
+        cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, cur,
+                mtp_layer.ffn_up,   NULL, NULL,
+                mtp_layer.ffn_gate, NULL, NULL,
+                mtp_layer.ffn_down, NULL, NULL,
+                NULL,
+                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false);
+    }
 
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
@@ -4737,7 +4767,6 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
-    // Qwen 3.5 MTP uses model.output as LM head (no separate nextn.shared_head_head)
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
     cb(cur, "result_output", -1);
 
@@ -8100,7 +8129,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         } else {
             hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
         }
-        ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
+        ggml_set_name(hidden_states_from_main_model, "inp_mtp_states");
         ggml_set_input(hidden_states_from_main_model);
 
         lctx.inp_mtp_states = hidden_states_from_main_model; 

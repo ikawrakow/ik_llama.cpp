@@ -3568,30 +3568,28 @@ void server_context::speculative_decoding_accept() {
 
         // the accepted tokens from the speculation
         const auto ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, slot.drafted);
-        
+
+        int32_t mtp_n_past_base = 0;
+        std::vector<float> mtp_hidden_state_pre;
         if (slot.has_mtp) {
-            llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
-            llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
+            mtp_n_past_base = slot.n_past - (slot.drafted.size() + 1);
 
             const int n_embd = llama_model_n_embd(llama_get_model(ctx));
             if (!ids.empty()) {
-                const float* emb = llama_get_embeddings(ctx);
-                if (emb) {
-                    slot.mtp_hidden_state.resize(ids.size() * n_embd);
-                    memcpy(slot.mtp_hidden_state.data(), emb, ids.size() * n_embd * sizeof(float));
+                mtp_hidden_state_pre.resize(ids.size() * n_embd);
+                for (size_t i = 0; i < ids.size(); i++) {
+                    const float* emb_i = llama_get_embeddings_ith(ctx, slot.i_batch_dft[i]);
+                    if (emb_i) {
+                        memcpy(mtp_hidden_state_pre.data() + i * n_embd, emb_i, n_embd * sizeof(float));
+                    }
                 }
             } else {
                 const float* emb0 = llama_get_embeddings_ith(ctx, 0);
                 if (emb0) {
-                    slot.mtp_hidden_state.resize(n_embd);
-                    memcpy(slot.mtp_hidden_state.data(), emb0, n_embd * sizeof(float));
+                    mtp_hidden_state_pre.resize(n_embd);
+                    memcpy(mtp_hidden_state_pre.data(), emb0, n_embd * sizeof(float));
                 }
             }
-            
-            llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
-
-            int32_t n_past_base = slot.n_past - (slot.drafted.size() + 1);
-            mtp_accept_tokens(mtp_target, ids, n_past_base, slot.id);
         }
 
         slot.i_batch_dft.clear();
@@ -3616,7 +3614,82 @@ void server_context::speculative_decoding_accept() {
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
 
+        // const bool any_rejected = (ids.size() - 1) < n_draft;
+        // const bool gpu_ckpt = llama_kv_cache_checkpoint_supported(ctx);
+        // if (any_rejected && slot.spec_ckpt.valid) {
+        //     if (gpu_ckpt) {
+        //         llama_kv_cache_checkpoint_restore(ctx);
+        //     } else {
+        //         llama_state_seq_set_data(ctx, slot.spec_ckpt.data.data(), slot.spec_ckpt.data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        //     }
+
+        //     llama_kv_cache_seq_rm(ctx, slot.id, slot.spec_ckpt.n_past, -1);
+
+        //     // restore sampler state (RNG, grammar, prev tokens)
+        //     if (slot.spec_ckpt.sampler) {
+        //         common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
+        //     }
+
+        //     if (!ids.empty()) {
+        //         // Re-decode to restore the recurrent state after checkpoint restore.
+        //         const int n_re = (int)ids.size();
+        //         llama_batch re_batch = llama_batch_init(n_re, 0, 1);
+        //         common_batch_add(re_batch, slot.spec_ckpt.sampled, slot.spec_ckpt.n_past, { slot.id }, slot.has_mtp || n_re == 1);
+        //         for (int j = 0; j < n_re - 1; j++) {
+        //             const bool is_last = (j == n_re - 2);
+        //             common_batch_add(re_batch, ids[j], slot.spec_ckpt.n_past + 1 + j, { slot.id }, slot.has_mtp || is_last);
+        //         }
+
+        //         const int ret = llama_decode(ctx, re_batch);
+
+        //         if (ret != 0) {
+        //             SLT_ERR(slot, "failed to re-decode accepted tokens after checkpoint restore: %d\n", ret);
+        //         }
+
+        //         if (slot.has_mtp) {
+        //             const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+
+        //             const int n_accepted = (int)ids.size();
+        //             slot.mtp_hidden_state.resize(n_accepted * n_embd);
+        //             for (int j = 0; j < n_accepted; j++) {
+        //                 const float * emb_j = llama_get_embeddings_ith(ctx, j);
+        //                 if (emb_j) {
+        //                     memcpy(slot.mtp_hidden_state.data() + j * n_embd, emb_j, n_embd * sizeof(float));
+        //                 }
+        //             }
+
+        //             llama_context * mtp_ctx_rej = common_speculative_get_mtp_ctx(slot.spec);
+        //             llama_context * mtp_target_rej = mtp_ctx_rej ? mtp_ctx_rej : ctx;
+        //             llama_set_draft_input_hidden_state(mtp_target_rej, slot.mtp_hidden_state.data());
+        //             mtp_accept_tokens(mtp_target_rej, ids, slot.spec_ckpt.n_past, slot.id);
+
+        //             if (n_accepted > 1) {
+        //                 memmove(slot.mtp_hidden_state.data(),
+        //                         slot.mtp_hidden_state.data() + (n_accepted - 1) * n_embd,
+        //                         n_embd * sizeof(float));
+        //             }
+        //             slot.mtp_hidden_state.resize(n_embd);
+        //         }
+
+        //         for (llama_token id : ids) {
+        //             common_sampler_accept(slot.ctx_sampling, ctx, id, true);
+        //         }
+
+        //         llama_batch_free(re_batch);
+        //     }
+
+        //     discard_speculative_checkpoint(slot, ctx, gpu_ckpt);
+        // } else {
+        if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
+                llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
+                llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
+
+                slot.mtp_hidden_state = std::move(mtp_hidden_state_pre);
+                llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
+                mtp_accept_tokens(mtp_target, ids, mtp_n_past_base, slot.id);
+            }
         llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
+        // discard_speculative_checkpoint(slot, ctx, gpu_ckpt);
 
         for (size_t i = 0; i < ids.size(); ++i) {
             completion_token_output result;
@@ -4004,12 +4077,14 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
             if (mtp_warmup_needed) {
-                const float* emb = llama_get_embeddings(ctx); 
                 const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
                 const int n_toks = batch_view.n_tokens;
-                if (emb) {
-                    batch_mtp_hidden_state.resize(n_toks * n_embd);
-                    memcpy(batch_mtp_hidden_state.data(), emb, n_toks * n_embd * sizeof(float));
+                batch_mtp_hidden_state.resize(n_toks * n_embd);
+                for (int t = 0; t < n_toks; t++) {
+                    const float* emb_t = llama_get_embeddings_ith(ctx, t);
+                    if (emb_t) {
+                        memcpy(batch_mtp_hidden_state.data() + t * n_embd, emb_t, n_embd * sizeof(float));
+                    }
                 }
             }
         }

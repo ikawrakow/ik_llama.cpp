@@ -2928,6 +2928,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.hparams.vocab_only = params.vocab_only;
 
+        model.mtp = params.mtp;
+
         try {
             llm_load_arch(ml, model);
         } catch(const std::exception & e) {
@@ -3755,7 +3757,11 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     // set all ids as invalid (negative)
     std::fill(lctx.output_ids.begin(), lctx.output_ids.end(), -1);
 
-    ggml_backend_buffer_clear(lctx.buf_output, 0);
+    // TODO: For MTP only clear the portion of the output buffer that will actually be used
+    const size_t clear_size = (logits_size + embd_size) * sizeof(float);
+    if (clear_size > 0 && output_base) {
+        memset(output_base, 0, clear_size);
+    }
 
     lctx.n_outputs = 0;
 
@@ -4111,6 +4117,11 @@ static int llama_decode_internal(
             const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 && lctx.model.mtp;
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
+                    if (has_mtp && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
+                        // Qwen 3.5 use raw hidden state. GLM4 uses result_embd_pooled
+                        embd = gf->nodes[i];
+                        break;
+                    }
                     if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
                         embd = gf->nodes[i];
                         break;
