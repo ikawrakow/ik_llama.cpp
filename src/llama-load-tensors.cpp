@@ -1605,13 +1605,17 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
 
         auto & layer = model.layers[i];
 
+        const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
+                                  static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
+
         int flags = 0;
         // Skip loading MTP layers if the feature is disabled
         if (!model.mtp) {
-            if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+            if (is_mtp_layer) {
                 flags |= llama_model_loader::TENSOR_SKIP;
             }
         }
+        const int mtp_opt = is_mtp_layer ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
 
         layer.attn_norm      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), { n_embd }, flags);
         layer.attn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, flags);
@@ -1619,7 +1623,7 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
 
         if (!hparams.is_recurrent(i)) {
             // Attention layers (MTP layer is always standard attention)
-            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head * 2 }, flags);
+            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head * 2 }, flags | mtp_opt);
             layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, flags);
             layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, flags);
             layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, flags);
@@ -1641,19 +1645,20 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
             layer.ssm_out        = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_OUT,        "weight", i), { value_dim, n_embd }, flags);
         }
 
-        layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, flags);
-        layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, flags);
-        layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, flags);
+        // 9B and 4B don't have MLP in MTP
+        layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, flags | mtp_opt);
+        layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, flags | mtp_opt);
+        layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, flags | mtp_opt);
 
         // --- NextN / MTP tensors on the MTP layer ---
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (is_mtp_layer) {
             const int final_layer = n_layer - 1;
             auto nextn_ctx      = ctx_for_layer(final_layer);
-            auto nextn_host_ctx = ctx_input;
+            // 9B doesn't have fc
             layer.nextn.eh_proj          = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", final_layer),
                     { 2*n_embd, n_embd },
-                    flags);
+                    flags | llama_model_loader::TENSOR_NOT_REQUIRED);
             layer.nextn.enorm            = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer),
                     { n_embd },
@@ -1666,6 +1671,18 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
                     tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", final_layer),
                     { n_embd },
                     flags | llama_model_loader::TENSOR_NOT_REQUIRED);
+        }
+    }
+
+    // 9B shares q_proj
+    if (model.mtp && hparams.nextn_predict_layers > 0) {
+        const uint32_t n_main = n_layer - hparams.nextn_predict_layers;
+        for (uint32_t i = n_main; i < (uint32_t)n_layer; ++i) {
+            auto & mtp_layer = model.layers[i];
+            auto & last_main = model.layers[n_main - 1];
+            if (mtp_layer.wq == nullptr) {
+                mtp_layer.wq = last_main.wq;
+            }
         }
     }
 
@@ -2477,8 +2494,11 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
     }
 
     for (int i = 0; i < n_layer; ++i) {
+        const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
+                                  static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
+
         int flags = 0;
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (is_mtp_layer) {
             flags |= llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
         }
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -2556,7 +2576,7 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, flags);
         }
 
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (is_mtp_layer) {
              layer.nextn.eh_proj          = create_tensor(ctx_split, tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, flags);
              layer.nextn.enorm            = create_tensor(ctx_split, tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), { n_embd }, flags);
              layer.nextn.hnorm            = create_tensor(ctx_split, tn(LLM_TENSOR_NEXTN_HNORM, "weight", i), { n_embd }, flags);
@@ -2584,10 +2604,13 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
         ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
+        const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
+                                  static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
+
         int flags = 0;
         // Skip loading MTP layers if the feature is disabled
         if (!model.mtp) {
-            if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+            if (is_mtp_layer) {
                 // skip all tensors in the NextN layers
                 flags |= llama_model_loader::TENSOR_SKIP;
             }
@@ -2655,7 +2678,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
             layer.ffn_up   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, flags);
         }
         // --- NextN / MTP tensors on the final layer ---
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (is_mtp_layer) {
             const int final_layer = n_layer - 1;
             auto nextn_ctx      = ctx_for_layer(final_layer);
             auto nextn_host_ctx = ctx_input;
@@ -3117,8 +3140,11 @@ bool create_tensors_helper::create_bailingmoe2_tensors(const LLM_TN & tn) {
         ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
+        const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
+                                  static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
+
         int flags = 0;
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (is_mtp_layer) {
             // skip all tensors in the NextN layers
             flags |= llama_model_loader::TENSOR_SKIP;
         }
@@ -3152,7 +3178,7 @@ bool create_tensors_helper::create_bailingmoe2_tensors(const LLM_TN & tn) {
         }
 
         // NextN/MTP tensors (preserved but unused) - conditionally load for last nextn_predict_layers
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (is_mtp_layer) {
             layer.nextn.eh_proj          = create_tensor(ctx_split, tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, flags);
             layer.nextn.embed_tokens     = create_tensor(ctx_split, tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i), { n_embd, n_vocab },
                     llama_model_loader::TENSOR_NOT_REQUIRED | flags);

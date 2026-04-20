@@ -554,8 +554,12 @@ void llm_load_hparams(
                 }
 
                 switch (hparams.n_layer) {
-                    case 24: model.type = hparams.n_embd == 1024 ? e_model::MODEL_0_8B : e_model::MODEL_2B; break;
-                    case 32: model.type = hparams.n_embd == 2560 ? e_model::MODEL_4B   : e_model::MODEL_9B; break;
+                    case 24: // without MTP layer
+                    case 25: // with MTP layer (24 main + 1 MTP)
+                        model.type = hparams.n_embd == 1024 ? e_model::MODEL_0_8B : e_model::MODEL_2B; break;
+                    case 32: // without MTP layer
+                    case 33: // with MTP layer (32 main + 1 MTP)
+                        model.type = hparams.n_embd == 2560 ? e_model::MODEL_4B   : e_model::MODEL_9B; break;
                     case 64: // without MTP layer
                     case 65: // with MTP layer (64 main + 1 MTP)
                         model.type = e_model::MODEL_27B; break;
