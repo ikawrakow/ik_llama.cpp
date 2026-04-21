@@ -1407,6 +1407,45 @@ bool compute_1block_iq2ks(float d, const __m256 * vx, const __m256 * vw, const i
     }
     return result;
 }
+float compute_1block_iq2ks_rmse(float d, const __m256 * vx, const __m256 * vw, const int8_t * values, __m256i & this_idx) {
+    constexpr int kBlockSize = 32;
+    uint32_t aux32;
+    std::memcpy(&aux32, values, sizeof(aux32));
+    auto ivalues = _mm256_set1_epi32(aux32);
+    __m256 vbest[4];
+    __m256i ibest[4];
+    auto val = _mm256_set1_ps(d*values[0]);
+    auto ival = _mm256_set1_epi32(0);
+    for (int k = 0; k < kBlockSize/8; ++k) {
+        auto diff = _mm256_sub_ps(vx[k], val);
+        vbest[k] = _mm256_mul_ps(diff, diff);
+        ibest[k] = ival;
+    }
+    for (int j = 1; j < 4; ++j) {
+        val = _mm256_set1_ps(d*values[j]);
+        ival = _mm256_set1_epi32(j);
+        for (int k = 0; k < kBlockSize/8; ++k) {
+            auto diff = _mm256_sub_ps(vx[k], val);
+            diff = _mm256_mul_ps(diff, diff);
+            auto mask = _mm256_cmp_ps(diff, vbest[k], _CMP_LT_OQ);
+            vbest[k] = _mm256_or_ps(_mm256_and_ps(mask, diff), _mm256_andnot_ps(mask, vbest[k]));
+            auto imask = _mm256_castps_si256(mask);
+            ibest[k] = _mm256_or_si256(_mm256_and_si256(imask, ival), _mm256_andnot_si256(imask, ibest[k]));
+        }
+    }
+    auto idx = to_int8(ibest);
+    to_values_i32(idx, ivalues, ibest);
+    auto vd = _mm256_set1_ps(-d);
+    auto vrmse = _mm256_setzero_ps();
+    for (int k = 0; k < 4; ++k) {
+        auto vq   = _mm256_cvtepi32_ps(ibest[k]);
+        auto diff = _mm256_fmadd_ps(vd, vq, vx[k]);
+        auto wdiff = _mm256_mul_ps(vw[k], diff);
+        vrmse = _mm256_fmadd_ps(wdiff, diff, vrmse);
+    }
+    this_idx = idx;
+    return hsum_float_8(vrmse);
+}
 #endif
 void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales, float * all_sw, int8_t * all_Ls) {
 
@@ -1433,6 +1472,11 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
 
     const int nblock = n_per_row/QK_K;
 
+#ifdef __AVX2__
+        __m256 vx[4], vw[4];
+        uint8_t stored_q[32];
+#endif
+
     for (int ibl = 0; ibl < nblock; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq2_ks));
@@ -1446,10 +1490,6 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
         const float sigma2 = 1.5f*sumx2/QK_K;
 
         uint16_t extra = 0;
-
-#ifdef __AVX2__
-        __m256 vx[4], vw[4];
-#endif
 
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             const float * xb = xbl + kBlockSize*ib;
@@ -1570,12 +1610,72 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
     if (!d) return;
 
     float sumqx = 0, sumq2 = 0;
+#ifdef __AVX2__
+    auto vsumqx = _mm256_setzero_ps();
+    auto vsumq2 = _mm256_setzero_ps();
+#endif
     for (int ibl = 0; ibl < nblock; ++ibl) {
+        auto scales = all_scales + ibl*(QK_K/kBlockSize);
         auto xbl = x + ibl*QK_K;
         float sumx2 = 0;
         for (int j = 0; j < QK_K; ++j) sumx2 += xbl[j]*xbl[j];
         const float sigma2 = 1.5f*sumx2/QK_K;
         auto Ls = all_Ls + ibl*(QK_K/kBlockSize);
+#ifdef __AVX2__
+        __m256i idx[4];
+        for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
+            const int8_t * block_values = y[ibl].extra & (1 << ib) ? shifted_values : iq2nl_values;
+            uint32_t aux32;
+            std::memcpy(&aux32, block_values, sizeof(aux32));
+            auto ivalues = _mm256_set1_epi32(aux32);
+            const float * xb = xbl + kBlockSize*ib;
+            if (quant_weights) {
+                const float * qw = quant_weights + ibl*QK_K + ib*kBlockSize;
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
+            }
+            for (int k = 0; k < 4; ++k) {
+                vx[k] = _mm256_loadu_ps(xb + 8*k);
+                vw[k] = _mm256_loadu_ps(weight + 8*k);
+            }
+            int ls = Ls[ib] - 16;
+            float dl = d*ls;
+            __m256i idx1, idx2;
+            auto rmse1 = compute_1block_iq2ks_rmse(dl, vx, vw, block_values, idx1);
+            if (Ls[ib] > 0 && dl > scales[ib]) {
+                auto rmse2 = compute_1block_iq2ks_rmse(d*(Ls[ib] - 17), vx, vw, block_values, idx2);
+                if (rmse2 < rmse1) {
+                    --Ls[ib]; idx1 = idx2;
+                }
+            }
+            else if (Ls[ib] < 15 && dl < scales[ib]) {
+                auto rmse2 = compute_1block_iq2ks_rmse(d*(Ls[ib] - 15), vx, vw, block_values, idx2);
+                if (rmse2 < rmse1) {
+                    ++Ls[ib]; idx1 = idx2;
+                }
+            }
+            __m256i iv[4];
+            to_values_i32(idx1, ivalues, iv);
+            auto vd = _mm256_set1_ps(Ls[ib] - 16);
+            for (int k = 0; k < 4; ++k) {
+                auto vq = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(iv[k]));
+                auto wvq = _mm256_mul_ps(vw[k], vq);
+                vsumqx = _mm256_fmadd_ps(wvq, vx[k], vsumqx);
+                vsumq2 = _mm256_fmadd_ps(wvq, vq,    vsumq2);
+            }
+            ls = Ls[ib];
+            y[ibl].scales[ib/2] |= ((ls & 0xf) << 4*(ib%2));
+            y[ibl].extra |= ((ls >> 4) << (8 + ib));
+            idx[ib % 4] = idx1;
+            if ((ib % 4) == 3) {
+                auto vqs1 = _mm256_or_si256(idx[0], _mm256_slli_epi16(idx[1], 2));
+                auto vqs2 = _mm256_or_si256(_mm256_slli_epi16(idx[2], 4), _mm256_slli_epi16(idx[3], 6));
+                auto vqs = _mm256_or_si256(vqs1, vqs2);
+                _mm256_storeu_si256((__m256i *)y[ibl].qs + ib/4, vqs);
+            }
+        }
+#else
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             int ls = Ls[ib];
             y[ibl].scales[ib/2] |= ((ls & 0xf) << 4*(ib%2));
@@ -1604,7 +1704,12 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
                 }
             }
         }
+#endif
     }
+#ifdef __AVX2__
+    sumqx = hsum_float_8(vsumqx);
+    sumq2 = hsum_float_8(vsumq2);
+#endif
     *dptr = GGML_FP32_TO_FP16(1.030f*(sumq2 > 0 ? sumqx/sumq2 : d));
 }
 }
