@@ -244,6 +244,10 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
         dst->smpl = llama_sampler_dry_clone(src->smpl);
     }
 
+    if (dst->rbudget) {
+        common_reasoning_budget_free(dst->rbudget);
+        dst->rbudget = nullptr;
+    }
     if (src->rbudget) {
         dst->rbudget = common_reasoning_budget_clone(src->rbudget);
     }
