@@ -1337,7 +1337,7 @@ static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const flo
             int last = std::min(first + chunk, nrows);
             for (int row = first; row < last; ++row) {
                 auto xr = values + row*n_per_row;
-                ggml_quantize_chunk(GGML_TYPE_IQ4_KS, xr, (void *)Q.data(), 0, 1, n_per_row, nullptr);
+                ggml_quantize_chunk(GGML_TYPE_IQ4_KS, xr, (void *)Q.data(), 0, 1, n_per_row, nullptr, nullptr);
                 const float * dptr = (const float *)Q.data();
                 const float d = *dptr;
                 const block_iq4_ks * iq4 = (const block_iq4_ks *)(dptr + 1);

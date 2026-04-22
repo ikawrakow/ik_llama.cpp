@@ -167,6 +167,8 @@ static void usage(const char * executable) {
     printf("  --custom-q regex1=type1,regex2=type2...: use this to specify custom quantization type rules.\n\n");
     printf("  --repack Repack all tensors to the corresponding _r4/8 variant if available.\n\n");
     printf("  --repack-pattern Comma separated list of regexs to use for matching tensor names to be repacked.\n\n");
+    printf("  --symmetric-q40  Use [-7:7] range for Q4_0 quantization (turns off imatrix)\n\n");
+    printf("  --slow-iq2ks Use the original very slow IQ2_KS quantization method.\n\n");
     printf("Additional specific tensor quantization types used in the custom quant scheme 'CQS (default is Q2_K):\n");
     printf("      --attn-q-type ggml_type: use this ggml_type for the attn_q.weight tensor.\n");
     printf("      --attn-k-type ggml_type: use this ggml_type for the attn_k.weight tensor.\n");
@@ -348,6 +350,8 @@ int main(int argc, char ** argv) {
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<CustomQ> custom_quants;
+    quantize_user_data user_data = { false, false };
+    params.user_data = &user_data;
 
     std::vector<std::string> repack_patterns;
 
@@ -360,6 +364,10 @@ int main(int argc, char ** argv) {
             params.ignore_imatrix_rules = true;
         } else if (strcmp(argv[arg_idx], "--dry-run") == 0) {
             params.dry_run = true;
+        } else if (strcmp(argv[arg_idx], "--symmetric-q40") == 0) {
+            user_data.symmetric_q4_0 = true;
+        } else if (strcmp(argv[arg_idx], "--slow-iq2ks") == 0) {
+            user_data.slow_iq2_ks = true;
         } else if (strcmp(argv[arg_idx], "--repack") == 0) {
             params.only_repack = true;
         } else if (strcmp(argv[arg_idx], "--repack-pattern") == 0) {

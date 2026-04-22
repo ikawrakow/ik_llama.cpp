@@ -300,9 +300,6 @@ if (GGML_IQK_MUL_MAT)
         message(STATUS "Disabling IQK Flash Attention kernels")
     endif()
 endif()
-if (IQK_SLOW_IQ2KS_QUANTIZE)
-    set_source_files_properties(iqk/iqk_quantize.cpp PROPERTIES COMPILE_DEFINITIONS IQK_SLOW_IQ2KS_QUANTIZE)
-endif()
 
 if (GGML_CUDA)
     cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
