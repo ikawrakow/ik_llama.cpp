@@ -316,11 +316,12 @@ llama_token_data_array llama_sampling_prepare(
         bool apply_grammar = true,
         std::vector<float> * original_logits = nullptr);
 
+// if is_generated is true, the token is accepted by the sampling chain, the reasoning budget sampler, and the grammar sampler
 void common_sampler_accept(
         struct common_sampler * ctx_sampling,
         struct llama_context * ctx_main,
         llama_token id,
-        bool apply_grammar);
+        bool is_generated);
 
 // returns at least 1 token, up to draft.size()
 // access the internal list of current candidate tokens

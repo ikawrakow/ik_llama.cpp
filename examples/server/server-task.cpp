@@ -1,4 +1,5 @@
 #include "server-task.h"
+#include "server-chat.h"
 
 json result_timings::to_json() const {
     json base = {
@@ -203,8 +204,8 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat_partial() {
             });
     }
 
-    for (const auto& diff : oaicompat_msg_diffs) {
-        add_delta(common_chat_msg_diff_to_json_oaicompat(diff));
+    for (const auto& diff : oaicompat_msg_diffs) {        
+        add_delta(server_chat_msg_diff_to_json_oaicompat(diff));
     }
 
     if (!deltas.empty()) {
@@ -415,7 +416,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
                 json {
                     {"finish_reason", nullptr},
                     {"index", 0},
-                    {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
+                    {"delta", server_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
             {"created", t},
