@@ -1498,7 +1498,7 @@ bool llama_kv_cache::per_step_alloc(int max_tokens) {
             return false;
         }
         ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: %10s per-step buffer = %8.2f MiB (max_tokens=%d, ssm+qkv)\n", __func__,
+        LLAMA_LOG_INFO("%s: %10s per-step buffer = %8.2f MiB (max_tokens=%d)\n", __func__,
                        ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, max_tokens);
         ckpt.per_step_ctxs.push_back(ctx);
         ckpt.per_step_bufs.push_back(buf);
@@ -9431,7 +9431,7 @@ struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) 
     return llama_grammar_clone_impl(*grammar);
 }
 
-void llama_grammar_sample(
+void llama_grammar_apply(
       const struct llama_grammar * grammar,
       const struct llama_context * ctx,
           llama_token_data_array * candidates) {
@@ -9442,7 +9442,7 @@ void llama_sample_grammar(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
       const struct llama_grammar * grammar) {
-    llama_grammar_sample(grammar, ctx, candidates);
+    llama_grammar_apply(grammar, ctx, candidates);
 }
 
 void llama_grammar_accept_token(

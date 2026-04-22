@@ -182,12 +182,12 @@ if (NOT WIN32)
     # llama_target_and_test(test-double-float.cpp) # SLOW
 endif()
 
-llama_build_and_test(test-chat-parser.cpp)
-llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
-#llama_build_and_test(test-chat-template.cpp)
+#llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-jinja.cpp)
 llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
-llama_build_and_test(test-json-partial.cpp)
+llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+llama_build_and_test(test-chat-template.cpp )
+llama_build_and_test(test-json-partial.cpp )
 #llama_build_and_test(test-log.cpp)
 llama_build_and_test(
     test-peg-parser.cpp
@@ -196,6 +196,7 @@ llama_build_and_test(
     peg-parser/test-gbnf-generation.cpp
     peg-parser/test-json-parser.cpp
     peg-parser/test-json-serialization.cpp
+    peg-parser/test-python-dict-parser.cpp
     peg-parser/test-unicode.cpp
     peg-parser/tests.h
 )
@@ -211,3 +212,5 @@ llama_target_and_test(test-autorelease.cpp        LABEL "model")
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
+
+
