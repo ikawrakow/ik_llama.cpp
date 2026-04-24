@@ -505,6 +505,7 @@ extern "C" {
     };
 
     // model quantization parameters
+    struct quantize_user_data;
     typedef struct llama_model_quantize_params {
         int32_t nthread;                     // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
         enum llama_ftype ftype;              // quantize to this llama_ftype
@@ -532,6 +533,7 @@ extern "C" {
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
         void * repack_pattern;               // pointer to a vector containing regexes to be used for matching tensor names. Can be null
+        struct quantize_user_data * user_data; // so we can pass extra data to the quantization functions
     } llama_model_quantize_params;
 
     // grammar types
@@ -1276,7 +1278,7 @@ extern "C" {
     LLAMA_API struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar);
 
     /// @details Apply constraints from grammar
-    LLAMA_API void llama_grammar_sample(
+    LLAMA_API void llama_grammar_apply(
             const struct llama_grammar * grammar,
             const struct llama_context * ctx,
                 llama_token_data_array * candidates);
@@ -1284,7 +1286,7 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates,
       const struct llama_grammar * grammar),
-        "use llama_grammar_sample instead");
+        "use llama_grammar_apply instead");
 
     /// @details Accepts the sampled token into the grammar
     LLAMA_API void llama_grammar_accept_token(

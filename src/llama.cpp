@@ -1500,7 +1500,7 @@ bool llama_kv_cache::per_step_alloc(int max_tokens) {
             return false;
         }
         ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: %10s per-step buffer = %8.2f MiB (max_tokens=%d, ssm+qkv)\n", __func__,
+        LLAMA_LOG_INFO("%s: %10s per-step buffer = %8.2f MiB (max_tokens=%d)\n", __func__,
                        ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, max_tokens);
         ckpt.per_step_ctxs.push_back(ctx);
         ckpt.per_step_bufs.push_back(buf);
@@ -2495,7 +2495,11 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         result[il] += size;
-        if (auto pos = name.rfind(".bias"); pos < name.size() && name.size() - pos == 4) {
+        if (auto pos = name.rfind(".bias"); pos < name.size() && name.size() - pos == 5) {
+            // bias, we don't need to account for those
+            continue;
+        }
+        if (auto pos = name.rfind(".scale"); pos < name.size() && name.size() - pos == 6) {
             // bias, we don't need to account for those
             continue;
         }
@@ -2851,7 +2855,7 @@ static bool llm_load_tensors(
                     }
                     if (has_experts) {
                         LLAMA_LOG_INFO("Adding experts CPU overrides for layer %d\n", il);
-                        std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                        std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.(weight|scale))";
                         auto & o = overrides.emplace_back();
                         o.pattern = strdup(pattern.c_str());
                         o.buft = buft;
@@ -2926,7 +2930,7 @@ static bool llm_load_tensors(
                             }
                             if (has_experts) {
                                 LLAMA_LOG_INFO("Adding experts CPU overrides for layer %d in device %d\n", il, id);
-                                std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.weight)";
+                                std::string pattern = "blk\\." + std::to_string(il) + "\\.(ffn_(up|down|gate|gate_up)_exps\\.(weight|scale))";
                                 auto & o = overrides.emplace_back();
                                 o.pattern = strdup(pattern.c_str());
                                 o.buft = buft;
@@ -5548,6 +5552,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.kv_overrides                =*/ nullptr,
         /*.custom_quants               =*/ nullptr,
         /*.repack_pattern              =*/ nullptr,
+        /*.user_data                   =*/ nullptr,
     };
 
     return result;
@@ -8462,6 +8467,11 @@ int32_t llama_encode(
 int32_t llama_decode(
         struct llama_context * ctx,
           struct llama_batch   batch) {
+    // Clear any leftover stop signal from a previous (already-returned) decode. llama_decode_stop()
+    // is intended to interrupt the decode that is currently in flight; without this reset, a stop
+    // that arrived after the interrupted call returned would bleed into the next decode and cause
+    // an immediate ret=-3, which servers interpret as a fatal decode failure.
+    stop_internal_decode = false;
     const int ret = llama_decode_internal(*ctx, batch);
     if (ret < 0) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
@@ -9440,7 +9450,7 @@ struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) 
     return llama_grammar_clone_impl(*grammar);
 }
 
-void llama_grammar_sample(
+void llama_grammar_apply(
       const struct llama_grammar * grammar,
       const struct llama_context * ctx,
           llama_token_data_array * candidates) {
@@ -9451,7 +9461,7 @@ void llama_sample_grammar(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
       const struct llama_grammar * grammar) {
-    llama_grammar_sample(grammar, ctx, candidates);
+    llama_grammar_apply(grammar, ctx, candidates);
 }
 
 void llama_grammar_accept_token(

@@ -617,7 +617,7 @@ const char* llama_grammar_parser::parse_sequence(
                 throw std::runtime_error(std::string("expecting an int at ") + pos);
             }
             const char* int_end = parse_int(pos);
-            uint64_t min_times = std::stoul(std::string(pos, int_end - pos));
+            uint64_t min_times = std::stoull(std::string(pos, int_end - pos));
             pos = parse_space(int_end, is_nested);
 
             uint64_t max_times = UINT64_MAX; // default: no max limit
@@ -631,7 +631,7 @@ const char* llama_grammar_parser::parse_sequence(
 
                 if (is_digit_char(*pos)) {
                     const char* int_end = parse_int(pos);
-                    max_times = std::stoul(std::string(pos, int_end - pos));
+                    max_times = std::stoull(std::string(pos, int_end - pos));
                     pos = parse_space(int_end, is_nested);
                 }
 
@@ -1434,7 +1434,9 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, const struct llam
     }
 
     llama_grammar_accept_token(grammar, token, piece);
-    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    if (smpl) {
+        smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    }
 }
 
 void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string & piece) {

@@ -71,7 +71,7 @@ struct slot_params {
     oaicompat_type        oaicompat = OAICOMPAT_TYPE_NONE;
     std::string           oaicompat_model;
     std::string           oaicompat_cmpl_id;
-    common_chat_syntax           oaicompat_chat_syntax;
+    common_chat_parser_params           chat_parser_params;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)

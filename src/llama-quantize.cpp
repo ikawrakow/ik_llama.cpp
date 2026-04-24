@@ -831,10 +831,11 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
     return new_type;
 }
 
-static size_t llama_tensor_quantize_internal(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
+static size_t llama_tensor_quantize_internal(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row,
+        const float * imatrix, const quantize_user_data * user_data, std::vector<std::thread> & workers, const int nthread) {
     if (nthread < 2) {
         // single-thread
-        size_t new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, nrows, n_per_row, imatrix);
+        size_t new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, nrows, n_per_row, imatrix, user_data);
         if (!ggml_validate_row_data(new_type, new_data, new_size)) {
             throw std::runtime_error("quantized data validation failed");
         }
@@ -846,7 +847,7 @@ static size_t llama_tensor_quantize_internal(enum ggml_type new_type, const floa
     size_t new_size = 0;
     bool valid = true;
     auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, chunk_size,
-            nrows, n_per_row, imatrix]() {
+            nrows, n_per_row, imatrix, user_data]() {
         const int64_t nrows_per_chunk = chunk_size / n_per_row;
         size_t local_size = 0;
         while (true) {
@@ -860,7 +861,7 @@ static size_t llama_tensor_quantize_internal(enum ggml_type new_type, const floa
             }
             lock.unlock();
             const int64_t this_nrow = std::min(nrows - first_row, nrows_per_chunk);
-            size_t this_size = ggml_quantize_chunk(new_type, f32_data, new_data, first_row * n_per_row, this_nrow, n_per_row, imatrix);
+            size_t this_size = ggml_quantize_chunk(new_type, f32_data, new_data, first_row * n_per_row, this_nrow, n_per_row, imatrix, user_data);
             local_size += this_size;
 
             // validate the quantized data
@@ -1574,7 +1575,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                     std::mutex mutex;
                     int counter = 0;
                     bool valid = true;
-                    auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, tensor, imatrix] () {
+                    auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, tensor, imatrix, user_data = params->user_data] () {
                         int ne2 = tensor->ne[2];
                         auto row_size = ggml_row_size(new_type, tensor->ne[0]);
                         auto matrix_size = row_size * tensor->ne[1];
@@ -1591,7 +1592,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                             lock.unlock();
                             auto this_imatrix = imatrix ? imatrix + i02 * tensor->ne[0] : nullptr;
                             auto this_data = (char *)new_data + i02*matrix_size;
-                            auto this_size = ggml_quantize_chunk(new_type, f32_data + i02*tensor->ne[0]*tensor->ne[1], this_data, 0, tensor->ne[1], tensor->ne[0], this_imatrix);
+                            auto this_size = ggml_quantize_chunk(new_type, f32_data + i02*tensor->ne[0]*tensor->ne[1], this_data, 0, tensor->ne[1], tensor->ne[0],
+                                    this_imatrix, user_data);
                             local_size += this_size;
 
                             // validate the quantized data
@@ -1624,7 +1626,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                     void * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
                     const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
 
-                    new_size += llama_tensor_quantize_internal(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
+                    new_size += llama_tensor_quantize_internal(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, params->user_data, workers, nthread_use);
                 }
                 }
             }

@@ -185,6 +185,10 @@ static void test_roundtrip_on_chunk(
         for (int i = 0; i < chunk_size; i++) {
             input_scratch[i] = ggml_get_f32_1d(layer, i + offset);
         }
+    } else if (layer->type == GGML_TYPE_BF16) {
+        for (int i = 0; i < chunk_size; i++) {
+            input_scratch[i] = ggml_get_f32_1d(layer, i + offset);
+        }
     } else {
         input_scratch = ggml_get_data_f32(layer) + offset;
     }
@@ -211,7 +215,7 @@ static void test_roundtrip_on_layer(
     uint64_t nelements = ggml_nelements(layer);
 
     float* input_scratch_ptr = nullptr;
-    if (layer->type == GGML_TYPE_F16) {
+    if (layer->type == GGML_TYPE_F16 || layer->type == GGML_TYPE_BF16) {
         if (input_scratch.size() < nelements) input_scratch.resize(nelements);
         input_scratch_ptr = input_scratch.data();
     }
@@ -1333,7 +1337,7 @@ static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const flo
             int last = std::min(first + chunk, nrows);
             for (int row = first; row < last; ++row) {
                 auto xr = values + row*n_per_row;
-                ggml_quantize_chunk(GGML_TYPE_IQ4_KS, xr, (void *)Q.data(), 0, 1, n_per_row, nullptr);
+                ggml_quantize_chunk(GGML_TYPE_IQ4_KS, xr, (void *)Q.data(), 0, 1, n_per_row, nullptr, nullptr);
                 const float * dptr = (const float *)Q.data();
                 const float d = *dptr;
                 const block_iq4_ks * iq4 = (const block_iq4_ks *)(dptr + 1);
@@ -1587,6 +1591,7 @@ int main(int argc, char ** argv) {
     int included_layers = 0;
     int64_t max_nelements = 0;
     bool is_f16 = false;
+    bool is_bf16 = false;
     for (const auto& kv_tensor : tensors) {
         if (!layer_included(params, kv_tensor.first)) {
             continue;
@@ -1600,6 +1605,8 @@ int main(int argc, char ** argv) {
         }
         if (kv_tensor.second->type == GGML_TYPE_F16) {
             is_f16 = true;
+        } else if (kv_tensor.second->type == GGML_TYPE_BF16) {
+            is_bf16 = true;
         } else if (kv_tensor.second->type != GGML_TYPE_F32) {
             fprintf(stderr, "%s: error: Quantization should be tested with a float model, "
                 "this model contains already quantized layers (%s is type %d)\n", __func__, kv_tensor.first.c_str(), kv_tensor.second->type);
@@ -1613,6 +1620,9 @@ int main(int argc, char ** argv) {
 
     if (is_f16) {
         printf("note: source model is f16\n");
+    }
+    if (is_bf16) {
+        printf("note: source model is bf16\n");
     }
     printf("testing %d layers with max size %" PRId64 "\n", included_layers, max_nelements);
     // allocate scratch space

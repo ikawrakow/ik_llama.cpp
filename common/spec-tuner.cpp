@@ -107,12 +107,13 @@ void spec_tuner::reset_exploration() {
 void spec_tuner::write_best(common_params_speculative & params) const {
     for (const auto & coord : coords) {
         float val = coord.arms[coord.best_idx].value;
-        if      (coord.name == "n_max")          params.n_max          = (int32_t)val;
-        else if (coord.name == "p_min")          params.p_min          = val;
-        else if (coord.name == "n_min")          params.n_min          = (int32_t)val;
-        else if (coord.name == "ngram_size_n")   params.ngram_size_n   = (uint16_t)val;
-        else if (coord.name == "ngram_size_m")   params.ngram_size_m   = (uint16_t)val;
-        else if (coord.name == "ngram_min_hits") params.ngram_min_hits = (uint16_t)val;
+        if      (coord.name == "n_max")                params.n_max                = (int32_t)val;
+        else if (coord.name == "p_min")                params.p_min                = val;
+        else if (coord.name == "n_min")                params.n_min                = (int32_t)val;
+        else if (coord.name == "ngram_size_n")         params.ngram_size_n         = (uint16_t)val;
+        else if (coord.name == "ngram_size_m")         params.ngram_size_m         = (uint16_t)val;
+        else if (coord.name == "ngram_min_hits")       params.ngram_min_hits       = (uint16_t)val;
+        else if (coord.name == "suffix_min_match_len") params.suffix_min_match_len = (int32_t)val;
     }
 }
 
@@ -155,6 +156,21 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
         }
     }
 
+    if (type == COMMON_SPECULATIVE_TYPE_SUFFIX) {
+        {
+            spec_tuner_coord coord;
+            coord.name = "p_min";
+            coord.build_grid_float(0.0f, 0.95f, 11, user_params.p_min);
+            coords.push_back(std::move(coord));
+        }
+        {
+            spec_tuner_coord coord;
+            coord.name = "suffix_min_match_len";
+            coord.build_grid_int(1, 12, 1, user_params.suffix_min_match_len);
+            coords.push_back(std::move(coord));
+        }
+    }
+
     // Ngram can change only n_max/n_min per call
     if (type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD) {
         {
@@ -168,12 +184,13 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
 
     for (auto & coord : coords) {
         float user_val = 0.0f;
-        if      (coord.name == "n_max")          user_val = (float)user_params.n_max;
-        else if (coord.name == "p_min")          user_val = user_params.p_min;
-        else if (coord.name == "n_min")          user_val = (float)user_params.n_min;
-        else if (coord.name == "ngram_size_n")   user_val = (float)user_params.ngram_size_n;
-        else if (coord.name == "ngram_size_m")   user_val = (float)user_params.ngram_size_m;
-        else if (coord.name == "ngram_min_hits") user_val = (float)user_params.ngram_min_hits;
+        if      (coord.name == "n_max")                user_val = (float)user_params.n_max;
+        else if (coord.name == "p_min")                user_val = user_params.p_min;
+        else if (coord.name == "n_min")                user_val = (float)user_params.n_min;
+        else if (coord.name == "ngram_size_n")         user_val = (float)user_params.ngram_size_n;
+        else if (coord.name == "ngram_size_m")         user_val = (float)user_params.ngram_size_m;
+        else if (coord.name == "ngram_min_hits")       user_val = (float)user_params.ngram_min_hits;
+        else if (coord.name == "suffix_min_match_len") user_val = (float)user_params.suffix_min_match_len;
 
         coord.user_idx    = coord.find_nearest_arm(user_val);
         coord.best_idx    = 0;
@@ -201,12 +218,13 @@ void spec_tuner::propose(common_params_speculative & params) {
         coord.current_idx = coord.select_epsilon_greedy(epsilon);
 
         float val = coord.arms[coord.current_idx].value;
-        if      (coord.name == "n_max")          params.n_max          = (int32_t)val;
-        else if (coord.name == "p_min")          params.p_min          = val;
-        else if (coord.name == "n_min")          params.n_min          = (int32_t)val;
-        else if (coord.name == "ngram_size_n")   params.ngram_size_n   = (uint16_t)val;
-        else if (coord.name == "ngram_size_m")   params.ngram_size_m   = (uint16_t)val;
-        else if (coord.name == "ngram_min_hits") params.ngram_min_hits = (uint16_t)val;
+        if      (coord.name == "n_max")                params.n_max                = (int32_t)val;
+        else if (coord.name == "p_min")                params.p_min                = val;
+        else if (coord.name == "n_min")                params.n_min                = (int32_t)val;
+        else if (coord.name == "ngram_size_n")         params.ngram_size_n         = (uint16_t)val;
+        else if (coord.name == "ngram_size_m")         params.ngram_size_m         = (uint16_t)val;
+        else if (coord.name == "ngram_min_hits")       params.ngram_min_hits       = (uint16_t)val;
+        else if (coord.name == "suffix_min_match_len") params.suffix_min_match_len = (int32_t)val;
     }
 
     enforce_constraints(params);
@@ -346,6 +364,7 @@ void spec_tuner::print_best() const {
             else if (coord.name == "ngram_size_n")      oss << "--spec-ngram-size-n ";
             else if (coord.name == "ngram_size_m")      oss << "--spec-ngram-size-m ";
             else if (coord.name == "ngram_min_hits")    oss << "--spec-ngram-min-hits ";
+            else if (coord.name == "suffix_min_match_len") oss << "--suffix-pattern-len ";
             else                                        oss << "--" << coord.name << " ";
 
             if (is_int) oss << (int)coord.arms[coord.best_idx].value << " ";

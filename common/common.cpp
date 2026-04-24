@@ -407,6 +407,18 @@ void gpt_params_handle_model_default(gpt_params & params) {
     }
 }
 
+static bool is_truthy(const std::string & value) {
+    return value == "on" || value == "enabled" || value == "true" || value == "1";
+}
+
+static bool is_falsey(const std::string & value) {
+    return value == "off" || value == "disabled" || value == "false" || value == "0";
+}
+
+static bool is_autoy(const std::string & value) {
+    return value == "auto" || value == "-1";
+}
+
 bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     bool invalid_param = false;
     std::string arg;
@@ -1087,6 +1099,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
         } else if (value == "ngram-mod") {
             params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+        } else if (value == "suffix") {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_SUFFIX;
         } else {
             throw std::invalid_argument("unknown speculative decoding type without draft model");
         }
@@ -1117,6 +1131,29 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             throw std::invalid_argument("ngram min hits must be at least 1");
         }
         params.speculative.ngram_min_hits = value;
+        return true;
+    }
+    if (arg == "--suffix-pattern-len") {
+        CHECK_ARG
+        int value = std::stoi(argv[i]);
+        if (value < 1) {
+            throw std::invalid_argument("suffix pattern length must be at least 1");
+        }
+        params.speculative.suffix_min_match_len = value;
+        return true;
+    }
+    if (arg == "--suffix-max-depth") {
+        CHECK_ARG
+        int value = std::stoi(argv[i]);
+        if (value < 1) {
+            throw std::invalid_argument("suffix max depth must be at least 1");
+        }
+        params.speculative.suffix_max_depth = value;
+        return true;
+    }
+    if (arg == "--suffix-corpus") {
+        CHECK_ARG
+        params.speculative.suffix_corpus = argv[i];
         return true;
     }
     if (arg == "-a" || arg == "--alias") {
@@ -1886,7 +1923,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--grammar") {
         CHECK_ARG
-        sparams.grammar = argv[i];
+            sparams.grammar = { COMMON_GRAMMAR_TYPE_USER, argv[i] };
         return true;
     }
     if (arg == "--grammar-file") {
@@ -1897,16 +1934,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             invalid_param = true;
             return true;
         }
-        std::copy(
-            std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>(),
-            std::back_inserter(sparams.grammar)
-        );
+        sparams.grammar = {COMMON_GRAMMAR_TYPE_USER, read_file(argv[i])};
         return true;
     }
     if (arg == "-j" || arg == "--json-schema") {
         CHECK_ARG
-        sparams.grammar = json_schema_to_grammar(json::parse(argv[i]));
+        sparams.grammar = { COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT,  json_schema_to_grammar(json::parse(argv[i]))};
         return true;
     }
 
@@ -2085,7 +2118,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--peg") {
-        params.use_peg = true;
         return true;
     }
     if (arg == "--chat-template-kwargs") {
@@ -2093,6 +2125,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         std::string value = argv[i];
         auto parsed = json::parse(value);
         for (const auto& item : parsed.items()) {
+            if (item.key() == "enable_thinking") {
+                LOG_WRN("Setting 'enable_thinking' via --chat-template-kwargs is deprecated. "
+                    "Use --reasoning on / --reasoning off instead.\n");
+            }
             params.default_template_kwargs[item.key()] = item.value().dump();
         }
         return true;
@@ -2103,9 +2139,41 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.reasoning_format = common_reasoning_format_from_name(value);
         return true;
     }
+    if (arg == "-rea" || arg == "--reasoning") {
+        CHECK_ARG
+        std::string value = argv[i];
+        if (is_truthy(value)) {
+            params.enable_reasoning = 1;
+            params.default_template_kwargs["enable_thinking"] = "true";
+        } else if (is_falsey(value)) {
+            params.enable_reasoning = 0;
+            params.default_template_kwargs["enable_thinking"] = "false";
+        } else if (is_autoy(value)) {
+            params.enable_reasoning = -1;
+        } else {
+            throw std::invalid_argument(
+                string_format("error: unknown value for --reasoning: '%s'\n", value.c_str()));
+        }
+        return true;
+    }
+    if (arg == "--reasoning-budget-message") {
+        CHECK_ARG
+        std::string value = argv[i];
+        params.reasoning_budget_message = value;
+        return true;
+    }
+    if (arg == "--skip-chat-parsing") {
+        CHECK_ARG
+        params.force_pure_content_parser = true;
+        return true;
+    }
     if (arg == "--no-prefill-assistant") {
         CHECK_ARG
         params.prefill_assistant = false;
+        return true;
+    }
+    if (arg == "--parallel-tool-calls") {
+        params.parallel_tool_calls = true;
         return true;
     }
     if (arg == "--slot-prompt-similarity" || arg == "-sps") {
@@ -2512,9 +2580,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
-    options.push_back({ "main",        "       --peg",
-                                                                    "use peg parser for qwen3.5 models.\n"
-                                                                    "https://github.com/ikawrakow/ik_llama.cpp/pull/1490" });
+    options.push_back({ "main",        "       --parallel-tool-calls",  "enable parallel tool calls\n" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
@@ -2525,20 +2591,25 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
                         "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
                         "(default: none)", });
-    options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
-    options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed.\n"
-                                                                                                     "currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking"
-                                                                                                      "(default: -1)" });
-    options.push_back({ "main",      "       --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
+    options.push_back({ "main",        "-rea,  --reasoning",  "[on|off|auto]"
+                                                                 "Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))" });
+    options.push_back({ "main",        "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
+
+    options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
+    options.push_back({ "main",        "       --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
 						                                                                                            "none: include all tokens\n"
                                                                                                                     "auto: exclude all tokens between <think> and </think>\n"
 						                                                                                            "Or comma separated start and end tokens such as [THINK],[/THINK]\n"
 						                                                                                            "(default: auto)" });
-
-    options.push_back({ "main",      "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+    options.push_back({ "main",        "       --reasoning-budget-message",  "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)" });
+    options.push_back({ "main",        "       --skip-chat-parsing",  "force a pure content parser, even if a Jinja template is specified; model will output everything "
+            "in the content section, including any reasoning and/or tool calls (default: disabled)" });
+    options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
+    options.push_back({ "main",        "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
             "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
+    options.push_back({ "main",        "       -ptc, --parallel-tool-calls", "enable parallel tool calls\n" });
     options.push_back({ "grammar" });
-    options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.c_str() });
+    options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.grammar.c_str() });
     options.push_back({ "*",           "       --grammar-file FNAME",   "file to read grammar from" });
     options.push_back({ "*",           "-j,    --json-schema SCHEMA",
                                                                         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\n"
@@ -2683,12 +2754,15 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  per-step     save SSM state per draft step in VRAM; no re-decode on rejection\n"
                                                               "  gpu-fallback copy state to GPU buffer; re-decode on rejection\n"
                                                               "  cpu          serialise state via llama_state_seq; re-decode on rejection" });
-    options.push_back({ "*", "--spec-type Name [none | ngram - cache | ngram - simple | ngram - map - k | ngram - map - k4v | ngram - mod]", "type of speculative decoding to use when no draft model is provided (default: %d)\n", (int)params.speculative.type});
+    options.push_back({ "*", "--spec-type Name [none | ngram - cache | ngram - simple | ngram - map - k | ngram - map - k4v | ngram - mod | suffix]", "type of speculative decoding to use when no draft model is provided (default: %d)\n", (int)params.speculative.type});
     options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n",params.speculative.ngram_size_n });
 
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
 
     options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
+    options.push_back({ "*", "--suffix-pattern-len N",   "minimum context match length for suffix decoding (default: %d)", params.speculative.suffix_min_match_len });
+    options.push_back({ "*", "--suffix-max-depth N",     "suffix tree maximum depth for suffix decoding (default: %d)",    params.speculative.suffix_max_depth });
+    options.push_back({ "*", "--suffix-corpus PATH",     "corpus file to pre-warm the suffix tree: .json (array of strings or conversation messages) or .bin (raw int32 token IDs)" });
     options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
 
     options.push_back({ "retrieval" });
@@ -2881,6 +2955,21 @@ std::vector<std::string> string_split(const std::string& str, char delim) {
         values.push_back(value);
     }
     return values;
+}
+
+std::string string_repeat(const std::string & str, size_t n) {
+    if (n == 0) {
+        return "";
+    }
+
+    std::string result;
+    result.reserve(str.length() * n);
+
+    for (size_t i = 0; i < n; ++i) {
+        result += str;
+    }
+
+    return result;
 }
 
 static bool is_utf8_whitespace(uint8_t c) {
@@ -4031,6 +4120,15 @@ std::vector<llama_token> llama_tokenize(
     return result;
 }
 
+std::vector<llama_token> common_tokenize(
+    const struct llama_vocab * vocab,
+    const std::string & text,
+    bool   add_special,
+    bool   parse_special){
+
+    return llama_tokenize(vocab, text, add_special, parse_special);
+}
+
 std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
@@ -4492,7 +4590,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "escape: %s # default: false\n", params.escape ? "true" : "false");
     fprintf(stream, "file: # never logged, see prompt instead. Can still be specified for input.\n");
     fprintf(stream, "frequency_penalty: %f # default: 0.0 \n", sparams.penalty_freq);
-    yaml_dump_string_multiline(stream, "grammar", sparams.grammar.c_str());
+    yaml_dump_string_multiline(stream, "grammar", sparams.grammar.grammar.c_str());
     fprintf(stream, "grammar-file: # never logged, see grammar instead. Can still be specified for input.\n");
     fprintf(stream, "hellaswag: %s # default: false\n", params.hellaswag ? "true" : "false");
     fprintf(stream, "hellaswag_tasks: %zu # default: 400\n", params.hellaswag_tasks);

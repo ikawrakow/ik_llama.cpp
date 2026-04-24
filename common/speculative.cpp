@@ -8,6 +8,7 @@
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
+#include "suffix-tree.h"
 
 #include <algorithm>
 #include <cstring>
@@ -26,7 +27,8 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
-    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,
+    COMMON_SPECULATIVE_TYPE_SUFFIX
 };
 
 const std::map<std::string, enum common_speculative_type> common_speculative_type_from_name_map = {
@@ -38,7 +40,8 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
     {"ngram_mod",     COMMON_SPECULATIVE_TYPE_NGRAM_MOD},
-    {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
+    {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE},
+    {"suffix",        COMMON_SPECULATIVE_TYPE_SUFFIX}
 };
 
 struct common_speculative_config {
@@ -791,6 +794,126 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
     }
 };
 
+struct common_speculative_state_suffix : public common_speculative_state {
+    common_suffix_tree tree;
+    common_suffix_tree corpus_tree;
+    bool has_corpus = false;
+    size_t cache_size   = 0;
+
+    // Acceptance feedback
+    size_t n_draft_last  = 0;
+    bool   had_accept    = false;
+    int    n_low         = 0;
+    float  base_p_min    = 0.1f;
+    float  eff_p_min     = 0.1f;
+
+    common_speculative_state_suffix(
+            enum common_speculative_type type,
+            int max_depth,
+            const std::string & corpus_path,
+            const llama_model * model)
+        : common_speculative_state(type)
+        , tree(max_depth)
+        , corpus_tree(max_depth)
+    {
+        if (!corpus_path.empty()) {
+            std::function<std::vector<llama_token>(const std::string &)> tokenize_fn;
+            if (model) {
+                tokenize_fn = [model](const std::string & text) -> std::vector<llama_token> {
+                    return common_tokenize(model, text, false, true);
+                };
+            }
+            has_corpus = corpus_tree.load_corpus(corpus_path, tokenize_fn);
+        }
+    }
+
+    void begin(const llama_tokens & prompt) override {
+        cache_size   = 0;
+        n_draft_last = 0;
+        had_accept   = false;
+        n_low        = 0;
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+
+        base_p_min = params.p_min;
+        if (n_draft_last > 0 && !had_accept) {
+            if (++n_low >= 3) {
+                eff_p_min = std::min(eff_p_min + 0.1f, 0.5f);
+                n_low     = 0;
+            }
+        }
+        had_accept = false;
+
+        if (cache_size < prompt_tgt.size() + 1) {
+            llama_tokens tokens_new;
+            tokens_new.reserve(prompt_tgt.size() + 1 - cache_size);
+            for (size_t j = cache_size; j < prompt_tgt.size(); ++j) {
+                tokens_new.push_back(prompt_tgt[j]);
+            }
+            tokens_new.push_back(id_last);
+
+            tree.extend(tokens_new.data(), (int)tokens_new.size());
+            cache_size = prompt_tgt.size() + 1;
+        }
+
+        const int ctx_len = std::min((int)(prompt_tgt.size() + 1), tree.max_depth());
+        llama_tokens context;
+        context.reserve(ctx_len);
+        const int ctx_start = (int)prompt_tgt.size() + 1 - ctx_len;
+        for (int j = ctx_start; j < (int)prompt_tgt.size(); ++j) {
+            context.push_back(prompt_tgt[j]);
+        }
+        context.push_back(id_last);
+        const int min_match_len = std::max(1, params.suffix_min_match_len);
+
+        result = tree.speculate(
+            context.data(), (int)context.size(),
+            params.n_max,
+            eff_p_min,
+            1,
+            min_match_len);
+
+        if (has_corpus) {
+            auto corpus_result = corpus_tree.speculate(
+                context.data(), (int)context.size(),
+                params.n_max,
+                eff_p_min,
+                1,
+                min_match_len);
+            if (corpus_result.size() > result.size()) {
+                result = std::move(corpus_result);
+            }
+        }
+
+        n_draft_last = result.size();
+    }
+
+    void accept(uint16_t n_accepted) override {
+        if (n_draft_last == 0) {
+            return;
+        }
+        had_accept = true;
+        const double f_acc = (double)n_accepted / (double)n_draft_last;
+        if (f_acc < 0.5) {
+            if (++n_low >= 3) {
+                eff_p_min = std::min(eff_p_min + 0.1f, 0.5f);
+                n_low     = 0;
+            }
+        } else {
+            n_low = 0;
+            if (eff_p_min > base_p_min) {
+                eff_p_min = std::max(eff_p_min - 0.05f, base_p_min);
+            }
+        }
+    }
+};
+
 struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
@@ -844,6 +967,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:     return "ngram_mod";
         case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:   return "ngram_cache";
+        case COMMON_SPECULATIVE_TYPE_SUFFIX:        return "suffix";
         default:                                    return "unknown";
     }
 }
@@ -913,6 +1037,7 @@ common_speculative * common_speculative_init(
         bool has_ngram_map_k   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
         bool has_ngram_map_k4v = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
         bool has_ngram_mod     = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
+        bool has_suffix        = (params.type == COMMON_SPECULATIVE_TYPE_SUFFIX);
 
         // In a more complex implementation we could use the same implementation but with different parameters.
         // This was initially used in PR-18471 but removed to simplify the code.
@@ -945,6 +1070,9 @@ common_speculative * common_speculative_init(
         }
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
+        }
+        if (has_suffix) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_SUFFIX, params));
         }
         if (has_mtp) {
              configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_MTP, params));
@@ -1022,6 +1150,13 @@ common_speculative * common_speculative_init(
                 auto state = create_state_ngram_cache(
                         params.lookup_cache_static, params.lookup_cache_dynamic, config);
                 impls.push_back(std::make_unique<common_speculative_state_ngram_cache>(state));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_SUFFIX: {
+                int depth = config.params.suffix_max_depth > 0 ? config.params.suffix_max_depth : 64;
+                const llama_model * model = llama_get_model(ctx_tgt);
+                impls.push_back(std::make_unique<common_speculative_state_suffix>(
+                    config.type, depth, config.params.suffix_corpus, model));
                 break;
             }
             default:

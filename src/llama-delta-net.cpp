@@ -140,6 +140,11 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
         ? (output_size + (n_tokens - 1) * state_size)
         : output_size;
 
+    // per-step states are at [output_size, output_size + n_tokens*state_size)
+    const int64_t last_state_offset = save_all_steps
+        ? (output_size + (n_tokens - 1) * state_size)
+        : output_size;
+
     ggml_tensor * new_state_flat = ggml_view_1d(ctx0, fused_result, state_size,
             last_state_offset * ggml_element_size(fused_result));
     ggml_tensor * new_state = ggml_reshape_4d(ctx0, new_state_flat, S_v, S_v, H_v, n_seqs);

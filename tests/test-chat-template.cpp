@@ -1,6 +1,8 @@
 #include <string>
+#include <utility>
 #include <vector>
 #include <sstream>
+#include <regex>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -12,8 +14,6 @@
 
 #include "llama.h"
 #include "common.h"
-#include "minja/chat-template.hpp"
-#include "minja/minja.hpp"
 #include "chat.h"
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
@@ -22,17 +22,16 @@
 
 using json = nlohmann::ordered_json;
 
-int main_automated_tests(void);
+static int main_automated_tests(void);
 
-void run_multiple(std::string dir_path, bool stop_on_first_failure, json input, bool use_common = false);
-void run_single(std::string contents, json input, bool use_common = false, const std::string & output_path = "");
+static void run_multiple(const std::string& dir_path, bool stop_on_first_failure, const json& input, bool use_common = false);
+static void run_single(const std::string& contents, json input, bool use_common = false, const std::string & output_path = "");
 
-
-
-std::string HELP = R"(
+static std::string HELP = R"(
 Usage: test-chat-template [OPTIONS] PATH_TO_TEMPLATE
 Options:
   -h, --help               Show this help message and exit.
+  --with-tools             Add a tool and a tool call to the default JSON input
   --json <path>            Path to the JSON input file.
   --stop-on-first-fail     Stop testing on the first failure (default: false).
   --no-common              Use direct Jinja engine instead of common chat templates (default: use common).
@@ -42,7 +41,7 @@ If PATH_TO_TEMPLATE is a directory, runs all .jinja files in that directory.
 If PATH_TO_TEMPLATE is omitted, runs automated tests (default CI mode).
 )";
 
-std::string DEFAULT_JSON = R"({
+static std::string DEFAULT_JSON = R"({
     "messages": [
         {
             "role": "user",
@@ -58,12 +57,65 @@ std::string DEFAULT_JSON = R"({
     "add_generation_prompt": true
 })";
 
+static std::string DEFAULT_JSON_WITH_TOOLS = R"({
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hello, how are you?"
+        },
+        {
+            "role": "assistant",
+            "content": "I am fine, thank you!"
+        },
+        {
+            "role": "user",
+            "content": "Call a tool!"
+        },
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call00001",
+                    "type": "function",
+                    "function": {
+                        "name": "test",
+                        "arguments": { "arg": "hello" }
+                    }
+                }
+            ]
+        }
+    ],
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "test",
+                "description": "Test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "arg": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": ["arg"]
+            }
+        }
+    ],
+    "bos_token": "<s>",
+    "eos_token": "</s>",
+    "add_generation_prompt": true
+})";
+
+
 int main(int argc, char ** argv) {
     std::vector<std::string> args(argv, argv + argc);
 
     std::string tmpl_path;
     std::string json_path;
     std::string output_path;
+    std::string & json_to_use = DEFAULT_JSON;
     bool stop_on_first_fail = false;
     bool use_common = true;
 
@@ -71,9 +123,12 @@ int main(int argc, char ** argv) {
         if (args[i] == "--help" || args[i] == "-h") {
             std::cout << HELP << "\n";
             return 0;
-        } else if (args[i] == "--json" && i + 1 < args.size()) {
+        }
+        if (args[i] == "--json" && i + 1 < args.size()) {
             json_path = args[i + 1];
             i++;
+        } else if (args[i] == "--with-tools") {
+            json_to_use = DEFAULT_JSON_WITH_TOOLS;
         } else if (args[i] == "--stop-on-first-fail") {
             stop_on_first_fail = true;
         } else if (args[i] == "--output" && i + 1 < args.size()) {
@@ -106,7 +161,7 @@ int main(int argc, char ** argv) {
             std::istreambuf_iterator<char>());
         input_json = json::parse(content);
     } else {
-        input_json = json::parse(DEFAULT_JSON);
+        input_json = json::parse(json_to_use);
     }
 
     std::filesystem::path p(tmpl_path);
@@ -126,7 +181,7 @@ int main(int argc, char ** argv) {
     return 0;
 }
 
-void run_multiple(std::string dir_path, bool stop_on_first_fail, json input, bool use_common) {
+void run_multiple(const std::string& dir_path, bool stop_on_first_fail, const json& input, bool use_common) {
     std::vector<std::string> failed_tests;
 
     // list all files in models/templates/ and run each
@@ -163,10 +218,10 @@ void run_multiple(std::string dir_path, bool stop_on_first_fail, json input, boo
 
 static std::string normalize_newlines(const std::string & s) {
 #ifdef _WIN32
-    static const std::regex nl_regex("\r\n");
-    return std::regex_replace(s, nl_regex, "\n");
+  static const std::regex nl_regex("\r\n");
+  return std::regex_replace(s, nl_regex, "\n");
 #else
-    return s;
+  return s;
 #endif
 }
 
@@ -181,7 +236,7 @@ static std::string format_using_common(
     common_chat_templates_inputs inputs;
     inputs.use_jinja = true;
     inputs.messages = messages;
-    inputs.tools = tools;
+    inputs.tools = std::move(tools);
     inputs.add_generation_prompt = true;
     auto output = common_chat_templates_apply(tmpls.get(), inputs).prompt;
     output = normalize_newlines(output);
@@ -210,7 +265,7 @@ static jinja::value_string format_using_direct_engine(
 
     jinja::runtime runtime(ctx);
     const jinja::value results = runtime.execute(ast);
-    auto parts = runtime.gather_string_parts(results);
+    auto parts = jinja::runtime::gather_string_parts(results);
 
     std::cout << "\n=== RESULTS ===\n";
     for (const auto & part : parts->as_string().parts) {
@@ -221,7 +276,7 @@ static jinja::value_string format_using_direct_engine(
 }
 
 
-void run_single(std::string contents, json input, bool use_common, const std::string & output_path) {
+void run_single(const std::string& contents, json input, bool use_common, const std::string & output_path) {
     jinja::enable_debug(true);
 
     jinja::value_string output_parts;
@@ -281,7 +336,7 @@ static common_chat_msg simple_msg(const std::string & role, const std::string & 
 int main_automated_tests(void) {
     // jinja::enable_debug(true);
 
-    llama_chat_message conversation[] = {
+    std::vector<llama_chat_message> conversation {
         {"system", "You are a helpful assistant"},
         {"user", "Hello"},
         {"assistant", "Hi there"},
@@ -289,54 +344,16 @@ int main_automated_tests(void) {
         {"assistant", "   I am an assistant   "},
         {"user", "Another question"},
     };
-    size_t message_count = 6;
-    std::vector<std::string> templates = {
-        // teknium/OpenHermes-2.5-Mistral-7B
-       "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}",
-        // mistralai/Mistral-7B-Instruct-v0.2
-        "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
-        // TheBloke/FusionNet_34Bx2_MoE-AWQ
-        "{%- for idx in range(0, messages|length) -%}\\n{%- if messages[idx]['role'] == 'user' -%}\\n{%- if idx > 1 -%}\\n{{- bos_token + '[INST] ' + messages[idx]['content'] + ' [/INST]' -}}\\n{%- else -%}\\n{{- messages[idx]['content'] + ' [/INST]' -}}\\n{%- endif -%}\\n{% elif messages[idx]['role'] == 'system' %}\\n{{- '[INST] <<SYS>>\\\\n' + messages[idx]['content'] + '\\\\n<</SYS>>\\\\n\\\\n' -}}\\n{%- elif messages[idx]['role'] == 'assistant' -%}\\n{{- ' '  + messages[idx]['content'] + ' ' + eos_token -}}\\n{% endif %}\\n{% endfor %}",
-        // bofenghuang/vigogne-2-70b-chat
-        "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% elif true == true and not '<<SYS>>' in messages[0]['content'] %}{% set loop_messages = messages %}{% set system_message = 'Vous êtes Vigogne, un assistant IA créé par Zaion Lab. Vous suivez extrêmement bien les instructions. Aidez autant que vous le pouvez.' %}{% else %}{% set loop_messages = messages %}{% set system_message = false %}{% endif %}{% for message in loop_messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if loop.index0 == 0 and system_message != false %}{% set content = '<<SYS>>\\\\n' + system_message + '\\\\n<</SYS>>\\\\n\\\\n' + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'system' %}{{ '<<SYS>>\\\\n' + content.strip() + '\\\\n<</SYS>>\\\\n\\\\n' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}",
-        // mlabonne/AlphaMonarch-7B
-        "{% for message in messages %}{{bos_token + message['role'] + '\\n' + message['content'] + eos_token + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ bos_token + 'assistant\\n' }}{% endif %}",
-        // google/gemma-7b-it
-        "{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '<start_of_turn>' + role + '\\n' + message['content'] | trim + '<end_of_turn>\\n' }}{% endfor %}{% if add_generation_prompt %}{{'<start_of_turn>model\\n'}}{% endif %}",
-        // OrionStarAI/Orion-14B-Chat
-        "{% for message in messages %}{% if loop.first %}{{ bos_token }}{% endif %}{% if message['role'] == 'user' %}{{ 'Human: ' + message['content'] + '\\n\\nAssistant: ' + eos_token }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token }}{% endif %}{% endfor %}",
-        // openchat/openchat-3.5-0106
-        // The included chat_template differs from the author's suggestions here: https://huggingface.co/openchat/openchat_3.5/discussions/5#65448109b4a3f3a2f486fd9d
-        // So we match against the included template but implement the suggested version.
-        "{{ bos_token }}{% for message in messages %}{{ 'GPT4 Correct ' + message['role'].title() + ': ' + message['content'] + '<|end_of_turn|>'}}{% endfor %}{% if add_generation_prompt %}{{ 'GPT4 Correct Assistant:' }}{% endif %}",
-        // deepseek-ai/deepseek-coder-33b-instruct
-        "{% if not add_generation_prompt is defined %}\n{% set add_generation_prompt = false %}\n{% endif %}\n{%- set ns = namespace(found=false) -%}\n{%- for message in messages -%}\n    {%- if message['role'] == 'system' -%}\n        {%- set ns.found = true -%}\n    {%- endif -%}\n{%- endfor -%}\n{{bos_token}}{%- if not ns.found -%}\n{{'You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\\n'}}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message['role'] == 'system' %}\n{{ message['content'] }}\n    {%- else %}\n        {%- if message['role'] == 'user' %}\n{{'### Instruction:\\n' + message['content'] + '\\n'}}\n        {%- else %}\n{{'### Response:\\n' + message['content'] + '\\n<|EOT|>\\n'}}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n{% if add_generation_prompt %}\n{{'### Response:'}}\n{% endif %}",
-        // eachadea/vicuna-13b-1.1
-        // No template included in tokenizer_config.json, so this template likely needs to be manually set.
-        "{%- for message in messages %}{%- if message['role'] == 'system' -%}{{- '' + message['content'] + '\n\n' -}}{%- else -%}{%- if message['role'] == 'user' -%}{{-'USER: ' + message['content'] + '\n'-}}{%- else -%}{{-'ASSISTANT: ' + message['content'] + '</s>\n' -}}{%- endif -%}{%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}{{-'ASSISTANT:'-}}{%- endif -%}",
-        // Orca-Vicuna
-        // No template included in tokenizer_config.json, so this template likely needs to be manually set.
-        "{%- for message in messages %}{%- if message['role'] == 'system' -%}{{-'SYSTEM: ' + message['content'] + '\n' -}}{%- else -%}{%- if message['role'] == 'user' -%}{{-'USER: ' + message['content'] + '\n'-}}{%- else -%}{{-'ASSISTANT: ' + message['content'] + '</s>\n' -}}{%- endif -%}{%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}{{-'ASSISTANT:'-}}{%- endif -%}",
-        // CohereForAI/c4ai-command-r-plus
-        "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% elif false == true %}{% set loop_messages = messages %}{% set system_message = 'You are Command-R, a brilliant, sophisticated, AI-assistant trained to assist human users by providing thorough responses. You are trained by Cohere.' %}{% else %}{% set loop_messages = messages %}{% set system_message = false %}{% endif %}{% if system_message != false %}{{ '<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>' + system_message + '<|END_OF_TURN_TOKEN|>' }}{% endif %}{% for message in loop_messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% set content = message['content'] %}{% if message['role'] == 'user' %}{{ '<|START_OF_TURN_TOKEN|><|USER_TOKEN|>' + content.strip() + '<|END_OF_TURN_TOKEN|>' }}{% elif message['role'] == 'assistant' %}{{ '<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>'  + content.strip() + '<|END_OF_TURN_TOKEN|>' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>' }}{% endif %}",
-        // Llama-3
-        "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}",
-        //Phi-3-mini
-        "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') %}{{'<|user|>' + '\n' + message['content'] + '<|end|>' + '\n' + '<|assistant|>' + '\n'}}{% elif (message['role'] == 'assistant') %}{{message['content'] + '<|end|>' + '\n'}}{% endif %}{% endfor %}",
-        //Phi-3-small
-        "{{ bos_token }}{% for message in messages %}{{'<|' + message['role'] + '|>' + '\n' + message['content'] + '<|end|>\n' }}{% endfor %}{% if add_generation_prompt %}{{ '<|assistant|>\n' }}{% else %}{{ eos_token }}{% endif %}",
-        //Phi-3-medium
-        "{% for message in messages %}{% if (message['role'] == 'user') %}{{'<|user|>' + '\n' + message['content'] + '<|end|>' + '\n' + '<|assistant|>' + '\n'}}{% elif (message['role'] == 'assistant') %}{{message['content'] + '<|end|>' + '\n'}}{% endif %}{% endfor %}",
-        //Phi-3-vision
-        "{% for message in messages %}{{'<|' + message['role'] + '|>' + '\n' + message['content'] + '<|end|>\n' }}{% endfor %}{% if add_generation_prompt and messages[-1]['role'] != 'assistant' %}{{- '<|assistant|>\n' -}}{% endif %}",
-        // ChatGLM3
-        "{% for message in messages %}{% if loop.first %}[gMASK]sop<|{{ message['role'] }}|>\n {{ message['content'] }}{% else %}<|{{ message['role'] }}|>\n {{ message['content'] }}{% endif %}{% endfor %}{% if add_generation_prompt %}<|assistant|>{% endif %}",
-        // ChatGLM4
-        u8"[gMASK]<sop>{% for item in messages %}{% if item['tools'] is defined %}<|system|>\n你是一个名为 ChatGLM 的人工智能助手。你是基于智谱AI训练的语言模型 GLM-4 模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。\n\n# 可用工具{% set tools = item['tools'] %}{% for tool in tools %}{% if tool['type'] == 'function' %}\n\n## {{ tool['function']['name'] }}\n\n{{ tool['function'] | tojson(indent=4) }}\n......{% endif %}{% endfor %}{% endif %}{% if item['content'] %}<|{{ item['role'] }}|>{{ item['metadata'] }}\n{{ item['content'] }}{% endif %}{% endfor %}{% if add_generation_prompt %}<|assistant|>{% endif %}",
-        // MiniCPM-3B-OpenHermes-2.5-v2-GGUF
-        u8"{% for message in messages %}{% if message['role'] == 'user' %}{{'<用户>' + message['content'].strip() + '<AI>'}}{% else %}{{message['content'].strip()}}{% endif %}{% endfor %}",
-        // DeepSeek-V2
-        "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{{ bos_token }}{% for message in messages %}{% if message['role'] == 'user' %}{{ 'User: ' + message['content'] + '\n\n' }}{% elif message['role'] == 'assistant' %}{{ 'Assistant: ' + message['content'] + eos_token }}{% elif message['role'] == 'system' %}{{ message['content'] + '\n\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}",
+
+    // std::string wrong = /* .template_str= */ u8"[gMASK]<sop>{% for item in messages %}{% if item['tools'] is defined %}<|system|>\n你是一个名为 ChatGLM 的人工智能助手。你是基于智谱AI训练的语言模型 GLM-4 模型开发的，你的任务是针对用户的问题和要求提供适当的答复和支持。\n\n# 可用工具{% set tools = item['tools'] %}{% for tool in tools %}{% if tool['type'] == 'function' %}\n\n## {{ tool['function']['name'] }}\n\n{{ tool['function'] | tojson(indent=4) }}\n......{% endif %}{% endfor %}{% endif %}{% if item['content'] %}<|{{ item['role'] }}|>{{ item['metadata'] }}\n{{ item['content'] }}{% endif %}{% endfor %}{% if add_generation_prompt %}<|assistant|>{% endif %}";
+    struct TestCase {
+        std::string name;
+        std::string template_str;
+        std::string expected_output;
+        std::string expected_output_jinja;
+        std::string bos_token = "";
+        std::string eos_token = "";
+        bool supported_with_jinja = true;
     };
     std::vector<TestCase> test_cases {
         {
@@ -599,23 +616,23 @@ int main_automated_tests(void) {
     supported_tmpl.resize(res);
     res = llama_chat_builtin_templates(supported_tmpl.data(), supported_tmpl.size());
     std::cout << "Built-in chat templates:\n";
-    for (auto tmpl : supported_tmpl) {
+    for (const auto *tmpl : supported_tmpl) {
         std::cout << "  " << tmpl << "\n";
     }
 
     // test invalid chat template
-    res = llama_chat_apply_template(nullptr, "INVALID TEMPLATE", conversation, message_count, true, formatted_chat.data(), formatted_chat.size());
+    res = llama_chat_apply_template("INVALID TEMPLATE", conversation.data(), conversation.size(), true, formatted_chat.data(), formatted_chat.size());
     assert(res < 0);
+    const auto add_generation_prompt = true;
 
     for (const auto & test_case : test_cases) {
         std::cout << "\n\n=== " << test_case.name << " ===\n\n";
         formatted_chat.resize(1024);
         res = llama_chat_apply_template(
-            nullptr,
-            custom_template.c_str(),
-            conversation,
-            message_count,
-            true,
+            test_case.template_str.c_str(),
+            conversation.data(),
+            conversation.size(),
+            add_generation_prompt,
             formatted_chat.data(),
             formatted_chat.size()
         );
@@ -631,6 +648,7 @@ int main_automated_tests(void) {
     }
 
     std::vector<common_chat_msg> messages;
+    messages.reserve(conversation.size());
     for (const auto & msg : conversation) {
         messages.push_back(simple_msg(msg.role, msg.content));
     }
@@ -660,46 +678,6 @@ int main_automated_tests(void) {
             assert(false);
         }
     }
-
-    // TODO: llama_chat_format_single will be deprecated, remove these tests later
-
-    // test llama_chat_format_single for system message
-    std::cout << "\n\n=== llama_chat_format_single (system message) ===\n\n";
-    std::vector<common_chat_msg> chat2;
-    common_chat_msg sys_msg{"system", "You are a helpful assistant"};
-
-    auto fmt_sys = [&](std::string tmpl_str) {
-        auto tmpls = common_chat_templates_init(/* model= */ nullptr, tmpl_str);
-        auto output = common_chat_format_single(tmpls.get(), chat2, sys_msg, false, /* use_jinja= */ false);
-        std::cout << "fmt_sys(" << tmpl_str << ") : " << output << "\n";
-        std::cout << "-------------------------\n";
-        return output;
-    };
-    assert(fmt_sys("chatml") == "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n");
-    assert(fmt_sys("llama2") == "[INST] You are a helpful assistant\n");
-    assert(fmt_sys("gemma")  == ""); // for gemma, system message is merged with user message
-    assert(fmt_sys("llama3") == "<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant<|eot_id|>");
-
-
-    // test llama_chat_format_single for user message
-    std::cout << "\n\n=== llama_chat_format_single (user message) ===\n\n";
-    chat2.push_back({"system", "You are a helpful assistant"});
-    chat2.push_back({"user", "Hello"});
-    chat2.push_back({"assistant", "I am assistant"});
-    common_chat_msg new_msg{"user", "How are you"};
-
-    auto fmt_single = [&](std::string tmpl_str) {
-        auto tmpls = common_chat_templates_init(/* model= */ nullptr, tmpl_str);
-        auto output = common_chat_format_single(tmpls.get(), chat2, new_msg, true, /* use_jinja= */ false);
-        std::cout << "fmt_single(" << tmpl_str << ") : " << output << "\n";
-        std::cout << "-------------------------\n";
-        return output;
-    };
-    assert(fmt_single("chatml") == "\n<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n");
-    assert(fmt_single("llama2") == "[INST] How are you [/INST]");
-    assert(fmt_single("gemma")  == "\n<start_of_turn>user\nHow are you<end_of_turn>\n<start_of_turn>model\n");
-    assert(fmt_single("llama3") == "<|start_header_id|>user<|end_header_id|>\n\nHow are you<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
-    // assert(fmt_single("gigachat") == "user<|role_sep|>How are you<|message_sep|>available functions<|role_sep|>[]<|message_sep|>assistant<|role_sep|>");
 
     std::cout << "\nOK: All tests passed successfully.\n";
 

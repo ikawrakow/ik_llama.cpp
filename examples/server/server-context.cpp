@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iostream>
 #include <regex>
+#include <exception>
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
     if (params_base.minilog) {
@@ -361,14 +362,13 @@ void server_context::init() {
         }
 
         // thinking is enabled if:
-        // 1. It's not explicitly disabled (reasoning_budget == 0)
-        // 2. The chat template supports it
-        const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
-        SRV_INF("%s: chat template, thinking = %d\n", __func__, enable_thinking);
+            // 1. It's not explicitly disabled via --reasoning off
+            // 2. The chat template supports it
+        const bool template_supports_thinking = params_base.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
+        const bool enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
 
         chat_params = {
             /* use_jinja             */ params_base.use_jinja,
-            /* use_peg               */ params_base.use_peg,
             /* prefill_assistant     */ params_base.prefill_assistant,
             /* reasoning_format      */ params_base.reasoning_format,
             /* chat_template_kwargs  */ params_base.default_template_kwargs,
@@ -376,6 +376,10 @@ void server_context::init() {
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio(mctx) : false,
             /* enable_thinking       */ enable_thinking,
+            /* parallel_tool_calls  */ params_base.parallel_tool_calls,
+            /* reasoning_budget      */ params_base.reasoning_budget,
+            /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
+            /* force_pure_content    */ params_base.force_pure_content_parser
            // /* media_path            */ params_base.media_path,
         };
     }
@@ -588,20 +592,76 @@ result_timings server_slot::get_timings() const {
     return timings;
 }
 
-const common_chat_msg& server_slot::update_chat_msg(std::vector<common_chat_msg_diff>& diffs) {
-    auto previous_msg = chat_msg;
+const common_chat_msg& server_slot::update_chat_msg(bool is_partial, std::vector<common_chat_msg_diff>& diffs,
+    bool filter_tool_calls) {
+    auto msg_prv_copy = chat_msg;
     auto new_msg = common_chat_parse(
         generated_text,
         /* is_partial= */ stop != STOP_TYPE_EOS,
-        params.oaicompat_chat_syntax);
+        params.chat_parser_params);
     if (!new_msg.empty()) {
-        new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
+        //new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
+        new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
-        diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
+        auto all_diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, chat_msg);
+
+        if (!filter_tool_calls) {
+            diffs = std::move(all_diffs);
+        } else {
+            for (auto & d : all_diffs) {
+                // If this is a new type of delta, flush all currently pending tool call names
+                for (size_t i = 0; i < chat_msg.tool_calls.size(); ++i) {
+                    if (sent_tool_call_names.count(i) || chat_msg.tool_calls[i].name.empty()) {
+                        continue;
+                    }
+                    if (d.tool_call_index != i || !d.tool_call_delta.arguments.empty()) {
+                        common_chat_msg_diff header;
+                        header.tool_call_index = i;
+                        header.tool_call_delta.id = chat_msg.tool_calls[i].id;
+                        header.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                        diffs.push_back(std::move(header));
+                        sent_tool_call_names.insert(i);
+                    }
+                }
+
+                if (d.tool_call_index == std::string::npos) {
+                    diffs.push_back(std::move(d));
+                } else {
+                    size_t i = d.tool_call_index;
+                    if (sent_tool_call_names.count(i)) {
+                        if (!d.tool_call_delta.arguments.empty()) {
+                            d.tool_call_delta.name = "";
+                            d.tool_call_delta.id = "";
+                            diffs.push_back(std::move(d));
+                        }
+                    } else {
+                        // Not sent yet.
+                        if (!d.tool_call_delta.arguments.empty() || !is_partial) {
+                            d.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                            d.tool_call_delta.id = chat_msg.tool_calls[i].id;
+                            diffs.push_back(std::move(d));
+                            sent_tool_call_names.insert(i);
+                        } else {
+                            // Suppress
+                        }
+                    }
+                }
+            }
+            // Final check at EOF
+            if (!is_partial) {
+                for (size_t i = 0; i < chat_msg.tool_calls.size(); ++i) {
+                    if (!sent_tool_call_names.count(i) && !chat_msg.tool_calls[i].name.empty()) {
+                        common_chat_msg_diff header;
+                        header.tool_call_index = i;
+                        header.tool_call_delta.id = chat_msg.tool_calls[i].id;
+                        header.tool_call_delta.name = chat_msg.tool_calls[i].name;
+                        diffs.push_back(std::move(header));
+                        sent_tool_call_names.insert(i);
+                    }
+                }
+            }
+        }
     }
-    //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", generated_text.c_str());
-    //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.reasoning_content.c_str());
-    //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.content.c_str());
     return chat_msg;
 }
 
@@ -1051,16 +1111,28 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         try {
             auto schema = json_value(data, "json_schema", json::object());
             LLAMA_LOG_DEBUG("JSON schema: %s\n", schema.dump(2).c_str());
-            slot.sparams.grammar = json_schema_to_grammar(schema);
-            LLAMA_LOG_DEBUG("Converted grammar: %s\n", slot.sparams.grammar.c_str());
+            std::string grammar_str = json_schema_to_grammar(schema);
+            SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
+            slot.sparams.grammar = { COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, std::move(grammar_str) };
         }
         catch (const std::exception& e) {
             throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
         }
     }
     else {
-        slot.sparams.grammar = json_value(data, "grammar", default_sparams.grammar);
-        LLAMA_LOG_DEBUG("Grammar: %s\n", slot.sparams.grammar.c_str());
+        slot.sparams.grammar = default_sparams.grammar;
+        std::string grammar_str = json_value(data, "grammar", std::string());
+        if (!grammar_str.empty()) {
+            // grammar_type key is set by the server when converting chat template grammars
+            std::string grammar_type = json_value(data, "grammar_type", std::string());
+            if (grammar_type == "tool_calls") {
+                slot.sparams.grammar = { COMMON_GRAMMAR_TYPE_TOOL_CALLS, std::move(grammar_str) };
+            } else {
+                // explicit grammar from the user (API field "grammar")
+                slot.sparams.grammar = { COMMON_GRAMMAR_TYPE_USER, std::move(grammar_str) };
+            }
+            LLAMA_LOG_DEBUG("Grammar (%s): %s\n", grammar_type.c_str(), common_grammar_value(slot.sparams.grammar).c_str());
+        }
         slot.sparams.grammar_lazy = json_value(data, "grammar_lazy", default_sparams.grammar_lazy);
         LLAMA_LOG_DEBUG("Grammar lazy: %s\n", slot.sparams.grammar_lazy ? "true" : "false");
     }
@@ -1148,23 +1220,25 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     {
         auto it = data.find("chat_format");
         if (it != data.end()) {
-            slot.params.oaicompat_chat_syntax.format = static_cast<common_chat_format>(it->get<int>());
-            LLAMA_LOG_DEBUG("Chat format: %s\n", common_chat_format_name(slot.params.oaicompat_chat_syntax.format));
+            slot.params.chat_parser_params.format = static_cast<common_chat_format>(it->get<int>());
+            LLAMA_LOG_DEBUG("Chat format: %s\n", common_chat_format_name(slot.params.chat_parser_params.format));
         }
         else {
-            slot.params.oaicompat_chat_syntax.format = defaults.oaicompat_chat_syntax.format;
+            slot.params.chat_parser_params.format = defaults.chat_parser_params.format;
         }
         common_reasoning_format reasoning_format = params_base.reasoning_format;
         if (data.contains("reasoning_format")) {
             reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
         }
-        slot.params.oaicompat_chat_syntax.reasoning_format = reasoning_format;
-        slot.params.oaicompat_chat_syntax.reasoning_in_content = slot.params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
-        slot.params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+        slot.params.chat_parser_params.reasoning_format = reasoning_format;
+        slot.params.chat_parser_params.reasoning_in_content = slot.params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+        slot.params.chat_parser_params.generation_prompt = json_value(data, "generation_prompt", std::string());
+        slot.sparams.generation_prompt = slot.params.chat_parser_params.generation_prompt;
+        LLAMA_LOG_DEBUG("Generation prompt: '%s'\n", slot.params.chat_parser_params.generation_prompt.c_str());
+        slot.params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
-            slot.params.oaicompat_chat_syntax.parser.load(data.at("chat_parser").get<std::string>());
+            slot.params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
         }
-        slot.params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
     }
     {
 
@@ -1226,6 +1300,29 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
         if (slot.sparams.grammar_lazy && slot.sparams.grammar_triggers.empty()) {
             throw std::runtime_error("Error: no triggers set for lazy grammar!");
+        }
+    }
+
+    // Parse reasoning budget sampler parameters
+    {
+        const int32_t budget = json_value(data, "reasoning_budget_tokens", (int32_t)-1);
+        const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
+        const auto end_tag = json_value(data, "reasoning_budget_end_tag", std::string());
+        const auto message = json_value(data, "reasoning_budget_message", std::string());
+        slot.sparams.reasoning_budget_tokens = budget;
+
+        if (!start_tag.empty()) {
+            slot.sparams.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
+        }
+        if (!end_tag.empty()) {
+            slot.sparams.reasoning_budget_end = common_tokenize(vocab, end_tag, false, true);
+            slot.sparams.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
+
+            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+                budget, slot.sparams.generation_prompt.c_str(),
+                slot.sparams.reasoning_budget_start.size(),
+                slot.sparams.reasoning_budget_end.size(),
+                slot.sparams.reasoning_budget_forced.size());
         }
     }
 
@@ -1395,13 +1492,13 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
         }
-
-        if (banbuffer_size > 0) {
-            slot.n_buffer = banbuffer_size;
-        } else {
-            slot.n_buffer = slot.n_buffer + 1; // buffer is longest string/regex + 1
+        if (banned_regex_ci != data.end() || banned_regex != data.end() || banned_strings != data.end()) {
+            if (banbuffer_size > 0) {
+                slot.n_buffer = banbuffer_size;
+            } else {
+                slot.n_buffer = slot.n_buffer + 1; // buffer is longest string/regex + 1
+            }
         }
-
 		slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
         slot.ban_phrases_bias = json_value(data, "banned_bias", params_base.ban_phrases_bias);
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);
@@ -1523,7 +1620,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
-        }
+    }
     }
     {
         const auto& stop = data.find("stop");
@@ -1553,10 +1650,18 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     }
 
     {
-        if (slot.ctx_sampling != nullptr) {
-            common_sampler_free(slot.ctx_sampling);
+        try
+        {
+            if (slot.ctx_sampling != nullptr) {
+                common_sampler_free(slot.ctx_sampling);
+            }
+            slot.ctx_sampling = common_sampler_init(model, slot.sparams);
         }
-        slot.ctx_sampling = common_sampler_init(model, slot.sparams);
+        catch (std::exception & e) {
+            std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
+            send_error(task, err_msg, ERROR_TYPE_INVALID_REQUEST);
+            return false;
+        }
         if (slot.ctx_sampling == nullptr) {
             // for now, the only error that may happen here is invalid grammar
             send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
@@ -1874,13 +1979,12 @@ json server_context::get_formated_generation(const server_slot& slot) const {
         {"logit_bias",                slot.sparams.logit_bias},
         {"n_probs",                   slot.sparams.n_probs},
         {"min_keep",                  slot.sparams.min_keep},
-        {"grammar",                   slot.sparams.grammar},
+        {"grammar",                   slot.sparams.grammar.grammar},
         {"grammar_triggers",          grammar_triggers},
         {"preserved_tokens",          slot.sparams.preserved_tokens},
-        {"chat_format",               common_chat_format_name(slot.params.oaicompat_chat_syntax.format)},
-        {"reasoning_format",          common_reasoning_format_name(slot.params.oaicompat_chat_syntax.reasoning_format)},
-        {"reasoning_in_content",      slot.params.oaicompat_chat_syntax.reasoning_in_content},
-        {"thinking_forced_open",      slot.params.oaicompat_chat_syntax.thinking_forced_open},
+        {"chat_format",               common_chat_format_name(slot.params.chat_parser_params.format)},
+        {"reasoning_format",          common_reasoning_format_name(slot.params.chat_parser_params.reasoning_format)},
+        {"reasoning_in_content",      slot.params.chat_parser_params.reasoning_in_content},
         {"samplers",                  samplers_sequence}
     };
 }
@@ -1949,7 +2053,7 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
         {"id_slot",    slot.id},
         {"multimodal", false}
     };
-    slot.update_chat_msg(res->oaicompat_msg_diffs);
+    slot.update_chat_msg(true, res->oaicompat_msg_diffs);
 
     res->anthropic_has_reasoning = !slot.chat_msg.reasoning_content.empty();
 
@@ -2010,7 +2114,7 @@ void server_context::send_final_response(server_slot& slot) {
     res->post_sampling_probs = slot.params.post_sampling_probs;
     res->oaicompat = slot.params.oaicompat;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
-    res->oaicompat_msg = slot.update_chat_msg(res->oaicompat_msg_diffs);
+    res->oaicompat_msg = slot.update_chat_msg(false, res->oaicompat_msg_diffs);
     res->oai_resp_id = slot.oai_resp_id;
     res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
     res->oai_resp_message_id = slot.oai_resp_message_id;
@@ -3105,19 +3209,22 @@ void  server_context::create_checkpoint_at_interval(server_slot & slot, const gp
         if (slot.checkpoint_pos + params_base.ctx_checkpoints_interval <= 1 + pos) {
             bool created = create_checkpoint(slot);
             if (created) {
-                slot.checkpoint_pos = pos;
-            }
+            slot.checkpoint_pos = pos;
         }
     }
+}
 }
 
 void server_context::apply_checkpoint(server_slot & slot) {
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
+    const bool has_recurrent = llama_model_has_recurrent(llama_get_model(slot.ctx));
+    // For hybrid/recurrent models, pos_min semantics don't apply: the recurrent state is a single
+    // snapshot, not a per-token window. Use pos_max against n_past to match whole-prefix checkpoints.
     const auto pos_min_thold = std::max(0, pos_next - 1);
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
 
-        if (pos_min > pos_min_thold) {
+        if (has_recurrent || pos_min > pos_min_thold) {
             SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", slot.n_past, (int)slot.cache_tokens.size(), slot.id, pos_min);
 
             // search for a context checkpoint
@@ -3126,6 +3233,11 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
                     // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
+                    if (has_recurrent) {
+                        // recurrent/hybrid: only whole-prefix checkpoints are valid; pick the latest one
+                        // that covers no more than the current n_past and still leaves tokens to decode.
+                        return cur.pos_max <= slot.n_past && cur.pos_max < pos_next;
+                    }
                     return cur.pos_min < pos_min_thold;
                 }
             );
@@ -3143,28 +3255,39 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     do_reset = true;
                     //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else {
-                    slot.n_past = std::min(slot.n_past, std::max(it->pos_min+1, it->pos_max));
+                    slot.n_past = std::min(slot.n_past, std::max(it->pos_min + 1, it->pos_max));
                     slot.n_past = slot.cache_tokens.size_up_to_pos(slot.n_past-1);
-                    slot.n_past_prompt = std::min(slot.n_past_prompt, std::max(it->pos_min_prompt+1, it->pos_max_prompt));
+                    slot.n_past_prompt = std::min(slot.n_past_prompt, std::max(it->pos_min_prompt + 1, it->pos_max_prompt));
                     slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(slot.n_past_prompt-1);
                     SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, (float)checkpoint_size / 1024 / 1024);
                 }
             }
 
             if (do_reset) {
-                SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
-                    "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                slot.n_past = 0;
-                slot.n_past_prompt = 0;
+                if (has_recurrent) {
+                    // Hybrid/recurrent: do NOT zero n_past. The prompt prefix is already in cache_tokens
+                    // and update_slots() reprocesses from slot.n_past_prompt; dropping to 0 forces a full
+                    // recompute on every turn and — combined with cached state — trips llama_decode ret=-3.
+                    SLT_WRN(slot, "no usable hybrid/recurrent checkpoint; preserving slot state (n_past = %d, n_past_prompt = %d)\n",
+                        (int)slot.n_past, (int)slot.n_past_prompt);
+                } else {
+                    SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
+                        "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                    slot.n_past = 0;
+                    slot.n_past_prompt = 0;
+                }
             }
         }
     }
 
     {
-        // erase any checkpoints with pos_min > pos_min_thold
+        // erase checkpoints that are no longer consistent with the current decode position.
+        // Transformer: anything with pos_min beyond the threshold is stale.
+        // Recurrent/hybrid: anything with pos_max past pos_next refers to future tokens we've rewound past.
         for (auto it = slot.server_cached_prompt.checkpoints.begin(); it != slot.server_cached_prompt.checkpoints.end();) {
             const auto & cur = *it;
-            if (cur.pos_min > pos_min_thold) {
+            const bool stale = has_recurrent ? (cur.pos_max > pos_next) : (cur.pos_min > pos_min_thold);
+            if (stale) {
                 SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
                 it = slot.server_cached_prompt.checkpoints.erase(it);
             } else {
@@ -3777,8 +3900,6 @@ void server_context::speculative_decoding_accept() {
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
                 if (!process_token(result, slot)) {
                     // release slot because of stop condition
-                    slot.cache_tokens.push_back(slot.sampled);
-                    slot.n_past++;
                     send_final_response(slot);
                     release_slot_after_final_response(slot);
                     break;
@@ -3836,8 +3957,6 @@ void server_context::send_token_results(completion_token_outputs& results, serve
             if (slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
                 continue;
             }
-            slot.cache_tokens.push_back(slot.sampled);
-            slot.n_past++;
             send_final_response(slot);
             release_slot_after_final_response(slot);
             released = true;
@@ -3849,8 +3968,6 @@ void server_context::send_token_results(completion_token_outputs& results, serve
     }
 
     if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
-        slot.cache_tokens.push_back(slot.sampled);
-        slot.n_past++;
         send_final_response(slot);
         release_slot_after_final_response(slot);
     }

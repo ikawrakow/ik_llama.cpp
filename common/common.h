@@ -27,6 +27,7 @@
 #include <tuple>
 #include <map>
 #include <sstream>
+#include <variant>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -146,9 +147,9 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_SUFFIX,        // self-speculative suffix-decoding (arXiv:2411.04975)
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
-
 
 struct common_params_model {
     std::string path        = ""; // model local path                                       // NOLINT
@@ -164,7 +165,6 @@ struct common_params_speculative {
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding
 
     // Recurrent-model checkpoint strategy for speculative decoding.
-    // Controls the trade-off between VRAM usage and rejection latency.
     int recurrent_ckpt_mode = LLAMA_SPEC_CKPT_AUTO;
 
     std::string devices;
@@ -185,6 +185,11 @@ struct common_params_speculative {
     uint16_t ngram_min_hits = 1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
     std::shared_ptr<common_ngram_mod> ngram_mod;
+
+    // suffix-decoding specific
+    int32_t     suffix_min_match_len = 5;  // minimum context match length
+    int32_t     suffix_max_depth     = 64; // suffix tree maximum depth
+    std::string suffix_corpus;             // path to corpus file for offline pre-warming (.json or .bin)
 
     std::string lookup_cache_static;  // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding          // NOLINT
@@ -421,14 +426,23 @@ struct gpt_params {
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";
+
+    // tool call and template
     std::string chat_template = "";
     bool use_jinja = false;                                                                                 // NOLINT
     bool use_peg = false;
     std::string system_prompt = "";
     bool enable_chat_template = true;
+    bool force_pure_content_parser = false;
+    bool parallel_tool_calls = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
+    int reasoning_budget = -1;
+    std::string reasoning_budget_message; // message injected before end tag when budget exhausted
+    std::map<std::string, std::string> default_template_kwargs;
+
     thinking_tokens think_tokens;
-    int reasoning_budget      = -1;
+
     bool prefill_assistant    = true;
     bool dry_run              = false;
 
@@ -437,7 +451,7 @@ struct gpt_params {
     std::string ssl_file_key  = "";
     std::string ssl_file_cert = "";
 
-    std::map<std::string, std::string> default_template_kwargs;
+
 
     // "advanced" endpoints are disabled by default for better security
     common_webui webui = COMMON_WEBUI_AUTO;
@@ -537,6 +551,7 @@ std::string string_join(const std::vector<std::string>& values, const std::strin
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
 std::string string_lower(const std::string & str);
+std::string string_repeat(const std::string & str, size_t n);
 
 static bool string_starts_with(const std::string& str,
     const std::string& prefix) {  // While we wait for C++20's std::string::starts_with...
@@ -647,9 +662,15 @@ std::vector<llama_token> common_tokenize(
                         bool   add_special,
                         bool   parse_special = false);
 
-std::vector<llama_token> llama_tokenize(
+std::vector<llama_token> common_tokenize(
     const struct llama_vocab* vocab,
     const std::string& text,
+    bool   add_special,
+    bool   parse_special = false);
+
+std::vector<llama_token> llama_tokenize(
+    const struct llama_vocab * vocab,
+    const std::string & text,
     bool   add_special,
     bool   parse_special = false);
 

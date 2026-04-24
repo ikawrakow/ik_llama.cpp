@@ -188,7 +188,7 @@ int main(int argc, char ** argv) {
     // draft sequence data
     std::vector<seq_draft> drafts(n_seq_dft);
 
-    params.sparams.grammar.clear(); // the draft samplers will copy the target sampler's grammar
+    params.sparams.grammar = { COMMON_GRAMMAR_TYPE_NONE, ""}; // the draft samplers will copy the target sampler's grammar
     if (params.sparams.temp == 0) {
         params.sparams.temp = -1.0f; // force greedy sampling with probs for the draft model
     }
