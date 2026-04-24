@@ -1836,19 +1836,30 @@ __device__ static inline float tq3_4s_decode_scale_cuda(uint8_t byte) {
     return ldexpf(mantissa, exp_v);
 }
 
+// Branchless WHT butterfly shared by both dequantize_block_tq3_{4s,1s}
+// (and mirrored in tq3-act-rotate.cu). The step-indexed conditional
+//     val = (lane & step) ? (other - val) : (other + val)
+// is re-expressed as a sign-bit XOR + unconditional add, which nvcc emits
+// as ISEL + IADD + FADD rather than a predicated FSUB/FADD pair.
+static __device__ __forceinline__ float tq3_cuda_wht32(float val, int lane) {
+    #pragma unroll
+    for (int step = 1; step < 32; step <<= 1) {
+        const float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
+        const uint32_t flip = (lane & step) ? 0x80000000u : 0u;
+        val = other + __uint_as_float(__float_as_uint(val) ^ flip);
+    }
+    return val;
+}
+
 template<typename dst_t>
 static __global__ void dequantize_block_tq3_4s(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb) {
     const int i = blockIdx.x;
     if (i >= nb) return;
 
+    // Fetch only this lane's subgroup scale instead of materializing all 4 in
+    // a register array — reduces per-thread register pressure with no extra
+    // shared-memory traffic (the block is in __constant__ / L1 anyway).
     const block_tq3_4s * x = (const block_tq3_4s *)vx + i;
-    const float ds[4] = {
-        tq3_4s_decode_scale_cuda(x->d[0]),
-        tq3_4s_decode_scale_cuda(x->d[1]),
-        tq3_4s_decode_scale_cuda(x->d[2]),
-        tq3_4s_decode_scale_cuda(x->d[3]),
-    };
-
     dst_t * y = yy + i * QK_TQ3_0;
     const int j = threadIdx.x;
     const int g = j / 8;
@@ -1856,17 +1867,11 @@ static __global__ void dequantize_block_tq3_4s(const void * __restrict__ vx, dst
     const uint8_t * qp = x->qs + g * 3;
     const uint8_t idx = tq3_idx_from_packed_cuda(qp, r);
 
-    float val = tq3_0_centroids_cuda[idx] * ds[g];
-    for (int step = 1; step < 32; step <<= 1) {
-        float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
-        if (j & step) {
-            val = other - val;
-        } else {
-            val = other + val;
-        }
-    }
+    float val = tq3_0_centroids_cuda[idx] * tq3_4s_decode_scale_cuda(x->d[g]);
+    val = tq3_cuda_wht32(val, j);
 
-    y[j] = (dst_t)(val * (tq3_0_signs_cuda[j] / sqrtf(32.0f)));
+    constexpr float inv_sqrt_32 = 0.17677669529663688f; // 1/sqrt(32), was sqrtf() call
+    y[j] = (dst_t)(val * tq3_0_signs_cuda[j] * inv_sqrt_32);
 }
 
 template<typename dst_t>
@@ -1881,9 +1886,9 @@ static __global__ void dequantize_block_tq3_1s(const void * __restrict__ vx, dst
     const int i = blockIdx.x;
     if (i >= nb) return;
 
+    // Fetch only the half-scale this lane needs (d0 for j<16, d1 otherwise);
+    // drops one __half2float per thread relative to eager prefetch of both.
     const block_tq3_1s * x = (const block_tq3_1s *)vx + i;
-    const float d0 = __half2float(x->d0);
-    const float d1 = __half2float(x->d1);
     dst_t * y = yy + i * QK_TQ3_0;
     const int j = threadIdx.x;
 
@@ -1892,17 +1897,12 @@ static __global__ void dequantize_block_tq3_1s(const void * __restrict__ vx, dst
     const uint8_t * qp = x->qs + g * 3;
     const uint8_t idx = tq3_idx_from_packed_cuda(qp, r);
 
-    float val = tq3_0_centroids_cuda[idx] * (j < 16 ? d0 : d1);
-    for (int step = 1; step < 32; step <<= 1) {
-        float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
-        if (j & step) {
-            val = other - val;
-        } else {
-            val = other + val;
-        }
-    }
+    const float d = __half2float(j < 16 ? x->d0 : x->d1);
+    float val = tq3_0_centroids_cuda[idx] * d;
+    val = tq3_cuda_wht32(val, j);
 
-    y[j] = (dst_t)(val * (tq3_0_signs_cuda[j] / sqrtf(32.0f)));
+    constexpr float inv_sqrt_32 = 0.17677669529663688f; // 1/sqrt(32), was sqrtf() call
+    y[j] = (dst_t)(val * tq3_0_signs_cuda[j] * inv_sqrt_32);
 }
 
 template<typename dst_t>
