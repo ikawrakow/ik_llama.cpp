@@ -19,4 +19,10 @@ static __device__ __forceinline__ float ggml_cuda_tq3_sign(const int i) {
     return ((((unsigned) i * 0x9E3779B9u) >> 31) & 1) ? -1.0f : 1.0f;
 }
 
+// In-place forward WHT rotation of `n` activations (must be multiple of QK_TQ3_0 = 32).
 void ggml_cuda_tq3_rotate_act(float * x, int64_t n, cudaStream_t stream);
+
+// Out-of-place variant: reads from src, writes rotated result to dst. Replaces
+// the cudaMemcpyAsync(src -> scratch) + in-place rotate pair with a single
+// kernel that loads once and stores once, saving one global-memory round-trip.
+void ggml_cuda_tq3_rotate_act_copy(const float * src, float * dst, int64_t n, cudaStream_t stream);
