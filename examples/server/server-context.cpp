@@ -3265,11 +3265,14 @@ void server_context::apply_checkpoint(server_slot & slot) {
 
             if (do_reset) {
                 if (has_recurrent) {
-                    // Hybrid/recurrent: do NOT zero n_past. The prompt prefix is already in cache_tokens
-                    // and update_slots() reprocesses from slot.n_past_prompt; dropping to 0 forces a full
-                    // recompute on every turn and — combined with cached state — trips llama_decode ret=-3.
-                    SLT_WRN(slot, "no usable hybrid/recurrent checkpoint; preserving slot state (n_past = %d, n_past_prompt = %d)\n",
-                        (int)slot.n_past, (int)slot.n_past_prompt);
+                    // Without a usable recurrent checkpoint, preserving prefix state leaks stale recurrent memory
+                    // from prior requests into the current prompt. Force a full prompt re-processing fallback.
+                    SLT_WRN(slot, "%s", "no usable hybrid/recurrent checkpoint; forcing full prompt re-processing\n");
+                    slot.n_past = 0;
+                    slot.n_past_prompt = 0;
+                    slot.n_past_se = 0;
+                    slot.ga_i = 0;
+                    common_sampler_reset(slot.ctx_sampling);
                 } else {
                     SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
                         "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
@@ -3762,7 +3765,6 @@ static void restore_speculative_checkpoint(
             }
 
             if (slot.has_mtp) {
-                // All positions need logits enabled so llama_get_embeddings_ith works for each.
                 for (int j = 0; j < re_batch.n_tokens; j++) {
                     re_batch.logits[j] = true;
                 }
