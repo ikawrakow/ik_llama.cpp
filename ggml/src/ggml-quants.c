@@ -15707,7 +15707,31 @@ void quantize_row_tq3_1s(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
     quantize_row_tq3_1s_ref(x, (block_tq3_1s *)y, k);
 }
 
-// CPU dot product — scalar, dequantizes then dots against Q8_0
+// CPU dot product — dequantizes TQ3 block into a 32-float scratch, then dots
+// against the Q8_0 bytes. On AVX2-capable CPUs the inner 32-element dot is
+// vectorized with a 4 x FMA unrolled loop that widens the Q8_0 int8 lane to
+// fp32 once per block — a ~3-4x speedup on the `-ncmoe > 0` CPU-experts path
+// that Chimere hits when the MoE tail doesn't fit in VRAM. The scalar path is
+// preserved as the pre-AVX2 fallback.
+#if defined(__AVX2__)
+static inline float tq3_dot_fp32_q8_0_avx2(const float * GGML_RESTRICT fp32, const int8_t * GGML_RESTRICT q8) {
+    // Load 32 Q8_0 bytes, widen to 4 x 8-lane int32, convert to fp32.
+    const __m256i q8_i8   = _mm256_loadu_si256((const __m256i *)q8);
+    const __m256i q8_i16_lo = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(q8_i8));
+    const __m256i q8_i16_hi = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(q8_i8, 1));
+    const __m256  q8_f_0 = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q8_i16_lo)));
+    const __m256  q8_f_1 = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q8_i16_lo, 1)));
+    const __m256  q8_f_2 = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(q8_i16_hi)));
+    const __m256  q8_f_3 = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q8_i16_hi, 1)));
+    __m256 acc = _mm256_setzero_ps();
+    acc = _mm256_fmadd_ps(_mm256_loadu_ps(fp32 +  0), q8_f_0, acc);
+    acc = _mm256_fmadd_ps(_mm256_loadu_ps(fp32 +  8), q8_f_1, acc);
+    acc = _mm256_fmadd_ps(_mm256_loadu_ps(fp32 + 16), q8_f_2, acc);
+    acc = _mm256_fmadd_ps(_mm256_loadu_ps(fp32 + 24), q8_f_3, acc);
+    return hsum_float_8(acc);
+}
+#endif
+
 void ggml_vec_dot_tq3_4s_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_TQ3_0 == 0);
     assert(nrc == 1);
@@ -15723,11 +15747,15 @@ void ggml_vec_dot_tq3_4s_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     for (int i = 0; i < nb; ++i) {
         dequantize_row_tq3_4s(&x[i], tmp, QK_TQ3_0);
         const float d_q8 = GGML_FP16_TO_FP32(y[i].d);
+#if defined(__AVX2__)
+        sumf += tq3_dot_fp32_q8_0_avx2(tmp, y[i].qs) * d_q8;
+#else
         float dot = 0.0f;
         for (int j = 0; j < QK_TQ3_0; ++j) {
             dot += tmp[j] * (float) y[i].qs[j];
         }
         sumf += dot * d_q8;
+#endif
     }
 
     *s = sumf;
@@ -15748,11 +15776,15 @@ void ggml_vec_dot_tq3_1s_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     for (int i = 0; i < nb; ++i) {
         dequantize_row_tq3_1s(&x[i], tmp, QK_TQ3_0);
         const float d_q8 = GGML_FP16_TO_FP32(y[i].d);
+#if defined(__AVX2__)
+        sumf += tq3_dot_fp32_q8_0_avx2(tmp, y[i].qs) * d_q8;
+#else
         float dot = 0.0f;
         for (int j = 0; j < QK_TQ3_0; ++j) {
             dot += tmp[j] * (float) y[i].qs[j];
         }
         sumf += dot * d_q8;
+#endif
     }
 
     *s = sumf;
