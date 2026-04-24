@@ -1356,7 +1356,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     };
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && inputs.enable_thinking;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     const std::string SECTION_BEGIN = "<|tool_calls_section_begin|>";
