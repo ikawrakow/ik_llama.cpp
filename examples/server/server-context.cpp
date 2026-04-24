@@ -3216,6 +3216,17 @@ void  server_context::create_checkpoint_at_interval(server_slot & slot, const gp
 }
 
 void server_context::apply_checkpoint(server_slot & slot) {
+    // Fix for ggml-org/llama.cpp issue #20225:
+    // The checkpoint logic below was written for Sliding Window Attention (SWA)
+    // semantics where `pos_min` advances with the window. For hybrid/recurrent
+    // architectures (Qwen3.5, Qwen3.5-MoE, Qwen3Next, Nemotron-H-MoE, Mamba*),
+    // `pos_min` always covers the whole sequence, so `pos_min > pos_min_thold`
+    // is ALWAYS true on every turn, which forces a full prompt re-process
+    // (8 min instead of seconds on a 15K-token multi-turn chat).
+    // Skip the SWA-only logic for these models; their in-memory slot state is
+    // already preserved across turns by the normal update_slots path.
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) return;
+
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
     const bool has_recurrent = llama_model_has_recurrent(llama_get_model(slot.ctx));
     // For hybrid/recurrent models, pos_min semantics don't apply: the recurrent state is a single
