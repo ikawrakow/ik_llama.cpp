@@ -1800,6 +1800,118 @@ static void dequantize_row_iq6_k_cuda(const void * vx, dst_t * y, const int64_t 
     dequantize_block_iq6_k<<<nb, 32, 0, stream>>>(vx, y);
 }
 
+// --------------------------------------------------------------------------
+// TurboQuant TQ3_4S / TQ3_1S CUDA dequantize kernels (Phase 2)
+// Ported from turbo-tan/llama.cpp-tq3 (arXiv 2504.19874)
+// --------------------------------------------------------------------------
+
+__constant__ static const float tq3_0_centroids_cuda[8] = {
+    -1.996684f, -1.291398f, -0.740341f, -0.247508f,
+     0.230106f,  0.725222f,  1.277503f,  1.988943f
+};
+__constant__ static const float tq3_0_signs_cuda[32] = {
+    +1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+    -1.0f, +1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+};
+
+static __device__ __forceinline__ uint8_t tq3_idx_from_packed_cuda(const uint8_t * qp, int r) {
+    switch (r) {
+        case 0: return  qp[0]       & 7;
+        case 1: return (qp[0] >> 3) & 7;
+        case 2: return ((qp[0] >> 6) | (qp[1] << 2)) & 7;
+        case 3: return (qp[1] >> 1) & 7;
+        case 4: return (qp[1] >> 4) & 7;
+        case 5: return ((qp[1] >> 7) | (qp[2] << 1)) & 7;
+        case 6: return (qp[2] >> 2) & 7;
+        default: return (qp[2] >> 5) & 7;
+    }
+}
+
+__device__ static inline float tq3_4s_decode_scale_cuda(uint8_t byte) {
+    if (byte == 0) return 0.0f;
+    const int exp_v = (byte >> 5) - 9;
+    const float mantissa = 1.0f + (float)(byte & 31) / 32.0f;
+    return ldexpf(mantissa, exp_v);
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_tq3_4s(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb) {
+    const int i = blockIdx.x;
+    if (i >= nb) return;
+
+    const block_tq3_4s * x = (const block_tq3_4s *)vx + i;
+    const float ds[4] = {
+        tq3_4s_decode_scale_cuda(x->d[0]),
+        tq3_4s_decode_scale_cuda(x->d[1]),
+        tq3_4s_decode_scale_cuda(x->d[2]),
+        tq3_4s_decode_scale_cuda(x->d[3]),
+    };
+
+    dst_t * y = yy + i * QK_TQ3_0;
+    const int j = threadIdx.x;
+    const int g = j / 8;
+    const int r = j % 8;
+    const uint8_t * qp = x->qs + g * 3;
+    const uint8_t idx = tq3_idx_from_packed_cuda(qp, r);
+
+    float val = tq3_0_centroids_cuda[idx] * ds[g];
+    for (int step = 1; step < 32; step <<= 1) {
+        float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
+        if (j & step) {
+            val = other - val;
+        } else {
+            val = other + val;
+        }
+    }
+
+    y[j] = (dst_t)(val * (tq3_0_signs_cuda[j] / sqrtf(32.0f)));
+}
+
+template<typename dst_t>
+static void dequantize_row_tq3_4s_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int nb = k / QK_TQ3_0;
+    dequantize_block_tq3_4s<<<nb, 32, 0, stream>>>(vx, y, nb);
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_tq3_1s(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb) {
+    const int i = blockIdx.x;
+    if (i >= nb) return;
+
+    const block_tq3_1s * x = (const block_tq3_1s *)vx + i;
+    const float d0 = __half2float(x->d0);
+    const float d1 = __half2float(x->d1);
+    dst_t * y = yy + i * QK_TQ3_0;
+    const int j = threadIdx.x;
+
+    const int g = j / 8;
+    const int r = j % 8;
+    const uint8_t * qp = x->qs + g * 3;
+    const uint8_t idx = tq3_idx_from_packed_cuda(qp, r);
+
+    float val = tq3_0_centroids_cuda[idx] * (j < 16 ? d0 : d1);
+    for (int step = 1; step < 32; step <<= 1) {
+        float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
+        if (j & step) {
+            val = other - val;
+        } else {
+            val = other + val;
+        }
+    }
+
+    y[j] = (dst_t)(val * (tq3_0_signs_cuda[j] / sqrtf(32.0f)));
+}
+
+template<typename dst_t>
+static void dequantize_row_tq3_1s_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int nb = k / QK_TQ3_0;
+    dequantize_block_tq3_1s<<<nb, 32, 0, stream>>>(vx, y, nb);
+}
+
 template <typename src_t, typename dst_t>
 static __global__ void convert_unary(const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t k) {
     const int64_t i = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
@@ -1999,6 +2111,10 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq6_k_cuda;
         case GGML_TYPE_IQ3_S:
             return dequantize_row_iq3_s_cuda;
+        case GGML_TYPE_TQ3_4S:
+            return dequantize_row_tq3_4s_cuda;
+        case GGML_TYPE_TQ3_1S:
+            return dequantize_row_tq3_1s_cuda;
         case GGML_TYPE_F32:
             return convert_unary_cuda<float>;
         case GGML_TYPE_BF16:
@@ -2102,6 +2218,10 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq6_k_cuda;
         case GGML_TYPE_IQ3_S:
             return dequantize_row_iq3_s_cuda;
+        case GGML_TYPE_TQ3_4S:
+            return dequantize_row_tq3_4s_cuda;
+        case GGML_TYPE_TQ3_1S:
+            return dequantize_row_tq3_1s_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cuda<half>;
         case GGML_TYPE_BF16:
