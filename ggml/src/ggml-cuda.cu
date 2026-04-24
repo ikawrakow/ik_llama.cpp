@@ -2275,8 +2275,9 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
         if (src0->type == GGML_TYPE_TQ3_4S || src0->type == GGML_TYPE_TQ3_1S) {
             const int64_t n_act = src1->ne[0] * src1->ne[1] * src1->ne[2];
             src1_tq3_rot.alloc(n_act);
-            CUDA_CHECK(cudaMemcpyAsync(src1_tq3_rot.get(), src1_src, n_act * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-            ggml_cuda_tq3_rotate_act(src1_tq3_rot.get(), n_act, stream);
+            // Fused copy+rotate: single kernel reads src1_src and writes rotated
+            // floats to src1_tq3_rot, eliminating the prior DtD cudaMemcpyAsync.
+            ggml_cuda_tq3_rotate_act_copy(src1_src, src1_tq3_rot.get(), n_act, stream);
             src1_src = src1_tq3_rot.get();
         }
         quantize_row_q8_1_cuda(src1_src, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], src1->ne[2], ne10_padded,
@@ -2766,8 +2767,9 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 if (src0->type == GGML_TYPE_TQ3_4S || src0->type == GGML_TYPE_TQ3_1S) {
                     const int64_t n_act = ne00 * num_src1_rows;
                     src1_tq3_rot_mid.alloc(n_act);
-                    CUDA_CHECK(cudaMemcpyAsync(src1_tq3_rot_mid.get(), src1_src_cont, n_act * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-                    ggml_cuda_tq3_rotate_act(src1_tq3_rot_mid.get(), n_act, stream);
+                    // Fused copy+rotate (see mul_mat_vec_q gemv path): saves
+                    // one DtD memcpy on the MUL_MAT_ID per-row fast path.
+                    ggml_cuda_tq3_rotate_act_copy(src1_src_cont, src1_tq3_rot_mid.get(), n_act, stream);
                     src1_src_cont = src1_tq3_rot_mid.get();
                 }
                 quantize_row_q8_1_cuda(src1_src_cont, src1_quantized.get(), ne00, num_src1_rows, 1,
@@ -4953,7 +4955,7 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                 is_good = read_value(parsed[1], params.enable_p2p);
             }
             else if (parsed[0] == "fa-offset") {
-                float tmp;
+                float tmp = 0.0f;  // silence GCC maybe-uninitialized warning
                 is_good = read_value(parsed[1], tmp);
                 if (is_good) {
                     if (tmp < 0.0f || tmp > 3.0f) {
