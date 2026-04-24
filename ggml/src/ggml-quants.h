@@ -98,6 +98,16 @@ void dequantize_row_iq4_xs (const block_iq4_xs  * GGML_RESTRICT x, float * GGML_
 void dequantize_row_iq3_s  (const block_iq3_s   * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void dequantize_row_iq1_bn (const block_iq1_bn  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 
+// TurboQuant (upstream turbo-tan/llama.cpp-tq3) — Phase 1 CPU-only runtime support
+void dequantize_row_tq3_4s (const block_tq3_4s  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void dequantize_row_tq3_1s (const block_tq3_1s  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void quantize_row_tq3_4s_ref(const float * GGML_RESTRICT x, block_tq3_4s * GGML_RESTRICT y, int64_t k);
+void quantize_row_tq3_1s_ref(const float * GGML_RESTRICT x, block_tq3_1s * GGML_RESTRICT y, int64_t k);
+void quantize_row_tq3_4s    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void quantize_row_tq3_1s    (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void ggml_vec_dot_tq3_4s_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+void ggml_vec_dot_tq3_1s_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 // Dot product
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);

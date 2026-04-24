@@ -512,6 +512,26 @@ typedef struct {
 } block_iq3_s_r4;
 static_assert(sizeof(block_iq3_s_r4) == 4*sizeof(block_iq3_s), "wrong iq3_s_r4 block size/padding");
 
+// TurboQuant 3-bit (upstream turbo-tan/llama.cpp-tq3, arXiv 2504.19874)
+// 32 values per block, WHT rotation + Lloyd-Max 8-level codebook
+#define QK_TQ3_0 32
+
+// TurboQuant 3-bit with two half-block scales (4.0 bpw)
+typedef struct {
+    ggml_half d0;
+    ggml_half d1;
+    uint8_t qs[QK_TQ3_0 * 3 / 8];
+} block_tq3_1s;
+static_assert(sizeof(block_tq3_1s) == 2 * sizeof(ggml_half) + QK_TQ3_0 * 3 / 8, "wrong tq3_1s block size/padding");
+
+// TurboQuant 3-bit with four u8 per-8 scales (4.0 bpw)
+// Each d[g] is an E3M5 mini-float: scale = 2^(d>>5 - 9) * (1 + (d&31)/32)
+typedef struct {
+    uint8_t   d[4];                  // 4 × E3M5 scales for groups of 8 elements
+    uint8_t   qs[QK_TQ3_0 * 3 / 8];  // 12 bytes: 32 × 3-bit packed indices
+} block_tq3_4s;
+static_assert(sizeof(block_tq3_4s) == 4 + QK_TQ3_0 * 3 / 8, "wrong tq3_4s block size/padding");
+
 typedef struct {
     ggml_half d;
     uint8_t  qs[QK_K/8];
