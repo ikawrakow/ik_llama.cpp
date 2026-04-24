@@ -31,6 +31,7 @@
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
 #include "ggml-cuda/quantize.cuh"
+#include "ggml-cuda/tq3-act-rotate.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/scale.cuh"
 #include "ggml-cuda/softcap.cuh"
@@ -2266,7 +2267,19 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
     }
     ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), quantized_size);
     if (is_gemv) {
-        quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], src1->ne[2], ne10_padded,
+        const float * src1_src = (const float *)src1->data;
+        // TurboQuant TQ3: apply forward WHT rotation on activations before q8_1
+        // quantization so the MMVQ dot against rotated weights produces the
+        // correct matmul result (inverse WHT is not applied on weight side).
+        ggml_cuda_pool_alloc<float> src1_tq3_rot(ctx.pool());
+        if (src0->type == GGML_TYPE_TQ3_4S || src0->type == GGML_TYPE_TQ3_1S) {
+            const int64_t n_act = src1->ne[0] * src1->ne[1] * src1->ne[2];
+            src1_tq3_rot.alloc(n_act);
+            CUDA_CHECK(cudaMemcpyAsync(src1_tq3_rot.get(), src1_src, n_act * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            ggml_cuda_tq3_rotate_act(src1_tq3_rot.get(), n_act, stream);
+            src1_src = src1_tq3_rot.get();
+        }
+        quantize_row_q8_1_cuda(src1_src, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], src1->ne[2], ne10_padded,
                 src0->type, stream);
         CUDA_CHECK(cudaGetLastError());
 
@@ -2748,7 +2761,16 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 CUDA_CHECK(cudaGetLastError());
             } else {
                 ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), src1_quantized_size);
-                quantize_row_q8_1_cuda((const float *)src1_contiguous.get(), src1_quantized.get(), ne00, num_src1_rows, 1,
+                const float * src1_src_cont = (const float *)src1_contiguous.get();
+                ggml_cuda_pool_alloc<float> src1_tq3_rot_mid(ctx.pool());
+                if (src0->type == GGML_TYPE_TQ3_4S || src0->type == GGML_TYPE_TQ3_1S) {
+                    const int64_t n_act = ne00 * num_src1_rows;
+                    src1_tq3_rot_mid.alloc(n_act);
+                    CUDA_CHECK(cudaMemcpyAsync(src1_tq3_rot_mid.get(), src1_src_cont, n_act * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+                    ggml_cuda_tq3_rotate_act(src1_tq3_rot_mid.get(), n_act, stream);
+                    src1_src_cont = src1_tq3_rot_mid.get();
+                }
+                quantize_row_q8_1_cuda(src1_src_cont, src1_quantized.get(), ne00, num_src1_rows, 1,
                         src1_padded_num_cols, src0->type, stream);
                 src1_row.nb[1] = src1_padded_row_size;
                 src1_row.nb[2] = src1_row.nb[3] = src1_row.nb[1]*num_src1_rows;
