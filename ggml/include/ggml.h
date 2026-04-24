@@ -426,6 +426,11 @@ extern "C" {
         //
         GGML_TYPE_I2_S    = 36,
         //
+        // TurboQuant 3-bit (upstream turbo-tan/llama.cpp-tq3, arXiv 2504.19874)
+        //
+        GGML_TYPE_TQ3_1S  = 44,
+        GGML_TYPE_TQ3_4S  = 46,
+        //
         GGML_TYPE_Q8_0_X4 = 97,
         GGML_TYPE_Q8_1_X4 = 98,
         GGML_TYPE_Q8_2_X4 = 99,

@@ -1166,6 +1166,32 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_TQ3_1S] = {
+        .type_name                = "tq3_1s",
+        .blck_size                = QK_TQ3_0,
+        .type_size                = sizeof(block_tq3_1s),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tq3_1s,
+        .from_float               = quantize_row_tq3_1s,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_tq3_1s_ref,
+        .vec_dot                  = ggml_vec_dot_tq3_1s_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_TQ3_4S] = {
+        .type_name                = "tq3_4s",
+        .blck_size                = QK_TQ3_0,
+        .type_size                = sizeof(block_tq3_4s),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tq3_4s,
+        .from_float               = quantize_row_tq3_4s,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_tq3_4s_ref,
+        .vec_dot                  = ggml_vec_dot_tq3_4s_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_IQ3_S_R4] = {
         .type_name                = "iq3_s_r4",
         .blck_size                = QK_K,
@@ -7775,10 +7801,13 @@ struct ggml_tensor * ggml_moe_up_gate(
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids,
             enum   ggml_unary_op  op) {
-    if (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate))) {
+    // TQ3 fallback: iqk_moe_fused_up_gate doesn't know TQ3 yet (Phase 1 CPU-only).
+    // Force the non-fused path which uses standard type_traits dispatch.
+    const bool is_tq3 = as_up->type == GGML_TYPE_TQ3_4S || as_up->type == GGML_TYPE_TQ3_1S;
+    if (is_tq3 || (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate)))) {
         struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, as_up,   b, ids);
-        struct ggml_tensor * result_gate = ggml_mul_mat_id(ctx, as_gate, b, ids);
-        return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
+        struct ggml_tensor * result_gate = as_gate ? ggml_mul_mat_id(ctx, as_gate, b, ids) : NULL;
+        return result_gate ? ggml_fused_mul_unary(ctx, result_gate, result_up, op) : result_up;
     }
     GGML_ASSERT(!ggml_is_transposed(as_up));
     GGML_ASSERT(!as_gate || !ggml_is_transposed(as_gate));
@@ -7828,16 +7857,18 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
         return ggml_moe_up_gate(ctx, as_up, as_gate, b, ids, op);
     }
 
-    if (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate))) {
+    // TQ3 fallback: iqk_moe_fused_up_gate doesn't know TQ3 yet (Phase 1 CPU-only).
+    const bool is_tq3_ext = as_up->type == GGML_TYPE_TQ3_4S || as_up->type == GGML_TYPE_TQ3_1S;
+    if (is_tq3_ext || (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate)))) {
         struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, as_up,   b, ids);
         if (as_up_b) {
             result_up = ggml_add_id(ctx, result_up, as_up_b, ids);
         }
-        struct ggml_tensor * result_gate = ggml_mul_mat_id(ctx, as_gate, b, ids);
-        if (as_gate_b) {
+        struct ggml_tensor * result_gate = as_gate ? ggml_mul_mat_id(ctx, as_gate, b, ids) : NULL;
+        if (result_gate && as_gate_b) {
             result_gate = ggml_add_id(ctx, result_gate, as_gate_b, ids);
         }
-        return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
+        return result_gate ? ggml_fused_mul_unary(ctx, result_gate, result_up, op) : result_up;
     }
 
     GGML_ASSERT(!ggml_is_transposed(as_up));
@@ -7878,7 +7909,9 @@ struct ggml_tensor * ggml_fused_up_gate(
             struct ggml_tensor  * gate,
             struct ggml_tensor  * b,
             enum   ggml_unary_op  op) {
-    if (!ggml_is_quantized(up->type) || up->type != gate->type || !ggml_are_same_shape(up, gate)) {
+    // TQ3 fallback: iqk fused op doesn't know TQ3 yet.
+    const bool is_tq3_fug = up->type == GGML_TYPE_TQ3_4S || up->type == GGML_TYPE_TQ3_1S;
+    if (is_tq3_fug || !ggml_is_quantized(up->type) || up->type != gate->type || !ggml_are_same_shape(up, gate)) {
         struct ggml_tensor * result_up   = ggml_mul_mat(ctx, up,   b);
         struct ggml_tensor * result_gate = ggml_mul_mat(ctx, gate, b);
         return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
