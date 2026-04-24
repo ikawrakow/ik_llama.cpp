@@ -155,6 +155,10 @@ typedef sycl::half2 ggml_half2;
 #define QI3_S (QK_K / (4*QR3_S))
 #define QR3_S 4
 
+// TurboQuant TQ3: 32-elem blocks, q8_1 weights packed 8/block -> qi = 2
+#define QI_TQ3 (QK_TQ3_0 / (4*QR_TQ3))
+#define QR_TQ3 4
+
 #define QI1_BN (QK_IQ1BN / (4*QR1_BN))
 #define QR1_BN 8
 
