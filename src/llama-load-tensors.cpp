@@ -1601,12 +1601,13 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
     const int64_t conv_dim   = key_dim * 2 + value_dim;
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_split = ctx_for_layer_split(i);
-
         auto & layer = model.layers[i];
 
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
+
+        // For now only run MTP into the per-layer
+        ggml_context * ctx_split = is_mtp_layer ? ctx_for_layer(i) : ctx_for_layer_split(i);
 
         int flags = 0;
         // Skip loading MTP layers if the feature is disabled
@@ -4158,6 +4159,12 @@ bool create_tensors_helper::create_tensors() {
             gpu_split_count.resize(model.splits.size(), 0.0f);
         }
         for (int il = 0; il < n_layer; ++il) {
+            // For now only run MTP into the per-layer
+            if (model.mtp && hparams.nextn_predict_layers > 0 &&
+                static_cast<uint32_t>(il) >= static_cast<uint32_t>(n_layer) - hparams.nextn_predict_layers) {
+                LLAMA_LOG_DEBUG("%s: not splitting MTP tail layer %d (forced non-split)\n", __func__, il);
+                continue;
+            }
             int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
                 LLAMA_LOG_INFO("%s: not splitting layer %d because buffer type is host\n", __func__, il);

@@ -815,12 +815,9 @@ static void ggml_gallocr_init_tensor(ggml_gallocr_t galloc, struct ggml_tensor *
 }
 
 static bool ggml_gallocr_node_needs_realloc(ggml_gallocr_t galloc, struct ggml_tensor * node, struct tensor_alloc * talloc) {
-    // TODO: Need to check if is a constraint for qwen split graph
     if (node->data || node->view_src) {
-        return true; // pre-allocated tensor or view: existing reservation remains valid
+        return true;
     }
-    // The tensor needs backend allocation, but the cached reservation does not point at a valid
-    // backend buffer anymore, so the current allocation plan cannot be reused.
     if (talloc->buffer_id < 0 || talloc->buffer_id >= galloc->n_buffers) {
         return false;
     }

@@ -173,7 +173,7 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
     cb(cur, "mtp_fused", il);
 
     // Self-Attention (wq may be shared from main model's last layer)
-    GGML_ASSERT(il < (int)kv_self.k_l.size() && il < (int)kv_self.v_l.size() && "MTP layer index out of KV cache range");
+    GGML_ASSERT(il < (int)kv_self.k_l.size() && il < (int)kv_self.v_l.size());
     if (!kv_self.k_l[il] || !kv_self.v_l[il]) {
         LLAMA_LOG_ERROR("%s: KV cache not allocated for MTP layer %d (k=%p, v=%p)\n",
                 __func__, il, (void*)kv_self.k_l[il], (void*)kv_self.v_l[il]);
@@ -185,7 +185,9 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
                 (void*)model.layers[il].wv, (void*)model.layers[il].wo);
         GGML_ABORT("Missing attention weights for MTP layer");
     }
+
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+
     cur = build_std_attention(gf, mtp_layer.attn_norm, cur,
             inp_pos, nullptr, nullptr,
             KQ_mask, nullptr, nullptr,
@@ -211,7 +213,7 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
     cb(cur, "result_output", -1);
 
     return cur;

@@ -778,8 +778,11 @@ static bool llama_kv_cache_init(
     // count used buffer types
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
+        const bool qwen_mtp = model.arch == LLM_ARCH_QWEN35 && hparams.nextn_predict_layers > 0;
+        const int64_t n_mtp_first = n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
-            if (split_cache) {
+            const bool is_mtp_tail = qwen_mtp && i >= n_mtp_first;
+            if (split_cache && !is_mtp_tail) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
             } else {
                 buft_layer_count[model.buft_layer[i].buft]++;
@@ -865,8 +868,10 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k(i);
 
+        const bool is_mtp_tail_layer = model.arch == LLM_ARCH_QWEN35 &&
+                hparams.nextn_predict_layers > 0 && i >= (int)n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        struct ggml_context * ctx = (split_cache && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -4135,10 +4140,14 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     // set all ids as invalid (negative)
     std::fill(lctx.output_ids.begin(), lctx.output_ids.end(), -1);
 
-    // TODO: For MTP only clear the portion of the output buffer that will actually be used
-    const size_t clear_size = (logits_size + embd_size) * sizeof(float);
-    if (clear_size > 0 && output_base) {
-        memset(output_base, 0, clear_size);
+    if (has_mtp) {
+        // MTP uses a large output footprint, clear only the active region.
+        const size_t clear_size = (logits_size + embd_size) * sizeof(float);
+        if (clear_size > 0 && output_base) {
+            memset(output_base, 0, clear_size);
+        }
+    } else {
+        ggml_backend_buffer_clear(lctx.buf_output, 0);
     }
 
     lctx.n_outputs = 0;
@@ -4493,10 +4502,11 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 && lctx.model.mtp;
+            const bool use_qwen_mtp_embd = has_mtp && lctx.model.arch == LLM_ARCH_QWEN35;
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
-                    if (has_mtp && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
-                        // Qwen 3.5 use raw hidden state. GLM4 uses result_embd_pooled
+                    if (use_qwen_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
+                        // Qwen 3.5 uses raw hidden state before the final shared-head normalization.
                         embd = gf->nodes[i];
                         break;
                     }
