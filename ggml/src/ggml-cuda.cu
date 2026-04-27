@@ -2323,7 +2323,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
         quantize_mmq_q8_1_cuda((const float *)src1->data, src1_quantized.get(), src1->ne[0], src1->ne[1], 1, ne10_padded, src0->type, stream);
         CUDA_CHECK(cudaGetLastError());
 
-        ggml_cuda_mul_mat_q_id(ctx, src0, src1, nullptr, dst, nullptr, src1_quantized.get());
+        ggml_cuda_op_mul_mat_q(ctx, src0, src1, dst, (const char *)src0->data, nullptr, src1_quantized.get(), (float *)dst->data,
+                0, src0->ne[1], src1->ne[1], ne10_padded, stream);
         CUDA_CHECK(cudaGetLastError());
     }
 
@@ -2354,7 +2355,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                         (float *)dst->data, 0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
             }
         } else {
-            ggml_cuda_mul_mat_q_id(ctx, dst->src[0], src1, nullptr, dst, nullptr, src1_quantized.get());
+            ggml_cuda_op_mul_mat_q(ctx, dst->src[0], src1, dst, (const char *)dst->src[0]->data, nullptr, src1_quantized.get(),
+                    (float *)dst->data, 0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
         }
         CUDA_CHECK(cudaGetLastError());
         ++node_n;
