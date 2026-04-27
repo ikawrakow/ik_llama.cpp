@@ -153,7 +153,7 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+    struct ggml_tensor * inp_out_ids = (n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
 
     ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
 
@@ -193,6 +193,10 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
             KQ_mask, nullptr, nullptr,
             kq_scale, 0.0f, 0, il, true, false, true, false, true, nullptr);
 
+    if (inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     // Dense FFN — optional (9B and 4B don't have FFN in MTP layer)
     if (mtp_layer.ffn_gate != nullptr) {
         cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, cur,
@@ -208,10 +212,6 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
 
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "result_norm", -1);
-
-    if (inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    }
 
     cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
     cb(cur, "result_output", -1);
