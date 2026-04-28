@@ -117,6 +117,24 @@ static void copy_missing_tensors(ggml_backend_cuda_context & ctx, ggml_tensor * 
     ggml_cuda_set_device(ctx.device);
 }
 
+bool reduce_can_use_cuda_graphs([[maybe_unused]] ggml_tensor * dst) {
+#ifdef GGML_USE_NCCL
+#if __CUDA_ARCH__ >= CC_AMPERE
+    constexpr bool bf16_supported = true;
+#else
+    constexpr bool bf16_supported = false;
+#endif
+    int nreduce = dst->op_params[1];
+    int nhave   = dst->op_params[2];
+    auto & info = ggml_cuda_info();
+    if (info.have_nccl && dst->type != GGML_TYPE_Q8_0 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32) &&
+       (dst->type != GGML_TYPE_BF16 || bf16_supported) && info.device_count == nreduce) {
+        return true;
+    }
+#endif
+    return false;
+}
+
 void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     auto op = (ggml_op)dst->op_params[0];

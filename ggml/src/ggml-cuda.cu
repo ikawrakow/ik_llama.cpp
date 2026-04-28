@@ -4092,7 +4092,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 
         if (ggml_is_noop(node)) continue;
 
-        if (node->op == GGML_OP_REDUCE) {
+        if (node->op == GGML_OP_REDUCE && !reduce_can_use_cuda_graphs(node)) {
             use_cuda_graph = false;
             break;
         }
@@ -4354,6 +4354,10 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     // or previous graph capture failure.
     // Also disable for multi-gpu for now. TO DO investigate
     bool use_cuda_graph = !disable_cuda_graphs_due_to_env && cuda_ctx->use_cuda_graph;
+
+    if (use_cuda_graph && cgraph->n_nodes == 1 && cgraph->nodes[0]->op == GGML_OP_REDUCE) {
+        use_cuda_graph &= reduce_can_use_cuda_graphs(cgraph->nodes[0]);
+    }
 
     ggml_cuda_graph * graph = nullptr;
     if (use_cuda_graph) {
