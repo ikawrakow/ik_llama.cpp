@@ -62,15 +62,6 @@ struct llama_kv_cache {
     // When true, the delta_net graph builder will enable per-step SSM state saves
     bool save_per_step_ssm = false;
 
-    // Set by llama_kv_cache_seq_rm when a hybrid/recurrent slot's cell is
-    // fully emptied. Read once during the next graph build to inject a
-    // state-reset op into the recurrent layers, then cleared. Indexed by
-    // slot/cell index (= column in cache.s_l[layer]). Sized by
-    // qnext_state_slots when the cache is initialized; empty for non-
-    // hybrid models, in which case all reads short-circuit through the
-    // size() bounds check.
-    std::vector<bool> pending_recurrent_reset;
-
     std::vector<llama_split_tensor> split_k_l;
     std::vector<llama_split_tensor> split_v_l;
     std::vector<llama_split_tensor> split_s_l;

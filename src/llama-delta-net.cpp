@@ -646,12 +646,8 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
     GGML_ASSERT(model.layers[il].wqkv_gate != nullptr || model.layers[il].ssm_in != nullptr);
 
     if (all_same_seq) {
-        const uint32_t state_seq_id = (uint32_t) token_seq_ids.front();
-        const bool needs_recurrent_reset =
-            state_seq_id < lctx.kv_self.pending_recurrent_reset.size() &&
-            lctx.kv_self.pending_recurrent_reset[state_seq_id];
-        bool reset_state = (batch.pos != nullptr && batch.pos[0] == 0) || needs_recurrent_reset;
-        return build_layer_attn_linear_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, inp_out_ids, state_seq_id, reset_state, il, cb);
+        bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
+        return build_layer_attn_linear_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, inp_out_ids, token_seq_ids.front(), reset_state, il, cb);
     }
 
     GGML_ASSERT(has_unique_seq_ids && "qwen3next mixed-sequence batches require unique sequence IDs per token");
@@ -661,11 +657,8 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
         ggml_tensor * cur_i = ggml_view_2d(ctx0, cur, cur->ne[0], 1, cur->nb[1], (size_t) i * cur->nb[1]);
         ggml_tensor * inp_s_seq_qnext_i = ggml_view_2d(ctx0, lctx.inp_s_seq_qnext, 1, 1, lctx.inp_s_seq_qnext->nb[1], (size_t) i * lctx.inp_s_seq_qnext->nb[1]);
 
+        const bool reset_state_i = batch.pos != nullptr && batch.pos[i] == 0;
         const uint32_t state_seq_id_i = (uint32_t) token_seq_ids[i];
-        const bool needs_recurrent_reset_i =
-            state_seq_id_i < lctx.kv_self.pending_recurrent_reset.size() &&
-            lctx.kv_self.pending_recurrent_reset[state_seq_id_i];
-        const bool reset_state_i = (batch.pos != nullptr && batch.pos[i] == 0) || needs_recurrent_reset_i;
         ggml_tensor * out_i = build_layer_attn_linear_core(ctx0, gf, cur_i, inp_s_seq_qnext_i, inp_out_ids, state_seq_id_i, reset_state_i, il, cb);
 
         out = out == nullptr ? out_i : ggml_concat(ctx0, out, out_i, 1);

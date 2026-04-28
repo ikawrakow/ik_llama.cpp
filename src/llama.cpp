@@ -851,7 +851,6 @@ static bool llama_kv_cache_init(
         LLAMA_LOG_WARN("%s: reducing qwen3next state slots from %u to %u to fit KV cache size\n",
                 __func__, std::max<uint32_t>(1, cparams.n_seq_max), qnext_state_slots);
     }
-    cache.pending_recurrent_reset.assign(qnext_state_slots, false);
 
     int n_mla = 0;
     const int64_t n_mtp_first_layer = n_layer - hparams.nextn_predict_layers;
@@ -1598,14 +1597,6 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     for (auto & buf : cache.bufs) {
         ggml_backend_buffer_clear(buf, 0);
     }
-
-    // The full clear above zeroed every recurrent state buffer, so any
-    // pending per-slot resets recorded by an earlier seq_rm are now
-    // redundant. Drop them so the next graph build does not emit a
-    // spurious in-graph reset op.
-    std::fill(cache.pending_recurrent_reset.begin(),
-              cache.pending_recurrent_reset.end(),
-              false);
 }
 
 static bool llama_kv_cache_seq_rm(
@@ -1655,15 +1646,6 @@ static bool llama_kv_cache_seq_rm(
                 cache.cells[i].pos = -1;
                 if (has_qnext_state) {
                     cache.cells[i].src = i;
-                    // Defer the recurrent-state reset to graph build time:
-                    // delta-net's existing reset path (ggml_scale state, 0.0f)
-                    // does the zeroing inside the compute graph, so we just
-                    // record which slots need reset here. The flags are
-                    // consumed and cleared at the end of build_qwen3next /
-                    // build_qwen35.
-                    if ((uint32_t) i < cache.pending_recurrent_reset.size()) {
-                        cache.pending_recurrent_reset[i] = true;
-                    }
                 }
                 if (new_head == cache.size) new_head = i;
             }

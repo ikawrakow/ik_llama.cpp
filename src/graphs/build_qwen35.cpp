@@ -59,14 +59,6 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
 
     ggml_build_forward_expand(gf, cur);
 
-    // Consume the recurrent-state reset flags. Any slot that was marked by
-    // llama_kv_cache_seq_rm has had its reset op embedded in this graph
-    // through delta_net's reset_state branch, so we can clear the flags now;
-    // the reset will fire when the graph executes.
-    std::fill(lctx.kv_self.pending_recurrent_reset.begin(),
-              lctx.kv_self.pending_recurrent_reset.end(),
-              false);
-
     return gf;
 }
 
@@ -146,14 +138,6 @@ ggml_cgraph * llm_build_context::build_qwen35() {
     }
 
     ggml_build_forward_expand(gf, cur);
-
-    // Consume the recurrent-state reset flags. Any slot that was marked by
-    // llama_kv_cache_seq_rm has had its reset op embedded in this graph
-    // through delta_net's reset_state branch, so we can clear the flags now;
-    // the reset will fire when the graph executes.
-    std::fill(lctx.kv_self.pending_recurrent_reset.begin(),
-              lctx.kv_self.pending_recurrent_reset.end(),
-              false);
 
     return gf;
 }
