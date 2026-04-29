@@ -2,46 +2,67 @@
 
 Built on top of [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) and [llama-swap](https://github.com/mostlygeek/llama-swap)
 
-All commands are provided for Podman and Docker.
+Commands are provided for Podman and Docker.
 
-CPU or CUDA sections under [Build](#Build) and [Run]($Run) are enough to get up and running.
+CPU or CUDA sections under [Prebuilt](#Prebuilt)/[Build](#Build) and [Run]($Run) are enough to get up and running.
 
 ## Overview
 
+- [Prebuilt](#Prebuilt)
 - [Build](#Build)
 - [Run](#Run)
 - [Troubleshooting](#Troubleshooting)
 - [Extra Features](#Extra)
 - [Credits](#Credits)
 
-## Build
+## Prebuilt Docker images
 
-### Using docker-bake (Recommended)
+Pull one of the available images from `ghcr.io`. [View all tags](https://github.com/ikawrakow/ik_llama.cpp/pkgs/container/ik-llama-cpp/versions?filters%5Bversion_type%5D=tagged)
+
+```bash
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cpu-swap
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cpu-server
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cpu-full
+
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-swap
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-server
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-full
+```
+
+## Build
 
 The project uses Docker Bake for building multiple targets efficiently.
 
-#### CPU Variant
+Clone the repository: `git clone https://github.com/ikawrakow/ik_llama.cpp`
+
+Use `docker-bake`.
 
 ```bash
-docker buildx bake --builder ik-llama-builder full swap
+docker buildx create --name ik-llama-builder --use
+```
+
+### CPU Variant
+
+```bash
+VARIANT=cpu docker buildx bake --builder ik-llama-builder --load full swap
 ```
 
 Or with custom tags:
 
 ```bash
-REPO_OWNER=yourname docker buildx bake --builder ik-llama-builder \
+REPO_OWNER=yourname VARIANT=cpu docker buildx bake --builder ik-llama-builder --load \
   -f ./docker-bake.hcl \
   full swap
 ```
 
-#### CUDA Variant
+### CUDA Variant
 
 First, set the CUDA version and GPU architecture in `ik_llama-cuda.Containerfile`:
 - `CUDA_DOCKER_ARCH`: Your GPU's compute capability (e.g., `86` for RTX 30*, `89` for RTX 40*, `12.0` for RTX 50*)
 - `CUDA_VERSION`: CUDA Toolkit version (e.g., `12.6.2`, `13.1.1`)
 
 ```bash
-VARIANT=cu12 docker buildx bake --builder ik-llama-builder full swap
+VARIANT=cu12 docker buildx bake --builder ik-llama-builder --load full swap
 ```
 
 ### Build Targets
@@ -50,12 +71,6 @@ Builds two image tags per variant:
 
 - **`full`**: Includes `llama-server`, `llama-quantize`, and other utilities.
 - **`swap`**: Includes only `llama-swap` and `llama-server`.
-
-### Local Development
-
-1. Clone the repository: `git clone https://github.com/ikawrakow/ik_llama.cpp`
-2. Enter the repo: `cd ik_llama.cpp`
-3. Use either docker-bake or build-local.sh as shown above.
 
 ## Run
 
