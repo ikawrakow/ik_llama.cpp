@@ -685,6 +685,8 @@ extern "C" {
 
     LLAMA_API bool llama_model_has_recurrent(const struct llama_model * model);
 
+    LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
+
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,

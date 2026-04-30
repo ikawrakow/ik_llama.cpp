@@ -1620,7 +1620,13 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not supported by recurrent model, it will be disabled");
+        }
     }
+    if (llama_model_is_split_mode_graph(llama_get_model(slot.ctx))) {
+        if (params_base.ctx_shift) {
+            params_base.ctx_shift = false;
+            LOG_WARNING("%s\n", "ctx_shift is not implemented for split mode graph, it will be disabled");
+        }
     }
     {
         const auto& stop = data.find("stop");
@@ -4423,7 +4429,7 @@ void server_context::update_slots() {
     // apply context-shift if needed
     // TODO: simplify and improve
     context_shift();
-    
+
     // start populating the batch for this iteration
     common_batch_clear(batch);
 
