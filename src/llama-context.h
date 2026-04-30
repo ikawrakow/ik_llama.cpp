@@ -289,6 +289,7 @@ struct llama_context {
 
     struct Prev;
     std::unique_ptr<Prev> prev;
+    std::unique_ptr<Prev> prev_mtp;
 
     void reset_scheduler();
     bool can_reuse_graph(const llama_batch & u_batch);
