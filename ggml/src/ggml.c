@@ -22662,18 +22662,17 @@ static void ggml_compute_forward_delta_net_f32(
     const int nth = params->nth;
 
     int repeat_type = dst->op_params[0];
-    // save_all_steps is handled by the CUDA backend only;
-    // the CPU path always writes to the single state slot after the output.
+    const int save_all_steps = dst->op_params[1];
+    const int64_t state_step_stride = head_dim * head_dim * n_heads * n_seqs;
     float * state_working = out_data + output_size;
 
     if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
                 src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
                 q_data, k_data, v_data, g_data, beta_data, state_in,
-                out_data, state_working, ith, nth)) {
+                out_data, state_working, save_all_steps, (int) state_step_stride, ith, nth)) {
         return;
     }
 
-    // TODO: fix this in case we need to fall back to it.
     const int64_t total_heads = n_heads * n_seqs;
     const int64_t heads_per_thread = (total_heads + nth - 1) / nth;
     const int64_t h_start = ith * heads_per_thread;
@@ -22703,6 +22702,7 @@ static void ggml_compute_forward_delta_net_f32(
         }
 
         float * state = state_working + state_head_offset;
+        const int64_t state_head_size = head_dim * head_dim;
 
         for (int64_t t = 0; t < n_tokens; ++t) {
             const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
@@ -22756,6 +22756,12 @@ static void ggml_compute_forward_delta_net_f32(
                     s = decay * s + v_new_buf[row] * k_col;
                     state[row + col * head_dim] = fminf(fmaxf(s, -1e6f), 1e6f);
                 }
+            }
+
+            if (save_all_steps && t + 1 < n_tokens) {
+                float * next_state = state_working + (t + 1) * state_step_stride + state_head_offset;
+                memcpy(next_state, state, state_head_size * sizeof(float));
+                state = next_state;
             }
         }
     }

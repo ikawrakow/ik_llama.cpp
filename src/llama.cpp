@@ -6863,7 +6863,8 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 
 // Unified speculative-checkpoint
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, int max_tokens) {
-    // Graph-split tensors and mixed CPU/GPU configurations are not supported.
+    // Graph-split recurrent tensors are not supported. Mixed CPU/GPU recurrent
+    // placement is allowed as long as each layer has a concrete backend buffer.
     bool has_gpu = false;
     bool has_cpu = false;
     for (const auto * sl : kv.s_l) {
@@ -6878,9 +6879,9 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
             has_cpu = true;
         }
     }
-    if (!has_gpu || has_cpu) {
-        if (has_cpu && has_gpu) {
-            LLAMA_LOG_INFO("%s: per-step disabled — mixed CPU/GPU recurrent layers\n", __func__);
+    if (!has_gpu) {
+        if (has_cpu) {
+            LLAMA_LOG_INFO("%s: per-step disabled — recurrent layers are CPU-only\n", __func__);
         }
         kv.save_per_step_ssm = false;
         return false;
