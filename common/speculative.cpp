@@ -8,6 +8,7 @@
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
+#include "suffix-tree.h"
 
 #include <algorithm>
 #include <cstring>
@@ -26,7 +27,8 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
-    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,
+    COMMON_SPECULATIVE_TYPE_SUFFIX
 };
 
 const std::map<std::string, enum common_speculative_type> common_speculative_type_from_name_map = {
@@ -38,7 +40,8 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
     {"ngram_mod",     COMMON_SPECULATIVE_TYPE_NGRAM_MOD},
-    {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
+    {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE},
+    {"suffix",        COMMON_SPECULATIVE_TYPE_SUFFIX}
 };
 
 struct common_speculative_config {
@@ -148,11 +151,13 @@ struct common_speculative_state {
 
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
+    llama_context * ctx_mtp = nullptr;
     common_sampler * smpl;
 
     common_speculative_state_mtp(
             enum common_speculative_type type,
-            llama_context * ctx_tgt)
+            llama_context * ctx_tgt,
+            const llama_context_params & mtp_cparams)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
     {
@@ -161,10 +166,21 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_sampler_type::DIST,
         };
         smpl = common_sampler_init(llama_get_model(ctx_tgt), params);
+
+        const llama_model * model = llama_get_model(ctx_tgt);
+        ctx_mtp = llama_init_from_model(const_cast<llama_model *>(model), mtp_cparams);
+        if (ctx_mtp) {
+            LOG_INF("%s: created MTP context (n_ctx=%d)\n", __func__, llama_n_ctx(ctx_mtp));
+        } else {
+            LOG_ERR("%s: failed to create MTP context\n", __func__);
+        }
     }
 
     ~common_speculative_state_mtp() override {
         common_sampler_free(smpl);
+        if (ctx_mtp) {
+            llama_free(ctx_mtp);
+        }
     }
 
     void begin(const llama_tokens & prompt) override {
@@ -178,12 +194,18 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_tokens & result) override {
 
         int32_t n_past = (int32_t)prompt_tgt.size();
-
         llama_seq_id seq_id = 0;
+
+        llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
+        if (mtp_pos_max >= n_past) {
+            llama_kv_cache_seq_rm(ctx_mtp, seq_id, n_past, -1);
+        }
+
+        llama_context * ctx = ctx_mtp;
 
         result = mtp_speculative_gen_draft(
             smpl,
-            ctx_tgt,
+            ctx,
             params.n_max,
             params.p_min,
             id_last,
@@ -576,6 +598,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         i_last = 0;
 
         n_draft_last = 0;
+        n_low = 0;
 
         const size_t n = mod.get_n();
 
@@ -670,6 +693,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
                     mod.reset();
                     n_low = 0;
+                    i_last = 0;
                 }
             } else {
                 n_low = 0;
@@ -771,9 +795,132 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
     }
 };
 
+struct common_speculative_state_suffix : public common_speculative_state {
+    common_suffix_tree tree;
+    common_suffix_tree corpus_tree;
+    bool has_corpus = false;
+    size_t cache_size   = 0;
+
+    // Acceptance feedback
+    size_t n_draft_last  = 0;
+    bool   had_accept    = false;
+    int    n_low         = 0;
+    float  base_p_min    = 0.1f;
+    float  eff_p_min     = 0.1f;
+
+    common_speculative_state_suffix(
+            enum common_speculative_type type,
+            int max_depth,
+            const std::string & corpus_path,
+            const llama_model * model)
+        : common_speculative_state(type)
+        , tree(max_depth)
+        , corpus_tree(max_depth)
+    {
+        if (!corpus_path.empty()) {
+            std::function<std::vector<llama_token>(const std::string &)> tokenize_fn;
+            if (model) {
+                tokenize_fn = [model](const std::string & text) -> std::vector<llama_token> {
+                    return common_tokenize(model, text, false, true);
+                };
+            }
+            has_corpus = corpus_tree.load_corpus(corpus_path, tokenize_fn);
+        }
+    }
+
+    void begin(const llama_tokens & prompt) override {
+        cache_size   = 0;
+        n_draft_last = 0;
+        had_accept   = false;
+        n_low        = 0;
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+
+        base_p_min = params.p_min;
+        if (n_draft_last > 0 && !had_accept) {
+            if (++n_low >= 3) {
+                eff_p_min = std::min(eff_p_min + 0.1f, 0.5f);
+                n_low     = 0;
+            }
+        }
+        had_accept = false;
+
+        if (cache_size < prompt_tgt.size() + 1) {
+            llama_tokens tokens_new;
+            tokens_new.reserve(prompt_tgt.size() + 1 - cache_size);
+            for (size_t j = cache_size; j < prompt_tgt.size(); ++j) {
+                tokens_new.push_back(prompt_tgt[j]);
+            }
+            tokens_new.push_back(id_last);
+
+            tree.extend(tokens_new.data(), (int)tokens_new.size());
+            cache_size = prompt_tgt.size() + 1;
+        }
+
+        const int ctx_len = std::min((int)(prompt_tgt.size() + 1), tree.max_depth());
+        llama_tokens context;
+        context.reserve(ctx_len);
+        const int ctx_start = (int)prompt_tgt.size() + 1 - ctx_len;
+        for (int j = ctx_start; j < (int)prompt_tgt.size(); ++j) {
+            context.push_back(prompt_tgt[j]);
+        }
+        context.push_back(id_last);
+        const int min_match_len = std::max(1, params.suffix_min_match_len);
+
+        result = tree.speculate(
+            context.data(), (int)context.size(),
+            params.n_max,
+            eff_p_min,
+            1,
+            min_match_len);
+
+        if (has_corpus) {
+            auto corpus_result = corpus_tree.speculate(
+                context.data(), (int)context.size(),
+                params.n_max,
+                eff_p_min,
+                1,
+                min_match_len);
+            if (corpus_result.size() > result.size()) {
+                result = std::move(corpus_result);
+            }
+        }
+
+        n_draft_last = result.size();
+    }
+
+    void accept(uint16_t n_accepted) override {
+        if (n_draft_last == 0) {
+            return;
+        }
+        had_accept = true;
+        const double f_acc = (double)n_accepted / (double)n_draft_last;
+        if (f_acc < 0.5) {
+            if (++n_low >= 3) {
+                eff_p_min = std::min(eff_p_min + 0.1f, 0.5f);
+                n_low     = 0;
+            }
+        } else {
+            n_low = 0;
+            if (eff_p_min > base_p_min) {
+                eff_p_min = std::max(eff_p_min - 0.05f, base_p_min);
+            }
+        }
+    }
+};
+
 struct common_speculative {
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
+    std::unique_ptr<spec_tuner> tuner;
+    int last_n_drafted = 0;
+    int64_t t_step_start_us = 0;
 };
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
@@ -821,6 +968,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:     return "ngram_mod";
         case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:   return "ngram_cache";
+        case COMMON_SPECULATIVE_TYPE_SUFFIX:        return "suffix";
         default:                                    return "unknown";
     }
 }
@@ -890,6 +1038,7 @@ common_speculative * common_speculative_init(
         bool has_ngram_map_k   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
         bool has_ngram_map_k4v = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
         bool has_ngram_mod     = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
+        bool has_suffix        = (params.type == COMMON_SPECULATIVE_TYPE_SUFFIX);
 
         // In a more complex implementation we could use the same implementation but with different parameters.
         // This was initially used in PR-18471 but removed to simplify the code.
@@ -923,6 +1072,9 @@ common_speculative * common_speculative_init(
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
+        if (has_suffix) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_SUFFIX, params));
+        }
         if (has_mtp) {
              configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_MTP, params));
         }
@@ -950,9 +1102,15 @@ common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_MTP: {
-                impls.push_back(std::make_unique<common_speculative_state_mtp>(config.type,
-                    /* .ctx_tgt      = */ ctx_tgt
-                ));
+                auto mtp_state = std::make_unique<common_speculative_state_mtp>(config.type,
+                    /* .ctx_tgt      = */ ctx_tgt,
+                    /* .mtp_cparams  = */ params.cparams_dft
+                );
+                if (!mtp_state->ctx_mtp) {
+                    LOG_ERR("%s: failed to create MTP context\n", __func__);
+                    return nullptr;
+                }
+                impls.push_back(std::move(mtp_state));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
@@ -995,6 +1153,13 @@ common_speculative * common_speculative_init(
                 impls.push_back(std::make_unique<common_speculative_state_ngram_cache>(state));
                 break;
             }
+            case COMMON_SPECULATIVE_TYPE_SUFFIX: {
+                int depth = config.params.suffix_max_depth > 0 ? config.params.suffix_max_depth : 64;
+                const llama_model * model = llama_get_model(ctx_tgt);
+                impls.push_back(std::make_unique<common_speculative_state_suffix>(
+                    config.type, depth, config.params.suffix_corpus, model));
+                break;
+            }
             default:
                 break;
         }
@@ -1008,6 +1173,22 @@ common_speculative * common_speculative_init(
     auto * result = new common_speculative {
         /* .impls = */ std::move(impls)
     };
+
+    // initialize autotune if requested
+    if (params.autotune && !result->impls.empty()) {
+        auto actual_type = result->impls[0]->type;
+        if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
+            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
+            result->tuner = std::make_unique<spec_tuner>();
+            result->tuner->init(actual_type, params);
+            LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
+                    common_speculative_type_to_str(actual_type).c_str(),
+                    result->tuner->coords.size());
+        } else {
+            LOG_WRN("Autotune disabled — speculative type %s is not supported for autotuning\n",
+                    common_speculative_type_to_str(actual_type).c_str());
+        }
+    }
 
     return result;
 }
@@ -1034,10 +1215,17 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 
 llama_tokens common_speculative_draft(
         common_speculative * spec,
-        const common_params_speculative & params,
+        common_params_speculative & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last) {
     llama_tokens result;
+
+    spec->t_step_start_us = ggml_time_us();
+
+    // apply autotune proposal if enabled
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->tuner->propose(params);
+    }
 
     spec->curr_impl = nullptr; // reset current implementation
 
@@ -1061,17 +1249,29 @@ llama_tokens common_speculative_draft(
         }
     }
 
+    // store draft count for tuner feedback
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->last_n_drafted = (int)result.size();
+    }
+
     return result;
 }
 
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
-    if (n_accepted == 0) {
-        return;
+    if (spec->tuner && spec->tuner->enabled && spec->t_step_start_us > 0) {
+        int64_t step_time_us = ggml_time_us() - spec->t_step_start_us;
+        double step_tps = (step_time_us > 100)
+            ? (n_accepted + 1.0) * 1e6 / (double)step_time_us
+            : 0.0;
+        spec->tuner->accept_feedback(n_accepted, spec->last_n_drafted, step_tps);
+        spec->t_step_start_us = 0;
     }
 
     common_speculative_state * impl = spec->curr_impl;
 
-    GGML_ASSERT(impl);
+    if (!impl) {
+        return;
+    }
 
     {
         common_time_meas tm(impl->t_accept_us, !impl->gen_perf);
@@ -1085,7 +1285,7 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     }
 }
 
-void common_speculative_print_stats(const common_speculative * spec) {
+void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded, int n_past, common_params_speculative * active_params) {
     if (spec == nullptr) {
         return;
     }
@@ -1111,11 +1311,48 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 impl->n_acc_tokens,
                 str_perf.c_str());
     }
+
+    if (spec->tuner && spec->tuner->enabled && slot_tps > 0.0 && n_decoded > 0) {
+        auto * mutable_spec = const_cast<common_speculative *>(spec);
+        if (active_params) {
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, *active_params);
+        } else {
+            common_params_speculative tmp_params;
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, tmp_params);
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
 // MTP
 // ----------------------------------------------------------------------------
+
+llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
+    if (!spec) return nullptr;
+
+    for (auto & impl : spec->impls) {
+        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
+            auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get());
+            if (mtp_state) {
+                return mtp_state->ctx_mtp;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void common_speculative_context_shift(
+        common_speculative * spec,
+        llama_seq_id         seq_id,
+        llama_pos            kv_keep,
+        llama_pos            kv_discard,
+        llama_pos            kv_past) {
+    if (auto * ctx_mtp = common_speculative_get_mtp_ctx(spec); ctx_mtp != nullptr) {
+        llama_kv_cache_seq_rm (ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
+        llama_kv_cache_seq_add(ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
+    }
+}
+
 std::vector<llama_token> mtp_speculative_gen_draft(
     struct common_sampler * smpl,
     struct llama_context * ctx,
@@ -1137,6 +1374,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     llama_token current_input_id = id_last;
     int32_t current_n_past = n_past;
+    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+    std::vector<float> draft_hidden_state(n_embd);
 
     for (int i = 0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
@@ -1152,9 +1391,13 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         drafts.push_back(id_next);
 
         const float * emb = llama_get_embeddings_ith(ctx, 0);
-        if (emb) {
-            llama_set_draft_input_hidden_state(ctx, emb);
+        if (!emb) {
+            break;
         }
+        
+        // Keep a stable copy because later decode steps reuse ctx->embd storage.
+        memcpy(draft_hidden_state.data(), emb, n_embd * sizeof(float));
+        llama_set_draft_input_hidden_state(ctx, draft_hidden_state.data());
 
         current_input_id = id_next;
         current_n_past++;
@@ -1181,7 +1424,15 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
         return;
     }
 
-    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
+    llama_seq_id seq_id    = batch.seq_id[0][0];
+    llama_pos    start_pos = batch.pos[0];
+
+    if (llama_kv_cache_seq_pos_max(ctx, seq_id) >= start_pos) {
+        llama_kv_cache_seq_rm(ctx, seq_id, start_pos, -1);
+    }
+
+    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens from pos %d...\n",
+            is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens, (int)start_pos);
 
     llama_batch mtp_batch = batch;
     if (is_prompt_warmup) {

@@ -20,6 +20,7 @@
 #include <set>
 #include <map>
 #include <array>
+#include <charconv>
 #include <future>
 #include <regex>
 #include <algorithm>
@@ -204,8 +205,100 @@ namespace GGUFMeta {
     };
 }
 
+static bool parse_tensor_layer_index(const std::string & name, uint32_t & layer) {
+    if (name.rfind("blk.", 0) != 0) {
+        return false;
+    }
+
+    const char * first = name.data() + 4;
+    const char * last  = first;
+    const char * end   = name.data() + name.size();
+
+    while (last < end && *last != '.') {
+        ++last;
+    }
+
+    if (last == first || last == end) {
+        return false;
+    }
+
+    auto result = std::from_chars(first, last, layer);
+    return result.ec == std::errc() && result.ptr == last;
+}
+
+static bool is_split_expert_tensor(const std::string & name, uint32_t & expert) {
+    static const char * prefixes[] = { "ffn_gate.", "ffn_down.", "ffn_up." };
+
+    const size_t layer_end = name.find('.', 4);
+    if (layer_end == std::string::npos) {
+        return false;
+    }
+
+    const size_t prefix_begin = layer_end + 1;
+
+    for (const char * prefix : prefixes) {
+        const size_t prefix_len = std::char_traits<char>::length(prefix);
+        if (name.compare(prefix_begin, prefix_len, prefix) != 0) {
+            continue;
+        }
+
+        const size_t expert_begin = prefix_begin + prefix_len;
+        const size_t expert_end = name.find('.', expert_begin);
+        if (expert_end == std::string::npos || expert_end == expert_begin) {
+            continue;
+        }
+
+        auto result = std::from_chars(name.data() + expert_begin, name.data() + expert_end, expert);
+        if (result.ec == std::errc() && result.ptr == name.data() + expert_end) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool is_merged_expert_tensor(llm_tensor tensor_type) {
+    switch (tensor_type) {
+        case LLM_TENSOR_FFN_NORM_EXPS:
+        case LLM_TENSOR_FFN_DOWN_EXPS:
+        case LLM_TENSOR_FFN_GATE_EXPS:
+        case LLM_TENSOR_FFN_UP_EXPS:
+        case LLM_TENSOR_FFN_GATE_UP_EXPS:
+        case LLM_TENSOR_FFN_EXP_PROBS_B:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
+    ranges.erase(std::remove_if(ranges.begin(), ranges.end(), [](const llama_file_range & range) {
+        return range.empty();
+    }), ranges.end());
+
+    std::sort(ranges.begin(), ranges.end(), [](const llama_file_range & lhs, const llama_file_range & rhs) {
+        if (lhs.first != rhs.first) {
+            return lhs.first < rhs.first;
+        }
+        return lhs.last < rhs.last;
+    });
+
+    std::vector<llama_file_range> merged;
+    merged.reserve(ranges.size());
+
+    for (const auto & range : ranges) {
+        if (merged.empty() || range.first > merged.back().last) {
+            merged.push_back(range);
+            continue;
+        }
+        merged.back().last = std::max(merged.back().last, range.last);
+    }
+
+    ranges = std::move(merged);
+}
+
 llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
-        bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps,
+        bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
     int trace = 0;
@@ -500,6 +593,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     this->use_thp = use_thp;
     this->merge_qkv = merge_qkv;
     this->merge_up_gate_exps = merge_up_gate_exps;
+    this->defer_experts = defer_experts;
 }
 
 llama_model_loader::~llama_model_loader() {
@@ -508,6 +602,74 @@ llama_model_loader::~llama_model_loader() {
     }
     for (auto * ctx : contexts) {
         ggml_free(ctx);
+    }
+}
+
+void llama_model_loader::build_expert_tensor_index(const llama_hparams & hparams) {
+    expert_tensor_index = {};
+
+    if (hparams.n_expert == 0 || hparams.n_layer == 0) {
+        return;
+    }
+
+    expert_tensor_index.file_ranges.resize(files.size());
+
+    size_t deferred_bytes = 0;
+    const llm_arch arch = get_arch();
+
+    for (const auto & weight : weights) {
+        const std::string name(weight.tensor->name);
+        uint32_t layer = 0;
+        if (!parse_tensor_layer_index(name, layer)) {
+            continue;
+        }
+
+        if (layer >= hparams.n_layer) {
+            throw std::runtime_error(format("expert tensor '%s' has invalid layer index %u", name.c_str(), layer));
+        }
+
+        // check for split expert tensors (blk.N.ffn_gate.E.weight) by name pattern,
+        // since llm_tensor_type can't resolve these (two %d in the format string)
+        uint32_t expert = 0;
+        if (is_split_expert_tensor(name, expert)) {
+            if (expert >= hparams.n_expert) {
+                throw std::runtime_error(format("expert tensor '%s' has invalid expert index %u", name.c_str(), expert));
+            }
+        } else {
+            const llm_tensor tensor_type = llm_tensor_type(arch, name, int(layer));
+            if (!is_merged_expert_tensor(tensor_type)) {
+                continue;
+            }
+        }
+
+        const size_t tensor_bytes = ggml_nbytes(weight.tensor);
+        deferred_bytes += tensor_bytes;
+        expert_tensor_index.file_ranges.at(weight.idx).push_back({ weight.offs, weight.offs + tensor_bytes });
+    }
+
+    for (auto & ranges : expert_tensor_index.file_ranges) {
+        coalesce_ranges(ranges);
+    }
+
+    expert_tensor_index.deferred_bytes = deferred_bytes;
+    expert_tensor_index.dense_bytes = n_bytes > deferred_bytes ? n_bytes - deferred_bytes : 0;
+}
+
+bool llama_model_loader::should_defer_expert_mmaps() const {
+    return defer_experts && use_mmap && !expert_tensor_index.empty();
+}
+
+void llama_model_loader::drop_mmap_expert_pages() const {
+    if (!use_mmap || mappings.empty() || expert_tensor_index.file_ranges.empty()) {
+        return;
+    }
+
+    const size_t n_range_sets = std::min(mappings.size(), expert_tensor_index.file_ranges.size());
+    for (size_t idx = 0; idx < n_range_sets; ++idx) {
+        const auto & ranges = expert_tensor_index.file_ranges[idx];
+        for (const auto & range : ranges) {
+            mappings[idx]->dontneed_fragment(range.first, range.last);
+        }
     }
 }
 
@@ -562,8 +724,8 @@ bool llama_model_loader::get_arr(const std::string & key, std::vector<T> & resul
 
     result.resize(arr_info.length);
     if (arr_info.gt == GGUF_TYPE_BOOL) {
-        std::transform((const bool *)arr_info.data, (const bool *)arr_info.data + arr_info.length, result.begin(),
-                [] (bool x) { return static_cast<T>(x); });
+        std::transform((const int8_t *)arr_info.data, (const int8_t *)arr_info.data + arr_info.length, result.begin(),
+                [] (int8_t x) { return static_cast<T>(x != 0); });
 
     } else {
         result.assign((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length);
@@ -600,8 +762,8 @@ bool llama_model_loader::get_arr(const std::string & key, std::array<T, N_MAX> &
     }
 
     if (arr_info.gt == GGUF_TYPE_BOOL) {
-        std::transform((const bool *)arr_info.data, (const bool *)arr_info.data + arr_info.length, result.begin(),
-                [] (bool x) { return static_cast<T>(x); });
+        std::transform((const int8_t *)arr_info.data, (const int8_t *)arr_info.data + arr_info.length, result.begin(),
+                [] (int8_t x) { return static_cast<T>(x != 0); });
     } else {
         std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
     }

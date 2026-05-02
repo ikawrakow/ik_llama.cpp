@@ -40,12 +40,14 @@ struct llama_cparams {
     bool rope_cache;
     bool graph_reuse;
     bool k_cache_hadamard;
+    bool v_cache_hadamard;
     bool split_mode_graph_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;
     int  min_experts;
     float thresh_experts;
     bool mtp;
+    int  worst_graph_tokens;
 
     enum ggml_type reduce_type;
     enum llama_pooling_type pooling_type;

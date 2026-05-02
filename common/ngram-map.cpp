@@ -208,7 +208,7 @@ void common_ngram_map_begin(
                 count_keys, count_keys_del, count_values_del, count_map_entries_upd);
     }
 
-    map.idx_last_check = (map.size_last_begin > 0) ? map.size_last_begin - 1 : 0;
+    map.idx_last_check = size_begin;
     map.size_last_begin = size_begin;
 }
 
@@ -386,7 +386,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         LOG_DBG("%s: key_idx = %zu, key_offset = %zu, key_num = %d, draft.size = %zu\n", __func__,
                 curr_key.key_idx, key_offset, curr_key.key_num, draft.size());
 
-        map.last_draft_created   = false;
+        map.last_draft_created   = true;
         map.last_draft_key_idx   = key_offset;
         map.last_draft_value_idx = 0; // value 0 is used for simple mode
         return;

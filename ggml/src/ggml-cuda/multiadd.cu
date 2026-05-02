@@ -68,6 +68,40 @@ static void mul_multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t 
     mul_multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, nb02, nb11, nb12, src0, src1, dst);
 }
 
+static __global__ void mul_multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, int64_t nb31,
+        const char * src0, const char * src1, char * dst, const float * scales, const char * cids) {
+    const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
+    int64_t k = ne0*ne1;
+    if (i >= k) {
+        return;
+    }
+    int i1 = i / ne0;
+    int i0 = i % ne0;
+    float * result = (float *)(dst + i1*nb1);
+
+    const int * ids = (const int *)(cids + i1 * nb31);
+
+    auto c0 = src0 + i1*nb02;
+    auto c1 = src1 + i1*nb12;
+
+    float sum = 0;
+    for (int j = 0; j < nused; ++j) {
+        auto x0 = (const float *)c0;
+        auto x1 = (const float *)c1;
+        sum += x0[i0] * x1[0] * scales[ids[j]];
+        c0 += nb01;
+        c1 += nb11;
+    }
+    result[i0] = sum;
+}
+
+static void mul_multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, int64_t nb31,
+        const char * src0, const char * src1, char * dst, const float * scales, const char * ids, cudaStream_t stream) {
+    int64_t k = ne0 * ne1;
+    const int num_blocks = (k + CUDA_MULTI_ADD_BLOCK_SIZE - 1) / CUDA_MULTI_ADD_BLOCK_SIZE;
+    mul_multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, nb02, nb11, nb12, nb31, src0, src1, dst, scales, ids);
+}
+
 void ggml_cuda_op_mul_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto src0 = dst->src[0];
     auto src1 = dst->src[1];
@@ -81,6 +115,19 @@ void ggml_cuda_op_mul_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * d
     GGML_ASSERT(src0->ne[3] == src1->ne[3]);
     GGML_ASSERT(src0->ne[3] == 1);
     GGML_ASSERT(src1->ne[0] == 1);
+
+    auto src2 = dst->src[2];
+    auto src3 = dst->src[3];
+    if (src2 && src3) {
+        GGML_ASSERT(src3->ne[0] == src0->ne[1]);
+        GGML_ASSERT(src3->type == GGML_TYPE_I32);
+        GGML_ASSERT(src2->type == GGML_TYPE_F32);
+
+        mul_multi_add_f32_cuda(src0->ne[1], dst->ne[0], dst->ne[1], dst->nb[1], src0->nb[1], src0->nb[2], src1->nb[1], src1->nb[2], src3->nb[1],
+                (const char *)src0->data, (const char *)src1->data, (char *)dst->data, (const float *)src2->data, (const char *)src3->data, ctx.stream());
+
+        return;
+    }
 
     mul_multi_add_f32_cuda(src0->ne[1], dst->ne[0], dst->ne[1], dst->nb[1], src0->nb[1], src0->nb[2], src1->nb[1], src1->nb[2],
             (const char *)src0->data, (const char *)src1->data, (char *)dst->data, ctx.stream());

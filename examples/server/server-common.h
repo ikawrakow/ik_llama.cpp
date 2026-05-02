@@ -245,7 +245,6 @@ json oaicompat_chat_params_parse(const json& body);
 
 struct server_chat_params {
     bool use_jinja;
-    bool use_peg;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs;
@@ -253,6 +252,10 @@ struct server_chat_params {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    bool parallel_tool_calls = false;
+    int  reasoning_budget = -1;
+    std::string reasoning_budget_message;
+    bool force_pure_content = false;
 };
 
 // used by /chat/completions endpoint
@@ -348,6 +351,10 @@ public:
     server_tokens(mtmd::input_chunks& mtmd_chunks, bool has_mtmd);
 
     server_tokens(const llama_tokens& tokens, bool has_mtmd);
+
+    json to_json() const;
+
+    void from_json(const json & j);
 
     // the next position after n_tokens. if n_tokens < 0, return the next position after all tokens.
     llama_pos pos_next(int64_t n_tokens = -1) const;

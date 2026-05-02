@@ -71,7 +71,7 @@ struct slot_params {
     oaicompat_type        oaicompat = OAICOMPAT_TYPE_NONE;
     std::string           oaicompat_model;
     std::string           oaicompat_cmpl_id;
-    common_chat_syntax           oaicompat_chat_syntax;
+    common_chat_parser_params           chat_parser_params;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -166,6 +166,7 @@ struct server_task_result {
     bool truncated;
     int32_t n_decoded;
     int32_t n_prompt_tokens;
+    int32_t n_prompt_tokens_cache;
     int32_t n_tokens_cached;
     bool has_new_line;
     std::string stopping_word;
@@ -249,11 +250,16 @@ struct server_task_result_cmpl_final : server_task_result {
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
 
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     virtual bool is_stop() override {
         return true;
     }
 
     json to_json_non_oaicompat_final();
+
+    json usage_json_oaicompat();
 
     json to_json_oaicompat_final();
 
@@ -352,6 +358,22 @@ struct server_prompt_checkpoint {
     size_t size() const {
         return data.size();
     }
+
+    json to_json() {
+        json j;
+        j["pos_min"] = pos_min;
+        j["pos_max"] = pos_max;
+        j["pos_min_prompt"] = pos_min_prompt;
+        j["pos_max_prompt"] = pos_max_prompt;
+        return j;
+    }
+
+    void from_json(const json & j) {
+        pos_min = j.value<llama_pos>("pos_min", 0);
+        pos_max = j.value<llama_pos>("pos_max", 0);
+        pos_min_prompt = j.value<llama_pos>("pos_min_prompt", 0);
+        pos_max_prompt = j.value<llama_pos>("pos_max_prompt", 0);
+    }
 };
 
 
@@ -380,6 +402,22 @@ struct server_prompt {
             data,
             checkpoints
         };
+    }
+
+    json to_json()
+    {
+        json j;
+        j["tokens"] = tokens.to_json();
+        j["n_kept_prompt"] = n_kept_prompt;
+        j["n_discarded_prompt"] = n_discarded_prompt;
+        return j;
+    }
+
+    void from_json(const json & j) {
+        tokens.from_json(j.at("tokens"));
+        n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
+        n_discarded_prompt = j.value<llama_pos>("n_discarded_prompt", 0);
+        n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
     }
 };
 

@@ -39,6 +39,8 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
         const float * x0, const float * s0, const float * c,
         float * dst, float * dst_silu, int ith, int nth);
 
+void iqk_rms_rms_add(struct ggml_tensor * dst, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif

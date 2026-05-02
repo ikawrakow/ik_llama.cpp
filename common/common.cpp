@@ -407,6 +407,18 @@ void gpt_params_handle_model_default(gpt_params & params) {
     }
 }
 
+static bool is_truthy(const std::string & value) {
+    return value == "on" || value == "enabled" || value == "true" || value == "1";
+}
+
+static bool is_falsey(const std::string & value) {
+    return value == "off" || value == "disabled" || value == "false" || value == "0";
+}
+
+static bool is_autoy(const std::string & value) {
+    return value == "auto" || value == "-1";
+}
+
 bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     bool invalid_param = false;
     std::string arg;
@@ -499,6 +511,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CACHE_TYPE_V",     params.cache_type_v);
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
+    get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
 
 }
 
@@ -1020,6 +1033,27 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.p_min = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--recurrent-ckpt-mode") {
+        CHECK_ARG
+        const std::string val = argv[i];
+        if (val == "auto" || val == "AUTO") {
+            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_AUTO;
+        } else if (val == "per-step" || val == "PER_STEP") {
+            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_PER_STEP;
+        } else if (val == "gpu-fallback" || val == "GPU_FALLBACK") {
+            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_GPU_FALLBACK;
+        } else if (val == "cpu" || val == "CPU") {
+            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_CPU;
+        } else {
+            throw std::invalid_argument("unknown --recurrent-ckpt-mode value: " + val +
+                "; expected auto, per-step, gpu-fallback, or cpu");
+        }
+        return true;
+    }
+    if (arg == "--spec-autotune") {
+        params.speculative.autotune = true;
+        return true;
+    }
     if (arg == "--chunks") {
         CHECK_ARG
         params.n_chunks = std::stoi(argv[i]);
@@ -1065,6 +1099,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
         } else if (value == "ngram-mod") {
             params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+        } else if (value == "suffix") {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_SUFFIX;
         } else {
             throw std::invalid_argument("unknown speculative decoding type without draft model");
         }
@@ -1095,6 +1131,29 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             throw std::invalid_argument("ngram min hits must be at least 1");
         }
         params.speculative.ngram_min_hits = value;
+        return true;
+    }
+    if (arg == "--suffix-pattern-len") {
+        CHECK_ARG
+        int value = std::stoi(argv[i]);
+        if (value < 1) {
+            throw std::invalid_argument("suffix pattern length must be at least 1");
+        }
+        params.speculative.suffix_min_match_len = value;
+        return true;
+    }
+    if (arg == "--suffix-max-depth") {
+        CHECK_ARG
+        int value = std::stoi(argv[i]);
+        if (value < 1) {
+            throw std::invalid_argument("suffix max depth must be at least 1");
+        }
+        params.speculative.suffix_max_depth = value;
+        return true;
+    }
+    if (arg == "--suffix-corpus") {
+        CHECK_ARG
+        params.speculative.suffix_corpus = argv[i];
         return true;
     }
     if (arg == "-a" || arg == "--alias") {
@@ -1180,6 +1239,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.mmproj_use_gpu = false;
         return true;
     }
+    if (arg == "--mtmd-kq-type") {
+        CHECK_ARG
+        params.mtmd_kq_type = argv[i];
+        return true;
+    }
     if (arg == "--image" || arg == "--audio") {
         CHECK_ARG
         params.image.emplace_back(argv[i]);
@@ -1248,6 +1312,50 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ctv" || arg == "--cache-type-v") {
         params.cache_type_v = argv[++i];
+        return true;
+    }
+    if (arg == "-ctk-first" || arg == "--cache-type-k-first") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_k_first = p[0];
+            params.n_k_first = std::stoi(p[1].c_str());
+        }
+        return true;
+    }
+    if (arg == "-ctk-last" || arg == "--cache-type-k-last") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_k_last = p[0];
+            params.n_k_last = std::stoi(p[1].c_str());
+        }
+        return true;
+    }
+    if (arg == "-ctv-first" || arg == "--cache-type-v-first") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_v_first = p[0];
+            params.n_v_first = std::stoi(p[1].c_str());
+        }
+        return true;
+    }
+    if (arg == "-ctv-last" || arg == "--cache-type-v-last") {
+        CHECK_ARG
+        auto p = string_split(argv[i], ",");
+        if (p.size() != 2) {
+            invalid_param = true;
+        } else {
+            params.type_v_last = p[0];
+            params.n_v_last = std::stoi(p[1].c_str());
+        }
         return true;
     }
     if (arg == "-ctkd" || arg == "--cache-type-k-draft") {
@@ -1505,6 +1613,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.fit = true;
         return true;
     }
+    if (arg == "--defer-experts") {
+        params.defer_experts = true;
+        params.warmup = false;
+        return true;
+    }
     if (arg == "--fit-margin") {
         CHECK_ARG;
         int32_t margin = std::stoi(argv[i]);
@@ -1514,6 +1627,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         } else {
             params.fit_margin = margin;
         }
+        return true;
+    }
+    if (arg == "-wgt" || arg == "--worst-graph-tokens") {
+        CHECK_ARG;
+        params.worst_graph_tokens = std::stoi(argv[i]);
         return true;
     }
     if (arg == "--no-mmap") {
@@ -1543,6 +1661,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-khad" || arg == "--k-cache-hadamard") {
         params.k_cache_hadamard = true;
+        return true;
+    }
+    if (arg == "-vhad" || arg == "--v-cache-hadamard") {
+        params.v_cache_hadamard = true;
         return true;
     }
     if (arg == "-smgs" || arg == "--split-mode-graph-scheduling") {
@@ -1633,6 +1755,30 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--banned-n") {
         CHECK_ARG
         params.banned_n = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--allowlist-unicode-rule") {
+        CHECK_ARG
+        if (params.allow_ruless.size() == 0) {
+            params.allow_ruless.push_back({});
+        }
+        params.allow_ruless.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
+        return true;
+    }
+    if (arg == "--allowlist-pieces") {
+        CHECK_ARG
+        params.allow_pieces.push_back(argv[i]);
+        return true;
+    }
+    if (arg == "--allowlist-keyword") {
+        CHECK_ARG
+        params.allow_kws.push_back(argv[i]);
+        params.allow_ruless.push_back({});
+        return true;
+    }
+    if (arg == "--allowlist-keyword-delay") {
+        CHECK_ARG
+        params.allow_kw_delay = std::stoul(argv[i]);
         return true;
     }
     if (arg == "-ld" || arg == "--logdir") {
@@ -1777,7 +1923,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--grammar") {
         CHECK_ARG
-        sparams.grammar = argv[i];
+            sparams.grammar = { COMMON_GRAMMAR_TYPE_USER, argv[i] };
         return true;
     }
     if (arg == "--grammar-file") {
@@ -1788,16 +1934,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             invalid_param = true;
             return true;
         }
-        std::copy(
-            std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>(),
-            std::back_inserter(sparams.grammar)
-        );
+        sparams.grammar = {COMMON_GRAMMAR_TYPE_USER, read_file(argv[i])};
         return true;
     }
     if (arg == "-j" || arg == "--json-schema") {
         CHECK_ARG
-        sparams.grammar = json_schema_to_grammar(json::parse(argv[i]));
+        sparams.grammar = { COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT,  json_schema_to_grammar(json::parse(argv[i]))};
         return true;
     }
 
@@ -1976,7 +2118,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--peg") {
-        params.use_peg = true;
         return true;
     }
     if (arg == "--chat-template-kwargs") {
@@ -1984,6 +2125,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         std::string value = argv[i];
         auto parsed = json::parse(value);
         for (const auto& item : parsed.items()) {
+            if (item.key() == "enable_thinking") {
+                LOG_WRN("Setting 'enable_thinking' via --chat-template-kwargs is deprecated. "
+                    "Use --reasoning on / --reasoning off instead.\n");
+            }
             params.default_template_kwargs[item.key()] = item.value().dump();
         }
         return true;
@@ -1994,9 +2139,41 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.reasoning_format = common_reasoning_format_from_name(value);
         return true;
     }
+    if (arg == "-rea" || arg == "--reasoning") {
+        CHECK_ARG
+        std::string value = argv[i];
+        if (is_truthy(value)) {
+            params.enable_reasoning = 1;
+            params.default_template_kwargs["enable_thinking"] = "true";
+        } else if (is_falsey(value)) {
+            params.enable_reasoning = 0;
+            params.default_template_kwargs["enable_thinking"] = "false";
+        } else if (is_autoy(value)) {
+            params.enable_reasoning = -1;
+        } else {
+            throw std::invalid_argument(
+                string_format("error: unknown value for --reasoning: '%s'\n", value.c_str()));
+        }
+        return true;
+    }
+    if (arg == "--reasoning-budget-message") {
+        CHECK_ARG
+        std::string value = argv[i];
+        params.reasoning_budget_message = value;
+        return true;
+    }
+    if (arg == "--skip-chat-parsing") {
+        CHECK_ARG
+        params.force_pure_content_parser = true;
+        return true;
+    }
     if (arg == "--no-prefill-assistant") {
         CHECK_ARG
         params.prefill_assistant = false;
+        return true;
+    }
+    if (arg == "--parallel-tool-calls") {
+        params.parallel_tool_calls = true;
         return true;
     }
     if (arg == "--slot-prompt-similarity" || arg == "-sps") {
@@ -2313,6 +2490,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts,","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
+    options.push_back({ "*",         "-vhad,  --v-cache-hadamard,",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", true});
     options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", false});
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
@@ -2378,9 +2556,16 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
     options.push_back({ "*",           "       --adaptive-target",      "adaptive-p sampling: (default: %.2f, <0.0 = disabled)", (double)sparams.adaptive_target});
     options.push_back({ "*",           "       --adaptive-decay",       "adaptive-p sampling: (default: %.2f)", (double)sparams.adaptive_decay});
+    options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
     options.push_back({ "*",           "       --banned-string-file",   "file path of the list of banned strings on each line" });
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
-    options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
+    options.push_back({ "*",           "       --allowlist-unicode-rule",
+                                                                        "rule for allowlisting unicode script and/or codepoints. disabled without any rule. format: `LOWER..UPPER,SCRIPT:BIAS`\n"
+                                                                        "if unspecified: LOWER = 0, UPPER = -1(=max), SCRIPT=\"\", BIAS = 0. at least one of LOWER, UPPER, or SCRIPT is required\n" });
+    options.push_back({ "*",           "       --allowlist-pieces",     "allowlist each token in argument. inherits max BIAS in --allowlist-unicode-rule. overrides --allowlist-unicode-rule" });
+    options.push_back({ "*",           "       --allowlist-keyword",    "keyword to expire earlier allowlist rules if matched during generation. does not affect later rules" });
+    options.push_back({ "*",           "       --allowlist-keyword-delay",
+                                                                        "# tokens to delay matching for the first keyword (default: %zu)", params.allow_kw_delay });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -2395,9 +2580,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
-    options.push_back({ "main",        "       --peg",
-                                                                    "use peg parser for qwen3.5 models.\n"
-                                                                    "https://github.com/ikawrakow/ik_llama.cpp/pull/1490" });
+    options.push_back({ "main",        "       --parallel-tool-calls",  "enable parallel tool calls\n" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
@@ -2408,20 +2591,25 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
                         "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
                         "(default: none)", });
-    options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
-    options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed.\n"
-                                                                                                     "currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking"
-                                                                                                      "(default: -1)" });
-    options.push_back({ "main",      "       --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
+    options.push_back({ "main",        "-rea,  --reasoning",  "[on|off|auto]"
+                                                                 "Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))" });
+    options.push_back({ "main",        "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
+
+    options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
+    options.push_back({ "main",        "       --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
 						                                                                                            "none: include all tokens\n"
                                                                                                                     "auto: exclude all tokens between <think> and </think>\n"
 						                                                                                            "Or comma separated start and end tokens such as [THINK],[/THINK]\n"
 						                                                                                            "(default: auto)" });
-
-    options.push_back({ "main",      "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+    options.push_back({ "main",        "       --reasoning-budget-message",  "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)" });
+    options.push_back({ "main",        "       --skip-chat-parsing",  "force a pure content parser, even if a Jinja template is specified; model will output everything "
+            "in the content section, including any reasoning and/or tool calls (default: disabled)" });
+    options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
+    options.push_back({ "main",        "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
             "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
+    options.push_back({ "main",        "       -ptc, --parallel-tool-calls", "enable parallel tool calls\n" });
     options.push_back({ "grammar" });
-    options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.c_str() });
+    options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.grammar.c_str() });
     options.push_back({ "*",           "       --grammar-file FNAME",   "file to read grammar from" });
     options.push_back({ "*",           "-j,    --json-schema SCHEMA",
                                                                         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\n"
@@ -2450,6 +2638,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-nkvo, --no-kv-offload",        "disable KV offload" });
     options.push_back({ "*",           "-ctk,  --cache-type-k TYPE",    "KV cache data type for K (default: %s)", params.cache_type_k.c_str() });
     options.push_back({ "*",           "-ctv,  --cache-type-v TYPE",    "KV cache data type for V (default: %s)", params.cache_type_v.c_str() });
+    options.push_back({ "*",           "-ctk-first, --cache-type-k-first TYPE,N", "KV cache data type for the first N layers of K (default: %s,-1)", params.type_k_first.c_str() });
+    options.push_back({ "*",           "-ctv-last,  --cache-type-k-last  TYPE,N", "KV cache data type for the last N layers of K  (default: %s,-1)", params.type_k_last.c_str() });
+    options.push_back({ "*",           "-ctv-first, --cache-type-v-first TYPE,N", "KV cache data type for the first N layers of V (default: %s,-1)", params.type_v_first.c_str() });
+    options.push_back({ "*",           "-ctk-last,  --cache-type-v-last  TYPE,N", "KV cache data type for the last N layers of V  (default: %s,-1)", params.type_v_last.c_str() });
     options.push_back({ "*",           "-ctkd, --cache-type-k-draft TYPE", "KV cache data type for K for the draft model" });
     options.push_back({ "*",           "-ctvd, --cache-type-v-draft TYPE", "KV cache data type for V for the draft model" });
 
@@ -2478,9 +2670,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "multi-modality" });
     options.push_back({ "*",           "       --mmproj FILE",          "path to a multimodal projector file for LLaVA. see examples/llava/README.md" });
     options.push_back({ "*",           "       --image FILE",           "path to an image file. use with multimodal models. Specify multiple times for batching" });
-    options.push_back({ "*",           "       --image-min-tokens N",           "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)"});
-    options.push_back({ "*",           "       --image-max-tokens N",           "maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)" });
-    options.push_back({ "*",           "       --no-context-shift",           "disable context-shift." });
+    options.push_back({ "*",           "       --image-min-tokens N",   "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)"});
+    options.push_back({ "*",           "       --image-max-tokens N",   "maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)" });
+    options.push_back({ "*",           "       --mtmd-kq-type TYPE",    "data type for multimodality K*Q (default: %s)", params.mtmd_kq_type.c_str() });
+    options.push_back({ "*",           "       --no-context-shift",     "disable context-shift." });
     options.push_back({ "*",           "--context-shift (auto|on|off|0|1)", "set context-shift (default: %s)", params.ctx_shift ? "on" : "off" });
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
@@ -2495,7 +2688,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
+    options.push_back({ "*",           "-wgt, --worst-graph-tokens N",  "number of tokens to use for worst-case graph"});
     options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
@@ -2554,12 +2749,21 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "number of tokens to draft for speculative decoding (default: %d)", params.speculative.n_max });
     options.push_back({ "*", "--draft-min, --draft-n-min N",   "minimum number of draft tokens to use for speculative decoding" });
     options.push_back({ "*", "--draft-p-min P",                "minimum speculative decoding probability (greedy) (default: %.1f)", (double)params.speculative.p_min });
-    options.push_back({ "*", "--spec-type Name [none | ngram - cache | ngram - simple | ngram - map - k | ngram - map - k4v | ngram - mod]", "type of speculative decoding to use when no draft model is provided (default: %d)\n", (int)params.speculative.type});
+    options.push_back({ "*", "--recurrent-ckpt-mode MODE",    "checkpoint strategy for recurrent/hybrid speculative decoding\n"
+                                                              "  auto         auto-select: per-step if CUDA full-GPU, gpu-fallback otherwise (default)\n"
+                                                              "  per-step     save SSM state per draft step in VRAM; no re-decode on rejection\n"
+                                                              "  gpu-fallback copy state to GPU buffer; re-decode on rejection\n"
+                                                              "  cpu          serialise state via llama_state_seq; re-decode on rejection" });
+    options.push_back({ "*", "--spec-type Name [none | ngram - cache | ngram - simple | ngram - map - k | ngram - map - k4v | ngram - mod | suffix]", "type of speculative decoding to use when no draft model is provided (default: %d)\n", (int)params.speculative.type});
     options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n",params.speculative.ngram_size_n });
 
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
 
     options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
+    options.push_back({ "*", "--suffix-pattern-len N",   "minimum context match length for suffix decoding (default: %d)", params.speculative.suffix_min_match_len });
+    options.push_back({ "*", "--suffix-max-depth N",     "suffix tree maximum depth for suffix decoding (default: %d)",    params.speculative.suffix_max_depth });
+    options.push_back({ "*", "--suffix-corpus PATH",     "corpus file to pre-warm the suffix tree: .json (array of strings or conversation messages) or .bin (raw int32 token IDs)" });
+    options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
 
     options.push_back({ "retrieval" });
     options.push_back({ "retrieval",   "       --context-file FNAME",   "file to load context from (repeat to specify multiple files)" });
@@ -2751,6 +2955,21 @@ std::vector<std::string> string_split(const std::string& str, char delim) {
         values.push_back(value);
     }
     return values;
+}
+
+std::string string_repeat(const std::string & str, size_t n) {
+    if (n == 0) {
+        return "";
+    }
+
+    std::string result;
+    result.reserve(str.length() * n);
+
+    for (size_t i = 0; i < n; ++i) {
+        result += str;
+    }
+
+    return result;
 }
 
 static bool is_utf8_whitespace(uint8_t c) {
@@ -3331,8 +3550,17 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.ncmoe           = params.ncmoe;
     mparams.fit             = params.fit;
     mparams.fit_margin      = params.fit_margin;
+    mparams.worst_graph_tokens = params.worst_graph_tokens;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
+    mparams.type_k_first    = kv_cache_type_from_str(params.type_k_first);
+    mparams.type_k_last     = kv_cache_type_from_str(params.type_k_last );
+    mparams.type_v_first    = kv_cache_type_from_str(params.type_v_first);
+    mparams.type_v_last     = kv_cache_type_from_str(params.type_v_last );
+    mparams.n_k_first       = params.n_k_first;
+    mparams.n_k_last        = params.n_k_last;
+    mparams.n_v_first       = params.n_v_first;
+    mparams.n_v_last        = params.n_v_last;
     mparams.max_ctx_size    = params.n_ctx;
     mparams.n_seq_max       = params.n_parallel;
     mparams.n_ubatch        = get_batch_ubatch(params).second;
@@ -3349,6 +3577,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     mparams.mtp             = params.has_mtp;
     mparams.flash_attn      = params.flash_attn;
+    mparams.defer_experts   = params.defer_experts;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -3398,6 +3627,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.seed              = params.seed;
     cparams.logits_all        = params.logits_all;
     cparams.embeddings        = params.embedding;
+    cparams.worst_case_tokens = params.worst_graph_tokens;
     cparams.rope_scaling_type = params.rope_scaling_type;
     cparams.rope_freq_base    = params.rope_freq_base;
     cparams.rope_freq_scale   = params.rope_freq_scale;
@@ -3422,6 +3652,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.rope_cache        = params.rope_cache;
     cparams.graph_reuse       = params.graph_reuse;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
+    cparams.v_cache_hadamard  = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
@@ -3436,6 +3667,20 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
     cparams.type_reduce = ggml_type_from_str(params.reduce_type);
     if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v)) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
+    cparams.type_k_first    = kv_cache_type_from_str(params.type_k_first);
+    cparams.type_k_last     = kv_cache_type_from_str(params.type_k_last );
+    cparams.type_v_first    = kv_cache_type_from_str(params.type_v_first);
+    cparams.type_v_last     = kv_cache_type_from_str(params.type_v_last );
+    cparams.n_k_first       = params.n_k_first;
+    cparams.n_k_last        = params.n_k_last;
+    cparams.n_v_first       = params.n_v_first;
+    cparams.n_v_last        = params.n_v_last;
+    if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v_first) && cparams.n_v_first > 0) {
+        throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
+    if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v_last) && cparams.n_v_last > 0) {
         throw std::runtime_error("Quantized V cache cannot be used without flash attention");
     }
 
@@ -3873,6 +4118,15 @@ std::vector<llama_token> llama_tokenize(
         result.resize(n_tokens);
     }
     return result;
+}
+
+std::vector<llama_token> common_tokenize(
+    const struct llama_vocab * vocab,
+    const std::string & text,
+    bool   add_special,
+    bool   parse_special){
+
+    return llama_tokenize(vocab, text, add_special, parse_special);
 }
 
 std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
@@ -4336,7 +4590,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "escape: %s # default: false\n", params.escape ? "true" : "false");
     fprintf(stream, "file: # never logged, see prompt instead. Can still be specified for input.\n");
     fprintf(stream, "frequency_penalty: %f # default: 0.0 \n", sparams.penalty_freq);
-    yaml_dump_string_multiline(stream, "grammar", sparams.grammar.c_str());
+    yaml_dump_string_multiline(stream, "grammar", sparams.grammar.grammar.c_str());
     fprintf(stream, "grammar-file: # never logged, see grammar instead. Can still be specified for input.\n");
     fprintf(stream, "hellaswag: %s # default: false\n", params.hellaswag ? "true" : "false");
     fprintf(stream, "hellaswag_tasks: %zu # default: 400\n", params.hellaswag_tasks);
@@ -4379,6 +4633,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "ncmoe: %d # default: 0\n", params.ncmoe);
     fprintf(stream, "fit: %d # default: false\n", params.fit);
     fprintf(stream, "fit_margin: %d # default: 0\n", params.fit_margin);
+    fprintf(stream, "worst_graph_tokens: %d # default: 0\n", params.worst_graph_tokens);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);
@@ -4399,6 +4654,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
     fprintf(stream, "merge_up_gate_exps: %s # default: false\n", params.merge_up_gate_exps ? "true" : "false");
+    fprintf(stream, "defer_experts: %s # default: false\n", params.defer_experts ? "true" : "false");
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
@@ -4437,6 +4693,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "rope_cache: %s # default: false\n", params.rope_cache ? "true" : "false");
     fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
+    fprintf(stream, "v_cache_hadamard: %s # default: false\n", params.v_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_mode_graph_scheduling: %s # default: false\n", params.split_mode_graph_scheduling ? "true" : "false");
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
@@ -4458,4 +4715,38 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "adaptive_updt_w_cur: %s # default: false\n", sparams.adaptive_updt_w_cur ? "true" : "false");
     fprintf(stream, "verbose_prompt: %s # default: false\n", params.verbose_prompt ? "true" : "false");
     fprintf(stream, "display_prompt: %s # default: true\n", params.display_prompt ? "true" : "false");
+}
+
+//
+// Argparse utils
+//
+
+std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_rule(std::string argstr) {
+    // format:
+    //   LOWER..UPPER,SCRIPT:BIAS
+
+    auto subs = string_split(argstr, ":");
+    float bias = subs.size() == 1 ? 0 : std::stof(subs[1]);
+
+    subs = string_split(subs[0], ",");
+    std::string script = std::all_of(subs.back().begin(), subs.back().end(), [](char c) {
+        return std::isalpha(c);
+    }) ? string_lower(subs.back()) : "*";
+    if (script == "ascii") {
+        return { 0x000000, 0x00007F, "*", bias };
+    }
+
+    uint32_t first = 0;
+    uint32_t last = -1;
+    if ((script == "*") || (subs.size() > 1)) {
+        subs = string_split(subs.front(), ".");
+        if (!subs.front().empty()) {
+            first = std::stoul(subs.front());
+        }
+        if (!subs.back().empty()) {
+            last = std::stoul(subs.back());
+        }
+    }
+
+    return { std::min(first, last), std::max(first, last), script, bias };
 }

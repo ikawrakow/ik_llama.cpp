@@ -449,6 +449,39 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
     int ne01 = src0->ne[1];
     int ne00 = src0->ne[0];
 
+    auto src2 = dst->src[2];
+    auto src3 = dst->src[3];
+    if (src2 && src3) {
+        GGML_ASSERT(src2->type == GGML_TYPE_F32);
+        GGML_ASSERT(src3->type == GGML_TYPE_I32);
+        GGML_ASSERT(src3->ne[0] == src0->ne[1]);
+
+        auto cids = (const char *)src3->data;
+        auto scales = (const float *)src2->data;
+        for (int ir = first; ir < last; ++ir) {
+            auto c0 = (const char *)src0->data + ir*src0->nb[2];
+            auto c1 = (const char *)src1->data + ir*src1->nb[2];
+            auto cy = (      char *)dst->data + ir* dst->nb[1];
+            auto  y = (     float *)cy;
+            auto x0 = (const float *)c0;
+            auto x1 = (const float *)c1;
+            auto ids = (const int *)(cids + ir*src3->nb[1]);
+            float s = scales[ids[0]] * x1[0];
+            for (int k = 0; k < ne00; ++k) y[k] = x0[k] * s;
+            for (int j = 1; j < ne01; ++j) {
+                c0 += src0->nb[1];
+                c1 += src1->nb[1];
+                x0 = (const float *)c0;
+                x1 = (const float *)c1;
+                s  = x1[0] * scales[ids[j]];
+                for (int k = 0; k < ne00; ++k) y[k] += x0[k] * s;
+            }
+        }
+
+        return;
+
+    }
+
     for (int ir = first; ir < last; ++ir) {
         auto c0 = (const char *)src0->data + ir*src0->nb[2];
         auto c1 = (const char *)src1->data + ir*src1->nb[2];
@@ -790,5 +823,134 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
 #else
     return false;
 #endif
-    }
+}
 
+namespace {
+inline float sum_row_squared(int ncols, const float * x) {
+    float sum = 0;
+    int i = 0;
+#ifdef __AVX2__
+    auto vsum = _mm256_setzero_ps();
+    for (; i < ncols - 7; i += 8) {
+        auto vx = _mm256_loadu_ps(x + i);
+        vsum = _mm256_fmadd_ps(vx, vx, vsum);
+    }
+    sum = hsum_float_8(vsum);
+#endif
+    for (; i < ncols; ++i) sum += x[i]*x[i];
+    //for (int j = 0; j < ncols; ++j) sum += x[j]*x[j];
+    return sum;
+}
+inline float sum_row_squared(int ncols, const ggml_half * x) {
+    float sum = 0;
+    for (int j = 0; j < ncols; ++j) {
+        float v = GGML_FP16_TO_FP32(x[j]);
+        sum += v*v;
+    }
+    return sum;
+}
+inline float sum_row_squared(int ncols, const ggml_bf16_t * x) {
+    float sum = 0;
+    for (int j = 0; j < ncols; ++j) {
+        float v = GGML_BF16_TO_FP32(x[j]);
+        sum += v*v;
+    }
+    return sum;
+}
+inline void rms_rms_add(int ncols, float scale1, float scale2, const float * x1, const float * x2, const float * c1, const float * c2, float * dst) {
+    int j = 0;
+#ifdef __AVX2__
+    auto vs1 = _mm256_set1_ps(scale1);
+    auto vs2 = _mm256_set1_ps(scale2);
+    for (; j < ncols - 7; j += 8) {
+        auto vx1 = _mm256_loadu_ps(x1 + j);
+        auto vx2 = _mm256_loadu_ps(x2 + j);
+        auto vc1 = _mm256_loadu_ps(c1 + j);
+        auto vc2 = _mm256_loadu_ps(c2 + j);
+        auto vy = _mm256_add_ps(_mm256_mul_ps(_mm256_mul_ps(vs1, vc1), vx1), _mm256_mul_ps(_mm256_mul_ps(vs2, vc2), vx2));
+        _mm256_storeu_ps(dst + j, vy);
+    }
+#endif
+    for (; j < ncols; ++j) {
+        dst[j] = scale1 * c1[j] * x1[j] + scale2 * c2[j] * x2[j];
+    }
+}
+inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_half * x1, const ggml_half * x2, const float * c1, const float * c2, float * dst) {
+    for (int j = 0; j < ncols; ++j) {
+        float v1 = GGML_FP16_TO_FP32(x1[j]);
+        float v2 = GGML_FP16_TO_FP32(x2[j]);
+        dst[j] = scale1 * c1[j] * v1 + scale2 * c2[j] * v2;
+    }
+}
+inline void rms_rms_add(int ncols, float scale1, float scale2, const ggml_bf16_t * x1, const ggml_bf16_t * x2, const float * c1, const float * c2, float * dst) {
+    for (int j = 0; j < ncols; ++j) {
+        float v1 = GGML_BF16_TO_FP32(x1[j]);
+        float v2 = GGML_BF16_TO_FP32(x2[j]);
+        dst[j] = scale1 * c1[j] * v1 + scale2 * c2[j] * v2;
+    }
+}
+}
+
+void iqk_rms_rms_add(struct ggml_tensor * dst, int ith, int nth) {
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const struct ggml_tensor * src2 = dst->src[2];
+    const struct ggml_tensor * src3 = dst->src[3];
+
+    GGML_ASSERT(ggml_is_contiguous(src0) && ggml_is_contiguous(src2) && ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_are_same_shape(src2, dst));
+    GGML_ASSERT(ggml_nrows(src1) == 1 && ggml_nrows(src3) == 1);
+    GGML_ASSERT(src0->ne[0] == src1->ne[0] && src2->ne[0] == src3->ne[0]);
+    GGML_ASSERT(src0->type == src2->type);
+    GGML_ASSERT(src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F32);
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    GGML_ASSERT(eps > 0.0f);
+
+    int nrows = ggml_nrows(dst);
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first = ith*nrows_per_thread;
+    int last  = MIN(nrows, first + nrows_per_thread);
+
+    const float * c1 = (float *) src1->data;
+    const float * c2 = (float *) src3->data;
+
+    const int ncols = dst->ne[0];
+
+    for (int ir = first; ir < last; ++ir) {
+        float * y = (float *)dst->data + ir*ncols;
+
+        float sum1 = 0, sum2 = 0;
+        if (src0->type == GGML_TYPE_F32) {
+            sum1 = sum_row_squared(ncols, (const float *)src0->data + ir*ncols);
+            sum2 = sum_row_squared(ncols, (const float *)src2->data + ir*ncols);
+        }
+        else if (src0->type == GGML_TYPE_F16) {
+            sum1 = sum_row_squared(ncols, (const ggml_half *)src0->data + ir*ncols);
+            sum2 = sum_row_squared(ncols, (const ggml_half *)src2->data + ir*ncols);
+        }
+        else {
+            sum1 = sum_row_squared(ncols, (const ggml_bf16_t *)src0->data + ir*ncols);
+            sum2 = sum_row_squared(ncols, (const ggml_bf16_t *)src2->data + ir*ncols);
+        }
+
+        const float mean1  = sum1/ncols;
+        const float mean2  = sum2/ncols;
+        const float scale1 = 1.0f/sqrtf(mean1 + eps);
+        const float scale2 = 1.0f/sqrtf(mean2 + eps);
+        if (src0->type == GGML_TYPE_F32) {
+            rms_rms_add(ncols, scale1, scale2, (const float *)src0->data + ir*ncols, (const float *)src2->data + ir*ncols, c1, c2, y);
+        }
+        else if (src0->type == GGML_TYPE_F16) {
+            rms_rms_add(ncols, scale1, scale2, (const ggml_half *)src0->data + ir*ncols, (const ggml_half *)src2->data + ir*ncols, c1, c2, y);
+        }
+        else {
+            rms_rms_add(ncols, scale1, scale2, (const ggml_bf16_t *)src0->data + ir*ncols, (const ggml_bf16_t *)src2->data + ir*ncols, c1, c2, y);
+        }
+    }
+}

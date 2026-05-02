@@ -1,0 +1,118 @@
+name: Build and Push Docker Image
+
+on:
+  # Allows manual triggering of the workflow
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: "cu12"
+            cuda_version: "12.6.2"
+            containerfile: "ik_llama-cuda.Containerfile"
+          - variant: "cu13"
+            cuda_version: "13.1.1"
+            containerfile: "ik_llama-cuda.Containerfile"
+          - variant: "cpu"
+            cuda_version: "none"
+            containerfile: "ik_llama-cpu.Containerfile"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 0 indicates all history for all branches and tags
+      
+      - name: Free Disk Space (Ubuntu)
+        run: |
+          echo "Listing initial disk usage..."
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf /usr/lib/jvm
+          sudo docker image prune -af
+          echo "Listing disk usage after cleanup..."
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Environment
+        id: prep
+        run: |
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> $GITHUB_ENV
+          echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+      
+      # 5.1 Restore the cache from GitHub's storage to a host folder
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .buildkit-cache
+          key: ccache-${{ matrix.variant }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ matrix.variant }}-
+
+      # 5.2. "Inject" that host folder into BuildKit's internal mount system
+      - name: Inject ccache into BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              ".buildkit-cache": "/ccache"
+            }
+          skip-extraction: ${{ github.event_name == 'pull_request' }}
+
+      # 5.3 Build and push using the cache
+      - name: Build and Push
+        uses: docker/bake-action@v7
+        env:
+          REPO_OWNER: ${{ env.REPO_LOWER }}
+          VARIANT: ${{ matrix.variant }}
+          BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
+          CUDA_VERSION: ${{ matrix.cuda_version }}
+          GGML_NATIVE: "OFF" # Force OFF for CI portability
+          USE_CCACHE: "true"
+        with:
+          push: true
+          files: ./docker-bake.hcl
+          set: |
+            *.context=.
+            *.dockerfile=./docker/${{ matrix.containerfile }}
+            *.cache-from=type=gha,scope=ccache-${{ matrix.variant }}
+            *.cache-to=type=gha,mode=max,scope=ccache-${{ matrix.variant }}
+          source: .
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      packages: write
+    steps:
+      - name: Delete untagged images
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use the lower-case owner env you created earlier if possible, 
+          # or just github.repository_owner
+          owner: ${{ github.repository_owner }}
+          package: ik-llama-cpp
+          delete-untagged: true
+          # This helps avoid the "Package not found" error during high-volume deletion
+          validate: false

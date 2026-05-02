@@ -39,15 +39,27 @@ static __device__ void quantize_f32_q4_0_block(const float * __restrict__ x, blo
 
     y->d = d;
 
+    float sumqx = 0, sumq2 = 0;
     for (int j = 0; j < QK4_0/2; ++j) {
-        const float x0 = x[0       + j]*id;
-        const float x1 = x[QK4_0/2 + j]*id;
+        const float v0 = x[0       + j];
+        const float v1 = x[QK4_0/2 + j];
+        const float x0 = v0*id;
+        const float x1 = v1*id;
 
         const uint8_t xi0 = min(15, (int8_t)(x0 + 8.5f));
         const uint8_t xi1 = min(15, (int8_t)(x1 + 8.5f));
+        float q0 = xi0 - 8;
+        float q1 = xi1 - 8;
+        float w0 = v0*v0;
+        float w1 = v1*v1;
+        sumqx += w0*q0*v0 + w1*q1*v1;
+        sumq2 += w0*q0*q0 + w1*q1*q1;
 
         y->qs[j]  = xi0;
         y->qs[j] |= xi1 << 4;
+    }
+    if (sumq2 > 0) {
+        y->d = sumqx/sumq2;
     }
 }
 
@@ -191,6 +203,7 @@ static __device__ void quantize_f32_iq4_nl_block(const float * __restrict__ x, b
         sumq2 += w0*v0*v0 + w1*v1*v1;
     }
 
+    //y->d = d;
     y->d = sumq2 > 0 ? sumqx/sumq2 : d;
 }
 

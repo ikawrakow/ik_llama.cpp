@@ -248,6 +248,12 @@ static inline float hmax_float_8(__m256 x) {
     max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4));
     return  _mm_cvtss_f32(max4);
 }
+static inline float hmin_float_8(__m256 x) {
+    __m128 min4 = _mm_min_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
+    min4 = _mm_min_ps( min4, _mm_movehl_ps(min4, min4));
+    min4 = _mm_min_ss( min4, _mm_movehdup_ps( min4));
+    return  _mm_cvtss_f32(min4);
+}
 
 static inline __m128 hsum_float_4x4(__m128 * accm) {
     accm[0] = _mm_add_ps(_mm_unpacklo_ps(accm[0], accm[2]), _mm_unpackhi_ps(accm[0], accm[2]));

@@ -542,6 +542,16 @@ typedef struct {
 static_assert(sizeof(block_iq1_m_r4) == 28, "wrong iq1_m_r4 block size/padding");
 
 //
+// Bonsai
+//
+#define QK1_0_G128 128
+typedef struct {
+    ggml_half  d;
+    uint8_t    qs[QK1_0_G128 / 8];
+} block_q1_0_g128;
+static_assert(sizeof(block_q1_0_g128) == sizeof(ggml_half) + QK1_0_G128 / 8, "wrong q1_0_g128 block size/padding");
+
+//
 // Bitnet and TriLM - implemented as 1.625 bpw
 //
 #define QK_IQ1BN 64

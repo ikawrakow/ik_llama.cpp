@@ -120,6 +120,16 @@ json server_task_result_cmpl_partial::to_json_oaicompat_partial() {
     return res;
 }
 
+json server_task_result_cmpl_final::usage_json_oaicompat() {
+    return json{
+        {"completion_tokens", n_decoded},
+        {"prompt_tokens",     n_prompt_tokens},
+        {"total_tokens",      n_decoded + n_prompt_tokens},
+        {"prompt_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+    };
+}
+
+
 json server_task_result_cmpl_final::to_json_oaicompat_final() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
@@ -144,11 +154,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_final() {
         {"created",            t},
         {"model",              oaicompat_model},
         {"object",             "text_completion"},
-        {"usage", json {
-            {"completion_tokens", n_decoded},
-            {"prompt_tokens",     n_prompt_tokens},
-            {"total_tokens",      n_decoded + n_prompt_tokens}
-        }},
+        {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
 
@@ -379,11 +385,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_final() {
         {"created",            t},
         {"model",              oaicompat_model},
         {"object",             "chat.completion"},
-        {"usage", json {
-            {"completion_tokens", n_decoded},
-            {"prompt_tokens",     n_prompt_tokens},
-            {"total_tokens",      n_decoded + n_prompt_tokens}
-        }},
+        {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
 
@@ -445,11 +447,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"id",                 oaicompat_cmpl_id},
             {"model",              oaicompat_model},
             {"object",             "chat.completion.chunk"},
-            {"usage", json {
-                {"completion_tokens", n_decoded},
-                {"prompt_tokens",     n_prompt_tokens},
-                {"total_tokens",      n_decoded + n_prompt_tokens},
-            }},
+            {"usage",              usage_json_oaicompat()},
             });
     }
     if (timings.prompt_n >= 0) {
@@ -523,10 +521,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_final() {
         {"object",       "response"},
         {"output",       output},
         {"status",       "completed"},
-        {"usage",        json{
+        {"usage",        json {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
             {"total_tokens",  n_decoded + n_prompt_tokens},
+            {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
         }},
     };
 
@@ -633,11 +632,12 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
                 {"status",     "completed"},
                 {"model",      oaicompat_model},
                 {"output",     output},
-                {"usage",      json{
+                {"usage",      json {
                     {"input_tokens",  n_prompt_tokens},
                     {"output_tokens", n_decoded},
                     {"total_tokens",  n_decoded + n_prompt_tokens},
-                }},
+                    {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+                }}
             }},
         }},
     });
@@ -703,7 +703,8 @@ json server_task_result_cmpl_final::to_json_anthropic_final() {
         {"stop_reason", stop_reason},
         {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
         {"usage", {
-            {"input_tokens", n_prompt_tokens},
+            {"cache_read_input_tokens", n_prompt_tokens_cache},
+            {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},
             {"output_tokens", n_decoded}
         }}
     };
@@ -719,15 +720,13 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
 
-    bool has_thinking = !oaicompat_msg.reasoning_content.empty();
-    bool has_text = !oaicompat_msg.content.empty();
     size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
     size_t thinking_block_index = 0;
-    size_t text_block_index = has_thinking ? 1 : 0;
+    size_t text_block_index = anthropic_thinking_block_started ? 1 : 0;
 
-    bool thinking_block_started = false;
-    bool text_block_started = false;
+    bool thinking_block_started = anthropic_thinking_block_started;
+    bool text_block_started = anthropic_text_block_started;
     std::set<size_t> tool_calls_started;
 
     for (const auto& diff : oaicompat_msg_diffs) {
@@ -790,7 +789,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
 
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + diff.tool_call_index;
+            size_t content_block_index = (thinking_block_started ? 1 : 0) + (text_block_started ? 1 : 0) + diff.tool_call_index;
 
             if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
                 const auto& full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
@@ -826,7 +825,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
     }
 
-    if (has_thinking) {
+    if (thinking_block_started) {
         events.push_back({
             {"event", "content_block_delta"},
             {"data", {
@@ -847,7 +846,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
             });
     }
 
-    if (has_text) {
+    if (text_block_started) {
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
@@ -858,7 +857,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
     }
 
     for (size_t i = 0; i < num_tool_calls; i++) {
-        size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + i;
+        size_t content_block_index = (thinking_block_started ? 1 : 0) + (text_block_started ? 1 : 0) + i;
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
@@ -925,7 +924,8 @@ json server_task_result_cmpl_partial::to_json_anthropic_partial() {
                     {"stop_reason", nullptr},
                     {"stop_sequence", nullptr},
                     {"usage", {
-                        {"input_tokens", n_prompt_tokens},
+                        {"cache_read_input_tokens", n_prompt_tokens_cache},
+                        {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},
                         {"output_tokens", 0}
                     }}
                 }}

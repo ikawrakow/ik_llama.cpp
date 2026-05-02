@@ -207,7 +207,9 @@ static void process_logits(std::ostream& out, int n_vocab, const float * logits,
                 break;
             }
             lock.unlock();
-            const double v = log_softmax(n_vocab, logits + i*n_vocab, log_probs.data() + int64_t(i)*nv, tokens[i+1]);
+            const size_t logits_offset = size_t(i)*size_t(n_vocab);
+            const size_t probs_offset  = size_t(i)*size_t(nv);
+            const double v = log_softmax(n_vocab, logits + logits_offset, log_probs.data() + probs_offset, tokens[i+1]);
             local_nll += v;
             local_nll2 += v*v;
         }
@@ -453,9 +455,11 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
         for (int j = n_ctx - params.ppl_stride - 1; j < n_ctx - 1; ++j) {
 
             // Calculate probability of next token, given the previous ones.
+            const size_t offset = size_t(j)*size_t(n_vocab);
+            const float * tok_logits_begin = logits.data() + offset;
             const std::vector<float> tok_logits(
-                logits.begin() + (j + 0) * n_vocab,
-                logits.begin() + (j + 1) * n_vocab);
+                tok_logits_begin,
+                tok_logits_begin + n_vocab);
 
             const float prob = softmax(tok_logits)[tokens[start + j + 1]];
             logit_history[start + j + 1] = tok_logits[tokens[start + j + 1]];

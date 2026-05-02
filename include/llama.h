@@ -52,6 +52,9 @@
 #define LLAMA_STATE_SEQ_MAGIC   LLAMA_FILE_MAGIC_GGSQ
 #define LLAMA_STATE_SEQ_VERSION 3
 
+#define LLAMA_SERVER_MAGIC 0x6c6d7376u // 'lmsv'
+#define LLAMA_SERVER_VERSION 1 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -189,6 +192,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q4_0_4_8      = 34, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q4_0_8_8      = 35, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4         = 38, // except 1d tensors, 38 to be compatible with mainline
+        LLAMA_FTYPE_MOSTLY_Q1_0_G128     = 41, // except 1d tensors, 38 to be compatible with mainline
         //
         LLAMA_FTYPE_MOSTLY_Q6_0          = 135, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ1_BN        = 136, // except 1d tensors
@@ -380,6 +384,15 @@ extern "C" {
         int32_t  amb;
         int32_t  fit_margin;
         bool     fit;
+        int32_t  worst_graph_tokens;
+        enum ggml_type type_k_first;
+        enum ggml_type type_k_last;
+        enum ggml_type type_v_first;
+        enum ggml_type type_v_last;
+        int32_t n_k_first;
+        int32_t n_k_last;
+        int32_t n_v_first;
+        int32_t n_v_last;
 
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
@@ -413,6 +426,7 @@ extern "C" {
         bool mtp;           // if true, load MTP layers if present
         bool dry_run;       // skip loading tensors
         bool flash_attn;
+        bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -426,6 +440,7 @@ extern "C" {
         uint32_t n_threads;         // number of threads to use for generation
         uint32_t n_threads_batch;   // number of threads to use for batch processing
         int32_t  max_extra_alloc;   // Max. additional VRAM the scheduler is allowed to allocate
+        int32_t  worst_case_tokens; // number of tokens to use when reserving worst case graphs
 
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
@@ -447,6 +462,14 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
+        enum ggml_type type_k_first;
+        enum ggml_type type_k_last;
+        enum ggml_type type_v_first;
+        enum ggml_type type_v_last;
+        int32_t n_k_first;
+        int32_t n_k_last;
+        int32_t n_v_first;
+        int32_t n_v_last;
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool logits_all;  // the llama_decode() call computes all logits, not just the last one (DEPRECATED - set llama_batch.logits instead)
@@ -465,6 +488,7 @@ extern "C" {
         float thresh_experts;
         bool only_active_experts;
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
+        bool v_cache_hadamard;  // if true, apply Hadamard transfrom to V-cache (needs FA)
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
@@ -481,6 +505,7 @@ extern "C" {
     };
 
     // model quantization parameters
+    struct quantize_user_data;
     typedef struct llama_model_quantize_params {
         int32_t nthread;                     // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
         enum llama_ftype ftype;              // quantize to this llama_ftype
@@ -508,6 +533,7 @@ extern "C" {
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
         void * repack_pattern;               // pointer to a vector containing regexes to be used for matching tensor names. Can be null
+        struct quantize_user_data * user_data; // so we can pass extra data to the quantization functions
     } llama_model_quantize_params;
 
     // grammar types
@@ -659,6 +685,8 @@ extern "C" {
 
     LLAMA_API bool llama_model_has_recurrent(const struct llama_model * model);
 
+    LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
+
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
@@ -773,6 +801,28 @@ extern "C" {
     // Clear the KV cache - both cell info is erased and KV data is zeroed
     LLAMA_API void llama_kv_cache_clear(
             struct llama_context * ctx);
+
+    // Unified checkpoint API for recurrent/hybrid speculative decoding.
+    enum llama_spec_ckpt_mode {
+        LLAMA_SPEC_CKPT_NONE        = -1,
+        LLAMA_SPEC_CKPT_AUTO        =  0,
+        LLAMA_SPEC_CKPT_PER_STEP    =  1,
+        LLAMA_SPEC_CKPT_GPU_FALLBACK =  2,
+        LLAMA_SPEC_CKPT_CPU         =  3,
+    };
+
+    // Initialise the checkpoint system for the upcoming speculation window.
+    LLAMA_API int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens);
+
+    // Save the current recurrent state as a speculative checkpoint.
+    LLAMA_API bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id);
+
+    // Restore the recurrent state after speculative decode.
+    LLAMA_API bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
+                                            llama_pos n_past, int accepted_step);
+
+    // Discard the saved checkpoint and reset internal mode state.
+    LLAMA_API void llama_spec_ckpt_discard(struct llama_context * ctx);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
@@ -1230,7 +1280,7 @@ extern "C" {
     LLAMA_API struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar);
 
     /// @details Apply constraints from grammar
-    LLAMA_API void llama_grammar_sample(
+    LLAMA_API void llama_grammar_apply(
             const struct llama_grammar * grammar,
             const struct llama_context * ctx,
                 llama_token_data_array * candidates);
@@ -1238,7 +1288,7 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates,
       const struct llama_grammar * grammar),
-        "use llama_grammar_sample instead");
+        "use llama_grammar_apply instead");
 
     /// @details Accepts the sampled token into the grammar
     LLAMA_API void llama_grammar_accept_token(
@@ -1535,5 +1585,7 @@ const std::vector<std::pair<std::string, struct ggml_tensor *>> & llama_internal
 llama_token llama_sample_token_with_rng(struct llama_context * ctx, llama_token_data_array * candidates, std::mt19937 & rng);
 
 #endif // LLAMA_API_INTERNAL
+
+size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts);
 
 #endif // LLAMA_H

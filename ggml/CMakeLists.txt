@@ -139,7 +139,7 @@ set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
 set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
 
 option(GGML_IQK_FLASH_ATTENTION             "ggml: enable the IQK FlashAttention CPU kernels" ON)
-option(GGML_IQK_FA_ALL_QUANTS               "ggml: compile all quants for IQK FlashAttention" OFF)
+option(GGML_IQK_FA_ALL_QUANTS               "ggml: compile all quants for IQK FlashAttention" ON)
 
 option(GGML_CURL                            "ggml: use libcurl to download model from an URL" OFF)
 option(GGML_HIPBLAS                         "ggml: use hipBLAS"                               OFF)

@@ -2008,6 +2008,7 @@ struct FlashAttnBF16 {
             q    += q_step*stride_q;
             mask += q_step*stride_m;
             qkv  += q_step*stride_qkv;
+            if (M && S) { M += q_step; S += q_step; }
         }
         int n_left = nq1 - q_step*(nq1/q_step);
         if (n_left > 0) {
@@ -2238,6 +2239,7 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
                          float       * qkv, const float * sinkf, float * M, float * S)
 
 IQK_FA_CASE(iqk_fa_576_512);
+IQK_FA_CASE(iqk_fa_512_512);
 IQK_FA_CASE(iqk_fa_320_256);
 IQK_FA_CASE(iqk_fa_192_128);
 IQK_FA_CASE(iqk_fa_192_192);

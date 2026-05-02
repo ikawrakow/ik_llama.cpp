@@ -26,7 +26,7 @@ static __global__ void hadamard_f32(const char * src, char * dst, int ne0,
     float scale = ksqrt2;
 
 #pragma unroll
-    for (int h = 2; h < nh; h <<= 2) {
+    for (int h = 2; h < nh; h <<= 1) {
         __syncthreads();
         int ii = tid/h, jj = tid%h;
         int j = 2*h*ii+jj;
@@ -50,6 +50,7 @@ static void hadamard_f32_cuda(int nh, const char * x, char * y, int ne0, int ne1
         case  64: hadamard_f32< 64><<<num_blocks,  32, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
         case 128: hadamard_f32<128><<<num_blocks,  64, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
         case 256: hadamard_f32<256><<<num_blocks, 128, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
+        case 512: hadamard_f32<512><<<num_blocks, 256, 0, stream>>>(x, y, ne0, nb01, nb02, nb03, nb1, nb2, nb3); break;
         default: GGML_ABORT("Unsupported Hadamard block size");
     }
 }
