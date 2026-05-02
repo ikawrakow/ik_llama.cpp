@@ -8477,11 +8477,6 @@ int32_t llama_encode(
 int32_t llama_decode(
         struct llama_context * ctx,
           struct llama_batch   batch) {
-    // Clear any leftover stop signal from a previous (already-returned) decode. llama_decode_stop()
-    // is intended to interrupt the decode that is currently in flight; without this reset, a stop
-    // that arrived after the interrupted call returned would bleed into the next decode and cause
-    // an immediate ret=-3, which servers interpret as a fatal decode failure.
-    stop_internal_decode = false;
     const int ret = llama_decode_internal(*ctx, batch);
     if (ret < 0) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
