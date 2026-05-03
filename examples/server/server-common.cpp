@@ -1647,9 +1647,9 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
 }
 
 
-size_t server_tokens::size_up_to_pos(llama_pos max_idx) const {
+size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
     if (!has_mtmd) {
-        return std::min((size_t)max_idx+1, tokens.size());
+        return std::min((size_t)max_pos, tokens.size());
     }
 
     size_t idx = 0;
@@ -1669,12 +1669,12 @@ size_t server_tokens::size_up_to_pos(llama_pos max_idx) const {
             idx++;
         }
 
-        if (idx >= max_idx) {
+        if (pos >= max_pos) {
             break;
         }
     }
 
-    return idx+1;
+    return idx;
 }
 
 
