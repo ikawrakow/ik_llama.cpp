@@ -856,6 +856,7 @@ extern "C" {
         struct ggml_hash_set visited_hash_set;
 
         enum ggml_cgraph_eval_order order;
+        bool reused;
     };
 
     // scratch buffer

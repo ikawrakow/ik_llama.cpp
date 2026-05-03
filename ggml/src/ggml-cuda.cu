@@ -4252,6 +4252,10 @@ static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph *
         graph->ggml_graph_properties.resize(cgraph->n_nodes);
     }
 
+    if (!cuda_graph_update_required && cgraph->reused) {
+        return false;
+    }
+
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
     // and store properties to allow this comparison for the next token
     for (int i = 0; i < cgraph->n_nodes; i++) {

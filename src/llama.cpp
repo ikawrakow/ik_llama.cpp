@@ -4484,6 +4484,7 @@ static int llama_decode_internal(
         } else {
             //printf("Reusing graph\n");
             gf = lctx.prev->graph;
+            gf->reused = true;
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
