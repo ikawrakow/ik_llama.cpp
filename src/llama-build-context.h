@@ -471,7 +471,7 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_tensor * inp_pos
     );
 
-    struct ggml_tensor * build_mtp_tail_dsa(
+    struct ggml_tensor * build_deepseek2_mtp(
         const struct llama_layer & mtp_layer,
         struct ggml_tensor * prev_embeddings,
         struct ggml_cgraph * gf,

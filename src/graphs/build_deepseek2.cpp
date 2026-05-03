@@ -47,6 +47,10 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
     if (cparams.mtp_op_type != MTP_OP_NONE) {
+        if (model.arch != LLM_ARCH_GLM_DSA || !model.mtp || hparams.nextn_predict_layers == 0) {
+            GGML_ABORT("MTP tail is only wired for GLM_DSA models with NextN layers enabled");
+        }
+
         ggml_tensor * hidden_states_from_main_model;
 
         if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
@@ -54,7 +58,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         } else {
             hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
         }
-        ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
+        ggml_set_name(hidden_states_from_main_model, "inp_mtp_states");
         ggml_set_input(hidden_states_from_main_model);
 
         lctx.inp_mtp_states = hidden_states_from_main_model;
@@ -62,7 +66,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        cur = build_mtp_tail_dsa(mtp_layer, hidden_states_from_main_model, gf, inp_pos, rope_cache);
+        cur = build_deepseek2_mtp(mtp_layer, hidden_states_from_main_model, gf, inp_pos, rope_cache);
 
         ggml_build_forward_expand(gf, cur);
         return gf;
@@ -568,7 +572,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     return gf;
 }
 
-struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
+struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
     const llama_layer & mtp_layer,
     struct ggml_tensor * prev_embeddings,
     struct ggml_cgraph * gf,
@@ -583,13 +587,16 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
 
     const int il = hparams.n_layer - 1;
 
+    const uint32_t n_head_mtp          = hparams.n_head(il);
+    const uint32_t n_embd_head_k_mtp   = hparams.n_embd_head_k(il);
+    const uint32_t n_embd_head_v_mtp   = hparams.n_embd_head_v(il);
     const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-    const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k(il) - hparams.n_rot;
-    const uint32_t kv_lora_rank = hparams.n_lora_kv;
-    const uint32_t q_lora_rank  = hparams.n_lora_q;
+    const uint32_t n_embd_head_qk_nope = n_embd_head_k_mtp - hparams.n_rot;
+    const uint32_t kv_lora_rank        = hparams.n_lora_kv;
+    const uint32_t q_lora_rank         = hparams.n_lora_q;
 
     const float mscale = attn_factor * (1.0f + hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
-    const float kq_scale = 1.0f*mscale*mscale/sqrtf(float(hparams.n_embd_head_k(il)));
+    const float kq_scale = 1.0f*mscale*mscale/sqrtf(float(n_embd_head_k_mtp));
     const float attn_factor_scaled = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
@@ -605,6 +612,10 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
     // Normalize and project
     ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
     ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
+
+    if (mtp_layer.nextn.eh_proj == nullptr) {
+        GGML_ABORT("GLM_DSA MTP requires nextn.eh_proj");
+    }
 
     ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
     cb(combined, "mtp_concat", il);
@@ -637,10 +648,10 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
             kv_rope_compressed = ggml_view_2d(ctx0, mqa, kv_lora_rank + n_embd_head_qk_rope, n_tokens, mqa->nb[1],
                     q_lora_rank*ggml_element_size(mqa));
 
-            q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                ggml_row_size(q->type, hparams.n_embd_head_k(il)), qnb1, 0);
-            q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                ggml_row_size(q->type, hparams.n_embd_head_k(il)), qnb1, ggml_row_size(q->type, n_embd_head_qk_nope));
+            q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head_mtp, n_tokens,
+                ggml_row_size(q->type, n_embd_head_k_mtp), qnb1, 0);
+            q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head_mtp, n_tokens,
+                ggml_row_size(q->type, n_embd_head_k_mtp), qnb1, ggml_row_size(q->type, n_embd_head_qk_nope));
             k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
                     mqa->nb[1], mqa->nb[1], ggml_row_size(kv_rope_compressed->type, kv_lora_rank));
             kv_compressed = ggml_view_2d(ctx0, kv_rope_compressed, kv_lora_rank, n_tokens, mqa->nb[1], 0);
@@ -660,14 +671,14 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
             q = ggml_mul_mat(ctx0, mtp_layer.wq_b, q);
             cb(q, "q", il);
 
-            q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il)),
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il) * n_head), 0);
+            q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head_mtp, n_tokens,
+                ggml_row_size(q->type, n_embd_head_k_mtp),
+                ggml_row_size(q->type, n_embd_head_k_mtp * n_head_mtp), 0);
 
-            q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il)),
-                    ggml_row_size(q->type, hparams.n_embd_head_k(il) * n_head),
-                    ggml_row_size(q->type, n_embd_head_qk_nope));
+            q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head_mtp, n_tokens,
+                ggml_row_size(q->type, n_embd_head_k_mtp),
+                ggml_row_size(q->type, n_embd_head_k_mtp * n_head_mtp),
+                ggml_row_size(q->type, n_embd_head_qk_nope));
 
             k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
                     kv_rope_compressed->nb[1],
@@ -737,7 +748,7 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
             ggml_tensor * kqv_compressed = nullptr;
 
             auto wk_b = mtp_layer.wk_b->ne[1] == kv_lora_rank ? mtp_layer.wk_b
-                : ggml_reshape_3d(ctx0, mtp_layer.wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head);
+                : ggml_reshape_3d(ctx0, mtp_layer.wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head_mtp);
 
             q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
             cb(q_nope, "q_nope_perm", il);
@@ -799,8 +810,8 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
             }
 
             auto wv_b = mtp_layer.wv_b;
-            if (wv_b->ne[1] != n_embd_head_v) {
-                wv_b = ggml_reshape_3d(ctx0, wv_b, kv_lora_rank, n_embd_head_v, n_head);
+            if (wv_b->ne[1] != n_embd_head_v_mtp) {
+                wv_b = ggml_reshape_3d(ctx0, wv_b, kv_lora_rank, n_embd_head_v_mtp, n_head_mtp);
             }
 
             ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
@@ -810,7 +821,7 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
                 kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
                 cb(kqv, "kqv_perm", il);
             }
-            cur = ggml_reshape_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens);
+            cur = ggml_reshape_2d(ctx0, kqv, n_embd_head_v_mtp*n_head_mtp, n_tokens);
             cb(cur, "kqv_2d", il);
 
             ggml_build_forward_expand(gf, cur);
@@ -827,8 +838,8 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
             cb(v_states, "v_states", il);
             v_states = ggml_permute(ctx0, v_states, 0, 2, 1, 3);
             v_states = ggml_cont(ctx0, v_states);
-            v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v_full * n_head, n_tokens,
-                    ggml_row_size(v_states->type, hparams.n_embd_head_v_full * n_head), 0);
+            v_states = ggml_view_2d(ctx0, v_states, n_embd_head_v_mtp * n_head_mtp, n_tokens,
+                ggml_row_size(v_states->type, n_embd_head_v_mtp * n_head_mtp), 0);
 
             struct ggml_tensor * q_states = ggml_concat(ctx0, q_nope, q_rope, 0);
             cb(q_states, "q_states", il);
@@ -882,6 +893,10 @@ struct ggml_tensor * llm_build_context::build_mtp_tail_dsa(
     cb(cur, "mtp_ffn_out_resid", il);
 
     // Output head
+    if (mtp_layer.nextn.shared_head_norm == nullptr) {
+        GGML_ABORT("GLM_DSA MTP requires nextn.shared_head_norm");
+    }
+
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "result_norm", -1);
 
