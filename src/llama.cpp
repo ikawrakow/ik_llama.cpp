@@ -561,6 +561,7 @@ void llama_context::reset_scheduler() {
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
+    if (kv_self.save_per_step_ssm) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     //if (u_batch.n_tokens > 1) return false;
@@ -4468,9 +4469,7 @@ static int llama_decode_internal(
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         if (!lctx.can_reuse_graph(u_batch)) {
-            //lctx.reset_scheduler();
-            ggml_backend_sched_reset(lctx.sched);
-            prev.reset();
+            lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
@@ -6882,8 +6881,9 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 
 // Unified speculative-checkpoint
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, int max_tokens) {
-    // Graph-split recurrent tensors are not supported. Mixed CPU/GPU recurrent
-    // placement is allowed as long as each layer has a concrete backend buffer.
+    // Graph-split recurrent tensors are not supported. CPU-only and mixed
+    // CPU/GPU recurrent placement are allowed as long as each layer has a
+    // concrete backend buffer for the per-step tensors.
     bool has_gpu = false;
     bool has_cpu = false;
     for (const auto * sl : kv.s_l) {
@@ -6898,10 +6898,7 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
             has_cpu = true;
         }
     }
-    if (!has_gpu) {
-        if (has_cpu) {
-            LLAMA_LOG_INFO("%s: per-step disabled — recurrent layers are CPU-only\n", __func__);
-        }
+    if (!has_gpu && !has_cpu) {
         kv.save_per_step_ssm = false;
         return false;
     }
