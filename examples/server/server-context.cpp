@@ -974,7 +974,9 @@ int32_t server_context::populate_vocab_pieces() {
     vocab_pieces.clear();
     vocab_pieces.reserve(n_vocab);
     for (int32_t id = 0; id < n_vocab; ++id) {
-        vocab_pieces.push_back(common_token_to_piece(ctx, id, true));
+        auto piece = common_token_to_piece(ctx, id, true);
+        max_piece_len = std::max(piece.length(), max_piece_len);
+        vocab_pieces.push_back(std::move(piece));
     }
     return n_vocab;
 }
@@ -1674,6 +1676,104 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             return false;
         }
     }
+
+    do  // populate expiring logit bias
+    {
+        const auto elb_prev_params = slot.sparams.elb_params;
+
+        const auto& expiring_logit_bias = data.find("expiring_logit_bias");
+        if (expiring_logit_bias != data.end() && expiring_logit_bias->is_array()) {
+            // has new params from api
+            std::string content;
+            for (const auto& line: data["expiring_logit_bias"]) {
+                if (line.is_string()) {
+                    content += line.get<std::string>() + "\n";
+                }
+            }
+            try {
+                argparse_expiring_logit_bias(content, slot.sparams);
+            } catch (const std::invalid_argument& e) {
+                std::cerr << e.what() << '\n';
+            } catch (const std::out_of_range& e) {
+                std::cerr << e.what() << '\n';
+            }
+        }
+
+        const auto& elb_params = slot.sparams.elb_params;
+        if (elb_params.empty()) {
+            slot.ctx_sampling->elb_states.clear();
+            break;
+        }
+
+        if (!slot.elb_prev_states.empty() && (elb_params == elb_prev_params)) {
+            // reset and reuse previous states
+            slot.ctx_sampling->elb_states = slot.elb_prev_states;
+            for (auto& elb_state: slot.ctx_sampling->elb_states) {
+                elb_state.countup = 0;
+            }
+            break;
+        }
+
+        const auto n_elb_param = elb_params.size();
+
+        slot.ctx_sampling->elb_states.clear();
+        slot.ctx_sampling->elb_states.reserve(n_elb_param);
+
+        // 1 state <-> 1 exitword <-> 1+ entries
+        for (const auto& [entries, exitword]: elb_params) {
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0 });
+            auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
+            auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
+            auto& delay = slot.ctx_sampling->elb_states.back().delay;
+            auto& max_cond_len = slot.ctx_sampling->elb_states.back().max_cond_len;
+
+            // 1 entry <-> 1 phrase <-> 1+ biases
+            for (auto [phrases, biases, duration]: entries) {
+                for (const auto& phrase: phrases) {
+                    if (phrase.empty()) {
+                        continue;
+                    }
+                    const auto ids = common_tokenize(model, phrase, false, true);
+                    biases.resize(ids.size(), biases.back());
+                    if (biases[0] != 0.0f) {
+                        // cond is piece for first_tokens (no match to bias)
+                        first_tokens.push_back({ ids[0], biases[0], size_t(duration), common_token_to_piece(ctx, ids[0], true) });
+                    }
+
+                    int32_t m = 1;
+                    if (duration < 0) {
+                        // -1 is smallest infinite duration
+                        duration ^= 0x7FFFFFFF;
+                        m = -1;
+                    }
+
+                    std::string cond;
+                    for (int32_t j = 1; j < ids.size(); ++j) {
+                        // cond collects preceding string for other_tokens (match to bias)
+                        cond += common_token_to_piece(ctx, ids[j - 1], true);
+                        if (biases[j] == 0.0f) {
+                            continue;
+                        } else if (biases[j] > 0.0f) {
+                            delay = std::max(size_t(duration + m * j), delay);
+                        }
+                        other_tokens.push_back({ ids[j], biases[j], size_t(duration + m * j), cond });
+                    }
+                    max_cond_len = std::max(int32_t(cond.length()), max_cond_len);
+                }
+            }
+        }
+
+        // sort by duration in descending order
+        for (auto& elb_state: slot.ctx_sampling->elb_states) {
+            std::sort(elb_state.first_tokens.begin(), elb_state.first_tokens.end(), [](const auto& a, const auto& b) {
+                return a.duration > b.duration;
+            });
+            std::sort(elb_state.other_tokens.begin(), elb_state.other_tokens.end(), [](const auto& a, const auto& b) {
+                return a.duration > b.duration;
+            });
+        }
+    } while (false);
+    slot.elb_prev_states = slot.ctx_sampling->elb_states;
 
     slot.command = SLOT_COMMAND_LOAD_PROMPT;
     // slot.prompt_tokens.clear();
@@ -3807,6 +3907,13 @@ void server_context::speculative_decoding_accept() {
 
         size_t n_draft = slot.drafted.size();
 
+        slot.ctx_sampling->to_generated_text = &slot.generated_text;
+        if (n_draft > 0) {
+            (void) populate_vocab_pieces();     // max_piece_len
+            slot.ctx_sampling->drafted_text.reserve(max_piece_len * n_draft);
+            slot.ctx_sampling->drafted_text.clear();
+        }
+
         apply_server_biases(slot);
 
         // the accepted tokens from the speculation
@@ -4320,6 +4427,8 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                     slot.ctx_sampling->params.logit_bias[tok] += slot.ban_phrases_bias;
                 }
             }
+
+            slot.ctx_sampling->to_generated_text = &slot.generated_text;
 
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
