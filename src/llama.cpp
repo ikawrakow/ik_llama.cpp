@@ -4213,8 +4213,14 @@ static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
         LLAMA_LOG_ERROR("%s: Source hidden state is null\n", __func__);
         return false;
     }
+    auto nbytes = ggml_nbytes(dst);
+    if (nbytes > lctx.draft_input_hidden_size*sizeof(float)) {
+        LLAMA_LOG_ERROR("%s: saved hidden state size %zu is less than input MTP state %zu\n", __func__,
+                lctx.draft_input_hidden_size, nbytes/sizeof(float));
+        return false;
+    }
 
-    ggml_backend_tensor_set(dst, src, 0, ggml_nbytes(dst));
+    ggml_backend_tensor_set(dst, src, 0, nbytes);
     return true;
 }
 
@@ -9841,8 +9847,9 @@ void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_of
     ggml_backend_sched_set_op_offload(lctx->sched, ggml_op(op), on_or_off);
 }
 
-void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state) {
+void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state, size_t size) {
     ctx->draft_input_hidden_state = hidden_state;
+    ctx->draft_input_hidden_size  = size;
 }
 
 size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts) {
