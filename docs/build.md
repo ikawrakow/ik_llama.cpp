@@ -181,6 +181,76 @@ llama_new_context_with_model:  CUDA_Host compute buffer size =     8.31 MiB
         gmake CC=/usr/local/bin/clang15 CXX=/usr/local/bin/clang++15 -j4
         ```
 
+## CPU build flags for AVX-512 (Zen4 / Sapphire Rapids+)
+
+The IQK quantized GEMM kernels in `ggml/src/iqk/iqk_gemm_*.cpp` (the dominant
+hot path for quantized prompt processing) are gated by the `HAVE_FANCY_SIMD`
+macro defined in
+[`ggml/src/iqk/iqk_config.h`](../ggml/src/iqk/iqk_config.h):
+
+```c
+#if defined(__AVX512F__)  && defined(__AVX512VNNI__) && \
+    defined(__AVX512VL__) && defined(__AVX512BW__)   && defined(__AVX512DQ__)
+    #define HAVE_FANCY_SIMD
+#endif
+```
+
+If these five macros are not defined at compile time, the AVX-512 quantized
+matmul path is skipped and the build falls back to AVX2. There is no warning
+at build time and no obvious symptom at runtime — performance is simply lower
+than what an AVX-512-capable CPU (AMD Zen4 / Intel Sapphire Rapids+) can
+deliver. A few related gates are worth knowing about:
+
+- `f16`/`f32` GEMM is gated only by `__AVX512F__`.
+- Native `bf16` GEMM and the use of a `bf16` KV cache in flash attention is
+  gated by `__AVX512BF16__`.
+- For AVX2-only CPUs that implement the VNNI extension (`vpdpbusd`), the
+  equivalent "fancy" path is gated by `__AVXVNNI__`. VNNI alone is
+  responsible for most of the speedup on quantized matmul.
+
+### Linux / GCC
+
+Modern GCC with `GGML_NATIVE=ON` (the default unless cross-compiling)
+resolves `-march=native` on Zen4 / Sapphire Rapids hardware to a target that
+defines all of the macros above. No manual configuration is usually needed.
+Verification:
+
+```bash
+objdump -d build/bin/llama-cli | grep -c vpdpbusd
+# A non-trivial count (hundreds) means VNNI compiled in.
+# Zero means the IQK kernels fell back to AVX2.
+```
+
+### Windows / MSVC and other cases that need explicit defines
+
+MSVC does not propagate `-march=native` semantics, and in cross-compile
+scenarios `GGML_NATIVE` is intentionally disabled. In both cases the
+macros must be supplied explicitly via `GGML_ARCH_FLAGS`, which the build
+system forwards verbatim to the C/C++ compiler line:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_ARCH_FLAGS="-D__AVX512F__ -D__AVX512VNNI__ -D__AVX512VL__ -D__AVX512BW__ -D__AVX512DQ__ -D__AVX512BF16__"
+cmake --build build --config Release
+```
+
+For AVX2 CPUs that have VNNI but not AVX-512, the equivalent is:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_ARCH_FLAGS="-D__AVXVNNI__"
+```
+
+After the build completes, the same `objdump | grep -c vpdpbusd` check
+confirms the quantized path is in.
+
+### Note on Zen4 throughput
+
+On Zen4 the AVX-512 implementation is 256-bit double-pumped: each `_mm512_*`
+op issues two micro-ops with throughput of roughly one AVX-512 op per two
+cycles. The wider register width and reduced loop overhead still produce
+measurable gains over AVX2 on prompt processing for IQK kernels.
+
 ## Metal Build
 
 On MacOS, Metal is enabled by default. Using Metal makes the computation run on the GPU.
