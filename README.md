@@ -45,6 +45,12 @@ cmake -B build -DGGML_NATIVE=ON
 cmake --build build --config Release -j$(nproc)
 ```
 
+For AVX-512-capable CPUs (AMD Zen4 / Intel Sapphire Rapids+), see
+[`docs/build.md`](docs/build.md) section "CPU build flags for AVX-512" for the
+additional flags that activate the IQK quantized GEMM kernels (the
+`HAVE_FANCY_SIMD` path). Without those flags, a vanilla `Release` build
+silently falls back to the AVX2 path on this hardware.
+
 ### Build for GPU
 
 Install Nvidia Drivers and [CUDA Toolkit](https://developer.nvidia.com/cuda/toolkit).
