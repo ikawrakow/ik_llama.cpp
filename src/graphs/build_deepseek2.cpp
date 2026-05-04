@@ -890,6 +890,7 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
     }
 
     cur = ggml_add(ctx0, cur, ffn_inp);
+    cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "mtp_ffn_out_resid", il);
 
     // Output head
