@@ -262,6 +262,7 @@ struct cmd_params {
     bool verbose;
     bool warmup;
     bool repack = false;
+    bool repack_auto = false;
     bool fmoe = true;
     bool ger = false;     // ger = Grouped Expert Routing
     bool no_fug = false;
@@ -311,6 +312,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* warmup               */ true,
     /* repack               */ false,
+    /* repack_auto          */ false,
     /* fmoe                 */ true,
     /* ger                  */ false,
     /* no_fug               */ false,
@@ -365,7 +367,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -oe, --output-err <csv|json|md|sql> (default: %s)\n", output_format_str(cmd_params_defaults.output_format_stderr));
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
-    printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -rtr, --run-time-repack <0|1|auto>  (default: %s)\n", cmd_params_defaults.repack ? (cmd_params_defaults.repack_auto ? "auto" : "1") : "0");
     printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.cuda_params.c_str());
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
     printf("  -muge, --merge-up-gate-experts      (default: %s)\n", cmd_params_defaults.muge ? "1" : "0");
@@ -797,7 +799,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 invalid_param = true;
                 break;
             }
-            params.repack = std::stoi(argv[i]);
+            std::string v = argv[i];
+            std::transform(v.begin(), v.end(), v.begin(),
+                    [](unsigned char c) { return (char)std::tolower(c); });
+            if (v == "auto") {
+                params.repack = true;
+                params.repack_auto = true;
+            } else if (v == "1" || v == "on") {
+                params.repack = true;
+                params.repack_auto = false;
+            } else if (v == "0" || v == "off") {
+                params.repack = false;
+                params.repack_auto = false;
+            } else {
+                // numeric fallback (legacy `0|1`)
+                params.repack = std::stoi(argv[i]) != 0;
+                params.repack_auto = false;
+            }
         } else if (arg == "-cuda" || arg == "--cuda-params") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -979,6 +997,7 @@ struct cmd_params_instance {
     bool use_mmap;
     bool embeddings;
     bool repack = false;
+    bool repack_auto = false;
     bool fmoe = true;
     bool ger = false;
     bool no_fug = false;
@@ -1006,6 +1025,7 @@ struct cmd_params_instance {
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap = use_mmap;
         mparams.repack_tensors = repack;
+        mparams.repack_tensors_auto = repack_auto;
         mparams.use_thp = use_thp;
         mparams.merge_qkv = mqkv;
         mparams.merge_up_gate_exps = muge;
@@ -1029,6 +1049,7 @@ struct cmd_params_instance {
                main_gpu == other.main_gpu &&
                use_mmap == other.use_mmap &&
                repack == other.repack &&
+               repack_auto == other.repack_auto &&
                mqkv == other.mqkv &&
                muge == other.muge &&
                defer_experts == other.defer_experts &&
@@ -1120,6 +1141,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
@@ -1167,6 +1189,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
@@ -1214,6 +1237,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
@@ -1261,6 +1285,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
