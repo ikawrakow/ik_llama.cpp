@@ -1394,10 +1394,10 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         if (!emb) {
             break;
         }
-        
+
         // Keep a stable copy because later decode steps reuse ctx->embd storage.
         memcpy(draft_hidden_state.data(), emb, n_embd * sizeof(float));
-        llama_set_draft_input_hidden_state(ctx, draft_hidden_state.data());
+        llama_set_draft_input_hidden_state(ctx, draft_hidden_state.data(), n_embd);
 
         current_input_id = id_next;
         current_n_past++;

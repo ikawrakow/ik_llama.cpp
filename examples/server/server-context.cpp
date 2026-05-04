@@ -3142,7 +3142,7 @@ void server_context::add_sampled_tokens() {
                 if (!slot.mtp_hidden_state.empty()) {
                     const int n_embd = llama_model_n_embd(llama_get_model(ctx));
                     const int n_hidden = slot.mtp_hidden_state.size() / n_embd;
-                    llama_set_draft_input_hidden_state(hs_ctx, slot.mtp_hidden_state.data() + (n_hidden - 1) * n_embd);
+                    llama_set_draft_input_hidden_state(hs_ctx, slot.mtp_hidden_state.data() + (n_hidden - 1) * n_embd, n_embd);
                 } else {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
                     const float* emb_neg1 = llama_get_embeddings_ith(ctx, -1);
@@ -3150,7 +3150,7 @@ void server_context::add_sampled_tokens() {
                         const int n_embd = llama_model_n_embd(llama_get_model(ctx));
                         slot.mtp_hidden_state.resize(n_embd);
                         memcpy(slot.mtp_hidden_state.data(), emb_neg1, n_embd * sizeof(float));
-                        llama_set_draft_input_hidden_state(hs_ctx, slot.mtp_hidden_state.data());
+                        llama_set_draft_input_hidden_state(hs_ctx, slot.mtp_hidden_state.data(), slot.mtp_hidden_state.size());
                     }
                 }
             }
@@ -3727,7 +3727,7 @@ static void restore_speculative_checkpoint(
             slot.mtp_hidden_state = mtp_hidden_state_pre;
             llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
             llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-            llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
+            llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data(), slot.mtp_hidden_state.size());
             mtp_accept_tokens(mtp_target, ids, mtp_n_past_base, slot.id);
         }
 
@@ -3775,7 +3775,7 @@ static void restore_speculative_checkpoint(
 
                 llama_context * mtp_ctx_rej = common_speculative_get_mtp_ctx(slot.spec);
                 llama_context * mtp_target_rej = mtp_ctx_rej ? mtp_ctx_rej : ctx;
-                llama_set_draft_input_hidden_state(mtp_target_rej, slot.mtp_hidden_state.data());
+                llama_set_draft_input_hidden_state(mtp_target_rej, slot.mtp_hidden_state.data(), slot.mtp_hidden_state.size());
                 mtp_accept_tokens(mtp_target_rej, ids, slot.spec_ckpt.n_past, slot.id);
 
                 if (n_accepted > 1) {
@@ -3882,7 +3882,7 @@ void server_context::speculative_decoding_accept() {
                     llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
 
                     slot.mtp_hidden_state = std::move(mtp_hidden_state_pre);
-                    llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
+                    llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data(), slot.mtp_hidden_state.size());
                     mtp_accept_tokens(mtp_target, ids, mtp_n_past_base, slot.id);
                 }
             llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
@@ -4403,7 +4403,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
             llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-            llama_set_draft_input_hidden_state(mtp_target, batch_mtp_hidden_state.data());
+            llama_set_draft_input_hidden_state(mtp_target, batch_mtp_hidden_state.data(), batch_mtp_hidden_state.size());
             mtp_update_kv_cache(mtp_target, batch_view, true);
         }
 
