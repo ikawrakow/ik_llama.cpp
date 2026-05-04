@@ -181,6 +181,104 @@ llama_new_context_with_model:  CUDA_Host compute buffer size =     8.31 MiB
         gmake CC=/usr/local/bin/clang15 CXX=/usr/local/bin/clang++15 -j4
         ```
 
+## CPU build flags for AVX-512 (Zen4 / Sapphire Rapids+)
+
+The IQK quantized GEMM kernels in `ggml/src/iqk/iqk_gemm_*.cpp` (the dominant
+hot path for quantized prompt processing) are gated by the `HAVE_FANCY_SIMD`
+macro defined in
+[`ggml/src/iqk/iqk_config.h`](../ggml/src/iqk/iqk_config.h):
+
+```c
+#if defined(__AVX512F__)  && defined(__AVX512VNNI__) && \
+    defined(__AVX512VL__) && defined(__AVX512BW__)   && defined(__AVX512DQ__)
+    #define HAVE_FANCY_SIMD
+#endif
+```
+
+If these five macros are not defined at compile time, the AVX-512 quantized
+matmul path is skipped and the build falls back to AVX2. There is no warning
+at build time and no obvious symptom at runtime — performance is simply lower
+than what an AVX-512-capable CPU (AMD Zen4 / Intel Sapphire Rapids+) can
+deliver. A few related gates are worth knowing about:
+
+- `f16`/`f32` GEMM is gated only by `__AVX512F__`.
+- Native `bf16` GEMM and the use of a `bf16` KV cache in flash attention is
+  gated by `__AVX512BF16__`.
+- A separate `HAVE_VNNI256` path (`iqk_config.h:52-54`) is gated by
+  `__AVXVNNI__` *or* (`__AVX512VNNI__ && __AVX512VL__`). This gives a
+  meaningful speedup on AVX2-only CPUs that have the VNNI extension
+  (e.g. some Alder Lake / Raptor Lake parts), even without full AVX-512.
+  VNNI alone (`vpdpbusd`) is responsible for most of the speedup on
+  quantized matmul.
+
+### Recommended: high-level CMake options
+
+The standard `GGML_AVX512_*` options work on both MSVC and GCC and are the
+shortest path that activates `HAVE_FANCY_SIMD`:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_NATIVE=ON \
+    -DGGML_AVX512=ON \
+    -DGGML_AVX512_VBMI=ON \
+    -DGGML_AVX512_VNNI=ON \
+    -DGGML_AVX512_BF16=ON
+cmake --build build --config Release
+```
+
+Mechanics:
+- On MSVC, `GGML_AVX512=ON` adds `/arch:AVX512` (which itself defines
+  `__AVX512F__`, `__AVX512VL__`, `__AVX512BW__`, `__AVX512DQ__`,
+  `__AVX512CD__`), and the `GGML_AVX512_VNNI=ON` / `_VBMI=ON` / `_BF16=ON`
+  options add the corresponding `__AVX512VNNI__` / `__AVX512VBMI__` /
+  `__AVX512BF16__` definitions explicitly. See
+  [`ggml/src/CMakeLists.txt:1352-1374`](../ggml/src/CMakeLists.txt#L1352-L1374).
+- On GCC / Clang, `GGML_NATIVE=ON` resolves `-march=native` to a target
+  that defines the macros (on Zen4, `znver4`; on Sapphire Rapids,
+  `sapphirerapids`), and the same `GGML_AVX512_*=ON` options add explicit
+  `-mavx512vnni` / `-mavx512vbmi` / `-mavx512bf16` flags as belt-and-braces.
+
+Verification — confirm the quantized path is in the binary:
+
+```bash
+objdump -d build/bin/llama-cli | grep -c vpdpbusd
+# A non-trivial count (hundreds+) means VNNI compiled in.
+# Zero means the IQK kernels fell back to AVX2.
+```
+
+You can also check the runtime banner: a successful AVX-512 build prints
+`HAVE_FANCY_SIMD is defined` and `system_info: AVX512_VNNI = 1 ...`.
+
+### Fallback: explicit `GGML_ARCH_FLAGS`
+
+If the recommended options above do not produce `HAVE_FANCY_SIMD is defined`
+on your toolchain (older MSVC versions, exotic compilers, or cross-compiles
+to ARM where `-march=native` does not propagate the relevant macros), the
+defines can be supplied explicitly via `GGML_ARCH_FLAGS`, which the build
+system forwards verbatim to the C/C++ compiler line:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_ARCH_FLAGS="-D__AVX512F__ -D__AVX512VNNI__ -D__AVX512VL__ -D__AVX512BW__ -D__AVX512DQ__ -D__AVX512BF16__"
+cmake --build build --config Release
+```
+
+For AVX2 CPUs that have VNNI but not AVX-512, the equivalent is:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_ARCH_FLAGS="-D__AVXVNNI__"
+```
+
+The same `objdump | grep -c vpdpbusd` check applies.
+
+### Note on Zen4 throughput
+
+On Zen4 the AVX-512 implementation is 256-bit double-pumped: each `_mm512_*`
+op issues two micro-ops with throughput of roughly one AVX-512 op per two
+cycles. The wider register width and reduced loop overhead still produce
+measurable gains over AVX2 on prompt processing for IQK kernels.
+
 ## Metal Build
 
 On MacOS, Metal is enabled by default. Using Metal makes the computation run on the GPU.

@@ -105,6 +105,7 @@ struct llama_hparams {
     float f_residual_scale  = 0.0f;
     float f_embedding_scale = 0.0f;
     float f_attention_scale = 0.0f;
+    float f_attn_v_scale    = 1.0f;
 
     // grok-2
     float    f_attn_out_scale = 0.0f;

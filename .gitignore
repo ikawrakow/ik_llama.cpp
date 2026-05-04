@@ -49,6 +49,8 @@ build*
 !build-info.sh
 !build.zig
 !docs/build.md
+!scripts/build-*.sh
+!scripts/build-*.bat
 /libllama.so
 /llama-*
 /vulkan-shaders-gen

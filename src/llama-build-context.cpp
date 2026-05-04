@@ -2575,6 +2575,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                             split_wv, bv ? bv->splits[id] : nullptr,
                             the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split);
                     Qcur = Q; Kcur = K; Vcur = V;
+                    if (model.arch == LLM_ARCH_MIMO2 && std::abs(model.hparams.f_attn_v_scale - 1) > 1e-4f) {
+                        Vcur = ggml_scale(ctx0, Vcur, model.hparams.f_attn_v_scale);
+                        cb(Vcur, "Vcur_scales", il_cb);
+                    }
                 }
                 auto rope_factors = rope_factors_in;
                 if (rope_factors) {
@@ -2781,6 +2785,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 model.layers[il].wq,   model.layers[il].bq, model.layers[il].wk, model.layers[il].bk, model.layers[il].wv, model.layers[il].bv,
                 model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, f_attn_scale, il);
         Qcur = Q; Kcur = K; Vcur = V;
+        if (model.arch == LLM_ARCH_MIMO2 && std::abs(model.hparams.f_attn_v_scale - 1) > 1e-4f) {
+            Vcur = ggml_scale(ctx0, Vcur, model.hparams.f_attn_v_scale);
+            cb(Vcur, "Vcur_scales", il);
+        }
         if (model.arch == LLM_ARCH_GEMMA4) {
             Vcur = ggml_reshape_3d(ctx0, Vcur, model.hparams.n_embd_head_v(il), model.hparams.n_head_kv(il), n_tokens);
             Vcur = ggml_rms_norm(ctx0, Vcur, model.hparams.f_norm_rms_eps);
