@@ -3326,9 +3326,139 @@ static bool llm_load_tensors(
     return true;
 }
 
+// --- run-time-repack auto policy ----------------------------------------------------
+//
+// `--run-time-repack auto` (a.k.a. `-rtr auto`) flips repacking on by default, but
+// disables it when the GGUF is known to overflow physical RAM and would otherwise
+// trigger swap thrashing during the repack pass. The check is conservative: probe
+// metadata only, compare model size against ~90% of physical RAM, and flip off
+// only when the model is a MoE that would not fit. Anything that we cannot
+// reliably check (RAM detection failed, probe threw, GPU offload may shift the
+// CPU-side footprint) leaves the user-supplied -rtr setting untouched.
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#elif defined(__linux__)
+#  include <unistd.h>
+#elif defined(__APPLE__)
+#  include <sys/sysctl.h>
+#endif
+
+static uint64_t llama_get_total_ram_bytes() {
+#if defined(_WIN32)
+    MEMORYSTATUSEX mem_info = {};
+    mem_info.dwLength = sizeof(mem_info);
+    if (GlobalMemoryStatusEx(&mem_info)) {
+        return (uint64_t) mem_info.ullTotalPhys;
+    }
+#elif defined(__linux__)
+    long pages     = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    if (pages > 0 && page_size > 0) {
+        return (uint64_t) pages * (uint64_t) page_size;
+    }
+#elif defined(__APPLE__)
+    int mib[2] = { CTL_HW, HW_MEMSIZE };
+    uint64_t mem = 0;
+    size_t   len = sizeof(mem);
+    if (sysctl(mib, 2, &mem, &len, nullptr, 0) == 0 && mem > 0) {
+        return mem;
+    }
+#endif
+    return 0;
+}
+
+// Returns true iff `--run-time-repack auto` should disable run-time repack for
+// this load. False means "do nothing" — preserves the user's -rtr setting.
+static bool llama_rtr_auto_should_disable(
+        const std::string         & fname,
+        const llama_model_params  & params,
+        std::string               & reason) {
+    if (!params.repack_tensors || !params.repack_tensors_auto) {
+        return false;
+    }
+
+    // GPU offload (or n-cpu-moe) shifts the actual CPU-side footprint and the
+    // raw on-disk model size is no longer a reliable proxy for RAM pressure.
+    // Defer to the user's explicit -rtr choice in that case.
+    if (params.n_gpu_layers > 0) {
+        return false;
+    }
+
+    const uint64_t phys_ram = llama_get_total_ram_bytes();
+    if (phys_ram == 0) {
+        return false;
+    }
+
+    try {
+        // Metadata-only probe: mmap + no repack to inspect arch/hparams cheaply.
+        llama_model_loader probe(
+                fname,
+                params.ncmoe,
+                /*use_mmap*/      true,
+                /*check_tensors*/ false,
+                /*repack_tensors*/false,
+                params.use_thp,
+                params.merge_qkv,
+                params.merge_up_gate_exps,
+                params.defer_experts,
+                params.kv_overrides,
+                params.tensor_buft_overrides);
+
+        llama_model probe_model;
+        probe_model.hparams.vocab_only = params.vocab_only;
+        llm_load_arch(probe, probe_model);
+        llm_load_hparams(probe, probe_model);
+
+        const bool is_moe = probe_model.hparams.n_expert > 0
+                         && probe_model.hparams.n_expert_used > 0;
+        if (!is_moe) {
+            // Dense models have not shown the same swap regression in our testing,
+            // so the auto policy stays out of the way.
+            return false;
+        }
+
+        const uint64_t model_bytes = (uint64_t) probe.n_bytes;
+        // 90% of physical RAM, conservative buffer for kernel + other processes.
+        const uint64_t threshold = phys_ram - phys_ram / 10;
+        if (model_bytes <= threshold) {
+            return false;
+        }
+
+        reason = format("MoE model %.1f GiB > 90%% of RAM %.1f GiB",
+                model_bytes / 1073741824.0, phys_ram / 1073741824.0);
+        return true;
+    } catch (const std::exception & e) {
+        LLAMA_LOG_WARN("%s: --run-time-repack auto: probe failed (%s); leaving repack as-is\n",
+                __func__, e.what());
+        return false;
+    }
+}
+
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
+        if (params.repack_tensors && params.repack_tensors_auto) {
+            std::string reason;
+            if (llama_rtr_auto_should_disable(fname, params, reason)) {
+                // Auto policy turns repack off — leave use_mmap as the user
+                // configured it (default true, or whatever --no-mmap chose).
+                params.repack_tensors = false;
+                LLAMA_LOG_INFO("%s: --run-time-repack auto: disabled (%s)\n",
+                        __func__, reason.c_str());
+            } else {
+                // Auto keeps repack enabled — match the legacy `-rtr 1`
+                // coupling and force use_mmap=false so the repack pass can
+                // write back into the tensor buffers.
+                params.use_mmap = false;
+                LLAMA_LOG_INFO("%s: --run-time-repack auto: keeping repack enabled\n",
+                        __func__);
+            }
+        }
+
         llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
@@ -5468,6 +5598,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
+        /*.repack_tensors_auto         =*/ false,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,
