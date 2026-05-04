@@ -204,28 +204,57 @@ deliver. A few related gates are worth knowing about:
 - `f16`/`f32` GEMM is gated only by `__AVX512F__`.
 - Native `bf16` GEMM and the use of a `bf16` KV cache in flash attention is
   gated by `__AVX512BF16__`.
-- For AVX2-only CPUs that implement the VNNI extension (`vpdpbusd`), the
-  equivalent "fancy" path is gated by `__AVXVNNI__`. VNNI alone is
-  responsible for most of the speedup on quantized matmul.
+- A separate `HAVE_VNNI256` path (`iqk_config.h:52-54`) is gated by
+  `__AVXVNNI__` *or* (`__AVX512VNNI__ && __AVX512VL__`). This gives a
+  meaningful speedup on AVX2-only CPUs that have the VNNI extension
+  (e.g. some Alder Lake / Raptor Lake parts), even without full AVX-512.
+  VNNI alone (`vpdpbusd`) is responsible for most of the speedup on
+  quantized matmul.
 
-### Linux / GCC
+### Recommended: high-level CMake options
 
-Modern GCC with `GGML_NATIVE=ON` (the default unless cross-compiling)
-resolves `-march=native` on Zen4 / Sapphire Rapids hardware to a target that
-defines all of the macros above. No manual configuration is usually needed.
-Verification:
+The standard `GGML_AVX512_*` options work on both MSVC and GCC and are the
+shortest path that activates `HAVE_FANCY_SIMD`:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DGGML_NATIVE=ON \
+    -DGGML_AVX512=ON \
+    -DGGML_AVX512_VBMI=ON \
+    -DGGML_AVX512_VNNI=ON \
+    -DGGML_AVX512_BF16=ON
+cmake --build build --config Release
+```
+
+Mechanics:
+- On MSVC, `GGML_AVX512=ON` adds `/arch:AVX512` (which itself defines
+  `__AVX512F__`, `__AVX512VL__`, `__AVX512BW__`, `__AVX512DQ__`,
+  `__AVX512CD__`), and the `GGML_AVX512_VNNI=ON` / `_VBMI=ON` / `_BF16=ON`
+  options add the corresponding `__AVX512VNNI__` / `__AVX512VBMI__` /
+  `__AVX512BF16__` definitions explicitly. See
+  [`ggml/src/CMakeLists.txt:1352-1374`](../ggml/src/CMakeLists.txt#L1352-L1374).
+- On GCC / Clang, `GGML_NATIVE=ON` resolves `-march=native` to a target
+  that defines the macros (on Zen4, `znver4`; on Sapphire Rapids,
+  `sapphirerapids`), and the same `GGML_AVX512_*=ON` options add explicit
+  `-mavx512vnni` / `-mavx512vbmi` / `-mavx512bf16` flags as belt-and-braces.
+
+Verification — confirm the quantized path is in the binary:
 
 ```bash
 objdump -d build/bin/llama-cli | grep -c vpdpbusd
-# A non-trivial count (hundreds) means VNNI compiled in.
+# A non-trivial count (hundreds+) means VNNI compiled in.
 # Zero means the IQK kernels fell back to AVX2.
 ```
 
-### Windows / MSVC and other cases that need explicit defines
+You can also check the runtime banner: a successful AVX-512 build prints
+`HAVE_FANCY_SIMD is defined` and `system_info: AVX512_VNNI = 1 ...`.
 
-MSVC does not propagate `-march=native` semantics, and in cross-compile
-scenarios `GGML_NATIVE` is intentionally disabled. In both cases the
-macros must be supplied explicitly via `GGML_ARCH_FLAGS`, which the build
+### Fallback: explicit `GGML_ARCH_FLAGS`
+
+If the recommended options above do not produce `HAVE_FANCY_SIMD is defined`
+on your toolchain (older MSVC versions, exotic compilers, or cross-compiles
+to ARM where `-march=native` does not propagate the relevant macros), the
+defines can be supplied explicitly via `GGML_ARCH_FLAGS`, which the build
 system forwards verbatim to the C/C++ compiler line:
 
 ```bash
@@ -241,8 +270,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release \
     -DGGML_ARCH_FLAGS="-D__AVXVNNI__"
 ```
 
-After the build completes, the same `objdump | grep -c vpdpbusd` check
-confirms the quantized path is in.
+The same `objdump | grep -c vpdpbusd` check applies.
 
 ### Note on Zen4 throughput
 
