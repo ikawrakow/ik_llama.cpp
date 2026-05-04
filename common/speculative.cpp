@@ -198,7 +198,6 @@ struct common_speculative_state_mtp : public common_speculative_state {
         llama_seq_id seq_id = 0;
 
         llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
-        //printf("%s: n_past = %d, mtp_pos_max = %d\n", __func__, n_past, mtp_pos_max);
         if (mtp_pos_max >= n_past) {
             llama_kv_cache_seq_rm(ctx_mtp, seq_id, n_past, -1);
         }
@@ -219,11 +218,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
     void accept(uint16_t n_accepted) override {
         GGML_UNUSED(n_accepted);
     }
-
-    std::vector<float> last_logits;
-    bool               accepted = false;
 };
-
 
 struct common_speculative_state_draft : public common_speculative_state {
     llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
@@ -1401,11 +1396,9 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     int32_t current_n_past = n_past;
     const int n_embd = llama_model_n_embd(llama_get_model(ctx));
 
-    //std::vector<float> draft_hidden_state(n_embd);
     auto & last = mtp_get_last_embd(ctx);
     int i0 = 0;
     if (last.last_id >= 0) {
-        //printf("%s(%p): adding previously sampled token id = %d, p = %g. n_past = %d\n", __func__, (const void *)ctx, last.last_id, last.prob, n_past);
         if (last.prob < p_min) {
             return drafts;
         }
@@ -1448,9 +1441,6 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             break;
         }
     }
-    //printf("%s: sampled", __func__);
-    //for (auto id : drafts) printf(" %d", id);
-    //printf("\n");
     llama_batch_free(mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
@@ -1503,25 +1493,19 @@ void mtp_accept_tokens(
     }
 
     llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
-    //printf("%s(%p): have", __func__, (const void *)ctx);
     for (size_t i = 0; i < ids.size(); ++i) {
-        //printf(" %d", ids[i]);
         common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
     }
-    //printf("\n");
 
     mtp_update_kv_cache(ctx, accepted_batch, false);
 
     auto & last = mtp_get_last_embd(ctx);
-    //llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
     auto embd = llama_get_embeddings_ith(ctx, ids.size() - 1);
     if (embd) {
         std::memcpy(last.embd.data(), embd, last.embd.size()*sizeof(float));
         llama_set_draft_input_hidden_state(ctx, last.embd.data());
         last.last_id = common_sampler_sample_speculative(nullptr, ctx, ids.size() - 1, &last.prob);
-        //printf("%s: sampled next token. id = %d, p = %g\n", __func__, last.last_id, last.prob);
     }
-    //llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
     llama_batch_free(accepted_batch);
 }
