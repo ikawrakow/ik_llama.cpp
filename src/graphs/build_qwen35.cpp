@@ -147,8 +147,8 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
     struct ggml_tensor * prev_embeddings,
     int64_t n_embd_head,
     struct ggml_cgraph * gf,
-    struct ggml_tensor * inp_pos
-) {
+    struct ggml_tensor * inp_pos) {
+
     const int il = hparams.n_layer - 1;
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
