@@ -166,8 +166,10 @@ typedef struct common_params_sampling {
             std::vector<std::string>    phrases;
             std::vector<float>          biases;     // for each phrase, nth bias for nth token, extrapolate
             int32_t                     duration;   // bias duration, unless exitword matches
+            bool                        is_range;   // has lower and upper biases
             bool operator == (const struct elb_entry& other) const {
-                return (duration == other.duration)
+                return (is_range == other.is_range)
+                    && (duration == other.duration)
                     && (biases == other.biases)
                     && (phrases == other.phrases);
             }

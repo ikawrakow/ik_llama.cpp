@@ -1728,13 +1728,30 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             auto& max_cond_len = slot.ctx_sampling->elb_states.back().max_cond_len;
 
             // 1 entry <-> 1 phrase <-> 1+ biases
-            for (auto [phrases, biases, duration]: entries) {
+            for (auto [phrases, biases, duration, is_range]: entries) {
                 for (const auto& phrase: phrases) {
                     if (phrase.empty()) {
                         continue;
                     }
+
                     const auto ids = common_tokenize(model, phrase, false, true);
-                    biases.resize(ids.size(), biases.back());
+                    if (!is_range) {
+                        // extrapolate
+                        biases.resize(ids.size(), biases.back());
+                    } else if (ids.size() == 1) {
+                        biases[0] = biases.back();
+                        biases.resize(1);
+                    } else {
+                        // interpolate
+                        float bb = biases.back();
+                        const float inc = (bb - biases.front()) / (ids.size() - 1);
+                        biases.resize(ids.size());
+                        for (int32_t j = ids.size() - 1; j >= 0; --j) {
+                            biases[j] = bb;
+                            bb -= inc;
+                        }
+                    }
+
                     if (biases[0] != 0.0f) {
                         // cond is piece for first_tokens (no match to bias)
                         first_tokens.push_back({ ids[0], biases[0], size_t(duration), common_token_to_piece(ctx, ids[0], true) });

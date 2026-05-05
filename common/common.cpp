@@ -4796,7 +4796,6 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 const auto cpos = line.find(':');
                 if ((cpos != std::string::npos) && (1 < cpos) && (cpos < qqpos)) {
                     auto sub = line.substr(1, cpos - 1);
-                    string_strip(sub);
                     duration = std::stoi(sub);
                 }
                 if (duration == 0) {
@@ -4824,15 +4823,26 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     continue;   // next line
                 }
 
-                // (... : BIAS, ..., BIAS)
+                // (... : BIAS ...)
                 std::vector<float> biases;
+                bool is_range = false;
                 const auto rcpos = line.rfind(':');
                 if ((rcpos != std::string::npos) && (line.rfind('"') < rcpos)) {
                     auto sub = line.substr(rcpos + 1, n_char - rcpos - 2);
-                    for (auto split: string_split(sub, ',')) {
-                        string_strip(split);
-                        if (!split.empty()) {
-                            biases.push_back(std::stof(split));
+                    if (sub.find("~") != std::string::npos) {
+                        // (... : BIAS ~ BIAS)
+                        const auto splits = string_split(sub, '~');
+                        auto split = splits.front();
+                        biases.push_back(std::stof(split));
+                        split = splits.back();
+                        biases.push_back(std::stof(split));
+                        is_range = true;
+                    } else {
+                        // (... : BIAS, BIAS, ..., BIAS)
+                        for (auto split: string_split(sub, ',')) {
+                            if (!split.empty()) {
+                                biases.push_back(std::stof(split));
+                            }
                         }
                     }
                 }
@@ -4845,7 +4855,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     saved_phrases = std::move(phrases);
                     saved_biases = std::move(biases);
                 } else {
-                    elb_params.back().entries.push_back({ std::move(phrases), std::move(biases), duration });
+                    elb_params.back().entries.push_back({ std::move(phrases), std::move(biases), duration, is_range });
                 }
                 continue;   // next line
             }
