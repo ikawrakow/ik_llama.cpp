@@ -1639,9 +1639,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-rtr" || arg == "--run-time-repack") {
-        // Optional value: 0|off → disable, 1|on → force on, auto → enable with
-        // safety net that auto-disables on swap-bound MoE (model > 90% of RAM).
-        // No value (legacy form) → behave like "1".
+        // Optional value: 0|off to disable, 1|on to force on, auto to enable
+        // with safety net that auto-disables on swap-bound MoE (model > 90%
+        // of available memory). No value (legacy form) behaves like "1".
         bool repack      = true;
         bool repack_auto = false;
 
@@ -2731,7 +2731,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-rtr,  --run-time-repack [0|1|auto]",
                                                                         "repack tensors if interleaved variant is available.\n"
                                                                         "0/off = disable, 1/on = always (legacy), auto = enable with auto-disable\n"
-                                                                        "for swap-bound MoE (model > 90%% of RAM). Default: 0."});
+                                                                        "for swap-bound MoE (model > 90%% of available memory). Default: 0."});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
