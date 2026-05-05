@@ -363,6 +363,139 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
     return gf;
 }
 
+ggml_cgraph * llm_build_context::build_gemma4_mtp() {
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+
+    const int64_t n_embd          = hparams.n_embd;
+    const int64_t n_vocab         = hparams.n_vocab;
+    const int64_t n_backbone      = hparams.mtp_backbone_n_embd;
+    const int32_t n_layer         = hparams.n_layer;
+    const bool    has_target_ctx  = lctx.mtp_target_ctx != nullptr && lctx.mtp_target_model != nullptr;
+
+    GGML_ASSERT(n_backbone > 0);
+
+    ggml_tensor * inp_pos = build_inp_pos();
+
+    if (batch.token) {
+        lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
+        cb(lctx.inp_tokens, "inp_tokens", -1);
+        ggml_set_input(lctx.inp_tokens);
+    } else {
+        return gf;
+    }
+
+    ggml_tensor * hidden_state = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_backbone, n_tokens);
+    ggml_set_name(hidden_state, "inp_mtp_states");
+    ggml_set_input(hidden_state);
+    lctx.inp_mtp_states = hidden_state;
+
+    ggml_tensor * token_embd;
+    if (has_target_ctx) {
+        const llama_model & target_model = *lctx.mtp_target_model;
+        token_embd = ggml_get_rows(ctx0, target_model.tok_embd, lctx.inp_tokens);
+        cb(token_embd, "inp_embd_target", -1);
+        token_embd = ggml_scale(ctx0, token_embd, std::sqrt(float(n_backbone)));
+        cb(token_embd, "inp_embd_scaled", -1);
+    } else {
+        token_embd = ggml_dup(ctx0, hidden_state);
+        cb(token_embd, "inp_embd_placeholder", -1);
+    }
+
+    ggml_tensor * cur = ggml_concat(ctx0, token_embd, hidden_state, 0);
+    cb(cur, "inp_mtp_combined", -1);
+    cur = llm_build_lora_mm(lctx, ctx0, model.mtp_pre_proj, cur);
+    cb(cur, "mtp_pre_proj", -1);
+
+    const llama_kv_cache * target_kv = has_target_ctx ? &lctx.mtp_target_ctx->kv_self : &kv_self;
+    const int32_t target_n_kv = has_target_ctx ? std::max<int32_t>(lctx.mtp_target_ctx->kv_self.n, n_tokens) : n_kv;
+    const int32_t target_kv_head = has_target_ctx ? lctx.mtp_target_ctx->kv_self.head : kv_head;
+
+    ggml_tensor * KQ_mask = nullptr;
+    ggml_tensor * KQ_mask_swa = nullptr;
+    if (has_target_ctx) {
+        const int64_t n_mask_tokens = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+        lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, target_n_kv, n_mask_tokens);
+        cb(lctx.inp_KQ_mask, "KQ_mask", -1);
+        ggml_set_input(lctx.inp_KQ_mask);
+        KQ_mask = lctx.inp_KQ_mask;
+
+        if (hparams.n_swa > 0) {
+            lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, target_n_kv, n_mask_tokens);
+            cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
+            ggml_set_input(lctx.inp_KQ_mask_swa);
+            KQ_mask_swa = lctx.inp_KQ_mask_swa;
+        }
+    }
+
+    for (int il = 0; il < n_layer; ++il) {
+        ggml_tensor * inpL = cur;
+
+        const bool is_sliding    = hparams.swa_layers[il] ? true : false;
+        const float freq_base_l  = is_sliding ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
+        const float freq_scale_l = is_sliding ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
+        const int   n_rot_l      = is_sliding ? hparams.n_rot_swa : hparams.n_rot;
+        const int   n_swa        = is_sliding ? hparams.n_swa : 0;
+        const int   n_embd_head  = hparams.n_embd_head_k(il);
+        const int   n_head       = hparams.n_head(il);
+        ggml_tensor * KQ_mask_l  = is_sliding ? KQ_mask_swa : KQ_mask;
+
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_norm", il);
+
+        ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+        cb(Qcur, "Qcur", il);
+        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+        Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cb(Qcur, "Qcur_normed", il);
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+        cb(Qcur, "Qcur_rope", il);
+
+        if (has_target_ctx) {
+            cur = llm_build_kv(ctx0, lctx, *target_kv, gf, model.layers[il].wo, model.layers[il].bo,
+                    nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa);
+        } else {
+            cur = ggml_reshape_2d(ctx0, Qcur, n_embd_head*n_head, n_tokens);
+            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+            cb(cur, "kqv_placeholder", il);
+        }
+
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cb(cur, "attn_post_norm", il);
+        cur = ggml_add(ctx0, cur, inpL);
+        cb(cur, "attn_out", il);
+
+        ggml_tensor * ffn = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                model.layers[il].ffn_up,   nullptr, nullptr,
+                model.layers[il].ffn_gate, nullptr, nullptr,
+                model.layers[il].ffn_down, nullptr, nullptr,
+                nullptr,
+                LLM_FFN_GELU, LLM_FFN_PAR, cb, il, gf, true, false, nullptr, model.layers[il].ffn_post_norm);
+        cb(ffn, "ffn_out", il);
+
+        cur = ffn;
+        if (model.layers[il].out_scale) {
+            cur = ggml_mul(ctx0, cur, model.layers[il].out_scale);
+            cb(cur, "out_scaled", il);
+        }
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+    }
+
+    ggml_tensor * mtp_embd = llm_build_lora_mm(lctx, ctx0, model.mtp_post_proj, cur);
+    cb(mtp_embd, "result_mtp_embd", -1);
+    ggml_build_forward_expand(gf, mtp_embd);
+
+    ggml_tensor * logits = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
+    cb(logits, "result_output", -1);
+    ggml_build_forward_expand(gf, logits);
+
+    GGML_UNUSED(n_embd);
+    GGML_UNUSED(n_vocab);
+
+    return gf;
+}
+
 static ggml_tensor * gemma4_project_per_layer_inputs(ggml_context * ctx0, const llama_model & model, const llm_build_cb & cb,
         int n_embd, int n_embd_per_layer, int n_layer, int n_tokens,
         ggml_tensor * inputs_embeds, ggml_tensor * inp_per_layer) {
@@ -613,6 +746,12 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     }
 
     cur = inpL;
+
+    if (cparams.mtp) {
+        ggml_tensor * mtp_embd = ggml_dup(ctx0, cur);
+        cb(mtp_embd, "result_mtp_embd", -1);
+        ggml_build_forward_expand(gf, mtp_embd);
+    }
 
     cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);

@@ -22,6 +22,37 @@ static void log_text(const gpt_params & params_base, const std::string & text) {
     }
 }
 
+static bool params_use_external_mtp(const gpt_params & params_base) {
+    return params_base.has_mtp &&
+        params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP &&
+        params_base.speculative.model_dft != nullptr;
+}
+
+static void set_external_mtp_hidden(server_slot & slot, llama_context * ctx, const float * hidden, int n_embd) {
+    if (!slot.has_mtp || !slot.spec || hidden == nullptr || n_embd <= 0) {
+        return;
+    }
+
+    slot.mtp_hidden_state.assign(hidden, hidden + n_embd);
+
+    llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
+    llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
+    llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
+}
+
+static void set_external_mtp_hidden_from_rows(server_slot & slot, llama_context * ctx, const std::vector<float> & rows, int n_embd) {
+    if (rows.empty() || n_embd <= 0) {
+        return;
+    }
+
+    const size_t n_rows = rows.size() / n_embd;
+    if (n_rows == 0) {
+        return;
+    }
+
+    set_external_mtp_hidden(slot, ctx, rows.data() + (n_rows - 1) * n_embd, n_embd);
+}
+
 void server_speculative_checkpoint::clear() {
     valid = false;
     per_step_enabled = false;
@@ -201,6 +232,9 @@ bool server_context::load_model(const gpt_params& params_) {
         params_base.speculative.cparams_dft = cparams_dft;
 
     }
+    else if (params_base.has_mtp && params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP && params_base.speculative.model_dft != nullptr) {
+        // External MTP assistants (Gemma 4) are loaded through the draft-model path but use the MTP backend.
+    }
     else if (params_base.has_mtp && llama_model_n_nextn_layer(model) == 0) {
         LOG_WARNING("WARNING: -mtp flag provided, but model has 0 NextN layers. MTP will be disabled.\n", {});
         params_base.has_mtp = false;
@@ -257,14 +291,22 @@ void server_context::init() {
         slot.sparams = params_base.sparams;
 
         if (params_base.has_mtp) {
-            if (llama_model_n_nextn_layer(model) > 0) {
+            const bool has_external_mtp = params_use_external_mtp(params_base);
+
+            if (llama_model_n_nextn_layer(model) > 0 || has_external_mtp) {
                 params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
                 params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
-                params_base.speculative.cparams_dft = common_context_params_to_llama(params_base);
-                params_base.speculative.cparams_dft.mtp          = true;
-                params_base.speculative.cparams_dft.mtp_op_type  = MTP_OP_WARMUP;
-                params_base.speculative.cparams_dft.embeddings   = true;
+                if (!has_external_mtp) {
+                    params_base.speculative.cparams_dft = common_context_params_to_llama(params_base);
+                    params_base.speculative.cparams_dft.mtp          = true;
+                    params_base.speculative.cparams_dft.mtp_op_type  = MTP_OP_WARMUP;
+                    params_base.speculative.cparams_dft.embeddings   = true;
+                } else {
+                    params_base.speculative.cparams_dft.mtp          = true;
+                    params_base.speculative.cparams_dft.mtp_op_type  = MTP_OP_WARMUP;
+                    params_base.speculative.cparams_dft.embeddings   = true;
+                }
 
                 slot.has_mtp = true;
                 slot.params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
@@ -3710,7 +3752,8 @@ void server_context::extend_context(const int32_t n_tokens) {
 static void restore_speculative_checkpoint(
         server_slot & slot, llama_context * ctx, llama_model * model,
         const std::vector<llama_token> & ids, int n_draft,
-        const std::vector<float> & mtp_hidden_state_pre, int32_t mtp_n_past_base) {
+    const std::vector<float> & mtp_hidden_state_pre, int32_t mtp_n_past_base,
+    bool external_mtp) {
     if (slot.spec_ckpt.per_step_enabled) {
         const int step = (int)ids.size() - 1;
         llama_spec_ckpt_restore(ctx, slot.id, slot.spec_ckpt.n_past, step);
@@ -3724,11 +3767,16 @@ static void restore_speculative_checkpoint(
 
         // Update MTP KV cache and hidden state using embeddings collected before checkpoint restore.
         if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-            slot.mtp_hidden_state = mtp_hidden_state_pre;
-            llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
-            llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-            llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
-            mtp_accept_tokens(mtp_target, ids, mtp_n_past_base, slot.id);
+            const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+            if (external_mtp) {
+                set_external_mtp_hidden_from_rows(slot, ctx, mtp_hidden_state_pre, n_embd);
+            } else {
+                slot.mtp_hidden_state = mtp_hidden_state_pre;
+                llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
+                llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
+                llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
+                mtp_accept_tokens(mtp_target, ids, mtp_n_past_base, slot.id);
+            }
         }
 
         SLT_DBG(slot, "per-step restore: step=%d (rejected %d drafts)\n",
@@ -3773,15 +3821,19 @@ static void restore_speculative_checkpoint(
                     }
                 }
 
-                llama_context * mtp_ctx_rej = common_speculative_get_mtp_ctx(slot.spec);
-                llama_context * mtp_target_rej = mtp_ctx_rej ? mtp_ctx_rej : ctx;
-                llama_set_draft_input_hidden_state(mtp_target_rej, slot.mtp_hidden_state.data());
-                mtp_accept_tokens(mtp_target_rej, ids, slot.spec_ckpt.n_past, slot.id);
+                if (external_mtp) {
+                    set_external_mtp_hidden_from_rows(slot, ctx, slot.mtp_hidden_state, n_embd);
+                } else {
+                    llama_context * mtp_ctx_rej = common_speculative_get_mtp_ctx(slot.spec);
+                    llama_context * mtp_target_rej = mtp_ctx_rej ? mtp_ctx_rej : ctx;
+                    llama_set_draft_input_hidden_state(mtp_target_rej, slot.mtp_hidden_state.data());
+                    mtp_accept_tokens(mtp_target_rej, ids, slot.spec_ckpt.n_past, slot.id);
 
-                if (n_accepted > 1) {
-                    memmove(slot.mtp_hidden_state.data(),
-                            slot.mtp_hidden_state.data() + (n_accepted - 1) * n_embd,
-                            n_embd * sizeof(float));
+                    if (n_accepted > 1) {
+                        memmove(slot.mtp_hidden_state.data(),
+                                slot.mtp_hidden_state.data() + (n_accepted - 1) * n_embd,
+                                n_embd * sizeof(float));
+                    }
                 }
                 slot.mtp_hidden_state.resize(n_embd);
             }
@@ -3875,16 +3927,21 @@ void server_context::speculative_decoding_accept() {
         // for recurrent/hybrid models: if any drafts were rejected, restore recurrent state
         const bool any_rejected = (ids.size() - 1) < n_draft;
         if (any_rejected && slot.spec_ckpt.valid) {
-            restore_speculative_checkpoint(slot, ctx, model, ids, n_draft, mtp_hidden_state_pre, mtp_n_past_base);
+            restore_speculative_checkpoint(slot, ctx, model, ids, n_draft, mtp_hidden_state_pre, mtp_n_past_base, params_use_external_mtp(params_base));
         } else {
             if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
+                const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                if (params_use_external_mtp(params_base)) {
+                    set_external_mtp_hidden_from_rows(slot, ctx, mtp_hidden_state_pre, n_embd);
+                } else {
                     llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
                     llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
 
-                    slot.mtp_hidden_state = std::move(mtp_hidden_state_pre);
+                    slot.mtp_hidden_state = mtp_hidden_state_pre;
                     llama_set_draft_input_hidden_state(mtp_target, slot.mtp_hidden_state.data());
                     mtp_accept_tokens(mtp_target, ids, mtp_n_past_base, slot.id);
                 }
+            }
             llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
             discard_speculative_checkpoint(slot, ctx);
         }
@@ -4328,8 +4385,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 const float* emb_i = llama_get_embeddings_ith(ctx, tok_idx);
                 if (emb_i) {
                     const int n_embd = llama_model_n_embd(llama_get_model(ctx));
-                    slot.mtp_hidden_state.resize(n_embd);
-                    memcpy(slot.mtp_hidden_state.data(), emb_i, n_embd * sizeof(float));
+                    if (params_use_external_mtp(params_base)) {
+                        set_external_mtp_hidden(slot, ctx, emb_i, n_embd);
+                    } else {
+                        slot.mtp_hidden_state.resize(n_embd);
+                        memcpy(slot.mtp_hidden_state.data(), emb_i, n_embd * sizeof(float));
+                    }
                 }
             }
 
@@ -4395,16 +4456,25 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             slot.i_batch = -1;
         }
         if (mtp_warmup_needed && !batch_mtp_hidden_state.empty()) {
-            llama_context * mtp_ctx = nullptr;
-            for (auto & slot : slots) {
-                if (slot.spec && slot.has_mtp) {
-                    llama_context * mc = common_speculative_get_mtp_ctx(slot.spec);
-                    if (mc) { mtp_ctx = mc; break; }
+            if (params_use_external_mtp(params_base)) {
+                for (auto & slot : slots) {
+                    if (slot.spec && slot.has_mtp && !slot.mtp_hidden_state.empty()) {
+                        const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                        set_external_mtp_hidden(slot, ctx, slot.mtp_hidden_state.data(), n_embd);
+                    }
                 }
+            } else {
+                llama_context * mtp_ctx = nullptr;
+                for (auto & slot : slots) {
+                    if (slot.spec && slot.has_mtp) {
+                        llama_context * mc = common_speculative_get_mtp_ctx(slot.spec);
+                        if (mc) { mtp_ctx = mc; break; }
+                    }
+                }
+                llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
+                llama_set_draft_input_hidden_state(mtp_target, batch_mtp_hidden_state.data());
+                mtp_update_kv_cache(mtp_target, batch_view, true);
             }
-            llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-            llama_set_draft_input_hidden_state(mtp_target, batch_mtp_hidden_state.data());
-            mtp_update_kv_cache(mtp_target, batch_view, true);
         }
 
         // speculative decoding - main model sample and accept

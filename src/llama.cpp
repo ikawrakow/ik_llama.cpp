@@ -25,6 +25,9 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
+uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
+void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
+
 // TODO: fix these includes
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_cpu_ops.h"
@@ -3590,7 +3593,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
         // NOTE: hparams.causal_attn indicates the model is capable of generation and uses the kv cache.
         if (cparams.causal_attn && !lctx.is_encoding) {
-            const int64_t n_kv     = kv_self.n;
+            const llama_kv_cache & mask_kv_self =
+                (lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)
+                    ? lctx.mtp_target_ctx->kv_self
+                    : kv_self;
+            const int64_t n_kv     = mask_kv_self.n;
             const int64_t n_tokens = batch.n_tokens;
 
 
@@ -3617,21 +3624,21 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
-            auto noalibi_f16 = [&lctx, &hparams, n_kv, data_f16, data_swa_f16] (int j, llama_pos pos, llama_seq_id seq_id, int first, int last) {
+            auto noalibi_f16 = [&mask_kv_self, &hparams, n_kv, data_f16, data_swa_f16] (int j, llama_pos pos, llama_seq_id seq_id, int first, int last) {
                 ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
                 ggml_half h_zero = ggml_fp32_to_fp16(0.f);
                 for (int i = first; i < last; ++i) {
-                    ggml_half h = !lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos ? h_inf : h_zero;
+                    ggml_half h = !mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].pos > pos ? h_inf : h_zero;
                     if (data_f16) data_f16[j*n_kv + i] = h;
                     if (data_swa_f16) {
                         if (h != h_inf) {
                             if (hparams.n_attn_chunk) {
                                 llama_pos pos_chunk_start = (pos / hparams.n_attn_chunk) * hparams.n_attn_chunk;
-                                if (lctx.kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
+                                if (mask_kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
                                     h = h_inf;
                                 }
                             } else {
-                                if (pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
                                     h = h_inf;
                                 }
                             }
@@ -3644,7 +3651,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             if (n_kv >= 1024 && n_tokens >= 32) {
                 int n_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
                 int npt = (n_kv + n_thread - 1)/n_thread;
-                auto compute = [&batch, &lctx, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, npt, data, data_swa, data_f16, data_swa_f16] (int ith) {
+                auto compute = [&batch, &mask_kv_self, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, npt, data, data_swa, data_f16, data_swa_f16] (int ith) {
                     int first = ith * npt;
                     int last  = std::min(int(n_kv), first + npt);
                     if (last <= first) return;
@@ -3659,11 +3666,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
                         for (int i = first; i < last; ++i) {
                             float f;
-                            if (!lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos) {
+                            if (!mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].pos > pos) {
                                 f = -INFINITY;
                             } else {
                                 if (hparams.use_alibi) {
-                                    f = -std::abs(lctx.kv_self.cells[i].pos - pos);
+                                    f = -std::abs(mask_kv_self.cells[i].pos - pos);
                                 } else {
                                     f = 0.0f;
                                 }
@@ -3681,11 +3688,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                 if (f > -INFINITY) {
                                     if (hparams.n_attn_chunk) {
                                         llama_pos pos_chunk_start = (pos / hparams.n_attn_chunk) * hparams.n_attn_chunk;
-                                        if (lctx.kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
+                                        if (mask_kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
                                             f = -INFINITY;
                                         }
                                     } else {
-                                        if (pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                        if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
                                             f = -INFINITY;
                                         }
                                     }
@@ -3740,11 +3747,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
                     for (int i = 0; i < n_kv; ++i) {
                         float f;
-                        if (!lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos) {
+                        if (!mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].pos > pos) {
                             f = -INFINITY;
                         } else {
                             if (hparams.use_alibi) {
-                                f = -std::abs(lctx.kv_self.cells[i].pos - pos);
+                                f = -std::abs(mask_kv_self.cells[i].pos - pos);
                             } else {
                                 f = 0.0f;
                             }
@@ -3761,11 +3768,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                         if (data_swa || data_swa_f16) {
                             if (hparams.n_attn_chunk) {
                                 llama_pos pos_chunk_start = (pos / hparams.n_attn_chunk) * hparams.n_attn_chunk;
-                                if (lctx.kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
+                                if (mask_kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
                                     f = -INFINITY;
                                 }
                             } else {
-                                if (pos - kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
                                     f = -INFINITY;
                                 }
                             }
@@ -4106,6 +4113,21 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
 // Make sure enough space is available for outputs.
 // Returns max number of outputs for which space was reserved.
+static uint32_t llama_output_embd_width(const llama_context & lctx) {
+    const auto & hparams = lctx.model.hparams;
+    if (lctx.cparams.mtp && lctx.model.arch == LLM_ARCH_GEMMA4_MTP && hparams.mtp_backbone_n_embd > 0) {
+        return hparams.mtp_backbone_n_embd;
+    }
+    return hparams.n_embd;
+}
+
+static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
+    return lctx.cparams.mtp && (
+        lctx.model.hparams.nextn_predict_layers > 0 ||
+        lctx.model.arch == LLM_ARCH_GEMMA4 ||
+        lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
+}
+
 static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     const auto & cparams = lctx.cparams;
     const auto & hparams = lctx.model.hparams;
@@ -4114,10 +4136,10 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
 
     const auto n_batch = cparams.n_batch;
     const auto n_vocab = hparams.n_vocab;
-    const auto n_embd  = hparams.n_embd;
+    const auto n_embd  = llama_output_embd_width(lctx);
 
     // TODO: use a per-batch flag for logits presence instead
-    const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 && lctx.cparams.mtp;
+    const bool has_mtp = llama_context_has_mtp_outputs(lctx);
     const bool has_logits = !cparams.embeddings || has_mtp;
     const bool has_embd   = lctx.is_encoding || (cparams.embeddings && (cparams.pooling_type == LLAMA_POOLING_TYPE_NONE)) || has_mtp;
 
@@ -4278,7 +4300,8 @@ static int llama_decode_internal(
 
     // this indicates we are doing pooled embedding, so we ignore batch.logits and output all tokens
     const bool embd_pooled = cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
-    const bool has_mtp = cparams.mtp && hparams.nextn_predict_layers > 0;
+    const bool has_mtp = llama_context_has_mtp_outputs(lctx);
+    const uint32_t n_embd_output = llama_output_embd_width(lctx);
 
     // count outputs
     if (batch_all.logits && !embd_pooled) {
@@ -4519,12 +4542,12 @@ static int llama_decode_internal(
             res = nullptr;
         }
         else {
-            const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 && lctx.model.mtp;
-            const bool use_qwen_mtp_embd = has_mtp && lctx.model.arch == LLM_ARCH_QWEN35;
+            const bool has_mtp = llama_context_has_mtp_outputs(lctx);
+            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_QWEN35 || lctx.model.arch == LLM_ARCH_GEMMA4 || lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
-                    if (use_qwen_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
-                        // Qwen 3.5 uses raw hidden state before the final shared-head normalization.
+                    if (use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
+                        // MTP recurrent state can be wider/different than the logits head hidden state.
                         embd = gf->nodes[i];
                         break;
                     }
@@ -4537,7 +4560,7 @@ static int llama_decode_internal(
                     }
                 }
             }
-            if (cparams.embeddings && lctx.model.hparams.nextn_predict_layers == 0) {
+            if (cparams.embeddings && lctx.model.hparams.nextn_predict_layers == 0 && !has_mtp) {
                 res = nullptr; // do not extract logits for embedding case
             } else {
                 if (!embd) { // do not extract embeddings when not needed
@@ -4639,13 +4662,13 @@ static int llama_decode_internal(
                     {
                         // extract token embeddings
                         GGML_ASSERT(lctx.embd != nullptr);
-                        float * embd_out = lctx.embd + n_outputs_prev_embd*n_embd;
-                        const int32_t n_outputs_new_embd = has_mtp ? n_tokens : lctx.n_outputs;
+                        float * embd_out = lctx.embd + n_outputs_prev_embd*n_embd_output;
+                        const int32_t n_outputs_new_embd = has_mtp ? embd->ne[1] : lctx.n_outputs;
 
                         if (n_outputs_new_embd) {
                             GGML_ASSERT( n_outputs_prev_embd + n_outputs_new_embd <= n_outputs_embd);
-                            GGML_ASSERT((n_outputs_prev_embd + n_outputs_new_embd)*n_embd <= (int64_t) lctx.embd_size);
-                            ggml_backend_tensor_get_async(backend_embd, embd, embd_out, 0, n_outputs_new_embd*n_embd*sizeof(float));
+                            GGML_ASSERT((n_outputs_prev_embd + n_outputs_new_embd)*n_embd_output <= (int64_t) lctx.embd_size);
+                            ggml_backend_tensor_get_async(backend_embd, embd, embd_out, 0, n_outputs_new_embd*n_embd_output*sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
@@ -4676,7 +4699,7 @@ static int llama_decode_internal(
 #endif
         }
         n_outputs_prev += lctx.n_outputs;
-        n_outputs_prev_embd += has_mtp ? n_tokens : lctx.n_outputs;
+        n_outputs_prev_embd += has_mtp && embd ? embd->ne[1] : lctx.n_outputs;
         cur_token += n_tokens;
         if (reset_previous) {
             // We need to discard this graph. Otherwise, iwith CUDA graphs enabled, the graph will get resused and this will reset the
@@ -6004,7 +6027,8 @@ struct llama_context * llama_init_from_model(
         }
     }
 
-    if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 && cparams.mtp != 0) {
+    if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 &&
+        model->arch != LLM_ARCH_GEMMA4 && model->arch != LLM_ARCH_GEMMA4_MTP && cparams.mtp != 0) {
         cparams.mtp = 0;
     }
 
@@ -6511,6 +6535,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_GEMMA4:
+        case LLM_ARCH_GEMMA4_MTP:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -9840,6 +9865,15 @@ void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_of
 
 void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state) {
     ctx->draft_input_hidden_state = hidden_state;
+}
+
+uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
+    return llama_output_embd_width(*ctx);
+}
+
+void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx) {
+    ctx->mtp_target_ctx = target_ctx;
+    ctx->mtp_target_model = target_ctx ? llama_get_model(target_ctx) : nullptr;
 }
 
 size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts) {

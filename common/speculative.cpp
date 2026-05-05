@@ -19,6 +19,9 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
+void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
+uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
+
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
@@ -171,10 +174,29 @@ struct common_speculative_state_mtp : public common_speculative_state {
         const llama_model * model = llama_get_model(ctx_tgt);
         ctx_mtp = llama_init_from_model(const_cast<llama_model *>(model), mtp_cparams);
         if (ctx_mtp) {
+            llama_set_mtp_target_context(ctx_mtp, ctx_tgt);
             LOG_INF("%s: created MTP context (n_ctx=%d)\n", __func__, llama_n_ctx(ctx_mtp));
         } else {
             LOG_ERR("%s: failed to create MTP context\n", __func__);
         }
+    }
+
+    common_speculative_state_mtp(
+            enum common_speculative_type type,
+            llama_context * ctx_tgt,
+            llama_context * ctx_mtp)
+        : common_speculative_state(type)
+        , ctx_tgt(ctx_tgt)
+        , ctx_mtp(ctx_mtp)
+    {
+        struct common_params_sampling params;
+        params.samplers_sequence = {
+            llama_sampler_type::DIST,
+        };
+        smpl = common_sampler_init(llama_get_model(ctx_mtp), params);
+        llama_set_mtp_target_context(ctx_mtp, ctx_tgt);
+
+        LOG_INF("%s: using external MTP assistant context (n_ctx=%d)\n", __func__, llama_n_ctx(ctx_mtp));
     }
 
     ~common_speculative_state_mtp() override {
@@ -1029,9 +1051,9 @@ common_speculative * common_speculative_init(
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
-        bool has_draft = !params.mparams_dft.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
         bool has_mtp = (params.type == COMMON_SPECULATIVE_TYPE_MTP); 
+        bool has_draft = !params.mparams_dft.path.empty() && !has_mtp;
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
         bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
@@ -1102,10 +1124,19 @@ common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_MTP: {
-                auto mtp_state = std::make_unique<common_speculative_state_mtp>(config.type,
-                    /* .ctx_tgt      = */ ctx_tgt,
-                    /* .mtp_cparams  = */ params.cparams_dft
-                );
+                std::unique_ptr<common_speculative_state_mtp> mtp_state;
+                if (ctx_dft) {
+                    mtp_state = std::make_unique<common_speculative_state_mtp>(config.type,
+                        /* .ctx_tgt      = */ ctx_tgt,
+                        /* .ctx_mtp      = */ ctx_dft
+                    );
+                    ctx_dft = nullptr;
+                } else {
+                    mtp_state = std::make_unique<common_speculative_state_mtp>(config.type,
+                        /* .ctx_tgt      = */ ctx_tgt,
+                        /* .mtp_cparams  = */ params.cparams_dft
+                    );
+                }
                 if (!mtp_state->ctx_mtp) {
                     LOG_ERR("%s: failed to create MTP context\n", __func__);
                     return nullptr;
@@ -1224,7 +1255,7 @@ static mtp_last_embd & mtp_get_last_embd(const llama_context * ctx) {
     static std::unordered_map<const llama_context *, mtp_last_embd> map;
     auto & last = map[ctx];
     if (last.embd.empty()) {
-        auto n_embd = llama_model_n_embd(llama_get_model(ctx));
+        auto n_embd = llama_mtp_state_n_embd(ctx);
         last.embd.resize(n_embd);
     }
     return last;
@@ -1394,7 +1425,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     llama_token current_input_id = id_last;
     int32_t current_n_past = n_past;
-    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+    const int n_embd = llama_mtp_state_n_embd(ctx);
 
     auto & last = mtp_get_last_embd(ctx);
     int i0 = 0;

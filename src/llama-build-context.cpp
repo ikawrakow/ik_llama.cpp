@@ -2331,6 +2331,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_gemma4();
             } break;
+        case LLM_ARCH_GEMMA4_MTP:
+            {
+                result = llm.build_gemma4_mtp();
+            } break;
         case LLM_ARCH_STARCODER2:
             {
                 result = llm.build_starcoder2();
