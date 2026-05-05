@@ -844,7 +844,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
         return;
     }
 
-    const std::string search_window = ctx_sampling->to_generated_text->substr(std::max(
+    const std::string search_window = ctx_sampling->to_generated_text->substr(std::min(
         ctx_sampling->to_generated_text->length(),
         size_t(ctx_sampling->elb_search_pos)
     )) + common_token_to_piece(ctx_main, ctx_sampling->prev.back(), true);
