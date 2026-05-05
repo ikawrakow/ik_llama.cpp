@@ -4760,9 +4760,10 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {
     decltype(sparams.elb_params) elb_params = { { { }, "" } };
 
-    int32_t saved_duration;
+    int32_t saved_duration = 0;
     std::vector<std::string> saved_phrases;
     std::vector<float> saved_biases;
+    bool saved_is_range = false;
 
     for (auto line: string_split(content, "\n")) {
         string_strip(line);
@@ -4854,6 +4855,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     saved_duration = duration;
                     saved_phrases = std::move(phrases);
                     saved_biases = std::move(biases);
+                    saved_is_range = is_range;
                 } else {
                     elb_params.back().entries.push_back({ std::move(phrases), std::move(biases), duration, is_range });
                 }
@@ -4867,7 +4869,9 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
         }
         string_process_escapes(line);
         elb_params.back().exitword = std::move(line);
-        elb_params.back().entries.push_back({ saved_phrases, saved_biases, saved_duration });
+        if (!saved_phrases.empty() && !saved_biases.empty() && (saved_duration != 0)) {
+            elb_params.back().entries.push_back({ saved_phrases, saved_biases, saved_duration, saved_is_range });
+        }
         elb_params.push_back({ { }, "" });
     }
 
