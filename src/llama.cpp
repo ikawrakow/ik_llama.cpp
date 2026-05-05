@@ -4165,14 +4165,22 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     // set all ids as invalid (negative)
     std::fill(lctx.output_ids.begin(), lctx.output_ids.end(), -1);
 
-    if (has_mtp) {
-        // MTP uses a large output footprint, clear only the active region.
-        const size_t clear_size = (logits_size + embd_size) * sizeof(float);
-        if (clear_size > 0 && output_base) {
-            memset(output_base, 0, clear_size);
+    if (false) {
+        // What is the purpose of clearing the output buffer?
+        // When we are getting embeddings for models with large vocabularies this
+        // costs a non-negligible amount of time.
+        // The output buffer will get populated with meaningful results in llama_decode
+        // If it doesn't, the solution is not to just blindly zero the buffer
+        // but to fix the bug that causes meaningless results.
+        if (has_mtp) {
+            // MTP uses a large output footprint, clear only the active region.
+            const size_t clear_size = (logits_size + embd_size) * sizeof(float);
+            if (clear_size > 0 && output_base) {
+                memset(output_base, 0, clear_size);
+            }
+        } else {
+            ggml_backend_buffer_clear(lctx.buf_output, 0);
         }
-    } else {
-        ggml_backend_buffer_clear(lctx.buf_output, 0);
     }
 
     lctx.n_outputs = 0;
@@ -6387,6 +6395,38 @@ struct llama_context * llama_init_from_model(
         if (model->has_tensor_overrides() && cparams.split_mode_graph_scheduling) {
             LLAMA_LOG_INFO("XXXXXXXX Split Mode Graph Scheduling is FORCED despite tensor overrides due to user choice.\n");
             LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMGS and every possible tensor overrides.\n");
+        }
+    }
+
+    if (cparams.mtp && hparams.nextn_predict_layers > 0) {
+        const auto n_batch = cparams.n_batch;
+        const auto n_vocab = hparams.n_vocab;
+        const auto n_embd  = hparams.n_embd;
+
+        const size_t logits_size = n_vocab*n_batch;
+        const size_t embd_size   = n_embd*n_batch;
+
+        if (ctx->output_ids.empty()) {
+            // init, never resized afterwards
+            ctx->output_ids.resize(n_batch);
+        }
+
+        const size_t prev_size = ctx->buf_output ? ggml_backend_buffer_get_size(ctx->buf_output) : 0;
+        const size_t new_size  = (logits_size + embd_size) * sizeof(float);
+
+        // alloc only when more than the current capacity is required
+        if (!ctx->buf_output || prev_size < new_size) {
+            if (ctx->buf_output) {
+                ggml_backend_buffer_free(ctx->buf_output);
+                ctx->buf_output = nullptr;
+                ctx->logits = nullptr;
+                ctx->embd = nullptr;
+            }
+
+            ctx->buf_output = ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), new_size);
+            if (ctx->buf_output == nullptr) {
+                LLAMA_LOG_ERROR("%s: failed to allocate output buffer of size %.2f MiB\n", __func__, new_size / (1024.0 * 1024.0));
+            }
         }
     }
 

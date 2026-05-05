@@ -1472,13 +1472,19 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
     llama_batch mtp_batch = batch;
     if (is_prompt_warmup) {
         llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
+        // We don't need the logits when doing warmup
+        for (int i = 0; i < mtp_batch.n_tokens; ++i) {
+            mtp_batch.logits[i] = false;
+        }
+        // This is just in case to not run into empty tensor issues
+        mtp_batch.logits[mtp_batch.n_tokens-1] = true;
     } else {
         llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
+        for (int i = 0; i < mtp_batch.n_tokens; ++i) {
+            mtp_batch.logits[i] = true;
+        }
     }
 
-    for (int i = 0; i < mtp_batch.n_tokens; ++i) {
-        mtp_batch.logits[i] = true;
-    }
     llama_decode(ctx, mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 }
