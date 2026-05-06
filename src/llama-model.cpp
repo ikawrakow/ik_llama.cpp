@@ -1899,6 +1899,27 @@ bool llama_model_has_recurrent(const llama_model * model) {
     return llm_arch_is_hybrid(model->arch) || llm_arch_is_recurrent(model->arch);
 }
 
+bool llama_model_is_gemma4_mtp_assistant(const llama_model * model) {
+    return model && model->arch == LLM_ARCH_GEMMA4_MTP;
+}
+
+bool llama_is_gemma4_mtp_file(const char * path) {
+    if (!path || !*path) return false;
+    struct gguf_init_params params = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
+    struct gguf_context * ctx = gguf_init_from_file(path, params);
+    if (!ctx) return false;
+    bool result = false;
+    const int key_id = gguf_find_key(ctx, "general.architecture");
+    if (key_id >= 0) {
+        const char * arch = gguf_get_val_str(ctx, key_id);
+        if (arch && strcmp(arch, "gemma4_mtp") == 0) {
+            result = true;
+        }
+    }
+    gguf_free(ctx);
+    return result;
+}
+
 bool llama_model_is_split_mode_graph(const struct llama_model * model) {
     return model && (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN);
 }

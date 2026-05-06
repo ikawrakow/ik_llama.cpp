@@ -22,20 +22,9 @@ static void log_text(const gpt_params & params_base, const std::string & text) {
     }
 }
 
-static bool model_has_arch(const llama_model * model, const char * arch) {
-    if (model == nullptr || arch == nullptr) {
-        return false;
-    }
-
-    char model_arch[64] = { 0 };
-    const int rc = llama_model_meta_val_str(model, "general.architecture", model_arch, sizeof(model_arch));
-    return rc > 0 && std::strcmp(model_arch, arch) == 0;
-}
-
 static bool params_use_gemma4_external_mtp(const gpt_params & params_base) {
     return params_base.has_mtp &&
-        params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP &&
-        model_has_arch(params_base.speculative.model_dft, "gemma4_mtp");
+        llama_model_is_gemma4_mtp_assistant(params_base.speculative.model_dft);
 }
 
 static llama_context * get_slot_mtp_ctx(server_slot & slot, llama_context * ctx) {
@@ -3804,7 +3793,7 @@ void server_context::extend_context(const int32_t n_tokens) {
 static void restore_speculative_checkpoint(
         server_slot & slot, llama_context * ctx, llama_model * model,
         const std::vector<llama_token> & ids, int n_draft,
-    const std::vector<float> & mtp_hidden_state_pre, int32_t mtp_n_past_base) {
+        const std::vector<float> & mtp_hidden_state_pre, int32_t mtp_n_past_base) {
     if (slot.spec_ckpt.per_step_enabled) {
         const int step = (int)ids.size() - 1;
         llama_spec_ckpt_restore(ctx, slot.id, slot.spec_ckpt.n_past, step);

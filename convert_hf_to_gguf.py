@@ -3413,6 +3413,15 @@ class Gemma4AssistantModel(Gemma4BaseModel):
 
         mapped_name = self._root_tensor_map.get(name)
         if mapped_name is not None:
+            if mapped_name == "mtp_token_ordering.weight":
+                n_vocab = int(data_torch.shape[0])
+                n_centroids = int(self.hparams.get("num_centroids", 2048))
+                tokens_per_centroid = n_vocab // n_centroids
+                inv_ordering = torch.zeros(n_vocab, dtype=torch.int32)
+                tok_ord_i32 = data_torch.to(dtype=torch.int64)
+                inv_ordering[tok_ord_i32] = torch.arange(n_vocab, dtype=torch.int32)
+                token_to_centroid = (inv_ordering // tokens_per_centroid).to(dtype=torch.int32)
+                return [(mapped_name, token_to_centroid)]
             return [(mapped_name, data_torch)]
 
         prefix = "model.layers."

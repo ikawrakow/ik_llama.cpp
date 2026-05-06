@@ -4160,14 +4160,15 @@ bool create_tensors_helper::create_tensors() {
         use_mmap_buffer &= !has_buft_overrides;
     }
 
-    if (model.arch == LLM_ARCH_GEMMA4 && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
-        bool supported = true;
-        if (model.tok_embd_per_layer) {
-            supported = false;
-        }
-        if (!supported) {
+    {
+        const bool unsupported =
+            (model.arch == LLM_ARCH_GEMMA4_MTP) ||
+            (model.arch == LLM_ARCH_GEMMA4 && model.tok_embd_per_layer);
+        if (unsupported && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
             LLAMA_LOG_WARN("\n=========================================================\n");
-            LLAMA_LOG_WARN("Split mode 'graph' is not supported for this Gemma4 variant\n");
+            LLAMA_LOG_WARN("Split mode 'graph' is not supported for %s\n",
+                           model.arch == LLM_ARCH_GEMMA4_MTP ? "Gemma 4 MTP assistant"
+                                                              : "this Gemma4 variant");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
             model.split_mode = LLAMA_SPLIT_MODE_LAYER;

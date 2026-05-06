@@ -516,26 +516,10 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     ggml_build_forward_expand(gf, mtp_embd);
 
     ggml_tensor * logits;
-    // For E2B/E4B variants
-    if (hparams.mtp_use_ordered_embeddings && model.mtp_centroids && model.mtp_token_ordering) {
-        ggml_tensor * cur_normed = llm_build_norm(ctx0, cur, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
-        cb(cur_normed, "result_norm", -1);
-
-        ggml_tensor * centroid_scores = ggml_mul_mat(ctx0, model.mtp_centroids, cur_normed);
-        cb(centroid_scores, "centroid_scores", -1);
-
-        ggml_tensor * cs_t = ggml_cont(ctx0, ggml_transpose(ctx0, centroid_scores));
-
-        ggml_tensor * tok_ord = (model.mtp_token_ordering->type == GGML_TYPE_I32)
-            ? model.mtp_token_ordering
-            : ggml_cast(ctx0, model.mtp_token_ordering, GGML_TYPE_I32);
-
-        ggml_tensor * logits_t = ggml_get_rows(ctx0, cs_t, tok_ord);
-        cb(logits_t, "logits_t", -1);
-
-        logits = ggml_cont(ctx0, ggml_transpose(ctx0, logits_t));
-        cb(logits, "result_output", -1);
-    } else {
+    // E2B/E4B: The centroid/token-ordering tensors are kept in the GGUF for future use but
+    // not required for correct inference — the full-vocab matmul against tok_embd
+    // (model.output = model.tok_embd) yields valid per-token logits.
+    {
         logits = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
         cb(logits, "result_output", -1);
     }
