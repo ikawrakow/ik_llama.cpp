@@ -2,6 +2,25 @@
 #include "../llama-model.h"
 #include "../llama-context.h"
 
+static int gemma4_mtp_target_kv_layer(const llama_hparams & mtp_hparams, const llama_hparams & target_hparams, int mtp_il) {
+    GGML_ASSERT(mtp_il >= 0 && mtp_il < (int) mtp_hparams.n_layer);
+
+    const bool is_sliding = mtp_hparams.swa_layers[mtp_il] != 0;
+    const int target_n_kv_layer = target_hparams.n_layer_kv_from_start > 0
+        ? std::min<int>((int) target_hparams.n_layer, target_hparams.n_layer_kv_from_start)
+        : (int) target_hparams.n_layer;
+
+    int target_il = -1;
+    for (int il = 0; il < target_n_kv_layer; ++il) {
+        if ((target_hparams.swa_layers[il] != 0) == is_sliding) {
+            target_il = il;
+        }
+    }
+
+    GGML_ASSERT(target_il >= 0 && "Gemma4 MTP could not find a matching target KV layer");
+    return target_il;
+}
+
 static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_context & lctx, ggml_context * ctx0,
         ggml_tensor * inpL, ggml_tensor * inp_pos, ggml_tensor * inp_out_ids,
         ggml_tensor * KQ_mask, ggml_tensor * KQ_mask_swa, int n_tokens,  const llm_build_cb & cb) {
@@ -371,6 +390,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     const int64_t n_backbone      = hparams.mtp_backbone_n_embd;
     const int32_t n_layer         = hparams.n_layer;
     const bool    has_target_ctx  = lctx.mtp_target_ctx != nullptr && lctx.mtp_target_model != nullptr;
+    const llama_hparams * target_hparams = has_target_ctx ? &lctx.mtp_target_model->hparams : nullptr;
 
     GGML_ASSERT(n_backbone > 0);
 
@@ -412,6 +432,10 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
 
     ggml_tensor * KQ_mask = nullptr;
     ggml_tensor * KQ_mask_swa = nullptr;
+    ggml_tensor * frozen_k_swa = nullptr;
+    ggml_tensor * frozen_v_swa = nullptr;
+    ggml_tensor * frozen_k_full = nullptr;
+    ggml_tensor * frozen_v_full = nullptr;
     if (has_target_ctx) {
         const int64_t n_mask_tokens = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
         lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, target_n_kv, n_mask_tokens);
@@ -419,7 +443,8 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         ggml_set_input(lctx.inp_KQ_mask);
         KQ_mask = lctx.inp_KQ_mask;
 
-        if (hparams.n_swa > 0) {
+        const uint32_t target_n_swa = target_hparams ? target_hparams->n_swa : hparams.n_swa;
+        if (target_n_swa > 0) {
             lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, target_n_kv, n_mask_tokens);
             cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
             ggml_set_input(lctx.inp_KQ_mask_swa);
@@ -434,7 +459,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         const float freq_base_l  = is_sliding ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
         const float freq_scale_l = is_sliding ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
         const int   n_rot_l      = is_sliding ? hparams.n_rot_swa : hparams.n_rot;
-        const int   n_swa        = is_sliding ? hparams.n_swa : 0;
+        const int   n_swa        = is_sliding ? (target_hparams ? target_hparams->n_swa : hparams.n_swa) : 0;
         const int   n_embd_head  = hparams.n_embd_head_k(il);
         const int   n_head       = hparams.n_head(il);
         ggml_tensor * KQ_mask_l  = is_sliding ? KQ_mask_swa : KQ_mask;
@@ -452,8 +477,12 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         cb(Qcur, "Qcur_rope", il);
 
         if (has_target_ctx) {
+            const int target_il = gemma4_mtp_target_kv_layer(hparams, *target_hparams, il);
+            ggml_tensor ** frozen_k = is_sliding ? &frozen_k_swa : &frozen_k_full;
+            ggml_tensor ** frozen_v = is_sliding ? &frozen_v_swa : &frozen_v_full;
             cur = llm_build_kv(ctx0, lctx, *target_kv, gf, model.layers[il].wo, model.layers[il].bo,
-                    nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa);
+                    nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa, target_il,
+                    frozen_k, frozen_v);
         } else {
             cur = ggml_reshape_2d(ctx0, Qcur, n_embd_head*n_head, n_tokens);
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);

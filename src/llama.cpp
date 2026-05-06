@@ -565,6 +565,7 @@ void llama_context::reset_scheduler() {
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
     if (kv_self.save_per_step_ssm) return false;
+    if (model.arch == LLM_ARCH_GEMMA4_MTP && mtp_target_ctx != nullptr) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     //if (u_batch.n_tokens > 1) return false;
@@ -4517,7 +4518,8 @@ static int llama_decode_internal(
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
             //if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
-            if (u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
+            if (u_batch.embd == nullptr && lctx.cparams.graph_reuse &&
+                    !(lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)) {
                 prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
                         (int)u_batch.n_tokens, cparams.mtp_op_type, gf});

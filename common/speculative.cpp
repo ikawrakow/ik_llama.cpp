@@ -157,6 +157,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
     llama_context * ctx_mtp = nullptr;
     common_sampler * smpl;
+    bool constant_draft_positions = false;
 
     common_speculative_state_mtp(
             enum common_speculative_type type,
@@ -188,6 +189,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_mtp(ctx_mtp)
+        , constant_draft_positions(true)
     {
         struct common_params_sampling params;
         params.samplers_sequence = {
@@ -233,7 +235,8 @@ struct common_speculative_state_mtp : public common_speculative_state {
             params.p_min,
             id_last,
             n_past,
-            seq_id
+            seq_id,
+            constant_draft_positions
         );
     }
 
@@ -1408,7 +1411,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     float p_min,
     llama_token id_last,
     int32_t n_past,
-    llama_seq_id seq_id) {
+    llama_seq_id seq_id,
+    bool constant_draft_positions) {
 
     llama_tokens drafts;
     drafts.reserve(n_draft);
@@ -1443,7 +1447,8 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     for (int i = i0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
-        common_batch_add(mtp_batch, current_input_id, current_n_past, {seq_id}, true);
+        const int32_t draft_pos = constant_draft_positions ? n_past : current_n_past;
+        common_batch_add(mtp_batch, current_input_id, draft_pos, {seq_id}, true);
 
         if (llama_decode(ctx, mtp_batch) != 0) {
             break;
