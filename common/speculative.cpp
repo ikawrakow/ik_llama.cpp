@@ -22,6 +22,20 @@
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
+static bool common_model_has_arch(const llama_model * model, const char * arch) {
+    if (model == nullptr || arch == nullptr) {
+        return false;
+    }
+
+    char model_arch[64] = { 0 };
+    const int rc = llama_model_meta_val_str(model, "general.architecture", model_arch, sizeof(model_arch));
+    return rc > 0 && std::strcmp(model_arch, arch) == 0;
+}
+
+static bool common_is_gemma4_mtp_assistant(const llama_model * model) {
+    return common_model_has_arch(model, "gemma4_mtp");
+}
+
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
@@ -185,11 +199,12 @@ struct common_speculative_state_mtp : public common_speculative_state {
     common_speculative_state_mtp(
             enum common_speculative_type type,
             llama_context * ctx_tgt,
-            llama_context * ctx_mtp)
+            llama_context * ctx_mtp,
+            bool constant_draft_positions)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_mtp(ctx_mtp)
-        , constant_draft_positions(true)
+        , constant_draft_positions(constant_draft_positions)
     {
         struct common_params_sampling params;
         params.samplers_sequence = {
@@ -1129,9 +1144,11 @@ common_speculative * common_speculative_init(
             case COMMON_SPECULATIVE_TYPE_MTP: {
                 std::unique_ptr<common_speculative_state_mtp> mtp_state;
                 if (ctx_dft) {
+                    const bool use_constant_draft_positions = common_is_gemma4_mtp_assistant(llama_get_model(ctx_dft));
                     mtp_state = std::make_unique<common_speculative_state_mtp>(config.type,
                         /* .ctx_tgt      = */ ctx_tgt,
-                        /* .ctx_mtp      = */ ctx_dft
+                        /* .ctx_mtp      = */ ctx_dft,
+                        /* .constant_draft_positions = */ use_constant_draft_positions
                     );
                     ctx_dft = nullptr;
                 } else {
