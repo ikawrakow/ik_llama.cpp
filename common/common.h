@@ -777,3 +777,5 @@ std::string string_format(const char* fmt, ...);
 //
 
 std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_rule(std::string argstr);
+
+void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams);

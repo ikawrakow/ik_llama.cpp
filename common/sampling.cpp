@@ -162,6 +162,9 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
+    result->elb_idx = 0;
+    result->elb_search_pos = 0;
+
     return result;
 }
 
@@ -605,6 +608,10 @@ static llama_token_data_array llama_sampling_prepare_impl(
         llama_sample_apply_guidance(ctx_main, logits, logits_guidance, params.cfg_scale);
     }
 
+    if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
+        common_expiring_logit_bias_apply(ctx_sampling, logits);
+    }
+
     cur.resize(n_vocab);
 
     if ((ctx_sampling->server_biases != nullptr) && (ctx_sampling->server_biases->size() == n_vocab)) {
@@ -699,6 +706,10 @@ void common_sampler_accept(
     if (ctx_sampling->smpl) {
         llama_sampler_dry_accept(ctx_sampling->smpl, token);
     }
+
+    if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
+        common_expiring_logit_bias_accept(ctx_sampling, ctx_main);
+    }
 }
 
 llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort) {
@@ -745,6 +756,8 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     for (; i < draft.size(); i++) {
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
 
+        gsmpl->drafted_text += common_token_to_piece(ctx, id, true);
+
         common_sampler_accept(gsmpl, ctx, id, true);
 
         result.push_back(id);
@@ -757,6 +770,8 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     if (i == draft.size()) {
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
 
+        gsmpl->drafted_text += common_token_to_piece(ctx, id, true);
+
         common_sampler_accept(gsmpl, ctx, id, true);
 
         result.push_back(id);
@@ -765,8 +780,85 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     return result;
 }
 
+void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float* logits) {
+    auto index_first_inactive = [](auto countup, auto& tokens) {
+        return std::distance(
+            tokens.begin(),
+            std::upper_bound(tokens.begin(), tokens.end(), countup, [](const auto& countup, const auto& token) {
+                return countup > token.duration;
+            })
+        );
+    };
 
+    const auto& elb = ctx_sampling->elb_states[ctx_sampling->elb_idx];
 
+    std::string combined_text;
+    const std::string* search_window = &combined_text;
+    if (!ctx_sampling->drafted_text.empty()) {
+        // add speculated tokens
+        combined_text = ctx_sampling->to_generated_text != nullptr ? (
+            ctx_sampling->to_generated_text->substr(std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - elb.max_cond_len))
+        ) : "" + ctx_sampling->drafted_text;
+    } else if (ctx_sampling->to_generated_text != nullptr) {
+        search_window = ctx_sampling->to_generated_text;
+    }
+
+    if (!search_window->empty() && !elb.other_tokens.empty() && (elb.other_tokens.front().duration > elb.countup)) {
+        const auto ifi = index_first_inactive(elb.countup, elb.other_tokens);
+        for (size_t j = 0; j < ifi; ++j) {
+            const auto& [id, bias, _, cond] = elb.other_tokens[j];
+            if (string_ends_with(*search_window, cond)) {
+                logits[id] += bias;
+            }
+        }
+    }
+
+    if (!elb.first_tokens.empty() && (elb.first_tokens.front().duration > elb.countup)) {
+        const auto ifi = index_first_inactive(elb.countup, elb.first_tokens);
+        if (search_window->empty()) {
+            // empty case here
+            for (size_t j = 0; j < ifi; ++j) {
+                logits[elb.first_tokens[j].id] += elb.first_tokens[j].bias;
+            }
+        } else {
+            for (size_t j = 0; j < ifi; ++j) {
+                const auto& [id, bias, _, cond] = elb.first_tokens[j];
+                // no bias if seen (probably too late)
+                if (!string_ends_with(*search_window, cond)) {
+                    logits[id] += bias;
+                }
+            }
+        }
+    }
+}
+
+void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, struct llama_context * ctx_main) {
+    if (ctx_sampling->to_generated_text == nullptr) {
+        // prompt processing
+        return;
+    }
+
+    auto& elb = ctx_sampling->elb_states[ctx_sampling->elb_idx];
+    const int32_t exitword_len = elb.exitword.length();
+    if ((elb.delay > ++elb.countup) || (exitword_len == 0)) {
+        return;
+    }
+
+    const std::string search_window = ctx_sampling->to_generated_text->substr(std::min(
+        ctx_sampling->to_generated_text->length(),
+        size_t(ctx_sampling->elb_search_pos)
+    )) + common_token_to_piece(ctx_main, ctx_sampling->prev.back(), true);
+
+    const auto exitword_pos = search_window.find(elb.exitword);
+    if (exitword_pos != std::string::npos) {
+        ++ctx_sampling->elb_idx;
+        // no double counting characters that matched
+        ctx_sampling->elb_search_pos += exitword_pos + exitword_len;
+    } else {
+        // move search position to include next token
+        ctx_sampling->elb_search_pos += std::max(0, int32_t(search_window.length()) - exitword_len + 1);
+    }
+}
 
 
 template <>

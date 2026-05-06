@@ -128,9 +128,11 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         }
 
         if (lctx.cparams.mtp) {
-            struct ggml_tensor * embd_copy = ggml_dup(ctx0, inpL);
-            cb(embd_copy, "result_mtp_embd", -1);
-            ggml_set_output(embd_copy);
+            //struct ggml_tensor * embd_copy = ggml_dup(ctx0, inpL);
+            //cb(embd_copy, "result_mtp_embd", -1);
+            //ggml_set_output(embd_copy);
+            cb(inpL, "result_mtp_embd", -1);
+            ggml_set_output(inpL);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
@@ -153,7 +155,7 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    struct ggml_tensor * inp_out_ids = (n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
+    struct ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
 
     ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
 
@@ -210,10 +212,12 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
 
-    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
+    // As far as I can tell this was wrong. We need the FFN output, and not the normalized result.
+    //cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "result_norm", -1);
 
-    cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
+    //cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
+    cur = build_output(lctx, ctx0, cur, model.output, mtp_layer.nextn.shared_head_norm, cb);
     cb(cur, "result_output", -1);
 
     return cur;

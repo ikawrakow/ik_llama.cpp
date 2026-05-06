@@ -167,6 +167,9 @@ struct server_slot {
     struct common_params_sampling sparams;
     common_sampler * ctx_sampling = nullptr;
 
+    // expiring logit bias
+    decltype(ctx_sampling->elb_states) elb_prev_states;
+
     bool has_mtp = false;
     bool use_gemma4_external_mtp = false;
     std::vector<float> mtp_hidden_state;
@@ -251,6 +254,7 @@ struct server_context {
     std::vector<control_vector_container> control_vectors;
 
     std::vector<std::string> vocab_pieces;
+    size_t max_piece_len = 0;
 
     gpt_params params_base;
 

@@ -70,7 +70,8 @@ delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_
         GGML_ASSERT((uint32_t) s < qnext_state_slots);
     }
 
-    save_per_step_states = lctx.kv_self.save_per_step_ssm && batch.n_tokens > 1;
+    int max_per_step = lctx.kv_self.save_per_step_ssm ? std::min<int>(8, lctx.kv_self.ckpt.per_step_max_allocated) : 0;
+    save_per_step_states = lctx.kv_self.save_per_step_ssm && batch.n_tokens > 1 && batch.n_tokens <= max_per_step;
 }
 
 delta_net::~delta_net() = default;
