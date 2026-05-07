@@ -52,5 +52,14 @@
 #if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
     #define HAVE_VNNI256
 #endif
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+    #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_epi32
+    #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_epi32
+    #define ggml_mm_dpbusd_epi32    _mm_dpbusd_epi32
+#elif defined(__AVXVNNI__)
+    #define ggml_mm256_dpbusd_epi32 _mm256_dpbusd_avx_epi32
+    #define ggml_mm256_dpwssd_epi32 _mm256_dpwssd_avx_epi32
+    #define ggml_mm_dpbusd_epi32    _mm_dpbusd_avx_epi32
+#endif
 #endif
 
