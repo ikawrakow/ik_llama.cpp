@@ -4,6 +4,7 @@
 #include "common.h"
 #include "reasoning-budget.cpp"
 
+#include <cstdlib>
 #include <limits>
 #include <random>
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
@@ -922,13 +923,76 @@ static bool common_sampler_speculative_top1_avx2(const float * logits, const int
         }
     }
     for (; i < n_vocab; ++i) {
-
         if (logits[i] > max_val) {
             max_val = logits[i]; best_id = i;
         }
     }
     return true;
 }
+
+__attribute__((target("avx2")))
+static bool common_sampler_speculative_top2_avx2(
+        const float * logits,
+        const int     n_vocab,
+        int &         best_id,
+        float &       max_val,
+        float &       second_val) {
+    if (n_vocab < 8) {
+        return false;
+    }
+
+    __m256  max_v    = _mm256_loadu_ps(logits);
+    __m256  second_v = _mm256_set1_ps(-std::numeric_limits<float>::infinity());
+    __m256i id_v     = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+
+    const __m256i step = _mm256_set1_epi32(8);
+    __m256i cur_id = _mm256_add_epi32(id_v, step);
+
+    int i = 8;
+    for (; i + 7 < n_vocab; i += 8) {
+        const __m256 x = _mm256_loadu_ps(logits + i);
+        const __m256 old_max = max_v;
+        const __m256 gt_max = _mm256_cmp_ps(x, max_v, _CMP_GT_OQ);
+
+        const __m256 second_no_max = _mm256_max_ps(second_v, x);
+        second_v = _mm256_blendv_ps(second_no_max, old_max, gt_max);
+        max_v = _mm256_blendv_ps(max_v, x, gt_max);
+        id_v = _mm256_blendv_epi8(id_v, cur_id, _mm256_castps_si256(gt_max));
+        cur_id = _mm256_add_epi32(cur_id, step);
+    }
+
+    alignas(32) float max_buf[8];
+    alignas(32) float second_buf[8];
+    alignas(32) int id_buf[8];
+    _mm256_store_ps(max_buf, max_v);
+    _mm256_store_ps(second_buf, second_v);
+    _mm256_store_si256((__m256i *) id_buf, id_v);
+
+    best_id = id_buf[0];
+    max_val = max_buf[0];
+    second_val = second_buf[0];
+
+    auto consider = [&](const float value, const int id) {
+        if (value > max_val) {
+            second_val = max_val;
+            max_val = value;
+            best_id = id;
+        } else if (value > second_val) {
+            second_val = value;
+        }
+    };
+
+    for (int j = 1; j < 8; ++j) {
+        consider(max_buf[j], id_buf[j]);
+        consider(second_buf[j], -1);
+    }
+    for (; i < n_vocab; ++i) {
+        consider(logits[i], i);
+    }
+
+    return true;
+}
+
 __attribute__((target("avx2,fma")))
 static inline __m256 v_expf(__m256 x) {
   const __m256 r = _mm256_set1_ps(0x1.8p23f);
@@ -998,6 +1062,7 @@ static float prob_avx2(int n, const float * logits, float max_val) {
     return 1.0f/sumf;
 }
 #endif
+
 static float prob_scalar(int n, const float * logits, float max_val) {
     double sum_exp = 0.0;
     for (int i = 0; i < n; ++i) {
@@ -1019,31 +1084,51 @@ llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, str
 
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
 
+    static const bool fast_prob = std::getenv("IK_SPEC_FAST_P_MIN") != nullptr;
+    const bool track_second = out_prob && fast_prob;
+
     int best_id = 0;
+    float second_val = -std::numeric_limits<float>::infinity();
     float max_val = logits[0];
+
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
     static const bool has_avx2 = __builtin_cpu_supports("avx2");
-    if (has_avx2 && common_sampler_speculative_top1_avx2(logits, n_vocab, best_id, max_val)) {
-        if (out_prob) {
-            static const bool has_fma = __builtin_cpu_supports("fma");
-            if (has_fma) {
-                *out_prob = prob_avx2(n_vocab, logits, max_val);
-            } else {
-                *out_prob = prob_scalar(n_vocab, logits, max_val);
+    if (has_avx2) {
+        if (track_second) {
+            if (common_sampler_speculative_top2_avx2(logits, n_vocab, best_id, max_val, second_val)) {
+                const double margin = (double)(max_val - second_val);
+                *out_prob = (float)(1.0 / (1.0 + exp(-margin)));
+                return best_id;
             }
+        } else if (common_sampler_speculative_top1_avx2(logits, n_vocab, best_id, max_val)) {
+            if (out_prob) {
+                static const bool has_fma = __builtin_cpu_supports("fma");
+                *out_prob = has_fma ? prob_avx2(n_vocab, logits, max_val) : prob_scalar(n_vocab, logits, max_val);
+            }
+            return best_id;
         }
-        return best_id;
     }
 #endif
+
     for (int i = 1; i < n_vocab; ++i) {
         if (logits[i] > max_val) {
+            if (track_second) {
+                second_val = max_val;
+            }
             max_val = logits[i];
             best_id = i;
+        } else if (track_second && logits[i] > second_val) {
+            second_val = logits[i];
         }
     }
 
     if (out_prob) {
-        *out_prob = prob_scalar(n_vocab, logits, max_val);
+        if (fast_prob) {
+            const double margin = (double)(max_val - second_val);
+            *out_prob = (float)(1.0 / (1.0 + exp(-margin)));
+        } else {
+            *out_prob = prob_scalar(n_vocab, logits, max_val);
+        }
     }
 
     return best_id;

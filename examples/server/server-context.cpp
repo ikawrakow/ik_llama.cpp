@@ -138,25 +138,25 @@ static void set_external_mtp_hidden_from_rows(server_slot & slot, llama_context 
     cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, rows, n_embd);
 }
 
-void server_speculative_checkpoint::clear() {
+void server_speculative_checkpoint::clear(bool free_sampler) {
     valid = false;
     per_step_enabled = false;
     n_past = 0;
     sampled = LLAMA_TOKEN_NULL;
 
-    if (sampler != nullptr) {
+    if (free_sampler && sampler != nullptr) {
         common_sampler_free(sampler);
         sampler = nullptr;
     }
 }
 
 static void discard_speculative_checkpoint(server_slot & slot, llama_context * ctx) {
-    slot.spec_ckpt.clear();
+    slot.spec_ckpt.clear(false);
     llama_spec_ckpt_discard(ctx);
 }
 
 static bool save_speculative_checkpoint(server_slot & slot, llama_model * model, llama_context * ctx, int ckpt_mode) {
-    slot.spec_ckpt.clear();
+    slot.spec_ckpt.clear(false);
     slot.spec_ckpt.n_past = slot.n_past - (int32_t)(slot.drafted.size() + 1);
     slot.spec_ckpt.sampled = slot.sampled;
 
@@ -173,10 +173,12 @@ static bool save_speculative_checkpoint(server_slot & slot, llama_model * model,
         return false;
     }
 
-    slot.spec_ckpt.sampler = common_sampler_init(model, slot.sparams);
     if (slot.spec_ckpt.sampler == nullptr) {
-        discard_speculative_checkpoint(slot, ctx);
-        return false;
+        slot.spec_ckpt.sampler = common_sampler_init(model, slot.sparams);
+        if (slot.spec_ckpt.sampler == nullptr) {
+            discard_speculative_checkpoint(slot, ctx);
+            return false;
+        }
     }
 
     common_sampler_clone(slot.ctx_sampling, slot.spec_ckpt.sampler);
@@ -4167,10 +4169,11 @@ void server_context::speculative_decoding_accept() {
         slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
 
         // update how many tokens out of those tested were accepted
-        slot.n_draft_accepted += ids.size() - 1;
+        const uint16_t n_draft_accepted = ids.empty() ? 0 : (uint16_t) (ids.size() - 1);
+        slot.n_draft_accepted += n_draft_accepted;
 
         // inform the speculative decoding about the number of accepted tokens
-        common_speculative_accept(slot.spec, ids.size() - 1);
+        common_speculative_accept(slot.spec, n_draft_accepted);
 
         // rollback to the state before sampling the draft tokens
         slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - n_draft);
@@ -4192,6 +4195,8 @@ void server_context::speculative_decoding_accept() {
             llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
             discard_speculative_checkpoint(slot, ctx);
         }
+
+        common_speculative_feedback(slot.spec, n_draft_accepted);
 
         for (size_t i = 0; i < ids.size(); ++i) {
             completion_token_output result;

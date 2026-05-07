@@ -1343,6 +1343,15 @@ struct mtp_last_embd {
     int   last_id = -1;
 };
 
+struct mtp_accept_profile {
+    size_t  n_calls = 0;
+    size_t  n_tokens = 0;
+    int64_t t_batch_us = 0;
+    int64_t t_update_us = 0;
+    int64_t t_sample_us = 0;
+    int64_t t_free_us = 0;
+};
+
 // Hopefully never called concurrently from multiple threads
 static mtp_last_embd & mtp_get_last_embd(const llama_context * ctx) {
     static std::unordered_map<const llama_context *, mtp_last_embd> map;
@@ -1352,6 +1361,29 @@ static mtp_last_embd & mtp_get_last_embd(const llama_context * ctx) {
         last.embd.resize(n_embd);
     }
     return last;
+}
+
+static mtp_accept_profile & mtp_get_accept_profile(const llama_context * ctx) {
+    static std::unordered_map<const llama_context *, mtp_accept_profile> map;
+    return map[ctx];
+}
+
+static void mtp_print_accept_profile(const llama_context * ctx) {
+    if (!ctx) {
+        return;
+    }
+    const auto & prof = mtp_get_accept_profile(ctx);
+    if (prof.n_calls == 0) {
+        return;
+    }
+
+    LOG_INF("statistics mtp accept: #calls = %zu, #tokens = %zu, batch = %.3f ms, update = %.3f ms, sample = %.3f ms, free = %.3f ms\n",
+            prof.n_calls,
+            prof.n_tokens,
+            prof.t_batch_us / 1000.0,
+            prof.t_update_us / 1000.0,
+            prof.t_sample_us / 1000.0,
+            prof.t_free_us / 1000.0);
 }
 
 llama_tokens common_speculative_draft(
@@ -1399,15 +1431,6 @@ llama_tokens common_speculative_draft(
 }
 
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
-    if (spec->tuner && spec->tuner->enabled && spec->t_step_start_us > 0) {
-        int64_t step_time_us = ggml_time_us() - spec->t_step_start_us;
-        double step_tps = (step_time_us > 100)
-            ? (n_accepted + 1.0) * 1e6 / (double)step_time_us
-            : 0.0;
-        spec->tuner->accept_feedback(n_accepted, spec->last_n_drafted, step_tps);
-        spec->t_step_start_us = 0;
-    }
-
     common_speculative_state * impl = spec->curr_impl;
 
     if (!impl) {
@@ -1423,6 +1446,17 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
 
         impl->accept(n_accepted);
         impl->n_call_accept++;
+    }
+}
+
+void common_speculative_feedback(common_speculative * spec, uint16_t n_accepted) {
+    if (spec->tuner && spec->tuner->enabled && spec->t_step_start_us > 0) {
+        int64_t step_time_us = ggml_time_us() - spec->t_step_start_us;
+        double step_tps = (step_time_us > 100)
+            ? (n_accepted + 1.0) * 1e6 / (double)step_time_us
+            : 0.0;
+        spec->tuner->accept_feedback(n_accepted, spec->last_n_drafted, step_tps);
+        spec->t_step_start_us = 0;
     }
 }
 
@@ -1451,6 +1485,13 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                 impl->n_gen_tokens,
                 impl->n_acc_tokens,
                 str_perf.c_str());
+
+        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
+            const auto * mtp_state = dynamic_cast<const common_speculative_state_mtp *>(impl.get());
+            if (mtp_state) {
+                mtp_print_accept_profile(mtp_state->ctx_mtp);
+            }
+        }
     }
 
     if (spec->tuner && spec->tuner->enabled && slot_tps > 0.0 && n_decoded > 0) {
@@ -1672,13 +1713,22 @@ void mtp_accept_tokens(
         return;
     }
 
+    auto & prof = mtp_get_accept_profile(ctx);
+    prof.n_calls++;
+    prof.n_tokens += ids.size();
+
+    const int64_t t_batch_start_us = ggml_time_us();
     llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
     for (size_t i = 0; i < ids.size(); ++i) {
         common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
     }
+    prof.t_batch_us += ggml_time_us() - t_batch_start_us;
 
+    const int64_t t_update_start_us = ggml_time_us();
     mtp_update_kv_cache(ctx, accepted_batch, false);
+    prof.t_update_us += ggml_time_us() - t_update_start_us;
 
+    const int64_t t_sample_start_us = ggml_time_us();
     auto & last = mtp_get_last_embd(ctx);
     auto embd = llama_get_embeddings_ith(ctx, ids.size() - 1);
     if (embd) {
@@ -1686,6 +1736,9 @@ void mtp_accept_tokens(
         llama_set_draft_input_hidden_state(ctx, last.embd.data());
         last.last_id = common_sampler_sample_speculative(nullptr, ctx, ids.size() - 1, &last.prob);
     }
+    prof.t_sample_us += ggml_time_us() - t_sample_start_us;
 
+    const int64_t t_free_start_us = ggml_time_us();
     llama_batch_free(accepted_batch);
+    prof.t_free_us += ggml_time_us() - t_free_start_us;
 }

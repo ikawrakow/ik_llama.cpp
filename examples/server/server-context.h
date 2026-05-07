@@ -29,7 +29,7 @@ struct server_speculative_checkpoint {
     llama_token sampled = LLAMA_TOKEN_NULL;
     common_sampler * sampler = nullptr; // saved sampler state
 
-    void clear();
+    void clear(bool free_sampler = true);
 };
 
 struct server_slot {

@@ -14,6 +14,8 @@ struct spec_tuner_coord {
     int current_idx = 0;
     int best_idx    = 0;
     int user_idx    = 0;
+    int min_samples_for_best = 1;
+    double min_best_delta = 0.0;
 
     int select_epsilon_greedy(double epsilon) const;
 
@@ -22,6 +24,7 @@ struct spec_tuner_coord {
     void reset_scores();
 
     void build_grid_float(float lo, float hi, int n_points, float user_value);
+    void build_values_float(const std::vector<float> & values, float user_value);
     void build_grid_int(int lo, int hi, int step, int user_value);
     int  find_nearest_arm(float value) const;
 };

@@ -36,9 +36,12 @@ void spec_tuner_coord::update(double reward) {
     arm.N += 1;
     arm.Q += (reward - arm.Q) / arm.N;
 
-    double best_Q = -1e30;
+    double best_Q = arms[best_idx].N > 0 ? arms[best_idx].Q : -1e30;
     for (int i = 0; i < (int)arms.size(); i++) {
-        if (arms[i].N > 0 && arms[i].Q > best_Q) {
+        if (i == best_idx) {
+            continue;
+        }
+        if (arms[i].N >= min_samples_for_best && arms[i].Q > best_Q + min_best_delta) {
             best_Q   = arms[i].Q;
             best_idx = i;
         }
@@ -69,6 +72,19 @@ void spec_tuner_coord::build_grid_float(float lo, float hi, int n_points, float 
         std::sort(arms.begin(), arms.end(), [](const spec_tuner_arm & a, const spec_tuner_arm & b) {
             return a.value < b.value;
         });
+    }
+}
+
+void spec_tuner_coord::build_values_float(const std::vector<float> & values, float user_value) {
+    arms.clear();
+    std::vector<float> sorted = values;
+    sorted.push_back(user_value);
+    std::sort(sorted.begin(), sorted.end());
+
+    for (float v : sorted) {
+        if (arms.empty() || std::fabs(arms.back().value - v) > 1e-6f) {
+            arms.push_back({v, 0.0, 0});
+        }
     }
 }
 
@@ -131,13 +147,35 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
     t_tuner_us = 0;
     last_n_drafted = 0;
 
+    const float mtp_auto_seed_p_min = user_params.p_min > 0.0f ? user_params.p_min : 0.75f;
+
+    if (type == COMMON_SPECULATIVE_TYPE_MTP) {
+        epsilon   = 0.08;
+        log_every = 25;
+    }
+
     // all types get n_max
     // For simplicity we will create a fixed grid of possible values
     {
         spec_tuner_coord coord;
         coord.name = "n_max";
-        int hi = std::max(16, (int)user_params.n_max);
-        coord.build_grid_int(1, hi, 1, user_params.n_max);
+        if (type == COMMON_SPECULATIVE_TYPE_MTP) {
+            // Multi-token prediction can recursively draft beyond one token, but Qwen3 MTP
+            // currently wins by tuning confidence while keeping the user's draft width.
+            coord.build_grid_int(user_params.n_max, user_params.n_max, 1, user_params.n_max);
+        } else {
+            int hi = std::max(16, (int)user_params.n_max);
+            coord.build_grid_int(1, hi, 1, user_params.n_max);
+        }
+        coords.push_back(std::move(coord));
+    }
+
+    if (type == COMMON_SPECULATIVE_TYPE_MTP) {
+        spec_tuner_coord coord;
+        coord.name = "p_min";
+        coord.min_samples_for_best = 4;
+        coord.min_best_delta = 0.25;
+        coord.build_values_float({0.65f, 0.70f, 0.75f}, mtp_auto_seed_p_min);
         coords.push_back(std::move(coord));
     }
 
@@ -185,7 +223,7 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
     for (auto & coord : coords) {
         float user_val = 0.0f;
         if      (coord.name == "n_max")                user_val = (float)user_params.n_max;
-        else if (coord.name == "p_min")                user_val = user_params.p_min;
+        else if (coord.name == "p_min")                user_val = (type == COMMON_SPECULATIVE_TYPE_MTP) ? mtp_auto_seed_p_min : user_params.p_min;
         else if (coord.name == "n_min")                user_val = (float)user_params.n_min;
         else if (coord.name == "ngram_size_n")         user_val = (float)user_params.ngram_size_n;
         else if (coord.name == "ngram_size_m")         user_val = (float)user_params.ngram_size_m;
@@ -193,8 +231,8 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
         else if (coord.name == "suffix_min_match_len") user_val = (float)user_params.suffix_min_match_len;
 
         coord.user_idx    = coord.find_nearest_arm(user_val);
-        coord.best_idx    = 0;
-        coord.current_idx = 0;
+        coord.best_idx    = coord.user_idx;
+        coord.current_idx = coord.user_idx;
     }
 
     LOG_DBG("Autotune ε-greedy (ε=%.2f) per-draft-call, reward=per-step TPS\n", epsilon);
