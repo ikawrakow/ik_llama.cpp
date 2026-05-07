@@ -180,6 +180,14 @@ struct server_slot {
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
+    int64_t t_spec_ckpt_save_us = 0;
+    int64_t t_spec_ckpt_restore_us = 0;
+    int64_t t_mtp_hidden_copy_us = 0;
+    int64_t t_mtp_accept_us = 0;
+    size_t n_spec_ckpt_save = 0;
+    size_t n_spec_ckpt_restore = 0;
+    size_t n_mtp_hidden_rows = 0;
+    size_t n_mtp_accept = 0;
 
     int32_t n_past_se = 0; // self-extend
 

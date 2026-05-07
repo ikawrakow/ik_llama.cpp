@@ -2081,7 +2081,9 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         int idx_out = ggml_backend_sched_get_backend_idx(lctx.sched, lctx.model.output->buffer);
         if (idx_out >= 0) idx = idx_out;
         const bool is_qwen_mtp = (lctx.model.arch == LLM_ARCH_QWEN35 ||
-                                  lctx.model.arch == LLM_ARCH_QWEN35MOE) && lctx.cparams.mtp;
+                                  lctx.model.arch == LLM_ARCH_QWEN35MOE ||
+                                  lctx.model.arch == LLM_ARCH_QWEN35_MTP ||
+                                  lctx.model.arch == LLM_ARCH_QWEN35MOE_MTP) && lctx.cparams.mtp;
         if (cur->op == GGML_OP_REDUCE && cur->src[idx] && !is_qwen_mtp) {
             // avoid copy to main GPU
             cur->view_src = cur->src[idx];
@@ -2290,10 +2292,12 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_qwen3next();
             } break;
         case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_QWEN35MOE_MTP:
             {
                 result = llm.build_qwen35moe();
             } break;
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35_MTP:
             {
                 result = llm.build_qwen35();
             } break;
@@ -2590,7 +2594,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 auto the_k_norm = model.layers[il].attn_k_norm ? model.layers[il].attn_k_norm->extra ?
                     ((ggml_split_tensor_t *)model.layers[il].attn_k_norm->extra)->splits[id] : model.layers[il].attn_k_norm : nullptr;
                 ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
-                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
+                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 ||
+                        model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN35_MTP ||
+                        model.arch == LLM_ARCH_QWEN35MOE_MTP) {
                     auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, split_wq, split_wk, split_wv,
                             the_q_norm, the_k_norm, il);
                     Qcur = Q; Kcur = K; Vcur = V; gate = G;
@@ -2800,7 +2806,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     auto input_normed = cur;
 
     ggml_tensor *Qcur, *Kcur, *Vcur, *gate = nullptr;
-    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
+    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35 ||
+            model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN35_MTP ||
+            model.arch == LLM_ARCH_QWEN35MOE_MTP) {
         auto [Q, K, V, G] = llm_build_mul_mat_qkv_gated(gf, cur, model.layers[il].wq, model.layers[il].wk, model.layers[il].wv,
                 model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, il);
         Qcur = Q; Kcur = K; Vcur = V; gate = G;

@@ -15,6 +15,7 @@
 #include <iostream>
 #include <regex>
 #include <exception>
+#include <cstdlib>
 
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
@@ -183,6 +184,19 @@ static bool save_speculative_checkpoint(server_slot & slot, llama_model * model,
 }
 
 server_context::~server_context() {
+    // Free slot-owned speculative state before freeing the target context it may reference.
+    for (server_slot& slot : slots) {
+        if (slot.ctx_sampling != nullptr) {
+            common_sampler_free(slot.ctx_sampling);
+        }
+        slot.spec_ckpt.clear();
+        if (slot.ctx_dft) {
+            llama_free(slot.ctx_dft);
+        }
+        common_speculative_free(slot.spec);
+        llama_batch_free(slot.batch_spec);
+    }
+
     if (ctx) {
         llama_free(ctx);
         ctx = nullptr;
@@ -202,19 +216,6 @@ server_context::~server_context() {
     if (model_draft) {
         llama_free_model(model_draft);
         model_draft = nullptr;
-    }
-
-    // Clear any sampling context
-    for (server_slot& slot : slots) {
-        if (slot.ctx_sampling != nullptr) {
-            common_sampler_free(slot.ctx_sampling);
-        }
-        slot.spec_ckpt.clear();
-        if (slot.ctx_dft) {
-            llama_free(slot.ctx_dft);
-        }
-        common_speculative_free(slot.spec);
-        llama_batch_free(slot.batch_spec);
     }
 
     llama_batch_free(batch);
@@ -320,6 +321,52 @@ bool server_context::load_model(const gpt_params& params_) {
     else if (params_base.has_mtp && llama_model_n_nextn_layer(model) == 0) {
         LOG_WARNING("WARNING: -mtp flag provided, but model has 0 NextN layers. MTP will be disabled.\n", {});
         params_base.has_mtp = false;
+    }
+    else if (params_base.has_mtp && std::getenv("IK_MTP_SIBLING_ARCH") != nullptr) {
+        char arch[128] = {};
+        if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) < 0) {
+            LOG_ERROR("failed to read model architecture for MTP sibling override", {});
+            return false;
+        }
+
+        std::string override_arch;
+        if (std::string(arch) == "qwen35moe") {
+            override_arch = "qwen35moe_mtp";
+        } else if (std::string(arch) == "qwen35") {
+            override_arch = "qwen35_mtp";
+        } else {
+            LOG_WARNING("IK_MTP_SIBLING_ARCH requested, but architecture is not qwen35/qwen35moe. Keeping legacy MTP path.\n", {});
+        }
+
+        if (!override_arch.empty()) {
+            LLAMA_LOG_INFO("\n\n======================loading MTP SIBLING model (%s)======================\n\n",
+                    override_arch.c_str());
+
+            gpt_params params_mtp = params_base;
+            params_mtp.n_parallel = 1;
+            if (params_mtp.n_ctx == 0) {
+                params_mtp.n_ctx = params_base.n_ctx / params_base.n_parallel;
+            }
+            params_mtp.has_mtp = true;
+
+            llama_model_params mparams_mtp = common_model_params_to_llama(params_mtp);
+            mparams_mtp.mtp = true;
+            mparams_mtp.override_arch = override_arch.c_str();
+
+            model_draft = llama_model_load_from_file(params_base.model.c_str(), mparams_mtp);
+            if (model_draft == nullptr) {
+                LOG_ERROR("failed to load MTP sibling model", { {"model", params_base.model}, {"override_arch", override_arch} });
+                return false;
+            }
+
+            cparams_dft = common_context_params_to_llama(params_mtp);
+            cparams_dft.mtp         = true;
+            cparams_dft.mtp_op_type = MTP_OP_WARMUP;
+            cparams_dft.embeddings  = true;
+
+            params_base.speculative.model_dft   = model_draft;
+            params_base.speculative.cparams_dft = cparams_dft;
+        }
     }
     return true;
 }
@@ -578,6 +625,14 @@ void server_slot::reset() {
     // Reset speculative decoding stats
     n_draft_total = 0;
     n_draft_accepted = 0;
+    t_spec_ckpt_save_us = 0;
+    t_spec_ckpt_restore_us = 0;
+    t_mtp_hidden_copy_us = 0;
+    t_mtp_accept_us = 0;
+    n_spec_ckpt_save = 0;
+    n_spec_ckpt_restore = 0;
+    n_mtp_hidden_rows = 0;
+    n_mtp_accept = 0;
     chat_msg = {};
     json_schema = json();
     generated_tool_call_ids.clear();
@@ -839,6 +894,15 @@ void server_slot::print_timings() const {
         SLT_CNT(*this,
             "draft acceptance rate = %0.5f (%5d accepted / %5d generated)\n",
             draft_ratio, n_draft_accepted, n_draft_total
+        );
+    }
+    if (has_mtp && (n_spec_ckpt_save > 0 || n_spec_ckpt_restore > 0 || n_mtp_hidden_rows > 0 || n_mtp_accept > 0)) {
+        SLT_CNT(*this,
+            "mtp server timing: ckpt_save = %.3f ms / %zu calls, ckpt_restore = %.3f ms / %zu calls, hidden_copy = %.3f ms / %zu rows, mtp_accept = %.3f ms / %zu calls\n",
+            t_spec_ckpt_save_us / 1000.0, n_spec_ckpt_save,
+            t_spec_ckpt_restore_us / 1000.0, n_spec_ckpt_restore,
+            t_mtp_hidden_copy_us / 1000.0, n_mtp_hidden_rows,
+            t_mtp_accept_us / 1000.0, n_mtp_accept
         );
     }
     common_speculative_print_stats(spec, n_gen_second, n_decoded, n_past,
@@ -3940,7 +4004,10 @@ static void restore_speculative_checkpoint(
         const std::vector<float> & mtp_hidden_state_pre, int32_t mtp_n_past_base) {
     if (slot.spec_ckpt.per_step_enabled) {
         const int step = (int)ids.size() - 1;
+        const int64_t t_restore_start_us = ggml_time_us();
         llama_spec_ckpt_restore(ctx, slot.id, slot.spec_ckpt.n_past, step);
+        slot.t_spec_ckpt_restore_us += ggml_time_us() - t_restore_start_us;
+        slot.n_spec_ckpt_restore++;
 
         if (slot.spec_ckpt.sampler) {
             common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
@@ -3959,7 +4026,10 @@ static void restore_speculative_checkpoint(
             step, (int)(n_draft - (ids.size() - 1)));
     } else {
         // Restore pre-speculation recurrent state then re-decode accepted tokens.
+        const int64_t t_restore_start_us = ggml_time_us();
         llama_spec_ckpt_restore(ctx, slot.id, slot.spec_ckpt.n_past, 0);
+        slot.t_spec_ckpt_restore_us += ggml_time_us() - t_restore_start_us;
+        slot.n_spec_ckpt_restore++;
 
         if (slot.spec_ckpt.sampler) {
             common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
@@ -3989,6 +4059,7 @@ static void restore_speculative_checkpoint(
                 const int n_embd = get_ctx_mtp_n_embd(ctx);
 
                 const int n_accepted = (int)ids.size();
+                const int64_t t_hidden_start_us = ggml_time_us();
                 slot.mtp_hidden_state.resize(n_accepted * n_embd);
                 for (int j = 0; j < n_accepted; j++) {
                     const float * emb_j = llama_get_embeddings_ith(ctx, j);
@@ -3996,6 +4067,8 @@ static void restore_speculative_checkpoint(
                         memcpy(slot.mtp_hidden_state.data() + j * n_embd, emb_j, n_embd * sizeof(float));
                     }
                 }
+                slot.t_mtp_hidden_copy_us += ggml_time_us() - t_hidden_start_us;
+                slot.n_mtp_hidden_rows += n_accepted;
 
                 if (slot.use_gemma4_external_mtp) {
                     cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, slot.mtp_hidden_state, n_embd);
@@ -4081,6 +4154,8 @@ void server_context::speculative_decoding_accept() {
                     memcpy(mtp_hidden_state_pre.data(), emb0, n_embd * sizeof(float));
                 }
             }
+            slot.t_mtp_hidden_copy_us += ggml_time_us() - t_hidden_start_us;
+            slot.n_mtp_hidden_rows += !ids.empty() ? ids.size() : 1;
         }
 
         slot.i_batch_dft.clear();
@@ -4484,6 +4559,14 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             continue; // continue loop of n_batch
         }
 
+        bool mtp_target_hook_active = false;
+        for (auto & slot : slots) {
+            if (slot.has_mtp && slot.spec && common_speculative_mtp_uses_target_hook(slot.spec)) {
+                mtp_target_hook_active = true;
+                break;
+            }
+        }
+
         bool mtp_warmup_needed = false;
         llama_context * batch_mtp_target = nullptr;
         std::vector<float> batch_mtp_hidden_state;
@@ -4719,10 +4802,14 @@ void server_context::update_slots() {
         const int ckpt_mode = params_base.speculative.recurrent_ckpt_mode;
 
         for (auto & slot : slots) {
-            if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch_dft.empty()) {
+            if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch_dft.empty() || slot.drafted.empty()) {
                 continue;
             }
-            if (save_speculative_checkpoint(slot, model, ctx, ckpt_mode)) {
+            const int64_t t_ckpt_start_us = ggml_time_us();
+            const bool ckpt_saved = save_speculative_checkpoint(slot, model, ctx, ckpt_mode);
+            slot.t_spec_ckpt_save_us += ggml_time_us() - t_ckpt_start_us;
+            slot.n_spec_ckpt_save++;
+            if (ckpt_saved) {
                 const char * mode_name = slot.spec_ckpt.per_step_enabled ? "per-step" : "shadow/cpu";
                 SLT_DBG(slot, "spec checkpoint saved (mode=%s), n_past_pre_spec=%d\n",
                     mode_name, slot.spec_ckpt.n_past);

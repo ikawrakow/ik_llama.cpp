@@ -1511,6 +1511,7 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
+    const bool mtp_only = model.arch == LLM_ARCH_QWEN35MOE_MTP;
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     // output
@@ -1541,7 +1542,9 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[i];
 
         int flags = 0;
-        if (!model.mtp && is_mtp_layer) {
+        if (mtp_only && !is_mtp_layer) {
+            flags |= llama_model_loader::TENSOR_SKIP;
+        } else if (!model.mtp && is_mtp_layer) {
             flags |= llama_model_loader::TENSOR_SKIP;
         }
 
@@ -1609,6 +1612,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
+    const bool mtp_only = model.arch == LLM_ARCH_QWEN35_MTP;
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     // output
@@ -1639,7 +1643,11 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
 
         int flags = 0;
         // Skip loading MTP layers if the feature is disabled
-        if (!model.mtp) {
+        if (mtp_only) {
+            if (!is_mtp_layer) {
+                flags |= llama_model_loader::TENSOR_SKIP;
+            }
+        } else if (!model.mtp) {
             if (is_mtp_layer) {
                 flags |= llama_model_loader::TENSOR_SKIP;
             }
@@ -4097,8 +4105,10 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_QWEN3NEXT:
             use_mmap_buffer = create_qwen3next_tensors(tn); break;
         case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_QWEN35MOE_MTP:
             use_mmap_buffer = create_qwen35moe_tensors(tn); break;
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35_MTP:
             use_mmap_buffer = create_qwen35_tensors(tn); break;
         case LLM_ARCH_PHI2:
             use_mmap_buffer = create_phi2_tensors(tn); break;
@@ -4288,7 +4298,9 @@ bool create_tensors_helper::create_tensors() {
             else if (layer.wo && layer.wq && layer.wk && (layer.wv || model.arch == LLM_ARCH_GEMMA4)) {
                 auto granularity_kq = hparams.n_embd_head_k(il) * gqa_ratio;
                 int wq_ne1 = layer.wq->ne[1];
-                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN35) {
+                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE ||
+                        model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE_MTP ||
+                        model.arch == LLM_ARCH_QWEN35_MTP) {
                     granularity_kq *= 2; wq_ne1 /= 2;
                 }
                 auto granularity_vo = hparams.n_embd_head_v(il) * gqa_ratio;
@@ -4358,7 +4370,9 @@ bool create_tensors_helper::create_tensors() {
                     LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(1, ctx_split, layer.wqkv_gate, layer.split_wqkv_gate, wqkv_gate_split, mem_used);
                 }
-                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN35) {
+                if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_QWEN35MOE ||
+                        model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE_MTP ||
+                        model.arch == LLM_ARCH_QWEN35_MTP) {
                     for (auto & s : split_kq) s /= 2*gqa_ratio;
                 } else {
                     for (auto & s : split_kq) s /= gqa_ratio;

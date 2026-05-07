@@ -479,7 +479,8 @@ struct llama_model {
     size_t max_nodes(int n_tokens) const {
         auto n_tensors = tensors_by_name.size();
         if (split_mode == LLAMA_SPLIT_MODE_GRAPH && !devices.empty()) n_tensors *= devices.size();
-        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35) {
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 ||
+                arch == LLM_ARCH_QWEN35MOE_MTP || arch == LLM_ARCH_QWEN35_MTP) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
         //return std::max<size_t>(1024, 8*n_tensors);
@@ -554,7 +555,9 @@ struct llama_lora_adapter {
 //   std::string name = tn(LLM_TENSOR_ATTN_NORM, "weight", 3);     -> "blk.3.attn_norm.weight"
 //
 struct LLM_TN {
-    LLM_TN(llm_arch arch) : arch(arch) {}
+    LLM_TN(llm_arch arch) : arch(arch == LLM_ARCH_QWEN35MOE_MTP ? LLM_ARCH_QWEN35MOE :
+                               arch == LLM_ARCH_QWEN35_MTP    ? LLM_ARCH_QWEN35    :
+                               arch) {}
 
     llm_arch arch;
 
@@ -572,4 +575,3 @@ struct LLM_TN {
 std::string llama_model_ftype_name(llama_ftype ftype);
 
 const char * llama_model_type_name(e_model type);
-

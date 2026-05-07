@@ -412,6 +412,7 @@ extern "C" {
         const struct llama_model_kv_override * kv_overrides;
 
         const struct llama_model_tensor_buft_override * tensor_buft_overrides;
+        const char * override_arch; // optional model architecture override for sibling draft heads
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
@@ -1564,6 +1565,15 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
+
+    // Register an MTP sibling context to be updated from target-model decode
+    LLAMA_API void llama_set_mtp(struct llama_context * ctx_target, struct llama_context * ctx_mtp);
+
+    // Return the latest target hidden-state tensor used as MTP input, if available.
+    LLAMA_API struct ggml_tensor * llama_context_get_t_h_pre_norm(struct llama_context * ctx);
+
+    // Return the latest MTP block hidden-state tensor for autoregressive MTP drafting, if available.
+    LLAMA_API struct ggml_tensor * llama_context_get_t_mtp_out(struct llama_context * ctx);
 
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 

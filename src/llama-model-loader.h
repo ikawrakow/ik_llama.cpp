@@ -83,13 +83,15 @@ struct llama_model_loader {
     std::vector<ggml_context *> contexts;
 
     std::string arch_name;
+    llm_arch    arch      = LLM_ARCH_UNKNOWN;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
     llama_expert_tensor_index expert_tensor_index;
 
     llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
             bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
             const llama_model_kv_override * param_overrides_p,
-            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+            const char * override_arch = nullptr);
 
     ~llama_model_loader();
 
@@ -125,7 +127,7 @@ struct llama_model_loader {
 
     const std::string& get_arch_name() const { return arch_name; }
 
-    enum llm_arch get_arch() const { return llm_kv.arch; }
+    enum llm_arch get_arch() const { return arch; }
 
     const char * get_tensor_name(int i) const;
 

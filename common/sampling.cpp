@@ -1010,6 +1010,13 @@ llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, str
     GGML_UNUSED(gsmpl);
 
     float * logits = llama_get_logits_ith(ctx, idx);
+    if (!logits) {
+        if (out_prob) {
+            *out_prob = 0.0f;
+        }
+        return -1;
+    }
+
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
 
     int best_id = 0;

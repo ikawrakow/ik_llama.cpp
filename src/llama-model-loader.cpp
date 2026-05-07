@@ -271,6 +271,17 @@ static bool is_merged_expert_tensor(llm_tensor tensor_type) {
     }
 }
 
+static llm_arch llm_arch_for_kv(llm_arch arch) {
+    switch (arch) {
+        case LLM_ARCH_QWEN35MOE_MTP:
+            return LLM_ARCH_QWEN35MOE;
+        case LLM_ARCH_QWEN35_MTP:
+            return LLM_ARCH_QWEN35;
+        default:
+            return arch;
+    }
+}
+
 static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
     ranges.erase(std::remove_if(ranges.begin(), ranges.end(), [](const llama_file_range & range) {
         return range.empty();
@@ -300,7 +311,8 @@ static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
 llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        const char * override_arch) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -344,7 +356,13 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     }
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
-    llm_kv = LLM_KV(llm_arch_from_string(arch_name));
+    if (override_arch != nullptr && override_arch[0] != '\0') {
+        LLAMA_LOG_INFO("%s: overriding model architecture %s -> %s\n",
+                __func__, arch_name.c_str(), override_arch);
+        arch_name = override_arch;
+    }
+    arch = llm_arch_from_string(arch_name);
+    llm_kv = LLM_KV(llm_arch_for_kv(arch));
 
     files.emplace_back(new llama_file(fname.c_str(), "rb"));
     contexts.emplace_back(ctx);
@@ -925,7 +943,7 @@ const struct ggml_tensor * llama_model_loader::check_tensor_dims(const std::stri
 
 struct ggml_tensor * llama_model_loader::create_tensor(struct ggml_context * ctx, const std::string & name,
         const std::vector<int64_t> & ne, int flags) {
-    const struct ggml_tensor * cur = check_tensor_dims(name, ne, !(flags & TENSOR_NOT_REQUIRED));
+    const struct ggml_tensor * cur = check_tensor_dims(name, ne, !(flags & (TENSOR_NOT_REQUIRED | TENSOR_SKIP)));
 
     if (cur == NULL) {
         return NULL;
@@ -976,6 +994,11 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
 
 void llama_model_loader::done_getting_tensors() const {
     if (n_created != n_tensors) {
+        if (arch == LLM_ARCH_QWEN35MOE_MTP || arch == LLM_ARCH_QWEN35_MTP) {
+            LLAMA_LOG_INFO("%s: partial load - used %d of %d tensors in the file (rest belong to sibling model on same .gguf)\n",
+                    __func__, n_created, n_tensors);
+            return;
+        }
         throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
     }
 }
@@ -1261,4 +1284,3 @@ template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum
 template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
 
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
-

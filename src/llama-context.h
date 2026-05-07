@@ -266,6 +266,35 @@ struct llama_context {
 
     const float * draft_input_hidden_state = nullptr;
 
+    struct mtp_target_hook {
+        llama_context * ctx_mtp = nullptr;
+        llama_batch hook_batch = {};
+        std::vector<float> pending_h;
+        int32_t n_tokens_alloc = 0;
+        llama_pos pending_pos = -1;
+        llama_seq_id pending_seq_id = -1;
+        size_t n_update_calls = 0;
+        size_t n_update_tokens = 0;
+        int64_t t_copy_us = 0;
+        int64_t t_decode_us = 0;
+    } mtp_hook;
+
+    struct ggml_tensor * t_h_pre_norm = nullptr;
+    struct ggml_tensor * t_mtp_out = nullptr;
+    size_t n_mtp_graph_build = 0;
+    size_t n_mtp_graph_reuse = 0;
+    size_t n_mtp_reuse_fail_disabled = 0;
+    size_t n_mtp_reuse_fail_no_prev = 0;
+    size_t n_mtp_reuse_fail_per_step = 0;
+    size_t n_mtp_reuse_fail_embd = 0;
+    size_t n_mtp_reuse_fail_seq = 0;
+    size_t n_mtp_reuse_fail_head = 0;
+    size_t n_mtp_reuse_fail_kv = 0;
+    size_t n_mtp_reuse_fail_outputs = 0;
+    size_t n_mtp_reuse_fail_tokens = 0;
+    size_t n_mtp_reuse_fail_op = 0;
+    size_t n_mtp_reuse_fail_cache = 0;
+
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
@@ -291,6 +320,8 @@ struct llama_context {
     struct Prev;
     std::unique_ptr<Prev> prev;
     std::unique_ptr<Prev> prev_mtp;
+    std::unique_ptr<Prev> prev_mtp_update;
+    std::unique_ptr<Prev> prev_mtp_draft;
 
     void reset_scheduler();
     bool can_reuse_graph(const llama_batch & u_batch);
@@ -303,8 +334,14 @@ struct llama_context {
 
     bool update_cache_copies();
 
-    bool prepare_mtp_graph_inputs(
-        struct llama_context & lctx);
     void set_mtp_op_type(llama_mtp_op_type value);
+    void set_mtp(llama_context * ctx_mtp);
+    void handle_mtp_for_ubatch(
+            int32_t              n_tokens,
+            const llama_token  * tokens,
+            const llama_pos    * positions,
+            int32_t            * n_seq_id,
+            llama_seq_id      ** seq_id,
+            struct ggml_tensor * hidden_states);
 
 };

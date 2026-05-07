@@ -180,7 +180,8 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
     struct ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
 
-    ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
+    ggml_tensor * token_emb_w = mtp_layer.nextn.embed_tokens ? mtp_layer.nextn.embed_tokens : model.tok_embd;
+    ggml_tensor * token_emb = build_inp_embd_mtp(token_emb_w);
 
     ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
     ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
@@ -238,7 +239,8 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
 
     cb(cur, "result_norm", -1);
 
-    cur = build_output(lctx, ctx0, cur, model.output, mtp_layer.nextn.shared_head_norm, cb);
+    ggml_tensor * head_w = mtp_layer.nextn.shared_head_head ? mtp_layer.nextn.shared_head_head : model.output;
+    cur = build_output(lctx, ctx0, cur, head_w, mtp_layer.nextn.shared_head_norm, cb);
     cb(cur, "result_output", -1);
 
     return cur;
@@ -257,7 +259,8 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
 
     struct ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
 
-    ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
+    ggml_tensor * token_emb_w = mtp_layer.nextn.embed_tokens ? mtp_layer.nextn.embed_tokens : model.tok_embd;
+    ggml_tensor * token_emb = build_inp_embd_mtp(token_emb_w);
 
     ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
     ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
@@ -317,7 +320,8 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
     cb(cur, "result_norm", -1);
 
     //cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
-    cur = build_output(lctx, ctx0, cur, model.output, mtp_layer.nextn.shared_head_norm, cb);
+    ggml_tensor * head_w = mtp_layer.nextn.shared_head_head ? mtp_layer.nextn.shared_head_head : model.output;
+    cur = build_output(lctx, ctx0, cur, head_w, mtp_layer.nextn.shared_head_norm, cb);
     cb(cur, "result_output", -1);
 
     return cur;
