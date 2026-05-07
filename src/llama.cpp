@@ -2774,7 +2774,8 @@ static bool llm_load_tensors(
             throw std::runtime_error("Manual tensor overrides cannot be used with --fit");
         }
         if (ml.ncmoe > 0) {
-            throw std::runtime_error("-ncmoe | --n-cpu-moe cannot be used with --fit");
+            LLAMA_LOG_INFO("%s: fitting with %d CPU-MoE layer override(s) as a placement constraint\n",
+                    __func__, ml.ncmoe);
         }
         n_gpu_layers = 999;
     }
