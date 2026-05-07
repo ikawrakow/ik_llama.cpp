@@ -328,7 +328,7 @@ bool server_context::load_model(const gpt_params& params_) {
         LOG_WARNING("WARNING: -mtp flag provided, but model has 0 NextN layers. MTP will be disabled.\n", {});
         params_base.has_mtp = false;
     }
-    else if (params_base.has_mtp && std::getenv("IK_MTP_SIBLING_ARCH") != nullptr) {
+    else if (params_base.has_mtp) {
         char arch[128] = {};
         if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) < 0) {
             LOG_ERROR("failed to read model architecture for MTP sibling override", {});
@@ -340,8 +340,6 @@ bool server_context::load_model(const gpt_params& params_) {
             override_arch = "qwen35moe_mtp";
         } else if (std::string(arch) == "qwen35") {
             override_arch = "qwen35_mtp";
-        } else {
-            LOG_WARNING("IK_MTP_SIBLING_ARCH requested, but architecture is not qwen35/qwen35moe. Keeping legacy MTP path.\n", {});
         }
 
         if (!override_arch.empty()) {
