@@ -111,7 +111,8 @@ static void apply_slot_mtp_accept(
         const std::vector<float> & mtp_hidden_state,
         const std::vector<llama_token> & ids,
         int32_t mtp_n_past_base,
-        int n_embd) {
+        int n_embd,
+        bool fast_p_min) {
     if (!slot.has_mtp || mtp_hidden_state.empty() || n_embd <= 0) {
         return;
     }
@@ -123,7 +124,10 @@ static void apply_slot_mtp_accept(
 
     slot.mtp_hidden_state = mtp_hidden_state;
     llama_set_draft_input_hidden_state(get_slot_mtp_ctx(slot, ctx), slot.mtp_hidden_state.data());
-    mtp_accept_tokens(get_slot_mtp_ctx(slot, ctx), ids, mtp_n_past_base, slot.id);
+    const int64_t t_mtp_accept_start_us = ggml_time_us();
+    mtp_accept_tokens(get_slot_mtp_ctx(slot, ctx), ids, mtp_n_past_base, slot.id, fast_p_min);
+    slot.t_mtp_accept_us += ggml_time_us() - t_mtp_accept_start_us;
+    slot.n_mtp_accept++;
 }
 
 static void set_external_mtp_hidden(server_slot & slot, llama_context * ctx, const float * hidden, int n_embd) {
@@ -898,7 +902,8 @@ void server_slot::print_timings() const {
             draft_ratio, n_draft_accepted, n_draft_total
         );
     }
-    if (has_mtp && (n_spec_ckpt_save > 0 || n_spec_ckpt_restore > 0 || n_mtp_hidden_rows > 0 || n_mtp_accept > 0)) {
+    if (has_mtp && std::getenv("IK_MTP_PROFILE") != nullptr &&
+            (n_spec_ckpt_save > 0 || n_spec_ckpt_restore > 0 || n_mtp_hidden_rows > 0 || n_mtp_accept > 0)) {
         SLT_CNT(*this,
             "mtp server timing: ckpt_save = %.3f ms / %zu calls, ckpt_restore = %.3f ms / %zu calls, hidden_copy = %.3f ms / %zu rows, mtp_accept = %.3f ms / %zu calls\n",
             t_spec_ckpt_save_us / 1000.0, n_spec_ckpt_save,
@@ -1239,6 +1244,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.params.speculative.n_max = json_value(data, "speculative.n_max", params_base.speculative.n_max);
     slot.params.speculative.n_min = json_value(data, "speculative.n_min", params_base.speculative.n_min);
     slot.params.speculative.p_min = json_value(data, "speculative.p_min", params_base.speculative.p_min);
+    slot.params.speculative.p_min_fast = json_value(data, "speculative.p_min_fast", params_base.speculative.p_min_fast);
 
     slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
     slot.params.speculative.n_min = std::max(slot.params.speculative.n_min, 0);
@@ -4021,7 +4027,7 @@ static void restore_speculative_checkpoint(
         // Update MTP KV cache and hidden state using embeddings collected before checkpoint restore.
         if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
             const int n_embd = get_ctx_mtp_n_embd(ctx);
-            apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
+            apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd, slot.params.speculative.p_min_fast);
         }
 
         SLT_DBG(slot, "per-step restore: step=%d (rejected %d drafts)\n",
@@ -4072,12 +4078,9 @@ static void restore_speculative_checkpoint(
                 slot.t_mtp_hidden_copy_us += ggml_time_us() - t_hidden_start_us;
                 slot.n_mtp_hidden_rows += n_accepted;
 
-                if (slot.use_gemma4_external_mtp) {
-                    cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, slot.mtp_hidden_state, n_embd);
-                } else {
-                    llama_set_draft_input_hidden_state(get_slot_mtp_ctx(slot, ctx), slot.mtp_hidden_state.data());
-                    mtp_accept_tokens(get_slot_mtp_ctx(slot, ctx), ids, slot.spec_ckpt.n_past, slot.id);
+                apply_slot_mtp_accept(slot, ctx, slot.mtp_hidden_state, ids, slot.spec_ckpt.n_past, n_embd, slot.params.speculative.p_min_fast);
 
+                if (!slot.use_gemma4_external_mtp) {
                     if (n_accepted > 1) {
                         memmove(slot.mtp_hidden_state.data(),
                                 slot.mtp_hidden_state.data() + (n_accepted - 1) * n_embd,
@@ -4141,6 +4144,7 @@ void server_context::speculative_decoding_accept() {
             mtp_n_past_base = slot.n_past - (slot.drafted.size() + 1);
 
             const int n_embd = get_ctx_mtp_n_embd(ctx);
+            const int64_t t_hidden_start_us = ggml_time_us();
             if (!ids.empty()) {
                 mtp_hidden_state_pre.resize(ids.size() * n_embd);
                 for (size_t i = 0; i < ids.size(); i++) {
@@ -4190,7 +4194,7 @@ void server_context::speculative_decoding_accept() {
         } else {
             if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
                 const int n_embd = get_ctx_mtp_n_embd(ctx);
-                apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
+                apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd, slot.params.speculative.p_min_fast);
             }
             llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
             discard_speculative_checkpoint(slot, ctx);

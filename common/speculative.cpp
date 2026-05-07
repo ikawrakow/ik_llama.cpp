@@ -283,7 +283,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
                     break;
                 }
 
-                llama_token id_next = common_sampler_sample_speculative(smpl, ctx_mtp, 0, prob_ptr);
+                llama_token id_next = common_sampler_sample_speculative(smpl, ctx_mtp, 0, prob_ptr, params.p_min_fast);
                 if (id_next < 0) {
                     break;
                 }
@@ -312,6 +312,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
             ctx,
             params.n_max,
             params.p_min,
+            params.p_min_fast,
             id_last,
             n_past,
             seq_id,
@@ -1369,6 +1370,9 @@ static mtp_accept_profile & mtp_get_accept_profile(const llama_context * ctx) {
 }
 
 static void mtp_print_accept_profile(const llama_context * ctx) {
+    if (std::getenv("IK_MTP_PROFILE") == nullptr) {
+        return;
+    }
     if (!ctx) {
         return;
     }
@@ -1554,6 +1558,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     struct llama_context * ctx,
     int n_draft,
     float p_min,
+    bool fast_p_min,
     llama_token id_last,
     int32_t n_past,
     llama_seq_id seq_id,
@@ -1580,7 +1585,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     int i0 = 0;
 
     if (keep_draft_kv && llama_kv_cache_seq_pos_max(ctx, seq_id) >= n_past - 1) {
-        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, -1, prob_ptr);
+        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, -1, prob_ptr, fast_p_min);
         if (id_next >= 0) {
             if (prob_ptr && prob < p_min) {
                 llama_batch_free(mtp_batch);
@@ -1625,8 +1630,10 @@ std::vector<llama_token> mtp_speculative_gen_draft(
             break;
         }
 
-        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr);
-
+        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0, prob_ptr, fast_p_min);
+        if (id_next < 0) {
+            break;
+        }
         if (i > 0 && prob_ptr && prob < p_min) {
             break;
         }
@@ -1708,7 +1715,8 @@ void mtp_accept_tokens(
     struct llama_context * ctx,
     const std::vector<llama_token> & ids,
     int32_t n_past_base,
-    llama_seq_id seq_id) {
+    llama_seq_id seq_id,
+    bool fast_p_min) {
     if (ids.empty()) {
         return;
     }
@@ -1734,7 +1742,7 @@ void mtp_accept_tokens(
     if (embd) {
         std::memcpy(last.embd.data(), embd, last.embd.size()*sizeof(float));
         llama_set_draft_input_hidden_state(ctx, last.embd.data());
-        last.last_id = common_sampler_sample_speculative(nullptr, ctx, ids.size() - 1, &last.prob);
+        last.last_id = common_sampler_sample_speculative(nullptr, ctx, ids.size() - 1, &last.prob, fast_p_min);
     }
     prof.t_sample_us += ggml_time_us() - t_sample_start_us;
 

@@ -1071,7 +1071,7 @@ static float prob_scalar(int n, const float * logits, float max_val) {
     return (float)(1./sum_exp);
 }
 
-llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob) {
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob, bool fast_p_min) {
     GGML_UNUSED(gsmpl);
 
     float * logits = llama_get_logits_ith(ctx, idx);
@@ -1084,7 +1084,8 @@ llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, str
 
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
 
-    static const bool fast_prob = std::getenv("IK_SPEC_FAST_P_MIN") != nullptr;
+    static const bool fast_prob_env = std::getenv("IK_SPEC_FAST_P_MIN") != nullptr;
+    const bool fast_prob = fast_p_min || fast_prob_env;
     const bool track_second = out_prob && fast_prob;
 
     int best_id = 0;

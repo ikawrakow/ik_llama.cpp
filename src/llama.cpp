@@ -873,7 +873,7 @@ void llama_context::handle_mtp_for_ubatch(
 }
 
 llama_context::~llama_context() {
-    if (n_mtp_graph_build > 0 || n_mtp_graph_reuse > 0) {
+    if (std::getenv("IK_MTP_PROFILE") != nullptr && (n_mtp_graph_build > 0 || n_mtp_graph_reuse > 0)) {
         LLAMA_LOG_INFO("%s: MTP graph stats: build=%zu reuse=%zu\n",
                 __func__, n_mtp_graph_build, n_mtp_graph_reuse);
         LLAMA_LOG_INFO("%s: MTP graph reuse misses: disabled=%zu no_prev=%zu per_step=%zu embd=%zu seq=%zu head=%zu kv=%zu outputs=%zu tokens=%zu op=%zu cache=%zu\n",

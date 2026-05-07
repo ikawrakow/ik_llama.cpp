@@ -1033,6 +1033,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.p_min = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--draft-p-min-fast") {
+        params.speculative.p_min_fast = true;
+        return true;
+    }
     if (arg == "--recurrent-ckpt-mode") {
         CHECK_ARG
         const std::string val = argv[i];
@@ -2758,6 +2762,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "number of tokens to draft for speculative decoding (default: %d)", params.speculative.n_max });
     options.push_back({ "*", "--draft-min, --draft-n-min N",   "minimum number of draft tokens to use for speculative decoding" });
     options.push_back({ "*", "--draft-p-min P",                "minimum speculative decoding probability (greedy) (default: %.1f)", (double)params.speculative.p_min });
+    options.push_back({ "*", "--draft-p-min-fast",             "use top-1/top-2 margin confidence proxy for speculative p_min" });
     options.push_back({ "*", "--recurrent-ckpt-mode MODE",    "checkpoint strategy for recurrent/hybrid speculative decoding\n"
                                                               "  auto         auto-select: per-step if CUDA full-GPU, gpu-fallback otherwise (default)\n"
                                                               "  per-step     save SSM state per draft step in VRAM; no re-decode on rejection\n"

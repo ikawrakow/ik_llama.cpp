@@ -64,6 +64,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     struct llama_context * ctx,
     int n_draft,
     float p_min,
+    bool fast_p_min,
     llama_token id_last,
     int32_t n_past,
     llama_seq_id seq_id,
@@ -75,5 +76,6 @@ void mtp_accept_tokens(
     struct llama_context * ctx,
     const std::vector<llama_token> & ids,
     int32_t n_past_base,
-    llama_seq_id seq_id
+    llama_seq_id seq_id,
+    bool fast_p_min = false
 );

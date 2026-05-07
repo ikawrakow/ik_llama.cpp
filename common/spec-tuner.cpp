@@ -147,7 +147,7 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
     t_tuner_us = 0;
     last_n_drafted = 0;
 
-    const float mtp_auto_seed_p_min = user_params.p_min > 0.0f ? user_params.p_min : 0.75f;
+    const float mtp_auto_seed_p_min = user_params.p_min > 0.0f ? user_params.p_min : (user_params.p_min_fast ? 0.90f : 0.75f);
 
     if (type == COMMON_SPECULATIVE_TYPE_MTP) {
         epsilon   = 0.08;
@@ -175,7 +175,11 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
         coord.name = "p_min";
         coord.min_samples_for_best = 4;
         coord.min_best_delta = 0.25;
-        coord.build_values_float({0.65f, 0.70f, 0.75f}, mtp_auto_seed_p_min);
+        if (user_params.p_min_fast) {
+            coord.build_values_float({0.88f, 0.90f, 0.92f, 0.95f}, mtp_auto_seed_p_min);
+        } else {
+            coord.build_values_float({0.65f, 0.70f, 0.75f}, mtp_auto_seed_p_min);
+        }
         coords.push_back(std::move(coord));
     }
 

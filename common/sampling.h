@@ -331,7 +331,7 @@ std::vector<llama_token> llama_sampling_sample_and_accept_n(struct common_sample
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first = false);
 
 // Greedy argmax sampling for speculative drafting
-llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob = nullptr);
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob = nullptr, bool fast_p_min = false);
 
 void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float* logits);
 

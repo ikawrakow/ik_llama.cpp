@@ -177,6 +177,7 @@ struct common_params_speculative {
 
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min = 0.75f; // minimum speculative decoding probability (greedy)
+    bool    p_min_fast = false; // use margin-confidence proxy for speculative p_min
 
     // ngram-based speculative decoding
 
