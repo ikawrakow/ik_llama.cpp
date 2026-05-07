@@ -813,6 +813,9 @@ static bool llama_kv_cache_init(
             const bool is_mtp_tail = qwen_mtp && i >= n_mtp_first;
             if (split_cache && !is_mtp_tail) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
+                if (model.buft_layer[i].buft != model.buft_layer[i].buft_matrix) {
+                    buft_layer_count[model.buft_layer[i].buft]++;
+                }
             } else {
                 buft_layer_count[model.buft_layer[i].buft]++;
             }
@@ -6419,7 +6422,14 @@ struct llama_context * llama_init_from_model(
         LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
-    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
+    const bool force_layer_scheduling_for_mtp =
+        cparams.mtp_op_type != MTP_OP_NONE && model->hparams.nextn_predict_layers > 0;
+    if (force_layer_scheduling_for_mtp && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        LLAMA_LOG_INFO("%s: embedded MTP context forcing layer scheduling under split mode graph\n", __func__);
+    }
+    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH &&
+        (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling) &&
+        !force_layer_scheduling_for_mtp) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);
         ggml_backend_sched_set_max_extra_alloc(ctx->sched, params.max_extra_alloc);
         if (model->has_tensor_overrides() && cparams.split_mode_graph_scheduling) {

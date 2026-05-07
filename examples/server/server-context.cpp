@@ -16,6 +16,8 @@
 #include <regex>
 #include <exception>
 
+uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
+
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1, int32_t offset = 0) {
     if (pos_min == -1) {
         pos_min = llama_kv_cache_seq_pos_min(ctx, id);
@@ -54,6 +56,14 @@ static llama_context * get_slot_mtp_ctx(server_slot & slot, llama_context * ctx)
     return mtp_ctx ? mtp_ctx : ctx;
 }
 
+static int get_ctx_mtp_n_embd(llama_context * ctx) {
+    return ctx ? (int) llama_mtp_state_n_embd(ctx) : 0;
+}
+
+static int get_slot_mtp_n_embd(server_slot & slot, llama_context * ctx) {
+    return get_ctx_mtp_n_embd(get_slot_mtp_ctx(slot, ctx));
+}
+
 static void cache_slot_mtp_hidden(server_slot & slot, const float * hidden, int n_embd) {
     if (hidden == nullptr || n_embd <= 0) {
         return;
@@ -67,7 +77,7 @@ static void sync_slot_mtp_hidden(server_slot & slot, llama_context * ctx) {
         return;
     }
 
-    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+    const int n_embd = get_slot_mtp_n_embd(slot, ctx);
     if (n_embd <= 0 || slot.mtp_hidden_state.size() < (size_t) n_embd) {
         return;
     }
@@ -111,7 +121,7 @@ static void apply_slot_mtp_accept(
     }
 
     slot.mtp_hidden_state = mtp_hidden_state;
-    sync_slot_mtp_hidden(slot, ctx);
+    llama_set_draft_input_hidden_state(get_slot_mtp_ctx(slot, ctx), slot.mtp_hidden_state.data());
     mtp_accept_tokens(get_slot_mtp_ctx(slot, ctx), ids, mtp_n_past_base, slot.id);
 }
 
@@ -3371,7 +3381,7 @@ void server_context::add_sampled_tokens() {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
                     const float* emb_neg1 = llama_get_embeddings_ith(ctx, -1);
                     if (emb_neg1) {
-                        const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                        const int n_embd = get_ctx_mtp_n_embd(ctx);
                         cache_and_sync_slot_mtp_hidden(slot, ctx, emb_neg1, n_embd);
                     }
                 }
@@ -3940,7 +3950,7 @@ static void restore_speculative_checkpoint(
 
         // Update MTP KV cache and hidden state using embeddings collected before checkpoint restore.
         if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-            const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+            const int n_embd = get_ctx_mtp_n_embd(ctx);
             apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
         }
 
@@ -3975,7 +3985,7 @@ static void restore_speculative_checkpoint(
                 SLT_ERR(slot, "failed to re-decode accepted tokens after checkpoint restore: %d\n", ret);
             }
             if (slot.has_mtp) {
-                const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                const int n_embd = get_ctx_mtp_n_embd(ctx);
 
                 const int n_accepted = (int)ids.size();
                 slot.mtp_hidden_state.resize(n_accepted * n_embd);
@@ -3989,7 +3999,7 @@ static void restore_speculative_checkpoint(
                 if (slot.use_gemma4_external_mtp) {
                     cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, slot.mtp_hidden_state, n_embd);
                 } else {
-                    sync_slot_mtp_hidden(slot, ctx);
+                    llama_set_draft_input_hidden_state(get_slot_mtp_ctx(slot, ctx), slot.mtp_hidden_state.data());
                     mtp_accept_tokens(get_slot_mtp_ctx(slot, ctx), ids, slot.spec_ckpt.n_past, slot.id);
 
                     if (n_accepted > 1) {
@@ -4054,7 +4064,7 @@ void server_context::speculative_decoding_accept() {
         if (slot.has_mtp) {
             mtp_n_past_base = slot.n_past - (slot.drafted.size() + 1);
 
-            const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+            const int n_embd = get_ctx_mtp_n_embd(ctx);
             if (!ids.empty()) {
                 mtp_hidden_state_pre.resize(ids.size() * n_embd);
                 for (size_t i = 0; i < ids.size(); i++) {
@@ -4100,7 +4110,7 @@ void server_context::speculative_decoding_accept() {
             restore_speculative_checkpoint(slot, ctx, model, ids, n_draft, mtp_hidden_state_pre, mtp_n_past_base);
         } else {
             if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-                const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                const int n_embd = get_ctx_mtp_n_embd(ctx);
                 apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
             }
             llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
@@ -4474,8 +4484,18 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         }
 
         bool mtp_warmup_needed = false;
+        llama_context * batch_mtp_target = nullptr;
         std::vector<float> batch_mtp_hidden_state;
         if (params_base.has_mtp) {
+            for (auto & slot : slots) {
+                if (slot.spec && slot.has_mtp) {
+                    llama_context * mc = common_speculative_get_mtp_ctx(slot.spec);
+                    if (mc) {
+                        batch_mtp_target = mc;
+                        break;
+                    }
+                }
+            }
             for (auto& slot : slots) {
                 if ((slot.state == SLOT_STATE_PROCESSING && slot.n_decoded == 0) ||
                     (slot.state == SLOT_STATE_IDLE && slot.command == SLOT_COMMAND_LOAD_PROMPT)) {
@@ -4487,13 +4507,16 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
             if (mtp_warmup_needed) {
-                const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
+                llama_context * mtp_target = batch_mtp_target ? batch_mtp_target : ctx;
+                const int n_embd_src = get_ctx_mtp_n_embd(ctx);
+                const int n_embd_dst = get_ctx_mtp_n_embd(mtp_target);
                 const int n_toks = batch_view.n_tokens;
-                batch_mtp_hidden_state.resize(n_toks * n_embd);
+                batch_mtp_hidden_state.assign(n_toks * n_embd_dst, 0.0f);
                 for (int t = 0; t < n_toks; t++) {
                     const float* emb_t = llama_get_embeddings_ith(ctx, t);
                     if (emb_t) {
-                        memcpy(batch_mtp_hidden_state.data() + t * n_embd, emb_t, n_embd * sizeof(float));
+                        const int n_copy = std::min(n_embd_src, n_embd_dst);
+                        memcpy(batch_mtp_hidden_state.data() + t * n_embd_dst, emb_t, n_copy * sizeof(float));
                     }
                 }
             }
@@ -4547,7 +4570,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (params_base.has_mtp && slot.n_decoded == 0) {
                 const float* emb_i = llama_get_embeddings_ith(ctx, tok_idx);
                 if (emb_i) {
-                    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                    const int n_embd = get_ctx_mtp_n_embd(ctx);
                     if (slot.use_gemma4_external_mtp) {
                         set_external_mtp_hidden(slot, ctx, emb_i, n_embd);
                     } else {
@@ -4625,14 +4648,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                     }
                 }
             } else {
-                llama_context * mtp_ctx = nullptr;
-                for (auto & slot : slots) {
-                    if (slot.spec && slot.has_mtp) {
-                        llama_context * mc = common_speculative_get_mtp_ctx(slot.spec);
-                        if (mc) { mtp_ctx = mc; break; }
-                    }
-                }
-                llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
+                llama_context * mtp_target = batch_mtp_target ? batch_mtp_target : ctx;
                 llama_set_draft_input_hidden_state(mtp_target, batch_mtp_hidden_state.data());
                 mtp_update_kv_cache(mtp_target, batch_view, true);
             }
