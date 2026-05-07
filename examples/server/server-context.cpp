@@ -15,6 +15,7 @@
 #include <iostream>
 #include <regex>
 #include <exception>
+#include <cstdio>
 #include <cstdlib>
 
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
@@ -140,6 +141,21 @@ static void set_external_mtp_hidden(server_slot & slot, llama_context * ctx, con
 
 static void set_external_mtp_hidden_from_rows(server_slot & slot, llama_context * ctx, const std::vector<float> & rows, int n_embd) {
     cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, rows, n_embd);
+}
+
+static void add_arch_kv_override(gpt_params & params, const char * arch) {
+    if (!params.kv_overrides.empty() && params.kv_overrides.back().key[0] == 0) {
+        params.kv_overrides.pop_back();
+    }
+
+    llama_model_kv_override kvo = {};
+    snprintf(kvo.key, sizeof(kvo.key), "%s", "general.architecture");
+    kvo.tag = LLAMA_KV_OVERRIDE_TYPE_STR;
+    snprintf(kvo.val_str, sizeof(kvo.val_str), "%s", arch);
+
+    params.kv_overrides.emplace_back(kvo);
+    params.kv_overrides.emplace_back();
+    params.kv_overrides.back().key[0] = 0;
 }
 
 void server_speculative_checkpoint::clear(bool free_sampler) {
@@ -352,10 +368,10 @@ bool server_context::load_model(const gpt_params& params_) {
                 params_mtp.n_ctx = params_base.n_ctx / params_base.n_parallel;
             }
             params_mtp.has_mtp = true;
+            add_arch_kv_override(params_mtp, override_arch.c_str());
 
             llama_model_params mparams_mtp = common_model_params_to_llama(params_mtp);
             mparams_mtp.mtp = true;
-            mparams_mtp.override_arch = override_arch.c_str();
 
             model_draft = llama_model_load_from_file(params_base.model.c_str(), mparams_mtp);
             if (model_draft == nullptr) {

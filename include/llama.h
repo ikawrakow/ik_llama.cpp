@@ -412,7 +412,6 @@ extern "C" {
         const struct llama_model_kv_override * kv_overrides;
 
         const struct llama_model_tensor_buft_override * tensor_buft_overrides;
-        const char * override_arch; // optional model architecture override for sibling draft heads
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights

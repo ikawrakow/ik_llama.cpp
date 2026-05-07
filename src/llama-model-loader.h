@@ -90,8 +90,7 @@ struct llama_model_loader {
     llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
             bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
             const llama_model_kv_override * param_overrides_p,
-            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-            const char * override_arch = nullptr);
+            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 
     ~llama_model_loader();
 

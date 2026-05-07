@@ -311,8 +311,7 @@ static void coalesce_ranges(std::vector<llama_file_range> & ranges) {
 llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors,
         bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
-        const char * override_arch) {
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -356,11 +355,6 @@ llama_model_loader::llama_model_loader(const std::string & fname, int ncmoe, boo
     }
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
-    if (override_arch != nullptr && override_arch[0] != '\0') {
-        LLAMA_LOG_INFO("%s: overriding model architecture %s -> %s\n",
-                __func__, arch_name.c_str(), override_arch);
-        arch_name = override_arch;
-    }
     arch = llm_arch_from_string(arch_name);
     llm_kv = LLM_KV(llm_arch_for_kv(arch));
 

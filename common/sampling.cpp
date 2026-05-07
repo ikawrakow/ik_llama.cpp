@@ -4,7 +4,6 @@
 #include "common.h"
 #include "reasoning-budget.cpp"
 
-#include <cstdlib>
 #include <limits>
 #include <random>
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
@@ -1084,8 +1083,7 @@ llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, str
 
     const int n_vocab = llama_n_vocab(llama_get_model(ctx));
 
-    static const bool fast_prob_env = std::getenv("IK_SPEC_FAST_P_MIN") != nullptr;
-    const bool fast_prob = fast_p_min || fast_prob_env;
+    const bool fast_prob = fast_p_min;
     const bool track_second = out_prob && fast_prob;
 
     int best_id = 0;

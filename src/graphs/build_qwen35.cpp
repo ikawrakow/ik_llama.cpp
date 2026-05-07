@@ -302,7 +302,7 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
-    // Dense FFN — optional (9B and 4B don't have FFN in MTP layer)
+    // Dense FFN is optional; some Qwen35 MTP tails do not carry FFN weights.
     if (mtp_layer.ffn_gate != nullptr) {
         cur = llm_build_ffn(ctx0, lctx, mtp_layer.ffn_norm, cur,
                 mtp_layer.ffn_up,   NULL, NULL,
@@ -315,11 +315,8 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
 
-    // As far as I can tell this was wrong. We need the FFN output, and not the normalized result.
-    //cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "result_norm", -1);
 
-    //cur = build_output(lctx, ctx0, cur, model.output, nullptr, cb);
     ggml_tensor * head_w = mtp_layer.nextn.shared_head_head ? mtp_layer.nextn.shared_head_head : model.output;
     cur = build_output(lctx, ctx0, cur, head_w, mtp_layer.nextn.shared_head_norm, cb);
     cb(cur, "result_output", -1);
