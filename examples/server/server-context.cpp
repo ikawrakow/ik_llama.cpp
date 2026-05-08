@@ -278,6 +278,7 @@ bool server_context::load_model(const gpt_params& params_) {
         gpt_params params_dft;
         params_dft.devices      = params_base.speculative.devices;
         params_dft.model        = params_base.speculative.model;
+        params_dft.main_gpu     = params_base.main_gpu;
         params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
         params_dft.rpc_servers  = params_base.rpc_servers;
         params_dft.cache_type_k = params_base.speculative.cache_type_k.empty() ? params_base.cache_type_k : params_base.speculative.cache_type_k;

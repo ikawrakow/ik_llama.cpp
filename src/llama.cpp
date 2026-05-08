@@ -2698,7 +2698,19 @@ static bool llm_load_tensors(
     auto & hparams = model.hparams;
 
     if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
-        if (!is_model_split_supported(model)) {
+        const bool unsupported_gemma_split =
+            model.arch == LLM_ARCH_GEMMA4_MTP ||
+            (model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0);
+
+        if (unsupported_gemma_split) {
+            LLAMA_LOG_WARN("\n=========================================================\n");
+            LLAMA_LOG_WARN("Split mode 'graph' is not supported for %s\n",
+                    model.arch == LLM_ARCH_GEMMA4_MTP ? "Gemma 4 MTP assistant"
+                                                      : "this Gemma4 variant");
+            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
+            LLAMA_LOG_WARN("===========================================================\n\n");
+            split_mode = LLAMA_SPLIT_MODE_LAYER;
+        } else if (!is_model_split_supported(model)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for this model\n");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
@@ -3020,6 +3032,20 @@ static bool llm_load_tensors(
             }
         }
     }
+    if (model.arch == LLM_ARCH_GEMMA4_MTP && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count > 0 && n_gpu_layers > 0) {
+        const int mtp_device = std::clamp(main_gpu, 0, device_count - 1);
+
+        LLAMA_LOG_INFO("%s: Gemma 4 MTP assistant forcing layer placement to GPU %d under layer split\n",
+                __func__, mtp_device);
+
+        for (int i = i_gpu_start; i < n_layer; ++i) {
+            model.default_layer_device[i] = mtp_device;
+        }
+        if (n_gpu_layers > n_layer) {
+            model.default_layer_device[n_layer] = mtp_device;
+        }
+    }
+
     // assign the repeating layers to the devices according to the splits
     if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
         for (int i = i_gpu_start; i < n_layer; ++i) {
@@ -4716,7 +4742,7 @@ static int llama_decode_internal(
 #endif
         }
         n_outputs_prev += lctx.n_outputs;
-        n_outputs_prev_embd += has_mtp && embd ? embd->ne[1] : lctx.n_outputs;
+        n_outputs_prev_embd += (has_mtp && embd) ? embd->ne[1] : lctx.n_outputs;
         cur_token += n_tokens;
         if (reset_previous) {
             // We need to discard this graph. Otherwise, iwith CUDA graphs enabled, the graph will get resused and this will reset the
@@ -6422,14 +6448,7 @@ struct llama_context * llama_init_from_model(
         LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
-    const bool force_layer_scheduling_for_mtp =
-        cparams.mtp_op_type != MTP_OP_NONE && model->hparams.nextn_predict_layers > 0;
-    if (force_layer_scheduling_for_mtp && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        LLAMA_LOG_INFO("%s: embedded MTP context forcing layer scheduling under split mode graph\n", __func__);
-    }
-    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH &&
-        (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling) &&
-        !force_layer_scheduling_for_mtp) {
+    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);
         ggml_backend_sched_set_max_extra_alloc(ctx->sched, params.max_extra_alloc);
         if (model->has_tensor_overrides() && cparams.split_mode_graph_scheduling) {
@@ -9929,7 +9948,6 @@ uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx) {
     ctx->mtp_target_ctx = target_ctx;
-    ctx->mtp_target_model = target_ctx ? llama_get_model(target_ctx) : nullptr;
 }
 
 size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts) {

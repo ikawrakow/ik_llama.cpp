@@ -1992,6 +1992,7 @@ bool create_tensors_helper::create_gemma4_tensors(const LLM_TN & tn) {
 
     const uint32_t n_embd_per_layer = hparams.n_embd_per_layer;
     const int64_t  n_ff_exp         = hparams.n_ff_exp;
+    const bool     use_split_ctx    = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
 
     if (n_embd_head_k != n_embd_head_v) {
         throw std::runtime_error("Gemma 4 requires n_embd_head_k == n_embd_head_v");
@@ -2019,7 +2020,8 @@ bool create_tensors_helper::create_gemma4_tensors(const LLM_TN & tn) {
     int rope_freqs_flag = 0;
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_split = ctx_for_layer_split(i);
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = use_split_ctx ? ctx_for_layer_split(i) : ctx_layer;
         auto & layer = model.layers[i];
         const int64_t n_head      = hparams.n_head(i);
         const int64_t n_embd_head = hparams.n_embd_head_k(i);
@@ -2090,6 +2092,7 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     const int64_t n_backbone = hparams.mtp_backbone_n_embd;
+    const bool    use_split_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN;
     if (n_backbone <= 0) {
         throw std::runtime_error("Gemma 4 MTP assistant requires backbone_embedding_length metadata");
     }
@@ -2107,7 +2110,8 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
     model.mtp_centroids      = create_tensor(ctx_output, tn(LLM_TENSOR_MTP_CENTROIDS,      "weight"), {n_embd, hparams.mtp_num_centroids}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_split = ctx_for_layer_split(i);
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = use_split_ctx ? ctx_for_layer_split(i) : ctx_layer;
         auto & layer = model.layers[i];
         const int64_t n_head      = hparams.n_head(i);
         const int64_t n_embd_head = hparams.n_embd_head_k(i);

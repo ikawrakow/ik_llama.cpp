@@ -21,6 +21,109 @@ static int gemma4_mtp_target_kv_layer(const llama_hparams & mtp_hparams, const l
     return target_il;
 }
 
+static void gemma4_mtp_prepare_frozen_kv_views(
+        ggml_context * ctx0,
+        llama_context & lctx,
+        const llama_kv_cache & target_kv,
+        int assistant_il,
+        int target_il,
+        int32_t target_n_kv,
+        ggml_tensor ** frozen_k,
+        ggml_tensor ** frozen_v,
+        const llm_build_cb & cb) {
+    if (*frozen_k || *frozen_v) {
+        GGML_ASSERT(*frozen_k && *frozen_v);
+        return;
+    }
+
+    if (!lctx.cparams.flash_attn) {
+        return;
+    }
+
+    GGML_ASSERT(target_il >= 0 && target_il < (int) target_kv.k_l.size() && target_il < (int) target_kv.v_l.size());
+
+    ggml_tensor * k_cache = target_kv.k_l[target_il];
+    ggml_tensor * v_cache = target_kv.v_l[target_il];
+    if (!k_cache || !v_cache || !k_cache->extra || !v_cache->extra) {
+        return;
+    }
+
+    auto * split_k = (ggml_split_tensor_t *) k_cache->extra;
+    auto * split_v = (ggml_split_tensor_t *) v_cache->extra;
+
+    GGML_ASSERT(split_k && split_v);
+    GGML_ASSERT(split_k->n_device == split_v->n_device);
+
+    const llama_hparams & assistant_hparams = lctx.model.hparams;
+    const int64_t n_embd_head_k = assistant_hparams.n_embd_head_k(assistant_il);
+    const int64_t n_embd_head_v = assistant_hparams.n_embd_head_v(assistant_il);
+
+    std::vector<ggml_tensor *> k_parts;
+    std::vector<ggml_tensor *> v_parts;
+    k_parts.reserve(split_k->n_device);
+    v_parts.reserve(split_v->n_device);
+
+    for (int id = 0; id < split_k->n_device; ++id) {
+        ggml_tensor * split_kl = split_k->splits[id];
+        ggml_tensor * split_vl = split_v->splits[id];
+
+        GGML_ASSERT((split_kl && split_vl) || (!split_kl && !split_vl));
+        if (!split_kl) {
+            continue;
+        }
+
+        GGML_ASSERT(target_kv.size > 0);
+        GGML_ASSERT(split_kl->ne[1] % target_kv.size == 0);
+
+        const int64_t split_n_head_kv = split_kl->ne[1] / target_kv.size;
+
+        ggml_tensor * k_part = ggml_view_3d(ctx0, split_kl,
+                n_embd_head_k, target_n_kv, split_n_head_kv,
+                ggml_row_size(split_kl->type, n_embd_head_k) * split_n_head_kv,
+                ggml_row_size(split_kl->type, n_embd_head_k),
+                0);
+        if (k_part->type != GGML_TYPE_F32) {
+            k_part = ggml_cast(ctx0, k_part, GGML_TYPE_F32);
+        }
+        cb(k_part, "mtp_frozen_k_split", 1000 * (assistant_il + 1) + id);
+
+        ggml_tensor * v_part = ggml_view_3d(ctx0, split_vl,
+                n_embd_head_v, target_n_kv, split_n_head_kv,
+            ggml_row_size(split_vl->type, split_n_head_kv * n_embd_head_v),
+                ggml_row_size(split_vl->type, n_embd_head_v),
+                0);
+        if (v_part->type != GGML_TYPE_F32) {
+            v_part = ggml_cast(ctx0, v_part, GGML_TYPE_F32);
+        }
+        cb(v_part, "mtp_frozen_v_split", 1000 * (assistant_il + 1) + id);
+
+        k_parts.push_back(k_part);
+        v_parts.push_back(v_part);
+    }
+
+    GGML_ASSERT(!k_parts.empty() && k_parts.size() == v_parts.size());
+
+    ggml_tensor * k_full = k_parts[0];
+    ggml_tensor * v_full = v_parts[0];
+    for (size_t i = 1; i < k_parts.size(); ++i) {
+        k_full = ggml_concat(ctx0, k_full, k_parts[i], 2);
+        v_full = ggml_concat(ctx0, v_full, v_parts[i], 2);
+    }
+
+    if (k_full->type != GGML_TYPE_F16) {
+        k_full = ggml_cast(ctx0, k_full, GGML_TYPE_F16);
+    }
+    if (v_full->type != GGML_TYPE_F16) {
+        v_full = ggml_cast(ctx0, v_full, GGML_TYPE_F16);
+    }
+
+    cb(k_full, "mtp_frozen_k", assistant_il);
+    cb(v_full, "mtp_frozen_v", assistant_il);
+
+    *frozen_k = k_full;
+    *frozen_v = v_full;
+}
+
 static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_context & lctx, ggml_context * ctx0,
         ggml_tensor * inpL, ggml_tensor * inp_pos, ggml_tensor * inp_out_ids,
         ggml_tensor * KQ_mask, ggml_tensor * KQ_mask_swa, int n_tokens,  const llm_build_cb & cb) {
@@ -392,17 +495,6 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     const bool    has_target_ctx  = lctx.mtp_target_ctx != nullptr;
 
     GGML_ASSERT(n_backbone > 0);
-    GGML_ASSERT(has_target_ctx && "Gemma4 MTP assistant requires a bound target context");
-    GGML_ASSERT(batch.token && "Gemma4 MTP assistant requires token ids");
-
-    const llama_model   & target_model   = lctx.mtp_target_ctx->model;
-    const llama_hparams & target_hparams = target_model.hparams;
-    const llama_cparams & target_cparams = lctx.mtp_target_ctx->cparams;
-    const llama_kv_cache & target_kv     = lctx.mtp_target_ctx->kv_self;
-
-    GGML_ASSERT(n_tokens <= target_kv.n);
-
-    ggml_tensor * inp_pos = build_inp_pos();
 
     lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
     cb(lctx.inp_tokens, "inp_tokens", -1);
@@ -412,6 +504,32 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     ggml_set_name(hidden_state, "inp_mtp_states");
     ggml_set_input(hidden_state);
     lctx.inp_mtp_states = hidden_state;
+
+    if (!has_target_ctx || !batch.token) {
+        ggml_tensor * cur = ggml_view_2d(ctx0, hidden_state, n_embd, n_tokens,
+                ggml_row_size(hidden_state->type, n_backbone), 0);
+        cb(cur, "mtp_init_hidden_view", -1);
+
+        ggml_tensor * mtp_embd = ggml_dup(ctx0, hidden_state);
+        cb(mtp_embd, "result_mtp_embd", -1);
+        ggml_build_forward_expand(gf, mtp_embd);
+
+        ggml_tensor * logits = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
+        cb(logits, "result_output", -1);
+        ggml_build_forward_expand(gf, logits);
+
+        GGML_UNUSED(n_vocab);
+        return gf;
+    }
+
+    const llama_model   & target_model   = lctx.mtp_target_ctx->model;
+    const llama_hparams & target_hparams = target_model.hparams;
+    const llama_cparams & target_cparams = lctx.mtp_target_ctx->cparams;
+    const llama_kv_cache & target_kv     = lctx.mtp_target_ctx->kv_self;
+
+    GGML_ASSERT(n_tokens <= target_kv.n);
+
+    ggml_tensor * inp_pos = build_inp_pos();
 
     ggml_tensor * token_embd = ggml_get_rows(ctx0, target_model.tok_embd, lctx.inp_tokens);
     cb(token_embd, "inp_embd_target", -1);
@@ -474,6 +592,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         const int target_il = gemma4_mtp_target_kv_layer(hparams, target_hparams, il);
         ggml_tensor *& frozen_k = is_sliding ? frozen_k_swa : frozen_k_full;
         ggml_tensor *& frozen_v = is_sliding ? frozen_v_swa : frozen_v_full;
+        gemma4_mtp_prepare_frozen_kv_views(ctx0, lctx, target_kv, il, target_il, target_n_kv, &frozen_k, &frozen_v, cb);
         cur = llm_build_kv(ctx0, lctx, target_kv, gf, model.layers[il].wo, model.layers[il].bo,
             nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa, target_il,
             &frozen_k, &frozen_v);
