@@ -4064,7 +4064,7 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
         }
     } else {
         // src and dst are on the same backend
-        printf("Why is this being invoked?\n");
+        // printf("Why is this being invoked?\n");
         CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
     }
     return true;
