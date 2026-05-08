@@ -10,10 +10,10 @@ static int gemma4_mtp_target_kv_layer(const llama_hparams & mtp_hparams, const l
         ? std::min<int>((int) target_hparams.n_layer, target_hparams.n_layer_kv_from_start)
         : (int) target_hparams.n_layer;
 
-    int target_il = -1;
-    for (int il = 0; il < target_n_kv_layer; ++il) {
-        if ((target_hparams.swa_layers[il] != 0) == is_sliding) {
-            target_il = il;
+    int target_il = target_n_kv_layer - 1;
+    for (; target_il >= 0; --target_il) {
+        if ((target_hparams.swa_layers[target_il] != 0) == is_sliding) {
+            break;
         }
     }
 
@@ -389,46 +389,42 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     const int64_t n_vocab         = hparams.n_vocab;
     const int64_t n_backbone      = hparams.mtp_backbone_n_embd;
     const int32_t n_layer         = hparams.n_layer;
-    const bool    has_target_ctx  = lctx.mtp_target_ctx != nullptr && lctx.mtp_target_model != nullptr;
-    const llama_hparams * target_hparams = has_target_ctx ? &lctx.mtp_target_model->hparams : nullptr;
+    const bool    has_target_ctx  = lctx.mtp_target_ctx != nullptr;
 
     GGML_ASSERT(n_backbone > 0);
+    GGML_ASSERT(has_target_ctx && "Gemma4 MTP assistant requires a bound target context");
+    GGML_ASSERT(batch.token && "Gemma4 MTP assistant requires token ids");
+
+    const llama_model   & target_model   = lctx.mtp_target_ctx->model;
+    const llama_hparams & target_hparams = target_model.hparams;
+    const llama_cparams & target_cparams = lctx.mtp_target_ctx->cparams;
+    const llama_kv_cache & target_kv     = lctx.mtp_target_ctx->kv_self;
+
+    GGML_ASSERT(n_tokens <= target_kv.n);
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    if (batch.token) {
-        lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
-        cb(lctx.inp_tokens, "inp_tokens", -1);
-        ggml_set_input(lctx.inp_tokens);
-    } else {
-        return gf;
-    }
+    lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
+    cb(lctx.inp_tokens, "inp_tokens", -1);
+    ggml_set_input(lctx.inp_tokens);
 
     ggml_tensor * hidden_state = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_backbone, n_tokens);
     ggml_set_name(hidden_state, "inp_mtp_states");
     ggml_set_input(hidden_state);
     lctx.inp_mtp_states = hidden_state;
 
-    ggml_tensor * token_embd;
-    if (has_target_ctx) {
-        const llama_model & target_model = *lctx.mtp_target_model;
-        token_embd = ggml_get_rows(ctx0, target_model.tok_embd, lctx.inp_tokens);
-        cb(token_embd, "inp_embd_target", -1);
-        token_embd = ggml_scale(ctx0, token_embd, std::sqrt(float(n_backbone)));
-        cb(token_embd, "inp_embd_scaled", -1);
-    } else {
-        token_embd = ggml_dup(ctx0, hidden_state);
-        cb(token_embd, "inp_embd_placeholder", -1);
-    }
+    ggml_tensor * token_embd = ggml_get_rows(ctx0, target_model.tok_embd, lctx.inp_tokens);
+    cb(token_embd, "inp_embd_target", -1);
+    token_embd = ggml_scale(ctx0, token_embd, std::sqrt(float(n_backbone)));
+    cb(token_embd, "inp_embd_scaled", -1);
 
     ggml_tensor * cur = ggml_concat(ctx0, token_embd, hidden_state, 0);
     cb(cur, "inp_mtp_combined", -1);
     cur = llm_build_lora_mm(lctx, ctx0, model.mtp_pre_proj, cur);
     cb(cur, "mtp_pre_proj", -1);
 
-    const llama_kv_cache * target_kv = has_target_ctx ? &lctx.mtp_target_ctx->kv_self : &kv_self;
-    const int32_t target_n_kv = has_target_ctx ? std::max<int32_t>(lctx.mtp_target_ctx->kv_self.n, n_tokens) : n_kv;
-    const int32_t target_kv_head = has_target_ctx ? lctx.mtp_target_ctx->kv_self.head : kv_head;
+    const int32_t target_n_kv = target_kv.n;
+    const int32_t target_kv_head = target_kv.head;
 
     ggml_tensor * KQ_mask = nullptr;
     ggml_tensor * KQ_mask_swa = nullptr;
@@ -436,15 +432,14 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     ggml_tensor * frozen_v_swa = nullptr;
     ggml_tensor * frozen_k_full = nullptr;
     ggml_tensor * frozen_v_full = nullptr;
-    if (has_target_ctx) {
+    {
         const int64_t n_mask_tokens = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
         lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, target_n_kv, n_mask_tokens);
         cb(lctx.inp_KQ_mask, "KQ_mask", -1);
         ggml_set_input(lctx.inp_KQ_mask);
         KQ_mask = lctx.inp_KQ_mask;
 
-        const uint32_t target_n_swa = target_hparams ? target_hparams->n_swa : hparams.n_swa;
-        if (target_n_swa > 0) {
+        if (target_hparams.n_swa > 0) {
             lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, target_n_kv, n_mask_tokens);
             cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
             ggml_set_input(lctx.inp_KQ_mask_swa);
@@ -456,10 +451,10 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         ggml_tensor * inpL = cur;
 
         const bool is_sliding    = hparams.swa_layers[il] ? true : false;
-        const float freq_base_l  = is_sliding ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
-        const float freq_scale_l = is_sliding ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
-        const int   n_rot_l      = is_sliding ? hparams.n_rot_swa : hparams.n_rot;
-        const int   n_swa        = is_sliding ? (target_hparams ? target_hparams->n_swa : hparams.n_swa) : 0;
+        const float freq_base_l  = is_sliding ? target_hparams.rope_freq_base_train_swa  : target_cparams.rope_freq_base;
+        const float freq_scale_l = is_sliding ? target_hparams.rope_freq_scale_train_swa : target_cparams.rope_freq_scale;
+        const int   n_rot_l      = is_sliding ? target_hparams.n_rot_swa : target_hparams.n_rot;
+        const int   n_swa        = is_sliding ? target_hparams.n_swa : 0;
         const int   n_embd_head  = hparams.n_embd_head_k(il);
         const int   n_head       = hparams.n_head(il);
         ggml_tensor * KQ_mask_l  = is_sliding ? KQ_mask_swa : KQ_mask;
@@ -476,18 +471,12 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Qcur, "Qcur_rope", il);
 
-        if (has_target_ctx) {
-            const int target_il = gemma4_mtp_target_kv_layer(hparams, *target_hparams, il);
-            ggml_tensor ** frozen_k = is_sliding ? &frozen_k_swa : &frozen_k_full;
-            ggml_tensor ** frozen_v = is_sliding ? &frozen_v_swa : &frozen_v_full;
-            cur = llm_build_kv(ctx0, lctx, *target_kv, gf, model.layers[il].wo, model.layers[il].bo,
-                    nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa, target_il,
-                    frozen_k, frozen_v);
-        } else {
-            cur = ggml_reshape_2d(ctx0, Qcur, n_embd_head*n_head, n_tokens);
-            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
-            cb(cur, "kqv_placeholder", il);
-        }
+        const int target_il = gemma4_mtp_target_kv_layer(hparams, target_hparams, il);
+        ggml_tensor *& frozen_k = is_sliding ? frozen_k_swa : frozen_k_full;
+        ggml_tensor *& frozen_v = is_sliding ? frozen_v_swa : frozen_v_full;
+        cur = llm_build_kv(ctx0, lctx, target_kv, gf, model.layers[il].wo, model.layers[il].bo,
+            nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa, target_il,
+            &frozen_k, &frozen_v);
 
         cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_post_norm", il);
@@ -517,8 +506,8 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
 
     ggml_tensor * logits;
     // E2B/E4B: The centroid/token-ordering tensors are kept in the GGUF for future use but
-    // not required for correct inference — the full-vocab matmul against tok_embd
-    // (model.output = model.tok_embd) yields valid per-token logits.
+    // not required for correct inference — the full-vocab matmul against the tied output
+    // weight still yields valid per-token logits.
     {
         logits = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
         cb(logits, "result_output", -1);

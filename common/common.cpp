@@ -3358,33 +3358,8 @@ std::string fs_get_cache_file(const std::string & filename) {
 }
 
 
-//
-// Model utils
-//
-static void adjust_split_mode_for_external_mtp(gpt_params & params) {
-    // Gemma4 MTP assistant reads the target token embeddings and KV tensors across
-    // contexts. Needs to check how to handle with graph/attn split.
-    if (!params.has_mtp || params.speculative.model.empty()) {
-        return;
-    }
-
-    if (!llama_is_gemma4_mtp_file(params.speculative.model.c_str())) {
-        return;
-    }
-
-    if (params.split_mode == LLAMA_SPLIT_MODE_GRAPH || params.split_mode == LLAMA_SPLIT_MODE_ATTN) {
-        LLAMA_LOG_WARN("\n=======================================================\n");
-        LLAMA_LOG_WARN("Split mode 'graph' is not supported for Gemma4 external MTP\n");
-        LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
-        LLAMA_LOG_WARN("=======================================================\n\n");
-        params.split_mode = LLAMA_SPLIT_MODE_LAYER;
-    }
-}
-
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     llama_init_result iparams;
-
-    adjust_split_mode_for_external_mtp(params);
 
     auto mparams = common_model_params_to_llama(params);
 
