@@ -7,7 +7,7 @@ ARG BASE_CUDA_RUN_CONTAINER=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 
 # Build arguments
-ARG CUDA_DOCKER_ARCH="86;90"
+ARG CUDA_DOCKER_ARCH="75-virtual;80-virtual;86-real;89-real"
 ARG GGML_NATIVE=ON
 ARG USE_CCACHE=true
 
