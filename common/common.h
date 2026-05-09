@@ -151,6 +151,36 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
+std::string common_speculative_type_name_str();
+enum common_speculative_type common_speculative_type_from_name(const std::string & name);
+std::string common_speculative_type_to_str(enum common_speculative_type type);
+bool common_speculative_type_is_self_spec(enum common_speculative_type type);
+bool common_speculative_type_is_model_spec(enum common_speculative_type type);
+
+struct common_speculative_stage_params {
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+
+    int32_t n_max = -1;
+    int32_t n_min = -1;
+    float   p_min = -1.0f;
+
+    uint16_t ngram_size_n = 0;
+    uint16_t ngram_size_m = 0;
+    uint16_t ngram_min_hits = 0;
+
+    int32_t suffix_min_match_len = -1;
+    int32_t suffix_max_depth = -1;
+
+    bool has_n_max_override() const { return n_max >= 0; }
+    bool has_n_min_override() const { return n_min >= 0; }
+    bool has_p_min_override() const { return p_min >= 0.0f; }
+    bool has_ngram_size_n_override() const { return ngram_size_n > 0; }
+    bool has_ngram_size_m_override() const { return ngram_size_m > 0; }
+    bool has_ngram_min_hits_override() const { return ngram_min_hits > 0; }
+    bool has_suffix_min_match_len_override() const { return suffix_min_match_len >= 0; }
+    bool has_suffix_max_depth_override() const { return suffix_max_depth >= 0; }
+};
+
 struct common_params_model {
     std::string path        = ""; // model local path                                       // NOLINT
     std::string url         = ""; // model url to download                                  // NOLINT
@@ -175,6 +205,7 @@ struct common_params_speculative {
     int32_t n_max = 16; // number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
     bool enable_mtp = false; // append MTP as a fallback implementation without replacing the primary speculative type
+    std::vector<common_speculative_stage_params> stages; // explicit stage chain for single-spec or self-spec + model fallback
 
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min = 0.75f; // minimum speculative decoding probability (greedy)
@@ -217,7 +248,18 @@ struct common_params_speculative {
         //return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();
     }
 
+    std::vector<common_speculative_stage_params> get_resolved_stages() const;
+    common_params_speculative with_stage_overrides(const common_speculative_stage_params & stage) const;
+    bool has_stage_chain() const;
+    bool has_stage_type(common_speculative_type stage_type) const;
+    bool has_composite_stage_chain() const;
+    int32_t get_max_stage_n_max() const;
+    int32_t get_min_usable_stage_n_min() const;
+
 };
+
+bool common_speculative_validate_chain(const common_params_speculative & params, std::string * error = nullptr);
+std::string common_speculative_stage_chain_to_str(const common_params_speculative & params);
 
 struct gpt_params {
     std::string devices;

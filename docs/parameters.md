@@ -119,12 +119,21 @@ Check the details [here](./speculative.md).
 | `--spec-ngram-size-n N` | ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram| 12 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
 | `--spec-ngram-size-m N` | ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram | 48 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
 | `--spec-ngram-min-hits N` | minimum hits for ngram-map speculative decoding | 1 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
-| `--spec-type Name` | Comma-separated list of draft model parameters | - | none / ngram - cache / ngram - simple / ngram - map - k / ngram - map - k4v / ngram - mod [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
-| `-mtp, --multi-token-prediction` |  | - | MTP decoding for GLM-4.x MoE [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
-| `-no-mtp, --no-multi-token-prediction` |  | - | MTP decoding for GLM-4.x MoE [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
-| `--draft-max` |  | - | MTP decoding for GLM-4.x MoE [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
-| `--draft-p-min` |  | - | MTP decoding for GLM-4.x MoE [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
+| `--spec-type Name` | Select a single self-spec stage when `--spec-stage` is not used | none | `none`, `ngram-cache`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`, `suffix` [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
+| `--spec-stage SPEC[:k=v,...]` | Add an explicit speculative stage; repeat once for a supported two-stage chain | - | Supported two-stage shape: self-spec first, then `mtp` or `draft` fallback. Example: `--spec-stage ngram-mod:n_max=64,n_min=2 --spec-stage mtp:n_max=1,p_min=0.0` |
+| `-mtp, --multi-token-prediction` | Legacy shortcut that adds an MTP stage | off | Valid for single-stage MTP or implicit self-spec-plus-MTP startup configuration. If combined with `-md` without `--spec-stage`, startup is rejected as ambiguous. [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) |
+| `-no-mtp, --no-multi-token-prediction` | Disable the legacy MTP shortcut or remove an explicit MTP stage | off |  |
+| `--draft-max, --draft, --draft-n N` | Global speculative draft cap, or fallback value for stages without an explicit `n_max` override | 16 | Applies to single-stage mode and to explicit stages that do not set `n_max`. |
+| `--draft-min, --draft-n-min N` | Global minimum speculative draft threshold, or fallback value for stages without an explicit `n_min` override | 0 | In stage chains, a self-spec stage below this threshold can fall through to the next stage. |
+| `--draft-p-min P` | Global minimum speculative probability, or fallback value for stages without an explicit `p_min` override | 0.8 | Applies to single-stage mode and to explicit stages that do not set `p_min`. |
 | `--spec-autotune` | Automatically tune speculative params to maximize tokens/sec | - | Automatically determines the near-optimal arguments for the type of speculation being performed [PR 1595](https://github.com/ikawrakow/ik_llama.cpp/pull/1595) |
+
+Notes:
+
+- `--spec-type` cannot be combined with `--spec-stage`.
+- Explicit stage chains currently support at most two stages.
+- Supported self-spec stage names are `ngram-cache`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`, and `suffix`.
+- Composite stage chains disable speculative autotune.
 
 ## Cache Prompt to Host Memory
 
@@ -345,10 +354,26 @@ WIP
 | `--check-tensors` | Check model tensor data for invalid values | false |  |
 | `--override-kv KEY=TYPE:VALUE` | Override model metadata by key | - | Advanced option to override model metadata by key. May be specified multiple times. types: int, float, bool, str. Example: `--override-kv tokenizer.ggml.add_bos_token=bool:false` |
 | `-m, --model FNAME` | Model path | models/$filename | Mandatory, the GGUF model file to be served. |
-| `-md, --model-draft FNAME` | Draft model for speculative decoding | unused |  |
-| `--draft-max, --draft, --draft-n N` | Number of tokens to draft for speculative decoding | 16 |  |
-| `--draft-min, --draft-n-min N` | Minimum number of draft tokens to use for speculative decoding | - |  |
-| `--draft-p-min P` | Minimum speculative decoding probability (greedy) | 0.8 |  |
+| `-md, --model-draft FNAME` | Draft model for speculative decoding | unused | Required when an explicit `draft` stage is used. |
+| `--draft-max, --draft, --draft-n N` | Global speculative draft cap, or fallback value for stages without an explicit `n_max` override | 16 | Also used by single-stage MTP and draft-model speculation. |
+| `--draft-min, --draft-n-min N` | Global minimum speculative draft threshold, or fallback value for stages without an explicit `n_min` override | 0 |  |
+| `--draft-p-min P` | Global minimum speculative decoding probability (greedy), or fallback value for stages without an explicit `p_min` override | 0.8 |  |
+
+### Request-Level Speculative Overrides
+
+When the server is started with speculative decoding enabled, request JSON may override:
+
+- `speculative.n_max`
+- `speculative.n_min`
+- `speculative.p_min`
+- `speculative.stages`
+
+Request-level `speculative.stages` is constrained:
+
+- The number of stages must match the stage chain configured at server startup.
+- Each request stage must keep the same `type` as the corresponding startup stage.
+- Only `type`, `n_max`, `n_min`, and `p_min` are accepted per request.
+- Structural stage parameters such as ngram sizes, ngram hit thresholds, and suffix depth remain startup-only.
 
 ## Server Options
 
