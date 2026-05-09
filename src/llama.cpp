@@ -5093,7 +5093,7 @@ static int llama_decode_internal(
     auto tim1 = ggml_time_us();
 #endif
     const bool has_previous_graph = (bool) llama_context_prev_for_op(lctx);
-    if (!has_previous_graph) {
+    if (!has_previous_graph && lctx.cparams.mtp_op_type != MTP_OP_NONE) {
         lctx.reset_scheduler();
     }
 #if IK_PRINT_TIMING
