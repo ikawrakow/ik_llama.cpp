@@ -143,7 +143,7 @@ struct llama_kv_cache {
 
     // Per-step checkpoint: allocate, restore step k's full state (SSM + conv) to cache
     bool per_step_alloc(int max_tokens);
-    bool per_step_restore(int step);
+    bool per_step_restore(ggml_backend_sched_t sched, int step);
 
     ~llama_kv_cache() {
         for (struct ggml_context * ctx : ctxs) {
