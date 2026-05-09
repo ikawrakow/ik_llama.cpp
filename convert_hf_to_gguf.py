@@ -2599,6 +2599,23 @@ class Qwen3_5TextModel(Qwen2Model):
 class Qwen3_5MoeTextModel(Qwen3NextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen3.6 ships an MTP tail layer when mtp_num_hidden_layers > 0
+        # (note: HF uses mtp_num_hidden_layers, not num_nextn_predict_layers).
+        # Bump block_count + rebuild tensor_map so blk.{n_main + i}.* names
+        # resolve for the appended MTP block(s).
+        nextn = int(self.hparams.get("mtp_num_hidden_layers", 0) or 0)
+        self._nextn_layers = nextn
+        if nextn > 0:
+            self.block_count = self.hparams["num_hidden_layers"] + nextn
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self._nextn_layers > 0:
+            self.gguf_writer.add_nextn_predict_layers(self._nextn_layers)
+
     @staticmethod
     def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
         """Reorder V heads from grouped-by-K-head order to tiled order along `dim`.
@@ -2627,7 +2644,52 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
             return []
         name = stripped
         if name.startswith("mtp."):
-            return []
+            if self._nextn_layers == 0:
+                # No MTP requested for this snapshot; drop quietly.
+                return
+            base = self.hparams["num_hidden_layers"]
+
+            # mtp.layers.{i}.<rest> -> model.layers.{base+i}.<rest>
+            # Re-enter via type(self).modify_tensors so the parents handlers
+            # apply (norm+1, linear_attn QKVZ split, packed MoE experts, etc.).
+            # Use yield from because this method is a generator (return value
+            # would otherwise become StopIteration().value and be discarded).
+            m = re.match(r"mtp\.layers\.(\d+)\.(.+)", name)
+            if m:
+                i = int(m.group(1))
+                rest = m.group(2)
+                new_bid = base + i
+                new_name = f"model.layers.{new_bid}.{rest}"
+                yield from type(self).modify_tensors(self, data_torch, new_name, new_bid)
+                return
+
+            # Standalone MTP tensors (one per MTP layer, indexed at base + 0
+            # for the single-MTP-layer Qwen3.6 case). HF doesnt ship
+            # mtp.embed_tokens or mtp.shared_head_head — the loader treats
+            # both as TENSOR_NOT_REQUIRED and falls back to model.tok_embd /
+            # model.output (per build_qwen35moe_mtp).
+            nextn_bid = base + 0
+            renames = {
+                "mtp.fc.weight":                    f"blk.{nextn_bid}.nextn.eh_proj.weight",
+                "mtp.pre_fc_norm_embedding.weight": f"blk.{nextn_bid}.nextn.enorm.weight",
+                "mtp.pre_fc_norm_hidden.weight":    f"blk.{nextn_bid}.nextn.hnorm.weight",
+                "mtp.norm.weight":                  f"blk.{nextn_bid}.nextn.shared_head_norm.weight",
+            }
+            new_name = renames.get(name)
+            if new_name is None:
+                logger.warning("Qwen3_5MoeTextModel: dropping unknown MTP tensor: %s", name)
+                return
+            # Apply the Qwen3-Next/3.5/3.6 RMS-norm storage convention (+1) to
+            # the standalone nextn norms before yielding. The parents
+            # modify_tensors does this for tensors routed through it; standalone
+            # tensors yielded directly miss it. Without +1, enorm/hnorm/
+            # shared_head_norm carry off-scale values (e.g. enorm mean -0.73
+            # vs the correct +0.27), the LLM_NORM_RMS path produces garbage
+            # from the MTP block, and draft acceptance collapses.
+            if new_name.endswith("norm.weight"):
+                data_torch = data_torch + 1
+            yield (new_name, data_torch)
+            return
 
         # Packed MoE experts (Qwen3.5/3.6 layout):
         #   mlp.experts.down_proj     ships as [n_expert, n_embd, n_ff]
