@@ -17,6 +17,7 @@
 #include <exception>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
@@ -156,6 +157,15 @@ static void add_arch_kv_override(gpt_params & params, const char * arch) {
     params.kv_overrides.emplace_back(kvo);
     params.kv_overrides.emplace_back();
     params.kv_overrides.back().key[0] = 0;
+}
+
+static bool env_truthy(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && (
+        strcmp(value, "1") == 0 ||
+        strcmp(value, "true") == 0 ||
+        strcmp(value, "yes") == 0 ||
+        strcmp(value, "on") == 0);
 }
 
 void server_speculative_checkpoint::clear(bool free_sampler) {
@@ -355,6 +365,7 @@ bool server_context::load_model(const gpt_params& params_) {
         const bool dense_qwen_cpu_only = arch_name == "qwen35" &&
             (params_base.n_gpu_layers == 0 || !llama_supports_gpu_offload());
         const bool dense_qwen_split_graph = arch_name == "qwen35" && params_base.split_mode == LLAMA_SPLIT_MODE_GRAPH;
+        const bool dense_qwen_sibling_opt_in = env_truthy("IK_MTP_DENSE_QWEN35_SIBLING");
 
         std::string override_arch;
         if (arch_name == "qwen35moe") {
@@ -363,6 +374,8 @@ bool server_context::load_model(const gpt_params& params_) {
             LOG_INFO("using built-in MTP path for dense Qwen CPU-only run", {});
         } else if (arch_name == "qwen35" && dense_qwen_split_graph) {
             LOG_INFO("using built-in MTP path for dense Qwen split=graph run", {});
+        } else if (arch_name == "qwen35" && !dense_qwen_sibling_opt_in) {
+            LOG_INFO("using built-in MTP path for dense Qwen run; set IK_MTP_DENSE_QWEN35_SIBLING=1 to opt into qwen35_mtp sibling override", {});
         } else if (arch_name == "qwen35") {
             override_arch = "qwen35_mtp";
         }
