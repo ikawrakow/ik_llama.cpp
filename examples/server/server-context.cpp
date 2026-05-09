@@ -424,7 +424,7 @@ void server_context::init() {
             const bool has_external_mtp = params_use_gemma4_external_mtp(params_base);
 
             if (llama_model_n_nextn_layer(model) > 0 || has_external_mtp) {
-                params_base.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+                params_base.speculative.enable_mtp = true;
                 params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
                 if (!has_external_mtp) {
@@ -437,8 +437,7 @@ void server_context::init() {
 
                 slot.has_mtp = true;
                 slot.use_gemma4_external_mtp = has_external_mtp;
-                slot.params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
-                slot.params.speculative.n_min = 0;
+                slot.params.speculative.enable_mtp = true;
                 slot.params.speculative.cparams_dft = params_base.speculative.cparams_dft;
 
                 slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
@@ -449,7 +448,7 @@ void server_context::init() {
             }
             else {
                 SRV_WRN("%s\n", "MTP enabled via flag, but model has 0 NextN layers. Disabling speculative.");
-                params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+                params_base.speculative.enable_mtp = false;
                 slot.has_mtp = false;
             }
         }
@@ -3477,14 +3476,17 @@ void server_context::add_sampled_tokens() {
             common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
             slot.cache_tokens.push_back(slot.sampled);
 
-            if (slot.params.speculative.n_min > (int)draft.size()) {
+            const bool has_self_spec_mtp_fallback = slot.params.speculative.enable_mtp &&
+                slot.params.speculative.type != COMMON_SPECULATIVE_TYPE_NONE &&
+                slot.params.speculative.type != COMMON_SPECULATIVE_TYPE_MTP;
+
+            if (!has_self_spec_mtp_fallback && slot.params.speculative.n_min > (int)draft.size()) {
                 SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft.size(), slot.params.speculative.n_min);
                 // fallback to normal decoding
                 slot.i_batch = slot.i_batch_dft[0];
                 slot.drafted.clear();
                 slot.i_batch_dft.clear();
-            }
-            else {
+            } else {
                 // keep track of total number of drafted tokens tested
                 slot.n_draft_total += draft.size();
 

@@ -174,6 +174,7 @@ struct common_params_speculative {
 
     int32_t n_max = 16; // number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
+    bool enable_mtp = false; // append MTP as a fallback implementation without replacing the primary speculative type
 
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min = 0.75f; // minimum speculative decoding probability (greedy)

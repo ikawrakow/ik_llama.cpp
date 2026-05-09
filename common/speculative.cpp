@@ -56,6 +56,20 @@ struct common_speculative_config {
             const common_params_speculative & p = common_params_speculative{}) : type(t), params(p) {}
 };
 
+static bool common_speculative_type_is_self_spec(common_speculative_type type) {
+    switch (type) {
+        case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
+        case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
+        case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
+        case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
+        case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
+        case COMMON_SPECULATIVE_TYPE_SUFFIX:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool common_speculative_are_compatible(
     const llama_model * model_tgt,
     const llama_model * model_dft) {
@@ -1066,7 +1080,7 @@ common_speculative * common_speculative_init(
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
-        bool has_mtp = (params.type == COMMON_SPECULATIVE_TYPE_MTP); 
+        bool has_mtp = params.enable_mtp || (params.type == COMMON_SPECULATIVE_TYPE_MTP);
         bool has_draft = !params.mparams_dft.path.empty() && !has_mtp;
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
@@ -1234,8 +1248,12 @@ common_speculative * common_speculative_init(
         /* .impls = */ std::move(impls)
     };
 
+    const bool has_mtp_fallback = params.enable_mtp && params.type != COMMON_SPECULATIVE_TYPE_NONE && params.type != COMMON_SPECULATIVE_TYPE_MTP;
+
     // initialize autotune if requested
-    if (params.autotune && !result->impls.empty()) {
+    if (params.autotune && has_mtp_fallback) {
+        LOG_WRN("Autotune disabled — self-spec + MTP fallback is not supported yet\n");
+    } else if (params.autotune && !result->impls.empty()) {
         auto actual_type = result->impls[0]->type;
         if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
             actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
@@ -1309,23 +1327,34 @@ llama_tokens common_speculative_draft(
     spec->curr_impl = nullptr; // reset current implementation
 
     for (auto & impl : spec->impls) {
+        result.clear();
+
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
             impl->draft(params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result);
             impl->n_call_draft++;
         }
 
-        if (!result.empty()) {
-            LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
-                    common_speculative_type_to_str(impl.get()->type).c_str(), prompt_tgt.size(),
-                    impl.get()->n_call_draft, result.size());
-
-            spec->curr_impl = impl.get(); // set current implementation for stats
-            impl->n_gen_drafts++;
-            impl->n_gen_tokens += result.size();
-
-            break; // We have a draft, so break out of the loop and return it.
+        if (result.empty()) {
+            continue;
         }
+
+        if (common_speculative_type_is_self_spec(impl->type) && params.n_min > 0 && (int)result.size() < params.n_min) {
+            LOG_DBG("%s: impl %s drafted %zu tokens, below fallback threshold %d - trying next implementation\n",
+                    __func__, common_speculative_type_to_str(impl->type).c_str(), result.size(), params.n_min);
+            result.clear();
+            continue;
+        }
+
+        LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                common_speculative_type_to_str(impl.get()->type).c_str(), prompt_tgt.size(),
+                impl.get()->n_call_draft, result.size());
+
+        spec->curr_impl = impl.get(); // set current implementation for stats
+        impl->n_gen_drafts++;
+        impl->n_gen_tokens += result.size();
+
+        break; // We have a draft, so break out of the loop and return it.
     }
 
     // store draft count for tuner feedback
