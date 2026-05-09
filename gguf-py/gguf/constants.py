@@ -99,6 +99,7 @@ class Keys:
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
+        FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
         ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
 
     class Attention:
@@ -120,6 +121,7 @@ class Keys:
 
     class Rope:
         DIMENSION_COUNT          = "{arch}.rope.dimension_count"
+        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
         FREQ_BASE                = "{arch}.rope.freq_base"
         SCALING_TYPE             = "{arch}.rope.scaling.type"
         SCALING_FACTOR           = "{arch}.rope.scaling.factor"
@@ -142,6 +144,8 @@ class Keys:
         INNER_SIZE     = "{arch}.ssm.inner_size"
         STATE_SIZE     = "{arch}.ssm.state_size"
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
+        GROUP_COUNT    = "{arch}.ssm.group_count"
+        DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
 
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
@@ -224,6 +228,9 @@ class MODEL_ARCH(IntEnum):
     QWEN2MOE     = auto()
     QWEN3        = auto()
     QWEN3MOE     = auto()
+    QWEN3NEXT    = auto()
+    QWEN35       = auto()
+    QWEN35MOE    = auto()
     PHI2         = auto()
     PHI3         = auto()
     PLAMO        = auto()
@@ -305,6 +312,11 @@ class MODEL_TENSOR(IntEnum):
     SSM_A                = auto()
     SSM_D                = auto()
     SSM_OUT              = auto()
+    SSM_NORM             = auto()  # qwen3.5/qwen3.6 linear_attn RMS norm
+    SSM_BETA             = auto()  # qwen3.5/qwen3.6 in_proj_b gate
+    SSM_BETA_ALPHA       = auto()  # qwen3-next combined in_proj_ba gate
+    SSM_ALPHA            = auto()  # qwen3.5/qwen3.6 in_proj_a gate
+    ATTN_GATE            = auto()  # qwen3-next/qwen3.5 linear_attn z-gate (in_proj_z)
     ATTN_Q_A             = auto()
     ATTN_Q_B             = auto()
     ATTN_KV_A_MQA        = auto()
@@ -373,6 +385,9 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2MOE:       "qwen2moe",
     MODEL_ARCH.QWEN3:          "qwen3",
     MODEL_ARCH.QWEN3MOE:       "qwen3moe",
+    MODEL_ARCH.QWEN3NEXT:      "qwen3next",
+    MODEL_ARCH.QWEN35:         "qwen35",
+    MODEL_ARCH.QWEN35MOE:      "qwen35moe",
     MODEL_ARCH.PHI2:           "phi2",
     MODEL_ARCH.PHI3:           "phi3",
     MODEL_ARCH.PLAMO:          "plamo",
@@ -455,6 +470,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_A:                "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_OUT:              "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_NORM:             "blk.{bid}.ssm_norm",
+    MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
+    MODEL_TENSOR.SSM_BETA_ALPHA:       "blk.{bid}.ssm_ba",
+    MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
+    MODEL_TENSOR.ATTN_GATE:            "blk.{bid}.attn_gate",
     MODEL_TENSOR.ATTN_Q_A:             "blk.{bid}.attn_q_a",
     MODEL_TENSOR.ATTN_Q_B:             "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:        "blk.{bid}.attn_kv_a_mqa",
@@ -812,6 +832,102 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.QWEN35MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_QKV,   # linear_attn in_proj_qkv
+        MODEL_TENSOR.ATTN_GATE,  # linear_attn in_proj_z
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_ALPHA,  # linear_attn in_proj_a
+        MODEL_TENSOR.SSM_BETA,   # linear_attn in_proj_b
+        MODEL_TENSOR.SSM_NORM,   # linear_attn norm
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        # MTP tail layer (per qwen35moe.nextn_predict_layers metadata)
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.QWEN35: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+    ],
+    MODEL_ARCH.QWEN3NEXT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_BETA_ALPHA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,

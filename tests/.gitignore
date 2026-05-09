@@ -4,3 +4,5 @@
 ggml-common.h
 **/*.swp
 !peg-parser
+!converter
+!converter/**

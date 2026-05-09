@@ -920,6 +920,9 @@ class GGUFWriter:
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
+    def add_full_attention_interval(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), value)
+
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 
