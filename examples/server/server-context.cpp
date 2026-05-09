@@ -351,10 +351,18 @@ bool server_context::load_model(const gpt_params& params_) {
             return false;
         }
 
+        const std::string arch_name(arch);
+        const bool dense_qwen_cpu_only = arch_name == "qwen35" && params_base.n_gpu_layers == 0;
+        const bool dense_qwen_split_graph = arch_name == "qwen35" && params_base.split_mode == LLAMA_SPLIT_MODE_GRAPH;
+
         std::string override_arch;
-        if (std::string(arch) == "qwen35moe") {
+        if (arch_name == "qwen35moe") {
             override_arch = "qwen35moe_mtp";
-        } else if (std::string(arch) == "qwen35") {
+        } else if (arch_name == "qwen35" && dense_qwen_cpu_only) {
+            LOG_INFO("using built-in MTP path for dense Qwen CPU-only run", {});
+        } else if (arch_name == "qwen35" && dense_qwen_split_graph) {
+            LOG_INFO("using built-in MTP path for dense Qwen split=graph run", {});
+        } else if (arch_name == "qwen35") {
             override_arch = "qwen35_mtp";
         }
 
