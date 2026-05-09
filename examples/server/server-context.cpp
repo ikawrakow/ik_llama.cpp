@@ -352,7 +352,8 @@ bool server_context::load_model(const gpt_params& params_) {
         }
 
         const std::string arch_name(arch);
-        const bool dense_qwen_cpu_only = arch_name == "qwen35" && params_base.n_gpu_layers == 0;
+        const bool dense_qwen_cpu_only = arch_name == "qwen35" &&
+            (params_base.n_gpu_layers == 0 || !llama_supports_gpu_offload());
         const bool dense_qwen_split_graph = arch_name == "qwen35" && params_base.split_mode == LLAMA_SPLIT_MODE_GRAPH;
 
         std::string override_arch;
