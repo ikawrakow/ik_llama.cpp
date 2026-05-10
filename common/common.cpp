@@ -3138,6 +3138,33 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
     return true;
 }
 
+size_t string_split_open_close(const std::string& str, size_t pos, const char c, std::vector<std::string>& splits) {
+    auto opos = str.find(c, pos);
+    if (opos == std::string::npos) {
+        return 0;
+    }
+    pos = opos + 1;
+    auto cpos = str.find(c, pos);
+    while (cpos != std::string::npos) {
+        if (str[cpos - 1] == '\\') {
+            cpos = str.find(c, cpos + 1);
+        } else {
+            auto split = str.substr(opos + 1, cpos - opos - 1);
+            string_process_escapes(split);
+            splits.push_back(std::move(split));
+
+            pos = cpos + 1;
+            opos = str.find(c, pos);
+            if (opos == std::string::npos) {
+                break;
+            }
+            pos = opos + 1;
+            cpos = str.find(c, pos);
+        }
+    }
+    return pos;
+}
+
 //
 // Filesystem utils
 //
@@ -4758,15 +4785,14 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
 }
 
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {
-    decltype(sparams.elb_params) elb_params = { { { }, "" } };
-
-    int32_t saved_duration = 0;
-    std::vector<std::string> saved_phrases;
-    std::vector<float> saved_biases;
-    bool saved_is_range = false;
+    auto elb_params = sparams.elb_params;
+    elb_params.push_back({ { { } }, "" });
+    auto entry_lb = elb_params.back().entries.back();
+    auto entry_ms = elb_params.back().entries.back();
+    elb_params.back().entries.clear();
 
     for (auto line: string_split(content, "\n")) {
-        string_strip(line);
+        line = string_strip(line);
         const char c0 = line.empty() ? '#' : line[0];
         if (c0 == '#') {
             // comment
@@ -4776,91 +4802,111 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
         auto n_char = line.length();
         const char cE = line[n_char - 1];
 
-        if (n_char > 1) {
-            if ('(' == c0 && cE == ')') {
-                const bool is_nested = '(' == line[1] && line[n_char - 2] == ')';
-                if (is_nested) {
-                    if (n_char == 4) {
-                        // (())
-                        saved_phrases.clear();
-                        saved_biases.clear();
-                        continue;   // next line
-                    }
-                    n_char -= 2;
-                    line = line.substr(1, n_char);
-                }
-
-                auto qqpos = line.find('"');
-
-                // (DURATION : ...)
-                int32_t duration = is_nested ? -1 : 1;
-                const auto cpos = line.find(':');
-                if ((cpos != std::string::npos) && (1 < cpos) && (cpos < qqpos)) {
-                    auto sub = line.substr(1, cpos - 1);
-                    duration = std::stoi(sub);
-                }
-                if (duration == 0) {
+        if ('(' == c0 && cE == ')') {
+            const bool is_nested = '(' == line[1] && line[n_char - 2] == ')';
+            if (is_nested) {
+                if (n_char == 4) {
+                    // (())
+                    entry_lb = {};
+                    entry_ms = {};
                     continue;   // next line
                 }
+                n_char -= 2;
+                line = line.substr(1, n_char);
+            }
 
-                // (... "PHRASE" ... "PHRASE" ...)
-                std::vector<std::string> phrases;
-                auto pos = line.find('"', qqpos + 1);
-                while (pos != std::string::npos) {
-                    if (line[pos - 1] == '\\') {
-                        pos = line.find('"', pos + 1);
-                    } else {
-                        auto phrase = line.substr(qqpos + 1, pos - qqpos - 1);
-                        string_process_escapes(phrase);
-                        phrases.push_back(std::move(phrase));
-                        qqpos = line.find('"', pos + 1);
-                        if (qqpos == std::string::npos) {
-                            break;
-                        }
-                        pos = line.find('"', qqpos + 1);
-                    }
-                }
-                if (phrases.empty()) {
-                    continue;   // next line
-                }
+            auto qqpos = line.find('"');
 
-                // (... : BIAS ...)
-                std::vector<float> biases;
-                bool is_range = false;
-                const auto rcpos = line.rfind(':');
-                if ((rcpos != std::string::npos) && (line.rfind('"') < rcpos)) {
-                    auto sub = line.substr(rcpos + 1, n_char - rcpos - 2);
-                    if (sub.find("~") != std::string::npos) {
-                        // (... : BIAS ~ BIAS)
-                        const auto splits = string_split(sub, '~');
-                        auto split = splits.front();
-                        biases.push_back(std::stof(split));
-                        split = splits.back();
-                        biases.push_back(std::stof(split));
-                        is_range = true;
-                    } else {
-                        // (... : BIAS, BIAS, ..., BIAS)
-                        for (auto split: string_split(sub, ',')) {
-                            if (!split.empty()) {
-                                biases.push_back(std::stof(split));
-                            }
-                        }
-                    }
-                }
-                if (biases.empty()) {
-                    continue;   // next line
-                }
-
-                if (is_nested) {
-                    saved_duration = duration;
-                    saved_phrases = std::move(phrases);
-                    saved_biases = std::move(biases);
-                    saved_is_range = is_range;
-                } else {
-                    elb_params.back().entries.push_back({ std::move(phrases), std::move(biases), duration, is_range });
-                }
+            // (DURATION : ...)
+            int32_t duration = is_nested ? -1 : 1;
+            const auto cpos = line.find(':');
+            if ((cpos != std::string::npos) && (1 < cpos) && (cpos < qqpos)) {
+                auto sub = line.substr(1, cpos - 1);
+                duration = std::stoi(sub);
+            }
+            if (duration == 0) {
                 continue;   // next line
             }
+
+            // (... "PHRASE" ... "PHRASE" ...)
+            std::vector<std::string> phrases;
+            qqpos = string_split_open_close(line, qqpos, '"', phrases);
+            size_t max_phrase_len = 0;
+            for (const auto& phrase: phrases) {
+                max_phrase_len = std::max(phrase.length(), max_phrase_len);
+            }
+
+            auto search_window = line.substr(qqpos);
+
+#undef M    // (... : SPARAM ...)
+#define M(t, param, val, e) #param,
+            static const std::vector<std::string> names = { COMMON_PARAMS_SAMPLING_CORE };
+            std::vector<float> addsubs(names.size(), 0.0f);
+            bool is_ms = false;
+            for (int j = 0; j < names.size(); ++j) {
+                const auto& name = names[j];
+                auto pos = search_window.find(name);
+                if (pos != std::string::npos) {
+                    pos += name.length();
+                    auto cmpos = search_window.find(",", pos + 1);
+                    if (cmpos == std::string::npos) {
+                        cmpos = n_char - 1;
+                    }
+                    auto sub = search_window.substr(pos, cmpos - pos);
+                    sub = string_strip(sub);
+                    if (sub[0] == '~') {
+                        sub = sub.substr(1);
+                        addsubs[j] += std::stof(sub);
+                        is_ms = true;
+                    }
+                }
+            }
+            if (!is_ms) {
+                addsubs.clear();
+            } else if (phrases.empty()) {
+                phrases.push_back("");
+            }
+
+            std::vector<float> biases;
+            bool is_range = false;
+
+            if (addsubs.empty()) {
+                // (... : BIAS ...)
+                const auto rcpos = line.rfind(':');
+                auto sub = line.substr(rcpos + 1, n_char - rcpos - 2);
+                if (sub.find("~") != std::string::npos) {
+                    // (... : BIAS ~ BIAS)
+                    const auto splits = string_split(sub, '~');
+                    auto split = splits.front();
+                    biases.push_back(std::stof(split));
+                    split = splits.back();
+                    biases.push_back(std::stof(split));
+                    is_range = true;
+                } else {
+                    // (... : BIAS, BIAS, ..., BIAS)
+                    for (auto split: string_split(sub, ',')) {
+                        if (!split.empty()) {
+                            biases.push_back(std::stof(split));
+                        }
+                    }
+                }
+            }
+
+            if (!is_nested) {
+                elb_params.back().entries.push_back({ });
+            }
+            auto& entry = !is_nested ? elb_params.back().entries.back() : (
+                is_ms ? entry_ms : entry_lb
+            );
+            entry.posi =  std::vector<size_t>(phrases.size(), 0);
+            entry.addsubs = std::move(addsubs);
+            entry.is_added = false;
+            entry.max_phrase_len = max_phrase_len;
+            entry.phrases = std::move(phrases);
+            entry.biases = std::move(biases);
+            entry.duration = duration;
+            entry.is_range = is_range;
+            continue;   // next line
         }
 
         // exitword
@@ -4869,8 +4915,11 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
         }
         string_process_escapes(line);
         elb_params.back().exitword = std::move(line);
-        if (!saved_phrases.empty() && !saved_biases.empty() && (saved_duration != 0)) {
-            elb_params.back().entries.push_back({ saved_phrases, saved_biases, saved_duration, saved_is_range });
+        if (!entry_lb.phrases.empty() && !entry_lb.biases.empty() && (entry_lb.duration != 0)) {
+            elb_params.back().entries.push_back( entry_lb );
+        }
+        if (!entry_ms.addsubs.empty() && (entry_ms.duration != 0)) {
+            elb_params.back().entries.push_back( entry_ms );
         }
         elb_params.push_back({ { }, "" });
     }

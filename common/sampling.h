@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+#define DOTCAT2(a, b) a.b
+
 // sampler types
 enum class llama_sampler_type : char {
     DRY         = 'd',
@@ -80,39 +82,51 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
 }
 
 
+#define COMMON_PARAMS_SAMPLING_CORE                         /*  \
+    */  M( int32_t , min_keep            , 0     , 1e-6f )  /*  0 = disabled, otherwise samplers should return at least min_keep tokens \
+    */  M( int32_t , top_k               , 40    , 1e-6f )  /*  <= 0 to use vocab size \
+    */  M( float   , top_p               , 0.95f , 0.0f  )  /*  1.0 = disabled \
+    */  M( float   , min_p               , 0.05f , 0.0f  )  /*  0.0 = disabled \
+    */  M( float   , tfs_z               , 1.00f , 0.0f  )  /*  1.0 = disabled \
+    */  M( float   , typical_p           , 1.00f , 0.0f  )  /*  1.0 = disabled \
+    */  M( float   , temp                , 0.80f , 0.0f  )  /*  <= 0.0 to sample greedily, 0.0 to not output probabilities \
+    */  M( float   , dynatemp_range      , 0.00f , 0.0f  )  /*  0.0 = disabled \
+    */  M( float   , dynatemp_exponent   , 1.00f , 0.0f  )  /*  controls how entropy maps to temperature in dynamic temperature sampler \
+    */  M( int32_t , penalty_last_n      , 64    , 1e-6f )  /*  last n tokens to penalize (0 = disable penalty, -1 = context size) \
+    */  M( float   , penalty_repeat      , 1.00f , 0.0f  )  /*  1.0 = disabled \
+    */  M( float   , penalty_freq        , 0.00f , 0.0f  )  /*  0.0 = disabled \
+    */  M( float   , penalty_present     , 0.00f , 0.0f  )  /*  0.0 = disabled \
+    */  M( float   , dry_multiplier      , 0.0f  , 0.0f  )  /*  0.0 = disabled; DRY repetition penalty for tokens extending repetition: \
+    */  M( float   , dry_base            , 1.75f , 0.0f  )  /*  0.0 = disabled; multiplier * base ^ (length of sequence before token - allowed length) \
+    */  M( int32_t , dry_allowed_length  , 2     , 1e-6f )  /*  tokens extending repetitions beyond this receive penalty \
+    */  M( int32_t , dry_penalty_last_n  , -1    , 1e-6f )  /*  how many tokens to scan for repetitions (0 = disable penalty, -1 = context size) \
+    */  M( int32_t , mirostat            , 0     , 1e-6f )  /*  0 = disabled, 1 = mirostat, 2 = mirostat 2.0 \
+    */  M( float   , mirostat_tau        , 5.00f , 0.0f  )  /*  target entropy \
+    */  M( float   , mirostat_eta        , 0.10f , 0.0f  )  /*  learning rate \
+    */  M( float   , xtc_probability     , 0.0f  , 0.0f  )  /*  xtc probability \
+    */  M( float   , xtc_threshold       , 1.0f  , 0.0f  )  /*  xtc threshold, disabled if > 0.5 \
+    */  M( float   , top_n_sigma         , 0.0f  , 0.0f  )  /*  top-n-sigma \
+    */  M( float   , adaptive_target     , -1.0f , 0.0f  )  /*  select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled) \
+    */  M( float   , adaptive_decay      , 0.90f , 0.0f  )  /*  decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation) \
+    */  M( bool    , adaptive_updt_w_cur , false , 1e-6f )  /*  update state with current probability \
+    */
+
+enum {
+#undef M
+#define M(t, param, val, e) COMMON_ ## param,
+    COMMON_PARAMS_SAMPLING_CORE
+};
+
 // sampling parameters
 typedef struct common_params_sampling {
     int32_t     n_prev                = 64;                 // number of previous tokens to remember
     int32_t     n_probs               = 0;                  // if greater than 0, output the probabilities of top n_probs tokens.
-    int32_t     min_keep              = 0;                  // 0 = disabled, otherwise samplers should return at least min_keep tokens
-    int32_t     top_k                 = 40;                 // <= 0 to use vocab size
-    float       top_p                 = 0.95f;              // 1.0 = disabled
-    float       min_p                 = 0.05f;              // 0.0 = disabled
-    float       tfs_z                 = 1.00f;              // 1.0 = disabled
-    float       typical_p             = 1.00f;              // 1.0 = disabled
-    float       temp                  = 0.80f;              // <= 0.0 to sample greedily, 0.0 to not output probabilities
-    float       dynatemp_range        = 0.00f;              // 0.0 = disabled
-    float       dynatemp_exponent     = 1.00f;              // controls how entropy maps to temperature in dynamic temperature sampler
-    int32_t   penalty_last_n        = 64;                 // last n tokens to penalize (0 = disable penalty, -1 = context size)
-    float       penalty_repeat        = 1.00f;              // 1.0 = disabled
-    float       penalty_freq          = 0.00f;              // 0.0 = disabled
-    float       penalty_present       = 0.00f;              // 0.0 = disabled
-    float       dry_multiplier = 0.0f;  // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
-    float       dry_base = 1.75f; // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
-    int32_t   dry_allowed_length = 2;     // tokens extending repetitions beyond this receive penalty
-    int32_t   dry_penalty_last_n = -1;    // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
-    int32_t   total_context_size = 16840;
-    int32_t   mirostat              = 0;                  // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
-    float       mirostat_tau          = 5.00f;              // target entropy
-    float       mirostat_eta          = 0.10f;              // learning rate
-    float       xtc_probability       = 0.0f;               // xtc probability
-    float       xtc_threshold         = 1.0f;               // xtc threshold, disabled if > 0.5
-    float       top_n_sigma           = 0.0f;               // top-n-sigma
-    float       adaptive_target       = -1.0f;              // select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
-    float       adaptive_decay        = 0.90f;              // decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
-    bool        adaptive_updt_w_cur   = false;              // update state with current probability
+    int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
+#undef M
+#define M(t, param, val, e) t param = val;
+    COMMON_PARAMS_SAMPLING_CORE
 
     std::vector<std::string> dry_sequence_breakers = { "\n", ":", "\"", "*" };     // default sequence breakers for DRY
 
@@ -163,6 +177,10 @@ typedef struct common_params_sampling {
     // expiring logit bias
     struct elb_param {
         struct elb_entry {
+            std::vector<size_t>         posi;       // positions of phrases in generated text
+            std::vector<float>          addsubs;    // add/modify then subtract/restore sampling parameters
+            bool                        is_added;
+            size_t                      max_phrase_len;
             std::vector<std::string>    phrases;
             std::vector<float>          biases;     // for each phrase, nth bias for nth token, extrapolate
             int32_t                     duration;   // bias duration, unless exitword matches
@@ -171,7 +189,10 @@ typedef struct common_params_sampling {
                 return (is_range == other.is_range)
                     && (duration == other.duration)
                     && (biases == other.biases)
-                    && (phrases == other.phrases);
+                    && (phrases == other.phrases)
+                    && (is_added == other.is_added)
+                    && (addsubs == other.addsubs)
+                    && (posi == other.posi);
             }
         };
         std::vector<struct elb_entry> entries;
@@ -236,7 +257,7 @@ struct common_sampler {
     };
     std::vector<struct elb_state> elb_states;
     size_t                        elb_idx;          // for elb_states
-    int32_t                       elb_search_pos;   // for exitword
+    size_t                        elb_search_pos;   // for exitword
 };
 
 

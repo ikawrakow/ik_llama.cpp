@@ -601,6 +601,8 @@ std::vector<std::string> string_split<std::string>(const std::string& input, cha
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
 void string_process_escapes(std::string & input);
 
+size_t string_split_open_close(const std::string& str, size_t pos, const char c, std::vector<std::string>& splits);
+
 //
 // Filesystem utils
 //

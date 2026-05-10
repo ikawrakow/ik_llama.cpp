@@ -831,6 +831,48 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             }
         }
     }
+
+    // expiring multisampler
+    for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
+        if (entry.addsubs.empty()) {
+            continue;   // next entry
+        }
+        for (size_t j = 0; j < entry.phrases.size(); ++j) {
+            const auto& phrase = entry.phrases[j];
+            if (phrase.empty()) {
+                if (elb.countup == 0) {
+#undef M            // modify sampling parameters
+#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) +=  t(entry.addsubs[COMMON_ ## param] + e);
+                    COMMON_PARAMS_SAMPLING_CORE
+                    entry.is_added = true;
+                } else if (elb.countup == entry.duration) {
+#undef M            // restore sampling parameters
+#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) -=  t(entry.addsubs[COMMON_ ## param] + e);
+                    COMMON_PARAMS_SAMPLING_CORE
+                    entry.is_added = false;
+                }
+                continue;   // next entry
+            }
+            size_t count = 0;
+            auto pos = ctx_sampling->to_generated_text->find(phrase, entry.posi[j]);
+            while (pos != std::string::npos) {
+                ++count;
+                pos = ctx_sampling->to_generated_text->find(phrase, pos + phrase.length());
+            }
+            entry.posi[j] = ctx_sampling->to_generated_text->length() - phrase.length() + 1;
+            if (count % 2 == 1) {
+                if (entry.is_added) {
+                    // restore sampling parameters (reuse macro)
+                    COMMON_PARAMS_SAMPLING_CORE
+                } else {
+#undef M            // modify sampling parameters
+#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) +=  t(entry.addsubs[COMMON_ ## param] + e);
+                    COMMON_PARAMS_SAMPLING_CORE
+                }
+                entry.is_added = !entry.is_added;
+            }
+        }
+    }
 }
 
 void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, struct llama_context * ctx_main) {
@@ -847,17 +889,32 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
 
     const std::string search_window = ctx_sampling->to_generated_text->substr(std::min(
         ctx_sampling->to_generated_text->length(),
-        size_t(ctx_sampling->elb_search_pos)
-    )) + common_token_to_piece(ctx_main, ctx_sampling->prev.back(), true);
-
+        ctx_sampling->elb_search_pos)) + common_token_to_piece(ctx_main, ctx_sampling->prev.back(), true);
     const auto exitword_pos = search_window.find(elb.exitword);
-    if (exitword_pos != std::string::npos) {
-        ++ctx_sampling->elb_idx;
-        // no double counting characters that matched
-        ctx_sampling->elb_search_pos += exitword_pos + exitword_len;
-    } else {
+    if (exitword_pos == std::string::npos) {
         // move search position to include next token
         ctx_sampling->elb_search_pos += std::max(0, int32_t(search_window.length()) - exitword_len + 1);
+        return;
+    }
+
+    auto next_search_pos = ctx_sampling->elb_search_pos + exitword_pos + exitword_len;
+
+    // no double counting and single character clearance
+    ctx_sampling->elb_search_pos = next_search_pos + 1;
+
+    // expiring multisampler
+    for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
+        if (entry.is_added) {
+#undef M    // restore sampler parameters before moving to next state
+#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) -=  t(entry.addsubs[COMMON_ ## param] + e);
+            COMMON_PARAMS_SAMPLING_CORE
+        }
+    }
+
+    ++ctx_sampling->elb_idx;
+
+    for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
+        std::fill(entry.posi.begin(), entry.posi.end(), next_search_pos);
     }
 }
 

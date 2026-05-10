@@ -1744,20 +1744,26 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         // 1 state <-> 1 exitword <-> 1+ entries
         for (const auto& [entries, exitword]: elb_params) {
             slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0 });
+
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
             auto& delay = slot.ctx_sampling->elb_states.back().delay;
             auto& max_cond_len = slot.ctx_sampling->elb_states.back().max_cond_len;
 
             // 1 entry <-> 1 phrase <-> 1+ biases
-            for (auto [phrases, biases, duration, is_range]: entries) {
-                for (const auto& phrase: phrases) {
-                    if (phrase.empty()) {
-                        continue;
-                    }
+            for (auto& entry: entries) {
+                auto biases = entry.biases;
+                if (biases.empty()) {
+                    // expiring multisampler
+                    continue;
+                }
+
+                // expiring logit bias
+                for (const auto& phrase: entry.phrases) {
+                    auto duration = entry.duration;
 
                     const auto ids = common_tokenize(model, phrase, false, true);
-                    if (!is_range) {
+                    if (!entry.is_range) {
                         // extrapolate
                         biases.resize(ids.size(), biases.back());
                     } else if (ids.size() == 1) {
