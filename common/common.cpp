@@ -2578,6 +2578,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
+    options.push_back({ "*",           "       --expiring-logit-bias-file",
+                                                                        "original PR: https://github.com/ikawrakow/ik_llama.cpp/pull/1731\n"});
     options.push_back({ "main",        "       --cfg-negative-prompt PROMPT",
                                                                         "negative prompt to use for guidance (default: '%s')", sparams.cfg_negative_prompt.c_str() });
     options.push_back({ "main",        "       --cfg-negative-prompt-file FNAME",
@@ -4911,7 +4913,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             );
             entry.posi =  std::vector<size_t>(phrases.size(), 0);
             entry.addsubs = std::move(addsubs);
-            entry.is_added = false;
+            entry.addflags = std::vector<char>(phrases.size(), 0);
             entry.max_phrase_len = max_phrase_len;
             entry.phrases = std::move(phrases);
             entry.biases = std::move(biases);

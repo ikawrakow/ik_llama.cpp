@@ -177,9 +177,9 @@ typedef struct common_params_sampling {
     // expiring logit bias
     struct elb_param {
         struct elb_entry {
-            std::vector<size_t>         posi;       // positions of phrases in generated text
-            std::vector<float>          addsubs;    // add/modify then subtract/restore sampling parameters
-            bool                        is_added;
+            std::vector<size_t>         posi;           // positions of phrases in generated text
+            std::vector<float>          addsubs;        // add/modify then subtract/restore sampling parameters
+            std::vector<char>           addflags;       // 1 if added
             size_t                      max_phrase_len;
             std::vector<std::string>    phrases;
             std::vector<float>          biases;     // for each phrase, nth bias for nth token, extrapolate
@@ -190,7 +190,7 @@ typedef struct common_params_sampling {
                     && (duration == other.duration)
                     && (biases == other.biases)
                     && (phrases == other.phrases)
-                    && (is_added == other.is_added)
+                    && (addflags == other.addflags)
                     && (addsubs == other.addsubs)
                     && (posi == other.posi);
             }
@@ -203,6 +203,18 @@ typedef struct common_params_sampling {
         }
     };
     std::vector<struct elb_param> elb_params;
+
+    void elb_add(common_params_sampling::elb_param::elb_entry& entry) {
+        #undef X    // add to sampling parameters
+        #define X(T, MEMBER, _, E) MEMBER += T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
+        X_COMMON_PARAMS_SAMPLING
+    }
+
+    void elb_sub(common_params_sampling::elb_param::elb_entry& entry) {
+        #undef X    // subtract from sampling parameters
+        #define X(T, MEMBER, _, E) MEMBER -= T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
+        X_COMMON_PARAMS_SAMPLING
+    }
 
 } llama_sampling_params;
 
