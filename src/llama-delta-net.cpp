@@ -454,6 +454,15 @@ static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor *
     return cur;
 }
 
+static void build_qkv_cpy(ggml_context * ctx0, ggml_cgraph * gf, ggml_tensor * qkv_mixed, ggml_tensor * per_step_qkv) {
+    const int64_t conv_dim = qkv_mixed->ne[0];
+    const int64_t n_tok_qkv = qkv_mixed->ne[1] * qkv_mixed->ne[2];
+    ggml_tensor * qkv_flat = ggml_reshape_2d(ctx0, qkv_mixed, conv_dim, n_tok_qkv);
+    ggml_tensor * qkv_dst = ggml_view_2d(ctx0, per_step_qkv, conv_dim, n_tok_qkv, conv_dim * sizeof(float), 0);
+    auto qkv_cpy = ggml_cpy(ctx0, qkv_flat, qkv_dst);
+    ggml_build_forward_expand(gf, qkv_cpy);
+}
+
 ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * delta_input, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
             uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
@@ -540,10 +549,18 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
             }
             auto split_ssm_conv1d = (ggml_split_tensor_t *)l.ssm_conv1d->extra;
             GGML_ASSERT(split_ssm_conv1d && split_ssm_conv1d->splits[id]);
+            ggml_tensor * per_step_ckpt = nullptr;
+            if (save_per_step_states && il < (int)kv_self.ckpt.per_step_ssm.size()) {
+                per_step_ckpt = kv_self.ckpt.per_step_ssm[il][id];
+                //GGML_ASSERT(per_step_ckpt);
+            }
+            if (save_per_step_states && il < (int)kv_self.ckpt.per_step_qkv.size() && id < (int)kv_self.ckpt.per_step_qkv[il].size()) {
+                build_qkv_cpy(ctx0, gf, qkv_mixed, kv_self.ckpt.per_step_qkv[il][id]);
+            }
             auto output = build_qkv(ctx0, split_s_l->splits[id], split_ssm_conv1d->splits[id], qkv_mixed, inp_s_seq_qnext, beta, gate,
                                head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, hparams.ssm_d_conv,
                                state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
-                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf);
+                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf, save_per_step_states, per_step_ckpt);
             split_norm = (ggml_split_tensor_t *)l.ssm_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
             auto split_ssm_out = (ggml_split_tensor_t *)l.ssm_out->extra;
@@ -596,18 +613,19 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
     // Get per-step checkpoint tensor if available
     ggml_tensor * per_step_ckpt = nullptr;
     if (save_per_step_states && il < (int)kv_self.ckpt.per_step_ssm.size()) {
-        per_step_ckpt = kv_self.ckpt.per_step_ssm[il];
+        per_step_ckpt = kv_self.ckpt.per_step_ssm[il].front();
     }
 
     // Save qkv_mixed features for per-step conv state reconstruction
-    if (save_per_step_states && il < (int)kv_self.ckpt.per_step_qkv.size() && kv_self.ckpt.per_step_qkv[il] != nullptr) {
-        const int64_t conv_dim = qkv_mixed->ne[0];
-        const int64_t n_tok_qkv = qkv_mixed->ne[1] * qkv_mixed->ne[2];
-        ggml_tensor * qkv_flat = ggml_reshape_2d(ctx0, qkv_mixed, conv_dim, n_tok_qkv);
-        ggml_tensor * qkv_dst = ggml_view_2d(ctx0, kv_self.ckpt.per_step_qkv[il],
-                conv_dim, n_tok_qkv, conv_dim * sizeof(float), 0);
-        auto qkv_cpy = ggml_cpy(ctx0, qkv_flat, qkv_dst);
-        ggml_build_forward_expand(gf, qkv_cpy);
+    if (save_per_step_states && il < (int)kv_self.ckpt.per_step_qkv.size() && !kv_self.ckpt.per_step_qkv[il].empty()) {
+        build_qkv_cpy(ctx0, gf, qkv_mixed, kv_self.ckpt.per_step_qkv[il].front());
+        //const int64_t conv_dim = qkv_mixed->ne[0];
+        //const int64_t n_tok_qkv = qkv_mixed->ne[1] * qkv_mixed->ne[2];
+        //ggml_tensor * qkv_flat = ggml_reshape_2d(ctx0, qkv_mixed, conv_dim, n_tok_qkv);
+        //ggml_tensor * qkv_dst = ggml_view_2d(ctx0, kv_self.ckpt.per_step_qkv[il].front(),
+        //        conv_dim, n_tok_qkv, conv_dim * sizeof(float), 0);
+        //auto qkv_cpy = ggml_cpy(ctx0, qkv_flat, qkv_dst);
+        //ggml_build_forward_expand(gf, qkv_cpy);
     }
 
     auto output = build_qkv(ctx0, kv_self.s_l[il], model.layers[il].ssm_conv1d,
