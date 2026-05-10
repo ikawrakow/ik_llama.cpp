@@ -47,9 +47,6 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
 // get the MTP context from the speculative object (nullptr if not MTP type)
 llama_context * common_speculative_get_mtp_ctx(common_speculative * spec);
 
-// true when MTP is using the experimental target-to-sibling update hook
-bool common_speculative_mtp_uses_target_hook(common_speculative * spec);
-
 // Context shift for MTP to match how server handle main model
 void common_speculative_context_shift(
         common_speculative * spec,

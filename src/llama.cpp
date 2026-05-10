@@ -706,172 +706,6 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
     cparams.mtp_op_type = value;
 }
 
-void llama_context::set_mtp(llama_context * ctx_mtp) {
-    if (mtp_hook.ctx_mtp == ctx_mtp) {
-        return;
-    }
-
-    if (mtp_hook.hook_batch.pos != nullptr) {
-        llama_batch_free(mtp_hook.hook_batch);
-        mtp_hook.hook_batch = {};
-    }
-
-    if (mtp_hook.ctx_mtp != nullptr && mtp_hook.n_update_calls > 0) {
-        LLAMA_LOG_INFO("%s: MTP sibling hook stats: calls=%zu tokens=%zu copy=%.3f ms decode=%.3f ms\n",
-                __func__,
-                mtp_hook.n_update_calls,
-                mtp_hook.n_update_tokens,
-                mtp_hook.t_copy_us / 1000.0,
-                mtp_hook.t_decode_us / 1000.0);
-        LLAMA_LOG_INFO("%s: MTP sibling graph stats: build=%zu reuse=%zu\n",
-                __func__,
-                mtp_hook.ctx_mtp->n_mtp_graph_build,
-                mtp_hook.ctx_mtp->n_mtp_graph_reuse);
-        LLAMA_LOG_INFO("%s: MTP sibling graph reuse misses: disabled=%zu no_prev=%zu per_step=%zu embd=%zu seq=%zu head=%zu kv=%zu outputs=%zu tokens=%zu op=%zu cache=%zu\n",
-                __func__,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_disabled,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_no_prev,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_per_step,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_embd,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_seq,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_head,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_kv,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_outputs,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_tokens,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_op,
-                mtp_hook.ctx_mtp->n_mtp_reuse_fail_cache);
-    }
-
-    mtp_hook.ctx_mtp = ctx_mtp;
-    mtp_hook.pending_h.clear();
-    mtp_hook.n_tokens_alloc = 0;
-    mtp_hook.pending_pos = -1;
-    mtp_hook.pending_seq_id = -1;
-    mtp_hook.n_update_calls = 0;
-    mtp_hook.n_update_tokens = 0;
-    mtp_hook.t_copy_us = 0;
-    mtp_hook.t_decode_us = 0;
-
-    if (ctx_mtp != nullptr) {
-        const int32_t n_ubatch = (int32_t)cparams.n_ubatch;
-        const int32_t n_embd   = (int32_t)model.hparams.n_embd;
-        mtp_hook.hook_batch = llama_batch_init(n_ubatch, n_embd, 1);
-        mtp_hook.hook_batch.token = (llama_token *) malloc(sizeof(llama_token) * n_ubatch);
-        mtp_hook.pending_h.resize(n_embd);
-        mtp_hook.n_tokens_alloc = n_ubatch;
-        LLAMA_LOG_INFO("%s: MTP sibling registered (ctx_mtp=%p, n_ubatch=%d, n_embd=%d)\n",
-                __func__, (void *)ctx_mtp, n_ubatch, n_embd);
-    } else {
-        mtp_hook.pending_h.shrink_to_fit();
-        LLAMA_LOG_INFO("%s: MTP sibling unregistered\n", __func__);
-    }
-}
-
-void llama_context::handle_mtp_for_ubatch(
-        int32_t              n_tokens,
-        const llama_token  * tokens,
-        const llama_pos    * positions,
-        int32_t            * n_seq_id,
-        llama_seq_id      ** seq_id,
-        struct ggml_tensor * hidden_states) {
-    llama_context * ctx_mtp = mtp_hook.ctx_mtp;
-    if (ctx_mtp == nullptr || n_tokens <= 0 || tokens == nullptr || positions == nullptr || hidden_states == nullptr) {
-        return;
-    }
-    if (cparams.mtp_op_type != MTP_OP_NONE) {
-        return;
-    }
-    if (hidden_states->ne[0] != model.hparams.n_embd || hidden_states->ne[1] != n_tokens) {
-        return;
-    }
-
-    const llama_seq_id first_seq_id = (n_seq_id != nullptr && n_seq_id[0] > 0 && seq_id != nullptr && seq_id[0] != nullptr)
-        ? seq_id[0][0]
-        : 0;
-    const llama_pos pos_start = positions[0];
-    const llama_pos pos_max_mtp = llama_kv_cache_seq_pos_max(ctx_mtp, first_seq_id);
-    if (pos_start <= pos_max_mtp) {
-        return;
-    }
-
-    if (n_tokens > mtp_hook.n_tokens_alloc) {
-        llama_batch_free(mtp_hook.hook_batch);
-        mtp_hook.hook_batch = llama_batch_init(n_tokens, (int32_t)model.hparams.n_embd, 1);
-        mtp_hook.hook_batch.token = (llama_token *) malloc(sizeof(llama_token) * n_tokens);
-        mtp_hook.n_tokens_alloc = n_tokens;
-    }
-
-    llama_synchronize(this);
-
-    const int64_t n_embd = model.hparams.n_embd;
-    const size_t row_bytes = (size_t)n_embd * sizeof(float);
-
-    const bool pending_continues =
-        mtp_hook.pending_pos >= 0 &&
-        mtp_hook.pending_pos + 1 == pos_start &&
-        mtp_hook.pending_seq_id == first_seq_id;
-    if (mtp_hook.pending_pos >= 0 && !pending_continues) {
-        mtp_hook.pending_pos = -1;
-        mtp_hook.pending_seq_id = -1;
-    }
-
-    const int32_t n_out = (pending_continues ? 1 : 0) + (n_tokens - 1);
-    if (n_out > 0) {
-        const int64_t t_copy_start_us = ggml_time_us();
-        int32_t out_idx = 0;
-        if (pending_continues) {
-            memcpy(mtp_hook.hook_batch.embd + (size_t)out_idx * n_embd,
-                    mtp_hook.pending_h.data(), row_bytes);
-            mtp_hook.hook_batch.token[out_idx]     = tokens[0];
-            mtp_hook.hook_batch.pos[out_idx]       = positions[0];
-            mtp_hook.hook_batch.n_seq_id[out_idx]  = 1;
-            mtp_hook.hook_batch.seq_id[out_idx][0] = first_seq_id;
-            mtp_hook.hook_batch.logits[out_idx]    = out_idx == n_out - 1;
-            ++out_idx;
-        }
-
-        for (int32_t i = 0; i + 1 < n_tokens; ++i) {
-            const llama_seq_id sid = (n_seq_id != nullptr && n_seq_id[i + 1] > 0 && seq_id != nullptr && seq_id[i + 1] != nullptr)
-                ? seq_id[i + 1][0]
-                : first_seq_id;
-
-            ggml_backend_tensor_get(hidden_states,
-                    mtp_hook.hook_batch.embd + (size_t)out_idx * n_embd,
-                    (size_t)i * row_bytes,
-                    row_bytes);
-
-            mtp_hook.hook_batch.token[out_idx]     = tokens[i + 1];
-            mtp_hook.hook_batch.pos[out_idx]       = positions[i + 1];
-            mtp_hook.hook_batch.n_seq_id[out_idx]  = 1;
-            mtp_hook.hook_batch.seq_id[out_idx][0] = sid;
-            mtp_hook.hook_batch.logits[out_idx]    = false;
-            ++out_idx;
-        }
-        mtp_hook.t_copy_us += ggml_time_us() - t_copy_start_us;
-
-        mtp_hook.hook_batch.n_tokens = n_out;
-
-        const int64_t t_decode_start_us = ggml_time_us();
-        llama_set_mtp_op_type(ctx_mtp, MTP_OP_UPDATE_ACCEPTED);
-        const int32_t rc = llama_decode(ctx_mtp, mtp_hook.hook_batch);
-        llama_set_mtp_op_type(ctx_mtp, MTP_OP_NONE);
-        mtp_hook.t_decode_us += ggml_time_us() - t_decode_start_us;
-        ++mtp_hook.n_update_calls;
-        mtp_hook.n_update_tokens += n_out;
-        if (rc != 0) {
-            LLAMA_LOG_ERROR("%s: llama_decode(ctx_mtp) failed rc=%d (pos=%d, n=%d)\n",
-                    __func__, (int)rc, (int)pos_start, (int)n_out);
-        }
-    }
-
-    ggml_backend_tensor_get(hidden_states,
-            mtp_hook.pending_h.data(),
-            (size_t)(n_tokens - 1) * row_bytes,
-            row_bytes);
-    mtp_hook.pending_pos = positions[n_tokens - 1];
-    mtp_hook.pending_seq_id = first_seq_id;
-}
-
 llama_context::~llama_context() {
     if (std::getenv("IK_MTP_PROFILE") != nullptr && (n_mtp_graph_build > 0 || n_mtp_graph_reuse > 0)) {
         LLAMA_LOG_INFO("%s: MTP graph stats: build=%zu reuse=%zu\n",
@@ -889,11 +723,6 @@ llama_context::~llama_context() {
                 n_mtp_reuse_fail_tokens,
                 n_mtp_reuse_fail_op,
                 n_mtp_reuse_fail_cache);
-    }
-
-    if (mtp_hook.hook_batch.pos != nullptr) {
-        llama_batch_free(mtp_hook.hook_batch);
-        mtp_hook.hook_batch = {};
     }
 
     ggml_backend_sched_free(sched);
@@ -4875,8 +4704,6 @@ static int llama_decode_internal(
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
         struct ggml_tensor * embd = nullptr;
-        lctx.t_h_pre_norm = nullptr;
-        lctx.t_mtp_out = nullptr;
 
         if (lctx.n_outputs == 0) {
             // no output
@@ -4913,8 +4740,6 @@ static int llama_decode_internal(
                     GGML_ASSERT(strcmp(res->name, "result_output") == 0 && "missing result_output tensor");
                 }
             }
-            lctx.t_h_pre_norm = (cparams.mtp_op_type == MTP_OP_NONE && use_qwen_mtp_embd) ? embd : nullptr;
-            lctx.t_mtp_out = (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && use_qwen_mtp_embd) ? embd : nullptr;
         }
         // LLAMA_LOG_INFO("graph build time: %.3f ms (%d nodes, %d leafs)\n", (ggml_time_us() - t_start_us)/1000.0, gf->n_nodes, gf->n_leafs);
 #if IK_PRINT_TIMING == 1
@@ -4935,16 +4760,6 @@ static int llama_decode_internal(
         tim2 = ggml_time_us();
         printf("graph_compute(...): %d us\n", int(tim2-tim1));
 #endif
-
-        if (lctx.mtp_hook.ctx_mtp != nullptr && cparams.mtp_op_type == MTP_OP_NONE && u_batch.token != nullptr) {
-            lctx.handle_mtp_for_ubatch(
-                    (int32_t)n_tokens,
-                    u_batch.token,
-                    u_batch.pos,
-                    u_batch.n_seq_id,
-                    u_batch.seq_id,
-                    embd);
-        }
 
         bool reset_previous = false;
         // update the kv ring buffer
@@ -8926,21 +8741,6 @@ int32_t llama_decode(
 
 void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
     ctx->set_mtp_op_type(mtp_op_type);
-}
-
-void llama_set_mtp(llama_context * ctx_target, llama_context * ctx_mtp) {
-    if (ctx_target == nullptr) {
-        return;
-    }
-    ctx_target->set_mtp(ctx_mtp);
-}
-
-ggml_tensor * llama_context_get_t_h_pre_norm(llama_context * ctx) {
-    return ctx ? ctx->t_h_pre_norm : nullptr;
-}
-
-ggml_tensor * llama_context_get_t_mtp_out(llama_context * ctx) {
-    return ctx ? ctx->t_mtp_out : nullptr;
 }
 
 void llama_synchronize(struct llama_context * ctx) {

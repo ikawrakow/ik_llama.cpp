@@ -4604,14 +4604,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             continue; // continue loop of n_batch
         }
 
-        bool mtp_target_hook_active = false;
-        for (auto & slot : slots) {
-            if (slot.has_mtp && slot.spec && common_speculative_mtp_uses_target_hook(slot.spec)) {
-                mtp_target_hook_active = true;
-                break;
-            }
-        }
-
         bool mtp_warmup_needed = false;
         llama_context * batch_mtp_target = nullptr;
         std::vector<float> batch_mtp_hidden_state;

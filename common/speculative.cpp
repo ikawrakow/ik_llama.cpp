@@ -2,7 +2,6 @@
 
 #include "common.h"
 #include "ggml.h"
-#include "ggml-backend.h"
 #include "llama.h"
 #include "log.h"
 #include "ngram-cache.h"
@@ -184,12 +183,6 @@ struct common_speculative_state_mtp : public common_speculative_state {
     }
 
     ~common_speculative_state_mtp() override {
-        if (target_hook) {
-            llama_set_mtp(ctx_tgt, nullptr);
-        }
-        if (batch.pos != nullptr) {
-            llama_batch_free(batch);
-        }
         common_sampler_free(smpl);
         if (ctx_mtp) {
             llama_free(ctx_mtp);
@@ -198,8 +191,6 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
-        last_n_drafted = 0;
-        last_n_accepted = -1;
     }
 
     void draft(
@@ -210,95 +201,6 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
         int32_t n_past = (int32_t)prompt_tgt.size();
         llama_seq_id seq_id = 0;
-
-        if (target_hook) {
-            result.clear();
-            common_sampler_reset(smpl);
-
-            // If accept() was skipped after the previous draft, remove stale draft KV now.
-            if (last_n_drafted > 0) {
-                const int32_t n_to_drop = (int32_t)last_n_drafted - 1;
-                if (n_to_drop > 0 && ctx_mtp != nullptr) {
-                    const llama_pos pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
-                    if (pos_max >= 0) {
-                        const llama_pos drop_from = pos_max - n_to_drop + 1;
-                        llama_kv_cache_seq_rm(ctx_mtp, seq_id, drop_from, -1);
-                    }
-                }
-                last_n_drafted = 0;
-                last_n_accepted = 0;
-            }
-
-            const int32_t n_max = std::max(1, params.n_max);
-            const size_t row_bytes = (size_t)n_embd * sizeof(float);
-
-            float prob;
-            float * prob_ptr = params.p_min > 0 ? &prob : nullptr;
-            llama_token cond_tok = id_last;
-            llama_pos pos = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id) + 1;
-
-            for (int32_t k = 0; k < n_max; ++k) {
-                ggml_tensor * src = nullptr;
-                int32_t src_row = 0;
-
-                if (k == 0) {
-                    src = llama_context_get_t_h_pre_norm(ctx_tgt);
-                    if (last_n_accepted < 0) {
-                        src_row = (src && src->ne[1] > 0) ? (int32_t)src->ne[1] - 1 : 0;
-                    } else {
-                        src_row = last_n_accepted;
-                    }
-                    llama_synchronize(ctx_tgt);
-                } else {
-                    src = llama_context_get_t_mtp_out(ctx_mtp);
-                    src_row = (src && src->ne[1] > 0) ? (int32_t)src->ne[1] - 1 : 0;
-                    llama_synchronize(ctx_mtp);
-                }
-
-                if (!src) {
-                    LOG_WRN("%s: missing MTP hidden tensor at k=%d; stopping MTP draft\n", __func__, k);
-                    break;
-                }
-
-                if (src_row < 0) {
-                    src_row = 0;
-                }
-                if (src_row >= src->ne[1]) {
-                    src_row = src->ne[1] - 1;
-                }
-
-                ggml_backend_tensor_get(src, batch.embd, (size_t)src_row * row_bytes, row_bytes);
-
-                batch.token[0] = cond_tok;
-                batch.pos[0] = pos;
-                batch.n_seq_id[0] = 1;
-                batch.seq_id[0][0] = seq_id;
-                batch.logits[0] = true;
-
-                llama_set_mtp_op_type(ctx_mtp, MTP_OP_DRAFT_GEN);
-                const int32_t dec_rc = llama_decode(ctx_mtp, batch);
-                llama_set_mtp_op_type(ctx_mtp, MTP_OP_NONE);
-                if (dec_rc != 0) {
-                    LOG_DBG("%s: llama_decode(ctx_mtp) rc=%d at k=%d; stopping MTP draft\n", __func__, dec_rc, k);
-                    break;
-                }
-
-                llama_token id_next = common_sampler_sample_speculative(smpl, ctx_mtp, 0, prob_ptr, params.p_min_fast);
-                if (id_next < 0) {
-                    break;
-                }
-                if (prob_ptr && prob < params.p_min) {
-                    break;
-                }
-
-                result.push_back(id_next);
-                cond_tok = id_next;
-                ++pos;
-            }
-
-            last_n_drafted = (uint16_t) result.size();
-            return;
-        }
 
         llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
         if (mtp_pos_max >= n_past) {
@@ -318,25 +220,10 @@ struct common_speculative_state_mtp : public common_speculative_state {
             seq_id,
             constant_draft_positions
         );
-        last_n_drafted = (uint16_t) result.size();
     }
 
     void accept(uint16_t n_accepted) override {
-        if (!target_hook) {
-            GGML_UNUSED(n_accepted);
-            return;
-        }
-
-        const int32_t n_to_drop = std::max(0, (int32_t)last_n_drafted - (int32_t)n_accepted - 1);
-        if (n_to_drop > 0 && ctx_mtp != nullptr) {
-            const llama_pos pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, 0);
-            if (pos_max >= 0) {
-                const llama_pos drop_from = pos_max - n_to_drop + 1;
-                llama_kv_cache_seq_rm(ctx_mtp, 0, drop_from, -1);
-            }
-        }
-        last_n_drafted = 0;
-        last_n_accepted = (int32_t)n_accepted;
+        GGML_UNUSED(n_accepted);
     }
 };
 
@@ -1527,20 +1414,6 @@ llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
     return nullptr;
 }
 
-bool common_speculative_mtp_uses_target_hook(common_speculative * spec) {
-    if (!spec) return false;
-
-    for (auto & impl : spec->impls) {
-        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
-            auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get());
-            if (mtp_state) {
-                return mtp_state->target_hook;
-            }
-        }
-    }
-    return false;
-}
-
 void common_speculative_context_shift(
         common_speculative * spec,
         llama_seq_id         seq_id,
@@ -1584,28 +1457,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     auto & last = mtp_get_last_embd(ctx);
     int i0 = 0;
 
-    if (keep_draft_kv && llama_kv_cache_seq_pos_max(ctx, seq_id) >= n_past - 1) {
-        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, -1, prob_ptr, fast_p_min);
-        if (id_next >= 0) {
-            if (prob_ptr && prob < p_min) {
-                llama_batch_free(mtp_batch);
-                llama_set_mtp_op_type(ctx, MTP_OP_NONE);
-                return drafts;
-            }
-
-            drafts.push_back(id_next);
-            current_input_id = id_next;
-            current_n_past = n_past;
-
-            const float * emb = llama_get_embeddings_ith(ctx, -1);
-            if (emb) {
-                memcpy(last.embd.data(), emb, n_embd * sizeof(float));
-                llama_set_draft_input_hidden_state(ctx, last.embd.data());
-            }
-
-            i0 = 1;
-        }
-    } else if (last.last_id >= 0) {
+    if (last.last_id >= 0) {
         if (last.prob < p_min) {
             llama_batch_free(mtp_batch);
             llama_set_mtp_op_type(ctx, MTP_OP_NONE);

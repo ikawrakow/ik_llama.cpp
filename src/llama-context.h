@@ -266,21 +266,6 @@ struct llama_context {
 
     const float * draft_input_hidden_state = nullptr;
 
-    struct mtp_target_hook {
-        llama_context * ctx_mtp = nullptr;
-        llama_batch hook_batch = {};
-        std::vector<float> pending_h;
-        int32_t n_tokens_alloc = 0;
-        llama_pos pending_pos = -1;
-        llama_seq_id pending_seq_id = -1;
-        size_t n_update_calls = 0;
-        size_t n_update_tokens = 0;
-        int64_t t_copy_us = 0;
-        int64_t t_decode_us = 0;
-    } mtp_hook;
-
-    struct ggml_tensor * t_h_pre_norm = nullptr;
-    struct ggml_tensor * t_mtp_out = nullptr;
     size_t n_mtp_graph_build = 0;
     size_t n_mtp_graph_reuse = 0;
     size_t n_mtp_reuse_fail_disabled = 0;
@@ -335,13 +320,5 @@ struct llama_context {
     bool update_cache_copies();
 
     void set_mtp_op_type(llama_mtp_op_type value);
-    void set_mtp(llama_context * ctx_mtp);
-    void handle_mtp_for_ubatch(
-            int32_t              n_tokens,
-            const llama_token  * tokens,
-            const llama_pos    * positions,
-            int32_t            * n_seq_id,
-            llama_seq_id      ** seq_id,
-            struct ggml_tensor * hidden_states);
 
 };
