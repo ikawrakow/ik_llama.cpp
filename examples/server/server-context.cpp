@@ -1854,7 +1854,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             for (auto& entry: entries) {
                 auto biases = entry.biases;
                 if (biases.empty()) {
-                    // expiring multisampler
+                    // expiring sampler bias
                     continue;
                 }
 

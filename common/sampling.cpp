@@ -832,23 +832,23 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
         }
     }
 
-    // expiring multisampler
+    // expiring sampler bias
     for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
-        if (entry.addsubs.empty()) {
+        if (!entry.biases.empty()) {
             continue;   // next entry
         }
         for (size_t j = 0; j < entry.phrases.size(); ++j) {
             const auto& phrase = entry.phrases[j];
             if (phrase.empty()) {
                 if (elb.countup == 0) {
-#undef M            // modify sampling parameters
-#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) +=  t(entry.addsubs[COMMON_ ## param] + e);
-                    COMMON_PARAMS_SAMPLING_CORE
+                    #undef X    // new X modify sampling parameters
+                    #define X(T, MEMBER, _, E) A_DOT_B(ctx_sampling->params, MEMBER) += T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
+                    X_COMMON_PARAMS_SAMPLING
                     entry.is_added = true;
                 } else if (elb.countup == entry.duration) {
-#undef M            // restore sampling parameters
-#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) -=  t(entry.addsubs[COMMON_ ## param] + e);
-                    COMMON_PARAMS_SAMPLING_CORE
+                    #undef X    // new X restore sampling parameters
+                    #define X(T, MEMBER, _, E) A_DOT_B(ctx_sampling->params, MEMBER) -= T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
+                    X_COMMON_PARAMS_SAMPLING
                     entry.is_added = false;
                 }
                 continue;   // next entry
@@ -859,20 +859,31 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
                 ++count;
                 pos = ctx_sampling->to_generated_text->find(phrase, pos + phrase.length());
             }
-            entry.posi[j] = ctx_sampling->to_generated_text->length() - phrase.length() + 1;
+            entry.posi[j] = std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - int32_t(phrase.length()) + 1);
             if (count % 2 == 1) {
                 if (entry.is_added) {
                     // restore sampling parameters (reuse macro)
-                    COMMON_PARAMS_SAMPLING_CORE
+                    X_COMMON_PARAMS_SAMPLING
                 } else {
-#undef M            // modify sampling parameters
-#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) +=  t(entry.addsubs[COMMON_ ## param] + e);
-                    COMMON_PARAMS_SAMPLING_CORE
+                    #undef X    // new X modify sampling parameters
+                    #define X(T, MEMBER, _, E) A_DOT_B(ctx_sampling->params, MEMBER) += T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
+                    X_COMMON_PARAMS_SAMPLING
                 }
                 entry.is_added = !entry.is_added;
             }
         }
     }
+
+    // // debug print
+    // #undef X
+    // #define X(T, MEMBER, DV, E) #MEMBER,
+    // static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
+    // for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
+    //     #undef X
+    //     #define X(T, MEMBER, DV, E) if (std::abs(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]) > E) \
+    //     { printf("%s: %s = %f\n", __func__, names[SPARAMS_ ## MEMBER ## _ENUM].c_str(), float(A_DOT_B(ctx_sampling->params, MEMBER))); }
+    //     X_COMMON_PARAMS_SAMPLING
+    // }
 }
 
 void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, struct llama_context * ctx_main) {
@@ -902,12 +913,12 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
     // no double counting and single character clearance
     ctx_sampling->elb_search_pos = next_search_pos + 1;
 
-    // expiring multisampler
+    // expiring sampler bias
     for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
         if (entry.is_added) {
-#undef M    // restore sampler parameters before moving to next state
-#define M(t, param, val, e) DOTCAT2(ctx_sampling->params, param) -=  t(entry.addsubs[COMMON_ ## param] + e);
-            COMMON_PARAMS_SAMPLING_CORE
+            #undef X    // new X restore sampler parameters before moving to next state
+            #define X(T, MEMBER, _, E) A_DOT_B(ctx_sampling->params, MEMBER) -=  T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
+            X_COMMON_PARAMS_SAMPLING
         }
     }
 
@@ -916,6 +927,17 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
     for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
         std::fill(entry.posi.begin(), entry.posi.end(), next_search_pos);
     }
+
+    // // debug print
+    // #undef X
+    // #define X(T, MEMBER, DV, E) #MEMBER,
+    // static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
+    // for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
+    //     #undef X
+    //     #define X(T, MEMBER, DV, E) if (std::abs(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]) > E) \
+    //     { printf("%s: %s = %f\n", __func__, names[SPARAMS_ ## MEMBER ## _ENUM].c_str(), float(A_DOT_B(ctx_sampling->params, MEMBER))); }
+    //     X_COMMON_PARAMS_SAMPLING
+    // }
 }
 
 
