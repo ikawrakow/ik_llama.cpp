@@ -454,6 +454,9 @@ void server_context::init() {
             }
         }
 
+        const bool requested_spec = params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE ||
+                                    params_base.speculative.has_dft();
+
         bool can_spec = true;
         if (!params_base.dry_run) {
             can_spec = common_speculative_is_compat(ctx);
@@ -462,7 +465,7 @@ void server_context::init() {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
         // try speculative decoding
-        if (can_spec) {
+        if (can_spec && requested_spec) {
             slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
             if (slot.spec) {
                 if (mctx && !slot.has_mtp) {
@@ -471,11 +474,15 @@ void server_context::init() {
                 }
                 SLT_INF(slot, "%s", "speculative decoding context initialized\n");
             } else {
-                if (slot.has_mtp) {
-                    SRV_ERR("%s", "failed to initialize MTP speculative context, aborting\n");
-                    GGML_ABORT("MTP context creation failed");
+                if (llama_model_has_recurrent(model)) {
+                    SRV_ERR("%s", "failed to initialize recurrent speculative context\n");
+                    throw std::runtime_error("recurrent speculative context initialization failed");
+                } else if (slot.has_mtp) {
+                    SRV_ERR("%s", "failed to initialize MTP speculative context\n");
+                    throw std::runtime_error("MTP speculative context initialization failed");
                 } else {
-                    SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
+                    SRV_ERR("%s", "failed to initialize speculative decoding context\n");
+                    throw std::runtime_error("speculative decoding context initialization failed");
                 }
             }
         }
@@ -1232,6 +1239,17 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
     slot.params.speculative.n_min = std::max(slot.params.speculative.n_min, 0);
     slot.params.speculative.n_max = std::max(slot.params.speculative.n_max, 0);
+
+    if (slot.can_speculate() &&
+        llama_model_has_recurrent(model) &&
+        slot.params.speculative.n_max > params_base.speculative.n_max) {
+        send_error(task,
+                "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
+                " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
+                "; restart the server with a higher --draft-max to reserve checkpoint capacity",
+                ERROR_TYPE_INVALID_REQUEST);
+        return false;
+    }
 
     slot.params.speculative.ngram_size_n = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
     slot.params.speculative.ngram_size_m = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);

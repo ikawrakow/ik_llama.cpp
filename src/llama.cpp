@@ -1255,8 +1255,15 @@ bool llama_kv_cache::checkpoint_supported() const {
     return false;
 }
 
-bool llama_kv_cache::checkpoint_alloc_shadows() {
+bool llama_kv_cache::checkpoint_alloc_shadows(bool conv_only_shadow) {
     if (ckpt.allocated) {
+        if (ckpt.shadow_conv_only != conv_only_shadow) {
+            LLAMA_LOG_ERROR("%s: requested %s shadow buffers, but %s shadow buffers are already allocated\n",
+                    __func__,
+                    conv_only_shadow ? "conv-state-only" : "full-state",
+                    ckpt.shadow_conv_only ? "conv-state-only" : "full-state");
+            return false;
+        }
         return true;
     }
 
@@ -1269,10 +1276,7 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
         int           split_idx; // -1 for non-split
     };
 
-    const bool conv_only_shadow = save_per_step_ssm && ckpt.per_step_conv_state_dim > 0;
-    std::vector<tensor_entry> nonsplit_entries;
-
-    std::map<ggml_backend_buffer_type_t, std::vector<tensor_entry>> split_buft_entries;
+    std::map<ggml_backend_buffer_type_t, std::vector<tensor_entry>> buft_entries;
 
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (s_l[il] == nullptr) {
@@ -1285,16 +1289,18 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
             for (int d = 0; d < split_info->n_device; ++d) {
                 if (split_info->splits[d] == nullptr) continue;
                 ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(split_info->splits[d]->buffer);
-                split_buft_entries[buft].push_back({split_info->splits[d], il, d});
+                buft_entries[buft].push_back({split_info->splits[d], il, d});
             }
         } else {
-            nonsplit_entries.push_back({s_l[il], il, -1});
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(s_l[il]->buffer);
+            buft_entries[buft].push_back({s_l[il], il, -1});
         }
     }
 
-    if (!nonsplit_entries.empty()) {
+    // Allocate all shadows on the same backend type as the source tensor.
+    for (auto & [buft, entries] : buft_entries) {
         ggml_init_params params = {
-            /*.mem_size   =*/ nonsplit_entries.size() * ggml_tensor_overhead(),
+            /*.mem_size   =*/ entries.size() * ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
@@ -1304,60 +1310,39 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
             return false;
         }
 
-        for (auto & entry : nonsplit_entries) {
-            // Only need the conv portion when per-step is active.
-            const int64_t nelems = conv_only_shadow
-                ? ckpt.per_step_conv_state_dim
-                : (int64_t)ggml_nelements(entry.primary);
-            ggml_tensor * shadow = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, nelems);
-            ggml_format_name(shadow, "shadow_s_l%d", entry.il);
-            ckpt.s_l_shadow[entry.il] = shadow;
-        }
-
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_cpu_buffer_type());
-        if (!buf) {
-            LLAMA_LOG_ERROR("%s: failed to allocate CPU buffer for shadow tensors\n", __func__);
-            ggml_free(ctx);
-            return false;
-        }
-        ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: CPU shadow buffer = %8.2f MiB (%s)\n", __func__,
-                       ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0,
-                       conv_only_shadow ? "conv-state only" : "full recurrent state");
-        ckpt.shadow_ctxs.push_back(ctx);
-        ckpt.shadow_bufs.push_back(buf);
-    }
-
-    // Allocate split shadows on their respective devices
-    for (auto & [buft, entries] : split_buft_entries) {
-        ggml_init_params params = {
-            /*.mem_size   =*/ entries.size() * ggml_tensor_overhead(),
-            /*.mem_buffer =*/ NULL,
-            /*.no_alloc   =*/ true,
-        };
-        ggml_context * ctx = ggml_init(params);
-        if (!ctx) {
-            LLAMA_LOG_ERROR("%s: failed to create ggml context for split shadow tensors\n", __func__);
-            return false;
-        }
-
         for (auto & entry : entries) {
-            ggml_tensor * shadow = ggml_dup_tensor(ctx, entry.primary);
-            ggml_format_name(shadow, "shadow_s_l%d_d%d", entry.il, entry.split_idx);
+            ggml_tensor * shadow = nullptr;
+            if (conv_only_shadow && entry.split_idx < 0) {
+                shadow = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ckpt.per_step_conv_state_dim);
+            } else {
+                shadow = ggml_dup_tensor(ctx, entry.primary);
+            }
+            if (entry.split_idx >= 0) {
+                ggml_format_name(shadow, "shadow_s_l%d_d%d", entry.il, entry.split_idx);
+            } else {
+                ggml_format_name(shadow, "shadow_s_l%d", entry.il);
+            }
             entry.primary = shadow;
         }
 
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
         if (!buf) {
-            LLAMA_LOG_ERROR("%s: failed to allocate buffer for split shadow tensors\n", __func__);
+            LLAMA_LOG_ERROR("%s: failed to allocate buffer for shadow tensors\n", __func__);
             ggml_free(ctx);
             return false;
         }
         ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: %10s split shadow buffer = %8.2f MiB\n", __func__,
-                       ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+        LLAMA_LOG_INFO("%s: %10s shadow buffer = %8.2f MiB%s\n", __func__,
+                   ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0,
+                   conv_only_shadow ? " (conv-state only)" : "");
         ckpt.shadow_ctxs.push_back(ctx);
         ckpt.shadow_bufs.push_back(buf);
+
+        for (const auto & entry : entries) {
+            if (entry.split_idx < 0) {
+                ckpt.s_l_shadow[entry.il] = entry.primary;
+            }
+        }
     }
 
     // Build split shadow lookup
@@ -1374,7 +1359,7 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
         for (int d = 0; d < split_info->n_device; ++d) {
             if (split_info->splits[d] == nullptr) continue;
             ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(split_info->splits[d]->buffer);
-            for (auto & entry : split_buft_entries[buft]) {
+            for (auto & entry : buft_entries[buft]) {
                 if (entry.il == il && entry.split_idx == d) {
                     shadow_split[d] = entry.primary;
                     break;
@@ -1383,14 +1368,17 @@ bool llama_kv_cache::checkpoint_alloc_shadows() {
         }
     }
 
+    ckpt.shadow_conv_only = conv_only_shadow;
     ckpt.allocated = true;
     return true;
 }
 
 bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched) {
-    if (!checkpoint_alloc_shadows()) {
+    if (!checkpoint_alloc_shadows(false)) {
         return false;
     }
+
+    GGML_ASSERT(!ckpt.shadow_conv_only);
 
     const uint32_t n_layer = (uint32_t)s_l.size();
 
@@ -1417,8 +1405,8 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched) {
                 }
             }
         } else {
-            const size_t nbytes = ggml_nbytes(ckpt.s_l_shadow[il]);
-            ggml_backend_tensor_get(s_l[il], ckpt.s_l_shadow[il]->data, 0, nbytes);
+            GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
+            ggml_backend_tensor_copy(s_l[il], ckpt.s_l_shadow[il]);
         }
     }
 
@@ -1435,6 +1423,8 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched) {
         LLAMA_LOG_ERROR("%s: no checkpoint saved\n", __func__);
         return false;
     }
+
+    GGML_ASSERT(!ckpt.shadow_conv_only);
 
     const uint32_t n_layer = (uint32_t)s_l.size();
 
@@ -1460,6 +1450,7 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched) {
                 }
             }
         } else {
+            GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
             GGML_ASSERT(ggml_nbytes(ckpt.s_l_shadow[il]) == ggml_nbytes(s_l[il]));
             ggml_backend_tensor_copy(ckpt.s_l_shadow[il], s_l[il]);
         }
@@ -1474,6 +1465,34 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched) {
 
 void llama_kv_cache::checkpoint_delete() {
     ckpt.saved = false;
+}
+
+bool llama_kv_cache::per_step_save() {
+    const uint32_t n_layer = (uint32_t)s_l.size();
+    const int64_t conv_state_dim = ckpt.per_step_conv_state_dim;
+
+    ckpt.cells_snapshot = cells;
+    ckpt.head_snapshot  = head;
+    ckpt.used_snapshot  = used;
+
+    if (conv_state_dim > 0 && !checkpoint_alloc_shadows(true)) {
+        return false;
+    }
+
+    const size_t conv_bytes = (size_t)std::max<int64_t>(conv_state_dim, 0) * sizeof(float);
+    std::vector<float> conv_state((size_t)std::max<int64_t>(conv_state_dim, 0));
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr || conv_bytes == 0) {
+            continue;
+        }
+
+        ggml_backend_tensor_get(s_l[il], conv_state.data(), 0, conv_bytes);
+        GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
+        ggml_backend_tensor_set(ckpt.s_l_shadow[il], conv_state.data(), 0, conv_bytes);
+    }
+
+    ckpt.saved = true;
+    return true;
 }
 
 bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
@@ -1500,7 +1519,7 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
     ckpt.per_step_qkv.resize(n_layer);
 
     const int64_t ssm_state_dim = ckpt.per_step_ssm_state_size;
-    const int64_t conv_dim      = ckpt.per_step_conv_dim;
+    const int64_t conv_dim       = ckpt.per_step_conv_dim;
     if (ssm_state_dim <= 0 || conv_dim <= 0) {
         LLAMA_LOG_ERROR("%s: per_step dimensions not set (ssm=%lld, conv_dim=%lld)\n",
                 __func__, (long long)ssm_state_dim, (long long)conv_dim);
@@ -7097,8 +7116,12 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
     for (const auto * sl : kv.s_l) {
         if (!sl) continue;
         if (sl->extra) {
-            has_gpu = true;
-            continue;
+            const char * split_mode_name = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? "graph" :
+                                           model.split_mode == LLAMA_SPLIT_MODE_ATTN  ? "attn"  : "split";
+            LLAMA_LOG_WARN("%s: per-step checkpoints are not supported when recurrent state tensors are split across devices (split mode = %s)\n",
+                    __func__, split_mode_name);
+            kv.save_per_step_ssm = false;
+            return false;
         }
         //if (sl->extra) {
         //    kv.save_per_step_ssm = false;
@@ -7137,7 +7160,71 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
         return false;
     }
 
+    if (!kv.checkpoint_alloc_shadows(true)) {
+        LLAMA_LOG_ERROR("%s: failed to allocate conv-state shadow buffers for per-step checkpoints\n", __func__);
+        kv.save_per_step_ssm = false;
+        return false;
+    }
+
     return true;
+}
+
+static size_t llama_spec_ckpt_cpu_state_reserve(const llama_context * ctx, llama_seq_id seq_id) {
+    const auto & kv_self = ctx->kv_self;
+
+    size_t size = sizeof(uint32_t); // cell_count
+
+    if (seq_id >= 0 && llama_kv_qnext_seq_id_in_range(kv_self, seq_id) && (uint32_t) seq_id < kv_self.size) {
+        size += sizeof(llama_pos);
+        size += sizeof(uint32_t); // n_seq_id = 0 for seq-specific saves
+    }
+
+    const uint32_t v_state = kv_self.v_l.empty() ? 2 : kv_self.v_trans ? 1 : 0;
+    const uint32_t n_layer = kv_self.k_l.size();
+
+    size += sizeof(v_state);
+    size += sizeof(n_layer);
+    size += (size_t) n_layer * (sizeof(int32_t) + sizeof(uint64_t));
+
+    if (v_state == 0) {
+        size += (size_t) n_layer * (sizeof(int32_t) + sizeof(uint64_t));
+    } else if (v_state == 1) {
+        size += (size_t) n_layer * (sizeof(int32_t) + sizeof(uint32_t) + sizeof(uint32_t));
+    }
+
+    const uint32_t qnext_state = llama_kv_has_qnext_state_storage(kv_self) ? 1 : 0;
+    size += sizeof(qnext_state);
+
+    if (qnext_state != 0) {
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            const bool has_s_cache = il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr;
+            const uint64_t s_size_row = has_s_cache ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]) : 0;
+            const uint32_t s_rows = has_s_cache && seq_id >= 0 && llama_kv_qnext_seq_id_in_range(kv_self, seq_id) && (uint32_t) seq_id < kv_self.size
+                ? 1
+                : 0;
+
+            size += sizeof(int32_t);
+            size += sizeof(uint64_t);
+            size += sizeof(uint32_t);
+            size += (size_t) s_rows * s_size_row;
+        }
+    }
+    return size;
+}
+
+static const char * llama_spec_ckpt_mode_name(int mode) {
+    switch (mode) {
+        case LLAMA_SPEC_CKPT_PER_STEP:
+            return "per-step";
+        case LLAMA_SPEC_CKPT_GPU_FALLBACK:
+            return "gpu-fallback";
+        case LLAMA_SPEC_CKPT_CPU:
+            return "cpu";
+        case LLAMA_SPEC_CKPT_AUTO:
+            return "auto";
+        default:
+            return "none";
+    }
 }
 
 int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
@@ -7150,7 +7237,19 @@ int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
         return (int)LLAMA_SPEC_CKPT_NONE;
     }
 
+    if (kv.ckpt.fixed_spec_mode != LLAMA_SPEC_CKPT_NONE) {
+        if (kv.ckpt.fixed_spec_mode == LLAMA_SPEC_CKPT_PER_STEP && max_tokens > kv.ckpt.fixed_max_tokens) {
+            LLAMA_LOG_WARN("%s: fixed per-step checkpoint capacity is %d tokens, but the current speculative batch requests %d; disabling checkpoint for this batch\n",
+                    __func__, kv.ckpt.fixed_max_tokens, max_tokens);
+            return (int)LLAMA_SPEC_CKPT_NONE;
+        }
+
+        kv.ckpt.selected_spec_mode = kv.ckpt.fixed_spec_mode;
+        return kv.ckpt.selected_spec_mode;
+    }
+
     int requested = mode;
+    int resolved = LLAMA_SPEC_CKPT_NONE;
 
     // prefer PER_STEP → GPU_FALLBACK → CPU
     if (requested == LLAMA_SPEC_CKPT_AUTO) {
@@ -7159,22 +7258,53 @@ int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
 
     if (requested == LLAMA_SPEC_CKPT_PER_STEP) {
         if (spec_ckpt_try_per_step(kv, ctx->model, max_tokens)) {
-            kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_PER_STEP;
-            return (int)LLAMA_SPEC_CKPT_PER_STEP;
+            resolved = LLAMA_SPEC_CKPT_PER_STEP;
+        } else if (mode == LLAMA_SPEC_CKPT_PER_STEP) {
+            LLAMA_LOG_ERROR("%s: failed to preallocate per-step checkpoint buffers for max_tokens=%d; --recurrent-ckpt-mode=%s requires startup allocation\n",
+                    __func__, max_tokens, llama_spec_ckpt_mode_name(mode));
+            return (int)LLAMA_SPEC_CKPT_NONE;
+        } else {
+            LLAMA_LOG_WARN("%s: auto checkpoint mode could not preallocate per-step buffers for max_tokens=%d; falling back to gpu-fallback\n",
+                    __func__, max_tokens);
+            requested = LLAMA_SPEC_CKPT_GPU_FALLBACK;
         }
-        if (mode == LLAMA_SPEC_CKPT_PER_STEP) {
-            LLAMA_LOG_WARN("%s: per-step not available, falling back to GPU fallback mode\n", __func__);
-        }
-        requested = LLAMA_SPEC_CKPT_GPU_FALLBACK;
     }
 
-    if (requested == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
-        kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_GPU_FALLBACK;
-        return (int)LLAMA_SPEC_CKPT_GPU_FALLBACK;
+    if (resolved == LLAMA_SPEC_CKPT_NONE && requested == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
+        if (kv.checkpoint_alloc_shadows()) {
+            resolved = LLAMA_SPEC_CKPT_GPU_FALLBACK;
+        } else if (mode == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
+            LLAMA_LOG_ERROR("%s: failed to preallocate gpu-fallback checkpoint shadows at startup; --recurrent-ckpt-mode=%s requires startup allocation\n",
+                    __func__, llama_spec_ckpt_mode_name(mode));
+            return (int)LLAMA_SPEC_CKPT_NONE;
+        } else {
+            LLAMA_LOG_WARN("%s: auto checkpoint mode could not preallocate gpu-fallback checkpoint shadows; falling back to cpu\n",
+                    __func__);
+            requested = LLAMA_SPEC_CKPT_CPU;
+        }
     }
 
-    kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_CPU;
-    return (int)LLAMA_SPEC_CKPT_CPU;
+    if (resolved == LLAMA_SPEC_CKPT_NONE) {
+        resolved = LLAMA_SPEC_CKPT_CPU;
+    }
+
+    if (resolved == LLAMA_SPEC_CKPT_CPU) {
+        const size_t cpu_reserve = llama_spec_ckpt_cpu_state_reserve(ctx, 0);
+        kv.ckpt.cpu_state_data.clear();
+        kv.ckpt.cpu_state_data.reserve(cpu_reserve);
+        LLAMA_LOG_INFO("%s: CPU serialized checkpoint reserve = %8.2f MiB (per seq)\n",
+                __func__, cpu_reserve / 1024.0 / 1024.0);
+    }
+
+    kv.ckpt.fixed_spec_mode = resolved;
+    kv.ckpt.fixed_max_tokens = resolved == LLAMA_SPEC_CKPT_PER_STEP ? max_tokens : 0;
+    kv.ckpt.selected_spec_mode = resolved;
+
+    LLAMA_LOG_INFO("%s: fixed recurrent checkpoint mode = %s%s\n",
+            __func__, llama_spec_ckpt_mode_name(resolved),
+            resolved == LLAMA_SPEC_CKPT_PER_STEP ? (std::string(" (max_tokens=") + std::to_string(max_tokens) + ")").c_str() : "");
+
+    return resolved;
 }
 
 bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
@@ -7183,7 +7313,7 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
     switch (kv.ckpt.selected_spec_mode) {
         case LLAMA_SPEC_CKPT_PER_STEP:
             kv.save_per_step_ssm = true;
-            return kv.checkpoint_save(ctx->sched);
+            return kv.per_step_save();
 
         case LLAMA_SPEC_CKPT_GPU_FALLBACK:
             return kv.checkpoint_save(ctx->sched);
