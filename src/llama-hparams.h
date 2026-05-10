@@ -134,6 +134,12 @@ struct llama_hparams {
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 
+    // gemma4 separate assistant MTP
+    uint32_t mtp_backbone_n_embd = 0;
+    bool     mtp_use_ordered_embeddings = false;
+    uint32_t mtp_num_centroids = 0;
+    uint32_t mtp_centroid_top_k = 0;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = -1;
@@ -152,6 +158,7 @@ struct llama_hparams {
         if (this->n_vocab       != other.n_vocab)       return true;
         if (this->n_ctx_train   != other.n_ctx_train)   return true;
         if (this->n_embd        != other.n_embd)        return true;
+        if (this->mtp_backbone_n_embd != other.mtp_backbone_n_embd) return true;
         if (this->n_layer       != other.n_layer)       return true;
         if (this->n_rot         != other.n_rot)         return true;
         if (this->n_swa         != other.n_swa)         return true;

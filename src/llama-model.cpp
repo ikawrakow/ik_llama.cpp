@@ -804,6 +804,28 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_GEMMA4_MTP,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,           "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,          "output_norm" },
+            { LLM_TENSOR_ATTN_NORM,            "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,               "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_NORM,          "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_OUT,             "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_POST_NORM,       "blk.%d.post_attention_norm" },
+            { LLM_TENSOR_FFN_NORM,             "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,             "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,             "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,               "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_POST_NORM,        "blk.%d.post_ffw_norm" },
+            { LLM_TENSOR_LAYER_OUT_SCALE,      "blk.%d.layer_output_scale" },
+            { LLM_TENSOR_MTP_PRE_PROJ,         "mtp_pre_proj" },
+            { LLM_TENSOR_MTP_POST_PROJ,        "mtp_post_proj" },
+            { LLM_TENSOR_MTP_TOKEN_ORDERING,   "mtp_token_ordering" },
+            { LLM_TENSOR_MTP_CENTROIDS,        "mtp_centroids" },
+        },
+    },
+    {
         LLM_ARCH_STARCODER2,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -1879,6 +1901,27 @@ bool llama_model_is_hybrid(const llama_model * model) {
 
 bool llama_model_has_recurrent(const llama_model * model) {
     return llm_arch_is_hybrid(model->arch) || llm_arch_is_recurrent(model->arch);
+}
+
+bool llama_model_is_gemma4_mtp_assistant(const llama_model * model) {
+    return model && model->arch == LLM_ARCH_GEMMA4_MTP;
+}
+
+bool llama_is_gemma4_mtp_file(const char * path) {
+    if (!path || !*path) return false;
+    struct gguf_init_params params = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
+    struct gguf_context * ctx = gguf_init_from_file(path, params);
+    if (!ctx) return false;
+    bool result = false;
+    const int key_id = gguf_find_key(ctx, "general.architecture");
+    if (key_id >= 0) {
+        const char * arch = gguf_get_val_str(ctx, key_id);
+        if (arch && strcmp(arch, "gemma4_mtp") == 0) {
+            result = true;
+        }
+    }
+    gguf_free(ctx);
+    return result;
 }
 
 bool llama_model_is_split_mode_graph(const struct llama_model * model) {
