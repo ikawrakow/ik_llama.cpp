@@ -2144,7 +2144,9 @@ int32_t server_tokens::process_chunk(
     size_t idx,
     llama_pos pos,
     int32_t seq_id,
-    size_t& n_tokens_out) const {
+    size_t& n_tokens_out,
+    mtmd_helper_eval_batch_callback callback,
+    void * callback_user_data) const {
     const auto& chunk = find_chunk(idx);
     const char* name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
         ? "image" : "audio";
@@ -2152,13 +2154,15 @@ int32_t server_tokens::process_chunk(
     int32_t n_batch = llama_n_batch(ctx);
     int64_t t0 = ggml_time_ms();
     llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
+    int32_t result = mtmd_helper_eval_chunk_single_with_callback(mctx, ctx,
         chunk.get(),
         pos,
         seq_id,
         n_batch,
         true, // logits last
-        &new_n_past);
+        &new_n_past,
+        callback,
+        callback_user_data);
     LLAMA_LOG_INFO("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
     if (result != 0) {
         LLAMA_LOG_ERROR("mtmd_helper_eval failed with status %d", result);
