@@ -9,8 +9,6 @@
 #include <unordered_map>
 #include <vector>
 
-#define A_DOT_B(a, b) a.b
-
 // sampler types
 enum class llama_sampler_type : char {
     DRY         = 'd',

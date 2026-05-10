@@ -833,6 +833,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
     }
 
     // // debug print
+    // #define A_DOT_B(a, b) a.b
     // #undef X
     // #define X(T, MEMBER, DV, E) #MEMBER,
     // static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
@@ -849,15 +850,11 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             const auto& phrase = entry.phrases[j];
             if (phrase.empty()) {
                 if (elb.countup == 0) {
-                    // X_COMMON_PARAMS_SAMPLING
                     ctx_sampling->params.elb_add(entry);
                     entry.addflags[j] = 1;
-                    // X_COMMON_PARAMS_SAMPLING
                 } else if (elb.countup == entry.duration) {
-                    // X_COMMON_PARAMS_SAMPLING
                     ctx_sampling->params.elb_sub(entry);
                     entry.addflags[j] = 0;
-                    // X_COMMON_PARAMS_SAMPLING
                 }
                 continue;   // next entry
             }
@@ -869,7 +866,6 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             }
             entry.posi[j] = std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - int32_t(phrase.length()) + 1);
             if (count % 2 == 1) {
-                // X_COMMON_PARAMS_SAMPLING
                 if (entry.addflags[j] == 0) {
                     ctx_sampling->params.elb_add(entry);
                     entry.addflags[j] = 1;
@@ -877,7 +873,6 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
                     ctx_sampling->params.elb_sub(entry);
                     entry.addflags[j] = 0;
                 }
-                // X_COMMON_PARAMS_SAMPLING
             }
         }
     }
@@ -911,6 +906,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
     ctx_sampling->elb_search_pos = next_search_pos + 1;
 
     // // debug print
+    // #define A_DOT_B(a, b) a.b
     // #undef X
     // #define X(T, MEMBER, DV, E) #MEMBER,
     // static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
