@@ -1406,7 +1406,13 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched) {
             }
         } else {
             GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
-            ggml_backend_tensor_copy(s_l[il], ckpt.s_l_shadow[il]);
+            auto src_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
+            if (src_backend != nullptr && !ggml_backend_buffer_is_host(s_l[il]->buffer)) {
+                ggml_backend_tensor_copy_async(src_backend, src_backend, s_l[il], ckpt.s_l_shadow[il]);
+                backends_to_sync.insert(src_backend);
+            } else {
+                ggml_backend_tensor_copy(s_l[il], ckpt.s_l_shadow[il]);
+            }
         }
     }
 
@@ -1452,7 +1458,13 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched) {
         } else {
             GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
             GGML_ASSERT(ggml_nbytes(ckpt.s_l_shadow[il]) == ggml_nbytes(s_l[il]));
-            ggml_backend_tensor_copy(ckpt.s_l_shadow[il], s_l[il]);
+            auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
+            if (dst_backend != nullptr && !ggml_backend_buffer_is_host(s_l[il]->buffer)) {
+                ggml_backend_tensor_copy_async(dst_backend, dst_backend, ckpt.s_l_shadow[il], s_l[il]);
+                backends_to_sync.insert(dst_backend);
+            } else {
+                ggml_backend_tensor_copy(ckpt.s_l_shadow[il], s_l[il]);
+            }
         }
     }
 
@@ -1467,7 +1479,7 @@ void llama_kv_cache::checkpoint_delete() {
     ckpt.saved = false;
 }
 
-bool llama_kv_cache::per_step_save() {
+bool llama_kv_cache::per_step_save(ggml_backend_sched_t sched) {
     const uint32_t n_layer = (uint32_t)s_l.size();
     const int64_t conv_state_dim = ckpt.per_step_conv_state_dim;
 
@@ -1480,15 +1492,30 @@ bool llama_kv_cache::per_step_save() {
     }
 
     const size_t conv_bytes = (size_t)std::max<int64_t>(conv_state_dim, 0) * sizeof(float);
-    std::vector<float> conv_state((size_t)std::max<int64_t>(conv_state_dim, 0));
+    std::unordered_set<ggml_backend_t> backends_to_sync;
+
     for (uint32_t il = 0; il < n_layer; ++il) {
-        if (s_l[il] == nullptr || conv_bytes == 0) {
+        if (s_l[il] == nullptr || s_l[il]->extra != nullptr || conv_bytes == 0) {
             continue;
         }
 
-        ggml_backend_tensor_get(s_l[il], conv_state.data(), 0, conv_bytes);
         GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
-        ggml_backend_tensor_set(ckpt.s_l_shadow[il], conv_state.data(), 0, conv_bytes);
+
+        ggml_tensor src = *s_l[il];
+        src.ne[0] = conv_bytes / sizeof(float);
+        src.nb[1] = src.nb[2] = src.nb[3] = conv_bytes;
+
+        auto src_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
+        if (src_backend != nullptr && !ggml_backend_buffer_is_host(s_l[il]->buffer)) {
+            ggml_backend_tensor_copy_async(src_backend, src_backend, &src, ckpt.s_l_shadow[il]);
+            backends_to_sync.insert(src_backend);
+        } else {
+            ggml_backend_tensor_copy(&src, ckpt.s_l_shadow[il]);
+        }
+    }
+
+    for (auto backend : backends_to_sync) {
+        ggml_backend_synchronize(backend);
     }
 
     ckpt.saved = true;
@@ -7313,7 +7340,7 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
     switch (kv.ckpt.selected_spec_mode) {
         case LLAMA_SPEC_CKPT_PER_STEP:
             kv.save_per_step_ssm = true;
-            return kv.per_step_save();
+            return kv.per_step_save(ctx->sched);
 
         case LLAMA_SPEC_CKPT_GPU_FALLBACK:
             return kv.checkpoint_save(ctx->sched);
