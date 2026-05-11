@@ -1477,7 +1477,12 @@ void llama_kv_cache::checkpoint_delete() {
 }
 
 bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
-    if (ckpt.per_step_max_allocated >= max_tokens) {
+    // Only rejected drafts need recurrent-state restoration. The last
+    // verification token is never restored after full acceptance, so keep
+    // checkpoint storage to the restorable rows.
+    const int max_restore_steps = std::max(1, max_tokens - 1);
+
+    if (ckpt.per_step_max_allocated >= max_restore_steps) {
         return true;
     }
 
@@ -1544,18 +1549,18 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
 
         for (auto & [p, bt] : layers) {
             auto [il, id] = p;
-            // SSM state: max_tokens * ssm_state_dim
+            // SSM state: max_restore_steps * ssm_state_dim
             if (id < 0) {
-                if (max_tokens > 1) {
+                if (max_restore_steps > 0) {
                     GGML_ASSERT(ckpt.per_step_ssm[il].empty());
                     GGML_ASSERT(ckpt.per_step_qkv[il].empty());
-                    ggml_tensor * t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)(max_tokens - 1) * ssm_state_dim);
+                    ggml_tensor * t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_restore_steps * ssm_state_dim);
                     ggml_format_name(t_ssm, "per_step_ssm_l%d", il);
                     ckpt.per_step_ssm[il].push_back(t_ssm);
                 }
 
-                // Conv features (qkv_mixed): max_tokens * conv_dim
-                ggml_tensor * t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * conv_dim);
+                // Conv features (qkv_mixed): max_restore_steps * conv_dim
+                ggml_tensor * t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_restore_steps * conv_dim);
                 ggml_format_name(t_qkv, "per_step_qkv_l%d", il);
                 ckpt.per_step_qkv[il].push_back(t_qkv);
             } else {
@@ -1576,13 +1581,13 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
                 int nv = split->ne[0] / head_v_dim; // number of heads handled by this device
                 auto [this_conv_dim, this_ssm_dim] = model.hparams.n_embd_v_s_dims(nv);
 
-                if (max_tokens > 1) {
-                    auto t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)(max_tokens - 1) * this_ssm_dim);
+                if (max_restore_steps > 0) {
+                    auto t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_restore_steps * this_ssm_dim);
                     ggml_format_name(t_ssm, "per_step_ssm_l%d_%d", il, id);
                     ckpt.per_step_ssm[il][id] = t_ssm;
                 }
 
-                auto t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * this_conv_dim);
+                auto t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_restore_steps * this_conv_dim);
                 ggml_format_name(t_qkv, "per_step_qkv_l%d_%d", il, id);
                 ckpt.per_step_qkv[il][id] = t_qkv;
             }
@@ -1595,13 +1600,13 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
             return false;
         }
         ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: %10s per-step buffer = %8.2f MiB (max_tokens=%d)\n", __func__,
-                       ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, max_tokens);
+        LLAMA_LOG_INFO("%s: %10s per-step buffer = %8.2f MiB (max_restore_steps=%d, max_tokens=%d)\n", __func__,
+                       ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0, max_restore_steps, max_tokens);
         ckpt.per_step_ctxs.push_back(ctx);
         ckpt.per_step_bufs.push_back(buf);
     }
 
-    ckpt.per_step_max_allocated = max_tokens;
+    ckpt.per_step_max_allocated = max_restore_steps;
     return true;
 }
 
@@ -1662,7 +1667,7 @@ static void restore_recurrent_cache_tensors(int step, ggml_backend_sched_t sched
 }
 
 bool llama_kv_cache::per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step) {
-    if (ckpt.per_step_ssm.empty() || step < 0) {
+    if (ckpt.per_step_ssm.empty() || step < 0 || step >= ckpt.per_step_max_allocated) {
         return false;
     }
 

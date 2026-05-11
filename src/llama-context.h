@@ -91,8 +91,9 @@ struct llama_kv_cache {
         std::vector<std::vector<ggml_tensor *>> per_step_ssm;
 
         // Per-step conv feature buffer: stores qkv_mixed features from the
-        // verification forward pass so conv state can be reconstructed at any step.
-        // One tensor per recurrent layer, each sized [conv_dim * max_tokens].
+        // verification forward pass so conv state can be reconstructed at any
+        // restorable step. The final verification token is never restored after
+        // full acceptance, so it does not need a checkpoint row.
         std::vector<std::vector<ggml_tensor *>> per_step_qkv;
 
         int32_t per_step_n_tokens = 0;

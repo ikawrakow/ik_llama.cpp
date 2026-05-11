@@ -70,8 +70,8 @@ delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_
         GGML_ASSERT((uint32_t) s < qnext_state_slots);
     }
 
-    int max_per_step = lctx.kv_self.save_per_step_ssm ? std::min<int>(8, lctx.kv_self.ckpt.per_step_max_allocated) : 0;
-    save_per_step_states = lctx.kv_self.save_per_step_ssm && batch.n_tokens > 1 && batch.n_tokens <= max_per_step;
+    const int max_restore_steps = lctx.kv_self.save_per_step_ssm ? std::min<int>(8, lctx.kv_self.ckpt.per_step_max_allocated) : 0;
+    save_per_step_states = lctx.kv_self.save_per_step_ssm && batch.n_tokens > 1 && batch.n_tokens <= max_restore_steps + 1;
 }
 
 delta_net::~delta_net() = default;
@@ -432,9 +432,18 @@ static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor *
 static void build_qkv_cpy(ggml_context * ctx0, ggml_cgraph * gf, ggml_tensor * qkv_mixed, ggml_tensor * per_step_qkv) {
     const int64_t conv_dim = qkv_mixed->ne[0];
     const int64_t n_tok_qkv = qkv_mixed->ne[1] * qkv_mixed->ne[2];
+    const int64_t n_restore_qkv = n_tok_qkv - 1;
+
+    if (n_restore_qkv <= 0) {
+        return;
+    }
+
+    GGML_ASSERT(ggml_nelements(per_step_qkv) >= n_restore_qkv * conv_dim);
+
     ggml_tensor * qkv_flat = ggml_reshape_2d(ctx0, qkv_mixed, conv_dim, n_tok_qkv);
-    ggml_tensor * qkv_dst = ggml_view_2d(ctx0, per_step_qkv, conv_dim, n_tok_qkv, conv_dim * sizeof(float), 0);
-    auto qkv_cpy = ggml_cpy(ctx0, qkv_flat, qkv_dst);
+    ggml_tensor * qkv_src = ggml_view_2d(ctx0, qkv_flat, conv_dim, n_restore_qkv, qkv_flat->nb[1], 0);
+    ggml_tensor * qkv_dst = ggml_view_2d(ctx0, per_step_qkv, conv_dim, n_restore_qkv, conv_dim * sizeof(float), 0);
+    ggml_tensor * qkv_cpy = ggml_cpy(ctx0, qkv_src, qkv_dst);
     ggml_build_forward_expand(gf, qkv_cpy);
 }
 
@@ -660,4 +669,3 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
     return out;
 
 }
-
