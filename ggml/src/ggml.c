@@ -6944,6 +6944,40 @@ struct ggml_tensor * ggml_concat(
     return result;
 }
 
+struct ggml_tensor * ggml_concat_inplace(
+    struct ggml_context * ctx,
+    struct ggml_tensor * a,
+    struct ggml_tensor * b,
+    struct ggml_tensor * result_in,
+    int dim) {
+    GGML_ASSERT(dim >= 0 && dim < GGML_MAX_DIMS);
+    if (!result_in) {
+        return ggml_concat(ctx, a, b, dim);
+    }
+
+    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+        int64_t ne;
+        if (d == dim) {
+            ne = a->ne[d] + b->ne[d];
+        } else {
+            GGML_ASSERT(a->ne[d] == b->ne[d]);
+            ne = a->ne[d];
+        }
+        GGML_ASSERT(ne == result_in->ne[d]);
+    }
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, result_in);
+
+    ggml_set_op_params_i32(result, 0, dim);
+
+    result->op = GGML_OP_CONCAT;
+    result->grad = NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml_abs
 
 struct ggml_tensor * ggml_abs(
