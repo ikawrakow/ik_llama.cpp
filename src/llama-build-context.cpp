@@ -315,7 +315,9 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
     } else {
-        return nullptr;
+        lctx.inp_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, batch.n_tokens);
+        ggml_set_input(lctx.inp_embd);
+        cur = lctx.inp_embd;
     }
 
     cb(cur, "inp_embd", -1);

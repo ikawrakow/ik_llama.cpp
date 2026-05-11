@@ -1269,6 +1269,12 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             int                   dim);
+    GGML_API struct ggml_tensor * ggml_concat_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * result,
+            int                   dim);
 
     GGML_API struct ggml_tensor * ggml_abs(
             struct ggml_context * ctx,
@@ -2527,7 +2533,7 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
-            bool                  save_all_steps);
+            struct ggml_tensor  * saved_steps);
 
     // custom operators
 

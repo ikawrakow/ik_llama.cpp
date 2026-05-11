@@ -1438,7 +1438,7 @@ template <int head_dim>
 void iqk_fused_delta_net_neon_impl(int n_heads, int gqa_ratio, int repeat_type, int n_tokens, int n_seqs,
         size_t vnb1, size_t vnb2, size_t vnb3,
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
-        const float * state_in, float * out_data, float * state_out, int save_all_steps, int state_step_stride, int ith, int nth) {
+        const float * state_in, float * out_data, float * state_out, float * saved_steps, int state_step_stride, int ith, int nth) {
     const int total_heads = n_heads * n_seqs;
     const int heads_per_thread = (total_heads + nth - 1) / nth;
     const int h_start = ith * heads_per_thread;
@@ -1537,10 +1537,9 @@ void iqk_fused_delta_net_neon_impl(int n_heads, int gqa_ratio, int repeat_type, 
                 }
             }
 
-            if (save_all_steps && t + 1 < n_tokens) {
-                float * next_state = state_out + (t + 1) * state_step_stride + state_head_offset;
-                std::memcpy(next_state, state, head_dim * head_dim * sizeof(float));
-                state = next_state;
+            if (saved_steps && t + 1 < n_tokens) {
+                float * this_state = saved_steps + state_head_offset + t * state_step_stride;
+                std::memcpy(this_state, state, head_dim * head_dim * sizeof(float));
             }
         }
     }
@@ -1550,10 +1549,10 @@ template <int head_dim>
 void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n_tokens, int n_seqs,
         size_t vnb1, size_t vnb2, size_t vnb3,
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
-        const float * state_in, float * out_data, float * state_out, int save_all_steps, int state_step_stride, int ith, int nth) {
+        const float * state_in, float * out_data, float * state_out, float * saved_steps, int state_step_stride, int ith, int nth) {
 #ifdef __ARM_NEON
     iqk_fused_delta_net_neon_impl<head_dim>(n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, vnb1, vnb2, vnb3,
-            q_data, k_data, v_data, g_data, beta_data, state_in, out_data, state_out, save_all_steps, state_step_stride, ith, nth);
+            q_data, k_data, v_data, g_data, beta_data, state_in, out_data, state_out, saved_steps, state_step_stride, ith, nth);
     return;
 #endif
     const int total_heads = n_heads * n_seqs;
@@ -1711,10 +1710,9 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
 #endif
 #endif
 
-            if (save_all_steps && t + 1 < n_tokens) {
-                float * next_state = state_out + (t + 1) * state_step_stride + state_head_offset;
-                std::memcpy(next_state, state, head_dim * head_dim * sizeof(float));
-                state = next_state;
+            if (saved_steps && t + 1 < n_tokens) {
+                float * this_state = saved_steps + state_head_offset + t * state_step_stride;
+                std::memcpy(this_state, state, head_dim * head_dim * sizeof(float));
             }
         }
     }
@@ -1724,16 +1722,16 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
 bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_type, int n_tokens, int n_seqs,
         size_t vnb1, size_t vnb2, size_t vnb3,
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
-        const float * state_in, float * out_data, float * state_out, int save_all_steps, int state_step_stride, int ith, int nth) {
+        const float * state_in, float * out_data, float * state_out, float * saved_steps, int state_step_stride, int ith, int nth) {
     if (head_dim != 64 && head_dim != 128) {
         return false;
     }
     if (head_dim == 64) {
         iqk_fused_delta_net_impl<64>(n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, vnb1, vnb2, vnb3, q_data, k_data, v_data, g_data, beta_data, state_in,
-                out_data, state_out, save_all_steps, state_step_stride, ith, nth);
+                out_data, state_out, saved_steps, state_step_stride, ith, nth);
     } else {
         iqk_fused_delta_net_impl<128>(n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, vnb1, vnb2, vnb3, q_data, k_data, v_data, g_data, beta_data, state_in,
-                out_data, state_out, save_all_steps, state_step_stride, ith, nth);
+                out_data, state_out, saved_steps, state_step_stride, ith, nth);
     }
     return true;
 }
@@ -1774,7 +1772,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*n
 bool iqk_fused_delta_net(int, int, int, int, int, int,
         size_t, size_t, size_t,
         const float *, const float *, const float *, const float *, const float *,
-        const float *, float *, float *, int, int, int, int) {
+        const float *, float *, float *, float *, int, int, int) {
     return false;
 }
 

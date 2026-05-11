@@ -198,12 +198,14 @@ struct common_speculative_state_mtp : public common_speculative_state {
             llama_token id_last,
             llama_tokens & result) override {
 
-        int32_t n_past = (int32_t)prompt_tgt.size();
         llama_seq_id seq_id = 0;
 
         llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
-        if (mtp_pos_max >= n_past) {
-            llama_kv_cache_seq_rm(ctx_mtp, seq_id, n_past, -1);
+        int32_t n_past = mtp_pos_max >= 0 ? (int32_t)mtp_pos_max + 1 : (int32_t)prompt_tgt.size();
+
+        if (!prompt_tgt.empty() && mtp_pos_max < (llama_pos)prompt_tgt.size() - 1) {
+            LOG_WRN("%s: MTP context not fully warmed up: pos_max = %d, expected = %d\n",
+                    __func__, (int)mtp_pos_max, (int)prompt_tgt.size() - 1);
         }
 
         llama_context * ctx = ctx_mtp;
@@ -1478,9 +1480,9 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 }
 
 
-void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup) {
+int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup) {
     if (batch.n_tokens == 0) {
-        return;
+        return 0;
     }
 
     llama_seq_id seq_id    = batch.seq_id[0][0];
@@ -1509,8 +1511,9 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
         }
     }
 
-    llama_decode(ctx, mtp_batch);
+    const int32_t ret = llama_decode(ctx, mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+    return ret;
 }
 
 void mtp_accept_tokens(
@@ -1527,7 +1530,11 @@ void mtp_accept_tokens(
         common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
     }
 
-    mtp_update_kv_cache(ctx, accepted_batch, false);
+    if (mtp_update_kv_cache(ctx, accepted_batch, false) != 0) {
+        LOG_ERR("failed to update MTP KV cache for accepted tokens\n");
+        llama_batch_free(accepted_batch);
+        return;
+    }
 
     auto & last = mtp_get_last_embd(ctx);
     auto embd = llama_get_embeddings_ith(ctx, ids.size() - 1);

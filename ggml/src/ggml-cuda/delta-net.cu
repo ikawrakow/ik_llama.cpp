@@ -36,13 +36,13 @@ __global__ void delta_net_recurrent_f32(
     const float * __restrict__ beta_in,   // [1, n_tokens, n_heads, n_seqs]
     const float * __restrict__ state_in,  // [HEAD_DIM, HEAD_DIM*n_heads, 1, n_seqs]
     float * __restrict__ dst,             // output + new_state(s) concatenated
+    float * __restrict__ saved_states,
     const int64_t n_heads,
     const int64_t gqa_ratio,
     const int repeat_type,
     const int64_t n_tokens,
     const int64_t n_seqs,
     const int64_t output_offset,          // offset where state starts in output
-    const int save_all_states,            // 1 = save per-step states, 0 = final only
     size_t vnb1, size_t vnb2, size_t vnb3) {
     constexpr int warps_per_head = HEAD_DIM/WARP_SIZE;
     const int batch_idx = blockIdx.x / (warps_per_head*n_heads);
@@ -160,8 +160,8 @@ __global__ void delta_net_recurrent_f32(
         }
 
         // Save per-step state if requested
-        if (save_all_states) {
-            float * state_step_dst = dst + output_offset + t * state_step_stride + batch_idx * state_batch_stride + state_head_offset;
+        if (saved_states && t < n_tokens - 1) {
+            float * state_step_dst = saved_states + batch_idx * state_batch_stride + state_head_offset + t * state_step_stride;
             for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
                 int col = num_warps*i + col_idx_0;
                 state_step_dst[col*HEAD_DIM + row_out] = state_local[i];
@@ -176,11 +176,9 @@ __global__ void delta_net_recurrent_f32(
         __syncthreads();
     }
     // Copy the final state to its destination
-    if (!save_all_states) {
-        for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
-            int col = num_warps*i + col_idx_0;
-            state_dst[col*HEAD_DIM + row_out] = state_local[i];
-        }
+    for (int i = 0; i < HEAD_DIM/num_warps; ++i) {
+        int col = num_warps*i + col_idx_0;
+        state_dst[col*HEAD_DIM + row_out] = state_local[i];
     }
 }
 
@@ -192,13 +190,13 @@ static void delta_net_f32_cuda(
     const float * beta,
     const float * state_in,
     float * dst,
+    float * saved_states,
     const int64_t head_dim,
     const int64_t n_tokens,
     const int64_t n_heads,
     const int64_t gqa_ratio,
     const int     repeat_type,
     const int64_t n_seqs,
-    const int     save_all_states,
     size_t vnb1, size_t vnb2, size_t vnb3,
     const int device_id,
     const int cc, // compute capability (e.g., 890 for SM 8.9, 1200 for SM 12.0)
@@ -220,19 +218,19 @@ static void delta_net_f32_cuda(
         constexpr int threads_per_block = 256;
         if (head_dim == 64) {
             delta_net_recurrent_f32<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, save_all_states, vnb1, vnb2, vnb3);
+                    q, k, v, g, beta, state_in, dst, saved_states, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, vnb1, vnb2, vnb3);
         } else {
             delta_net_recurrent_f32<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, save_all_states, vnb1, vnb2, vnb3);
+                    q, k, v, g, beta, state_in, dst, saved_states, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, vnb1, vnb2, vnb3);
         }
     } else {
         constexpr int threads_per_block = 128;
         if (head_dim == 64) {
             delta_net_recurrent_f32<64, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, save_all_states, vnb1, vnb2, vnb3);
+                    q, k, v, g, beta, state_in, dst, saved_states, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, vnb1, vnb2, vnb3);
         } else {
             delta_net_recurrent_f32<128, threads_per_block><<<num_blocks, threads_per_block, smem_size, stream>>>(
-                    q, k, v, g, beta, state_in, dst, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, save_all_states, vnb1, vnb2, vnb3);
+                    q, k, v, g, beta, state_in, dst, saved_states, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs, output_offset, vnb1, vnb2, vnb3);
         }
     }
 
@@ -247,6 +245,7 @@ void ggml_cuda_op_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src3 = dst->src[3];  // g
     const ggml_tensor * src4 = dst->src[4];  // beta
     const ggml_tensor * src5 = dst->src[5];  // state
+    const ggml_tensor * src6 = dst->src[6];  // when not null, state for token 0...n_token-1
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -276,9 +275,12 @@ void ggml_cuda_op_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t state_size = head_dim * head_dim * n_heads * n_seqs;
 
     int repeat_type = dst->op_params[0];
-    int save_all_states = dst->op_params[1];
+    if (src6) {
+        GGML_ASSERT(src6->type == GGML_TYPE_F32);
+        GGML_ASSERT(src6->ne[0] >= (n_tokens - 1)*state_size);
+    }
 
-    const int64_t expected_size = save_all_states ? (output_size + n_tokens * state_size) : (output_size + state_size);
+    const int64_t expected_size = output_size + state_size;
     GGML_ASSERT(ggml_nelements(dst) == expected_size);
 
     GGML_ASSERT(head_dim <= 256);  // Reasonable limit for shared memory
@@ -295,8 +297,8 @@ void ggml_cuda_op_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         (const float *)src4->data,
         (const float *)src5->data,
         (float *)dst->data,
+        src6 ? (float *)src6->data : nullptr,
         head_dim, n_tokens, n_heads, gqa_ratio, repeat_type, n_seqs,
-        save_all_states,
         src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
         device_id, cc,
         ctx.stream());

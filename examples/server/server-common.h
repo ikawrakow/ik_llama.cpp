@@ -440,7 +440,9 @@ public:
         size_t idx,
         llama_pos pos,
         int32_t seq_id,
-        size_t& n_tokens_out) const;
+        size_t& n_tokens_out,
+        mtmd_helper_eval_batch_callback callback = nullptr,
+        void * callback_user_data = nullptr) const;
 
     server_tokens clone() const;
 
