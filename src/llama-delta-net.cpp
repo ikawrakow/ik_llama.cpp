@@ -123,7 +123,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     cb(beta,      "beta_fused", il);
     cb(state_flat,"state_fused", il);
 
-    ggml_tensor * fused_result = ggml_delta_net(ctx0, q, k, v, g, beta, state_flat, save_all_steps);
+    ggml_tensor * fused_result = ggml_delta_net(ctx0, q, k, v, g, beta, state_flat, per_step_ckpt);
     cb(fused_result, "delta_net_fused_raw", il);
     fused_result->op_params[0] = repeat_type;
 
@@ -138,32 +138,34 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     //output_tokens = ggml_cont_4d(ctx0, output_tokens, S_v, H_v, n_tokens, n_seqs);
 
     // per-step states are at [output_size, output_size + n_tokens*state_size)
-    const int64_t last_state_offset = save_all_steps
-        ? (output_size + (n_tokens - 1) * state_size)
-        : output_size;
+    //const int64_t last_state_offset = save_all_steps
+    //    ? (output_size + (n_tokens - 1) * state_size)
+    //    : output_size;
 
+    //ggml_tensor * new_state_flat = ggml_view_1d(ctx0, fused_result, state_size,
+    //        last_state_offset * ggml_element_size(fused_result));
     ggml_tensor * new_state_flat = ggml_view_1d(ctx0, fused_result, state_size,
-            last_state_offset * ggml_element_size(fused_result));
+            output_size * ggml_element_size(fused_result));
     ggml_tensor * new_state = ggml_reshape_4d(ctx0, new_state_flat, S_v, S_v, H_v, n_seqs);
 
     cb(output_tokens, "output_tokens", il);
     cb(new_state,     "new_state", il);
 
     // Copy all per-step SSM states to persistent checkpoint tensor
-    if (save_all_steps && per_step_ckpt != nullptr && gf != nullptr && n_tokens > 1) {
-        const int64_t per_step_total = n_tokens * state_size;
-        if (per_step_total <= ggml_nelements(per_step_ckpt)) {
-            ggml_tensor * all_steps_src = ggml_view_1d(ctx0, fused_result, per_step_total,
-                    output_size * ggml_element_size(fused_result));
-            ggml_tensor * ckpt_dst = ggml_view_1d(ctx0, per_step_ckpt, per_step_total, 0);
-            auto ckpt_cpy = ggml_cpy(ctx0, all_steps_src, ckpt_dst);
-            cb(ckpt_cpy, "per_step_ckpt_cpy", il);
-            ggml_build_forward_expand(gf, ckpt_cpy);
-        } else {
-            LLAMA_LOG_WARN("%s: per-step checkpoint tensor too small for %lld tokens (need %lld, have %lld), skipping per-step save\n",
-                    __func__, (long long)n_tokens, (long long)per_step_total, (long long)ggml_nelements(per_step_ckpt));
-        }
-    }
+    //if (save_all_steps && per_step_ckpt != nullptr && gf != nullptr && n_tokens > 1) {
+    //    const int64_t per_step_total = n_tokens * state_size;
+    //    if (per_step_total <= ggml_nelements(per_step_ckpt)) {
+    //        ggml_tensor * all_steps_src = ggml_view_1d(ctx0, fused_result, per_step_total,
+    //                output_size * ggml_element_size(fused_result));
+    //        ggml_tensor * ckpt_dst = ggml_view_1d(ctx0, per_step_ckpt, per_step_total, 0);
+    //        auto ckpt_cpy = ggml_cpy(ctx0, all_steps_src, ckpt_dst);
+    //        cb(ckpt_cpy, "per_step_ckpt_cpy", il);
+    //        ggml_build_forward_expand(gf, ckpt_cpy);
+    //    } else {
+    //        LLAMA_LOG_WARN("%s: per-step checkpoint tensor too small for %lld tokens (need %lld, have %lld), skipping per-step save\n",
+    //                __func__, (long long)n_tokens, (long long)per_step_total, (long long)ggml_nelements(per_step_ckpt));
+    //    }
+    //}
 
     return {output_tokens, new_state};
 }

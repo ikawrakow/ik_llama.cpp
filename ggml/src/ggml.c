@@ -9975,7 +9975,7 @@ struct ggml_tensor * ggml_delta_net(
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
         struct ggml_tensor  * state,
-        bool save_all_steps) {
+        struct ggml_tensor  * saved_steps) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
     GGML_ASSERT(ggml_is_contiguous(state));
@@ -10006,17 +10006,21 @@ struct ggml_tensor * ggml_delta_net(
     const int64_t output_size = S_v * H_v * n_tokens * n_seqs;
     const int64_t state_size  = S_v * S_v * H_v * n_seqs;
 
-    const int64_t state_slots = save_all_steps ? n_tokens : 1;
-    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_size + state_slots * state_size);
+    if (saved_steps) {
+        GGML_ASSERT(saved_steps->type == GGML_TYPE_F32);
+        GGML_ASSERT(saved_steps->ne[0] >= (n_tokens - 1)*state_size);
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_size + state_size);
 
     result->op     = GGML_OP_DELTA_NET;
-    result->op_params[1] = save_all_steps ? 1 : 0;
     result->src[0] = q;
     result->src[1] = k;
     result->src[2] = v;
     result->src[3] = g;
     result->src[4] = beta;
     result->src[5] = state;
+    result->src[6] = saved_steps;
 
     return result;
 }

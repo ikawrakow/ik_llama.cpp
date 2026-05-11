@@ -2533,7 +2533,7 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
-            bool                  save_all_steps);
+            struct ggml_tensor  * saved_steps);
 
     // custom operators
 
