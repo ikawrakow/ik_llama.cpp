@@ -22678,6 +22678,7 @@ static void ggml_compute_forward_delta_net_f32(
     const struct ggml_tensor * src3 = dst->src[3];
     const struct ggml_tensor * src4 = dst->src[4];
     const struct ggml_tensor * src5 = dst->src[5];
+    const struct ggml_tensor * src6 = dst->src[6];
 
     const int64_t head_dim = src0->ne[0];
     const int64_t n_tokens = src0->ne[1];
@@ -22695,19 +22696,24 @@ static void ggml_compute_forward_delta_net_f32(
     const float * beta_data = (const float *) src4->data;
     const float * state_in  = (const float *) src5->data;
     float * out_data  = (float *) dst->data;
+    float * saved_steps = src6 ? (float *)src6->data : NULL;
 
     const int ith = params->ith;
     const int nth = params->nth;
 
     int repeat_type = dst->op_params[0];
-    const int save_all_steps = dst->op_params[1];
     const int64_t state_step_stride = head_dim * head_dim * n_heads * n_seqs;
     float * state_working = out_data + output_size;
+
+    if (src6) {
+        GGML_ASSERT(src6->type == GGML_TYPE_F32);
+        GGML_ASSERT(src6->ne[0] >= (n_tokens - 1)*state_step_stride);
+    }
 
     if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
                 src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
                 q_data, k_data, v_data, g_data, beta_data, state_in,
-                out_data, state_working, save_all_steps, (int) state_step_stride, ith, nth)) {
+                out_data, state_working, saved_steps, (int) state_step_stride, ith, nth)) {
         return;
     }
 
@@ -22735,11 +22741,11 @@ static void ggml_compute_forward_delta_net_f32(
         const int64_t out_head_offset  = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim;
         const int64_t out_token_stride = head_dim * n_heads;
 
+        float * state = state_working + state_head_offset;
         for (int64_t i = 0; i < head_dim * head_dim; ++i) {
-            state_working[state_head_offset + i] = state_in[state_head_offset + i];
+            state[i] = state_in[state_head_offset + i];
         }
 
-        float * state = state_working + state_head_offset;
         const int64_t state_head_size = head_dim * head_dim;
 
         for (int64_t t = 0; t < n_tokens; ++t) {
@@ -22796,10 +22802,9 @@ static void ggml_compute_forward_delta_net_f32(
                 }
             }
 
-            if (save_all_steps && t + 1 < n_tokens) {
-                float * next_state = state_working + (t + 1) * state_step_stride + state_head_offset;
+            if (saved_steps && t + 1 < n_tokens) {
+                float * next_state = saved_steps + state_head_offset + t * state_step_stride;
                 memcpy(next_state, state, state_head_size * sizeof(float));
-                state = next_state;
             }
         }
     }
