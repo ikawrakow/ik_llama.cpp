@@ -3425,6 +3425,7 @@ void server_context::add_sampled_tokens() {
                 : slot.cache_tokens.get_text_tokens();
 
             auto & params_spec = slot.params.speculative;
+            const llama_pos draft_base_pos = slot.has_mtp ? slot.cache_tokens.pos_next() : -1;
 
             if (slot.has_mtp) {
                 if (!slot.mtp_hidden_state.empty()) {
@@ -3439,7 +3440,7 @@ void server_context::add_sampled_tokens() {
                 }
             }
 
-            llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+            llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled, draft_base_pos, slot.id);
 
             const int n_draft_max = slot.get_n_draft_max();
 

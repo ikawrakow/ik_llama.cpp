@@ -150,6 +150,18 @@ struct common_speculative_state {
             llama_token id_last,
             llama_tokens & result) = 0;
 
+    virtual void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_pos draft_base_pos,
+            llama_seq_id draft_seq_id,
+            llama_tokens & result) {
+        GGML_UNUSED(draft_base_pos);
+        GGML_UNUSED(draft_seq_id);
+        draft(params, prompt_tgt, id_last, result);
+    }
+
     virtual void accept(uint16_t n_accepted) = 0;
 };
 
@@ -197,15 +209,32 @@ struct common_speculative_state_mtp : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
+        draft(params, prompt_tgt, id_last, -1, 0, result);
+    }
 
-        llama_seq_id seq_id = 0;
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_pos draft_base_pos,
+            llama_seq_id seq_id,
+            llama_tokens & result) override {
 
-        llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
-        int32_t n_past = mtp_pos_max >= 0 ? (int32_t)mtp_pos_max + 1 : (int32_t)prompt_tgt.size();
+        const llama_pos mtp_pos_max = llama_kv_cache_seq_pos_max(ctx_mtp, seq_id);
+        const bool has_draft_base_pos = draft_base_pos >= 0;
+        // Prefer the target slot position when the caller has it. Gemma4 external MTP reads
+        // the target KV cache directly, so ctx_mtp's own KV position is not authoritative.
+        const llama_pos n_past = has_draft_base_pos
+            ? draft_base_pos
+            : (mtp_pos_max >= 0 ? mtp_pos_max + 1 : (llama_pos) prompt_tgt.size());
 
-        if (!prompt_tgt.empty() && mtp_pos_max < (llama_pos)prompt_tgt.size() - 1) {
+        if (!has_draft_base_pos && !prompt_tgt.empty() && mtp_pos_max < (llama_pos)prompt_tgt.size() - 1) {
             LOG_WRN("%s: MTP context not fully warmed up: pos_max = %d, expected = %d\n",
                     __func__, (int)mtp_pos_max, (int)prompt_tgt.size() - 1);
+        }
+        if (has_draft_base_pos && !constant_draft_positions && mtp_pos_max < n_past - 1) {
+            LOG_WRN("%s: MTP context not fully warmed up: pos_max = %d, expected >= %d\n",
+                    __func__, (int)mtp_pos_max, (int)n_past - 1);
         }
 
         llama_context * ctx = ctx_mtp;
@@ -1246,7 +1275,9 @@ llama_tokens common_speculative_draft(
         common_speculative * spec,
         common_params_speculative & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
-        llama_token id_last) {
+        llama_token id_last,
+        llama_pos draft_base_pos,
+        llama_seq_id draft_seq_id) {
     llama_tokens result;
 
     spec->t_step_start_us = ggml_time_us();
@@ -1261,7 +1292,7 @@ llama_tokens common_speculative_draft(
     for (auto & impl : spec->impls) {
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
-            impl->draft(params, prompt_tgt, id_last, result);
+            impl->draft(params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result);
             impl->n_call_draft++;
         }
 
@@ -1388,7 +1419,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     int n_draft,
     float p_min,
     llama_token id_last,
-    int32_t n_past,
+    llama_pos n_past,
     llama_seq_id seq_id,
     bool constant_draft_positions) {
 
@@ -1406,7 +1437,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     auto prob_ptr = p_min > 0 ? &prob : nullptr;
 
     llama_token current_input_id = id_last;
-    int32_t current_n_past = n_past;
+    llama_pos current_n_past = n_past;
     const int n_embd = llama_mtp_state_n_embd(ctx);
 
     auto & last = mtp_get_last_embd(ctx);
@@ -1428,7 +1459,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     int n_decode = 0;
     for (int i = i0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
-        const int32_t draft_pos = constant_draft_positions ? n_past : current_n_past;
+        const llama_pos draft_pos = constant_draft_positions ? n_past : current_n_past;
         common_batch_add(mtp_batch, current_input_id, draft_pos, {seq_id}, true);
 
         ++n_decode;
