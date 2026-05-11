@@ -553,6 +553,8 @@ struct llama_context::Prev {
     int n_outputs;
     int n_kv;
     int n_tokens;
+    int save_per_step_ssm;
+    int per_step_max_allocated;
     llama_mtp_op_type mtp_op_type;
     ggml_cgraph * graph;
 };
@@ -565,12 +567,14 @@ void llama_context::reset_scheduler() {
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
-    if (kv_self.save_per_step_ssm) return false;
+    //if (kv_self.save_per_step_ssm) return false;
     if (model.arch == LLM_ARCH_GEMMA4_MTP && mtp_target_ctx != nullptr) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     //if (u_batch.n_tokens > 1) return false;
     if (u_batch.embd) return false;
+    if (the_prev->save_per_step_ssm != kv_self.save_per_step_ssm ||
+        the_prev->per_step_max_allocated != kv_self.ckpt.per_step_max_allocated) return false;
     return u_batch.all_seq_id == the_prev->all_seq_id &&
            kv_self.head > 0 &&
            kv_self.n == the_prev->n_kv &&
@@ -4669,7 +4673,9 @@ static int llama_decode_internal(
                     !(lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)) {
                 prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
-                        (int)u_batch.n_tokens, cparams.mtp_op_type, gf});
+                        (int)u_batch.n_tokens,
+                        lctx.kv_self.save_per_step_ssm, lctx.kv_self.ckpt.per_step_max_allocated,
+                        cparams.mtp_op_type, gf});
             }
         } else {
             //printf("Reusing graph with n_kv = %d, n_tokens = %d\n", (int)prev->n_kv, (int)prev->n_tokens);
