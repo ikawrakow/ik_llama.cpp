@@ -1546,11 +1546,13 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
             auto [il, id] = p;
             // SSM state: max_tokens * ssm_state_dim
             if (id < 0) {
-                GGML_ASSERT(ckpt.per_step_ssm[il].empty());
-                GGML_ASSERT(ckpt.per_step_qkv[il].empty());
-                ggml_tensor * t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * ssm_state_dim);
-                ggml_format_name(t_ssm, "per_step_ssm_l%d", il);
-                ckpt.per_step_ssm[il].push_back(t_ssm);
+                if (max_tokens > 1) {
+                    GGML_ASSERT(ckpt.per_step_ssm[il].empty());
+                    GGML_ASSERT(ckpt.per_step_qkv[il].empty());
+                    ggml_tensor * t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)(max_tokens - 1) * ssm_state_dim);
+                    ggml_format_name(t_ssm, "per_step_ssm_l%d", il);
+                    ckpt.per_step_ssm[il].push_back(t_ssm);
+                }
 
                 // Conv features (qkv_mixed): max_tokens * conv_dim
                 ggml_tensor * t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * conv_dim);
@@ -1574,9 +1576,11 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
                 int nv = split->ne[0] / head_v_dim; // number of heads handled by this device
                 auto [this_conv_dim, this_ssm_dim] = model.hparams.n_embd_v_s_dims(nv);
 
-                auto t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * this_ssm_dim);
-                ggml_format_name(t_ssm, "per_step_ssm_l%d_%d", il, id);
-                ckpt.per_step_ssm[il][id] = t_ssm;
+                if (max_tokens > 1) {
+                    auto t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)(max_tokens - 1) * this_ssm_dim);
+                    ggml_format_name(t_ssm, "per_step_ssm_l%d_%d", il, id);
+                    ckpt.per_step_ssm[il][id] = t_ssm;
+                }
 
                 auto t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * this_conv_dim);
                 ggml_format_name(t_qkv, "per_step_qkv_l%d_%d", il, id);
