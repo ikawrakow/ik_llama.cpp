@@ -755,11 +755,19 @@ void llm_load_hparams(
                 }
             } break;
         case LLM_ARCH_GEMMA4_MTP:
+        case LLM_ARCH_GEMMA4_ASSISTANT:
             {
-                ml.get_key(LLM_KV_MTP_BACKBONE_EMBEDDING_LENGTH, hparams.mtp_backbone_n_embd);
-                ml.get_key(LLM_KV_MTP_USE_ORDERED_EMBEDDINGS,    hparams.mtp_use_ordered_embeddings, false);
-                ml.get_key(LLM_KV_MTP_CENTROID_COUNT,            hparams.mtp_num_centroids, false);
-                ml.get_key(LLM_KV_MTP_CENTROID_TOP_K,            hparams.mtp_centroid_top_k, false);
+                if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+                    ml.get_key("gemma4_assistant.n_embd_backbone",        hparams.mtp_backbone_n_embd);
+                    ml.get_key("gemma4_assistant.use_ordered_embeddings", hparams.mtp_use_ordered_embeddings, false);
+                    ml.get_key("gemma4_assistant.n_centroids",            hparams.mtp_num_centroids, false);
+                    ml.get_key("gemma4_assistant.centroid_top_k",         hparams.mtp_centroid_top_k, false);
+                } else {
+                    ml.get_key(LLM_KV_MTP_BACKBONE_EMBEDDING_LENGTH, hparams.mtp_backbone_n_embd);
+                    ml.get_key(LLM_KV_MTP_USE_ORDERED_EMBEDDINGS,    hparams.mtp_use_ordered_embeddings, false);
+                    ml.get_key(LLM_KV_MTP_CENTROID_COUNT,            hparams.mtp_num_centroids, false);
+                    ml.get_key(LLM_KV_MTP_CENTROID_TOP_K,            hparams.mtp_centroid_top_k, false);
+                }
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,       hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);

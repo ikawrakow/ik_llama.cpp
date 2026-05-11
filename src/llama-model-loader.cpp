@@ -1255,10 +1255,11 @@ template bool llama_model_loader::get_key<bool>       (enum llm_kv kid, bool & r
 template bool llama_model_loader::get_key<float>      (enum llm_kv kid, float & result,       bool required);
 template bool llama_model_loader::get_key<uint32_t>   (enum llm_kv kid, uint32_t & result,    bool required);
 template bool llama_model_loader::get_key<std::string>(enum llm_kv kid, std::string & result, bool required);
+template bool llama_model_loader::get_key<bool>       (const std::string & key, bool & result,        bool required);
+template bool llama_model_loader::get_key<uint32_t>   (const std::string & key, uint32_t & result,    bool required);
 
 template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
 template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
 template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
 
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
-

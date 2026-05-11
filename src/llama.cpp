@@ -568,7 +568,7 @@ void llama_context::reset_scheduler() {
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
     //if (kv_self.save_per_step_ssm) return false;
-    if (model.arch == LLM_ARCH_GEMMA4_MTP && mtp_target_ctx != nullptr) return false;
+    if (llm_arch_is_gemma4_mtp_assistant(model.arch) && mtp_target_ctx != nullptr) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     //if (u_batch.n_tokens > 1) return false;
@@ -2677,7 +2677,10 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         if (name == "mtp_pre_proj.weight"  || name == "mtp_post_proj.weight" ||
-            name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight") {
+            name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight" ||
+            name == "mtp.pre_projection.weight" || name == "mtp.post_projection.weight" ||
+            name == "mtp.centroids.weight" || name == "mtp.token_ordering.weight" ||
+            name == "rope_freqs.weight") {
             continue;
         }
         auto pos = name.find("blk.");
@@ -2868,14 +2871,14 @@ static bool llm_load_tensors(
 
     if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const bool unsupported_gemma_split =
-            model.arch == LLM_ARCH_GEMMA4_MTP ||
+            llm_arch_is_gemma4_mtp_assistant(model.arch) ||
             (model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0);
 
         if (unsupported_gemma_split) {
             LLAMA_LOG_WARN("\n=========================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for %s\n",
-                    model.arch == LLM_ARCH_GEMMA4_MTP ? "Gemma 4 MTP assistant"
-                                                      : "this Gemma4 variant");
+                    llm_arch_is_gemma4_mtp_assistant(model.arch) ? "Gemma 4 MTP assistant"
+                                                                 : "this Gemma4 variant");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
@@ -3201,7 +3204,7 @@ static bool llm_load_tensors(
             }
         }
     }
-    if (model.arch == LLM_ARCH_GEMMA4_MTP && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count > 0 && n_gpu_layers > 0) {
+    if (llm_arch_is_gemma4_mtp_assistant(model.arch) && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count > 0 && n_gpu_layers > 0) {
         const int mtp_device = std::clamp(main_gpu, 0, device_count - 1);
 
         LLAMA_LOG_INFO("%s: Gemma 4 MTP assistant forcing layer placement to GPU %d under layer split\n",
@@ -3797,7 +3800,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // NOTE: hparams.causal_attn indicates the model is capable of generation and uses the kv cache.
         if (cparams.causal_attn && !lctx.is_encoding) {
             const llama_kv_cache & mask_kv_self =
-                (lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)
+                (llm_arch_is_gemma4_mtp_assistant(lctx.model.arch) && lctx.mtp_target_ctx != nullptr)
                     ? lctx.mtp_target_ctx->kv_self
                     : kv_self;
             const int64_t n_kv     = mask_kv_self.n;
@@ -4318,7 +4321,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 // Returns max number of outputs for which space was reserved.
 static uint32_t llama_output_embd_width(const llama_context & lctx) {
     const auto & hparams = lctx.model.hparams;
-    if (lctx.cparams.mtp && lctx.model.arch == LLM_ARCH_GEMMA4_MTP && hparams.mtp_backbone_n_embd > 0) {
+    if (lctx.cparams.mtp && llm_arch_is_gemma4_mtp_assistant(lctx.model.arch) && hparams.mtp_backbone_n_embd > 0) {
         return hparams.mtp_backbone_n_embd;
     }
     return hparams.n_embd;
@@ -4328,7 +4331,7 @@ static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
     return lctx.cparams.mtp && (
         lctx.model.hparams.nextn_predict_layers > 0 ||
         lctx.model.arch == LLM_ARCH_GEMMA4 ||
-        lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
+        llm_arch_is_gemma4_mtp_assistant(lctx.model.arch));
 }
 
 static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
@@ -4729,7 +4732,7 @@ static int llama_decode_internal(
 #endif
             //if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
             if (u_batch.embd == nullptr && lctx.cparams.graph_reuse &&
-                    !(lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)) {
+                    !(llm_arch_is_gemma4_mtp_assistant(lctx.model.arch) && lctx.mtp_target_ctx != nullptr)) {
                 prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
                         (int)u_batch.n_tokens,
@@ -4758,7 +4761,8 @@ static int llama_decode_internal(
         else {
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
             const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_QWEN35 ||
-                                                       lctx.model.arch == LLM_ARCH_QWEN35MOE || lctx.model.arch == LLM_ARCH_GEMMA4 || lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
+                                                       lctx.model.arch == LLM_ARCH_QWEN35MOE || lctx.model.arch == LLM_ARCH_GEMMA4 ||
+                                                       llm_arch_is_gemma4_mtp_assistant(lctx.model.arch));
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
                     if (use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
@@ -6244,7 +6248,7 @@ struct llama_context * llama_init_from_model(
 
     if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 &&
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
-        model->arch != LLM_ARCH_GEMMA4_MTP && cparams.mtp != 0) {
+        !llm_arch_is_gemma4_mtp_assistant(model->arch) && cparams.mtp != 0) {
         cparams.mtp = 0;
     }
 
@@ -6784,6 +6788,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
+        case LLM_ARCH_GEMMA4_ASSISTANT:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

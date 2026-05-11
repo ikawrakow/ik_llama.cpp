@@ -2134,6 +2134,9 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
 
     model.mtp_token_ordering = create_tensor(ctx_output, tn(LLM_TENSOR_MTP_TOKEN_ORDERING, "weight"), {n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
     model.mtp_centroids      = create_tensor(ctx_output, tn(LLM_TENSOR_MTP_CENTROIDS,      "weight"), {n_embd, hparams.mtp_num_centroids}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    create_tensor(ctx_output, tn(LLM_TENSOR_ROPE_FREQS, "weight"),
+            {hparams.n_rot_swa > 0 ? hparams.n_rot_swa : hparams.n_rot},
+            llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -4123,6 +4126,7 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_GEMMA4:
             use_mmap_buffer = create_gemma4_tensors(tn); break;
         case LLM_ARCH_GEMMA4_MTP:
+        case LLM_ARCH_GEMMA4_ASSISTANT:
             use_mmap_buffer = create_gemma4_mtp_tensors(tn); break;
         case LLM_ARCH_STARCODER2:
             use_mmap_buffer = create_starcoder2_tensors(tn); break;
@@ -4195,13 +4199,13 @@ bool create_tensors_helper::create_tensors() {
 
     {
         const bool unsupported =
-            (model.arch == LLM_ARCH_GEMMA4_MTP) ||
+            llm_arch_is_gemma4_mtp_assistant(model.arch) ||
             (model.arch == LLM_ARCH_GEMMA4 && model.tok_embd_per_layer);
         if (unsupported && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
             LLAMA_LOG_WARN("\n=========================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for %s\n",
-                           model.arch == LLM_ARCH_GEMMA4_MTP ? "Gemma 4 MTP assistant"
-                                                              : "this Gemma4 variant");
+                           llm_arch_is_gemma4_mtp_assistant(model.arch) ? "Gemma 4 MTP assistant"
+                                                                        : "this Gemma4 variant");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
             model.split_mode = LLAMA_SPLIT_MODE_LAYER;

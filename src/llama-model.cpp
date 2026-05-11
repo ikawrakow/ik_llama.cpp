@@ -826,6 +826,29 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_GEMMA4_ASSISTANT,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,           "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,          "output_norm" },
+            { LLM_TENSOR_ROPE_FREQS,           "rope_freqs" },
+            { LLM_TENSOR_ATTN_NORM,            "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,               "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_NORM,          "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_OUT,             "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_POST_NORM,       "blk.%d.post_attention_norm" },
+            { LLM_TENSOR_FFN_NORM,             "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,             "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,             "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,               "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_POST_NORM,        "blk.%d.post_ffw_norm" },
+            { LLM_TENSOR_LAYER_OUT_SCALE,      "blk.%d.layer_output_scale" },
+            { LLM_TENSOR_MTP_PRE_PROJ,         "mtp.pre_projection" },
+            { LLM_TENSOR_MTP_POST_PROJ,        "mtp.post_projection" },
+            { LLM_TENSOR_MTP_TOKEN_ORDERING,   "mtp.token_ordering" },
+            { LLM_TENSOR_MTP_CENTROIDS,        "mtp.centroids" },
+        },
+    },
+    {
         LLM_ARCH_STARCODER2,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -1904,7 +1927,7 @@ bool llama_model_has_recurrent(const llama_model * model) {
 }
 
 bool llama_model_is_gemma4_mtp_assistant(const llama_model * model) {
-    return model && model->arch == LLM_ARCH_GEMMA4_MTP;
+    return model && llm_arch_is_gemma4_mtp_assistant(model->arch);
 }
 
 bool llama_is_gemma4_mtp_file(const char * path) {
@@ -1916,7 +1939,7 @@ bool llama_is_gemma4_mtp_file(const char * path) {
     const int key_id = gguf_find_key(ctx, "general.architecture");
     if (key_id >= 0) {
         const char * arch = gguf_get_val_str(ctx, key_id);
-        if (arch && strcmp(arch, "gemma4_mtp") == 0) {
+        if (arch && (strcmp(arch, "gemma4_mtp") == 0 || strcmp(arch, "gemma4_assistant") == 0)) {
             result = true;
         }
     }
