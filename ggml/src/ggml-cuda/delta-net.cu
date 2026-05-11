@@ -245,7 +245,7 @@ void ggml_cuda_op_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src3 = dst->src[3];  // g
     const ggml_tensor * src4 = dst->src[4];  // beta
     const ggml_tensor * src5 = dst->src[5];  // state
-    const ggml_tensor * src6 = dst->src[6];  // state
+    const ggml_tensor * src6 = dst->src[6];  // when not null, state for token 0...n_token-1
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -275,13 +275,11 @@ void ggml_cuda_op_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t state_size = head_dim * head_dim * n_heads * n_seqs;
 
     int repeat_type = dst->op_params[0];
-    //int save_all_states = dst->op_params[1];
     if (src6) {
         GGML_ASSERT(src6->type == GGML_TYPE_F32);
         GGML_ASSERT(src6->ne[0] >= (n_tokens - 1)*state_size);
     }
 
-    //const int64_t expected_size = save_all_states ? (output_size + n_tokens * state_size) : (output_size + state_size);
     const int64_t expected_size = output_size + state_size;
     GGML_ASSERT(ggml_nelements(dst) == expected_size);
 

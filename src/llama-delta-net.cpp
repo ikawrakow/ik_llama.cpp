@@ -80,8 +80,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
         ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
         ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
         int il, const llm_build_cb & cb, int repeat_type,
-        bool save_all_steps,
-        ggml_cgraph * gf, ggml_tensor * per_step_ckpt) {
+        ggml_tensor * per_step_ckpt) {
 
     const int64_t S_k      = q->ne[0];
     const int64_t H_k      = q->ne[2];
@@ -137,35 +136,12 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
             ggml_row_size(fused_result->type, S_v * H_v * n_tokens), 0);
     //output_tokens = ggml_cont_4d(ctx0, output_tokens, S_v, H_v, n_tokens, n_seqs);
 
-    // per-step states are at [output_size, output_size + n_tokens*state_size)
-    //const int64_t last_state_offset = save_all_steps
-    //    ? (output_size + (n_tokens - 1) * state_size)
-    //    : output_size;
-
-    //ggml_tensor * new_state_flat = ggml_view_1d(ctx0, fused_result, state_size,
-    //        last_state_offset * ggml_element_size(fused_result));
     ggml_tensor * new_state_flat = ggml_view_1d(ctx0, fused_result, state_size,
             output_size * ggml_element_size(fused_result));
     ggml_tensor * new_state = ggml_reshape_4d(ctx0, new_state_flat, S_v, S_v, H_v, n_seqs);
 
     cb(output_tokens, "output_tokens", il);
     cb(new_state,     "new_state", il);
-
-    // Copy all per-step SSM states to persistent checkpoint tensor
-    //if (save_all_steps && per_step_ckpt != nullptr && gf != nullptr && n_tokens > 1) {
-    //    const int64_t per_step_total = n_tokens * state_size;
-    //    if (per_step_total <= ggml_nelements(per_step_ckpt)) {
-    //        ggml_tensor * all_steps_src = ggml_view_1d(ctx0, fused_result, per_step_total,
-    //                output_size * ggml_element_size(fused_result));
-    //        ggml_tensor * ckpt_dst = ggml_view_1d(ctx0, per_step_ckpt, per_step_total, 0);
-    //        auto ckpt_cpy = ggml_cpy(ctx0, all_steps_src, ckpt_dst);
-    //        cb(ckpt_cpy, "per_step_ckpt_cpy", il);
-    //        ggml_build_forward_expand(gf, ckpt_cpy);
-    //    } else {
-    //        LLAMA_LOG_WARN("%s: per-step checkpoint tensor too small for %lld tokens (need %lld, have %lld), skipping per-step save\n",
-    //                __func__, (long long)n_tokens, (long long)per_step_total, (long long)ggml_nelements(per_step_ckpt));
-    //    }
-    //}
 
     return {output_tokens, new_state};
 }
@@ -309,7 +285,7 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
         int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, int64_t ssm_d_conv,
         int64_t state_seq_id_local, uint32_t qnext_state_slots, bool reset_state_local,
         float eps_norm, int repeat_type, int il, const llm_build_cb & cb, ggml_cgraph * gf,
-        bool save_per_step_states, ggml_tensor * per_step_ckpt) {
+        ggml_tensor * per_step_ckpt) {
     const int64_t key_dim        = head_k_dim * num_k_heads;
     const int64_t value_dim      = head_v_dim * num_v_heads;
     const int64_t conv_dim       = key_dim * 2 + value_dim;
@@ -395,7 +371,7 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(k_conv, "k_conv_normed", il);
 
     auto [output, new_state] = build_fused_delta_net(ctx0, q_conv, k_conv, v_conv, gate, beta, state, il, cb, repeat_type,
-            save_per_step_states, gf, per_step_ckpt);
+            per_step_ckpt);
 
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);
@@ -559,7 +535,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
             auto output = build_qkv(ctx0, split_s_l->splits[id], split_ssm_conv1d->splits[id], qkv_mixed, inp_s_seq_qnext, beta, gate,
                                head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, hparams.ssm_d_conv,
                                state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
-                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf, save_per_step_states, per_step_ckpt);
+                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt);
             split_norm = (ggml_split_tensor_t *)l.ssm_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
             auto split_ssm_out = (ggml_split_tensor_t *)l.ssm_out->extra;
@@ -631,8 +607,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         qkv_mixed, inp_s_seq_qnext, beta, gate,
         head_k_dim, num_k_heads, head_v_dim, num_v_heads, hparams.ssm_d_conv,
         state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
-        model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf,
-        save_per_step_states, per_step_ckpt);
+        model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt);
 
     auto gated_output = build_gated_output(lctx, ctx0, model.layers[il].ssm_norm, model.layers[il].ssm_out, output, z, head_v_dim, num_v_heads, n_tok, il, cb);
     if (inp_out_ids) {
