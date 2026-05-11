@@ -4874,7 +4874,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             std::vector<float> biases;
             bool is_range = false;
 
-            if (addsubs.empty()) {
+            if (!is_sb) {
                 // (... : BIAS ...)
                 const auto rcpos = line.rfind(':');
                 auto sub = line.substr(rcpos + 1, n_char - rcpos - 2);
@@ -4901,6 +4901,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             size_t max_phrase_len = 0;
             for (const auto& phrase: phrases) {
+                // printf("%s: line %zu: phrase = \"%s\"\n", __func__, i, phrase.c_str());
                 max_phrase_len = std::max(phrase.length(), max_phrase_len);
             }
             // printf("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
@@ -4911,7 +4912,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             auto& entry = !is_nested ? elb_params.back().entries.back() : (
                 is_sb ? entry_sb : entry_lb
             );
-            entry.posi =  std::vector<size_t>(phrases.size(), 0);
+            entry.posi = std::vector<size_t>(phrases.size(), 0);
             entry.addsubs = std::move(addsubs);
             entry.addflags = std::vector<char>(phrases.size(), 0);
             entry.max_phrase_len = max_phrase_len;

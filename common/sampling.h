@@ -202,14 +202,16 @@ typedef struct common_params_sampling {
     };
     std::vector<struct elb_param> elb_params;
 
+    // add to sampling parameters
     void elb_add(common_params_sampling::elb_param::elb_entry& entry) {
-        #undef X    // add to sampling parameters
+        #undef X
         #define X(T, MEMBER, _, E) MEMBER += T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
         X_COMMON_PARAMS_SAMPLING
     }
 
+    // subtract from sampling parameters
     void elb_sub(common_params_sampling::elb_param::elb_entry& entry) {
-        #undef X    // subtract from sampling parameters
+        #undef X
         #define X(T, MEMBER, _, E) MEMBER -= T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
         X_COMMON_PARAMS_SAMPLING
     }
