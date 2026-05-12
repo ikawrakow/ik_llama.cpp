@@ -46,6 +46,7 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
 
 // get the MTP context from the speculative object (nullptr if not MTP type)
 llama_context * common_speculative_get_mtp_ctx(common_speculative * spec);
+common_speculative_type common_speculative_current_type(const common_speculative * spec);
 
 // Context shift for MTP to match how server handle main model
 void common_speculative_context_shift(

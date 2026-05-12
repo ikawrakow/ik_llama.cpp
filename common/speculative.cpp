@@ -168,6 +168,8 @@ struct common_speculative_state {
     virtual void accept(uint16_t n_accepted) = 0;
 };
 
+static void mtp_invalidate_cached_draft(const llama_context * ctx);
+
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
     llama_context * ctx_mtp = nullptr;
@@ -205,6 +207,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
+        mtp_invalidate_cached_draft(ctx_mtp);
     }
 
     void draft(
@@ -1322,6 +1325,16 @@ static mtp_last_embd & mtp_get_last_embd(const llama_context * ctx) {
     return last;
 }
 
+static void mtp_invalidate_cached_draft(const llama_context * ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    auto & last = mtp_get_last_embd(ctx);
+    last.last_id = -1;
+    last.prob = 0.0f;
+}
+
 llama_tokens common_speculative_draft(
         common_speculative * spec,
         common_params_speculative & params,
@@ -1366,12 +1379,11 @@ llama_tokens common_speculative_draft(
             result.clear();
             continue;
         }
-
         LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
                 common_speculative_type_to_str(impl.get()->type).c_str(), prompt_tgt.size(),
                 impl.get()->n_call_draft, result.size());
 
-        spec->curr_impl = impl.get(); // set current implementation for stats
+        spec->curr_impl = impl.get();
         impl->n_gen_drafts++;
         impl->n_gen_tokens += result.size();
 
@@ -1411,6 +1423,12 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
 
         impl->accept(n_accepted);
         impl->n_call_accept++;
+    }
+
+    if (impl->type != COMMON_SPECULATIVE_TYPE_MTP) {
+        if (auto * ctx_mtp = common_speculative_get_mtp_ctx(spec); ctx_mtp != nullptr) {
+            mtp_invalidate_cached_draft(ctx_mtp);
+        }
     }
 }
 
@@ -1470,6 +1488,14 @@ llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
     return nullptr;
 }
 
+common_speculative_type common_speculative_current_type(const common_speculative * spec) {
+    if (spec == nullptr || spec->curr_impl == nullptr) {
+        return COMMON_SPECULATIVE_TYPE_NONE;
+    }
+
+    return spec->curr_impl->type;
+}
+
 void common_speculative_context_shift(
         common_speculative * spec,
         llama_seq_id         seq_id,
@@ -1496,6 +1522,11 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     drafts.reserve(n_draft);
 
     if (!smpl) return drafts;
+
+    if (n_draft <= 0) {
+        mtp_invalidate_cached_draft(ctx);
+        return drafts;
+    }
 
     common_sampler_reset(smpl);
 
