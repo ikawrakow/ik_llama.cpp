@@ -1111,8 +1111,9 @@ common_speculative * common_speculative_init(
     }
 
     const auto stages = params.get_resolved_stages();
-    const bool needs_draft_ctx = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params & stage) {
-        return stage.type == COMMON_SPECULATIVE_TYPE_DRAFT;
+    const bool needs_draft_ctx = std::any_of(stages.begin(), stages.end(), [&params](const common_speculative_stage_params & stage) {
+        return stage.type == COMMON_SPECULATIVE_TYPE_DRAFT ||
+               (stage.type == COMMON_SPECULATIVE_TYPE_MTP && params.model_dft != nullptr);
     });
 
     llama_context * ctx_dft = nullptr;
@@ -1129,9 +1130,6 @@ common_speculative * common_speculative_init(
         }
     }
 
-    // Compute the implementations to use based on the resolved stage chain.
-    std::vector<common_speculative_config> configs = {};
-    configs.reserve(stages.size());
     // Compute the implementations to use based on the resolved stage chain.
     std::vector<common_speculative_config> configs = {};
     configs.reserve(stages.size());

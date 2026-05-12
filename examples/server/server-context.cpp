@@ -474,7 +474,9 @@ bool server_context::load_model(const gpt_params& params_) {
         params_base.speculative.cparams_dft = cparams_dft;
 
     }
-    if (server_speculative_has_mtp(params_base.speculative) && llama_model_n_nextn_layer(model) == 0) {
+    if (server_speculative_has_mtp(params_base.speculative) &&
+        llama_model_n_nextn_layer(model) == 0 &&
+        !params_use_gemma4_external_mtp(params_base)) {
         LOG_WARNING("WARNING: MTP speculative stage requested, but model has 0 NextN layers. MTP will be disabled.\n", {});
         params_base.has_mtp = false;
         server_remove_speculative_stage(params_base.speculative, COMMON_SPECULATIVE_TYPE_MTP);
