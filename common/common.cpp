@@ -4797,10 +4797,9 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
 
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {
     auto elb_params = sparams.elb_params;
-    elb_params.push_back({ { { /* entry0 */ } }, "" });
-    auto entry_lb = elb_params.back().entries.back();
-    auto entry_sb = elb_params.back().entries.back();
-    elb_params.back().entries.clear();
+    elb_params.push_back({ { }, "" });
+    std::vector<common_params_sampling::elb_param::elb_entry> lb_entries;   // logit bias
+    std::vector<common_params_sampling::elb_param::elb_entry> sb_entries;   // sampler bias
 
     const auto lines = string_split(content, "\n");
     for (size_t i = 0; i < lines.size(); ++i) {
@@ -4819,8 +4818,8 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             if (is_nested) {
                 if (n_char == 4) {
                     // (())
-                    entry_lb = {};
-                    entry_sb = {};
+                    lb_entries.clear();
+                    sb_entries.clear();
                     // printf("%s: line %zu: persistent entry clear\n", __func__, i);
                     continue;   // next line
                 }
@@ -4845,7 +4844,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             // (... "PHRASE" ... "PHRASE" ...)
             std::vector<std::string> phrases;
-            auto window_sb = line.substr(string_extract(line, qqpos, '"', phrases));
+            auto sb_window = line.substr(string_extract(line, qqpos, '"', phrases));
 
             #undef X
             #define X(T, MEMBER, DV, E) #MEMBER,
@@ -4857,14 +4856,14 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             // (... : SPARAM ...)
             for (int j = 0; j < names.size(); ++j) {
                 const auto& name = names[j];
-                auto pos = window_sb.find(name);
+                auto pos = sb_window.find(name);
                 if (pos != std::string::npos) {
                     pos += name.length();
-                    auto cmpos = window_sb.find(",", pos + 1);
+                    auto cmpos = sb_window.find(",", pos + 1);
                     if (cmpos == std::string::npos) {
                         cmpos = n_char - 1;
                     }
-                    auto sub = window_sb.substr(pos, cmpos - pos);
+                    auto sub = sb_window.substr(pos, cmpos - pos);
                     sub = string_strip(sub);
                     if (sub[0] == '~') {
                         sub = sub.substr(1);
@@ -4874,11 +4873,16 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     }
                 }
             }
-            if (is_sb && phrases.empty()) {
-                // printf("%s: line %zu: phrase-less sampler bias\n", __func__, i);
-                phrases.push_back("");
+
+            if (phrases.empty()) {
+                if (is_sb) {
+                    phrases.push_back("");
+                } else {
+                    continue;   // next line
+                }
             }
 
+            const auto n_phrase = phrases.size();
             std::vector<float> biases;
             bool is_range = false;
 
@@ -4889,11 +4893,9 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 if (sub.find("~") != std::string::npos) {
                     // (... : BIAS ~ BIAS)
                     const auto splits = string_split(sub, '~');
-                    auto split = splits.front();
-                    biases.push_back(std::stof(split));
+                    biases.push_back(std::stof(splits.front()));
                     // printf("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
-                    split = splits.back();
-                    biases.push_back(std::stof(split));
+                    biases.push_back(std::stof(splits.back()));
                     // printf("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
                     is_range = true;
                 } else {
@@ -4905,6 +4907,9 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                         }
                     }
                 }
+                if (biases.empty()) {
+                    continue;   // next line
+                }
             }
 
             size_t max_phrase_len = 0;
@@ -4914,20 +4919,18 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             }
             // printf("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
 
-            if (!is_nested) {
-                elb_params.back().entries.push_back({ });
-            }
-            auto& entry = !is_nested ? elb_params.back().entries.back() : (
-                is_sb ? entry_sb : entry_lb
-            );
-            entry.posi = std::vector<size_t>(phrases.size(), 0);
-            entry.addsubs = std::move(addsubs);
-            entry.addflags = std::vector<char>(phrases.size(), 0);
-            entry.max_phrase_len = max_phrase_len;
-            entry.phrases = std::move(phrases);
-            entry.biases = std::move(biases);
-            entry.duration = duration;
-            entry.is_range = is_range;
+            (!is_nested ? elb_params.back().entries : (
+                is_sb ? sb_entries : lb_entries)).push_back({
+                    std::vector<size_t>(n_phrase, 0),
+                    std::move(addsubs),
+                    std::vector<char>(n_phrase, 0),
+                    max_phrase_len,
+                    std::move(phrases),
+                    std::move(biases),
+                    duration,
+                    is_range
+                });
+
             continue;   // next line
         }
 
@@ -4937,13 +4940,11 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
         }
         string_process_escapes(line);
         elb_params.back().exitword = std::move(line);
-        if (!entry_lb.phrases.empty() && !entry_lb.biases.empty() && (entry_lb.duration != 0)) {
-            // printf("%s: line %zu: persistent logit bias add\n", __func__, i);
-            elb_params.back().entries.push_back( entry_lb );
+        for (const auto entry: lb_entries) {
+            elb_params.back().entries.push_back(entry);
         }
-        if (!entry_sb.addsubs.empty() && (entry_sb.duration != 0)) {
-            // printf("%s: line %zu: persistent sampler bias add\n", __func__, i);
-            elb_params.back().entries.push_back( entry_sb );
+        for (const auto entry: sb_entries) {
+            elb_params.back().entries.push_back(entry);
         }
         elb_params.push_back({ { }, "" });
     }
