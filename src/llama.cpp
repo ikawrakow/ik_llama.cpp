@@ -4688,9 +4688,6 @@ static int llama_decode_internal(
                 kv_self.n = std::min(kv_self.size, std::max(pad, GGML_PAD(max_cell, pad)));
             }
         }
-        if (stop_internal_decode) {
-            return -3;
-        }
 
 #if IK_PRINT_TIMING
         auto tim2 = ggml_time_us();
@@ -4921,6 +4918,9 @@ static int llama_decode_internal(
             // recurrent state for each new token. This is probably not very relevant in practice because we basically never run TG with
             // empty context, but for the sake of correctness let's just do it.
             lctx.prev.reset();
+        }
+        if (stop_internal_decode) {
+            return -3;
         }
     }
 
