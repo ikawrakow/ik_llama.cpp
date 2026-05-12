@@ -3143,30 +3143,38 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
     return true;
 }
 
-size_t string_split_open_close(const std::string& str, size_t pos, const char c, std::vector<std::string>& splits) {
-    auto opos = str.find(c, pos);
-    if (opos == std::string::npos) {
+size_t string_extract(const std::string& str, size_t pos, const char c, std::vector<std::string>& extracts) {
+    auto opn_pos = str.find(c, pos);
+    if (opn_pos == std::string::npos) {
         return 0;
     }
-    pos = opos + 1;
-    auto cpos = str.find(c, pos);
-    while (cpos != std::string::npos) {
-        if (str[cpos - 1] == '\\') {
-            cpos = str.find(c, cpos + 1);
-        } else {
-            auto split = str.substr(opos + 1, cpos - opos - 1);
-            string_process_escapes(split);
-            splits.push_back(std::move(split));
 
-            pos = cpos + 1;
-            opos = str.find(c, pos);
-            if (opos == std::string::npos) {
-                break;
-            }
-            pos = opos + 1;
-            cpos = str.find(c, pos);
+    pos = opn_pos + 1;
+    auto cls_pos = str.find(c, pos);
+    while (cls_pos != std::string::npos) {
+        size_t n_esc = 0;
+        auto esc_pos = cls_pos;
+        while ((esc_pos > 0) && (str[--esc_pos] == '\\')) {
+            ++n_esc;
         }
+        if (n_esc % 2 == 1) {
+            cls_pos = str.find(c, cls_pos + 1);
+            continue;
+        }
+
+        auto extract = str.substr(opn_pos + 1, cls_pos - opn_pos - 1);
+        string_process_escapes(extract);
+        extracts.push_back(std::move(extract));
+
+        pos = cls_pos + 1;
+        opn_pos = str.find(c, pos);
+        if (opn_pos == std::string::npos) {
+            break;
+        }
+        pos = opn_pos + 1;
+        cls_pos = str.find(c, pos);
     }
+
     return pos;
 }
 
@@ -4837,7 +4845,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             // (... "PHRASE" ... "PHRASE" ...)
             std::vector<std::string> phrases;
-            auto window_sb = line.substr(string_split_open_close(line, qqpos, '"', phrases));
+            auto window_sb = line.substr(string_extract(line, qqpos, '"', phrases));
 
             #undef X
             #define X(T, MEMBER, DV, E) #MEMBER,
