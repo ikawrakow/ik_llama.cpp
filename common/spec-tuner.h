@@ -2,6 +2,8 @@
 
 #include "common.h"
 
+struct llama_model;
+
 struct spec_tuner_arm {
     float  value;
     double Q     = 0.0; // mean per-step Tokens-Per-Second (TPS)
@@ -55,7 +57,7 @@ struct spec_tuner {
     common_speculative_type spec_type = COMMON_SPECULATIVE_TYPE_NONE;
     std::vector<spec_tuner_coord> coords;
 
-    void init(common_speculative_type type, const common_params_speculative & user_params);
+    void init(common_speculative_type type, const common_params_speculative & user_params, const llama_model * model_tgt);
     void propose(common_params_speculative & params);
     void accept_feedback(int n_accepted, int n_drafted, double step_tps);
     void end_of_request(double slot_tps, int n_past, common_params_speculative & active_params);

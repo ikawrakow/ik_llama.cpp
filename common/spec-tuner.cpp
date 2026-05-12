@@ -117,7 +117,7 @@ void spec_tuner::write_best(common_params_speculative & params) const {
     }
 }
 
-void spec_tuner::init(common_speculative_type type, const common_params_speculative & user_params) {
+void spec_tuner::init(common_speculative_type type, const common_params_speculative & user_params, const llama_model * model_tgt) {
     enabled    = true;
     spec_type  = type;
     coords.clear();
@@ -136,7 +136,9 @@ void spec_tuner::init(common_speculative_type type, const common_params_speculat
     {
         spec_tuner_coord coord;
         coord.name = "n_max";
-        int hi = std::max(16, (int)user_params.n_max);
+        const bool recurrent_target = model_tgt != nullptr && llama_model_has_recurrent(model_tgt);
+        int hi = recurrent_target ? std::max(1, (int) user_params.n_max)
+                                  : std::max(16, (int) user_params.n_max);
         coord.build_grid_int(1, hi, 1, user_params.n_max);
         coords.push_back(std::move(coord));
     }
