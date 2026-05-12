@@ -1093,6 +1093,25 @@ common_speculative * common_speculative_init(
         }
     }
 
+    if (!configs.empty() && llama_model_has_recurrent(llama_get_model(ctx_tgt))) {
+        const int ckpt_tokens = std::max(1, params.n_max + 1);
+        const int actual_mode = llama_spec_ckpt_init(ctx_tgt, params.recurrent_ckpt_mode, ckpt_tokens);
+        if (actual_mode == LLAMA_SPEC_CKPT_NONE) {
+            LOG_ERR("%s: failed to prepare recurrent checkpoint mode '%s' during speculative init (max_tokens=%d)\n",
+                    __func__,
+                    params.recurrent_ckpt_mode == LLAMA_SPEC_CKPT_PER_STEP ? "per-step" :
+                    params.recurrent_ckpt_mode == LLAMA_SPEC_CKPT_GPU_FALLBACK ? "gpu-fallback" :
+                    params.recurrent_ckpt_mode == LLAMA_SPEC_CKPT_CPU ? "cpu" : "auto",
+                    ckpt_tokens);
+            if (ctx_dft != nullptr) {
+                llama_free(ctx_dft);
+            }
+            return nullptr;
+        }
+        llama_spec_ckpt_discard(ctx_tgt);
+        params.recurrent_ckpt_mode = actual_mode;
+    }
+
     std::vector<std::unique_ptr<common_speculative_state>> impls = {};
 
     for (const common_speculative_config & config : configs) {
@@ -1192,7 +1211,7 @@ common_speculative * common_speculative_init(
         if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
             actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
             result->tuner = std::make_unique<spec_tuner>();
-            result->tuner->init(actual_type, params);
+            result->tuner->init(actual_type, params, llama_get_model(ctx_tgt));
             LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
                     common_speculative_type_to_str(actual_type).c_str(),
                     result->tuner->coords.size());

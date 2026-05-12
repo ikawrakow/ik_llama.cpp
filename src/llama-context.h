@@ -103,6 +103,8 @@ struct llama_kv_cache {
         int32_t per_step_d_conv = 0;
 
         int selected_spec_mode = -1;
+        int fixed_spec_mode = LLAMA_SPEC_CKPT_NONE;
+        int32_t fixed_max_tokens = 0;
 
         // Serialised sequence state for CPU mode
         std::vector<uint8_t> cpu_state_data;
@@ -115,6 +117,7 @@ struct llama_kv_cache {
         std::vector<ggml_backend_buffer_t>   shadow_bufs;
 
         bool allocated = false;
+        bool shadow_conv_only = false;
         bool saved     = false;
 
         ~gpu_checkpoint() {
@@ -135,13 +138,14 @@ struct llama_kv_cache {
 
     gpu_checkpoint ckpt;
 
-    bool checkpoint_alloc_shadows();
+    bool checkpoint_alloc_shadows(bool conv_only_shadow = false);
     bool checkpoint_supported() const;
     bool checkpoint_save(ggml_backend_sched_t sched);
     bool checkpoint_restore(ggml_backend_sched_t sched);
     void checkpoint_delete();
 
     // Per-step checkpoint: allocate, restore step k's full state (SSM + conv) to cache
+    bool per_step_save(ggml_backend_sched_t sched);
     bool per_step_alloc(const llama_model & model, int max_tokens);
     bool per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step);
 
