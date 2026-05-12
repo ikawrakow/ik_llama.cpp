@@ -834,7 +834,16 @@ std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char d
 }
 
 static std::string common_normalize_spec_stage_key(std::string key) {
+    while (!key.empty() && key.front() == '-') {
+        key.erase(key.begin());
+    }
+
     std::replace(key.begin(), key.end(), '-', '_');
+
+    if (key.rfind("spec_", 0) == 0) {
+        key.erase(0, 5);
+    }
+
     return key;
 }
 
