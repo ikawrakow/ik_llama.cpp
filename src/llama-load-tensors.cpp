@@ -2776,7 +2776,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
                     tn(LLM_TENSOR_NEXTN_HNORM, "weight", final_layer),
                     { n_embd },
                     flags);
-            layer.nextn.shared_head_head = create_tensor(nextn_host_ctx,
+            layer.nextn.shared_head_head = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", final_layer),
                     { n_embd, n_vocab },
                     flags | llama_model_loader::TENSOR_NOT_REQUIRED);

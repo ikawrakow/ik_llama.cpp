@@ -258,7 +258,7 @@ struct server_context {
 
     gpt_params params_base;
 
-    llama_batch batch;
+    llama_batch batch = {};
 
     bool clean_kv_cache = true;
     bool add_bos_token = true;
