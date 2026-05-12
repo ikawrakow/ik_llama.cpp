@@ -63,6 +63,11 @@ static void gemma4_mtp_prepare_frozen_kv_views(
     k_parts.reserve(split_k->n_device);
     v_parts.reserve(split_v->n_device);
 
+    int n_k_reshaped = 0;
+    int n_v_reshaped = 0;
+    int n_k_heads = 0;
+    int n_v_heads = 0;
+
     for (int id = 0; id < split_k->n_device; ++id) {
         ggml_tensor * split_kl = split_k->splits[id];
         ggml_tensor * split_vl = split_v->splits[id];
@@ -82,7 +87,12 @@ static void gemma4_mtp_prepare_frozen_kv_views(
                 ggml_row_size(split_kl->type, n_embd_head_k) * split_n_head_kv,
                 ggml_row_size(split_kl->type, n_embd_head_k),
                 0);
-        if (k_part->type != GGML_TYPE_F32) {
+        if (auto row_size = ggml_row_size(k_part->type, k_part->ne[0]); row_size % sizeof(float) == 0) {
+            n_k_heads += split_n_head_kv;
+            k_part = ggml_reshape_4d_ext(ctx0, k_part, GGML_TYPE_F32, (row_size/sizeof(float))*k_part->ne[2], k_part->ne[1], 1, 1);
+            ++n_k_reshaped;
+        }
+        else if (k_part->type != GGML_TYPE_F32) {
             k_part = ggml_cast(ctx0, k_part, GGML_TYPE_F32);
         }
         cb(k_part, "mtp_frozen_k_split", 1000 * (assistant_il + 1) + id);
@@ -92,7 +102,12 @@ static void gemma4_mtp_prepare_frozen_kv_views(
             ggml_row_size(split_vl->type, split_n_head_kv * n_embd_head_v),
                 ggml_row_size(split_vl->type, n_embd_head_v),
                 0);
-        if (v_part->type != GGML_TYPE_F32) {
+        if (auto row_size = ggml_row_size(v_part->type, v_part->ne[0]); row_size % sizeof(float) == 0) {
+            v_part = ggml_reshape_4d_ext(ctx0, v_part, GGML_TYPE_F32, (row_size/sizeof(float))*v_part->ne[2], v_part->ne[1], 1, 1);
+            n_v_heads += split_n_head_kv;
+            ++n_v_reshaped;
+        }
+        else if (v_part->type != GGML_TYPE_F32) {
             v_part = ggml_cast(ctx0, v_part, GGML_TYPE_F32);
         }
         cb(v_part, "mtp_frozen_v_split", 1000 * (assistant_il + 1) + id);
@@ -102,12 +117,32 @@ static void gemma4_mtp_prepare_frozen_kv_views(
     }
 
     GGML_ASSERT(!k_parts.empty() && k_parts.size() == v_parts.size());
+    GGML_ASSERT((int)k_parts.size() == n_k_reshaped || n_k_reshaped == 0);
+    GGML_ASSERT((int)v_parts.size() == n_v_reshaped || n_v_reshaped == 0);
 
     ggml_tensor * k_full = k_parts[0];
     ggml_tensor * v_full = v_parts[0];
-    for (size_t i = 1; i < k_parts.size(); ++i) {
-        k_full = ggml_concat(ctx0, k_full, k_parts[i], 2);
-        v_full = ggml_concat(ctx0, v_full, v_parts[i], 2);
+    if ((int)k_parts.size() == n_k_reshaped) {
+        for (int i = 1; i < n_k_reshaped; ++i) {
+            k_full = ggml_concat(ctx0, k_full, k_parts[i], 0);
+        }
+        k_full = ggml_reshape_4d_ext(ctx0, k_full, k_cache->type, n_embd_head_k, n_k_heads, k_full->ne[1], 1);
+        k_full = ggml_permute(ctx0, k_full, 0, 2, 1, 3);
+    } else {
+        for (size_t i = 1; i < k_parts.size(); ++i) {
+            k_full = ggml_concat(ctx0, k_full, k_parts[i], 2);
+        }
+    }
+    if ((int)v_parts.size() == n_v_reshaped) {
+        for (int i = 1; i < n_v_reshaped; ++i) {
+            v_full = ggml_concat(ctx0, v_full, v_parts[i], 0);
+        }
+        v_full = ggml_reshape_4d_ext(ctx0, v_full, v_cache->type, n_embd_head_v, n_v_heads, v_full->ne[1], 1);
+        v_full = ggml_permute(ctx0, v_full, 0, 2, 1, 3);
+    } else {
+        for (size_t i = 1; i < v_parts.size(); ++i) {
+            v_full = ggml_concat(ctx0, v_full, v_parts[i], 2);
+        }
     }
 
     if (k_full->type != GGML_TYPE_F16) {

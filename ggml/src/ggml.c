@@ -8579,6 +8579,36 @@ struct ggml_tensor * ggml_reshape_4d(
     return result;
 }
 
+struct ggml_tensor * ggml_reshape_4d_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        enum ggml_type        type,
+        int64_t               ne0,
+        int64_t               ne1,
+        int64_t               ne2,
+        int64_t               ne3) {
+
+    bool is_node = false;
+
+    if (a->grad) {
+        is_node = true;
+    }
+
+    const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, type, 4, ne, a, 0);
+    ggml_format_name_fast(a->name, " (reshaped)", 11, result->name);
+
+    GGML_ASSERT(ggml_nbytes(a) == ggml_nbytes(result));
+
+    result->op   = GGML_OP_RESHAPE;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+
+
 static struct ggml_tensor * ggml_view_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,

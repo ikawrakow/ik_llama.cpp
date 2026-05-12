@@ -1843,6 +1843,16 @@ extern "C" {
             int64_t               ne2,
             int64_t               ne3);
 
+    GGML_API struct ggml_tensor * ggml_reshape_4d_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum ggml_type        type,
+            int64_t               ne0,
+            int64_t               ne1,
+            int64_t               ne2,
+            int64_t               ne3);
+
+
     // offset in bytes
     GGML_API struct ggml_tensor * ggml_view_1d(
             struct ggml_context * ctx,
