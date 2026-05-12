@@ -410,6 +410,7 @@ struct gpt_params {
     int image_min_tokens = -1;
     int image_max_tokens = -1;
     std::string mtmd_kq_type = "f32";
+    int32_t n_threads_mtmd = -1; // number of threads to use for multimodal processing (-1 = use n_threads_batch, then n_threads)
 
     // embedding
     bool embedding         = false; // get only sentence embedding
