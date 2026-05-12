@@ -1485,11 +1485,33 @@ bool llama_kv_cache::per_step_save(ggml_backend_sched_t sched) {
         return false;
     }
 
+    // Non-split recurrent tensors only need the pre-spec conv complement in
+    // their reduced shadow buffers. Split tensors keep full shadow copies so
+    // restore can still seed each split conv prefix from split_s_l_shadow.
     const size_t conv_bytes = (size_t)std::max<int64_t>(conv_state_dim, 0) * sizeof(float);
     std::unordered_set<ggml_backend_t> backends_to_sync;
 
     for (uint32_t il = 0; il < n_layer; ++il) {
-        if (s_l[il] == nullptr || s_l[il]->extra != nullptr || conv_bytes == 0) {
+        if (s_l[il] == nullptr) {
+            continue;
+        }
+
+        if (s_l[il]->extra != nullptr) {
+            auto * split_info = (const ggml_split_tensor_t *)s_l[il]->extra;
+            auto & shadow_split = ckpt.split_s_l_shadow[il];
+            for (int d = 0; d < split_info->n_device; ++d) {
+                if (split_info->splits[d] == nullptr || shadow_split[d] == nullptr) {
+                    continue;
+                }
+                auto src_backend = ggml_backend_sched_get_tensor_backend(sched, split_info->splits[d]);
+                GGML_ASSERT(src_backend != nullptr);
+                ggml_backend_tensor_copy_async(src_backend, src_backend, split_info->splits[d], shadow_split[d]);
+                backends_to_sync.insert(src_backend);
+            }
+            continue;
+        }
+
+        if (conv_bytes == 0) {
             continue;
         }
 
@@ -7126,25 +7148,17 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 
 // Unified speculative-checkpoint
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, int max_tokens) {
-    // Graph-split recurrent tensors are not supported. CPU-only and mixed
-    // CPU/GPU recurrent placement are allowed as long as each layer has a
-    // concrete backend buffer for the per-step tensors.
+    // Split recurrent tensors are supported as long as each layer exposes
+    // concrete backend buffers for the per-step tensors. CPU-only and mixed
+    // CPU/GPU recurrent placement are also allowed.
     bool has_gpu = false;
     bool has_cpu = false;
     for (const auto * sl : kv.s_l) {
         if (!sl) continue;
         if (sl->extra) {
-            const char * split_mode_name = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? "graph" :
-                                           model.split_mode == LLAMA_SPLIT_MODE_ATTN  ? "attn"  : "split";
-            LLAMA_LOG_WARN("%s: per-step checkpoints are not supported when recurrent state tensors are split across devices (split mode = %s)\n",
-                    __func__, split_mode_name);
-            kv.save_per_step_ssm = false;
-            return false;
+            has_gpu = true;
+            continue;
         }
-        //if (sl->extra) {
-        //    kv.save_per_step_ssm = false;
-        //    return false;
-        //}
         if (sl->buffer && !ggml_backend_buffer_is_host(sl->buffer)) {
             has_gpu = true;
         } else if (sl->buffer) {
