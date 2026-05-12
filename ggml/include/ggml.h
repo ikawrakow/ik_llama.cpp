@@ -2460,7 +2460,8 @@ extern "C" {
             struct ggml_tensor  * s,
             struct ggml_tensor  * x,
             struct ggml_tensor  * c,
-            struct ggml_tensor  * sq);
+            struct ggml_tensor  * sq,
+            struct ggml_tensor  * saved_steps);
 
     GGML_API struct ggml_tensor * ggml_ssm_scan(
             struct ggml_context * ctx,

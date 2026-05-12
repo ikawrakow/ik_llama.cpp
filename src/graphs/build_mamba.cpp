@@ -63,7 +63,7 @@ ggml_cgraph * llm_build_context::build_mamba() {
             // The new conv_states is the last (d_conv - 1) columns
             // of the last 3rd dimensional "layer" of the self-overlapping view.
             // For simultaneous sequences, it's more complicated.
-            struct ggml_tensor * x_conv = ggml_ssm_conv(ctx0, conv_states, x, model.layers[il].ssm_conv1d, state_seq);
+            struct ggml_tensor * x_conv = ggml_ssm_conv(ctx0, conv_states, x, model.layers[il].ssm_conv1d, state_seq, nullptr);
 
             // store last (d_conv - 1) columns of the conv_state part of x_conv back into the KV cache
             ggml_build_forward_expand(gf,

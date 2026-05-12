@@ -10419,7 +10419,8 @@ struct ggml_tensor * ggml_ssm_conv(
         struct ggml_tensor  * s,
         struct ggml_tensor  * x,
         struct ggml_tensor  * c,
-        struct ggml_tensor  * sq) {
+        struct ggml_tensor  * sq,
+        struct ggml_tensor  * saved_steps) {
     GGML_ASSERT(ggml_is_3d(s));
     GGML_ASSERT(ggml_is_matrix(x));
     GGML_ASSERT(ggml_is_matrix(c));
@@ -10437,6 +10438,12 @@ struct ggml_tensor * ggml_ssm_conv(
     GGML_ASSERT(sq->ne[0] == n_kv);
     GGML_ASSERT(sq->ne[1] == n_tokens);
 
+    if (saved_steps) {
+        GGML_ASSERT(n_kv == 1);
+        GGML_ASSERT(saved_steps->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_nelements(saved_steps) >= (d_conv - 1)*d_inner*n_tokens);
+    }
+
     bool is_node = false;
 
     if (s->grad || x->grad || c->grad || sq->grad) {
@@ -10453,6 +10460,7 @@ struct ggml_tensor * ggml_ssm_conv(
     result->src[1] = x;
     result->src[2] = c;
     result->src[3] = sq;
+    result->src[4] = saved_steps;
 
     return result;
 }
@@ -22369,6 +22377,7 @@ static int ggml_compute_forward_ssm_conv_f32(
     const struct ggml_tensor * src1 = dst->src[1]; // x
     const struct ggml_tensor * src2 = dst->src[2]; // conv1d.weight
     const struct ggml_tensor * src3 = dst->src[3]; // state_seq
+    const struct ggml_tensor * src4 = dst->src[4]; // state_seq
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -22378,6 +22387,11 @@ static int ggml_compute_forward_ssm_conv_f32(
     const int n_t  = src1->ne[1]; // n_tokens
     const int n_kv = src0->ne[2]; // max number of sequences in the batch
 
+    if (src4) {
+        GGML_ASSERT(n_kv == 1);
+        GGML_ASSERT(src4->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_nelements(src4) >= (nc - 1)*nr*n_t);
+    }
     GGML_ASSERT((nr*n_t) + (nc*nr*n_kv) == ggml_nelements(dst));
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
@@ -22387,7 +22401,7 @@ static int ggml_compute_forward_ssm_conv_f32(
     // for use with the destination state offset between sequences
     GGML_ASSERT(src2->nb[2] == src2->ne[1]*src2->ne[0]*sizeof(float));
 
-    if (n_kv == 1 && nc == 4) {
+    if (n_kv == 1 && nc == 4 && !src4) { // TODO: implement per token state saving in iqk_ssm_conv4
         float * dst_silu = NULL;
         if (node < cgraph->n_nodes + 2 &&
             cgraph->nodes[node+1]->op == GGML_OP_VIEW && cgraph->nodes[node+1]->src[0] == dst &&
@@ -22432,6 +22446,8 @@ static int ggml_compute_forward_ssm_conv_f32(
         }
     }
 
+    float * y = src4 ? (float *)src4->data + ir0*(nc-1) : NULL;
+
     for (int i2 = 0; i2 < n_t; ++i2) {
         int32_t * sq = (int32_t *) ((char *) src3->data +  i2*(src3->nb[1])); // {n_kv, n_tokens}
         float *   x  = (float *)   ((char *)  dst->data + ir0*sizeof(float) + i2*(nr*sizeof(float))); // {d_inner, n_tokens}
@@ -22461,6 +22477,14 @@ static int ggml_compute_forward_ssm_conv_f32(
             }
             // insert x on the last column
             s[(nc - 1) + i1*nc] = x0[i1];
+        }
+        if (y) {
+            for (int i1 = 0; i1 < ir; ++i1) {
+                for (int i0 = 0; i0 < nc - 1; ++i0) {
+                    y[i0 + i1*(nc-1)] = s[i0 + 1 + i1*nc];
+                }
+            }
+            y += nr*(nc - 1);
         }
 
         // handle copies when there are multiple output states
