@@ -4798,8 +4798,7 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {
     auto elb_params = sparams.elb_params;
     elb_params.push_back({ { }, "" });
-    std::vector<common_params_sampling::elb_param::elb_entry> lb_entries;   // logit bias
-    std::vector<common_params_sampling::elb_param::elb_entry> sb_entries;   // sampler bias
+    auto entries = elb_params[0].entries;
 
     const auto lines = string_split(content, "\n");
     for (size_t i = 0; i < lines.size(); ++i) {
@@ -4818,8 +4817,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             if (is_nested) {
                 if (n_char == 4) {
                     // (())
-                    lb_entries.clear();
-                    sb_entries.clear();
+                    entries.clear();
                     // printf("%s: line %zu: persistent entry clear\n", __func__, i);
                     continue;   // next line
                 }
@@ -4919,18 +4917,20 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             }
             // printf("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
 
-            (!is_nested ? elb_params.back().entries : (
-                is_sb ? sb_entries : lb_entries)).push_back({
-                    std::vector<size_t>(n_phrase, 0),
-                    std::move(addsubs),
-                    std::vector<char>(n_phrase, 0),
-                    max_phrase_len,
-                    std::move(phrases),
-                    std::move(biases),
-                    duration,
-                    is_range
-                });
-
+            common_params_sampling::elb_param::elb_entry entry = {
+                std::vector<size_t>(n_phrase, 0),
+                std::move(addsubs),
+                std::vector<char>(n_phrase, 0),
+                max_phrase_len,
+                std::move(phrases),
+                std::move(biases),
+                duration,
+                is_range
+            };
+            if (is_nested) {
+                entries.push_back(entry);
+            }
+            elb_params.back().entries.push_back(std::move(entry));
             continue;   // next line
         }
 
@@ -4940,13 +4940,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
         }
         string_process_escapes(line);
         elb_params.back().exitword = std::move(line);
-        for (const auto entry: lb_entries) {
-            elb_params.back().entries.push_back(entry);
-        }
-        for (const auto entry: sb_entries) {
-            elb_params.back().entries.push_back(entry);
-        }
-        elb_params.push_back({ { }, "" });
+        elb_params.push_back({ entries, "" });
     }
 
     sparams.elb_params = std::move(elb_params);
