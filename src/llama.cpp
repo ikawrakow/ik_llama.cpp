@@ -1407,12 +1407,9 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched) {
         } else {
             GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
             auto src_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
-            if (src_backend != nullptr && !ggml_backend_buffer_is_host(s_l[il]->buffer)) {
-                ggml_backend_tensor_copy_async(src_backend, src_backend, s_l[il], ckpt.s_l_shadow[il]);
-                backends_to_sync.insert(src_backend);
-            } else {
-                ggml_backend_tensor_copy(s_l[il], ckpt.s_l_shadow[il]);
-            }
+            GGML_ASSERT(src_backend != nullptr);
+            ggml_backend_tensor_copy_async(src_backend, src_backend, s_l[il], ckpt.s_l_shadow[il]);
+            backends_to_sync.insert(src_backend);
         }
     }
 
@@ -1459,12 +1456,9 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched) {
             GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
             GGML_ASSERT(ggml_nbytes(ckpt.s_l_shadow[il]) == ggml_nbytes(s_l[il]));
             auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
-            if (dst_backend != nullptr && !ggml_backend_buffer_is_host(s_l[il]->buffer)) {
-                ggml_backend_tensor_copy_async(dst_backend, dst_backend, ckpt.s_l_shadow[il], s_l[il]);
-                backends_to_sync.insert(dst_backend);
-            } else {
-                ggml_backend_tensor_copy(ckpt.s_l_shadow[il], s_l[il]);
-            }
+            GGML_ASSERT(dst_backend != nullptr);
+            ggml_backend_tensor_copy_async(dst_backend, dst_backend, ckpt.s_l_shadow[il], s_l[il]);
+            backends_to_sync.insert(dst_backend);
         }
     }
 
@@ -1506,12 +1500,9 @@ bool llama_kv_cache::per_step_save(ggml_backend_sched_t sched) {
         src.nb[1] = src.nb[2] = src.nb[3] = conv_bytes;
 
         auto src_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
-        if (src_backend != nullptr && !ggml_backend_buffer_is_host(s_l[il]->buffer)) {
-            ggml_backend_tensor_copy_async(src_backend, src_backend, &src, ckpt.s_l_shadow[il]);
-            backends_to_sync.insert(src_backend);
-        } else {
-            ggml_backend_tensor_copy(&src, ckpt.s_l_shadow[il]);
-        }
+        GGML_ASSERT(src_backend != nullptr);
+        ggml_backend_tensor_copy_async(src_backend, src_backend, &src, ckpt.s_l_shadow[il]);
+        backends_to_sync.insert(src_backend);
     }
 
     for (auto backend : backends_to_sync) {
