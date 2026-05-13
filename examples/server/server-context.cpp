@@ -123,7 +123,9 @@ static void apply_slot_mtp_accept(
 
     slot.mtp_hidden_state = mtp_hidden_state;
     llama_set_draft_input_hidden_state(mtp_ctx, slot.mtp_hidden_state.data());
-    mtp_accept_tokens(mtp_ctx, ids, mtp_n_past_base, slot.id);
+    // `ids` starts at the first verified draft token. The target-sampled boundary token
+    // is already present in the MTP KV from draft generation or target re-decode.
+    mtp_accept_tokens(mtp_ctx, ids, mtp_n_past_base + 1, slot.id);
 }
 
 static void set_external_mtp_hidden(server_slot & slot, llama_context * ctx, const float * hidden, int n_embd) {
@@ -4079,7 +4081,7 @@ static void restore_speculative_checkpoint(
                 } else {
                     llama_context * mtp_ctx = get_slot_mtp_ctx(slot, ctx);
                     llama_set_draft_input_hidden_state(mtp_ctx, slot.mtp_hidden_state.data());
-                    mtp_accept_tokens(mtp_ctx, ids, slot.spec_ckpt.n_past, slot.id);
+                    mtp_accept_tokens(mtp_ctx, ids, slot.spec_ckpt.n_past + 1, slot.id);
 
                     if (n_accepted > 1) {
                         memmove(slot.mtp_hidden_state.data(),
