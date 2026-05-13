@@ -1671,10 +1671,8 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
 }
 
 static void restore_recurrent_cache_tensors(int step, ggml_backend_sched_t sched,
-        size_t ssm_bytes, size_t conv_bytes, size_t conv_dim, int d_conv_m1,
-        ggml_tensor * s_l, ggml_tensor * per_step_ssm,
-        ggml_tensor * s_l_shadow, ggml_tensor * per_step_conv,
-        std::vector<float> & old_conv_buf, std::vector<float> & qkv_buf, std::vector<float> & conv_buf,
+        size_t ssm_bytes, size_t conv_bytes,
+        ggml_tensor * s_l, ggml_tensor * per_step_ssm, ggml_tensor * per_step_conv,
         std::unordered_set<ggml_backend_t> & backends_to_sync) {
     auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l);
     auto dst = *s_l;
@@ -1691,41 +1689,6 @@ static void restore_recurrent_cache_tensors(int step, ggml_backend_sched_t sched
     src = dst;
     src.data = (char *)per_step_conv->data + (size_t)step * conv_bytes;
     ggml_backend_tensor_copy_async(dst_backend, dst_backend, &src, &dst);
-
-    //if (s_l_shadow != nullptr) {
-    //    ggml_backend_tensor_get(s_l_shadow, old_conv_buf.data(), 0, conv_bytes);
-    //} else {
-    //    memset(old_conv_buf.data(), 0, conv_bytes);
-    //}
-
-    //auto qkv_needed = size_t(step + 1) * conv_dim;
-    //if (per_step_qkv) {
-    //    ggml_backend_tensor_get(per_step_qkv, qkv_buf.data(), 0, qkv_needed * sizeof(float));
-    //} else {
-    //    memset(qkv_buf.data(), 0, qkv_needed * sizeof(float));
-    //}
-
-    //for (int32_t col = 0; col < d_conv_m1; col++) {
-    //    int32_t src_token = step - (d_conv_m1 - 1) + col;  // e.g., K-2, K-1, K for d_conv=4
-    //    if (src_token >= 0) {
-    //        for (int64_t d = 0; d < conv_dim; d++) {
-    //            conv_buf[col + d * d_conv_m1] = qkv_buf[d + (int64_t)src_token * conv_dim];
-    //        }
-    //    } else {
-    //        int32_t old_col = d_conv_m1 + src_token;  // maps to 0, 1, ... for early steps
-    //        if (old_col >= 0 && old_col < d_conv_m1) {
-    //            for (int64_t d = 0; d < conv_dim; d++) {
-    //                conv_buf[col + d * d_conv_m1] = old_conv_buf[old_col + d * d_conv_m1];
-    //            }
-    //        } else {
-    //            for (int64_t d = 0; d < conv_dim; d++) {
-    //                conv_buf[col + d * d_conv_m1] = 0.0f;
-    //            }
-    //        }
-    //    }
-    //}
-
-    //ggml_backend_tensor_set(s_l, conv_buf.data(), 0, conv_bytes);
 }
 
 bool llama_kv_cache::per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step) {
@@ -1743,7 +1706,6 @@ bool llama_kv_cache::per_step_restore(const llama_model & model, ggml_backend_sc
 
     const int64_t ssm_bytes  = ssm_state_dim * sizeof(float);
     const int64_t conv_bytes = conv_state_dim * sizeof(float);
-    const int32_t d_conv_m1  = d_conv - 1;  // number of columns in conv state
 
     std::vector<float> ssm_buf(ssm_state_dim);
     std::vector<float> conv_buf(conv_state_dim);      // reconstructed conv state
@@ -1759,9 +1721,9 @@ bool llama_kv_cache::per_step_restore(const llama_model & model, ggml_backend_sc
         if (s_l[il] == nullptr || ckpt.per_step_ssm[il].empty()) continue;
 
         if (!s_l[il]->extra) {
-            restore_recurrent_cache_tensors(step, sched, ssm_bytes, conv_bytes, conv_dim, d_conv_m1,
-                s_l[il], ckpt.per_step_ssm[il].front(), ckpt.s_l_shadow[il], ckpt.per_step_conv[il].front(),
-                old_conv_buf, qkv_buf, conv_buf, backends_to_sync);
+            restore_recurrent_cache_tensors(step, sched, ssm_bytes, conv_bytes,
+                s_l[il], ckpt.per_step_ssm[il].front(), ckpt.per_step_conv[il].front(),
+                backends_to_sync);
         } else {
             auto split_sl = (const ggml_split_tensor_t *)s_l[il]->extra;
             for (int id = 0; id < split_sl->n_device; ++id) {
@@ -1773,16 +1735,14 @@ bool llama_kv_cache::per_step_restore(const llama_model & model, ggml_backend_sc
                 int nv = split->ne[0] / head_v_dim; // number of heads handled by this device
                 auto [this_conv_dim, this_ssm_dim] = model.hparams.n_embd_v_s_dims(nv);
                 auto this_conv_bytes = (d_conv - 1) * this_conv_dim * sizeof(float);
-                restore_recurrent_cache_tensors(step, sched, this_ssm_dim * sizeof(float), this_conv_bytes, this_conv_dim, d_conv_m1,
-                    split_sl->splits[id], ckpt.per_step_ssm[il][id], ckpt.split_s_l_shadow[il][id], ckpt.per_step_conv[il][id],
-                    old_conv_buf, qkv_buf, conv_buf, backends_to_sync);
+                restore_recurrent_cache_tensors(step, sched, this_ssm_dim * sizeof(float), this_conv_bytes,
+                    split_sl->splits[id], ckpt.per_step_ssm[il][id], ckpt.per_step_conv[il][id],
+                    backends_to_sync);
             }
         }
     }
 
-    // Strictly speaking we shouldn't need to do this. We are doing a synchronous copy of the
-    // convolution state in the above loop, and that involves a ggml_backend_synchronize call.
-    // But just in case.
+    // TODO: do we need to synchronize here?
     for (auto backend : backends_to_sync) {
         ggml_backend_synchronize(backend);
     }
