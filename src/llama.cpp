@@ -1477,68 +1477,6 @@ void llama_kv_cache::checkpoint_delete() {
     ckpt.saved = false;
 }
 
-bool llama_kv_cache::per_step_save(ggml_backend_sched_t sched) {
-    const uint32_t n_layer = (uint32_t)s_l.size();
-    const int64_t conv_state_dim = ckpt.per_step_conv_state_dim;
-
-    ckpt.cells_snapshot = cells;
-    ckpt.head_snapshot  = head;
-    ckpt.used_snapshot  = used;
-
-    if (conv_state_dim > 0 && !checkpoint_alloc_shadows(true)) {
-        return false;
-    }
-
-    // Non-split recurrent tensors only need the pre-spec conv complement in
-    // their reduced shadow buffers. Split tensors keep full shadow copies so
-    // restore can still seed each split conv prefix from split_s_l_shadow.
-    const size_t conv_bytes = (size_t)std::max<int64_t>(conv_state_dim, 0) * sizeof(float);
-    std::unordered_set<ggml_backend_t> backends_to_sync;
-
-    for (uint32_t il = 0; il < n_layer; ++il) {
-        if (s_l[il] == nullptr) {
-            continue;
-        }
-
-        if (s_l[il]->extra != nullptr) {
-            auto * split_info = (const ggml_split_tensor_t *)s_l[il]->extra;
-            auto & shadow_split = ckpt.split_s_l_shadow[il];
-            for (int d = 0; d < split_info->n_device; ++d) {
-                if (split_info->splits[d] == nullptr || shadow_split[d] == nullptr) {
-                    continue;
-                }
-                auto src_backend = ggml_backend_sched_get_tensor_backend(sched, split_info->splits[d]);
-                GGML_ASSERT(src_backend != nullptr);
-                ggml_backend_tensor_copy_async(src_backend, src_backend, split_info->splits[d], shadow_split[d]);
-                backends_to_sync.insert(src_backend);
-            }
-            continue;
-        }
-
-        if (conv_bytes == 0) {
-            continue;
-        }
-
-        GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
-
-        ggml_tensor src = *s_l[il];
-        src.ne[0] = conv_bytes / sizeof(float);
-        src.nb[1] = src.nb[2] = src.nb[3] = conv_bytes;
-
-        auto src_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
-        GGML_ASSERT(src_backend != nullptr);
-        ggml_backend_tensor_copy_async(src_backend, src_backend, &src, ckpt.s_l_shadow[il]);
-        backends_to_sync.insert(src_backend);
-    }
-
-    for (auto backend : backends_to_sync) {
-        ggml_backend_synchronize(backend);
-    }
-
-    ckpt.saved = true;
-    return true;
-}
-
 bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
     if (ckpt.per_step_max_allocated >= max_tokens) {
         return true;
@@ -1706,12 +1644,6 @@ bool llama_kv_cache::per_step_restore(const llama_model & model, ggml_backend_sc
 
     const int64_t ssm_bytes  = ssm_state_dim * sizeof(float);
     const int64_t conv_bytes = conv_state_dim * sizeof(float);
-
-    std::vector<float> ssm_buf(ssm_state_dim);
-    std::vector<float> conv_buf(conv_state_dim);      // reconstructed conv state
-    std::vector<float> old_conv_buf(conv_state_dim);   // pre-spec conv state from shadow
-    const int64_t qkv_needed = (int64_t)(step + 1) * conv_dim;
-    std::vector<float> qkv_buf(qkv_needed);
 
     int num_v_heads = model.hparams.ssm_dt_rank;
     int head_v_dim  = model.hparams.ssm_d_inner / num_v_heads;
@@ -7315,7 +7247,7 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
     switch (kv.ckpt.selected_spec_mode) {
         case LLAMA_SPEC_CKPT_PER_STEP:
             kv.save_per_step_ssm = true;
-            return kv.per_step_save(ctx->sched);
+            return true;
 
         case LLAMA_SPEC_CKPT_GPU_FALLBACK:
             return kv.checkpoint_save(ctx->sched);
