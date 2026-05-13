@@ -1002,7 +1002,6 @@ static common_params_speculative common_speculative_get_runtime_params(
     result.n_max = std::max(result.n_max, 0);
     result.n_min = std::max(0, std::min(result.n_min, result.n_max));
     result.stages.clear();
-    result.enable_mtp = false;
 
     return result;
 }
@@ -1111,6 +1110,17 @@ common_speculative * common_speculative_init(
     }
 
     const auto stages = params.get_resolved_stages();
+    if (params.model_dft && llama_model_is_gemma4_mtp_assistant(params.model_dft)) {
+        const bool has_draft_stage = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params & stage) {
+            return stage.type == COMMON_SPECULATIVE_TYPE_DRAFT;
+        });
+
+        if (has_draft_stage) {
+            LOG_ERR("%s: Gemma4 assistant models only support MTP stages; omit -md for self-spec-only runs or use -mtp/--spec-stage mtp for assistant-backed MTP\n", __func__);
+            return nullptr;
+        }
+    }
+
     const bool needs_draft_ctx = std::any_of(stages.begin(), stages.end(), [&params](const common_speculative_stage_params & stage) {
         return stage.type == COMMON_SPECULATIVE_TYPE_DRAFT ||
                (stage.type == COMMON_SPECULATIVE_TYPE_MTP && params.model_dft != nullptr);
@@ -1362,8 +1372,7 @@ llama_tokens common_speculative_draft(
 
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
-            impl->draft(impl_params, prompt_tgt, id_last, result);
-            impl->draft(impl_params, prompt_tgt, id_last, result);
+            impl->draft(impl_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result);
             impl->n_call_draft++;
         }
 

@@ -249,7 +249,6 @@ static bool save_speculative_checkpoint(server_slot & slot, llama_model * model,
 }
 
 static void server_remove_speculative_stage(common_params_speculative & spec, common_speculative_type type) {
-    spec.enable_mtp = false;
     spec.stages.erase(std::remove_if(spec.stages.begin(), spec.stages.end(), [type](const common_speculative_stage_params & stage) {
         return stage.type == type;
     }), spec.stages.end());
@@ -282,6 +281,20 @@ static bool server_speculative_same_stage_types(
     }
 
     return true;
+}
+
+static void server_reject_dead_speculative_request_overrides(const json & data) {
+    if (json_value_ptr(data, "speculative.type") != nullptr) {
+        throw std::runtime_error("Error: speculative.type request override is not supported; keep the startup stage types and use speculative.stages or speculative.n_max/n_min/p_min");
+    }
+
+    if (json_value_ptr(data, "speculative.ngram_size_n") != nullptr ||
+        json_value_ptr(data, "speculative.ngram_size_m") != nullptr ||
+        json_value_ptr(data, "speculative.ngram_min_hits") != nullptr ||
+        json_value_ptr(data, "speculative.suffix_min_match_len") != nullptr ||
+        json_value_ptr(data, "speculative.suffix_max_depth") != nullptr) {
+        throw std::runtime_error("Error: structural speculative overrides are startup-only; per-request overrides only support speculative.n_max, speculative.n_min, speculative.p_min, and speculative.stages");
+    }
 }
 
 static common_speculative_stage_params server_parse_speculative_stage_json(const json & stage_json) {
@@ -423,7 +436,6 @@ bool server_context::load_model(const gpt_params& params_) {
     if (!multimodal_spec_supported) {
             params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
             params_base.speculative.stages.clear();
-            params_base.speculative.enable_mtp = false;
             params_base.has_mtp = false;
             SRV_WRN("%s\n", "speculative decoding is not supported by multimodal, it will be disabled");
         }
@@ -567,8 +579,7 @@ void server_context::init() {
             }
         }
 
-        const bool requested_spec = params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE ||
-                                    params_base.speculative.has_dft();
+        const bool requested_spec = !params_base.speculative.get_resolved_stages().empty();
 
         bool can_spec = true;
         if (!params_base.dry_run) {
@@ -1340,90 +1351,81 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.params.post_sampling_probs = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
     // speculative decoding parameters
-    slot.params.speculative = defaults.speculative;
-    slot.params.speculative.n_max = json_value(data, "speculative.n_max", params_base.speculative.n_max);
-    slot.params.speculative.n_min = json_value(data, "speculative.n_min", params_base.speculative.n_min);
-    slot.params.speculative.p_min = json_value(data, "speculative.p_min", params_base.speculative.p_min);
+    try {
+        slot.params.speculative = defaults.speculative;
+        slot.params.speculative.n_max = json_value(data, "speculative.n_max", params_base.speculative.n_max);
+        slot.params.speculative.n_min = json_value(data, "speculative.n_min", params_base.speculative.n_min);
+        slot.params.speculative.p_min = json_value(data, "speculative.p_min", params_base.speculative.p_min);
 
-    const json speculative_type = json_value(data, "speculative.type", json());
-    if (!speculative_type.is_null()) {
-        slot.params.speculative.type = common_speculative_type_from_name(speculative_type.get<std::string>());
-        if (slot.params.speculative.type == COMMON_SPECULATIVE_TYPE_COUNT) {
-            throw std::runtime_error("Error: speculative.type is invalid");
-        }
-    }
+        server_reject_dead_speculative_request_overrides(data);
 
-    const json stages = json_value(data, "speculative.stages", json());
-    if (!stages.is_null()) {
-        if (!stages.is_array()) {
-            throw std::runtime_error("Error: speculative.stages must be an array");
-        }
-
-        const auto default_stages = defaults.speculative.get_resolved_stages();
-        if (stages.size() != default_stages.size()) {
-            throw std::runtime_error("Error: speculative.stages must provide the same number of stages configured at server startup");
-        }
-
-        slot.params.speculative.stages = default_stages;
-        for (size_t i = 0; i < stages.size(); ++i) {
-            const auto stage_override = server_parse_speculative_stage_json(stages[i]);
-            if (stage_override.type != default_stages[i].type) {
-                throw std::runtime_error("Error: speculative.stages must preserve the stage types configured at server startup");
+        const json stages = json_value(data, "speculative.stages", json());
+        if (!stages.is_null()) {
+            if (!stages.is_array()) {
+                throw std::runtime_error("Error: speculative.stages must be an array");
             }
 
-            if (stage_override.has_n_max_override()) {
-                slot.params.speculative.stages[i].n_max = stage_override.n_max;
+            const auto default_stages = defaults.speculative.get_resolved_stages();
+            if (stages.size() != default_stages.size()) {
+                throw std::runtime_error("Error: speculative.stages must provide the same number of stages configured at server startup");
             }
-            if (stage_override.has_n_min_override()) {
-                slot.params.speculative.stages[i].n_min = stage_override.n_min;
+
+            slot.params.speculative.stages = default_stages;
+            for (size_t i = 0; i < stages.size(); ++i) {
+                const auto stage_override = server_parse_speculative_stage_json(stages[i]);
+                if (stage_override.type != default_stages[i].type) {
+                    throw std::runtime_error("Error: speculative.stages must preserve the stage types configured at server startup");
+                }
+
+                if (stage_override.has_n_max_override()) {
+                    slot.params.speculative.stages[i].n_max = stage_override.n_max;
+                }
+                if (stage_override.has_n_min_override()) {
+                    slot.params.speculative.stages[i].n_min = stage_override.n_min;
+                }
+                if (stage_override.has_p_min_override()) {
+                    slot.params.speculative.stages[i].p_min = stage_override.p_min;
+                }
             }
-            if (stage_override.has_p_min_override()) {
-                slot.params.speculative.stages[i].p_min = stage_override.p_min;
-            }
+
+            const auto resolved = slot.params.speculative.get_resolved_stages();
+            slot.params.speculative.type = resolved.empty() ? COMMON_SPECULATIVE_TYPE_NONE : resolved.front().type;
         }
 
-        const auto resolved = slot.params.speculative.get_resolved_stages();
-        slot.params.speculative.type = resolved.empty() ? COMMON_SPECULATIVE_TYPE_NONE : resolved.front().type;
-    }
+        slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
+        slot.params.speculative.n_min = std::max(slot.params.speculative.n_min, 0);
+        slot.params.speculative.n_max = std::max(slot.params.speculative.n_max, 0);
 
-    slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
-    slot.params.speculative.n_min = std::max(slot.params.speculative.n_min, 0);
-    slot.params.speculative.n_max = std::max(slot.params.speculative.n_max, 0);
+        if (slot.can_speculate() &&
+            llama_model_has_recurrent(model) &&
+            slot.params.speculative.n_max > params_base.speculative.n_max) {
+            send_error(task,
+                    "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
+                    " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
+                    "; restart the server with a higher --draft-max to reserve checkpoint capacity",
+                    ERROR_TYPE_INVALID_REQUEST);
+            return false;
+        }
 
-    if (slot.can_speculate() &&
-        llama_model_has_recurrent(model) &&
-        slot.params.speculative.n_max > params_base.speculative.n_max) {
-        send_error(task,
-                "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
-                " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
-                "; restart the server with a higher --draft-max to reserve checkpoint capacity",
-                ERROR_TYPE_INVALID_REQUEST);
+        if (!server_speculative_same_stage_types(slot.params.speculative, defaults.speculative)) {
+            throw std::runtime_error("Error: per-request speculative stages must match the server startup stage types; only stage parameter overrides are supported");
+        }
+
+        if (slot.params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && !slot.has_mtp) {
+            throw std::runtime_error("Error: MTP speculative stage requested, but the server was not started with MTP support");
+        }
+
+        if (slot.params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_DRAFT) && !params_base.speculative.has_dft()) {
+            throw std::runtime_error("Error: draft speculative stage requested, but no draft model is loaded");
+        }
+
+        std::string spec_error;
+        if (!common_speculative_validate_chain(slot.params.speculative, &spec_error)) {
+            throw std::runtime_error("Error: invalid speculative request configuration: " + spec_error);
+        }
+    } catch (const std::exception & e) {
+        send_error(task, e.what(), ERROR_TYPE_INVALID_REQUEST);
         return false;
-    }
-
-    slot.params.speculative.ngram_size_n = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
-    slot.params.speculative.ngram_size_m = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
-    slot.params.speculative.ngram_min_hits = json_value(data, "speculative.ngram_min_hits", defaults.speculative.ngram_min_hits);
-
-    slot.params.speculative.ngram_size_n = std::max(1, std::min((int)slot.params.speculative.ngram_size_n, 1024));
-    slot.params.speculative.ngram_size_m = std::max(1, std::min((int)slot.params.speculative.ngram_size_m, 1024));
-    slot.params.speculative.ngram_min_hits = std::max(1, std::min((int)slot.params.speculative.ngram_min_hits, 1024));
-
-    if (!server_speculative_same_stage_types(slot.params.speculative, defaults.speculative)) {
-        throw std::runtime_error("Error: per-request speculative stages must match the server startup stage types; only stage parameter overrides are supported");
-    }
-
-    if (slot.params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && !slot.has_mtp) {
-        throw std::runtime_error("Error: MTP speculative stage requested, but the server was not started with MTP support");
-    }
-
-    if (slot.params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_DRAFT) && !params_base.speculative.has_dft()) {
-        throw std::runtime_error("Error: draft speculative stage requested, but no draft model is loaded");
-    }
-
-    std::string spec_error;
-    if (!common_speculative_validate_chain(slot.params.speculative, &spec_error)) {
-        throw std::runtime_error("Error: invalid speculative request configuration: " + spec_error);
     }
 
 

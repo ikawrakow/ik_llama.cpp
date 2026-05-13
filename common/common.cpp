@@ -110,17 +110,6 @@ bool common_speculative_type_is_self_spec(enum common_speculative_type type) {
     }
 }
 
-bool common_speculative_type_is_model_spec(enum common_speculative_type type) {
-    switch (type) {
-        case COMMON_SPECULATIVE_TYPE_DRAFT:
-        case COMMON_SPECULATIVE_TYPE_MTP:
-        case COMMON_SPECULATIVE_TYPE_EAGLE3:
-            return true;
-        default:
-            return false;
-    }
-}
-
 static int32_t common_speculative_stage_effective_n_max(
         const common_params_speculative & params,
         const common_speculative_stage_params & stage) {
@@ -179,7 +168,6 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     result.n_max = std::max(result.n_max, 0);
     result.n_min = std::max(0, std::min(result.n_min, result.n_max));
     result.stages.clear();
-    result.enable_mtp = false;
 
     return result;
 }
@@ -625,16 +613,12 @@ static void common_speculative_finalize_stages(gpt_params & params) {
 
     if (!spec.stages.empty()) {
         spec.type = spec.stages.front().type;
-        spec.enable_mtp = false;
+        params.has_mtp = spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
         return;
     }
 
     const bool wants_mtp = params.has_mtp;
     const bool wants_draft = spec.has_dft();
-
-    if (wants_mtp && wants_draft && (spec.type == COMMON_SPECULATIVE_TYPE_NONE || common_speculative_type_is_self_spec(spec.type))) {
-        throw std::invalid_argument("error: ambiguous model fallback requested via both -mtp and -md; use --spec-stage to choose the stage chain explicitly");
-    }
 
     if (spec.type != COMMON_SPECULATIVE_TYPE_NONE) {
         spec.stages.push_back({ .type = spec.type });
@@ -653,7 +637,6 @@ static void common_speculative_finalize_stages(gpt_params & params) {
     }
 
     spec.type = spec.stages.empty() ? COMMON_SPECULATIVE_TYPE_NONE : spec.stages.front().type;
-    spec.enable_mtp = false;
     params.has_mtp = spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
 }
 
@@ -1450,13 +1433,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--spec-stage") {
         CHECK_ARG
+
+        if (params.speculative.stages.empty()) {
+            if (params.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
+                throw std::invalid_argument("--spec-stage cannot be combined with --spec-type; use only --spec-stage for explicit stage chains");
+            }
+            if (params.has_mtp) {
+                throw std::invalid_argument("--spec-stage cannot be combined with -mtp/--multi-token-prediction; add the mtp fallback explicitly with --spec-stage mtp[:k=v,...]");
+            }
+        }
+
         params.speculative.stages.push_back(common_speculative_stage_from_arg(argv[i]));
         if (params.speculative.stages.size() == 1) {
             params.speculative.type = params.speculative.stages.front().type;
         }
-        if (params.speculative.stages.back().type == COMMON_SPECULATIVE_TYPE_MTP) {
-            params.has_mtp = true;
-        }
+        params.has_mtp = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
         return true;
     }
     if (arg == "--spec-type") {
@@ -1947,17 +1938,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
-        params.has_mtp = true;
         if (!params.speculative.stages.empty()) {
-            params.speculative.stages.push_back({ .type = COMMON_SPECULATIVE_TYPE_MTP });
-        } else {
-            params.speculative.enable_mtp = true;
+            throw std::invalid_argument("-mtp/--multi-token-prediction cannot be combined with --spec-stage; add the mtp fallback explicitly with --spec-stage mtp[:k=v,...]");
         }
+
+        params.has_mtp = true;
         return true;
     }
     if (arg == "-no-mtp" || arg == "--no-multi-token-prediction") {
         params.has_mtp = false;
-        params.speculative.enable_mtp = false;
         common_speculative_remove_explicit_stage(params.speculative, COMMON_SPECULATIVE_TYPE_MTP);
         return true;
     }
@@ -3126,8 +3115,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
-    options.push_back({ "*", "-mtp, --multi-token-prediction",          "legacy shortcut for adding an MTP speculative stage (if supported) (default: %s)", params.has_mtp ? "true" : "false" });
-    options.push_back({ "*", "-no-mtp, --no-multi-token-prediction",    "disable the legacy MTP speculative shortcut or remove an explicit MTP stage (default: %s)", !params.has_mtp ? "true" : "false" });
+    options.push_back({ "*", "-mtp, --multi-token-prediction",          "legacy shortcut for enabling MTP when --spec-stage is not used (default: %s)", params.has_mtp ? "true" : "false" });
+    options.push_back({ "*", "-no-mtp, --no-multi-token-prediction",    "disable the legacy MTP shortcut or remove an explicit MTP stage (default: %s)", !params.has_mtp ? "true" : "false" });
     options.push_back({ "*", "--draft-max, --draft, --draft-n N",
                                                                         "global default number of tokens to draft for speculative decoding or for stages without an explicit n_max override (default: %d)", params.speculative.n_max });
     options.push_back({ "*", "--draft-min, --draft-n-min N",   "global default minimum draft threshold or fallback threshold for stages without an explicit n_min override" });

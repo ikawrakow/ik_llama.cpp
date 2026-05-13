@@ -155,7 +155,6 @@ std::string common_speculative_type_name_str();
 enum common_speculative_type common_speculative_type_from_name(const std::string & name);
 std::string common_speculative_type_to_str(enum common_speculative_type type);
 bool common_speculative_type_is_self_spec(enum common_speculative_type type);
-bool common_speculative_type_is_model_spec(enum common_speculative_type type);
 
 struct common_speculative_stage_params {
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
@@ -204,7 +203,6 @@ struct common_params_speculative {
 
     int32_t n_max = 16; // number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
-    bool enable_mtp = false; // append MTP as a fallback implementation without replacing the primary speculative type
     std::vector<common_speculative_stage_params> stages; // explicit stage chain for single-spec or self-spec + model fallback
 
     float   p_split = 0.1f; // speculative decoding split probability
