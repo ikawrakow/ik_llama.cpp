@@ -4738,7 +4738,7 @@ GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
     }
     else {
-        nbytes = tensor->nb[1]; //tensor->ne[0]*tensor->nb[0]/blck_size;
+        nbytes = ggml_row_size(tensor->type, tensor->ne[0]);
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
