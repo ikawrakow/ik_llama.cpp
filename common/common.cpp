@@ -618,6 +618,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "-tm" || arg == "--threads-mtmd") {
+        CHECK_ARG
+        params.n_threads_mtmd = std::stoi(argv[i]);
+        if (params.n_threads_mtmd <= 0) {
+            params.n_threads_mtmd = std::thread::hardware_concurrency();
+        }
+        return true;
+    }
     if (arg == "-td" || arg == "--threads-draft") {
         CHECK_ARG
         params.speculative.n_threads = std::stoi(argv[i]);
@@ -2461,6 +2469,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-s,    --seed SEED",            "RNG seed (default: %d, use random seed for < 0)", params.seed });
     options.push_back({ "*",           "-t,    --threads N",            "number of threads to use during generation (default: %d)", params.n_threads });
     options.push_back({ "*",           "-tb,   --threads-batch N",      "number of threads to use during batch and prompt processing (default: same as --threads)" });
+    options.push_back({ "multi-modality", "-tm,   --threads-mtmd N",    "number of threads to use during multimodal image processing (default: same as --threads-batch)" });
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
@@ -2898,6 +2907,9 @@ std::string gpt_params_get_system_info(const gpt_params & params) {
     if (params.n_threads_batch != -1) {
         os << " (n_threads_batch = " << params.n_threads_batch << ")";
     }
+    if (params.n_threads_mtmd != -1) {
+        os << " (n_threads_mtmd = " << params.n_threads_mtmd << ")";
+    }
     os << " / " << std::thread::hardware_concurrency() << " | " << llama_print_system_info();
 
     return os.str();
@@ -3023,7 +3035,7 @@ std::string string_lower(const std::string& str) {
     std::string result = str;
     for (char& c : result) {
         if (c >= 'A' && c <= 'Z') {
-            c = static_cast<char>(c + ('a' - 'A')); 
+            c = static_cast<char>(c + ('a' - 'A'));
         }
     }
     return result;
@@ -3568,8 +3580,8 @@ static std::pair<int, int> get_batch_ubatch(const gpt_params & params) {
     if (params.n_ctx > 0) {
         n_batch = std::min(n_batch, params.n_ctx);
     }
-    if (!params.mmproj.path.empty()) {
-        // temporary fix for qwen mtmd
+    if (!params.mmproj.path.empty() && params.mmproj_use_gpu) {
+        // temporary fix for qwen mtmd (only when mmproj is on GPU)
         n_batch = std::max(n_batch, n_ubatch);
         n_ubatch = n_batch;
         fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);

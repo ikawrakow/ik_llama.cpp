@@ -292,7 +292,9 @@ bool server_context::load_model(const gpt_params& params_) {
         mtmd_context_params mparams = mtmd_context_params_default();
         mparams.use_gpu = params_base.mmproj_use_gpu;
         mparams.print_timings = false;
-        mparams.n_threads = params_base.n_threads;
+        mparams.n_threads = params_base.n_threads_mtmd != -1 ? params_base.n_threads_mtmd
+                             : params_base.n_threads_batch != -1 ? params_base.n_threads_batch
+                                                                 : params_base.n_threads;
         mparams.flash_attn_type = params_base.flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         mparams.verbosity = params_base.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
         mparams.image_min_tokens = params_base.image_min_tokens;
@@ -721,9 +723,8 @@ void server_slot::release() {
         command = SLOT_COMMAND_RELEASE;
         state = SLOT_STATE_IDLE;
         task.reset();
-        llama_decode_reset();
     }
-
+    llama_decode_reset();
 }
 
 
@@ -4551,8 +4552,14 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 for (auto& slot : slots) {
                     slot.state = SLOT_STATE_PROCESSING;
                     slot.command = SLOT_COMMAND_NONE;
-                    slot.release();
-                    if (ret != user_cancel) {
+                    if (ret == user_cancel) {
+                        llama_pos cur_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+                        slot.n_past = slot.cache_tokens.size_up_to_pos(cur_pos + 1);
+                        slot.cache_tokens.keep_first(slot.n_past);
+                        slot.release();
+                    }
+                    else {
+                        slot.release();
                         LLAMA_LOG_INFO("n_past = %d\n", (int)slot.cache_tokens.size());
                         send_error(slot, "Input prompt is too big compared to KV size. Please try increasing KV size.");
                     }
