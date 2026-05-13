@@ -3611,7 +3611,7 @@ void server_context::add_sampled_tokens() {
             }
 
             static const llama_tokens empty_prompt;
-            const llama_tokens & cached_text_tokens = slot.has_mtp
+            const llama_tokens & cached_text_tokens = slot.has_mtp && !slot.params.speculative.has_composite_stage_chain()
                 ? empty_prompt
                 : slot.cache_tokens.get_text_tokens();
 
@@ -4857,7 +4857,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             if (slot.n_decoded == 0 && slot.can_speculate()) {
                 static const llama_tokens empty_prompt;
-                const llama_tokens & spec_prompt = slot.has_mtp
+                const llama_tokens & spec_prompt = slot.has_mtp && !slot.params.speculative.has_composite_stage_chain()
                     ? empty_prompt
                     : slot.cache_tokens.get_text_tokens();
                 common_speculative_begin(slot.spec, spec_prompt);
