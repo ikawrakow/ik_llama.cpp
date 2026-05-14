@@ -4838,13 +4838,13 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 // printf("%s: line %zu: persistent entry\n", __func__, i);
             }
 
-            const auto qqpos = line.find('"');
+            const auto qq_pos = line.find('"');
 
             // (DURATION : ...)
             int32_t duration = is_nested ? -1 : 1;
-            const auto cpos = line.find(':');
-            if ((cpos != std::string::npos) && (1 < cpos) && (cpos < qqpos)) {
-                auto sub = line.substr(1, cpos - 1);
+            const auto cln_pos = line.find(':');
+            if ((cln_pos != std::string::npos) && (1 < cln_pos) && (cln_pos < qq_pos)) {
+                auto sub = line.substr(1, cln_pos - 1);
                 duration = std::stoi(sub);
             }
             if (duration == 0) {
@@ -4854,7 +4854,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             // (... "PHRASE" ... "PHRASE" ...)
             std::vector<std::string> phrases;
-            auto sb_window = line.substr(string_extract(line, qqpos, '"', phrases));
+            auto sb_window = line.substr(string_extract(line, qq_pos, '"', phrases));
 
             #undef X
             #define X(T, MEMBER, DV, E) #MEMBER,
@@ -4898,8 +4898,8 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             if (!is_sb) {
                 // (... : BIAS ...)
-                const auto rcpos = line.rfind(':');
-                auto sub = line.substr(rcpos + 1, n_char - rcpos - 2);
+                const auto cln_rpos = line.rfind(':');
+                auto sub = line.substr(cln_rpos + 1, n_char - cln_rpos - 2);
                 if (sub.find("~") != std::string::npos) {
                     // (... : BIAS ~ BIAS)
                     const auto splits = string_split(sub, '~');
