@@ -2307,6 +2307,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.lora_outfile = argv[i];
         return true;
     }
+    if (arg == "--output-draft" || arg == "--draft-output" || arg == "--draft-output-file") {
+        CHECK_ARG
+        params.out_file_draft = argv[i];
+        return true;
+    }
     if (arg == "-ofreq" || arg == "--output-frequency") {
         CHECK_ARG
         params.n_out_freq = std::stoi(argv[i]);
@@ -2795,6 +2800,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
 
     options.push_back({ "imatrix" });
     options.push_back({ "imatrix",     "-o,    --output FNAME",         "output file (default: '%s')", params.out_file.c_str() });
+    options.push_back({ "imatrix",     "       --output-draft FNAME",   "paired draft output file (default: derived from --output)" });
     options.push_back({ "imatrix",     "       --output-frequency N",   "output the imatrix every N iterations (default: %d)", params.n_out_freq });
     options.push_back({ "imatrix",     "       --save-frequency N",     "save an imatrix copy every N iterations (default: %d)", params.n_save_freq });
     options.push_back({ "imatrix",     "       --process-output",       "collect data for the output tensor (default: %s)", params.process_output ? "true" : "false" });

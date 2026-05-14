@@ -248,6 +248,29 @@ static std::string filter_tensor_name(const char * name) {
     return wname;
 }
 
+static bool is_named_imatrix_tensor(const std::string & wname, const gpt_params & params, bool collect_lsim) {
+    if (wname.rfind("blk.", 0) == 0) {
+        return true;
+    }
+    if (wname == "mtp_pre_proj.weight" || wname == "mtp_post_proj.weight") {
+        return true;
+    }
+    return (params.process_output || collect_lsim) && wname == params.output_tensor_name;
+}
+
+static std::string default_draft_imatrix_out_file(const std::string & target_out_file) {
+    if (target_out_file.empty()) {
+        return "imatrix-draft.dat";
+    }
+
+    const auto dot = target_out_file.rfind('.');
+    if (dot == std::string::npos || dot == 0) {
+        return target_out_file + "-draft";
+    }
+
+    return target_out_file.substr(0, dot) + "-draft" + target_out_file.substr(dot);
+}
+
 void IMatrixCollector::print_layer_importance(const char * msg, const std::vector<std::pair<double, int>>& sim) {
     if (sim.empty()) return;
     std::vector<std::pair<float, int>> layers;
@@ -303,8 +326,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (t->op != GGML_OP_MUL_MAT) return false;
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
-        //printf("wname = %s\n", wname.c_str());
-        if (!(wname.substr(0, 4) == "blk." || ((m_params.process_output || m_collect_lsim) && wname == m_params.output_tensor_name))) return false;
+        if (!is_named_imatrix_tensor(wname, m_params, m_collect_lsim)) return false;
         return true;
     }
 
@@ -682,10 +704,15 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
     return true;
 }
 
-static IMatrixCollector g_collector;
+static IMatrixCollector g_target_collector;
+static IMatrixCollector g_draft_collector;
+
+static IMatrixCollector * ik_get_imatrix_collector(void * user_data) {
+    return user_data != nullptr ? static_cast<IMatrixCollector *>(user_data) : &g_target_collector;
+}
 
 static bool ik_collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
-    return g_collector.collect_imatrix(t, ask, user_data);
+    return ik_get_imatrix_collector(user_data)->collect_imatrix(t, ask, user_data);
 }
 
 
@@ -772,6 +799,8 @@ static gpt_params build_draft_imatrix_params(const gpt_params & params) {
     draft_params.n_gpu_layers = params.speculative.n_gpu_layers >= 0 ? params.speculative.n_gpu_layers : params.n_gpu_layers;
     draft_params.has_mtp = true;
     draft_params.warmup = false;
+    draft_params.out_file = params.out_file_draft.empty() ? default_draft_imatrix_out_file(params.out_file) : params.out_file_draft;
+    draft_params.out_file_draft.clear();
     draft_params.cb_eval = ik_collect_imatrix;
     draft_params.cb_eval_user_data = nullptr;
 
@@ -1008,12 +1037,12 @@ int main(int argc, char ** argv) {
 
     params.n_batch = std::min(params.n_batch, params.n_ctx);
 
-    g_collector.set_params(params);
-    g_collector.set_collect_lsim(lsim);
+    g_target_collector.set_params(params);
+    g_target_collector.set_collect_lsim(lsim);
 
     for (const auto & in_file : params.in_files) {
         printf("%s : loading imatrix from '%s'\n", __func__, in_file.c_str());
-        if (!g_collector.load_imatrix(in_file.c_str())) {
+        if (!g_target_collector.load_imatrix(in_file.c_str())) {
             fprintf(stderr, "%s : failed to load %s\n", __func__, in_file.c_str());
             return 1;
         }
@@ -1021,7 +1050,7 @@ int main(int argc, char ** argv) {
 
     if (params.in_files.size() > 1) {
         printf("%s : saving combined imatrix to '%s'\n", __func__, params.out_file.c_str());
-        g_collector.save_imatrix();
+        g_target_collector.save_imatrix();
     }
 
     llama_backend_init();
@@ -1035,7 +1064,7 @@ int main(int argc, char ** argv) {
         // pass the callback to the backend scheduler
         // it will be executed for each node during the graph computation
         target_params.cb_eval = ik_collect_imatrix;
-        target_params.cb_eval_user_data = NULL;
+        target_params.cb_eval_user_data = &g_target_collector;
     }
 
     llama_init_result llama_init;
@@ -1045,6 +1074,9 @@ int main(int argc, char ** argv) {
 
     if (has_draft_model) {
         gpt_params draft_params = build_draft_imatrix_params(params);
+        g_draft_collector.set_params(draft_params);
+        g_draft_collector.set_collect_lsim(lsim);
+        draft_params.cb_eval_user_data = &g_draft_collector;
         auto mparams_dft = common_model_params_to_llama(draft_params);
 
         model_dft = ik_load_model_from_params(draft_params, mparams_dft);
@@ -1062,8 +1094,11 @@ int main(int argc, char ** argv) {
         }
 
         target_params.has_mtp = true;
-        target_params.cb_eval = nullptr;
-        target_params.cb_eval_user_data = nullptr;
+        target_params.cb_eval = ik_collect_imatrix;
+        target_params.cb_eval_user_data = &g_target_collector;
+
+        fprintf(stderr, "%s : paired imatrix outputs: target='%s', draft='%s'\n",
+            __func__, target_params.out_file.c_str(), draft_params.out_file.c_str());
 
         auto mparams_tgt = common_model_params_to_llama(target_params);
         llama_model * model_tgt = ik_load_model_from_params(target_params, mparams_tgt);
@@ -1141,8 +1176,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    g_collector.save_imatrix();
-    g_collector.print_layer_importance();
+    g_target_collector.save_imatrix();
+    g_target_collector.print_layer_importance();
+
+    if (ctx_dft != nullptr) {
+        g_draft_collector.save_imatrix();
+        g_draft_collector.print_layer_importance();
+    }
 
     llama_print_timings(ctx);
 
