@@ -884,26 +884,36 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
         return;
     }
 
-    auto& elb = ctx_sampling->elb_states[ctx_sampling->elb_idx];
-    const int32_t exitword_len = elb.exitword.length();
-    if ((elb.delay > ++elb.countup) || (exitword_len == 0)) {
+    auto idx = ctx_sampling->elb_idx;
+    auto& elb = ctx_sampling->elb_states[idx];
+    if ((elb.delay > ++elb.countup) || (elb.search_word_len == 0)) {
         return;
     }
 
+    size_t search_pos = 0;
     const std::string search_window = ctx_sampling->to_generated_text->substr(std::min(
         ctx_sampling->to_generated_text->length(),
         ctx_sampling->elb_search_pos)) + common_token_to_piece(ctx_main, ctx_sampling->prev.back(), true);
-    const auto exitword_pos = search_window.find(elb.exitword);
-    if (exitword_pos == std::string::npos) {
+
+    auto found = [&search_pos, &search_window](std::string search_word) {
+        search_pos = search_window.find(search_word);
+        return search_pos == std::string::npos;
+    };
+
+    if (found(elb.jumpword)) {
+        search_pos += ctx_sampling->elb_search_pos + elb.jumpword.length();
+        ctx_sampling->elb_idx = elb.jump_idx;
+    } else if (found(elb.exitword)) {
+        search_pos += ctx_sampling->elb_search_pos + elb.exitword.length();
+        ++ctx_sampling->elb_idx;
+    } else {
         // move search position to include next token
-        ctx_sampling->elb_search_pos += std::max(0, int32_t(search_window.length()) - exitword_len + 1);
+        ctx_sampling->elb_search_pos += std::max(0, int32_t(search_window.length()) - int32_t(elb.search_word_len) + 1);
         return;
     }
 
-    auto next_search_pos = ctx_sampling->elb_search_pos + exitword_pos + exitword_len;
-
-    // no double counting and single character clearance
-    ctx_sampling->elb_search_pos = next_search_pos + 1;
+    // no double counting and two-character clearance
+    ctx_sampling->elb_search_pos = search_pos + 2;
 
     // // debug print
     // #define A_DOT_B(a, b) a.b
@@ -914,8 +924,8 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
     // #define X(T, MEMBER, DV, E) if (std::abs(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]) > E) \
     // { printf("%s: %s = %f\n", __func__, names[SPARAMS_ ## MEMBER ## _ENUM].c_str(), float(A_DOT_B(ctx_sampling->params, MEMBER))); }
 
-    // expiring sampler bias
-    for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
+    // undo current sampler bias
+    for (auto& entry: ctx_sampling->params.elb_params[idx].entries) {
         for (auto& addflag: entry.addflags) {
             if (addflag == 1) {
                 ctx_sampling->params.elb_sub(entry);
@@ -923,10 +933,10 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
         }
     }
 
-    ++ctx_sampling->elb_idx;
-
+    // prepare next sampler bias
     for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
-        std::fill(entry.posi.begin(), entry.posi.end(), next_search_pos);
+        // clearance not needed for sampler bias
+        std::fill(entry.posi.begin(), entry.posi.end(), search_pos);
     }
 }
 

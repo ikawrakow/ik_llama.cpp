@@ -1909,8 +1909,20 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.ctx_sampling->elb_states.reserve(n_elb_param);
 
         // 1 state <-> 1 exitword <-> 1+ entries
-        for (const auto& [entries, exitword]: elb_params) {
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0 });
+        for (int32_t i = 0; i < elb_params.size(); ++i) {
+            const auto& [entries, exitword, op] = elb_params[i];
+
+            if (op == ">>") {
+                for (auto& elb_state: slot.ctx_sampling->elb_states) {
+                    if (elb_state.jumpword.empty()) {
+                        elb_state.jumpword = exitword;
+                        elb_state.jump_idx = i + 1;
+                        elb_state.search_word_len = std::max(elb_state.exitword.length(), elb_state.jumpword.length());
+                    }
+                }
+            }
+
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, exitword.length() });
 
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;

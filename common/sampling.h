@@ -195,8 +195,10 @@ typedef struct common_params_sampling {
         };
         std::vector<struct elb_entry> entries;
         std::string                   exitword;     // move to next state if matched during generation
+        std::string                   op;
         bool operator == (const struct elb_param& other) const {
-            return (exitword == other.exitword)
+            return (op == other.op)
+                && (exitword == other.exitword)
                 && (entries == other.entries);
         }
     };
@@ -266,10 +268,13 @@ struct common_sampler {
         size_t                        countup;          // compare against duration
         size_t                        delay;            // to avoid early termination of positively biased phrases
         int32_t                       max_cond_len;
+        std::string                   jumpword;
+        size_t                        jump_idx;
+        size_t                        search_word_len;
     };
     std::vector<struct elb_state> elb_states;
     size_t                        elb_idx;          // for elb_states
-    size_t                        elb_search_pos;   // for exitword
+    size_t                        elb_search_pos;
 };
 
 

@@ -4809,7 +4809,7 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
 
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {
     auto elb_params = sparams.elb_params;
-    elb_params.push_back({ { }, "" });
+    elb_params.push_back({ { }, "", "" });
     auto entries = elb_params[0].entries;
 
     const auto lines = string_split(content, "\n");
@@ -4946,13 +4946,21 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             continue;   // next line
         }
 
-        // printf("%s: line %zu: exitword=%s\n", __func__, i, line.c_str());
-        if ('"' == c0 && cE == '"') {
-            line = line.substr(1, n_char - 2);
+        std::vector<std::string> exitwords;
+        auto op_pos = string_extract(line, 0, '"', exitwords);
+        if (op_pos > 0) {
+            auto op = line.substr(op_pos);
+            elb_params.back().op = string_strip(op);
         }
-        string_process_escapes(line);
-        elb_params.back().exitword = std::move(line);
-        elb_params.push_back({ entries, "" });
+        if (exitwords.empty()) {
+            string_process_escapes(line);
+            exitwords.push_back(std::move(line));
+        }
+
+        // maybe support multiple exitwords in future
+        elb_params.back().exitword = std::move(exitwords[0]);
+
+        elb_params.push_back({ entries, "", "" });
     }
 
     sparams.elb_params = std::move(elb_params);
