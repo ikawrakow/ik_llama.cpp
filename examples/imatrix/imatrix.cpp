@@ -33,6 +33,25 @@ static inline bool add_and_check_nans_avx2(int n, const float * x, float * y, in
     int i = 0;
     auto has_nans = _mm256_setzero_ps();
     auto one = _mm256_set1_epi32(1);
+    {
+        __m256 vx[4], vy[4];
+        __m256i cy[4];
+        for ( ; i + 32 < n; i += 32) {
+            for (int k = 0; k < 4; ++k) {
+                vx[k] = _mm256_loadu_ps(x + i + 8*k);
+                vy[k] = _mm256_loadu_ps(y + i + 8*k);
+                cy[k] = _mm256_loadu_si256((const __m256i *)(counts + i + 8*k));
+                vy[k] = _mm256_fmadd_ps(vx[k], vx[k], vy[k]);
+                cy[k] = _mm256_add_epi32(cy[k], one);
+                auto mask = _mm256_cmp_ps(vx[k], vx[k], _CMP_UNORD_Q);
+                has_nans = _mm256_or_ps(has_nans, mask);
+            }
+            for (int k = 0; k < 4; ++k) {
+                _mm256_storeu_ps(y + i + 8*k, vy[k]);
+                _mm256_storeu_si256((__m256i *)(counts + i + 8*k), cy[k]);
+            }
+        }
+    }
     for ( ; i + 7 < n; i += 8) {
         auto vx = _mm256_loadu_ps(x + i);
         auto vy = _mm256_loadu_ps(y + i);
