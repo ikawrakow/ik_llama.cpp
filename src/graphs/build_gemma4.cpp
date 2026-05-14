@@ -531,10 +531,6 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
 
     GGML_ASSERT(n_backbone > 0);
 
-    lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
-    cb(lctx.inp_tokens, "inp_tokens", -1);
-    ggml_set_input(lctx.inp_tokens);
-
     ggml_tensor * hidden_state = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_backbone, n_tokens);
     ggml_set_name(hidden_state, "inp_mtp_states");
     ggml_set_input(hidden_state);
@@ -556,6 +552,10 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         GGML_UNUSED(n_vocab);
         return gf;
     }
+
+    lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
+    cb(lctx.inp_tokens, "inp_tokens", -1);
+    ggml_set_input(lctx.inp_tokens);
 
     const llama_model   & target_model   = lctx.mtp_target_ctx->model;
     const llama_hparams & target_hparams = target_model.hparams;
