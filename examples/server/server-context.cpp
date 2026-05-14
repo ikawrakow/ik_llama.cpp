@@ -117,6 +117,19 @@ static const float * mtp_hidden_last_row(const std::vector<float> & rows, int n_
     return rows.data() + (n_rows - 1) * n_embd;
 }
 
+static bool sync_external_mtp_after_non_mtp_accept(
+        server_slot & slot,
+        llama_context * ctx,
+        const std::vector<float> & mtp_commit_states,
+        int n_embd) {
+    if (!slot.use_gemma4_external_mtp || mtp_commit_states.empty() || n_embd <= 0) {
+        return false;
+    }
+
+    cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, mtp_commit_states, n_embd);
+    return true;
+}
+
 static void apply_slot_mtp_accept(
         server_slot & slot,
         llama_context * ctx,
@@ -4215,22 +4228,26 @@ static void restore_speculative_checkpoint(
                 apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
             } else if (!mtp_commit_tokens.empty() && !mtp_commit_states.empty()) {
                 const int n_embd = get_ctx_mtp_n_embd(ctx);
-                const float * seed_hidden = mtp_hidden_last_row(mtp_hidden_state_seed, n_embd);
-
-                if (seed_hidden == nullptr) {
-                    SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay after per-step restore");
-                    slot.mtp_hidden_state.clear();
+                if (sync_external_mtp_after_non_mtp_accept(slot, ctx, mtp_commit_states, n_embd)) {
+                    SLT_DBG(slot, "%s", "synced external MTP hidden state from accepted-prefix rows after per-step restore");
                 } else {
-                    llama_batch accepted_batch = llama_batch_init(mtp_commit_tokens.size(), 0, 1);
-                    for (size_t i = 0; i < mtp_commit_tokens.size(); ++i) {
-                        common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
+                    const float * seed_hidden = mtp_hidden_last_row(mtp_hidden_state_seed, n_embd);
+
+                    if (seed_hidden == nullptr) {
+                        SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay after per-step restore");
+                        slot.mtp_hidden_state.clear();
+                    } else {
+                        llama_batch accepted_batch = llama_batch_init(mtp_commit_tokens.size(), 0, 1);
+                        for (size_t i = 0; i < mtp_commit_tokens.size(); ++i) {
+                            common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
+                        }
+
+                        llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
+                        mtp_update_kv_cache(mtp_target, accepted_batch, false);
+                        llama_batch_free(accepted_batch);
+
+                        slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
                     }
-
-                    llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
-                    mtp_update_kv_cache(mtp_target, accepted_batch, false);
-                    llama_batch_free(accepted_batch);
-
-                    slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
                 }
             }
         }
@@ -4422,22 +4439,26 @@ void server_context::speculative_decoding_accept() {
                     apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
                 } else if (!mtp_commit_tokens.empty() && !mtp_commit_states.empty()) {
                     const int n_embd = get_ctx_mtp_n_embd(ctx);
-                    const float * seed_hidden = mtp_hidden_last_row(mtp_hidden_state_seed, n_embd);
-
-                    if (seed_hidden == nullptr) {
-                        SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay");
-                        slot.mtp_hidden_state.clear();
+                    if (sync_external_mtp_after_non_mtp_accept(slot, ctx, mtp_commit_states, n_embd)) {
+                        SLT_DBG(slot, "%s", "synced external MTP hidden state from accepted-prefix rows");
                     } else {
-                        llama_batch accepted_batch = llama_batch_init(mtp_commit_tokens.size(), 0, 1);
-                        for (size_t i = 0; i < mtp_commit_tokens.size(); ++i) {
-                            common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
+                        const float * seed_hidden = mtp_hidden_last_row(mtp_hidden_state_seed, n_embd);
+
+                        if (seed_hidden == nullptr) {
+                            SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay");
+                            slot.mtp_hidden_state.clear();
+                        } else {
+                            llama_batch accepted_batch = llama_batch_init(mtp_commit_tokens.size(), 0, 1);
+                            for (size_t i = 0; i < mtp_commit_tokens.size(); ++i) {
+                                common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
+                            }
+
+                            llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
+                            mtp_update_kv_cache(mtp_target, accepted_batch, false);
+                            llama_batch_free(accepted_batch);
+
+                            slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
                         }
-
-                        llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
-                        mtp_update_kv_cache(mtp_target, accepted_batch, false);
-                        llama_batch_free(accepted_batch);
-
-                        slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
                     }
                 }
             }
