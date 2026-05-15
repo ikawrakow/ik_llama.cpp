@@ -832,7 +832,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
         }
     }
 
-    // // debug print
+    // // uncomment and copy X_COMMON_PARAMS_SAMPLING for debug print
     // #define A_DOT_B(a, b) a.b
     // #undef X
     // #define X(T, MEMBER, DV, E) #MEMBER,
@@ -849,10 +849,13 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
         for (size_t j = 0; j < entry.phrases.size(); ++j) {
             const auto& phrase = entry.phrases[j];
             if (phrase.empty()) {
+                // duration bound only
                 if (elb.countup == 0) {
+                    // modify at begin
                     ctx_sampling->params.elb_add(entry);
                     entry.addflags[j] = 1;
                 } else if (elb.countup == entry.duration) {
+                    // restore at end
                     ctx_sampling->params.elb_sub(entry);
                     entry.addflags[j] = 0;
                 }
@@ -866,6 +869,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             }
             entry.posi[j] = std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - int32_t(phrase.length()) + 1);
             if (count % 2 == 1) {
+                // even = no match or cancelled
                 if (entry.addflags[j] == 0) {
                     ctx_sampling->params.elb_add(entry);
                     entry.addflags[j] = 1;
@@ -897,7 +901,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
 
     auto found = [&search_pos, &search_window](std::string search_word) {
         search_pos = search_window.find(search_word);
-        return search_pos == std::string::npos;
+        return search_pos != std::string::npos;
     };
 
     if (found(elb.jumpword)) {
@@ -915,7 +919,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
     // no double counting and two-character clearance
     ctx_sampling->elb_search_pos = search_pos + 2;
 
-    // // debug print
+    // // uncomment and copy X_COMMON_PARAMS_SAMPLING for debug print
     // #define A_DOT_B(a, b) a.b
     // #undef X
     // #define X(T, MEMBER, DV, E) #MEMBER,
@@ -935,7 +939,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
 
     // prepare next sampler bias
     for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
-        // clearance not needed for sampler bias
+        // no clearance for sampler bias
         std::fill(entry.posi.begin(), entry.posi.end(), search_pos);
     }
 }
