@@ -52,7 +52,7 @@ static bool params_use_gemma4_external_mtp(const gpt_params & params_base) {
 }
 
 static llama_context * get_slot_mtp_ctx(server_slot & slot, llama_context * ctx) {
-    llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
+    llama_context * mtp_ctx = common_speculative_get_companion_ctx(slot.spec);
     return mtp_ctx ? mtp_ctx : ctx;
 }
 
@@ -83,7 +83,7 @@ static void sync_slot_mtp_hidden(server_slot & slot, llama_context * ctx) {
     }
 
     const int n_hidden = slot.mtp_hidden_state.size() / n_embd;
-    llama_set_draft_input_hidden_state(get_slot_mtp_ctx(slot, ctx), slot.mtp_hidden_state.data() + (n_hidden - 1) * n_embd);
+    common_speculative_seed_companion_hidden(slot.spec, slot.mtp_hidden_state.data() + (n_hidden - 1) * n_embd);
 }
 
 static void cache_and_sync_slot_mtp_hidden(server_slot & slot, llama_context * ctx, const float * hidden, int n_embd) {
@@ -141,15 +141,13 @@ static void apply_slot_mtp_accept(
         return;
     }
 
-    llama_context * mtp_ctx = get_slot_mtp_ctx(slot, ctx);
     if (slot.use_gemma4_external_mtp) {
         cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, mtp_hidden_state, n_embd);
         return;
     }
 
     slot.mtp_hidden_state = mtp_hidden_state;
-    llama_set_draft_input_hidden_state(mtp_ctx, slot.mtp_hidden_state.data());
-    mtp_accept_tokens(mtp_ctx, ids, mtp_n_past_base, slot.id);
+    common_speculative_accept_tokens(slot.spec, ids, mtp_n_past_base, slot.id, slot.mtp_hidden_state.data());
 }
 
 static void set_external_mtp_hidden(server_slot & slot, llama_context * ctx, const float * hidden, int n_embd) {
@@ -196,8 +194,7 @@ static int32_t server_mtp_warmup_batch(
     }
 
     cache_slot_mtp_hidden(slot, last_hidden, n_embd_dst);
-    llama_set_draft_input_hidden_state(ctx_mtp, emb);
-    return mtp_update_kv_cache(ctx_mtp, *batch, true);
+    return common_speculative_on_prompt_batch(slot.spec, *batch, emb);
 }
 
 static int32_t server_mtp_media_warmup_callback(void * user_data, const llama_batch * batch) {
@@ -3658,7 +3655,14 @@ void server_context::add_sampled_tokens() {
                 }
             }
 
-            llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled, draft_base_pos, slot.id);
+            common_speculative_draft_result draft_result = common_speculative_draft_ex(
+                slot.spec,
+                params_spec,
+                cached_text_tokens,
+                slot.sampled,
+                draft_base_pos,
+                slot.id);
+            llama_tokens draft = std::move(draft_result.tokens);
 
             const int n_draft_max = slot.get_n_draft_max();
 
@@ -4234,9 +4238,6 @@ static void restore_speculative_checkpoint(
 
         // Update MTP KV cache and hidden state using embeddings collected before checkpoint restore.
         if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-            llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
-            llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-
             if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
                 const int n_embd = get_ctx_mtp_n_embd(ctx);
                 apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
@@ -4256,8 +4257,7 @@ static void restore_speculative_checkpoint(
                             common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
                         }
 
-                        llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
-                        mtp_update_kv_cache(mtp_target, accepted_batch, false);
+                        common_speculative_on_accept_batch(slot.spec, accepted_batch, seed_hidden);
                         llama_batch_free(accepted_batch);
 
                         slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
@@ -4311,9 +4311,7 @@ static void restore_speculative_checkpoint(
                 if (slot.use_gemma4_external_mtp) {
                     cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, slot.mtp_hidden_state, n_embd);
                 } else {
-                    llama_context * mtp_ctx = get_slot_mtp_ctx(slot, ctx);
-                    llama_set_draft_input_hidden_state(mtp_ctx, slot.mtp_hidden_state.data());
-                    mtp_accept_tokens(mtp_ctx, ids, slot.spec_ckpt.n_past, slot.id);
+                    common_speculative_accept_tokens(slot.spec, ids, slot.spec_ckpt.n_past, slot.id, slot.mtp_hidden_state.data());
 
                     if (n_accepted > 1) {
                         memmove(slot.mtp_hidden_state.data(),
@@ -4445,9 +4443,6 @@ void server_context::speculative_decoding_accept() {
             restore_speculative_checkpoint(slot, ctx, model, spec_type_used, ids, n_draft, mtp_commit_tokens, mtp_commit_states, mtp_hidden_state_seed, mtp_hidden_state_pre, mtp_n_past_base);
         } else {
             if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-                llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
-                llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-
                 if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
                     const int n_embd = get_ctx_mtp_n_embd(ctx);
                     apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
@@ -4467,8 +4462,7 @@ void server_context::speculative_decoding_accept() {
                                 common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
                             }
 
-                            llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
-                            mtp_update_kv_cache(mtp_target, accepted_batch, false);
+                            common_speculative_on_accept_batch(slot.spec, accepted_batch, seed_hidden);
                             llama_batch_free(accepted_batch);
 
                             slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
