@@ -286,6 +286,19 @@ bool server_context::load_model(const gpt_params& params_) {
     add_bos_token = llama_should_add_bos_token(model);
     has_eos_token = llama_add_eos_token(model) != 1;
 
+    if (params_base.has_mtp && params_base.n_parallel > 1) {
+        LOG_WARNING("MTP is not supported with parallel slots yet, disabling MTP to avoid cross-slot corruption.\n", {
+            {"n_parallel", params_base.n_parallel},
+        });
+        params_base.has_mtp = false;
+        if (params_base.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+        }
+        params_base.speculative.model.clear();
+        params_base.speculative.params.clear();
+        params_base.speculative.model_dft = nullptr;
+    }
+
     bool has_draft_model = !params_base.speculative.model.empty() || !params_base.speculative.params.empty();
     std::string& mmproj_path = params_base.mmproj.path;
     if (!mmproj_path.empty()) {
