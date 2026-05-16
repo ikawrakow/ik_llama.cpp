@@ -3481,6 +3481,28 @@ void string_process_escapes(std::string & input) {
     input.resize(output_idx);
 }
 
+std::string string_unescape(const std::string& str) {
+    std::string result;
+    result.reserve(2 * str.length());
+    for (const auto c: str) {
+        switch (c) {
+        case '\n':
+            result.append("\\n");
+            break;
+        case '\t':
+            result.append("\\t");
+            break;
+        case '\r':
+            result.append("\\r");
+            break;
+        default:
+            result.append(1, c);
+            break;
+        }
+    }
+    return result;
+}
+
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides) {
     const char * sep = strchr(data, '=');
     if (sep == nullptr || sep - data >= 128) {
@@ -3560,6 +3582,14 @@ size_t string_extract(const std::string& str, size_t pos, const char c, std::vec
     }
 
     return pos;
+}
+
+bool string_is_found(const std::string& window, const std::string& str, size_t& pos) {
+    if (str.empty()) {
+        return false;
+    }
+    pos = window.find(str);
+    return pos != std::string::npos;
 }
 
 //
@@ -5189,7 +5219,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
         auto line = string_strip(lines[i]);
         const char c0 = line.empty() ? '#' : line[0];
         if (c0 == '#') {
-            LLAMA_LOG_DEBUG("%s: line %zu: comment\n", __func__, i);
+            LLAMA_LOG_DEBUG("%s: line %zu: comment or empty\n", __func__, i);
             continue;   // next line
         }
 
@@ -5216,8 +5246,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             int32_t duration = is_nested ? -1 : 1;
             const auto cln_pos = line.find(':');
             if ((cln_pos != std::string::npos) && (1 < cln_pos) && (cln_pos < qq_pos)) {
-                auto sub = line.substr(1, cln_pos - 1);
-                duration = std::stoi(sub);
+                duration = std::stoi(line.substr(1, cln_pos - 1));
             }
             if (duration == 0) {
                 LLAMA_LOG_DEBUG("%s: line %zu: invalid duration\n", __func__, i);
@@ -5241,15 +5270,13 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 auto pos = sb_window.find(name);
                 if (pos != std::string::npos) {
                     pos += name.length();
-                    auto cmpos = sb_window.find(",", pos + 1);
-                    if (cmpos == std::string::npos) {
-                        cmpos = n_char - 1;
+                    auto next_pos = sb_window.find(",", pos + 1);
+                    if (next_pos == std::string::npos) {
+                        next_pos = n_char - 1;
                     }
-                    auto sub = sb_window.substr(pos, cmpos - pos);
-                    sub = string_strip(sub);
+                    auto sub = string_strip(sb_window.substr(pos, next_pos - pos));
                     if (sub[0] == '~') {
-                        sub = sub.substr(1);
-                        addsubs[j] += std::stof(sub);
+                        addsubs[j] += std::stof(sub.substr(1));
                         is_sb = true;
                         LLAMA_LOG_DEBUG("%s: line %zu: bias = %f\n", __func__, i, addsubs[j]);
                     }
@@ -5282,7 +5309,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     is_range = true;
                 } else {
                     // (... : BIAS, BIAS, ..., BIAS)
-                    for (auto split: string_split(sub, ',')) {
+                    for (const auto& split: string_split(sub, ',')) {
                         if (!split.empty()) {
                             biases.push_back(std::stof(split));
                             LLAMA_LOG_DEBUG("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
@@ -5304,7 +5331,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             common_params_sampling::elb_param::elb_entry entry = {
                 std::vector<size_t>(n_phrase, 0),
                 std::move(addsubs),
-                std::vector<char>(n_phrase, 0),
+                std::vector<bool>(n_phrase, false),
                 max_phrase_len,
                 std::move(phrases),
                 std::move(biases),

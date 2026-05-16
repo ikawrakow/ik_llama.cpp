@@ -643,8 +643,11 @@ std::vector<std::string> string_split<std::string>(const std::string& input, cha
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
 void string_process_escapes(std::string & input);
+std::string string_unescape(const std::string& str);
 
-size_t string_extract(const std::string& str, size_t pos, const char c, std::vector<std::string>& splits);
+size_t string_extract(const std::string& str, size_t pos, const char c, std::vector<std::string>& extracts);
+
+bool string_is_found(const std::string& window, const std::string& str, size_t& pos);
 
 //
 // Filesystem utils

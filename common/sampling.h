@@ -179,7 +179,7 @@ typedef struct common_params_sampling {
         struct elb_entry {
             std::vector<size_t>         posi;           // positions of phrases in generated text
             std::vector<float>          addsubs;        // add/modify then subtract/restore sampling parameters
-            std::vector<char>           addflags;       // 1 if added
+            std::vector<bool>           addflags;       // true if added
             size_t                      max_phrase_len;
             std::vector<std::string>    phrases;
             std::vector<float>          biases;     // for each phrase, nth bias for nth token, extrapolate
