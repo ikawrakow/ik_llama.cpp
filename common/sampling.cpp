@@ -789,6 +789,7 @@ static void elb_print(common_params_sampling& sparams, const common_params_sampl
     #undef X
     #define X(T, MEMBER, DV, E) if (std::abs(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]) > E) \
     { LLAMA_LOG_DEBUG("%s: %s = %f\n", __func__, names[SPARAMS_ ## MEMBER ## _ENUM].c_str(), float(A_DOT_B(sparams, MEMBER))); }
+    X_COMMON_PARAMS_SAMPLING
 }
 
 static void elb_add(common_params_sampling& sparams, const common_params_sampling::elb_param::elb_entry& entry) {
