@@ -5818,6 +5818,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.ffn_down_type               =*/ GGML_TYPE_COUNT,
         /*.ffn_up_type                 =*/ GGML_TYPE_COUNT,
         /*.ffn_gat_inp_type            =*/ GGML_TYPE_COUNT,
+        /*.extra_output_type           =*/ GGML_TYPE_COUNT,
         /*.allow_requantize            =*/ false,
         /*.quantize_output_tensor      =*/ true,
         /*.only_copy                   =*/ false,

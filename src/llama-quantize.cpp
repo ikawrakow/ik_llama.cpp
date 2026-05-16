@@ -1275,8 +1275,44 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     std::vector<gguf_context*> ctx_outs(n_split, NULL);
     ctx_outs[0] = ctx_out;
 
+    ggml_tensor extra;
+    ggml_tensor * output_meta = ml.get_tensor_meta("output.weight");
+    if (!output_meta) {
+        output_meta = ml.get_tensor_meta("token_embd.weight");
+    }
+    ggml_tensor * output_tensor = nullptr;
+    if (params->extra_output_type != GGML_TYPE_COUNT) {
+        auto meta = ml.get_tensor_meta("output.weight");
+        if (!meta) {
+            meta = ml.get_tensor_meta("token_embd.weight");
+        }
+        if (!meta) {
+            LLAMA_LOG_WARN("Extra output tensor requested, but 'output.weight' or 'token_embd.weight' not found\n");
+        } else {
+            LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX Will duplicate %s as %s\n", meta->name,
+                    ggml_type_name(params->extra_output_type));
+            auto weights = ml.get_weight(meta->name);
+            output_tensor = weights->tensor;
+            extra = *output_tensor;
+            auto new_type = params->extra_output_type;
+            extra.type = new_type;
+            auto tt = ggml_internal_get_type_traits(extra.type);
+            extra.nb[0] = tt.type_size;
+            extra.nb[1] = ggml_row_size(extra.type, extra.ne[0]);
+            extra.nb[2] = extra.nb[3] = extra.nb[1]*extra.ne[1];
+            extra.data  = nullptr;
+            strcpy(extra.name, "output_extra.weight");
+            auto orig_size = ggml_nbytes(output_tensor);
+            auto new_size  = ggml_nbytes(&extra);
+            if (new_size >= orig_size) {
+                LLAMA_LOG_INFO("No, duplicating it makes no sense as the new size (%zu) is greater than the original size (%zu)\n",
+                        new_size, orig_size);
+                output_tensor = nullptr;
+            }
+        }
+    }
+
     // populate the original tensors so we get an initial meta data
-    int last_split = -1;
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto weight = ml.get_weight(i);
         uint16_t i_split = params->keep_split ? weight->idx : 0;
@@ -1285,8 +1321,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             ctx_outs[i_split] = gguf_init_empty();
         }
         gguf_add_tensor(ctx_outs[i_split], tensor);
-        if (i_split > last_split) {
-            last_split = i_split;
+        if (tensor == output_tensor) {
+            gguf_add_tensor(ctx_outs[i_split], &extra);
         }
     }
 
@@ -1520,7 +1556,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
             // If we've decided to quantize to the same type the tensor is already
             // in then there's nothing to do.
-            quantize &= tensor->type != new_type;
+            if (tensor != output_tensor) {
+                quantize &= tensor->type != new_type;
+            }
         }
 
         if (!quantize) {
@@ -1644,8 +1682,51 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 }
                 new_data = work.data();
 
-                do_quantize(nthread, tensor, new_type, f32_data, (char *)new_data, imatrix, workers,
+                if (params->extra_output_type != GGML_TYPE_COUNT && tensor == output_tensor) {
+                    auto cur_size = ggml_nbytes(tensor);
+                    if (new_type != tensor->type) {
+                        do_quantize(nthread, tensor, new_type, f32_data, (char *)new_data, imatrix, workers,
+                                new_size, chunk_size_multiplier, params);
+                        gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), new_type);
+                        gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), new_data, new_size);
+                        fout.write((const char *) new_data, new_size);
+                        zeros(fout, GGML_PAD(new_size, align) - new_size);
+                        total_size_new += new_size;
+                        LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", cur_size/1024.0/1024.0, new_size/1024.0/1024.0);
+                    } else {
+                        gguf_set_tensor_type(ctx_outs[cur_split], name.c_str(), tensor->type);
+                        gguf_set_tensor_data(ctx_outs[cur_split], name.c_str(), tensor->data, cur_size);
+                        fout.write((const char *) tensor->data, cur_size);
+                        zeros(fout, GGML_PAD(cur_size, align) - cur_size);
+                        total_size_new += cur_size;
+                        LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", cur_size/1024.0/1024.0, cur_size/1024.0/1024.0);
+                    }
+
+                    LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
+                           ++idx, ml.n_tensors,
+                           ggml_get_name(tensor),
+                           llama_format_tensor_shape(tensor).c_str(),
+                           ggml_type_name(tensor->type));
+
+                    new_type = params->extra_output_type;
+                    chunk_size_multiplier = 1;
+                    auto [working_type, num_rows] = interleaved_properties(new_type);
+                    if (tensor->ne[1] % num_rows != 0) {
+                        new_type = working_type;
+                    } else {
+                        chunk_size_multiplier = num_rows;
+                    }
+                    LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
+                    fflush(stdout);
+
+                    do_quantize(nthread, tensor, new_type, f32_data, (char *)new_data, imatrix, workers,
+                        new_size, 1, params);
+
+                    name = extra.name;
+                } else {
+                    do_quantize(nthread, tensor, new_type, f32_data, (char *)new_data, imatrix, workers,
                             new_size, chunk_size_multiplier, params);
+                }
 
             }
             LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
