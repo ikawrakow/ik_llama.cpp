@@ -260,12 +260,16 @@ void iqk_quantize_any(int from_type, int to_type,
         int64_t i3 = row/(ne1*ne2);
         int64_t i2 = (row - i3*ne1*ne2)/ne1;
         int64_t i1 = row - i3*ne1*ne2 - i2*ne1;
-        const char * cx = (const char *)x + i1*nb1 + i2*nb2 + i3*nb3;
+        auto cx = (const char *)x + i1*nb1 + i2*nb2 + i3*nb3;
+        auto cy = (char *)y + (i3*ne1*ne2 + i2*ne1 + i1)*row_size_y;
         // TODO: special case common types such as f16, q8_0
         //       (although the performance gains may be too small to justify the added complexity)
-        to_float((const void *)cx, (float *)work_buffer, ne0);
-        auto cy = (char *)y + (i3*ne1*ne2 + i2*ne1 + i1)*row_size_y;
-        from_float((const float *)work_buffer, (void *)cy, ne0);
+        if (type_x != GGML_TYPE_F32) {
+            to_float((const void *)cx, (float *)work_buffer, ne0);
+            from_float((const float *)work_buffer, (void *)cy, ne0);
+        } else {
+            from_float((const float *)cx, (void *)cy, ne0);
+        }
     }
 }
 

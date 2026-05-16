@@ -394,6 +394,8 @@ extern "C" {
         int32_t n_v_first;
         int32_t n_v_last;
 
+        enum ggml_type extra_output_type;
+
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 
@@ -520,6 +522,7 @@ extern "C" {
         enum ggml_type ffn_down_type;        // feedforward network down type
         enum ggml_type ffn_up_type;          // feedforward network up type
         enum ggml_type ffn_gate_inp_type;    // routed experts probabilities typy (relevant for MoE models only)
+        enum ggml_type extra_output_type;    // routed experts probabilities typy (relevant for MoE models only)
         bool allow_requantize;               // allow quantizing non-f32/f16 tensors
         bool quantize_output_tensor;         // quantize output.weight
         bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored

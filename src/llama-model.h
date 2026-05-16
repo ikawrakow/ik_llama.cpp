@@ -415,6 +415,9 @@ struct llama_model {
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
+    struct ggml_tensor * output_mtp = nullptr;
+
+    std::unique_ptr<ggml_tensor> output_mtp_ptr;
 
     llama_split_tensor split_output;
     llama_split_tensor split_output_norm;

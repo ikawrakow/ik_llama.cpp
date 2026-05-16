@@ -443,6 +443,8 @@ struct gpt_params {
     int32_t     n_v_first    = -1;
     int32_t     n_v_last     = -1;
 
+    std::string extra_output_type = "";
+
     // multimodal models (see examples/mtmd)
     common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
