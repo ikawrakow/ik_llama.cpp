@@ -2141,6 +2141,14 @@ static void llm_requantize_output_tensor(llama_model & model, ggml_type new_type
     if (model.output->type == new_type) {
         LLAMA_LOG_WARN("%s: output tensor is already of type %s => not requantizing\n", __func__, ggml_type_name(new_type));
     }
+    auto [other_type, n_interleaved] = interleaved_properties(new_type);
+    if (model.output->ne[1] % n_interleaved != 0) {
+        LLAMA_LOG_WARN("%s: number of rows %ld is not a multiple of %d row interleaving for %s\n", __func__,
+                model.output->ne[1], n_interleaved, ggml_type_name(new_type));
+        LLAMA_LOG_WARN("%s: using %s instead of %s\n", __func__, ggml_type_name(other_type), ggml_type_name(new_type));
+        new_type = other_type;
+        n_interleaved = 1;
+    }
     auto nbytes_orig = ggml_nbytes(model.output);
     auto row_size    = ggml_row_size(new_type, model.output->ne[0]);
     auto nbytes_new  = row_size*ggml_nrows(model.output);
@@ -2186,8 +2194,8 @@ static void llm_requantize_output_tensor(llama_model & model, ggml_type new_type
 
     int nthread = std::max<int>(1, std::thread::hardware_concurrency()/2);
 
-    auto compute = [t = model.output, tensor_data, new_data, nthread, new_type] (int ith) {
-        std::vector<float> work(t->ne[0]);
+    auto compute = [t = model.output, tensor_data, new_data, nthread, new_type, n_interleaved] (int ith) {
+        std::vector<float> work(t->ne[0]*n_interleaved);
         auto tt_orig = ggml_internal_get_type_traits(t->type);
         auto tt_new  = ggml_internal_get_type_traits(new_type);
         iqk_quantize_any(int(t->type), int(new_type),
