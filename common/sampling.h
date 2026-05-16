@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+#define A_DOT_B(a, b) a.b
+
 // sampler types
 enum class llama_sampler_type : char {
     DRY         = 'd',
@@ -195,7 +197,7 @@ typedef struct common_params_sampling {
         };
         std::vector<struct elb_entry> entries;
         std::string                   exitword;     // move to next state if matched during generation
-        std::string                   op;
+        std::string                   op;           // exitword operator
         bool operator == (const struct elb_param& other) const {
             return (op == other.op)
                 && (exitword == other.exitword)
@@ -203,20 +205,6 @@ typedef struct common_params_sampling {
         }
     };
     std::vector<struct elb_param> elb_params;
-
-    // add to sampling parameters
-    void elb_add(common_params_sampling::elb_param::elb_entry& entry) {
-        #undef X
-        #define X(T, MEMBER, _, E) MEMBER += T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
-        X_COMMON_PARAMS_SAMPLING
-    }
-
-    // subtract from sampling parameters
-    void elb_sub(common_params_sampling::elb_param::elb_entry& entry) {
-        #undef X
-        #define X(T, MEMBER, _, E) MEMBER -= T(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM] + E);
-        X_COMMON_PARAMS_SAMPLING
-    }
 
 } llama_sampling_params;
 

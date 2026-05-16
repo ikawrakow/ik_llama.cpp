@@ -4817,7 +4817,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
         auto line = string_strip(lines[i]);
         const char c0 = line.empty() ? '#' : line[0];
         if (c0 == '#') {
-            // printf("%s: line %zu: comment\n", __func__, i);
+            LLAMA_LOG_DEBUG("%s: line %zu: comment\n", __func__, i);
             continue;   // next line
         }
 
@@ -4830,12 +4830,12 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 if (n_char == 4) {
                     // (())
                     entries.clear();
-                    // printf("%s: line %zu: persistent entry clear\n", __func__, i);
+                    LLAMA_LOG_DEBUG("%s: line %zu: persistent entry clear\n", __func__, i);
                     continue;   // next line
                 }
                 n_char -= 2;
                 line = line.substr(1, n_char);
-                // printf("%s: line %zu: persistent entry\n", __func__, i);
+                LLAMA_LOG_DEBUG("%s: line %zu: persistent entry\n", __func__, i);
             }
 
             const auto qq_pos = line.find('"');
@@ -4848,7 +4848,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 duration = std::stoi(sub);
             }
             if (duration == 0) {
-                // printf("%s: line %zu: invalid duration\n", __func__, i);
+                LLAMA_LOG_DEBUG("%s: line %zu: invalid duration\n", __func__, i);
                 continue;   // next line
             }
 
@@ -4879,7 +4879,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                         sub = sub.substr(1);
                         addsubs[j] += std::stof(sub);
                         is_sb = true;
-                        // printf("%s: line %zu: bias = %f\n", __func__, i, addsubs[j]);
+                        LLAMA_LOG_DEBUG("%s: line %zu: bias = %f\n", __func__, i, addsubs[j]);
                     }
                 }
             }
@@ -4904,16 +4904,16 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     // (... : BIAS ~ BIAS)
                     const auto splits = string_split(sub, '~');
                     biases.push_back(std::stof(splits.front()));
-                    // printf("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
+                    LLAMA_LOG_DEBUG("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
                     biases.push_back(std::stof(splits.back()));
-                    // printf("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
+                    LLAMA_LOG_DEBUG("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
                     is_range = true;
                 } else {
                     // (... : BIAS, BIAS, ..., BIAS)
                     for (auto split: string_split(sub, ',')) {
                         if (!split.empty()) {
                             biases.push_back(std::stof(split));
-                            // printf("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
+                            LLAMA_LOG_DEBUG("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
                         }
                     }
                 }
@@ -4924,10 +4924,10 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             size_t max_phrase_len = 0;
             for (const auto& phrase: phrases) {
-                // printf("%s: line %zu: phrase = \"%s\"\n", __func__, i, phrase.c_str());
+                LLAMA_LOG_DEBUG("%s: line %zu: phrase = \"%s\"\n", __func__, i, phrase.c_str());
                 max_phrase_len = std::max(phrase.length(), max_phrase_len);
             }
-            // printf("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
+            LLAMA_LOG_DEBUG("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
 
             common_params_sampling::elb_param::elb_entry entry = {
                 std::vector<size_t>(n_phrase, 0),
