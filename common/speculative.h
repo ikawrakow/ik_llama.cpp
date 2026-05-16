@@ -11,10 +11,31 @@ enum common_speculative_companion_kind {
     COMMON_SPECULATIVE_COMPANION_MODEL,
 };
 
+enum common_speculative_feature_kind {
+    COMMON_SPECULATIVE_FEATURE_NONE,
+    COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE,
+};
+
 struct common_speculative_traits {
     std::vector<common_speculative_type> configured_types;
     common_speculative_type active_type = COMMON_SPECULATIVE_TYPE_NONE;
     common_speculative_companion_kind companion_kind = COMMON_SPECULATIVE_COMPANION_NONE;
+};
+
+struct common_speculative_feature_request {
+    common_speculative_feature_kind kind = COMMON_SPECULATIVE_FEATURE_NONE;
+};
+
+struct common_speculative_feature_row_view {
+    llama_seq_id seq_id = 0;
+    llama_pos pos = -1;
+    const float * data = nullptr;
+};
+
+struct common_speculative_feature_view {
+    common_speculative_feature_kind kind = COMMON_SPECULATIVE_FEATURE_NONE;
+    int32_t width = 0;
+    std::vector<common_speculative_feature_row_view> rows;
 };
 
 struct common_speculative_span {
@@ -75,16 +96,24 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
 bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type);
 common_speculative_traits common_speculative_get_traits(const common_speculative * spec);
-llama_context * common_speculative_get_companion_ctx(common_speculative * spec);
-void common_speculative_seed_companion_hidden(common_speculative * spec, const float * hidden);
-int32_t common_speculative_on_prompt_batch(common_speculative * spec, const llama_batch & batch, const float * hidden);
-int32_t common_speculative_on_accept_batch(common_speculative * spec, const llama_batch & batch, const float * hidden);
-void common_speculative_accept_tokens(
-    common_speculative * spec,
-    const std::vector<llama_token> & ids,
-    int32_t n_past_base,
+std::vector<common_speculative_feature_request> common_speculative_get_feature_requests(const common_speculative * spec);
+bool common_speculative_feature_view_copy_seq_rows(
+    const common_speculative_feature_view & view,
     llama_seq_id seq_id,
-    const float * hidden = nullptr);
+    std::vector<float> * first_row,
+    std::vector<float> * last_row);
+bool common_speculative_capture_target_features(common_speculative * spec, const common_speculative_feature_view & features);
+bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id);
+bool common_speculative_copy_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id, std::vector<float> & hidden);
+void common_speculative_restore_sequence_hidden(common_speculative * spec, llama_seq_id seq_id, const std::vector<float> & hidden);
+void common_speculative_clear_sequence_hidden(common_speculative * spec, llama_seq_id seq_id);
+llama_context * common_speculative_get_companion_ctx(common_speculative * spec);
+int32_t common_speculative_on_target_batch(
+    common_speculative * spec,
+    const llama_batch & batch,
+    const common_speculative_feature_view & features,
+    bool is_prompt_warmup,
+    const float * seed_hidden = nullptr);
 
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0, int n_past = 0, common_params_speculative * active_params = nullptr);
@@ -100,23 +129,3 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past);
-
-// Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
-std::vector<llama_token> mtp_speculative_gen_draft(
-    struct common_sampler * smpl,
-    struct llama_context * ctx,
-    int n_draft,
-    float p_min,
-    llama_token id_last,
-    llama_pos n_past,
-    llama_seq_id seq_id,
-    bool constant_draft_positions = false);
-
-int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup);
-
-void mtp_accept_tokens(
-    struct llama_context * ctx,
-    const std::vector<llama_token> & ids,
-    int32_t n_past_base,
-    llama_seq_id seq_id
-);
