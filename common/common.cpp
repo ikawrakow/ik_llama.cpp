@@ -3549,39 +3549,32 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
     return true;
 }
 
-size_t string_extract(const std::string& str, size_t pos, const char c, std::vector<std::string>& extracts) {
-    auto opn_pos = str.find(c, pos);
-    if (opn_pos == std::string::npos) {
-        return 0;
+std::vector<std::string> string_extract(const std::string& str, const char c, std::vector<size_t>& posi) {
+    std::vector<std::string> extracts;
+    auto pos = str.find(c);
+    size_t count = 0;
+    while (pos != std::string::npos) {
+        if (count % 2 == 0) {
+            // opening c
+            posi.push_back(pos);
+            ++count;
+        } else {
+            // closing c must be unescaped
+            auto esc_pos = pos;
+            size_t n_esc = 0;
+            while ((esc_pos > 0) && (str[--esc_pos] == '\\')) {
+                ++n_esc;
+            }
+            if (n_esc % 2 == 0) {
+                extracts.push_back(str.substr(posi.back() + 1, pos - posi.back() - 1));
+                string_process_escapes(extracts.back());
+                posi.push_back(pos);
+                ++count;
+            }
+        }
+        pos = str.find(c, pos + 1);
     }
-
-    pos = opn_pos + 1;
-    auto cls_pos = str.find(c, pos);
-    while (cls_pos != std::string::npos) {
-        size_t n_esc = 0;
-        auto esc_pos = cls_pos;
-        while ((esc_pos > 0) && (str[--esc_pos] == '\\')) {
-            ++n_esc;
-        }
-        if (n_esc % 2 == 1) {
-            cls_pos = str.find(c, cls_pos + 1);
-            continue;
-        }
-
-        auto extract = str.substr(opn_pos + 1, cls_pos - opn_pos - 1);
-        string_process_escapes(extract);
-        extracts.push_back(std::move(extract));
-
-        pos = cls_pos + 1;
-        opn_pos = str.find(c, pos);
-        if (opn_pos == std::string::npos) {
-            break;
-        }
-        pos = opn_pos + 1;
-        cls_pos = str.find(c, pos);
-    }
-
-    return pos;
+    return extracts;
 }
 
 bool string_is_found(const std::string& window, const std::string& str, size_t& pos) {
@@ -5223,9 +5216,27 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             continue;   // next line
         }
 
+        // (... "EXTRACT" ... "EXTRACT" ...)
+        std::vector<size_t> qq_posi = { 0 };
+        auto extracts = string_extract(line, '"', qq_posi);
+        qq_posi.push_back(std::string::npos);
+        for (int32_t j = 0; j < int32_t(qq_posi.size()) - 1; j += 2) {
+            const auto pnd_pos = line.find('#', qq_posi[j]);
+            if (pnd_pos < qq_posi[j + 1]) {
+                LLAMA_LOG_DEBUG("%s: line %zu: inline comment @ %zu\n", __func__, i, pnd_pos);
+                line = string_strip(line.substr(0, pnd_pos));
+                qq_posi.resize(j + 2);
+                qq_posi.back() = std::string::npos;
+                extracts.resize(j / 2);
+                break;
+            }
+        }
+        const auto last_qq_pos = qq_posi[qq_posi.size() - 2];
+
         auto n_char = line.length();
         const char cE = line[n_char - 1];
 
+        LLAMA_LOG_DEBUG("%s: line %zu: %s\n", __func__, i, line.c_str());
         if ('(' == c0 && cE == ')') {
             const bool is_nested = '(' == line[1] && line[n_char - 2] == ')';
             if (is_nested) {
@@ -5240,22 +5251,16 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 LLAMA_LOG_DEBUG("%s: line %zu: persistent entry\n", __func__, i);
             }
 
-            const auto qq_pos = line.find('"');
-
             // (DURATION : ...)
             int32_t duration = is_nested ? -1 : 1;
             const auto cln_pos = line.find(':');
-            if ((cln_pos != std::string::npos) && (1 < cln_pos) && (cln_pos < qq_pos)) {
+            if ((cln_pos != std::string::npos) && (1 < cln_pos) && (cln_pos < qq_posi[1])) {
                 duration = std::stoi(line.substr(1, cln_pos - 1));
             }
             if (duration == 0) {
                 LLAMA_LOG_DEBUG("%s: line %zu: invalid duration\n", __func__, i);
                 continue;   // next line
             }
-
-            // (... "PHRASE" ... "PHRASE" ...)
-            std::vector<std::string> phrases;
-            auto sb_window = line.substr(string_extract(line, qq_pos, '"', phrases));
 
             #undef X
             #define X(T, MEMBER, DV, E) #MEMBER,
@@ -5265,16 +5270,17 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             bool is_sb = false;
 
             // (... : SPARAM ...)
+            const auto window = line.substr(last_qq_pos + 1);
             for (int j = 0; j < names.size(); ++j) {
                 const auto& name = names[j];
-                auto pos = sb_window.find(name);
+                auto pos = window.find(name);
                 if (pos != std::string::npos) {
                     pos += name.length();
-                    auto next_pos = sb_window.find(",", pos + 1);
+                    auto next_pos = window.find(",", pos + 1);
                     if (next_pos == std::string::npos) {
                         next_pos = n_char - 1;
                     }
-                    auto sub = string_strip(sb_window.substr(pos, next_pos - pos));
+                    auto sub = string_strip(window.substr(pos, next_pos - pos));
                     if (sub[0] == '~') {
                         addsubs[j] += std::stof(sub.substr(1));
                         is_sb = true;
@@ -5283,6 +5289,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 }
             }
 
+            auto& phrases = extracts;
             if (phrases.empty()) {
                 if (is_sb) {
                     phrases.push_back("");
@@ -5345,12 +5352,11 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             continue;   // next line
         }
 
-        std::vector<std::string> exitwords;
-        auto op_pos = string_extract(line, 0, '"', exitwords);
-        if (op_pos > 0) {
-            auto op = line.substr(op_pos);
-            elb_params.back().op = string_strip(op);
+        if (last_qq_pos > 0) {
+            elb_params.back().op = string_strip(line.substr(last_qq_pos + 1));
         }
+
+        auto& exitwords = extracts;
         if (exitwords.empty()) {
             string_process_escapes(line);
             exitwords.push_back(std::move(line));
