@@ -394,6 +394,8 @@ extern "C" {
         int32_t n_v_first;
         int32_t n_v_last;
 
+        enum ggml_type extra_output_type;
+
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 

@@ -1520,6 +1520,13 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
         }
+        if (model.mtp) {
+            model.output_mtp = create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+            if (!model.output_mtp) {
+                model.output_mtp = model.output;
+            }
+        }
     }
 
     const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
@@ -1614,9 +1621,18 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
     // output
     {
         model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
         if (model.output == NULL) {
-            model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+            model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
+                    llama_model_loader::TENSOR_DUPLICATED);
+        }
+        if (model.mtp) {
+            model.output_mtp = create_tensor(ctx_output, "output_extra.weight", {n_embd, n_vocab},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+            if (!model.output_mtp) {
+                model.output_mtp = model.output;
+            }
         }
     }
 
