@@ -2557,6 +2557,18 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     std::vector<bool> has_layer_norm(n_layer, false);
     size_t ow_size = 0;
     size_t embd_size = 0;
+    size_t output_misc_size = 0;
+    int gemma4_rope_layer = -1;
+
+    if (model.arch == LLM_ARCH_GEMMA4) {
+        for (int il = 0; il < n_layer; ++il) {
+            if (!model.hparams.swa_layers[il]) {
+                gemma4_rope_layer = il;
+                break;
+            }
+        }
+    }
+
     for (int i = 0; i < ml.n_tensors; ++i) {
         auto t = ml.get_weight(i)->tensor;
         std::string name(t->name);
@@ -2571,6 +2583,20 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         }
         if (name == "output_norm.weight") {
             continue;
+        }
+        if (model.arch == LLM_ARCH_GEMMA4) {
+            if (name == "per_layer_token_embd.weight" ||
+                name == "per_layer_model_proj.weight" ||
+                name == "per_layer_proj_norm.weight") {
+                output_misc_size += size;
+                continue;
+            }
+            if (name == "rope_freqs.weight") {
+                if (gemma4_rope_layer >= 0) {
+                    result[gemma4_rope_layer] += size;
+                }
+                continue;
+            }
         }
         if (name == "mtp_pre_proj.weight"  || name == "mtp_post_proj.weight" ||
             name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight") {
@@ -2707,7 +2733,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         }
     }
     if (!ow_size) ow_size = embd_size;
-    result[n_layer] = ow_size;
+    result[n_layer] = ow_size + output_misc_size;
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
@@ -3571,7 +3597,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     const auto & cparams = lctx.cparams;
     const auto & kv_self = lctx.kv_self;
 
-    if (batch.token) {
+    if (batch.token && lctx.inp_tokens) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();
 #endif
@@ -3645,7 +3671,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         auto tim1 = ggml_time_us();
 #endif
         const int64_t n_tokens = batch.n_tokens;
-        if (n_tokens > 1 && !cparams.mtp) {
+        if (n_tokens > 1 && !cparams.mtp && lctx.n_outputs < n_tokens) {
             GGML_ASSERT(lctx.inp_out_ids && "every model that can must skip unused outputs");
         }
 

@@ -566,7 +566,9 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
 #endif //GGML_CUDA_FORCE_MMQ
 
     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
-        return !fp16_mma_hardware_available(cc) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
+        // Match the plain MMQ policy: use MMQ for pre-Turing NVIDIA, including
+        // Volta, so indexed/expert matmuls avoid the fp16 cuBLAS fallback.
+        return cc < CC_TURING || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
     }
 
    if (amd_mfma_available(cc)) {
