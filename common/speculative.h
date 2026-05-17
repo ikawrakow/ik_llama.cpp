@@ -102,6 +102,28 @@ bool common_speculative_feature_view_copy_seq_rows(
     llama_seq_id seq_id,
     std::vector<float> * first_row,
     std::vector<float> * last_row);
+bool common_speculative_collect_target_batch_features(
+    const common_speculative * spec,
+    llama_context * ctx,
+    const llama_batch & batch,
+    common_speculative_feature_view & features);
+bool common_speculative_collect_target_seq_batch_features(
+    const common_speculative * spec,
+    llama_context * ctx,
+    const llama_batch & batch,
+    llama_seq_id seq_id,
+    common_speculative_feature_view & features);
+bool common_speculative_capture_output_hidden(
+    common_speculative * spec,
+    llama_context * ctx,
+    int32_t output_index,
+    llama_seq_id seq_id,
+    llama_pos pos);
+bool common_speculative_copy_output_hidden_rows(
+    const common_speculative * spec,
+    llama_context * ctx,
+    const std::vector<int32_t> & output_indices,
+    std::vector<float> & hidden_rows);
 bool common_speculative_capture_target_features(common_speculative * spec, const common_speculative_feature_view & features);
 bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id);
 bool common_speculative_copy_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id, std::vector<float> & hidden);

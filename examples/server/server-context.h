@@ -136,6 +136,7 @@ struct server_slot {
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
+    common_speculative_type drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
 
     json json_schema;
 

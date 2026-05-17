@@ -105,46 +105,6 @@ static bool server_speculative_batch_is_exact_single_seq(const llama_batch & bat
     return true;
 }
 
-static void server_speculative_add_hidden_row(
-        common_speculative_feature_view & view,
-        llama_seq_id seq_id,
-        llama_pos pos,
-        const float * hidden) {
-    if (hidden == nullptr) {
-        return;
-    }
-
-    view.rows.push_back({
-        /* .seq_id = */ seq_id,
-        /* .pos    = */ pos,
-        /* .data   = */ hidden,
-    });
-}
-
-static common_speculative_feature_view server_speculative_hidden_feature_view_from_batch(
-        const llama_batch & batch,
-        const float * hidden_rows,
-        int n_embd) {
-    common_speculative_feature_view view;
-    view.kind = COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
-    view.width = n_embd;
-
-    if (hidden_rows == nullptr || n_embd <= 0) {
-        return view;
-    }
-
-    view.rows.reserve(batch.n_tokens);
-    for (int i = 0; i < batch.n_tokens; ++i) {
-        if (batch.n_seq_id == nullptr || batch.seq_id == nullptr || batch.n_seq_id[i] <= 0 || batch.seq_id[i] == nullptr) {
-            continue;
-        }
-
-        server_speculative_add_hidden_row(view, batch.seq_id[i][0], batch.pos[i], hidden_rows + (size_t) i * n_embd);
-    }
-
-    return view;
-}
-
 static common_speculative_feature_view server_speculative_hidden_feature_view_from_rows(
         const std::vector<float> & rows,
         int n_embd,
@@ -161,32 +121,21 @@ static common_speculative_feature_view server_speculative_hidden_feature_view_fr
     const size_t n_rows = rows.size() / n_embd;
     view.rows.reserve(n_rows);
     for (size_t i = 0; i < n_rows; ++i) {
-        server_speculative_add_hidden_row(view, seq_id, pos_base + i, rows.data() + i * n_embd);
+        view.rows.push_back({
+            /* .seq_id = */ seq_id,
+            /* .pos    = */ pos_base + (llama_pos) i,
+            /* .data   = */ rows.data() + i * n_embd,
+        });
     }
 
     return view;
 }
 
-static common_speculative_feature_view server_speculative_hidden_feature_view_single(
-        llama_seq_id seq_id,
-        llama_pos pos,
-        const float * hidden,
-        int n_embd) {
-    common_speculative_feature_view view;
-    view.kind = COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
-    view.width = n_embd;
-    server_speculative_add_hidden_row(view, seq_id, pos, hidden);
-    return view;
-}
-
 static int server_speculative_copy_seq_batch(
         const llama_batch & batch,
-        const float * hidden_rows,
-        int n_embd,
         llama_seq_id seq_id,
-        llama_batch & seq_batch,
-        common_speculative_feature_view & feature_view) {
-    if (batch.token == nullptr || batch.pos == nullptr || hidden_rows == nullptr || n_embd <= 0) {
+        llama_batch & seq_batch) {
+    if (batch.token == nullptr || batch.pos == nullptr) {
         return -1;
     }
 
@@ -202,9 +151,6 @@ static int server_speculative_copy_seq_batch(
     }
 
     seq_batch = llama_batch_init(n_seq_tokens, 0, 1);
-    feature_view.kind = COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
-    feature_view.width = n_embd;
-    feature_view.rows.reserve(n_seq_tokens);
 
     for (int i = 0; i < batch.n_tokens; ++i) {
         if (!server_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
@@ -212,25 +158,17 @@ static int server_speculative_copy_seq_batch(
         }
 
         common_batch_add(seq_batch, batch.token[i], batch.pos[i], { seq_id }, batch.logits != nullptr && batch.logits[i]);
-        server_speculative_add_hidden_row(feature_view, seq_id, batch.pos[i], hidden_rows + (size_t) i * n_embd);
     }
 
     return n_seq_tokens;
 }
 
-static void server_speculative_capture_hidden(server_slot & slot, llama_context * ctx, const float * hidden, llama_pos pos) {
-    if (!slot.has_mtp || !slot.spec || hidden == nullptr) {
+static void server_speculative_capture_hidden(server_slot & slot, llama_context * ctx, int32_t output_index, llama_pos pos) {
+    if (!slot.has_mtp || !slot.spec) {
         return;
     }
 
-    const int n_embd = get_slot_mtp_n_embd(slot, ctx);
-    if (n_embd <= 0) {
-        return;
-    }
-
-    common_speculative_capture_target_features(
-        slot.spec,
-        server_speculative_hidden_feature_view_single(slot.id, pos, hidden, n_embd));
+    (void) common_speculative_capture_output_hidden(slot.spec, ctx, output_index, slot.id, pos);
 }
 
 static bool server_speculative_apply_target_batch(
@@ -276,10 +214,9 @@ static int32_t server_speculative_target_batch(
         return 0;
     }
 
-    const float * emb = llama_get_embeddings(ctx_tgt);
     const int n_embd_src = get_ctx_mtp_n_embd(ctx_tgt);
     const int n_embd_dst = get_ctx_mtp_n_embd(ctx_mtp);
-    if (emb == nullptr || n_embd_src <= 0 || n_embd_dst <= 0) {
+    if (n_embd_src <= 0 || n_embd_dst <= 0) {
         return -1;
     }
 
@@ -297,14 +234,21 @@ static int32_t server_speculative_target_batch(
     const bool needs_seq_split = is_prompt_warmup && !server_speculative_batch_is_exact_single_seq(*batch, slot.id);
 
     if (needs_seq_split) {
-        const int n_seq_tokens = server_speculative_copy_seq_batch(*batch, emb, n_embd_src, slot.id, seq_batch, feature_view);
+        const int n_seq_tokens = server_speculative_copy_seq_batch(*batch, slot.id, seq_batch);
         if (n_seq_tokens <= 0) {
             return n_seq_tokens < 0 ? -1 : 0;
         }
 
+        if (!common_speculative_collect_target_seq_batch_features(slot.spec, ctx_tgt, *batch, slot.id, feature_view)) {
+            llama_batch_free(seq_batch);
+            return -1;
+        }
+
         batch_for_spec = &seq_batch;
     } else {
-        feature_view = server_speculative_hidden_feature_view_from_batch(*batch, emb, n_embd_src);
+        if (!common_speculative_collect_target_batch_features(slot.spec, ctx_tgt, *batch, feature_view)) {
+            return -1;
+        }
     }
 
     const int32_t ret = common_speculative_on_target_batch(slot.spec, *batch_for_spec, feature_view, is_prompt_warmup, seed_hidden);
@@ -867,6 +811,7 @@ void server_slot::reset() {
     n_past_prompt = 0;
     n_sent_text = 0;
     drafted.clear();
+    drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
     i_batch_dft.clear();
     spec_ckpt.clear();
     n_sent_token_probs = 0;
@@ -3765,10 +3710,7 @@ void server_context::add_sampled_tokens() {
             if (slot.has_mtp) {
                 if (!common_speculative_has_sequence_hidden(slot.spec, slot.id)) {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
-                    const float* emb_neg1 = llama_get_embeddings_ith(ctx, -1);
-                    if (emb_neg1) {
-                        server_speculative_capture_hidden(slot, ctx, emb_neg1, draft_base_pos - 1);
-                    }
+                    server_speculative_capture_hidden(slot, ctx, -1, draft_base_pos - 1);
                 }
             }
 
@@ -3780,6 +3722,7 @@ void server_context::add_sampled_tokens() {
                 draft_base_pos,
                 slot.id);
             llama_tokens draft = std::move(draft_result.tokens);
+            slot.drafted_spec_type = draft_result.active_type;
 
             const int n_draft_max = slot.get_n_draft_max();
 
@@ -3804,6 +3747,7 @@ void server_context::add_sampled_tokens() {
                 // fallback to normal decoding
                 slot.i_batch = slot.i_batch_dft[0];
                 slot.drafted.clear();
+                slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
                 slot.i_batch_dft.clear();
             } else {
                 // keep track of total number of drafted tokens tested
@@ -3820,6 +3764,7 @@ void server_context::add_sampled_tokens() {
         }
         else {
             // no speculative decoding
+            slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
             slot.i_batch = batch.n_tokens;
 
             common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
@@ -4402,15 +4347,14 @@ static void restore_speculative_checkpoint(
                 SLT_ERR(slot, "failed to re-decode accepted tokens after checkpoint restore: %d\n", ret);
             }
             if (slot.has_mtp) {
-                const int n_embd = get_ctx_mtp_n_embd(ctx);
                 const int n_accepted = (int)ids.size();
-                std::vector<float> mtp_redecoded_states(n_accepted * n_embd);
-                for (int j = 0; j < n_accepted; j++) {
-                    const float * emb_j = llama_get_embeddings_ith(ctx, j);
-                    if (emb_j) {
-                        memcpy(mtp_redecoded_states.data() + j * n_embd, emb_j, n_embd * sizeof(float));
-                    }
+                std::vector<int32_t> redecoded_indices(n_accepted);
+                for (int j = 0; j < n_accepted; ++j) {
+                    redecoded_indices[j] = j;
                 }
+
+                std::vector<float> mtp_redecoded_states;
+                (void) common_speculative_copy_output_hidden_rows(slot.spec, ctx, redecoded_indices, mtp_redecoded_states);
 
                 if (!server_speculative_apply_target_batch(slot, ids, slot.spec_ckpt.n_past, mtp_redecoded_states)) {
                     common_speculative_clear_sequence_hidden(slot.spec, slot.id);
@@ -4437,7 +4381,7 @@ void server_context::speculative_decoding_accept() {
         }
 
         const llama_token sampled_before = slot.sampled;
-        const common_speculative_type spec_type_used = common_speculative_current_type(slot.spec);
+        const common_speculative_type spec_type_used = slot.drafted_spec_type;
         size_t n_draft = slot.drafted.size();
         std::vector<float> mtp_hidden_state_seed;
         if (slot.has_mtp) {
@@ -4479,14 +4423,10 @@ void server_context::speculative_decoding_accept() {
             const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted.size() + 1);
             mtp_n_past_base = slot.cache_tokens.pos_next(n_pre_spec_tokens);
 
-            const int n_embd = get_ctx_mtp_n_embd(ctx);
             if (!ids.empty()) {
-                mtp_hidden_state_pre.resize(ids.size() * n_embd);
-                for (size_t i = 0; i < ids.size(); i++) {
-                    const float* emb_i = llama_get_embeddings_ith(ctx, slot.i_batch_dft[i]);
-                    if (emb_i) {
-                        memcpy(mtp_hidden_state_pre.data() + i * n_embd, emb_i, n_embd * sizeof(float));
-                    }
+                std::vector<int32_t> accepted_indices(slot.i_batch_dft.begin(), slot.i_batch_dft.begin() + ids.size());
+                if (!common_speculative_copy_output_hidden_rows(slot.spec, ctx, accepted_indices, mtp_hidden_state_pre)) {
+                    mtp_hidden_state_pre.clear();
                 }
 
                 if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
@@ -4494,25 +4434,18 @@ void server_context::speculative_decoding_accept() {
                     mtp_commit_tokens.push_back(sampled_before);
                     mtp_commit_tokens.insert(mtp_commit_tokens.end(), ids.begin(), ids.end() - 1);
 
-                    mtp_commit_states.resize(ids.size() * n_embd);
-                    for (size_t i = 0; i < ids.size(); ++i) {
-                        const float * emb_i = llama_get_embeddings_ith(ctx, slot.i_batch_dft[i]);
-                        if (emb_i) {
-                            memcpy(mtp_commit_states.data() + i * n_embd, emb_i, n_embd * sizeof(float));
-                        }
+                    if (!common_speculative_copy_output_hidden_rows(slot.spec, ctx, accepted_indices, mtp_commit_states)) {
+                        mtp_commit_states.clear();
                     }
                 }
             } else {
-                const float* emb0 = llama_get_embeddings_ith(ctx, 0);
-                if (emb0) {
-                    mtp_hidden_state_pre.resize(n_embd);
-                    memcpy(mtp_hidden_state_pre.data(), emb0, n_embd * sizeof(float));
-                }
+                (void) common_speculative_copy_output_hidden_rows(slot.spec, ctx, std::vector<int32_t>{ 0 }, mtp_hidden_state_pre);
             }
         }
 
         slot.i_batch_dft.clear();
         slot.drafted.clear();
+        slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
 
         slot.n_past += ids.size();
         slot.n_decoded += ids.size();
@@ -5003,10 +4936,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             const int tok_idx = slot.i_batch - i;
 
             if (slot.has_mtp && slot.n_decoded == 0) {
-                const float* emb_i = llama_get_embeddings_ith(ctx, tok_idx);
-                if (emb_i) {
-                    server_speculative_capture_hidden(slot, ctx, emb_i, slot.n_past);
-                }
+                server_speculative_capture_hidden(slot, ctx, tok_idx, slot.n_past);
             }
 
             apply_server_biases(slot);

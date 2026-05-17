@@ -3,6 +3,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
+#include "llama-context.h"
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -1575,6 +1576,105 @@ static bool common_speculative_feature_view_copy_batch_rows(
     }
 
     return hidden_rows->size() == (size_t) batch.n_tokens * view.width;
+}
+
+static common_speculative_feature_kind common_speculative_feature_kind_from_llama(llama_spec_feature_kind kind) {
+    switch (kind) {
+        case LLAMA_SPEC_FEATURE_HIDDEN_STATE:
+            return COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
+        case LLAMA_SPEC_FEATURE_NONE:
+        default:
+            return COMMON_SPECULATIVE_FEATURE_NONE;
+    }
+}
+
+static void common_speculative_feature_view_from_llama(
+        const llama_spec_feature_view & src,
+        common_speculative_feature_view & dst) {
+    dst.kind = common_speculative_feature_kind_from_llama(src.kind);
+    dst.width = src.width;
+    dst.rows.clear();
+    dst.rows.reserve(src.rows.size());
+
+    for (const auto & row : src.rows) {
+        dst.rows.push_back({
+            /* .seq_id = */ row.seq_id,
+            /* .pos    = */ row.pos,
+            /* .data   = */ row.data,
+        });
+    }
+}
+
+bool common_speculative_collect_target_batch_features(
+        const common_speculative * spec,
+        llama_context * ctx,
+        const llama_batch & batch,
+        common_speculative_feature_view & features) {
+    features = {};
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    llama_spec_feature_view llama_features;
+    if (!llama_spec_get_hidden_feature_view(ctx, batch, llama_features)) {
+        return false;
+    }
+
+    common_speculative_feature_view_from_llama(llama_features, features);
+    return true;
+}
+
+bool common_speculative_collect_target_seq_batch_features(
+        const common_speculative * spec,
+        llama_context * ctx,
+        const llama_batch & batch,
+        llama_seq_id seq_id,
+        common_speculative_feature_view & features) {
+    features = {};
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    llama_spec_feature_view llama_features;
+    if (!llama_spec_get_hidden_feature_view_for_seq(ctx, batch, seq_id, llama_features)) {
+        return false;
+    }
+
+    common_speculative_feature_view_from_llama(llama_features, features);
+    return true;
+}
+
+bool common_speculative_capture_output_hidden(
+        common_speculative * spec,
+        llama_context * ctx,
+        int32_t output_index,
+        llama_seq_id seq_id,
+        llama_pos pos) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    llama_spec_feature_view llama_features;
+    if (!llama_spec_get_hidden_feature_view_from_output_index(ctx, output_index, seq_id, pos, llama_features)) {
+        return false;
+    }
+
+    common_speculative_feature_view features;
+    common_speculative_feature_view_from_llama(llama_features, features);
+    return common_speculative_capture_target_features(spec, features);
+}
+
+bool common_speculative_copy_output_hidden_rows(
+        const common_speculative * spec,
+        llama_context * ctx,
+        const std::vector<int32_t> & output_indices,
+        std::vector<float> & hidden_rows) {
+    hidden_rows.clear();
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    return llama_spec_copy_hidden_rows_from_output_indices(ctx, output_indices, hidden_rows);
 }
 
 common_speculative_traits common_speculative_get_traits(const common_speculative * spec) {
