@@ -2048,7 +2048,7 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
 }
 
 ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
-        ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb) {
+        ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name) {
     // lm_head
     if (output->extra) {
         auto split_output = (ggml_split_tensor_t *)output->extra;
@@ -2069,7 +2069,7 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
                 o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur));
             }
             cb(o.back(), "output", id);
-            if (last_norm) {
+            if (add_normed_name && last_norm) {
                 cb(last_norm, "result_norm", -1);
             }
         }
@@ -2095,7 +2095,9 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         }
         if (output_norm) {
             cur = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, output_norm, NULL, LLM_NORM_RMS, cb, -1);
-            cb(cur, "result_norm", -1);
+            if (add_normed_name) {
+                cb(cur, "result_norm", -1);
+            }
         }
         cur = llm_build_context::llm_build_lora_mm(lctx, ctx, output, cur);
     }
