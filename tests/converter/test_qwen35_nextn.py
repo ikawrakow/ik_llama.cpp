@@ -2,7 +2,7 @@
 """
 TDD test for Task 2: register NEXTN tensors on MODEL_ARCH.QWEN35 dense arch.
 
-The dense QWEN35 model (Qwen3.6-35B-A3B) has multi-token-prediction (MTP)
+The dense QWEN35 model (Qwen3.6-27B) has multi-token-prediction (MTP)
 support via a tail layer with 4 tensor types. Currently these are registered
 only on QWEN35MOE (the MoE variant); they must also be registered on QWEN35
 (the dense variant) so the converter can name the MTP tensors during

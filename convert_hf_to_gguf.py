@@ -2482,6 +2482,17 @@ class Qwen3NextModel(Qwen2MoeModel):
 class Qwen3_5TextModel(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen3.6 dense ships an MTP tail layer when mtp_num_hidden_layers > 0
+        # (HF uses mtp_num_hidden_layers, nested in text_config). Bump
+        # block_count + rebuild tensor_map so blk.{n_main + i}.* resolve.
+        nextn = int(self.hparams.get("mtp_num_hidden_layers", 0) or 0)
+        self._nextn_layers = nextn
+        if nextn > 0:
+            self.block_count = self.hparams["num_hidden_layers"] + nextn
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
     ) -> Iterable[tuple[str, Tensor]]:
