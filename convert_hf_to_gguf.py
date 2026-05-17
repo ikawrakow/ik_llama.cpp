@@ -2524,6 +2524,9 @@ class Qwen3_5TextModel(Qwen2Model):
             # model.output. Apply the Qwen3.5/3.6 RMS-norm (+1) convention to
             # the three nextn norms here, because they are yielded directly
             # and miss the norm+1 path that routed tensors get.
+            # Standalone-tensor handling assumes a single MTP layer (index 0);
+            # Qwen3.6 ships exactly one. The mtp.layers.* routed path above
+            # already handles multiple MTP layers correctly.
             nextn_bid = base + 0
             renames = {
                 "mtp.fc.weight":                    f"blk.{nextn_bid}.nextn.eh_proj.weight",

@@ -6,3 +6,5 @@ ggml-common.h
 !peg-parser
 !converter
 !converter/**
+
+__pycache__/
