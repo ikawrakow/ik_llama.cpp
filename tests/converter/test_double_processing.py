@@ -11,7 +11,10 @@ Root cause: `Qwen3_5MoeTextModel.modify_tensors` duplicates the parent
 handling. Subclass falls through to `yield from super().modify_tensors(...)`
 so every transformation runs TWICE:
 
-  - `data_torch + 1` for norm.weight runs twice -> wrong scale (+2 not +1)
+  - `data_torch + 1` for norm.weight on the general fall-through path runs
+    twice -> wrong scale (+2 not +1).  NOTE: the mtp. branch applies its own
+    +1 to standalone nextn norms before returning -- that is intentional and
+    correct (commit ea5bffe3); the mtp. branch never reaches super().
   - `-torch.exp(data_torch)` for A_log runs twice -> -exp(-exp(x)) garbage
   - linear_attn V-head reorder runs twice -> mis-permuted weights
   - linear_attn.conv1d.weight: subclass produces [4, 8192] (transposed),
@@ -19,9 +22,10 @@ so every transformation runs TWICE:
 
 Fix: remove the duplicated handling from the subclass so the parent (which
 has identical handling) processes the tensors exactly once. The subclass
-retains only the genuinely subclass-specific MoE expert reshaping.
+retains only the genuinely subclass-specific MoE expert reshaping and MTP
+standalone-tensor dispatch (which returns before reaching super()).
 
-These tests use AST inspection on convert_hf_to_gguf.py — stdlib unittest
+These tests use AST inspection on convert_hf_to_gguf.py -- stdlib unittest
 only, no torch/pytest needed.
 """
 from __future__ import annotations
@@ -49,10 +53,26 @@ def _find_method(cls: ast.ClassDef, name: str) -> ast.FunctionDef:
     raise AssertionError(f"method {cls.name}.{name} not found")
 
 
+def _find_mtp_branch(method: ast.FunctionDef) -> ast.If:
+    """Return the `if name.startswith("mtp."):` top-level if-statement."""
+    for stmt in method.body:
+        if isinstance(stmt, ast.If) and "mtp" in ast.unparse(stmt.test):
+            return stmt
+    raise AssertionError(
+        "if name.startswith('mtp.') branch not found in "
+        f"method {method.name}"
+    )
+
+
 class Qwen35MoeNoDoubleProcessingTests(unittest.TestCase):
     """Qwen3_5MoeTextModel must not duplicate transformations its parent
-    (Qwen3NextModel) already performs, since the subclass yields to super
-    and any duplicated transforms apply twice."""
+    (Qwen3NextModel) already performs on the general fall-through path, since
+    the subclass yields to super() at the end and any duplicated transforms
+    would apply twice.
+
+    Exception: the `if name.startswith("mtp."):` branch applies its own
+    `data_torch + 1` to standalone nextn norm tensors, then returns -- it
+    never reaches super(), so there is no double-processing there."""
 
     @classmethod
     def setUpClass(cls):
@@ -76,12 +96,44 @@ class Qwen35MoeNoDoubleProcessingTests(unittest.TestCase):
                       "parent should keep linear_attn V-reorder block")
 
     def test_subclass_does_not_redo_norm_plus_one(self):
+        """The general fall-through path of Qwen3_5MoeTextModel.modify_tensors
+        must not apply `data_torch + 1`, because the parent already does it
+        and yielding to super() would apply it twice.
+
+        The `if name.startswith("mtp."):` branch is explicitly exempt: it
+        applies +1 to standalone nextn norm tensors (enorm/hnorm/
+        shared_head_norm) and then returns before reaching super(). This is
+        correct and intentional (commit ea5bffe3) -- without it the MTP block
+        runs with off-scale norms and produces garbage outputs.
+        """
+        mtp_branch = _find_mtp_branch(self.sub_mt)
+        mtp_src = ast.unparse(mtp_branch)
+
+        # Confirm the mtp. branch carries the intentional +1 for standalone norms.
+        # This is correct: the mtp. standalone-tensor path yields and returns,
+        # never reaching super(), so there is no double-processing.
+        self.assertIn(
+            "data_torch + 1",
+            mtp_src,
+            "mtp. branch should apply +1 to standalone nextn norm tensors "
+            "(enorm/hnorm/shared_head_norm) before returning -- removing it "
+            "would break MTP norm scale (commit ea5bffe3).",
+        )
+
+        # The general fall-through path (everything outside the mtp. branch)
+        # must NOT contain data_torch + 1 -- the parent handles it there.
+        general_path_stmts = [
+            s for s in self.sub_mt.body
+            if not (isinstance(s, ast.If) and "mtp" in ast.unparse(s.test))
+        ]
+        general_path_src = " ".join(ast.unparse(s) for s in general_path_stmts)
         self.assertNotIn(
             "data_torch + 1",
-            self.sub_src,
-            "Qwen3_5MoeTextModel duplicates parent's norm.weight + 1 transform. "
-            "Falling through to super applies it AGAIN -> norms get scaled "
-            "(actual + 1) instead of actual.",
+            general_path_src,
+            "Qwen3_5MoeTextModel duplicates parent's norm.weight + 1 transform "
+            "on the general fall-through path. Yielding to super() applies it "
+            "AGAIN -> norms get wrong scale. Only the mtp. standalone-norm "
+            "branch may apply +1 (it returns before reaching super()).",
         )
 
     def test_subclass_does_not_redo_numeric_transforms(self):
@@ -93,9 +145,9 @@ class Qwen35MoeNoDoubleProcessingTests(unittest.TestCase):
         )
 
     def test_subclass_does_not_redo_linear_attn_block(self):
-        # ast.unparse normalizes quote style — accept either form
+        # ast.unparse normalizes quote style -- accept either form
         self.assertFalse(
-            ('if \'.linear_attn.\' in name:' in self.sub_src
+            ("if '.linear_attn.' in name:" in self.sub_src
              or 'if ".linear_attn." in name:' in self.sub_src),
             msg=("Qwen3_5MoeTextModel duplicates parent's linear_attn V-head "
                  "reorder block. Yielding to super reapplies the V-reorder; "
@@ -107,7 +159,7 @@ class Qwen35MoeNoDoubleProcessingTests(unittest.TestCase):
 
     def test_subclass_keeps_moe_expert_handling(self):
         """The MoE expert reshaping (packed down_proj / gate_up_proj) is
-        genuinely subclass-specific and must remain — Qwen2MoeModel parent
+        genuinely subclass-specific and must remain -- Qwen2MoeModel parent
         expects per-expert layout, ours stores them packed."""
         self.assertIn("mlp.experts.down_proj", self.sub_src,
                       "subclass must keep packed-expert down_proj handling")
