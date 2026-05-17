@@ -77,6 +77,28 @@ class Qwen35DenseConv1dF32Tests(unittest.TestCase):
             "GGMLQuantizationType.F32 for the conv1d weight.",
         )
 
+    def test_dense_conv1d_force_is_correctly_scoped(self):
+        """The conv1d F32 force must be guarded by 'bid is not None' and match
+        the tensor via format_tensor_name(SSM_CONV1D, ...), mirroring the
+        Qwen3_5MoeTextModel sibling. A regression dropping the bid guard would
+        wrongly force non-block tensors; one mishandling the name match would
+        miss the conv1d weight entirely."""
+        m = _find_method(self.dense, "tensor_force_quant")
+        self.assertIsNotNone(m, "Qwen3_5TextModel.tensor_force_quant not found.")
+        body = ast.unparse(m)
+        self.assertIn(
+            "bid is not None",
+            body,
+            "tensor_force_quant must guard the conv1d match with 'bid is not "
+            "None' so it only fires for per-block tensors.",
+        )
+        self.assertIn(
+            "format_tensor_name",
+            body,
+            "tensor_force_quant must match the conv1d tensor via "
+            "format_tensor_name(SSM_CONV1D, ...) like the MoE sibling.",
+        )
+
     def test_dense_tensor_force_quant_preserves_super(self):
         """The override must fall through to super().tensor_force_quant for
         all other tensors, otherwise it strips force-quant logic the base

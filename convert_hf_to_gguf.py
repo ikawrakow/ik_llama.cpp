@@ -2550,6 +2550,19 @@ class Qwen3_5TextModel(Qwen2Model):
             data_torch = data_torch + 1
 
         if ".linear_attn." in name:
+            # This dense converter handles only the separate in_proj_qkv /
+            # in_proj_z / in_proj_a / in_proj_b layout. The fused in_proj_qkvz /
+            # in_proj_ba layout (handled by Qwen3NextModel) needs split logic
+            # this class does not implement -- fail loudly rather than emit a
+            # silently un-reordered, broken GGUF.
+            if name.endswith(".linear_attn.in_proj_qkvz.weight") or name.endswith(
+                ".linear_attn.in_proj_ba.weight"
+            ):
+                raise NotImplementedError(
+                    f"Qwen3_5TextModel: fused linear-attn tensor '{name}' is "
+                    f"not supported; this converter handles only the separate "
+                    f"in_proj_qkv/in_proj_z/in_proj_a/in_proj_b layout."
+                )
             num_k_heads = self.hparams.get("linear_num_key_heads", 0)
             num_v_heads = self.hparams.get("linear_num_value_heads", 0)
             if num_k_heads > 0 and num_v_heads > 0 and num_k_heads != num_v_heads:
@@ -2638,12 +2651,14 @@ class Qwen3_5TextModel(Qwen2Model):
         if self._nextn_layers > 0:
             self.gguf_writer.add_nextn_predict_layers(self._nextn_layers)
 
-    def tensor_force_quant(self, name, new_name, bid, n_dims):
+    def tensor_force_quant(
+        self, name: str, new_name: str, bid: int | None, n_dims: int
+    ) -> gguf.GGMLQuantizationType | bool:
         # The CPU ggml_compute_forward_ssm_conv_f32 kernel asserts that its
         # conv1d weight is F32 (nb[0] == sizeof(float)). HF ships this tensor
         # as bf16, so a GGUF whose conv1d weight follows --outtype aborts on
         # the first decode. Force F32 at convert time, mirroring the
-        # Qwen3_5MoeTextModel sibling and upstream llama.cpp.
+        # Qwen3_5MoeTextModel sibling.
         if bid is not None and new_name == self.format_tensor_name(
             gguf.MODEL_TENSOR.SSM_CONV1D, bid, ".weight" if name.endswith(".weight") else ""
         ):
