@@ -2569,6 +2569,24 @@ class Qwen3_5TextModel(Qwen2Model):
                     v_part = data[qk_channels:]
                     v_part = self._reorder_v_heads(v_part, 0, num_k_heads, num_v_per_k, head_v_dim)
                     data_torch = torch.cat([data[:qk_channels], v_part], dim=0)
+                # HF stores V heads grouped-by-K-head; the runtime delta_net
+                # expects them tiled. Reorder every linear-attn projection that
+                # carries V channels, matching Qwen3NextModel (the working MoE
+                # path). Without this, decode collapses to garbage.
+                elif name.endswith(".linear_attn.in_proj_qkv.weight"):
+                    q_dim = head_k_dim * num_k_heads
+                    k_dim = head_k_dim * num_k_heads
+                    q = data_torch[:q_dim]
+                    k = data_torch[q_dim:q_dim + k_dim]
+                    v = data_torch[q_dim + k_dim:]
+                    v = self._reorder_v_heads(v, 0, num_k_heads, num_v_per_k, head_v_dim)
+                    data_torch = torch.cat([q, k, v], dim=0)
+                elif name.endswith(".linear_attn.in_proj_z.weight"):
+                    data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, head_v_dim)
+                elif name.endswith(".linear_attn.in_proj_b.weight") or name.endswith(".linear_attn.in_proj_a.weight"):
+                    data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, 1)
+                elif name.endswith(".linear_attn.out_proj.weight"):
+                    data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
             if name.endswith(".A_log"):
                 data_torch = -torch.exp(data_torch)
             elif name.endswith(".dt_bias"):
