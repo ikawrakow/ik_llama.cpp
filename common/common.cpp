@@ -1727,7 +1727,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--mtp-requantized-output-tensor" || arg == "-mtprot") {
+    if (arg == "--mtp-requantize-output-tensor" || arg == "-mtprot") {
         CHECK_ARG
         params.extra_output_type = argv[i];
         return true;
