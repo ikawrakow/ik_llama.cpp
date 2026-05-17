@@ -5031,7 +5031,7 @@ void server_context::update_slots() {
     // start populating the batch for this iteration
     common_batch_clear(batch);
 
-    // frist, add sampled tokens from any ongoing sequences
+    // first, add sampled tokens from any ongoing sequences
     add_sampled_tokens(); // Prepare batch for inference
 
     // process in chunks of params.n_batch
