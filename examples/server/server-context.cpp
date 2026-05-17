@@ -1624,6 +1624,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
             slot.params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
+        } else {
+            // Reset to default; otherwise a reused slot would apply the previous chat's PEG parser to non-chat outputs (e.g., /v1/completions).
+            slot.params.chat_parser_params.parser = defaults.chat_parser_params.parser;
         }
     }
     {
