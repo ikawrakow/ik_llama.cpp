@@ -2620,6 +2620,18 @@ class Qwen3_5TextModel(Qwen2Model):
         if self._nextn_layers > 0:
             self.gguf_writer.add_nextn_predict_layers(self._nextn_layers)
 
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # The CPU ggml_compute_forward_ssm_conv_f32 kernel asserts that its
+        # conv1d weight is F32 (nb[0] == sizeof(float)). HF ships this tensor
+        # as bf16, so a GGUF whose conv1d weight follows --outtype aborts on
+        # the first decode. Force F32 at convert time, mirroring the
+        # Qwen3_5MoeTextModel sibling and upstream llama.cpp.
+        if bid is not None and new_name == self.format_tensor_name(
+            gguf.MODEL_TENSOR.SSM_CONV1D, bid, ".weight" if name.endswith(".weight") else ""
+        ):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
     def prepare_tensors(self):
         # Fix: for Qwen3.5, post_attention_layernorm should map to ATTN_POST_NORM
         # (the base tensor_force gives it to FFN_NORM due to enum ordering).
