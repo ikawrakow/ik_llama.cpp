@@ -6013,6 +6013,9 @@ void llama_free_model(struct llama_model * model) {
 }
 
 static void llama_repack_up_gate_exps(llama_context & lctx) {
+    if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
+        return;
+    }
     auto & model = lctx.model;
     bool needs_repack = false;
     for (auto & l : model.layers) {
