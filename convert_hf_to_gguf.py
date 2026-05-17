@@ -2501,7 +2501,44 @@ class Qwen3_5TextModel(Qwen2Model):
             return []
         name = stripped
         if name.startswith("mtp."):
-            return []
+            if self._nextn_layers == 0:
+                # No MTP layer in this snapshot; drop quietly.
+                return
+            base = self.hparams["num_hidden_layers"]
+
+            # mtp.layers.{i}.<rest> -> model.layers.{base+i}.<rest>
+            # Re-enter via type(self).modify_tensors so the dense handlers
+            # (norm+1, standard attention/MLP via super()) apply. yield from
+            # is required because this method is a generator.
+            m = re.match(r"mtp\.layers\.(\d+)\.(.+)", name)
+            if m:
+                i = int(m.group(1))
+                rest = m.group(2)
+                new_bid = base + i
+                new_name = f"model.layers.{new_bid}.{rest}"
+                yield from type(self).modify_tensors(self, data_torch, new_name, new_bid)
+                return
+
+            # Standalone MTP tensors. HF ships no mtp.embed_tokens /
+            # mtp.shared_head_head — the loader falls back to model.tok_embd /
+            # model.output. Apply the Qwen3.5/3.6 RMS-norm (+1) convention to
+            # the three nextn norms here, because they are yielded directly
+            # and miss the norm+1 path that routed tensors get.
+            nextn_bid = base + 0
+            renames = {
+                "mtp.fc.weight":                    f"blk.{nextn_bid}.nextn.eh_proj.weight",
+                "mtp.pre_fc_norm_embedding.weight": f"blk.{nextn_bid}.nextn.enorm.weight",
+                "mtp.pre_fc_norm_hidden.weight":    f"blk.{nextn_bid}.nextn.hnorm.weight",
+                "mtp.norm.weight":                  f"blk.{nextn_bid}.nextn.shared_head_norm.weight",
+            }
+            new_name = renames.get(name)
+            if new_name is None:
+                logger.warning("Qwen3_5TextModel: dropping unknown MTP tensor: %s", name)
+                return
+            if new_name.endswith("norm.weight"):
+                data_torch = data_torch + 1
+            yield (new_name, data_torch)
+            return
 
         # Qwen3-Next / Qwen3.5 / Qwen3.6 store RMS-norm weights as
         # (actual_scale - 1), so the typical learned scale near 1.0 is
