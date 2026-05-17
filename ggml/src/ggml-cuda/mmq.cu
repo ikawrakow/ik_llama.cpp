@@ -247,7 +247,9 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
 #endif //GGML_CUDA_FORCE_MMQ
 
     if (cc < CC_OFFSET_AMD) {
-        return cc < CC_VOLTA || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
+        // On Volta, large-batch quantized matmuls otherwise fall back through
+        // fp16 cuBLAS temporaries. Keep using MMQ for pre-Turing NVIDIA.
+        return cc < CC_TURING || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
     }
 
     return cc < CC_RDNA3 || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;

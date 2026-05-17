@@ -100,7 +100,12 @@ option(GGML_SVE         "ggml: enable SVE"              OFF)
 option(GGML_NCCL        "ggml: enable NCCL"             ON)
 
 if (WIN32)
-    set(GGML_WIN_VER "0x602" CACHE STRING "ggml: Windows Version")
+    # Default to Windows 10 (0x0A00). Windows 8 / 8.1 reached end of support in
+    # January 2023, and the vendored cpp-httplib (used by the server target)
+    # rejects anything below 0x0A00 with `#error "cpp-httplib doesn't support
+    # Windows 8 or lower."`. Override with -DGGML_WIN_VER=0x602 if you really
+    # need to target Windows 8.
+    set(GGML_WIN_VER "0x0A00" CACHE STRING "ggml: Windows Version")
 endif()
 
 # ggml core

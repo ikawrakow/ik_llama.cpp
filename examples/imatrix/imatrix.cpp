@@ -26,6 +26,202 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+#include <immintrin.h>
+__attribute__((target("avx2,fma")))
+static inline bool add_and_check_nans_avx2(int n, const float * x, float * y, int * counts) {
+    int i = 0;
+    auto has_nans = _mm256_setzero_ps();
+    auto one = _mm256_set1_epi32(1);
+    {
+        __m256 vx[4], vy[4];
+        __m256i cy[4];
+        for ( ; i + 32 < n; i += 32) {
+            for (int k = 0; k < 4; ++k) {
+                vx[k] = _mm256_loadu_ps(x + i + 8*k);
+                vy[k] = _mm256_loadu_ps(y + i + 8*k);
+                cy[k] = _mm256_loadu_si256((const __m256i *)(counts + i + 8*k));
+                vy[k] = _mm256_fmadd_ps(vx[k], vx[k], vy[k]);
+                cy[k] = _mm256_add_epi32(cy[k], one);
+                auto mask = _mm256_cmp_ps(vx[k], vx[k], _CMP_UNORD_Q);
+                has_nans = _mm256_or_ps(has_nans, mask);
+            }
+            for (int k = 0; k < 4; ++k) {
+                _mm256_storeu_ps(y + i + 8*k, vy[k]);
+                _mm256_storeu_si256((__m256i *)(counts + i + 8*k), cy[k]);
+            }
+        }
+    }
+    for ( ; i + 7 < n; i += 8) {
+        auto vx = _mm256_loadu_ps(x + i);
+        auto vy = _mm256_loadu_ps(y + i);
+        auto cy = _mm256_loadu_si256((const __m256i *)(counts + i));
+        vy = _mm256_fmadd_ps(vx, vx, vy);
+        cy = _mm256_add_epi32(cy, one);
+        _mm256_storeu_ps(y + i, vy);
+        _mm256_storeu_si256((__m256i *)(counts + i), cy);
+        auto mask = _mm256_cmp_ps(vx, vx, _CMP_UNORD_Q);
+        has_nans = _mm256_or_ps(has_nans, mask);
+    }
+    auto has_any = _mm256_movemask_ps(has_nans);
+    if (has_any) {
+        return true;
+    }
+    for (; i < n; ++i) {
+        if (std::isnan(x[i])) {
+            return true;
+        }
+        y[i] += x[i]*x[i];
+        ++counts[i];
+    }
+    return false;
+}
+#endif
+static inline bool add_and_check_nans_scalar(int n, const float * x, float * y, int * counts) {
+    for (int i = 0; i < n; ++i) {
+        if (std::isnan(x[i])) {
+            return true;
+        }
+        y[i] += x[i]*x[i];
+        ++counts[i];
+    }
+    return false;
+}
+static bool add_and_check_nans(int n, const float * x, float * y, int * counts) {
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    static const bool has_avx2 = __builtin_cpu_supports("avx2");
+    static const bool has_fma  = __builtin_cpu_supports("fma");
+    if (has_avx2 && has_fma) {
+        return add_and_check_nans_avx2(n, x, y, counts);
+    }
+#endif
+    return add_and_check_nans_scalar(n, x, y, counts);
+}
+
+
+uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
+void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
+
+static llama_model * ik_load_model_from_params(const gpt_params & params, const llama_model_params & mparams) {
+    if (!params.hf_repo.empty() && !params.hf_file.empty()) {
+        return llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
+    }
+    if (!params.model_url.empty()) {
+        return llama_load_model_from_url(params.model_url.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
+    }
+
+    return llama_model_load_from_file(params.model.c_str(), mparams);
+}
+
+static bool ik_model_has_arch(const llama_model * model, const char * expected_arch) {
+    char arch[64] = { 0 };
+    const int32_t len = llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch));
+    return len > 0 && std::string(arch) == expected_arch;
+}
+
+static llama_init_result ik_init_from_loaded_model(llama_model * model, gpt_params & params) {
+    llama_init_result iparams;
+
+    if (model == nullptr) {
+        return iparams;
+    }
+
+    auto cparams = common_context_params_to_llama(params);
+
+    llama_context * lctx = llama_init_from_model(model, cparams);
+    if (lctx == nullptr) {
+        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
+        llama_free_model(model);
+        return iparams;
+    }
+
+    for (auto [op, on_off] : params.offload_policy) {
+        llama_set_offload_policy(lctx, op, on_off);
+    }
+
+    if (!params.control_vectors.empty()) {
+        if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
+        if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_n_layer(model);
+
+        const auto cvec = llama_control_vector_load(params.control_vectors);
+        if (cvec.n_embd == -1) {
+            llama_free(lctx);
+            llama_free_model(model);
+            return iparams;
+        }
+
+        const int err = llama_control_vector_apply(lctx,
+                                                   cvec.data.data(),
+                                                   cvec.data.size(),
+                                                   cvec.n_embd,
+                                                   params.control_vector_layer_start,
+                                                   params.control_vector_layer_end);
+        if (err) {
+            llama_free(lctx);
+            llama_free_model(model);
+            return iparams;
+        }
+    }
+
+    for (auto & la : params.lora_adapters) {
+        llama_lora_adapter_container loaded_la;
+        loaded_la.path = la.path;
+        loaded_la.scale = la.scale;
+        loaded_la.adapter = llama_lora_adapter_init(model, la.path.c_str());
+        if (loaded_la.adapter == nullptr) {
+            fprintf(stderr, "%s: error: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
+            llama_free(lctx);
+            llama_free_model(model);
+            return iparams;
+        }
+        iparams.lora_adapters.push_back(loaded_la);
+    }
+    if (!params.lora_init_without_apply) {
+        llama_lora_adapters_apply(lctx, iparams.lora_adapters);
+    }
+
+    if (params.ignore_eos) {
+        params.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
+    }
+
+    if (params.sparams.dry_penalty_last_n == -1) {
+        LOG("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+        params.sparams.dry_penalty_last_n = llama_n_ctx(lctx);
+    }
+
+    if (params.warmup) {
+        LOG("warming up the model with an empty run\n");
+
+        std::vector<llama_token> tmp;
+        llama_token bos = llama_token_bos(model);
+        llama_token eos = llama_token_eos(model);
+        if (bos != -1) {
+            tmp.push_back(bos);
+        } else {
+            tmp.push_back(eos);
+        }
+        if (llama_model_has_encoder(model)) {
+            llama_encode(lctx, llama_batch_get_one(tmp.data(), tmp.size(), 0, 0));
+            llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
+            if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
+                decoder_start_token_id = bos;
+            }
+            tmp.clear();
+            tmp.push_back(decoder_start_token_id);
+        }
+        if (llama_model_has_decoder(model)) {
+            llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));
+        }
+        llama_kv_cache_clear(lctx);
+        llama_synchronize(lctx);
+        llama_reset_timings(lctx);
+    }
+
+    iparams.model = model;
+    iparams.context = lctx;
+    return iparams;
+}
+
 static void print_usage(int argc, char ** argv, const gpt_params & params) {
     gpt_params_print_usage(argc, argv, params);
 
@@ -125,6 +321,29 @@ static std::string filter_tensor_name(const char * name) {
     return wname;
 }
 
+static bool is_named_imatrix_tensor(const std::string & wname, const gpt_params & params, bool collect_lsim) {
+    if (wname.rfind("blk.", 0) == 0) {
+        return true;
+    }
+    if (wname == "mtp_pre_proj.weight" || wname == "mtp_post_proj.weight") {
+        return true;
+    }
+    return (params.process_output || collect_lsim) && wname == params.output_tensor_name;
+}
+
+static std::string default_draft_imatrix_out_file(const std::string & target_out_file) {
+    if (target_out_file.empty()) {
+        return "imatrix-draft.dat";
+    }
+
+    const auto dot = target_out_file.rfind('.');
+    if (dot == std::string::npos || dot == 0) {
+        return target_out_file + "-draft";
+    }
+
+    return target_out_file.substr(0, dot) + "-draft" + target_out_file.substr(dot);
+}
+
 void IMatrixCollector::print_layer_importance(const char * msg, const std::vector<std::pair<double, int>>& sim) {
     if (sim.empty()) return;
     std::vector<std::pair<float, int>> layers;
@@ -180,8 +399,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (t->op != GGML_OP_MUL_MAT) return false;
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
-        //printf("wname = %s\n", wname.c_str());
-        if (!(wname.substr(0, 4) == "blk." || ((m_params.process_output || m_collect_lsim) && wname == m_params.output_tensor_name))) return false;
+        if (!is_named_imatrix_tensor(wname, m_params, m_collect_lsim)) return false;
         return true;
     }
 
@@ -278,14 +496,18 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     const int64_t i12 = row;
                     const float * x = (const float *)((const char *)data + i11*src1->nb[1] + i12*src1->nb[2]);
 
-                    for (int j = 0; j < (int)src1->ne[0]; ++j) {
-                        e.values[e_start + j] += x[j]*x[j];
-                        e.counts[e_start + j]++;
-                        if (!std::isfinite(e.values[e_start + j])) {
-                            fprintf(stderr, "%f detected in %s\n", e.values[e_start + j], wname.c_str());
-                            exit(1);
-                        }
+                    if (add_and_check_nans(src1->ne[0], x, e.values.data() + e_start, e.counts.data() + e_start)) {
+                        fprintf(stderr, "etected NaNs in %s\n", wname.c_str());
+                        exit(1);
                     }
+                    //for (int j = 0; j < (int)src1->ne[0]; ++j) {
+                    //    e.values[e_start + j] += x[j]*x[j];
+                    //    e.counts[e_start + j]++;
+                    //    if (!std::isfinite(e.values[e_start + j])) {
+                    //        fprintf(stderr, "%f detected in %s\n", e.values[e_start + j], wname.c_str());
+                    //        exit(1);
+                    //    }
+                    //}
                 }
             }
             if (e.ncall > m_last_call) {
@@ -359,14 +581,18 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             auto counts = e.counts.data() + i02*src0->ne[0];
             for (int i11 = 0; i11 < (int)src1->ne[1]; ++i11) {
                 const float * x = (const float *)((const char *)data + i11*src1->nb[1] + i12*src1->nb[2]);
-                for (int j = 0; j < (int)src1->ne[0]; ++j) {
-                    values[j] += x[j]*x[j];
-                    counts[j]++;
-                    if (!std::isfinite(values[j])) {
-                        fprintf(stderr, "%f detected in %s\n", e.values[j], wname.c_str());
-                        exit(1);
-                    }
+                if (add_and_check_nans(src1->ne[0], x, values, counts)) {
+                    fprintf(stderr, "detected NaNs in %s\n", wname.c_str());
+                    exit(1);
                 }
+                //for (int j = 0; j < (int)src1->ne[0]; ++j) {
+                //    values[j] += x[j]*x[j];
+                //    counts[j]++;
+                //    if (!std::isfinite(values[j])) {
+                //        fprintf(stderr, "%f detected in %s\n", values[j], wname.c_str());
+                //        exit(1);
+                //    }
+                //}
             }
         }
         if (e.ncall > m_last_call) {
@@ -559,10 +785,15 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
     return true;
 }
 
-static IMatrixCollector g_collector;
+static IMatrixCollector g_target_collector;
+static IMatrixCollector g_draft_collector;
+
+static IMatrixCollector * ik_get_imatrix_collector(void * user_data) {
+    return user_data != nullptr ? static_cast<IMatrixCollector *>(user_data) : &g_target_collector;
+}
 
 static bool ik_collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
-    return g_collector.collect_imatrix(t, ask, user_data);
+    return ik_get_imatrix_collector(user_data)->collect_imatrix(t, ask, user_data);
 }
 
 
@@ -638,7 +869,77 @@ static void process_logits(
     }
 }
 
-static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
+static gpt_params build_draft_imatrix_params(const gpt_params & params) {
+    gpt_params draft_params = params;
+
+    draft_params.model = params.speculative.model;
+    draft_params.model_url.clear();
+    draft_params.hf_repo.clear();
+    draft_params.hf_file.clear();
+    draft_params.n_ctx = params.speculative.n_ctx > 0 ? params.speculative.n_ctx : params.n_ctx;
+    draft_params.n_gpu_layers = params.speculative.n_gpu_layers >= 0 ? params.speculative.n_gpu_layers : params.n_gpu_layers;
+    draft_params.has_mtp = true;
+    draft_params.warmup = false;
+    draft_params.out_file = params.out_file_draft.empty() ? default_draft_imatrix_out_file(params.out_file) : params.out_file_draft;
+    draft_params.out_file_draft.clear();
+    draft_params.cb_eval = ik_collect_imatrix;
+    draft_params.cb_eval_user_data = nullptr;
+
+    if (params.speculative.n_threads > 0) {
+        draft_params.n_threads = params.speculative.n_threads;
+    }
+    if (params.speculative.n_threads_batch > 0) {
+        draft_params.n_threads_batch = params.speculative.n_threads_batch;
+    }
+    if (!params.speculative.devices.empty()) {
+        draft_params.devices = params.speculative.devices;
+    }
+    if (!params.speculative.cache_type_k.empty()) {
+        draft_params.cache_type_k = params.speculative.cache_type_k;
+    }
+    if (!params.speculative.cache_type_v.empty()) {
+        draft_params.cache_type_v = params.speculative.cache_type_v;
+    }
+
+    return draft_params;
+}
+
+static bool compute_draft_imatrix_batch(
+        llama_context * ctx_tgt,
+        llama_context * ctx_dft,
+    llama_token * draft_tokens,
+        int batch_start,
+        int batch_size,
+        int batch_pos) {
+    const float * hidden = llama_get_embeddings(ctx_tgt);
+    const int n_embd_tgt = llama_mtp_state_n_embd(ctx_tgt);
+    const int n_embd_dft = llama_mtp_state_n_embd(ctx_dft);
+
+    if (hidden == nullptr || n_embd_tgt <= 0 || n_embd_dft <= 0) {
+        fprintf(stderr, "%s: missing target hidden state for paired draft calibration\n", __func__);
+        return false;
+    }
+
+    if (n_embd_tgt != n_embd_dft) {
+        fprintf(stderr, "%s: hidden width mismatch between target (%d) and draft (%d)\n",
+                __func__, n_embd_tgt, n_embd_dft);
+        return false;
+    }
+
+    llama_set_mtp_op_type(ctx_dft, MTP_OP_DRAFT_GEN);
+    llama_set_draft_input_hidden_state(ctx_dft, hidden);
+    const int ret = llama_decode(ctx_dft, llama_batch_get_one(draft_tokens + batch_start, batch_size, batch_pos, 0));
+    llama_set_mtp_op_type(ctx_dft, MTP_OP_NONE);
+
+    if (ret != 0) {
+        fprintf(stderr, "%s: paired draft eval failed\n", __func__);
+        return false;
+    }
+
+    return true;
+}
+
+static bool compute_imatrix(llama_context * ctx, const gpt_params & params, llama_context * ctx_dft = nullptr) {
     const bool add_bos = llama_should_add_bos_token(llama_get_model(ctx));
     GGML_ASSERT(llama_add_eos_token(llama_get_model(ctx)) != 1);
     const int n_ctx = llama_n_ctx(ctx);
@@ -706,6 +1007,9 @@ static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
 
         // clear the KV cache
         llama_kv_cache_clear(ctx);
+        if (ctx_dft != nullptr) {
+            llama_kv_cache_clear(ctx_dft);
+        }
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -722,6 +1026,10 @@ static bool compute_imatrix(llama_context * ctx, const gpt_params & params) {
             // TODO: use batch.logits to save computations instead of relying on logits_all == true
             if (llama_decode(ctx, llama_batch_get_one(tokens.data() + batch_start, batch_size, j * n_batch, 0))) {
                 fprintf(stderr, "%s : failed to eval\n", __func__);
+                return false;
+            }
+
+            if (ctx_dft != nullptr && !compute_draft_imatrix_batch(ctx, ctx_dft, tokens.data(), batch_start, batch_size, j * n_batch)) {
                 return false;
             }
 
@@ -810,12 +1118,12 @@ int main(int argc, char ** argv) {
 
     params.n_batch = std::min(params.n_batch, params.n_ctx);
 
-    g_collector.set_params(params);
-    g_collector.set_collect_lsim(lsim);
+    g_target_collector.set_params(params);
+    g_target_collector.set_collect_lsim(lsim);
 
     for (const auto & in_file : params.in_files) {
         printf("%s : loading imatrix from '%s'\n", __func__, in_file.c_str());
-        if (!g_collector.load_imatrix(in_file.c_str())) {
+        if (!g_target_collector.load_imatrix(in_file.c_str())) {
             fprintf(stderr, "%s : failed to load %s\n", __func__, in_file.c_str());
             return 1;
         }
@@ -823,26 +1131,105 @@ int main(int argc, char ** argv) {
 
     if (params.in_files.size() > 1) {
         printf("%s : saving combined imatrix to '%s'\n", __func__, params.out_file.c_str());
-        g_collector.save_imatrix();
+        g_target_collector.save_imatrix();
     }
 
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    // pass the callback to the backend scheduler
-    // it will be executed for each node during the graph computation
-    params.cb_eval = ik_collect_imatrix;
-    params.cb_eval_user_data = NULL;
-    params.warmup = false;
+    gpt_params target_params = params;
+    target_params.warmup = false;
 
-    // init
-    llama_init_result llama_init = llama_init_from_gpt_params(params);
+    const bool has_draft_model = !params.speculative.model.empty();
+    if (!has_draft_model) {
+        // pass the callback to the backend scheduler
+        // it will be executed for each node during the graph computation
+        target_params.cb_eval = ik_collect_imatrix;
+        target_params.cb_eval_user_data = &g_target_collector;
+    }
+
+    llama_init_result llama_init;
+    llama_model * model_dft = nullptr;
+    llama_context * ctx_dft = nullptr;
+    bool use_paired_gemma4_mtp = false;
+
+    if (has_draft_model) {
+        gpt_params draft_params = build_draft_imatrix_params(params);
+        g_draft_collector.set_params(draft_params);
+        g_draft_collector.set_collect_lsim(lsim);
+        draft_params.cb_eval_user_data = &g_draft_collector;
+        auto mparams_dft = common_model_params_to_llama(draft_params);
+
+        model_dft = ik_load_model_from_params(draft_params, mparams_dft);
+        if (model_dft == nullptr) {
+            fprintf(stderr, "%s : failed to load draft model '%s'\n", __func__, draft_params.model.c_str());
+            llama_backend_free();
+            return 1;
+        }
+
+        if (!llama_model_is_gemma4_mtp_assistant(model_dft)) {
+            fprintf(stderr, "%s : paired imatrix mode currently supports Gemma 4 assistant draft models only\n", __func__);
+            llama_free_model(model_dft);
+            llama_backend_free();
+            return 1;
+        }
+
+        target_params.has_mtp = true;
+        target_params.cb_eval = ik_collect_imatrix;
+        target_params.cb_eval_user_data = &g_target_collector;
+
+        fprintf(stderr, "%s : paired imatrix outputs: target='%s', draft='%s'\n",
+            __func__, target_params.out_file.c_str(), draft_params.out_file.c_str());
+
+        auto mparams_tgt = common_model_params_to_llama(target_params);
+        llama_model * model_tgt = ik_load_model_from_params(target_params, mparams_tgt);
+        if (model_tgt == nullptr) {
+            fprintf(stderr, "%s : failed to load target model '%s'\n", __func__, target_params.model.c_str());
+            llama_free_model(model_dft);
+            llama_backend_free();
+            return 1;
+        }
+
+        if (!ik_model_has_arch(model_tgt, "gemma4")) {
+            fprintf(stderr, "%s : paired imatrix mode currently supports Gemma 4 target models only\n", __func__);
+            llama_free_model(model_tgt);
+            llama_free_model(model_dft);
+            llama_backend_free();
+            return 1;
+        }
+
+        llama_init = ik_init_from_loaded_model(model_tgt, target_params);
+        if (llama_init.model == nullptr || llama_init.context == nullptr) {
+            llama_free_model(model_dft);
+            llama_backend_free();
+            return 1;
+        }
+
+        auto draft_init = ik_init_from_loaded_model(model_dft, draft_params);
+        model_dft = draft_init.model;
+        ctx_dft = draft_init.context;
+        if (model_dft == nullptr || ctx_dft == nullptr) {
+            llama_free(llama_init.context);
+            llama_free_model(llama_init.model);
+            llama_backend_free();
+            return 1;
+        }
+
+        llama_set_mtp_target_context(ctx_dft, llama_init.context);
+        use_paired_gemma4_mtp = true;
+    } else {
+        llama_init = llama_init_from_gpt_params(target_params);
+    }
 
     llama_model * model = llama_init.model;
     llama_context * ctx = llama_init.context;
     if (model == nullptr || ctx == nullptr) {
         fprintf(stderr, "%s : failed to init\n", __func__);
         return 1;
+    }
+
+    if (!use_paired_gemma4_mtp && llama_model_is_gemma4_mtp_assistant(model) && !params.process_output) {
+        fprintf(stderr, "%s: warning: standalone Gemma 4 assistant imatrix does not exercise the assistant layers. Use '-m <target> -md <assistant> -mtp' for meaningful calibration.\n", __func__);
     }
 
     const int n_ctx_train = llama_n_ctx_train(model);
@@ -857,14 +1244,35 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
     }
 
-    if (!compute_imatrix(ctx, params)) {
+    if (!compute_imatrix(ctx, params, ctx_dft)) {
+        if (ctx_dft != nullptr) {
+            llama_free(ctx_dft);
+        }
+        if (model_dft != nullptr) {
+            llama_free_model(model_dft);
+        }
+        llama_free(ctx);
+        llama_free_model(model);
+        llama_backend_free();
         return 1;
     }
 
-    g_collector.save_imatrix();
-    g_collector.print_layer_importance();
+    g_target_collector.save_imatrix();
+    g_target_collector.print_layer_importance();
+
+    if (ctx_dft != nullptr) {
+        g_draft_collector.save_imatrix();
+        g_draft_collector.print_layer_importance();
+    }
 
     llama_print_timings(ctx);
+
+    if (ctx_dft != nullptr) {
+        llama_free(ctx_dft);
+    }
+    if (model_dft != nullptr) {
+        llama_free_model(model_dft);
+    }
 
     llama_free(ctx);
     llama_free_model(model);

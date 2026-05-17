@@ -405,11 +405,19 @@ struct llama_model {
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm = nullptr;
 
+    struct ggml_tensor * mtp_pre_proj = nullptr;
+    struct ggml_tensor * mtp_post_proj = nullptr;
+    struct ggml_tensor * mtp_token_ordering = nullptr;
+    struct ggml_tensor * mtp_centroids = nullptr;
+
     struct ggml_tensor * output_norm;
     struct ggml_tensor * output_norm_b;
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
+    struct ggml_tensor * output_mtp = nullptr;
+
+    std::unique_ptr<ggml_tensor> output_mtp_ptr;
 
     llama_split_tensor split_output;
     llama_split_tensor split_output_norm;

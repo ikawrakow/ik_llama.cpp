@@ -2,12 +2,13 @@
 
 #define CUDA_SSM_CONV_BLOCK_SIZE 256
 
-template <int split_n_t>
+template <int split_n_t, bool save_steps>
 static __global__ void ssm_conv_single_seq_f32(
         const float * src0,
         const float * src1,
         const float * src2,
         float * dst_x,
+        [[maybe_unused]] float * saved,
         int nc,
         int nr,
         int n_t,
@@ -27,6 +28,11 @@ static __global__ void ssm_conv_single_seq_f32(
     const float * state_row = src0 + (size_t) row * src0_s1;
     const float * c_row = src2 + (size_t) row * nc;
 
+    [[maybe_unused]] float * y;
+    if constexpr (save_steps) {
+        y = saved + t0*(nc - 1)*nr;
+    }
+
 #pragma unroll
     for (int it = 0; it < split_n_t; ++it) {
         const int t = t0 + it;
@@ -42,18 +48,28 @@ static __global__ void ssm_conv_single_seq_f32(
                 : src1[row + (size_t) (idx - (nc - 1)) * src1_s1];
 
             sumf += x * c_row[j];
+            if constexpr (save_steps) {
+                if (j > 0) {
+                    y[j-1] = x;
+                }
+            }
         }
 
         dst_x[row + (size_t) t * nr] = sumf;
+
+        if constexpr (save_steps) {
+            y += (nc - 1)*nr;
+        }
     }
 }
 
-template <int split_n_t>
+template <int split_n_t, bool save_steps>
 static __global__ void ssm_conv_single_seq_f32_nc4(
         const float * src0,
         const float * src1,
         const float * src2,
         float * dst_x,
+        [[maybe_unused]] float * saved,
         int nr,
         int n_t,
         int src0_s0,
@@ -67,6 +83,11 @@ static __global__ void ssm_conv_single_seq_f32_nc4(
     const int t0 = blockIdx.y * split_n_t;
     if (t0 >= n_t) {
         return;
+    }
+
+    [[maybe_unused]] float * y;
+    if constexpr (save_steps) {
+        y = saved + 3*(t0*nr + row);
     }
 
     const float * state_row = src0 + (size_t) row * src0_s1;
@@ -94,6 +115,13 @@ static __global__ void ssm_conv_single_seq_f32_nc4(
         const float x3 = i3 < 3 ? state_row[(size_t) i3 * src0_s0] : src1[row + (size_t) (i3 - 3) * src1_s1];
 
         dst_x[row + (size_t) t * nr] = x0 * c0 + x1 * c1 + x2 * c2 + x3 * c3;
+
+        if constexpr (save_steps) {
+            y[0] = x1;
+            y[1] = x2;
+            y[2] = x3;
+            y += 3*nr;
+        }
     }
 }
 
@@ -427,6 +455,7 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src1 = dst->src[1]; // x: [d_inner, n_tokens]
     const ggml_tensor * src2 = dst->src[2]; // conv1d.weight: [d_conv, d_inner]
     const ggml_tensor * src3 = dst->src[3]; // state_seq: [n_kv, n_tokens]
+    const ggml_tensor * src4 = dst->src[4]; // [d_conv - 1, d_inner, n_tokens]
 
     const int nc   = src2->ne[0];
     const int nr   = src0->ne[1];
@@ -455,6 +484,12 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src3->ne[0] == src0->ne[2]);
     GGML_ASSERT(src3->ne[1] == src1->ne[1]);
 
+    if (src4) {
+        GGML_ASSERT(n_kv == 1);
+        GGML_ASSERT(src4->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_nelements(src4) >= (nc - 1)*nr*n_t);
+    }
+
     float * dst_data = (float *) dst->data;
     float * dst_x = dst_data;
     float * dst_state = dst_data + (size_t) nr * n_t;
@@ -476,22 +511,42 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         constexpr int split_n_t = 32;
         const dim3 token_grid(row_grid.x, (n_t + split_n_t - 1) / split_n_t, 1);
 
-        if (nc == 4) {
-            ssm_conv_single_seq_f32_nc4<split_n_t><<<token_grid, block_dims, 0, ctx.stream()>>>(
-                (const float *) src0->data,
-                (const float *) src1->data,
-                (const float *) src2->data,
-                dst_x,
-                nr, n_t,
-                src0_s0, src0_s1, src1_s1);
+        if (src4) {
+            if (nc == 4) {
+                ssm_conv_single_seq_f32_nc4<split_n_t, true><<<token_grid, block_dims, 0, ctx.stream()>>>(
+                        (const float *) src0->data,
+                        (const float *) src1->data,
+                        (const float *) src2->data,
+                        dst_x, (float *)src4->data,
+                        nr, n_t,
+                        src0_s0, src0_s1, src1_s1);
+            } else {
+                ssm_conv_single_seq_f32<split_n_t, true><<<token_grid, block_dims, 0, ctx.stream()>>>(
+                        (const float *) src0->data,
+                        (const float *) src1->data,
+                        (const float *) src2->data,
+                        dst_x, (float *)src4->data,
+                        nc, nr, n_t,
+                        src0_s0, src0_s1, src1_s1);
+            }
         } else {
-            ssm_conv_single_seq_f32<split_n_t><<<token_grid, block_dims, 0, ctx.stream()>>>(
-                (const float *) src0->data,
-                (const float *) src1->data,
-                (const float *) src2->data,
-                dst_x,
-                nc, nr, n_t,
-                src0_s0, src0_s1, src1_s1);
+            if (nc == 4) {
+                ssm_conv_single_seq_f32_nc4<split_n_t, false><<<token_grid, block_dims, 0, ctx.stream()>>>(
+                        (const float *) src0->data,
+                        (const float *) src1->data,
+                        (const float *) src2->data,
+                        dst_x, nullptr,
+                        nr, n_t,
+                        src0_s0, src0_s1, src1_s1);
+            } else {
+                ssm_conv_single_seq_f32<split_n_t, false><<<token_grid, block_dims, 0, ctx.stream()>>>(
+                        (const float *) src0->data,
+                        (const float *) src1->data,
+                        (const float *) src2->data,
+                        dst_x, nullptr,
+                        nc, nr, n_t,
+                        src0_s0, src0_s1, src1_s1);
+            }
         }
 
         ssm_conv_single_seq_final_state_f32<<<row_grid, block_dims, 0, ctx.stream()>>>(

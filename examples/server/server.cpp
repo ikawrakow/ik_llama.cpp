@@ -584,7 +584,13 @@ int main(int argc, char ** argv) {
         state.store(SERVER_STATE_ERROR);
         return 1;
     } else {
-        ctx_server.init();
+        try {
+            ctx_server.init();
+        } catch (const std::exception & e) {
+            LOG_ERROR("server init failed", {{"error", e.what()}});
+            state.store(SERVER_STATE_ERROR);
+            return 1;
+        }
         state.store(SERVER_STATE_READY);
     }
 

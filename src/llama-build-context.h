@@ -240,6 +240,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_gemma4();
 
+    ggml_cgraph * build_gemma4_mtp();
+
     ggml_cgraph * build_starcoder2();
 
     ggml_cgraph * build_mamba();
@@ -339,7 +341,8 @@ struct llm_build_context {
                     int32_t   kv_head,
                     int32_t   n_kv,
                     float     kq_scale,
-         const llm_build_cb & cb, int il, ggml_tensor * sinks = nullptr, int n_swa = 0);
+         const llm_build_cb & cb, int il, ggml_tensor * sinks = nullptr, int n_swa = 0, int kv_il = -1,
+         ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr);
 
     static ggml_tensor * llm_build_ffn(ggml_context * ctx, llama_context & lctx, ggml_tensor * ffn_norm,
          ggml_tensor * cur,
@@ -471,11 +474,11 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_tensor * inp_pos
     );
 
-    struct ggml_tensor * build_deepseek2_mtp(
+    struct ggml_tensor * build_qwen35moe_mtp(
         const struct llama_layer & mtp_layer,
         struct ggml_tensor * prev_embeddings,
+        int64_t n_embd_head,
         struct ggml_cgraph * gf,
-        struct ggml_tensor * inp_pos,
-        struct ggml_tensor * rope_cache
+        struct ggml_tensor * inp_pos
     );
 };

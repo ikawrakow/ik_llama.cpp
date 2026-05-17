@@ -76,7 +76,7 @@ IQK_API void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const fl
 IQK_API bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_type, int n_tokens, int n_seqs,
         size_t vnb1, size_t vnb2, size_t vnb3,
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
-        const float * state_in, float * out_data, float * state_out, int save_all_steps, int state_step_stride, int ith, int nth);
+        const float * state_in, float * out_data, float * state_out, float * saved_steps, int state_step_stride, int ith, int nth);
 
 #ifdef __cplusplus
 }

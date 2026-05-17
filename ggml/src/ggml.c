@@ -4738,7 +4738,7 @@ GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
     }
     else {
-        nbytes = tensor->nb[1]; //tensor->ne[0]*tensor->nb[0]/blck_size;
+        nbytes = ggml_row_size(tensor->type, tensor->ne[0]);
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
@@ -6944,6 +6944,40 @@ struct ggml_tensor * ggml_concat(
     return result;
 }
 
+struct ggml_tensor * ggml_concat_inplace(
+    struct ggml_context * ctx,
+    struct ggml_tensor * a,
+    struct ggml_tensor * b,
+    struct ggml_tensor * result_in,
+    int dim) {
+    GGML_ASSERT(dim >= 0 && dim < GGML_MAX_DIMS);
+    if (!result_in) {
+        return ggml_concat(ctx, a, b, dim);
+    }
+
+    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+        int64_t ne;
+        if (d == dim) {
+            ne = a->ne[d] + b->ne[d];
+        } else {
+            GGML_ASSERT(a->ne[d] == b->ne[d]);
+            ne = a->ne[d];
+        }
+        GGML_ASSERT(ne == result_in->ne[d]);
+    }
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, result_in);
+
+    ggml_set_op_params_i32(result, 0, dim);
+
+    result->op = GGML_OP_CONCAT;
+    result->grad = NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml_abs
 
 struct ggml_tensor * ggml_abs(
@@ -7765,6 +7799,32 @@ struct ggml_tensor * ggml_mul_mat(
     return result;
 }
 
+struct ggml_tensor * ggml_mul_mat_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * result_in) {
+    if (!result_in) {
+        return ggml_mul_mat(ctx, a, b);
+    }
+    GGML_ASSERT(ggml_can_mul_mat(a, b));
+    GGML_ASSERT(!ggml_is_transposed(a));
+    GGML_ASSERT(b->ne[2] == 1 && b->ne[3] == 1);
+
+    const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
+    GGML_ASSERT(result_in->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_nelements(result_in) >= ne[0]*ne[1]);
+
+    struct ggml_tensor * result = ggml_view_2d(ctx, result_in, ne[0], ne[1], ne[0]*sizeof(float), 0);
+
+    result->op   = GGML_OP_MUL_MAT;
+    result->grad = NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 void ggml_mul_mat_set_prec(
         struct ggml_tensor * a,
         enum ggml_prec       prec) {
@@ -8518,6 +8578,36 @@ struct ggml_tensor * ggml_reshape_4d(
 
     return result;
 }
+
+struct ggml_tensor * ggml_reshape_4d_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        enum ggml_type        type,
+        int64_t               ne0,
+        int64_t               ne1,
+        int64_t               ne2,
+        int64_t               ne3) {
+
+    bool is_node = false;
+
+    if (a->grad) {
+        is_node = true;
+    }
+
+    const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, type, 4, ne, a, 0);
+    ggml_format_name_fast(a->name, " (reshaped)", 11, result->name);
+
+    GGML_ASSERT(ggml_nbytes(a) == ggml_nbytes(result));
+
+    result->op   = GGML_OP_RESHAPE;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+
 
 static struct ggml_tensor * ggml_view_impl(
         struct ggml_context * ctx,
@@ -9941,7 +10031,7 @@ struct ggml_tensor * ggml_delta_net(
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
         struct ggml_tensor  * state,
-        bool save_all_steps) {
+        struct ggml_tensor  * saved_steps) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
     GGML_ASSERT(ggml_is_contiguous(state));
@@ -9972,17 +10062,21 @@ struct ggml_tensor * ggml_delta_net(
     const int64_t output_size = S_v * H_v * n_tokens * n_seqs;
     const int64_t state_size  = S_v * S_v * H_v * n_seqs;
 
-    const int64_t state_slots = save_all_steps ? n_tokens : 1;
-    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_size + state_slots * state_size);
+    if (saved_steps) {
+        GGML_ASSERT(saved_steps->type == GGML_TYPE_F32);
+        GGML_ASSERT(saved_steps->ne[0] >= (n_tokens - 1)*state_size);
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_size + state_size);
 
     result->op     = GGML_OP_DELTA_NET;
-    result->op_params[1] = save_all_steps ? 1 : 0;
     result->src[0] = q;
     result->src[1] = k;
     result->src[2] = v;
     result->src[3] = g;
     result->src[4] = beta;
     result->src[5] = state;
+    result->src[6] = saved_steps;
 
     return result;
 }
@@ -10355,7 +10449,8 @@ struct ggml_tensor * ggml_ssm_conv(
         struct ggml_tensor  * s,
         struct ggml_tensor  * x,
         struct ggml_tensor  * c,
-        struct ggml_tensor  * sq) {
+        struct ggml_tensor  * sq,
+        struct ggml_tensor  * saved_steps) {
     GGML_ASSERT(ggml_is_3d(s));
     GGML_ASSERT(ggml_is_matrix(x));
     GGML_ASSERT(ggml_is_matrix(c));
@@ -10373,6 +10468,12 @@ struct ggml_tensor * ggml_ssm_conv(
     GGML_ASSERT(sq->ne[0] == n_kv);
     GGML_ASSERT(sq->ne[1] == n_tokens);
 
+    if (saved_steps) {
+        GGML_ASSERT(n_kv == 1);
+        GGML_ASSERT(saved_steps->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_nelements(saved_steps) >= (d_conv - 1)*d_inner*n_tokens);
+    }
+
     bool is_node = false;
 
     if (s->grad || x->grad || c->grad || sq->grad) {
@@ -10389,6 +10490,7 @@ struct ggml_tensor * ggml_ssm_conv(
     result->src[1] = x;
     result->src[2] = c;
     result->src[3] = sq;
+    result->src[4] = saved_steps;
 
     return result;
 }
@@ -20419,7 +20521,6 @@ static void ggml_compute_forward_im2col_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F16);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
@@ -20450,7 +20551,7 @@ static void ggml_compute_forward_im2col_f32(
     int ofs0 = is_2D ? nb13 : nb12;
     int ofs1 = is_2D ? nb12 : nb11;
 
-    GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
+    GGML_ASSERT(nb00 == (src0->type == GGML_TYPE_F16 ? sizeof(ggml_fp16_t) : sizeof(float)));
     GGML_ASSERT(nb10 == sizeof(float));
 
     // im2col: [N, IC, IH, IW] => [N, OH, OW, IC*KH*KW]
@@ -22305,6 +22406,7 @@ static int ggml_compute_forward_ssm_conv_f32(
     const struct ggml_tensor * src1 = dst->src[1]; // x
     const struct ggml_tensor * src2 = dst->src[2]; // conv1d.weight
     const struct ggml_tensor * src3 = dst->src[3]; // state_seq
+    const struct ggml_tensor * src4 = dst->src[4]; // state_seq
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -22314,6 +22416,11 @@ static int ggml_compute_forward_ssm_conv_f32(
     const int n_t  = src1->ne[1]; // n_tokens
     const int n_kv = src0->ne[2]; // max number of sequences in the batch
 
+    if (src4) {
+        GGML_ASSERT(n_kv == 1);
+        GGML_ASSERT(src4->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_nelements(src4) >= (nc - 1)*nr*n_t);
+    }
     GGML_ASSERT((nr*n_t) + (nc*nr*n_kv) == ggml_nelements(dst));
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
@@ -22323,7 +22430,7 @@ static int ggml_compute_forward_ssm_conv_f32(
     // for use with the destination state offset between sequences
     GGML_ASSERT(src2->nb[2] == src2->ne[1]*src2->ne[0]*sizeof(float));
 
-    if (n_kv == 1 && nc == 4) {
+    if (n_kv == 1 && nc == 4 && !src4) { // TODO: implement per token state saving in iqk_ssm_conv4
         float * dst_silu = NULL;
         if (node < cgraph->n_nodes + 2 &&
             cgraph->nodes[node+1]->op == GGML_OP_VIEW && cgraph->nodes[node+1]->src[0] == dst &&
@@ -22368,6 +22475,8 @@ static int ggml_compute_forward_ssm_conv_f32(
         }
     }
 
+    float * y = src4 ? (float *)src4->data + ir0*(nc-1) : NULL;
+
     for (int i2 = 0; i2 < n_t; ++i2) {
         int32_t * sq = (int32_t *) ((char *) src3->data +  i2*(src3->nb[1])); // {n_kv, n_tokens}
         float *   x  = (float *)   ((char *)  dst->data + ir0*sizeof(float) + i2*(nr*sizeof(float))); // {d_inner, n_tokens}
@@ -22397,6 +22506,14 @@ static int ggml_compute_forward_ssm_conv_f32(
             }
             // insert x on the last column
             s[(nc - 1) + i1*nc] = x0[i1];
+        }
+        if (y) {
+            for (int i1 = 0; i1 < ir; ++i1) {
+                for (int i0 = 0; i0 < nc - 1; ++i0) {
+                    y[i0 + i1*(nc-1)] = s[i0 + 1 + i1*nc];
+                }
+            }
+            y += nr*(nc - 1);
         }
 
         // handle copies when there are multiple output states
@@ -22640,6 +22757,7 @@ static void ggml_compute_forward_delta_net_f32(
     const struct ggml_tensor * src3 = dst->src[3];
     const struct ggml_tensor * src4 = dst->src[4];
     const struct ggml_tensor * src5 = dst->src[5];
+    const struct ggml_tensor * src6 = dst->src[6];
 
     const int64_t head_dim = src0->ne[0];
     const int64_t n_tokens = src0->ne[1];
@@ -22657,19 +22775,24 @@ static void ggml_compute_forward_delta_net_f32(
     const float * beta_data = (const float *) src4->data;
     const float * state_in  = (const float *) src5->data;
     float * out_data  = (float *) dst->data;
+    float * saved_steps = src6 ? (float *)src6->data : NULL;
 
     const int ith = params->ith;
     const int nth = params->nth;
 
     int repeat_type = dst->op_params[0];
-    const int save_all_steps = dst->op_params[1];
     const int64_t state_step_stride = head_dim * head_dim * n_heads * n_seqs;
     float * state_working = out_data + output_size;
+
+    if (src6) {
+        GGML_ASSERT(src6->type == GGML_TYPE_F32);
+        GGML_ASSERT(src6->ne[0] >= (n_tokens - 1)*state_step_stride);
+    }
 
     if (iqk_fused_delta_net(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
                 src2->nb[1]/sizeof(float), src2->nb[2]/sizeof(float), src2->nb[3]/sizeof(float),
                 q_data, k_data, v_data, g_data, beta_data, state_in,
-                out_data, state_working, save_all_steps, (int) state_step_stride, ith, nth)) {
+                out_data, state_working, saved_steps, (int) state_step_stride, ith, nth)) {
         return;
     }
 
@@ -22697,11 +22820,11 @@ static void ggml_compute_forward_delta_net_f32(
         const int64_t out_head_offset  = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim;
         const int64_t out_token_stride = head_dim * n_heads;
 
+        float * state = state_working + state_head_offset;
         for (int64_t i = 0; i < head_dim * head_dim; ++i) {
-            state_working[state_head_offset + i] = state_in[state_head_offset + i];
+            state[i] = state_in[state_head_offset + i];
         }
 
-        float * state = state_working + state_head_offset;
         const int64_t state_head_size = head_dim * head_dim;
 
         for (int64_t t = 0; t < n_tokens; ++t) {
@@ -22758,10 +22881,9 @@ static void ggml_compute_forward_delta_net_f32(
                 }
             }
 
-            if (save_all_steps && t + 1 < n_tokens) {
-                float * next_state = state_working + (t + 1) * state_step_stride + state_head_offset;
+            if (saved_steps && t + 1 < n_tokens) {
+                float * next_state = saved_steps + state_head_offset + t * state_step_stride;
                 memcpy(next_state, state, state_head_size * sizeof(float));
-                state = next_state;
             }
         }
     }

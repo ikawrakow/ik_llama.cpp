@@ -88,12 +88,13 @@ struct llama_kv_cache {
         std::vector<std::vector<ggml_tensor *>> split_s_l_shadow;
 
         // Per-step SSM state checkpoints for speculative decoding.
-        std::vector<ggml_tensor *> per_step_ssm;
+        std::vector<std::vector<ggml_tensor *>> per_step_ssm;
 
         // Per-step conv feature buffer: stores qkv_mixed features from the
         // verification forward pass so conv state can be reconstructed at any step.
         // One tensor per recurrent layer, each sized [conv_dim * max_tokens].
-        std::vector<ggml_tensor *> per_step_qkv;
+        //std::vector<std::vector<ggml_tensor *>> per_step_qkv;
+        std::vector<std::vector<ggml_tensor *>> per_step_conv;
 
         int32_t per_step_n_tokens = 0;
         int32_t per_step_max_allocated = 0;
@@ -103,6 +104,8 @@ struct llama_kv_cache {
         int32_t per_step_d_conv = 0;
 
         int selected_spec_mode = -1;
+        int fixed_spec_mode = LLAMA_SPEC_CKPT_NONE;
+        int32_t fixed_max_tokens = 0;
 
         // Serialised sequence state for CPU mode
         std::vector<uint8_t> cpu_state_data;
@@ -115,6 +118,7 @@ struct llama_kv_cache {
         std::vector<ggml_backend_buffer_t>   shadow_bufs;
 
         bool allocated = false;
+        bool shadow_conv_only = false;
         bool saved     = false;
 
         ~gpu_checkpoint() {
@@ -135,15 +139,15 @@ struct llama_kv_cache {
 
     gpu_checkpoint ckpt;
 
-    bool checkpoint_alloc_shadows();
+    bool checkpoint_alloc_shadows(bool conv_only_shadow = false);
     bool checkpoint_supported() const;
-    bool checkpoint_save();
-    bool checkpoint_restore();
+    bool checkpoint_save(ggml_backend_sched_t sched);
+    bool checkpoint_restore(ggml_backend_sched_t sched);
     void checkpoint_delete();
 
     // Per-step checkpoint: allocate, restore step k's full state (SSM + conv) to cache
-    bool per_step_alloc(int max_tokens);
-    bool per_step_restore(int step);
+    bool per_step_alloc(const llama_model & model, int max_tokens);
+    bool per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step);
 
     ~llama_kv_cache() {
         for (struct ggml_context * ctx : ctxs) {
@@ -199,6 +203,7 @@ struct llama_context {
     struct llama_cparams        cparams;
     struct llama_sampling       sampling;
     struct llama_kv_cache       kv_self;
+    struct llama_context      * mtp_target_ctx   = nullptr;
     struct llama_control_vector cvec;
 
     std::vector<float> scale_data;
