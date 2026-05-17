@@ -124,7 +124,6 @@ bool common_speculative_copy_output_hidden_rows(
     llama_context * ctx,
     const std::vector<int32_t> & output_indices,
     std::vector<float> & hidden_rows);
-bool common_speculative_capture_target_features(common_speculative * spec, const common_speculative_feature_view & features);
 bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id);
 bool common_speculative_copy_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id, std::vector<float> & hidden);
 void common_speculative_restore_sequence_hidden(common_speculative * spec, llama_seq_id seq_id, const std::vector<float> & hidden);
@@ -140,8 +139,6 @@ int32_t common_speculative_on_target_batch(
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0, int n_past = 0, common_params_speculative * active_params = nullptr);
 
-// get the MTP context from the speculative object (nullptr if not MTP type)
-llama_context * common_speculative_get_mtp_ctx(common_speculative * spec);
 common_speculative_type common_speculative_current_type(const common_speculative * spec);
 
 // Context shift for MTP to match how server handle main model

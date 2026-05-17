@@ -1581,6 +1581,10 @@ static bool common_speculative_feature_view_copy_batch_rows(
     return hidden_rows->size() == (size_t) batch.n_tokens * view.width;
 }
 
+static bool common_speculative_capture_target_features(
+        common_speculative * spec,
+        const common_speculative_feature_view & features);
+
 static common_speculative_feature_kind common_speculative_feature_kind_from_llama(llama_spec_feature_kind kind) {
     switch (kind) {
         case LLAMA_SPEC_FEATURE_HIDDEN_STATE:
@@ -1829,7 +1833,7 @@ std::vector<common_speculative_feature_request> common_speculative_get_feature_r
     return requests;
 }
 
-bool common_speculative_capture_target_features(common_speculative * spec, const common_speculative_feature_view & features) {
+static bool common_speculative_capture_target_features(common_speculative * spec, const common_speculative_feature_view & features) {
     auto * mtp_state = common_speculative_get_mtp_state(spec);
     if (mtp_state == nullptr || features.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE || features.width <= 0) {
         return false;
@@ -1979,10 +1983,6 @@ int32_t common_speculative_on_target_batch(
     return mtp_accept_batch(*mtp_state, batch, seq_id, first_hidden);
 }
 
-llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
-    return common_speculative_get_companion_ctx(spec);
-}
-
 common_speculative_type common_speculative_current_type(const common_speculative * spec) {
     if (spec == nullptr || spec->curr_impl == nullptr) {
         return COMMON_SPECULATIVE_TYPE_NONE;
@@ -1997,7 +1997,7 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past) {
-    if (auto * ctx_mtp = common_speculative_get_mtp_ctx(spec); ctx_mtp != nullptr) {
+    if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
         llama_kv_cache_seq_rm (ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
         llama_kv_cache_seq_add(ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
     }
