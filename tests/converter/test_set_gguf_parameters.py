@@ -81,5 +81,41 @@ class Qwen35MoeSetGgufParametersTests(unittest.TestCase):
         )
 
 
+class Qwen35DenseSetGgufParametersTests(unittest.TestCase):
+    """Task 4: Qwen3_5TextModel.set_gguf_parameters must emit nextn_predict_layers
+    when _nextn_layers > 0, mirroring Qwen3_5MoeTextModel.set_gguf_parameters."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(CONVERT) as f:
+            cls.tree = ast.parse(f.read())
+        cls.dense_cls = _find_class(cls.tree, "Qwen3_5TextModel")
+
+    def test_dense_set_gguf_parameters_emits_nextn_with_guard(self):
+        """Qwen3_5TextModel.set_gguf_parameters must call
+        add_nextn_predict_layers guarded by 'self._nextn_layers > 0', exactly
+        mirroring the MoE sibling. Without this the GGUF metadata omits
+        NEXTN_PREDICT_LAYERS and the runtime never activates MTP draft decoding."""
+        m = _override(self.dense_cls, "set_gguf_parameters")
+        self.assertIsNotNone(
+            m,
+            "Qwen3_5TextModel.set_gguf_parameters not found — cannot verify "
+            "nextn_predict_layers emission.",
+        )
+        body = ast.unparse(m)
+        self.assertIn(
+            "add_nextn_predict_layers",
+            body,
+            "Qwen3_5TextModel.set_gguf_parameters does not call "
+            "add_nextn_predict_layers — MTP metadata will be missing from the GGUF.",
+        )
+        self.assertIn(
+            "self._nextn_layers > 0",
+            body,
+            "Qwen3_5TextModel.set_gguf_parameters must guard add_nextn_predict_layers "
+            "with 'self._nextn_layers > 0' so the key is not written for non-MTP models.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

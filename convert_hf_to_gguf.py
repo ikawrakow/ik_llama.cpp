@@ -2577,6 +2577,8 @@ class Qwen3_5TextModel(Qwen2Model):
             self.gguf_writer.add_ssm_time_step_rank(n_v_heads)
             if (v_head_dim := self.hparams.get("linear_value_head_dim")) is not None:
                 self.gguf_writer.add_ssm_inner_size(v_head_dim * n_v_heads)
+        if self._nextn_layers > 0:
+            self.gguf_writer.add_nextn_predict_layers(self._nextn_layers)
 
     def prepare_tensors(self):
         # Fix: for Qwen3.5, post_attention_layernorm should map to ATTN_POST_NORM
