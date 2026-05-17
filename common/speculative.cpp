@@ -281,7 +281,10 @@ struct common_speculative_state_mtp : public common_speculative_state {
             return;
         }
 
-        llama_set_draft_input_hidden_state(ctx, hidden_it->second.data());
+        if (!llama_set_draft_input_hidden_state_copy(ctx, hidden_it->second.data(), hidden_it->second.size())) {
+            result.clear();
+            return;
+        }
 
         result = mtp_speculative_gen_draft(
             *this,
@@ -1901,7 +1904,10 @@ static int32_t mtp_accept_batch(
         return 0;
     }
 
-    llama_set_draft_input_hidden_state(state.ctx_mtp, hidden_rows);
+    const size_t hidden_rows_floats = (size_t) accepted_batch.n_tokens * state.n_embd;
+    if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, hidden_rows, hidden_rows_floats)) {
+        return -1;
+    }
     if (mtp_update_kv_cache(state.ctx_mtp, accepted_batch, false) != 0) {
         return -1;
     }
@@ -1910,7 +1916,9 @@ static int32_t mtp_accept_batch(
     const float * embd = llama_get_embeddings_ith(state.ctx_mtp, accepted_batch.n_tokens - 1);
     if (embd != nullptr) {
         std::memcpy(last.embd.data(), embd, last.embd.size() * sizeof(float));
-        llama_set_draft_input_hidden_state(state.ctx_mtp, last.embd.data());
+        if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, last.embd.data(), last.embd.size())) {
+            return -1;
+        }
         last.last_id = common_sampler_sample_speculative(nullptr, state.ctx_mtp, accepted_batch.n_tokens - 1, &last.prob);
     }
 
@@ -1960,7 +1968,9 @@ int32_t common_speculative_on_target_batch(
     GGML_UNUSED(seed_hidden);
 
     if (is_prompt_warmup) {
-        llama_set_draft_input_hidden_state(mtp_state->ctx_mtp, hidden_rows_storage.data());
+        if (!llama_set_draft_input_hidden_state_copy(mtp_state->ctx_mtp, hidden_rows_storage.data(), hidden_rows_storage.size())) {
+            return -1;
+        }
         const int32_t ret = mtp_update_kv_cache(mtp_state->ctx_mtp, batch, true);
         mtp_invalidate_cached_draft(*mtp_state, seq_id);
         return ret;
@@ -2036,7 +2046,11 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         last.last_id = -1;
         drafts.push_back(current_input_id);
         current_n_past++;
-        llama_set_draft_input_hidden_state(ctx, last.embd.data());
+        if (!llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
+            llama_batch_free(mtp_batch);
+            llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+            return drafts;
+        }
         i0 = 1;
     }
 
@@ -2066,7 +2080,9 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
         // Keep a stable copy because later decode steps reuse ctx->embd storage.
         memcpy(last.embd.data(), emb, n_embd * sizeof(float));
-        llama_set_draft_input_hidden_state(ctx, last.embd.data());
+        if (!llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
+            break;
+        }
 
         current_input_id = id_next;
         current_n_past++;

@@ -287,6 +287,8 @@ struct llama_context {
     void *              abort_callback_data = nullptr;
 
     const float * draft_input_hidden_state = nullptr;
+    size_t draft_input_hidden_state_n_floats = 0;
+    std::vector<float> draft_input_hidden_state_owned;
 
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
@@ -353,3 +355,8 @@ struct llama_context {
         struct llama_context * ctx,
         const std::vector<int32_t> & output_indices,
         std::vector<float>         & hidden_rows);
+
+    bool llama_set_draft_input_hidden_state_copy(
+        struct llama_context * ctx,
+        const float * hidden_state,
+        size_t n_floats);

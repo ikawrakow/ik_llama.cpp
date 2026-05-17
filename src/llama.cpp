@@ -4364,9 +4364,16 @@ static void llama_graph_compute(
 static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
     ggml_tensor * dst = lctx.inp_mtp_states;
     const float * src = lctx.draft_input_hidden_state;
+    const size_t expected_floats = ggml_nbytes(dst) / sizeof(float);
 
     if (!src) {
         LLAMA_LOG_ERROR("%s: Source hidden state is null\n", __func__);
+        return false;
+    }
+
+    if (lctx.draft_input_hidden_state_n_floats != expected_floats) {
+        LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
+                __func__, lctx.draft_input_hidden_state_n_floats, expected_floats);
         return false;
     }
 
@@ -9042,6 +9049,20 @@ bool llama_spec_copy_hidden_rows_from_output_indices(
     return hidden_rows.size() == (size_t) output_indices.size() * view.width;
 }
 
+bool llama_set_draft_input_hidden_state_copy(
+        struct llama_context * ctx,
+        const float * hidden_state,
+        size_t n_floats) {
+    if (ctx == nullptr || hidden_state == nullptr || n_floats == 0) {
+        return false;
+    }
+
+    ctx->draft_input_hidden_state_owned.assign(hidden_state, hidden_state + n_floats);
+    ctx->draft_input_hidden_state = ctx->draft_input_hidden_state_owned.data();
+    ctx->draft_input_hidden_state_n_floats = n_floats;
+    return true;
+}
+
 float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {
     int32_t j = -1;
 
@@ -10299,7 +10320,11 @@ void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_of
 }
 
 void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state) {
+    ctx->draft_input_hidden_state_owned.clear();
     ctx->draft_input_hidden_state = hidden_state;
+    ctx->draft_input_hidden_state_n_floats = ctx->inp_mtp_states
+        ? ggml_nbytes(ctx->inp_mtp_states) / sizeof(float)
+        : 0;
 }
 
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
