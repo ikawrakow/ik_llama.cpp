@@ -1464,45 +1464,72 @@ bool common_speculative_has_type(const common_speculative * spec, common_specula
     });
 }
 
-static bool common_speculative_feature_view_find_seq_rows(
-        const common_speculative_feature_view & view,
-        llama_seq_id seq_id,
-        const float ** first_row,
-        const float ** last_row) {
-    if (first_row != nullptr) {
-        *first_row = nullptr;
-    }
-    if (last_row != nullptr) {
-        *last_row = nullptr;
-    }
+static int common_speculative_ctx_mtp_n_embd(llama_context * ctx) {
+    return ctx ? (int) llama_mtp_state_n_embd(ctx) : 0;
+}
 
-    if (view.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE || view.width <= 0) {
+static bool common_speculative_batch_token_has_seq_id(
+        const llama_batch & batch,
+        int token_index,
+        llama_seq_id seq_id) {
+    if (batch.n_seq_id == nullptr || batch.seq_id == nullptr || batch.n_seq_id[token_index] <= 0 || batch.seq_id[token_index] == nullptr) {
         return false;
     }
 
-    const common_speculative_feature_row_view * first_row_view = nullptr;
-    const common_speculative_feature_row_view * last_row_view = nullptr;
-    for (const auto & row : view.rows) {
-        if (row.seq_id != seq_id || row.data == nullptr) {
+    for (int i = 0; i < batch.n_seq_id[token_index]; ++i) {
+        if (batch.seq_id[token_index][i] == seq_id) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool common_speculative_batch_is_exact_single_seq(
+        const llama_batch & batch,
+        llama_seq_id seq_id) {
+    if (batch.n_tokens <= 0 || batch.n_seq_id == nullptr || batch.seq_id == nullptr) {
+        return false;
+    }
+
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] != 1 || batch.seq_id[i] == nullptr || batch.seq_id[i][0] != seq_id) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static int common_speculative_copy_seq_batch(
+        const llama_batch & batch,
+        llama_seq_id seq_id,
+        llama_batch & seq_batch) {
+    if (batch.token == nullptr || batch.pos == nullptr) {
+        return -1;
+    }
+
+    int n_seq_tokens = 0;
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (common_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
+            ++n_seq_tokens;
+        }
+    }
+
+    if (n_seq_tokens == 0) {
+        return 0;
+    }
+
+    seq_batch = llama_batch_init(n_seq_tokens, 0, 1);
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (!common_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
             continue;
         }
 
-        if (first_row_view == nullptr || row.pos < first_row_view->pos) {
-            first_row_view = &row;
-        }
-        if (last_row_view == nullptr || row.pos > last_row_view->pos) {
-            last_row_view = &row;
-        }
+        common_batch_add(seq_batch, batch.token[i], batch.pos[i], { seq_id }, batch.logits != nullptr && batch.logits[i]);
     }
 
-    if (first_row != nullptr) {
-        *first_row = first_row_view != nullptr ? first_row_view->data : nullptr;
-    }
-    if (last_row != nullptr) {
-        *last_row = last_row_view != nullptr ? last_row_view->data : nullptr;
-    }
-
-    return first_row_view != nullptr && last_row_view != nullptr;
+    return n_seq_tokens;
 }
 
 static bool common_speculative_feature_view_copy_batch_rows(
@@ -1541,33 +1568,6 @@ static bool common_speculative_capture_target_features(
         common_speculative * spec,
         const common_speculative_feature_view & features);
 
-static common_speculative_feature_kind common_speculative_feature_kind_from_llama(llama_spec_feature_kind kind) {
-    switch (kind) {
-        case LLAMA_SPEC_FEATURE_HIDDEN_STATE:
-            return COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
-        case LLAMA_SPEC_FEATURE_NONE:
-        default:
-            return COMMON_SPECULATIVE_FEATURE_NONE;
-    }
-}
-
-static void common_speculative_feature_view_from_llama(
-        const llama_spec_feature_view & src,
-        common_speculative_feature_view & dst) {
-    dst.kind = common_speculative_feature_kind_from_llama(src.kind);
-    dst.width = src.width;
-    dst.rows.clear();
-    dst.rows.reserve(src.rows.size());
-
-    for (const auto & row : src.rows) {
-        dst.rows.push_back({
-            /* .seq_id = */ row.seq_id,
-            /* .pos    = */ row.pos,
-            /* .data   = */ row.data,
-        });
-    }
-}
-
 static bool common_speculative_feature_view_from_hidden_rows(
         const std::vector<float> & hidden_rows,
         int32_t width,
@@ -1605,12 +1605,10 @@ bool common_speculative_collect_target_batch_features(
         return true;
     }
 
-    llama_spec_feature_view llama_features;
-    if (!llama_spec_get_hidden_feature_view(ctx, batch, llama_features)) {
+    if (!llama_spec_get_hidden_feature_view(ctx, batch, features)) {
         return false;
     }
 
-    common_speculative_feature_view_from_llama(llama_features, features);
     return true;
 }
 
@@ -1625,12 +1623,10 @@ bool common_speculative_collect_target_seq_batch_features(
         return true;
     }
 
-    llama_spec_feature_view llama_features;
-    if (!llama_spec_get_hidden_feature_view_for_seq(ctx, batch, seq_id, llama_features)) {
+    if (!llama_spec_get_hidden_feature_view_for_seq(ctx, batch, seq_id, features)) {
         return false;
     }
 
-    common_speculative_feature_view_from_llama(llama_features, features);
     return true;
 }
 
@@ -1644,14 +1640,78 @@ bool common_speculative_capture_output_hidden(
         return true;
     }
 
-    llama_spec_feature_view llama_features;
-    if (!llama_spec_get_hidden_feature_view_from_output_index(ctx, output_index, seq_id, pos, llama_features)) {
+    common_speculative_feature_view features;
+    if (!llama_spec_get_hidden_feature_view_from_output_index(ctx, output_index, seq_id, pos, features)) {
         return false;
     }
 
-    common_speculative_feature_view features;
-    common_speculative_feature_view_from_llama(llama_features, features);
     return common_speculative_capture_target_features(spec, features);
+}
+
+bool common_speculative_ensure_sequence_hidden(
+        common_speculative * spec,
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_pos pos) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) || common_speculative_has_sequence_hidden(spec, seq_id)) {
+        return true;
+    }
+
+    return common_speculative_capture_output_hidden(spec, ctx, -1, seq_id, pos);
+}
+
+int32_t common_speculative_on_target_seq_batch(
+        common_speculative * spec,
+        llama_context * ctx_tgt,
+        const llama_batch & batch,
+        llama_seq_id seq_id,
+        bool is_prompt_warmup) {
+    llama_context * ctx_mtp = common_speculative_get_companion_ctx(spec);
+    ctx_mtp = ctx_mtp ? ctx_mtp : ctx_tgt;
+    if (ctx_tgt == nullptr || ctx_mtp == nullptr || batch.n_tokens <= 0) {
+        return 0;
+    }
+
+    const int n_embd_src = common_speculative_ctx_mtp_n_embd(ctx_tgt);
+    const int n_embd_dst = common_speculative_ctx_mtp_n_embd(ctx_mtp);
+    if (n_embd_src <= 0 || n_embd_dst <= 0) {
+        return -1;
+    }
+
+    if (n_embd_src != n_embd_dst) {
+        LOG_ERR("MTP warmup hidden state width mismatch: n_embd_src = %d, n_embd_dst = %d\n", n_embd_src, n_embd_dst);
+        return -1;
+    }
+
+    common_speculative_feature_view feature_view;
+    const llama_batch * batch_for_spec = &batch;
+    llama_batch seq_batch = {};
+    const bool needs_seq_split = is_prompt_warmup && !common_speculative_batch_is_exact_single_seq(batch, seq_id);
+
+    if (needs_seq_split) {
+        const int n_seq_tokens = common_speculative_copy_seq_batch(batch, seq_id, seq_batch);
+        if (n_seq_tokens <= 0) {
+            return n_seq_tokens < 0 ? -1 : 0;
+        }
+
+        if (!common_speculative_collect_target_seq_batch_features(spec, ctx_tgt, batch, seq_id, feature_view)) {
+            llama_batch_free(seq_batch);
+            return -1;
+        }
+
+        batch_for_spec = &seq_batch;
+    } else {
+        if (!common_speculative_collect_target_batch_features(spec, ctx_tgt, batch, feature_view)) {
+            return -1;
+        }
+    }
+
+    const int32_t ret = common_speculative_on_target_batch(spec, *batch_for_spec, feature_view, is_prompt_warmup);
+    if (needs_seq_split) {
+        llama_batch_free(seq_batch);
+    }
+
+    return ret;
 }
 
 bool common_speculative_copy_output_hidden_rows(

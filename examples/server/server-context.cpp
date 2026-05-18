@@ -16,8 +16,6 @@
 #include <regex>
 #include <exception>
 
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
-
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1, int32_t offset = 0) {
     if (pos_min == -1) {
         pos_min = llama_kv_cache_seq_pos_min(ctx, id);
@@ -51,159 +49,10 @@ static bool params_use_gemma4_external_mtp(const gpt_params & params_base) {
         llama_model_is_gemma4_mtp_assistant(params_base.speculative.model_dft);
 }
 
-static llama_context * get_slot_mtp_ctx(server_slot & slot, llama_context * ctx) {
-    llama_context * mtp_ctx = common_speculative_get_companion_ctx(slot.spec);
-    return mtp_ctx ? mtp_ctx : ctx;
-}
-
-static int get_ctx_mtp_n_embd(llama_context * ctx) {
-    return ctx ? (int) llama_mtp_state_n_embd(ctx) : 0;
-}
-
-static int get_slot_mtp_n_embd(server_slot & slot, llama_context * ctx) {
-    return get_ctx_mtp_n_embd(get_slot_mtp_ctx(slot, ctx));
-}
-
-static bool server_speculative_batch_token_has_seq_id(
-        const llama_batch & batch,
-        int token_index,
-        llama_seq_id seq_id) {
-    if (batch.n_seq_id == nullptr || batch.seq_id == nullptr || batch.n_seq_id[token_index] <= 0 || batch.seq_id[token_index] == nullptr) {
-        return false;
-    }
-
-    for (int i = 0; i < batch.n_seq_id[token_index]; ++i) {
-        if (batch.seq_id[token_index][i] == seq_id) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool server_speculative_batch_has_seq_id(const llama_batch & batch, llama_seq_id seq_id) {
-    for (int i = 0; i < batch.n_tokens; ++i) {
-        if (server_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool server_speculative_batch_is_exact_single_seq(const llama_batch & batch, llama_seq_id seq_id) {
-    if (batch.n_tokens <= 0 || batch.n_seq_id == nullptr || batch.seq_id == nullptr) {
-        return false;
-    }
-
-    for (int i = 0; i < batch.n_tokens; ++i) {
-        if (batch.n_seq_id[i] != 1 || batch.seq_id[i] == nullptr || batch.seq_id[i][0] != seq_id) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static int server_speculative_copy_seq_batch(
-        const llama_batch & batch,
-        llama_seq_id seq_id,
-        llama_batch & seq_batch) {
-    if (batch.token == nullptr || batch.pos == nullptr) {
-        return -1;
-    }
-
-    int n_seq_tokens = 0;
-    for (int i = 0; i < batch.n_tokens; ++i) {
-        if (server_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
-            ++n_seq_tokens;
-        }
-    }
-
-    if (n_seq_tokens == 0) {
-        return 0;
-    }
-
-    seq_batch = llama_batch_init(n_seq_tokens, 0, 1);
-
-    for (int i = 0; i < batch.n_tokens; ++i) {
-        if (!server_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
-            continue;
-        }
-
-        common_batch_add(seq_batch, batch.token[i], batch.pos[i], { seq_id }, batch.logits != nullptr && batch.logits[i]);
-    }
-
-    return n_seq_tokens;
-}
-
-static void server_speculative_capture_hidden(server_slot & slot, llama_context * ctx, int32_t output_index, llama_pos pos) {
-    if (!slot.has_mtp || !slot.spec) {
-        return;
-    }
-
-    (void) common_speculative_capture_output_hidden(slot.spec, ctx, output_index, slot.id, pos);
-}
-
 struct server_mtp_warmup {
     llama_context * ctx_tgt;
     server_slot   * slot;
 };
-
-static int32_t server_speculative_target_batch(
-        llama_context * ctx_tgt,
-        const llama_batch * batch,
-        server_slot & slot,
-    bool is_prompt_warmup) {
-    llama_context * ctx_mtp = get_slot_mtp_ctx(slot, ctx_tgt);
-    if (!ctx_tgt || !ctx_mtp || !batch || batch->n_tokens <= 0) {
-        return 0;
-    }
-
-    const int n_embd_src = get_ctx_mtp_n_embd(ctx_tgt);
-    const int n_embd_dst = get_ctx_mtp_n_embd(ctx_mtp);
-    if (n_embd_src <= 0 || n_embd_dst <= 0) {
-        return -1;
-    }
-
-    if (n_embd_src != n_embd_dst) {
-        LOG_ERROR("MTP warmup hidden state width mismatch", {
-            {"n_embd_src", n_embd_src},
-            {"n_embd_dst", n_embd_dst},
-        });
-        return -1;
-    }
-
-    common_speculative_feature_view feature_view;
-    const llama_batch * batch_for_spec = batch;
-    llama_batch seq_batch = {};
-    const bool needs_seq_split = is_prompt_warmup && !server_speculative_batch_is_exact_single_seq(*batch, slot.id);
-
-    if (needs_seq_split) {
-        const int n_seq_tokens = server_speculative_copy_seq_batch(*batch, slot.id, seq_batch);
-        if (n_seq_tokens <= 0) {
-            return n_seq_tokens < 0 ? -1 : 0;
-        }
-
-        if (!common_speculative_collect_target_seq_batch_features(slot.spec, ctx_tgt, *batch, slot.id, feature_view)) {
-            llama_batch_free(seq_batch);
-            return -1;
-        }
-
-        batch_for_spec = &seq_batch;
-    } else {
-        if (!common_speculative_collect_target_batch_features(slot.spec, ctx_tgt, *batch, feature_view)) {
-            return -1;
-        }
-    }
-
-    const int32_t ret = common_speculative_on_target_batch(slot.spec, *batch_for_spec, feature_view, is_prompt_warmup);
-    if (needs_seq_split) {
-        llama_batch_free(seq_batch);
-    }
-
-    return ret;
-}
 
 static int32_t server_mtp_media_warmup_callback(void * user_data, const llama_batch * batch) {
     auto * data = static_cast<server_mtp_warmup *>(user_data);
@@ -211,7 +60,9 @@ static int32_t server_mtp_media_warmup_callback(void * user_data, const llama_ba
         return 0;
     }
 
-    return server_speculative_target_batch(data->ctx_tgt, batch, *data->slot, true);
+    return batch != nullptr
+        ? common_speculative_on_target_seq_batch(data->slot->spec, data->ctx_tgt, *batch, data->slot->id, true)
+        : 0;
 }
 
 static bool server_response_needs_chat_parse(oaicompat_type oaicompat) {
@@ -3654,9 +3505,8 @@ void server_context::add_sampled_tokens() {
             const llama_pos draft_base_pos = slot.has_mtp ? slot.cache_tokens.pos_next() : -1;
 
             if (slot.has_mtp) {
-                if (!common_speculative_has_sequence_hidden(slot.spec, slot.id)) {
+                if (!common_speculative_ensure_sequence_hidden(slot.spec, ctx, slot.id, draft_base_pos - 1)) {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
-                    server_speculative_capture_hidden(slot, ctx, -1, draft_base_pos - 1);
                 }
             }
 
@@ -4807,11 +4657,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 continue;
             }
 
-            if (!server_speculative_batch_has_seq_id(batch_view, slot.id)) {
-                continue;
-            }
-
-            if (server_speculative_target_batch(ctx, &batch_view, slot, true) != 0) {
+            if (common_speculative_on_target_seq_batch(slot.spec, ctx, batch_view, slot.id, true) != 0) {
                 LOG_ERROR("failed to warm up MTP state from prompt batch for slot %d\n", slot.id);
             }
         }
@@ -4867,7 +4713,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             const int tok_idx = slot.i_batch - i;
 
             if (slot.has_mtp && slot.n_decoded == 0) {
-                server_speculative_capture_hidden(slot, ctx, tok_idx, slot.n_past);
+                (void) common_speculative_capture_output_hidden(slot.spec, ctx, tok_idx, slot.id, slot.n_past);
             }
 
             apply_server_biases(slot);

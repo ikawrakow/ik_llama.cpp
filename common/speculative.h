@@ -1,27 +1,20 @@
 #pragma once
 
+#include <random>
+
 #include "llama.h"
+#include "llama-context.h"
 #include "common.h"
 #include "spec-tuner.h"
 
 struct common_speculative;
 
-enum common_speculative_feature_kind {
-    COMMON_SPECULATIVE_FEATURE_NONE,
-    COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE,
-};
+using common_speculative_feature_kind = llama_spec_feature_kind;
+using common_speculative_feature_row_view = llama_spec_feature_row_view;
+using common_speculative_feature_view = llama_spec_feature_view;
 
-struct common_speculative_feature_row_view {
-    llama_seq_id seq_id = 0;
-    llama_pos pos = -1;
-    const float * data = nullptr;
-};
-
-struct common_speculative_feature_view {
-    common_speculative_feature_kind kind = COMMON_SPECULATIVE_FEATURE_NONE;
-    int32_t width = 0;
-    std::vector<common_speculative_feature_row_view> rows;
-};
+static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_NONE = LLAMA_SPEC_FEATURE_NONE;
+static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE = LLAMA_SPEC_FEATURE_HIDDEN_STATE;
 
 // comma separated list of all types
 std::string common_speculative_type_name_str();
@@ -59,28 +52,39 @@ llama_tokens common_speculative_draft(
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
 bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type);
+
+bool common_speculative_ensure_sequence_hidden(
+    common_speculative * spec,
+    llama_context * ctx,
+    llama_seq_id seq_id,
+    llama_pos pos);
+
 bool common_speculative_collect_target_batch_features(
     const common_speculative * spec,
     llama_context * ctx,
     const llama_batch & batch,
     common_speculative_feature_view & features);
+
 bool common_speculative_collect_target_seq_batch_features(
     const common_speculative * spec,
     llama_context * ctx,
     const llama_batch & batch,
     llama_seq_id seq_id,
     common_speculative_feature_view & features);
+
 bool common_speculative_capture_output_hidden(
     common_speculative * spec,
     llama_context * ctx,
     int32_t output_index,
     llama_seq_id seq_id,
     llama_pos pos);
+
 bool common_speculative_copy_output_hidden_rows(
     const common_speculative * spec,
     llama_context * ctx,
     const std::vector<int32_t> & output_indices,
     std::vector<float> & hidden_rows);
+
 bool common_speculative_commit_accepted_hidden_rows(
     common_speculative * spec,
     common_speculative_type spec_type_used,
@@ -89,6 +93,7 @@ bool common_speculative_commit_accepted_hidden_rows(
     llama_token sampled_before,
     const std::vector<llama_token> & ids,
     const std::vector<float> & hidden_rows);
+
 bool common_speculative_commit_accepted_output(
     common_speculative * spec,
     llama_context * ctx,
@@ -98,9 +103,20 @@ bool common_speculative_commit_accepted_output(
     llama_token sampled_before,
     const std::vector<llama_token> & ids,
     const std::vector<int32_t> & output_indices);
+
 bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id);
+
 void common_speculative_clear_sequence_hidden(common_speculative * spec, llama_seq_id seq_id);
+
 llama_context * common_speculative_get_companion_ctx(common_speculative * spec);
+
+int32_t common_speculative_on_target_seq_batch(
+    common_speculative * spec,
+    llama_context * ctx,
+    const llama_batch & batch,
+    llama_seq_id seq_id,
+    bool is_prompt_warmup);
+
 int32_t common_speculative_on_target_batch(
     common_speculative * spec,
     const llama_batch & batch,
