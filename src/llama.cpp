@@ -2347,6 +2347,16 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 if (tp_replicate) {
                     auto wo_split = (const ggml_split_tensor_t *)l.wo->extra;
                     const int n_device = wo_split->n_device;
+                    const int64_t n_embd_head_v_full = hparams.n_embd_head_v_full;
+
+                    std::vector<int> head_offsets(n_device + 1, 0);
+                    for (int idx = 0; idx < n_device; ++idx) {
+                        int n_h_id = 0;
+                        if (wo_split->splits[idx]) {
+                            n_h_id = (int)(wo_split->splits[idx]->ne[0] / n_embd_head_v_full);
+                        }
+                        head_offsets[idx + 1] = head_offsets[idx] + n_h_id;
+                    }
 
                     computed = std::make_unique<ggml_tensor>(*source);
                     computed->buffer = nullptr;
@@ -2357,21 +2367,36 @@ static void llm_prepare_mla(llama_model & model, int mla) {
 
                     replicas.resize(n_device);
                     split.tensor_splits.assign(n_device, nullptr);
+
+                    const size_t head_block_bytes = source->nb[2];
+
                     for (int id = 0; id < n_device; ++id) {
                         if (!wo_split->splits[id] || !wo_split->splits[id]->buffer) continue;
+                        const int head_offset  = head_offsets[id];
+                        const int n_head_local = head_offsets[id + 1] - head_offset;
+                        if (n_head_local <= 0) continue;
+
+                        const size_t slice_bytes = (size_t)n_head_local * head_block_bytes;
                         auto dev_buft = ggml_backend_buffer_get_type(wo_split->splits[id]->buffer);
-                        auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, ggml_nbytes(source));
+                        auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, slice_bytes);
                         ggml_backend_buffer_set_usage(dev_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                         model.bufs.push_back(dev_buf);
 
                         replicas[id] = std::make_unique<ggml_tensor>(*source);
                         auto rep = replicas[id].get();
+                        rep->ne[2] = n_head_local;
+                        rep->nb[3] = rep->nb[2] * (size_t)rep->ne[2];
                         rep->buffer = dev_buf;
                         rep->data   = ggml_backend_buffer_get_base(dev_buf);
                         rep->op = GGML_OP_NONE;
                         for (int j = 0; j < GGML_MAX_SRC; ++j) rep->src[j] = nullptr;
+                        rep->view_src = nullptr;
+                        rep->view_offs = 0;
+                        rep->extra = nullptr;
                         ggml_set_name(rep, (tname + "." + std::to_string(id)).c_str());
-                        ggml_backend_tensor_set(rep, source->data, 0, ggml_nbytes(source));
+
+                        const uint8_t * src_bytes = (const uint8_t *)source->data + (size_t)head_offset * head_block_bytes;
+                        ggml_backend_tensor_set(rep, src_bytes, 0, slice_bytes);
                         if (ggml_backend_buffer_is_host(rep->buffer)) {
                             iqk_modify_tensor(rep);
                         }
@@ -2379,11 +2404,11 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                     }
 
                     split.ggml.n_device  = n_device;
-                    split.ggml.split_dim = -1;
+                    split.ggml.split_dim = 2;
                     split.ggml.splits    = split.tensor_splits.data();
                     computed->extra = (void *)&split.ggml;
 
-                    printf("Computed %s as %d x %d x %d of type %s, replicated across %d devices\n",
+                    printf("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
                             tname.c_str(), (int)source->ne[0], (int)source->ne[1], (int)source->ne[2],
                             ggml_type_name(source->type), n_device);
                 } else {
