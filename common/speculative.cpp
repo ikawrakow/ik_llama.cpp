@@ -473,6 +473,9 @@ struct common_speculative_state_draft : public common_speculative_state {
 
             // only collect very high-confidence draft tokens
             if (cur_p->data[0].p < params.p_min) {
+                if (i == 0) {
+                    result.push_back(id);
+                }
                 break;
             }
 
