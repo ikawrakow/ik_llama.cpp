@@ -139,6 +139,142 @@ static void get_rows_cuda_float(const ggml_tensor * src0, const ggml_tensor * sr
     GGML_UNUSED(dst);
 }
 
+// Helper for k-quant scale extraction (matches convert.cu implementation)
+static inline __device__ void get_scale_min_k4_gr(int j, const uint8_t * q, uint8_t & d, uint8_t & m) {
+    if (j < 4) {
+        d = q[j] & 63; m = q[j + 4] & 63;
+    } else {
+        d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
+        m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
+    }
+}
+
+// Gather + dequantize Q4_K rows. 32 threads, blockIdx.x = block-in-row, blockIdx.y = token.
+template<typename dst_t>
+static __global__ void k_get_rows_q4_K(
+        const void * src0, const int32_t * src1, dst_t * dst,
+        int64_t nb01, int64_t s1) {
+    const int64_t i_block  = blockIdx.x;
+    const int64_t i_token  = blockIdx.y;
+    const int32_t row_idx  = src1[i_token];
+    const block_q4_K * x   = (const block_q4_K *)((const char *)src0 + row_idx * nb01) + i_block;
+    dst_t * y               = dst + i_token * s1 + i_block * QK_K;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid / 8;
+    const int64_t ir  = tid % 8;
+    const int64_t is  = 2 * il;
+
+    y += 64 * il + 4 * ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * q = x->qs + 32 * il + 4 * ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4_gr(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc, m1 = dmin * m;
+    get_scale_min_k4_gr(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc, m2 = dmin * m;
+    for (int l = 0; l < 4; ++l) {
+        y[l +  0] = d1 * (q[l] & 0xF) - m1;
+        y[l + 32] = d2 * (q[l] >>  4) - m2;
+    }
+}
+
+// Gather + dequantize Q5_K rows. 64 threads, blockIdx.x = block-in-row, blockIdx.y = token.
+template<typename dst_t>
+static __global__ void k_get_rows_q5_K(
+        const void * src0, const int32_t * src1, dst_t * dst,
+        int64_t nb01, int64_t s1) {
+    const int64_t i_block  = blockIdx.x;
+    const int64_t i_token  = blockIdx.y;
+    const int32_t row_idx  = src1[i_token];
+    const block_q5_K * x   = (const block_q5_K *)((const char *)src0 + row_idx * nb01) + i_block;
+    dst_t * y               = dst + i_token * s1 + i_block * QK_K;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t il  = tid / 16;
+    const int64_t ir  = tid % 16;
+    const int64_t is  = 2 * il;
+
+    y += 64 * il + 2 * ir;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * ql = x->qs + 32 * il + 2 * ir;
+    const uint8_t * qh = x->qh + 2 * ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4_gr(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc, m1 = dmin * m;
+    get_scale_min_k4_gr(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc, m2 = dmin * m;
+
+    uint8_t hm = 1 << (2 * il);
+    y[ 0] = d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1;
+    y[ 1] = d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1;
+    hm <<= 1;
+    y[32] = d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2;
+    y[33] = d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2;
+}
+
+// Gather + dequantize Q6_K rows. 64 threads, blockIdx.x = block-in-row, blockIdx.y = token.
+template<typename dst_t>
+static __global__ void k_get_rows_q6_K(
+        const void * src0, const int32_t * src1, dst_t * dst,
+        int64_t nb01, int64_t s1) {
+    const int64_t i_block  = blockIdx.x;
+    const int64_t i_token  = blockIdx.y;
+    const int32_t row_idx  = src1[i_token];
+    const block_q6_K * x   = (const block_q6_K *)((const char *)src0 + row_idx * nb01) + i_block;
+    dst_t * y               = dst + i_token * s1 + i_block * QK_K;
+
+    const int64_t tid = threadIdx.x;
+    const int64_t ip  = tid / 32;
+    const int64_t il  = tid % 32;
+    const int64_t is  = 8 * ip + il / 16;
+
+    y += 128 * ip + il;
+
+    const float d = x->d;
+    const uint8_t * ql = x->ql + 64 * ip + il;
+    const uint8_t   qh = x->qh[32 * ip + il];
+    const int8_t  * sc = x->scales + is;
+
+    y[ 0] = d * sc[0] * ((int8_t)((ql[ 0] & 0xF) | (((qh >> 0) & 3) << 4)) - 32);
+    y[32] = d * sc[2] * ((int8_t)((ql[32] & 0xF) | (((qh >> 2) & 3) << 4)) - 32);
+    y[64] = d * sc[4] * ((int8_t)((ql[ 0]  >> 4) | (((qh >> 4) & 3) << 4)) - 32);
+    y[96] = d * sc[6] * ((int8_t)((ql[32]  >> 4) | (((qh >> 6) & 3) << 4)) - 32);
+}
+
+static void get_rows_q4_K_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const void * src0_d, const int32_t * src1_d, float * dst_d, cudaStream_t stream) {
+    GGML_TENSOR_BINARY_OP_LOCALS
+    const int64_t s1_dst = nb1 / ggml_element_size(dst);
+    const dim3 block_nums(ne00 / QK_K, ne10, ne11 * ne12);
+    k_get_rows_q4_K<float><<<block_nums, 32, 0, stream>>>(src0_d, src1_d, dst_d, nb01, s1_dst);
+    GGML_UNUSED(src1); GGML_UNUSED(dst);
+}
+
+static void get_rows_q5_K_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const void * src0_d, const int32_t * src1_d, float * dst_d, cudaStream_t stream) {
+    GGML_TENSOR_BINARY_OP_LOCALS
+    const int64_t s1_dst = nb1 / ggml_element_size(dst);
+    const dim3 block_nums(ne00 / QK_K, ne10, ne11 * ne12);
+    k_get_rows_q5_K<float><<<block_nums, 64, 0, stream>>>(src0_d, src1_d, dst_d, nb01, s1_dst);
+    GGML_UNUSED(src1); GGML_UNUSED(dst);
+}
+
+static void get_rows_q6_K_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const void * src0_d, const int32_t * src1_d, float * dst_d, cudaStream_t stream) {
+    GGML_TENSOR_BINARY_OP_LOCALS
+    const int64_t s1_dst = nb1 / ggml_element_size(dst);
+    const dim3 block_nums(ne00 / QK_K, ne10, ne11 * ne12);
+    k_get_rows_q6_K<float><<<block_nums, 64, 0, stream>>>(src0_d, src1_d, dst_d, nb01, s1_dst);
+    GGML_UNUSED(src1); GGML_UNUSED(dst);
+}
+
 void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -179,8 +315,16 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q8_0:
             get_rows_cuda<QK8_0, QR8_0, dequantize_q8_0>(src0, src1, dst, src0_d, src1_i32, dst_d, stream);
             break;
+        case GGML_TYPE_Q4_K:
+            get_rows_q4_K_cuda(src0, src1, dst, src0->data, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_Q5_K:
+            get_rows_q5_K_cuda(src0, src1, dst, src0->data, src1_i32, dst_d, stream);
+            break;
+        case GGML_TYPE_Q6_K:
+            get_rows_q6_K_cuda(src0, src1, dst, src0->data, src1_i32, dst_d, stream);
+            break;
         default:
-            // TODO: k-quants
             GGML_ABORT("%s: unsupported type: %s\n", __func__, ggml_type_name(src0->type));
             break;
     }
