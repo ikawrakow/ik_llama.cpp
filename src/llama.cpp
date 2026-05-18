@@ -1612,7 +1612,7 @@ static void restore_recurrent_cache_tensors(int step, ggml_backend_sched_t sched
         size_t ssm_bytes, size_t conv_bytes,
         ggml_tensor * s_l, ggml_tensor * per_step_ssm, ggml_tensor * per_step_conv,
         std::unordered_set<ggml_backend_t> & backends_to_sync) {
-    auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l);
+    auto dst_backend = ggml_backend_sched_get_backend(sched, ggml_backend_sched_get_backend_idx(sched, s_l->buffer));
     auto dst = *s_l;
     dst.ne[0] = ssm_bytes/sizeof(float);
     dst.nb[1] = dst.nb[2] = dst.nb[3] = ssm_bytes + conv_bytes;
@@ -4766,8 +4766,10 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
-            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_QWEN35 ||
-                                                       lctx.model.arch == LLM_ARCH_QWEN35MOE || lctx.model.arch == LLM_ARCH_GEMMA4 || lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
+            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_QWEN35    ||
+                                                      lctx.model.arch == LLM_ARCH_QWEN35MOE ||
+                                                      lctx.model.arch == LLM_ARCH_GEMMA4    ||
+                                                      lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
                     if (use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
@@ -4781,6 +4783,7 @@ static int llama_decode_internal(
                     }
                     if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
                         embd = gf->nodes[i];
+                        break;
                     }
                 }
             }

@@ -663,7 +663,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     // not required for correct inference — the full-vocab matmul against the tied output
     // weight still yields valid per-token logits.
     {
-        logits = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
+        logits = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb, false);
         cb(logits, "result_output", -1);
     }
     ggml_build_forward_expand(gf, logits);
