@@ -3792,8 +3792,10 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
 }
 
 // MLA tensor distribution for -sm graph / -sm attn.
-// q_a/wkv_a_mqa/norms replicated; q_b/wkv_b row-split by Q head; wo row-split.
-// wk_b/wv_b are produced and per-device-replicated by llm_prepare_mla().
+// q_a/wkv_a_mqa/norms replicated; q_b row-split by Q head; wo row-split.
+// wk_b/wv_b are per-head split (split_dim=2) — loaded directly when present
+// in the GGUF, or produced per-head-split by llm_prepare_mla()'s materialize
+// lambda when only wkv_b is in the GGUF.
 static void distribute_mla_tensors_for_split_mode_graph(
         llama_layer & layer,
         const llama_hparams & hparams,

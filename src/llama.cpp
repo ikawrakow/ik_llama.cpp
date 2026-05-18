@@ -2334,7 +2334,8 @@ static void llm_prepare_mla(llama_model & model, int mla) {
 
             auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b.weight";
 
-            // Replicate wk_b/wv_b under -sm graph/attn: the per-head batched matmul can't read a split src0.
+            // Per-head split wk_b/wv_b under -sm graph/attn so each rank's batched matmul
+            // reads only its share of heads (split_dim=2), mirroring prepare_split_tensors.
             const bool tp_replicate =
                 (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)
                 && l.wo && l.wo->extra;
@@ -2974,8 +2975,12 @@ static bool llm_load_tensors(
         const bool unsupported_gemma_split =
             model.arch == LLM_ARCH_GEMMA4_MTP ||
             (model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0);
-        const bool incompatible_loader_opts =
-            ml.ncmoe > 0 || ml.repack_tensors || ml.merge_up_gate_exps || ml.tensor_buft_overrides;
+        const bool is_mla_arch =
+            model.arch == LLM_ARCH_DEEPSEEK2 ||
+            model.arch == LLM_ARCH_GLM_DSA ||
+            model.arch == LLM_ARCH_MISTRAL4;
+        const bool incompatible_loader_opts = is_mla_arch &&
+            (ml.ncmoe > 0 || ml.repack_tensors || ml.merge_up_gate_exps || ml.tensor_buft_overrides);
 
         if (unsupported_gemma_split) {
             LLAMA_LOG_WARN("\n=========================================================\n");
