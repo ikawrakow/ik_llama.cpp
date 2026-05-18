@@ -105,32 +105,6 @@ static bool server_speculative_batch_is_exact_single_seq(const llama_batch & bat
     return true;
 }
 
-static common_speculative_feature_view server_speculative_hidden_feature_view_from_rows(
-        const std::vector<float> & rows,
-        int n_embd,
-        llama_seq_id seq_id,
-        llama_pos pos_base) {
-    common_speculative_feature_view view;
-    view.kind = COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
-    view.width = n_embd;
-
-    if (n_embd <= 0 || rows.size() < (size_t) n_embd) {
-        return view;
-    }
-
-    const size_t n_rows = rows.size() / n_embd;
-    view.rows.reserve(n_rows);
-    for (size_t i = 0; i < n_rows; ++i) {
-        view.rows.push_back({
-            /* .seq_id = */ seq_id,
-            /* .pos    = */ pos_base + (llama_pos) i,
-            /* .data   = */ rows.data() + i * n_embd,
-        });
-    }
-
-    return view;
-}
-
 static int server_speculative_copy_seq_batch(
         const llama_batch & batch,
         llama_seq_id seq_id,
@@ -171,33 +145,6 @@ static void server_speculative_capture_hidden(server_slot & slot, llama_context 
     (void) common_speculative_capture_output_hidden(slot.spec, ctx, output_index, slot.id, pos);
 }
 
-static bool server_speculative_apply_target_batch(
-        server_slot & slot,
-        const std::vector<llama_token> & ids,
-        llama_pos pos_base,
-        const std::vector<float> & hidden_rows,
-        const float * seed_hidden = nullptr) {
-    if (!slot.has_mtp || !slot.spec || ids.empty()) {
-        return true;
-    }
-
-    const int n_embd = get_ctx_mtp_n_embd(get_slot_mtp_ctx(slot, slot.ctx));
-    if (n_embd <= 0 || hidden_rows.size() < (size_t) n_embd) {
-        return false;
-    }
-
-    llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
-    for (size_t i = 0; i < ids.size(); ++i) {
-        common_batch_add(accepted_batch, ids[i], pos_base + i, { slot.id }, true);
-    }
-
-    const auto feature_view = server_speculative_hidden_feature_view_from_rows(hidden_rows, n_embd, slot.id, pos_base);
-    const int32_t ret = common_speculative_on_target_batch(slot.spec, accepted_batch, feature_view, false, seed_hidden);
-    llama_batch_free(accepted_batch);
-
-    return ret == 0;
-}
-
 struct server_mtp_warmup {
     llama_context * ctx_tgt;
     server_slot   * slot;
@@ -207,8 +154,7 @@ static int32_t server_speculative_target_batch(
         llama_context * ctx_tgt,
         const llama_batch * batch,
         server_slot & slot,
-        bool is_prompt_warmup,
-        const float * seed_hidden = nullptr) {
+    bool is_prompt_warmup) {
     llama_context * ctx_mtp = get_slot_mtp_ctx(slot, ctx_tgt);
     if (!ctx_tgt || !ctx_mtp || !batch || batch->n_tokens <= 0) {
         return 0;
@@ -251,7 +197,7 @@ static int32_t server_speculative_target_batch(
         }
     }
 
-    const int32_t ret = common_speculative_on_target_batch(slot.spec, *batch_for_spec, feature_view, is_prompt_warmup, seed_hidden);
+    const int32_t ret = common_speculative_on_target_batch(slot.spec, *batch_for_spec, feature_view, is_prompt_warmup);
     if (needs_seq_split) {
         llama_batch_free(seq_batch);
     }
@@ -3714,15 +3660,14 @@ void server_context::add_sampled_tokens() {
                 }
             }
 
-            common_speculative_draft_result draft_result = common_speculative_draft_ex(
+            llama_tokens draft = common_speculative_draft(
                 slot.spec,
                 params_spec,
                 cached_text_tokens,
                 slot.sampled,
                 draft_base_pos,
                 slot.id);
-            llama_tokens draft = std::move(draft_result.tokens);
-            slot.drafted_spec_type = draft_result.active_type;
+            slot.drafted_spec_type = common_speculative_current_type(slot.spec);
 
             const int n_draft_max = slot.get_n_draft_max();
 
@@ -4282,10 +4227,8 @@ void server_context::extend_context(const int32_t n_tokens) {
 static void restore_speculative_checkpoint(
         server_slot & slot, llama_context * ctx, llama_model * model,
         common_speculative_type spec_type_used,
-        const std::vector<llama_token> & ids, int n_draft,
-        const std::vector<llama_token> & mtp_commit_tokens,
-        const std::vector<float> & mtp_commit_states,
-        const std::vector<float> & mtp_hidden_state_seed,
+    llama_token sampled_before,
+    const std::vector<llama_token> & ids, int n_draft,
         const std::vector<float> & mtp_hidden_state_pre, int32_t mtp_n_past_base) {
     if (slot.spec_ckpt.per_step_enabled) {
         const int step = (int)ids.size() - 1;
@@ -4300,19 +4243,17 @@ static void restore_speculative_checkpoint(
 
         // Update MTP KV cache and hidden state using embeddings collected before checkpoint restore.
         if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-            if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
-                if (!server_speculative_apply_target_batch(slot, ids, mtp_n_past_base, mtp_hidden_state_pre)) {
-                    common_speculative_clear_sequence_hidden(slot.spec, slot.id);
-                }
-            } else if (!mtp_commit_tokens.empty() && !mtp_commit_states.empty()) {
-                if (mtp_hidden_state_seed.empty()) {
-                    SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay after per-step restore");
-                    common_speculative_clear_sequence_hidden(slot.spec, slot.id);
-                } else if (!server_speculative_apply_target_batch(slot, mtp_commit_tokens, mtp_n_past_base, mtp_commit_states, mtp_hidden_state_seed.data())) {
-                    common_speculative_clear_sequence_hidden(slot.spec, slot.id);
-                } else {
-                    SLT_DBG(slot, "%s", "synced MTP target hidden state from accepted-prefix rows after per-step restore");
-                }
+            if (!common_speculative_commit_accepted_hidden_rows(
+                    slot.spec,
+                    spec_type_used,
+                    slot.id,
+                    mtp_n_past_base,
+                    sampled_before,
+                    ids,
+                    mtp_hidden_state_pre)) {
+                common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+            } else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
+                SLT_DBG(slot, "%s", "synced MTP target hidden state from accepted-prefix rows after per-step restore");
             }
         }
 
@@ -4353,10 +4294,15 @@ static void restore_speculative_checkpoint(
                     redecoded_indices[j] = j;
                 }
 
-                std::vector<float> mtp_redecoded_states;
-                (void) common_speculative_copy_output_hidden_rows(slot.spec, ctx, redecoded_indices, mtp_redecoded_states);
-
-                if (!server_speculative_apply_target_batch(slot, ids, slot.spec_ckpt.n_past, mtp_redecoded_states)) {
+                if (!common_speculative_commit_accepted_output(
+                        slot.spec,
+                        ctx,
+                        spec_type_used,
+                        slot.id,
+                        slot.spec_ckpt.n_past,
+                        sampled_before,
+                        ids,
+                        redecoded_indices)) {
                     common_speculative_clear_sequence_hidden(slot.spec, slot.id);
                 }
             }
@@ -4383,10 +4329,6 @@ void server_context::speculative_decoding_accept() {
         const llama_token sampled_before = slot.sampled;
         const common_speculative_type spec_type_used = slot.drafted_spec_type;
         size_t n_draft = slot.drafted.size();
-        std::vector<float> mtp_hidden_state_seed;
-        if (slot.has_mtp) {
-            common_speculative_copy_sequence_hidden(slot.spec, slot.id, mtp_hidden_state_seed);
-        }
 
         slot.ctx_sampling->to_generated_text = &slot.generated_text;
         if (n_draft > 0) {
@@ -4415,31 +4357,22 @@ void server_context::speculative_decoding_accept() {
             continue;
         }
 
+        const bool any_rejected = (ids.size() - 1) < n_draft;
         int32_t mtp_n_past_base = 0;
         std::vector<float> mtp_hidden_state_pre;
-        std::vector<llama_token> mtp_commit_tokens;
-        std::vector<float> mtp_commit_states;
+        std::vector<int32_t> accepted_output_indices;
         if (slot.has_mtp) {
             const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted.size() + 1);
             mtp_n_past_base = slot.cache_tokens.pos_next(n_pre_spec_tokens);
 
             if (!ids.empty()) {
-                std::vector<int32_t> accepted_indices(slot.i_batch_dft.begin(), slot.i_batch_dft.begin() + ids.size());
-                if (!common_speculative_copy_output_hidden_rows(slot.spec, ctx, accepted_indices, mtp_hidden_state_pre)) {
+                accepted_output_indices.assign(slot.i_batch_dft.begin(), slot.i_batch_dft.begin() + ids.size());
+            }
+
+            if (any_rejected && slot.spec_ckpt.valid && !accepted_output_indices.empty()) {
+                if (!common_speculative_copy_output_hidden_rows(slot.spec, ctx, accepted_output_indices, mtp_hidden_state_pre)) {
                     mtp_hidden_state_pre.clear();
                 }
-
-                if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
-                    mtp_commit_tokens.reserve(ids.size());
-                    mtp_commit_tokens.push_back(sampled_before);
-                    mtp_commit_tokens.insert(mtp_commit_tokens.end(), ids.begin(), ids.end() - 1);
-
-                    if (!common_speculative_copy_output_hidden_rows(slot.spec, ctx, accepted_indices, mtp_commit_states)) {
-                        mtp_commit_states.clear();
-                    }
-                }
-            } else {
-                (void) common_speculative_copy_output_hidden_rows(slot.spec, ctx, std::vector<int32_t>{ 0 }, mtp_hidden_state_pre);
             }
         }
 
@@ -4469,24 +4402,22 @@ void server_context::speculative_decoding_accept() {
         slot.n_past = slot.cache_tokens.n_tokens();
 
         // for recurrent/hybrid models: if any drafts were rejected, restore recurrent state
-        const bool any_rejected = (ids.size() - 1) < n_draft;
         if (any_rejected && slot.spec_ckpt.valid) {
-            restore_speculative_checkpoint(slot, ctx, model, spec_type_used, ids, n_draft, mtp_commit_tokens, mtp_commit_states, mtp_hidden_state_seed, mtp_hidden_state_pre, mtp_n_past_base);
+            restore_speculative_checkpoint(slot, ctx, model, spec_type_used, sampled_before, ids, n_draft, mtp_hidden_state_pre, mtp_n_past_base);
         } else {
-            if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-                if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
-                    if (!server_speculative_apply_target_batch(slot, ids, mtp_n_past_base, mtp_hidden_state_pre)) {
-                        common_speculative_clear_sequence_hidden(slot.spec, slot.id);
-                    }
-                } else if (!mtp_commit_tokens.empty() && !mtp_commit_states.empty()) {
-                    if (mtp_hidden_state_seed.empty()) {
-                        SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay");
-                        common_speculative_clear_sequence_hidden(slot.spec, slot.id);
-                    } else if (!server_speculative_apply_target_batch(slot, mtp_commit_tokens, mtp_n_past_base, mtp_commit_states, mtp_hidden_state_seed.data())) {
-                        common_speculative_clear_sequence_hidden(slot.spec, slot.id);
-                    } else {
-                        SLT_DBG(slot, "%s", "synced MTP target hidden state from accepted-prefix rows");
-                    }
+            if (slot.has_mtp && !accepted_output_indices.empty()) {
+                if (!common_speculative_commit_accepted_output(
+                        slot.spec,
+                        ctx,
+                        spec_type_used,
+                        slot.id,
+                        mtp_n_past_base,
+                        sampled_before,
+                        ids,
+                        accepted_output_indices)) {
+                    common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+                } else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
+                    SLT_DBG(slot, "%s", "synced MTP target hidden state from accepted-prefix rows");
                 }
             }
             llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);

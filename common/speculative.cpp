@@ -1003,7 +1003,6 @@ struct common_speculative {
     std::vector<common_speculative_config> configs; // resolved stage config for each implementation
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
-    size_t curr_impl_index = SIZE_MAX;
     std::unique_ptr<spec_tuner> tuner;
     int last_n_drafted = 0;
     int64_t t_step_start_us = 0;
@@ -1359,14 +1358,14 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
     }
 }
 
-common_speculative_draft_result common_speculative_draft_ex(
+llama_tokens common_speculative_draft(
         common_speculative * spec,
         common_params_speculative & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last,
         llama_pos draft_base_pos,
         llama_seq_id draft_seq_id) {
-    common_speculative_draft_result result;
+    llama_tokens result;
 
     spec->t_step_start_us = ggml_time_us();
 
@@ -1379,68 +1378,46 @@ common_speculative_draft_result common_speculative_draft_ex(
     const bool use_runtime_stage_overrides = common_speculative_stage_chain_matches(runtime_stages, spec->configs);
 
     spec->curr_impl = nullptr; // reset current implementation
-    spec->curr_impl_index = SIZE_MAX;
 
     for (size_t i = 0; i < spec->impls.size(); ++i) {
         auto & impl = spec->impls[i];
         const auto & runtime_stage = use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
         common_params_speculative impl_params = common_speculative_get_runtime_params(spec->configs[i], params, runtime_stage);
-        result.tokens.clear();
-        result.spans.clear();
-        result.active_type = COMMON_SPECULATIVE_TYPE_NONE;
+        result.clear();
 
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
-            impl->draft(impl_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result.tokens);
+            impl->draft(impl_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result);
             impl->n_call_draft++;
         }
 
-        if (result.tokens.empty()) {
+        if (result.empty()) {
             continue;
         }
 
-        if (common_speculative_type_is_self_spec(impl->type) && impl_params.n_min > 0 && (int)result.tokens.size() < impl_params.n_min) {
+        if (common_speculative_type_is_self_spec(impl->type) && impl_params.n_min > 0 && (int)result.size() < impl_params.n_min) {
             LOG_DBG("%s: impl %s drafted %zu tokens, below fallback threshold %d - trying next implementation\n",
-                    __func__, common_speculative_type_to_str(impl->type).c_str(), result.tokens.size(), impl_params.n_min);
-            result.tokens.clear();
+                    __func__, common_speculative_type_to_str(impl->type).c_str(), result.size(), impl_params.n_min);
+            result.clear();
             continue;
         }
         LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
                 common_speculative_type_to_str(impl.get()->type).c_str(), prompt_tgt.size(),
-                impl.get()->n_call_draft, result.tokens.size());
+                impl.get()->n_call_draft, result.size());
 
         spec->curr_impl = impl.get();
-        spec->curr_impl_index = i;
         impl->n_gen_drafts++;
-        impl->n_gen_tokens += result.tokens.size();
-        result.active_type = impl->type;
-        result.spans.push_back({
-            /* .type         = */ impl->type,
-            /* .stage_index  = */ (uint32_t) i,
-            /* .token_offset = */ 0,
-            /* .n_tokens     = */ (uint32_t) result.tokens.size(),
-        });
+        impl->n_gen_tokens += result.size();
 
         break; // We have a draft, so break out of the loop and return it.
     }
 
     // store draft count for tuner feedback
     if (spec->tuner && spec->tuner->enabled) {
-        spec->last_n_drafted = (int)result.tokens.size();
+        spec->last_n_drafted = (int)result.size();
     }
 
     return result;
-}
-
-llama_tokens common_speculative_draft(
-        common_speculative * spec,
-        common_params_speculative & params,
-        const llama_tokens & prompt_tgt,
-        llama_token id_last,
-        llama_pos draft_base_pos,
-        llama_seq_id draft_seq_id) {
-    auto result = common_speculative_draft_ex(spec, params, prompt_tgt, id_last, draft_base_pos, draft_seq_id);
-    return result.tokens;
 }
 
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
@@ -1528,27 +1505,6 @@ static bool common_speculative_feature_view_find_seq_rows(
     return first_row_view != nullptr && last_row_view != nullptr;
 }
 
-bool common_speculative_feature_view_copy_seq_rows(
-        const common_speculative_feature_view & view,
-        llama_seq_id seq_id,
-        std::vector<float> * first_row,
-        std::vector<float> * last_row) {
-    const float * first_ptr = nullptr;
-    const float * last_ptr = nullptr;
-    if (!common_speculative_feature_view_find_seq_rows(view, seq_id, &first_ptr, &last_ptr)) {
-        return false;
-    }
-
-    if (first_row != nullptr) {
-        first_row->assign(first_ptr, first_ptr + view.width);
-    }
-    if (last_row != nullptr) {
-        last_row->assign(last_ptr, last_ptr + view.width);
-    }
-
-    return true;
-}
-
 static bool common_speculative_feature_view_copy_batch_rows(
         const common_speculative_feature_view & view,
         const llama_batch & batch,
@@ -1610,6 +1566,33 @@ static void common_speculative_feature_view_from_llama(
             /* .data   = */ row.data,
         });
     }
+}
+
+static bool common_speculative_feature_view_from_hidden_rows(
+        const std::vector<float> & hidden_rows,
+        int32_t width,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        common_speculative_feature_view & view) {
+    view = {};
+    view.kind = COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
+    view.width = width;
+
+    if (width <= 0 || hidden_rows.empty() || hidden_rows.size() % (size_t) width != 0) {
+        return false;
+    }
+
+    const size_t n_rows = hidden_rows.size() / (size_t) width;
+    view.rows.reserve(n_rows);
+    for (size_t i = 0; i < n_rows; ++i) {
+        view.rows.push_back({
+            /* .seq_id = */ seq_id,
+            /* .pos    = */ pos_base + (llama_pos) i,
+            /* .data   = */ hidden_rows.data() + i * (size_t) width,
+        });
+    }
+
+    return true;
 }
 
 bool common_speculative_collect_target_batch_features(
@@ -1684,25 +1667,108 @@ bool common_speculative_copy_output_hidden_rows(
     return llama_spec_copy_hidden_rows_from_output_indices(ctx, output_indices, hidden_rows);
 }
 
-common_speculative_traits common_speculative_get_traits(const common_speculative * spec) {
-    common_speculative_traits traits;
-    if (spec == nullptr) {
-        return traits;
+static bool common_speculative_build_commit_tokens(
+        common_speculative_type spec_type_used,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        std::vector<llama_token> & commit_tokens) {
+    commit_tokens.clear();
+    if (ids.empty()) {
+        return true;
     }
 
-    traits.configured_types.reserve(spec->configs.size());
-    for (const auto & config : spec->configs) {
-        traits.configured_types.push_back(config.type);
-        if (config.type == COMMON_SPECULATIVE_TYPE_MTP || config.type == COMMON_SPECULATIVE_TYPE_DRAFT) {
-            traits.companion_kind = COMMON_SPECULATIVE_COMPANION_MODEL;
-        }
+    if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
+        commit_tokens = ids;
+        return true;
     }
 
-    if (spec->curr_impl != nullptr) {
-        traits.active_type = spec->curr_impl->type;
+    commit_tokens.reserve(ids.size());
+    commit_tokens.push_back(sampled_before);
+    if (ids.size() > 1) {
+        commit_tokens.insert(commit_tokens.end(), ids.begin(), ids.end() - 1);
     }
 
-    return traits;
+    return commit_tokens.size() == ids.size();
+}
+
+static bool common_speculative_apply_hidden_rows(
+        common_speculative * spec,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        const std::vector<llama_token> & ids,
+        const std::vector<float> & hidden_rows) {
+    auto * mtp_state = common_speculative_get_mtp_state(spec);
+    if (mtp_state == nullptr || ids.empty()) {
+        return true;
+    }
+
+    const size_t expected_floats = ids.size() * (size_t) mtp_state->n_embd;
+    if (mtp_state->n_embd <= 0 || hidden_rows.size() != expected_floats) {
+        return false;
+    }
+
+    llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        common_batch_add(accepted_batch, ids[i], pos_base + (llama_pos) i, { seq_id }, true);
+    }
+
+    common_speculative_feature_view feature_view;
+    const bool have_feature_view = common_speculative_feature_view_from_hidden_rows(
+        hidden_rows, mtp_state->n_embd, seq_id, pos_base, feature_view);
+    const int32_t ret = have_feature_view
+        ? common_speculative_on_target_batch(spec, accepted_batch, feature_view, false)
+        : -1;
+
+    llama_batch_free(accepted_batch);
+    return ret == 0;
+}
+
+bool common_speculative_commit_accepted_hidden_rows(
+        common_speculative * spec,
+        common_speculative_type spec_type_used,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        const std::vector<float> & hidden_rows) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) || ids.empty()) {
+        return true;
+    }
+
+    std::vector<llama_token> commit_tokens;
+    if (!common_speculative_build_commit_tokens(spec_type_used, sampled_before, ids, commit_tokens)) {
+        return false;
+    }
+
+    return common_speculative_apply_hidden_rows(spec, seq_id, pos_base, commit_tokens, hidden_rows);
+}
+
+bool common_speculative_commit_accepted_output(
+        common_speculative * spec,
+        llama_context * ctx,
+        common_speculative_type spec_type_used,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        const std::vector<int32_t> & output_indices) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) || ids.empty()) {
+        return true;
+    }
+
+    std::vector<float> hidden_rows;
+    if (!common_speculative_copy_output_hidden_rows(spec, ctx, output_indices, hidden_rows)) {
+        return false;
+    }
+
+    return common_speculative_commit_accepted_hidden_rows(
+        spec,
+        spec_type_used,
+        seq_id,
+        pos_base,
+        sampled_before,
+        ids,
+        hidden_rows);
 }
 
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded, int n_past, common_params_speculative * active_params) {
@@ -1807,30 +1873,9 @@ static void mtp_store_target_hidden(
     stored.assign(hidden, hidden + width);
 }
 
-static bool mtp_copy_target_hidden(
-        const common_speculative_state_mtp & state,
-        llama_seq_id seq_id,
-        std::vector<float> & hidden) {
-    auto it = state.target_hidden_by_seq.find(seq_id);
-    if (it == state.target_hidden_by_seq.end()) {
-        return false;
-    }
-
-    hidden = it->second;
-    return !hidden.empty();
-}
-
 static void mtp_clear_target_hidden(common_speculative_state_mtp & state, llama_seq_id seq_id) {
     state.target_hidden_by_seq.erase(seq_id);
     state.draft_cache_by_seq.erase(seq_id);
-}
-
-std::vector<common_speculative_feature_request> common_speculative_get_feature_requests(const common_speculative * spec) {
-    std::vector<common_speculative_feature_request> requests;
-    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
-        requests.push_back({ COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE });
-    }
-    return requests;
 }
 
 static bool common_speculative_capture_target_features(common_speculative * spec, const common_speculative_feature_view & features) {
@@ -1861,25 +1906,6 @@ bool common_speculative_has_sequence_hidden(const common_speculative * spec, lla
 
     auto it = mtp_state->target_hidden_by_seq.find(seq_id);
     return it != mtp_state->target_hidden_by_seq.end() && !it->second.empty();
-}
-
-bool common_speculative_copy_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id, std::vector<float> & hidden) {
-    const auto * mtp_state = common_speculative_get_mtp_state(spec);
-    if (mtp_state == nullptr) {
-        return false;
-    }
-
-    return mtp_copy_target_hidden(*mtp_state, seq_id, hidden);
-}
-
-void common_speculative_restore_sequence_hidden(common_speculative * spec, llama_seq_id seq_id, const std::vector<float> & hidden) {
-    auto * mtp_state = common_speculative_get_mtp_state(spec);
-    if (mtp_state == nullptr || hidden.empty()) {
-        return;
-    }
-
-    mtp_store_target_hidden(*mtp_state, seq_id, hidden.data(), hidden.size());
-    mtp_invalidate_cached_draft(*mtp_state, seq_id);
 }
 
 void common_speculative_clear_sequence_hidden(common_speculative * spec, llama_seq_id seq_id) {
@@ -1933,8 +1959,7 @@ int32_t common_speculative_on_target_batch(
         common_speculative * spec,
         const llama_batch & batch,
         const common_speculative_feature_view & features,
-        bool is_prompt_warmup,
-        const float * seed_hidden) {
+    bool is_prompt_warmup) {
     auto * mtp_state = common_speculative_get_mtp_state(spec);
     if (mtp_state == nullptr) {
         return 0;
@@ -1968,8 +1993,6 @@ int32_t common_speculative_on_target_batch(
         mtp_invalidate_cached_draft(*mtp_state, seq_id);
         return 0;
     }
-
-    GGML_UNUSED(seed_hidden);
 
     if (is_prompt_warmup) {
         if (!llama_set_draft_input_hidden_state_copy(mtp_state->ctx_mtp, hidden_rows_storage.data(), hidden_rows_storage.size())) {
