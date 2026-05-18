@@ -2007,8 +2007,8 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                 needs_sync[split_backend_id] = k_set_sync;
             }
 
-            ggml_tensor * node = split->graph.nodes[0];
-            if (sched->only_active_experts && split->graph.n_nodes > 0 &&
+            ggml_tensor * node = split->graph.n_nodes > 0 ? split->graph.nodes[0] : nullptr;
+            if (sched->only_active_experts && node != nullptr &&
                     ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
                     ggml_backend_buffer_is_host(input->buffer) &&
                     (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE)) {
@@ -2046,6 +2046,9 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
                         for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
                             int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
+                            if (id < 0 || id >= n_expert) {
+                                continue;
+                            }
                             unique_ids[id >> 5] |= (1u << (id & 31));
                         }
                     }
