@@ -445,7 +445,6 @@ void server_context::init() {
                 params_base.speculative.cparams_dft.embeddings   = true;
 
                 slot.has_mtp = true;
-                slot.use_gemma4_external_mtp = has_external_mtp;
                 slot.params.speculative.cparams_dft = params_base.speculative.cparams_dft;
 
                 slot.batch_spec = llama_batch_init(slot.params.speculative.get_max_stage_n_max() + 1, 0, 1);

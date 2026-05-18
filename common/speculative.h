@@ -51,26 +51,11 @@ llama_tokens common_speculative_draft(
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
-bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type);
-
 bool common_speculative_ensure_sequence_hidden(
     common_speculative * spec,
     llama_context * ctx,
     llama_seq_id seq_id,
     llama_pos pos);
-
-bool common_speculative_collect_target_batch_features(
-    const common_speculative * spec,
-    llama_context * ctx,
-    const llama_batch & batch,
-    common_speculative_feature_view & features);
-
-bool common_speculative_collect_target_seq_batch_features(
-    const common_speculative * spec,
-    llama_context * ctx,
-    const llama_batch & batch,
-    llama_seq_id seq_id,
-    common_speculative_feature_view & features);
 
 bool common_speculative_capture_output_hidden(
     common_speculative * spec,

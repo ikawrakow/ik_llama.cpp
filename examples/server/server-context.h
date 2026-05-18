@@ -172,7 +172,6 @@ struct server_slot {
     decltype(ctx_sampling->elb_states) elb_prev_states;
 
     bool has_mtp = false;
-    bool use_gemma4_external_mtp = false;
 
     // saves recurrent state before a speculative batch so it can be restored on rejection
     server_speculative_checkpoint spec_ckpt;

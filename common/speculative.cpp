@@ -1454,7 +1454,7 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     }
 }
 
-bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type) {
+static bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type) {
     if (spec == nullptr) {
         return false;
     }
@@ -1595,7 +1595,7 @@ static bool common_speculative_feature_view_from_hidden_rows(
     return true;
 }
 
-bool common_speculative_collect_target_batch_features(
+static bool common_speculative_collect_target_batch_features(
         const common_speculative * spec,
         llama_context * ctx,
         const llama_batch & batch,
@@ -1612,7 +1612,7 @@ bool common_speculative_collect_target_batch_features(
     return true;
 }
 
-bool common_speculative_collect_target_seq_batch_features(
+static bool common_speculative_collect_target_seq_batch_features(
         const common_speculative * spec,
         llama_context * ctx,
         const llama_batch & batch,
