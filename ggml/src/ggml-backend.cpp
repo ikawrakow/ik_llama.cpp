@@ -1972,7 +1972,7 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 }
 
 static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_backend_sched_split * split, std::array<bool, GGML_SCHED_MAX_BACKENDS> & needs_sync,
-        std::vector<int32_t> & ids, std::vector<uint32_t> & unique_ids, ggml_tensor * last_ids_tensor) {
+        std::vector<int32_t> & ids, std::vector<uint32_t> & unique_ids, ggml_tensor *& last_ids_tensor) {
     if (split->n_inputs < 1) return;
     constexpr bool k_set_sync = false;
     int split_backend_id = split->backend_id;
