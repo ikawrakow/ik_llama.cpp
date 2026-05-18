@@ -6260,7 +6260,8 @@ struct llama_context * llama_init_from_model(
 
     if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 &&
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
-        model->arch != LLM_ARCH_GEMMA4_MTP && cparams.mtp != 0) {
+        model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
+        cparams.mtp != 0) {
         cparams.mtp = 0;
     }
 

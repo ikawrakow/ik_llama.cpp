@@ -448,7 +448,7 @@ llm_expert_gating_func_type   gating_op,
     static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, const llm_build_cb & cb);
 
     static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
-            ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb);
+            ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name = true);
 
     static ggml_tensor * do_split_norm(ggml_context * ctx, ggml_tensor * cur, ggml_tensor * the_norm, const llama_hparams & hparams,
         const llm_build_cb & cb, int id, int il_cb, bool is_norm);
@@ -461,6 +461,14 @@ llm_expert_gating_func_type   gating_op,
         const struct llama_layer & mtp_layer,
         struct ggml_tensor * prev_embeddings,
         int64_t n_embd_head,
+        struct ggml_cgraph * gf,
+        struct ggml_tensor * inp_pos,
+        struct ggml_tensor * rope_cache
+    );
+
+    struct ggml_tensor * build_deepseek2_mtp(
+        const struct llama_layer & mtp_layer,
+        struct ggml_tensor * prev_embeddings,
         struct ggml_cgraph * gf,
         struct ggml_tensor * inp_pos,
         struct ggml_tensor * rope_cache
