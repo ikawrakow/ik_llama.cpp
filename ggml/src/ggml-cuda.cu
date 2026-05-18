@@ -1127,6 +1127,18 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             }
         }
     }
+    else if (extra->split_dim == 2) {
+        size_t cur_offset = 0;
+        for (int i = 0; i < extra->n_device; ++i) {
+            auto split = extra->splits[i];
+            if (!split) continue;
+            ggml_cuda_set_device(i);
+            auto size = ggml_nbytes(split);
+            const char * buf_host = (const char *)data + cur_offset;
+            CUDA_CHECK(cudaMemcpyAsync(split->data, buf_host, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            cur_offset += size;
+        }
+    }
     else {
         fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim == 0);
         GGML_ABORT("fatal error");
@@ -1146,6 +1158,8 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]]
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
     if (!tensor->extra) return;
+
+    printf("%s(%s): offset = %zu, size = %zu\n", __func__, tensor->name, offset, size);
 
     // Inverse of split_buffer_set_tensor; refuses paths with no defined inverse.
     auto extra = (ggml_split_tensor_t *)tensor->extra;

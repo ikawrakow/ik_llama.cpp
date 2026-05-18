@@ -2429,7 +2429,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         }
         ggml_free(ctx);
     }
-    if (mla == 1) return;
+    if (mla == 1 || model.split_mode == LLAMA_SPLIT_MODE_GRAPH) return;
 
     n_to_compute = 0;
     for (auto& l : model.layers) {

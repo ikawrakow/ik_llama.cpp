@@ -240,7 +240,7 @@
 // if you need to load more than 64 model shards.
 #define GGML_MAX_CONTEXTS       64
 #endif
-#define GGML_MAX_SRC            10
+#define GGML_MAX_SRC            12
 #ifndef GGML_MAX_NAME
 #define GGML_MAX_NAME           64
 #endif

@@ -3730,7 +3730,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
 
 static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor * tensor, llama_split_tensor & split_tensor,
         const std::vector<int> & splits, std::vector<size_t> & mem_used) {
-    GGML_ASSERT(split_dim <= 1);
+    GGML_ASSERT(split_dim <= 2);
     GGML_ASSERT(splits.size() > 1);
     std::string name{tensor->name};
     split_tensor.tensor_splits.resize(splits.size());
@@ -3749,6 +3749,17 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
         for (int i = 0; i < int(splits.size()); ++i) {
             if (splits[i] > 0) {
                 split_tensor.tensor_splits[i] = ggml_new_tensor_3d(ctx, tensor->type, tensor->ne[0], splits[i], tensor->ne[2]);
+                auto name_i = name + '.' + std::to_string(i);
+                ggml_set_name(split_tensor.tensor_splits[i], name_i.c_str());
+            } else {
+                split_tensor.tensor_splits[i] = nullptr;
+            }
+        }
+    }
+    else if (split_dim == 2) {
+        for (int i = 0; i < int(splits.size()); ++i) {
+            if (splits[i] > 0) {
+                split_tensor.tensor_splits[i] = ggml_new_tensor_3d(ctx, tensor->type, tensor->ne[0], tensor->ne[1], splits[i]);
                 auto name_i = name + '.' + std::to_string(i);
                 ggml_set_name(split_tensor.tensor_splits[i], name_i.c_str());
             } else {
@@ -3837,10 +3848,10 @@ static void distribute_mla_tensors_for_split_mode_graph(
         prepare_split_tensors(-1, ctx_split, layer.wkv_a_mqa, layer.split_wkv_a_mqa, mirror, mem_used);
     }
     if (layer.wk_b) {
-        prepare_split_tensors(-1, ctx_split, layer.wk_b, layer.split_wk_b, mirror, mem_used);
+        prepare_split_tensors( 2, ctx_split, layer.wk_b, layer.split_wk_b, split_heads, mem_used);
     }
     if (layer.wv_b) {
-        prepare_split_tensors(-1, ctx_split, layer.wv_b, layer.split_wv_b, mirror, mem_used);
+        prepare_split_tensors( 2, ctx_split, layer.wv_b, layer.split_wv_b, split_heads, mem_used);
     }
 
     // Output projection: row-split, partial outputs all-reduced after.

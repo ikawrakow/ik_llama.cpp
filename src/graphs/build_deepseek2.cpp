@@ -124,6 +124,9 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
                 cache_local->ne[0], n_tokens, row_size_cache, row_size_cache * kv_head);
 
         ggml_tensor * kvr = ggml_concat(ctx0, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), kv_compressed, 0);
+        if (cparams.k_cache_hadamard) {
+            kvr = ggml_hadamard(ctx0, kvr, 64);
+        }
 
         // Per-rank cache_copies slot.
         const int cc_idx = 2 * n_device * il + 2 * id;
@@ -142,20 +145,31 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
         auto wk_b_split = (const ggml_split_tensor_t *)model.layers[il].wk_b->extra;
         GGML_ASSERT(wk_b_split);
         ggml_tensor * wk_b_local = wk_b_split->splits[id];
-        const int head_offset = head_offsets[id];
-        const size_t wk_b_head_stride = wk_b_local->nb[1] * kv_lora_rank;
-        ggml_tensor * wk_b_slice = ggml_view_3d(ctx0, wk_b_local,
-                n_embd_head_qk_nope, kv_lora_rank, n_head_local,
-                wk_b_local->nb[1], wk_b_head_stride,
-                head_offset * wk_b_head_stride);
-        cb(wk_b_slice, "wk_b_slice", il_id);
+        //const int head_offset = head_offsets[id];
+        //const size_t wk_b_head_stride = wk_b_local->nb[1] * kv_lora_rank;
+        //ggml_tensor * wk_b_slice = ggml_view_3d(ctx0, wk_b_local,
+        //        n_embd_head_qk_nope, kv_lora_rank, n_head_local,
+        //        wk_b_local->nb[1], wk_b_head_stride,
+        //        head_offset * wk_b_head_stride);
+        //cb(wk_b_slice, "wk_b_slice", il_id);
+        //if (il == 0) {
+        //    auto wk_b = model.layers[il].wk_b;
+        //    printf("wk_b(%2d): %ld x %ld x %ld; %zu x %zu x %zu. view: %ld x %ld x %ld; %zu x %zu x %zu, offset = %zu, %d\n", id,
+        //            wk_b->ne[0], wk_b->ne[1], wk_b->ne[2], wk_b->nb[1], wk_b->nb[2], wk_b->nb[3],
+        //            wk_b_slice->ne[0], wk_b_slice->ne[1], wk_b_slice->ne[2], wk_b_slice->nb[1], wk_b_slice->nb[2], wk_b_slice->nb[3],
+        //            head_offset * wk_b_head_stride, head_offset);
+        //}
 
         ggml_tensor * q_nope_perm = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
 
-        ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b_slice, q_nope_perm);
+        //ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b_slice, q_nope_perm);
+        ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b_local, q_nope_perm);
 
         ggml_tensor * q_combined = ggml_concat(ctx0,
                 ggml_permute(ctx0, q_rope, 0, 2, 1, 3), q_nope2, 0);
+        if (cparams.k_cache_hadamard) {
+            q_combined = ggml_hadamard(ctx0, q_combined, 64);
+        }
 
         // FlashMLA-3 path: K = kv_cache (full latent + rope), V = kv_cache_lora (latent only)
         ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, cache_local,
@@ -171,18 +185,29 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
         if (use_f32_attn_precision) {
             ggml_flash_attn_ext_set_prec(kqv_compressed, GGML_PREC_F32);
         }
+        if (cparams.k_cache_hadamard) {
+            kqv_compressed = ggml_hadamard(ctx0, kqv_compressed, 64);
+        }
         kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
 
         auto wv_b_split = (const ggml_split_tensor_t *)model.layers[il].wv_b->extra;
         GGML_ASSERT(wv_b_split);
         ggml_tensor * wv_b_local = wv_b_split->splits[id];
-        const size_t wv_b_head_stride = wv_b_local->nb[1] * n_embd_head_v;
-        ggml_tensor * wv_b_slice = ggml_view_3d(ctx0, wv_b_local,
-                kv_lora_rank, n_embd_head_v, n_head_local,
-                wv_b_local->nb[1], wv_b_head_stride,
-                head_offset * wv_b_head_stride);
+        //const size_t wv_b_head_stride = wv_b_local->nb[1] * n_embd_head_v;
+        //ggml_tensor * wv_b_slice = ggml_view_3d(ctx0, wv_b_local,
+        //        kv_lora_rank, n_embd_head_v, n_head_local,
+        //        wv_b_local->nb[1], wv_b_head_stride,
+        //        head_offset * wv_b_head_stride);
+        //if (il == 0) {
+        //    auto wv_b = model.layers[il].wv_b;
+        //    printf("wv_b(%2d): %ld x %ld x %ld; %zu x %zu x %zu. view: %ld x %ld x %ld; %zu x %zu x %zu, offset = %zu, %d\n", id,
+        //            wv_b->ne[0], wv_b->ne[1], wv_b->ne[2], wv_b->nb[1], wv_b->nb[2], wv_b->nb[3],
+        //            wv_b_slice->ne[0], wv_b_slice->ne[1], wv_b_slice->ne[2], wv_b_slice->nb[1], wv_b_slice->nb[2], wv_b_slice->nb[3],
+        //            head_offset * wv_b_head_stride, head_offset);
+        //}
 
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_slice, kqv_compressed);
+        //ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_slice, kqv_compressed);
+        ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_local, kqv_compressed);
         if (n_tokens > 1) {
             kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
         }
