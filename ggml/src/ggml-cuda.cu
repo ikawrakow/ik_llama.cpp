@@ -1159,8 +1159,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]]
 
     if (!tensor->extra) return;
 
-    printf("%s(%s): offset = %zu, size = %zu\n", __func__, tensor->name, offset, size);
-
     // Inverse of split_buffer_set_tensor; refuses paths with no defined inverse.
     auto extra = (ggml_split_tensor_t *)tensor->extra;
     GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
