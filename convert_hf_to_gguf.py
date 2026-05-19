@@ -2861,7 +2861,7 @@ class MmprojModel(Model):
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
-    n_block_keys = ["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth", "layers", "encoder_layers"]
+    n_block_keys = ["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth", "layers", "encoder_layers", "vt_num_hidden_layers"]
 
     has_vision_encoder: bool = True  # by default
     has_audio_encoder: bool = False
@@ -2956,10 +2956,10 @@ class MmprojModel(Model):
             self.image_size = self.find_vparam(["image_size"])
             self.gguf_writer.add_vision_image_size(self.image_size)
             self.gguf_writer.add_vision_patch_size(self.find_vparam(["patch_size"]))
-            self.gguf_writer.add_vision_embedding_length(self.find_vparam(["hidden_size", "width"]))
-            self.gguf_writer.add_vision_feed_forward_length(self.find_vparam(["intermediate_size"]))
+            self.gguf_writer.add_vision_embedding_length(self.find_vparam(["hidden_size", "width", "vt_hidden_size"]))
+            self.gguf_writer.add_vision_feed_forward_length(self.find_vparam(["intermediate_size", "vt_intermediate_size"]))
             self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys))
-            self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads", "num_heads", "heads"]))
+            self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads", "num_heads", "heads", "vt_num_attention_heads"]))
 
             self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
             self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
@@ -2996,6 +2996,128 @@ class MmprojModel(Model):
         if ".patch_embd.weight" in new_name or ".patch_merger.weight" in new_name:
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return False
+
+    def prepare_tensors(self):
+        # ADAPTATION: this is a verbatim copy of ik_llama `Model.prepare_tensors`
+        # with ONE deliberate divergence: the unconditional `.squeeze()` applied
+        # to every tensor yielded by `modify_tensors` is dropped. Upstream
+        # llama.cpp `conversion/base.py:MmprojModel.prepare_tensors` comments
+        # that squeeze out ("TODO: why do we squeeze here?") precisely because
+        # mmproj/vision tensors must keep their full shape. In particular
+        # `Qwen3_5VisionModel.modify_tensors` splits the Conv3D patch-embed
+        # weight along the temporal axis -- `data_torch[:, :, 0, ...]` and
+        # `[:, :, 1, ...]` -- and a generic `.squeeze()` could silently drop an
+        # interior size-1 dimension of any vision tensor. Overriding here makes
+        # correctness independent of the actual vision tensor shapes instead of
+        # relying on the unverified assumption that none have an interior size-1
+        # dim. Everything else (dtype coercion, bid derivation, force-quant
+        # rules, ftype mapping, writer call) matches `Model.prepare_tensors`
+        # exactly; keep this in sync if that method changes.
+        max_name_len = max(len(s) for _, s in self.tensor_map.mapping.values()) + len(".weight,")
+
+        for name, data_torch in chain(self.generate_extra_tensors(), self.get_tensors()):
+            # we don't need these
+            if name.endswith((".attention.masked_bias", ".attention.bias", ".rotary_emb.inv_freq")):
+                continue
+
+            old_dtype = data_torch.dtype
+
+            # convert any unsupported data types to float32
+            if data_torch.dtype not in (torch.float16, torch.float32):
+                data_torch = data_torch.to(torch.float32)
+
+            # use the first number-like part of the tensor name as the block id
+            bid = None
+            for part in name.split("."):
+                if part.isdecimal():
+                    bid = int(part)
+                    break
+
+            # ADAPTATION: no `.squeeze()` -- see method docstring above.
+            for new_name, data in ((n, d.numpy()) for n, d in self.modify_tensors(data_torch, name, bid)):
+                data: np.ndarray  # type hint
+                n_dims = len(data.shape)
+                data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
+
+                # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
+                if n_dims <= 1 or new_name.endswith("_norm.weight"):
+                    data_qtype = gguf.GGMLQuantizationType.F32
+
+                # Conditions should closely match those in llama_model_quantize_internal in llama.cpp
+                # Some tensor types are always in float32
+                if data_qtype is False and (
+                    any(
+                        self.match_model_tensor_name(new_name, key, bid)
+                        for key in (
+                            gguf.MODEL_TENSOR.FFN_GATE_INP,
+                            gguf.MODEL_TENSOR.POS_EMBD,
+                            gguf.MODEL_TENSOR.TOKEN_TYPES,
+                        )
+                    )
+                    or not name.endswith(".weight")
+                ):
+                    data_qtype = gguf.GGMLQuantizationType.F32
+
+                if data_qtype is False and any(
+                    self.match_model_tensor_name(new_name, key, bid)
+                    for key in (
+                        gguf.MODEL_TENSOR.TOKEN_EMBD,
+                        gguf.MODEL_TENSOR.OUTPUT,
+                        gguf.MODEL_TENSOR.ATTN_V,
+                        gguf.MODEL_TENSOR.ATTN_K,
+                        gguf.MODEL_TENSOR.ATTN_QKV,
+                    )
+                ):
+                    if self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q4_0,
+                        gguf.LlamaFileType.MOSTLY_Q4_1,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype in (
+                        gguf.LlamaFileType.MOSTLY_Q5_0,
+                        gguf.LlamaFileType.MOSTLY_Q5_1,
+                    ):
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+
+                # No override (data_qtype is False), or wants to be quantized (data_qtype is True)
+                if isinstance(data_qtype, bool):
+                    if self.ftype == gguf.LlamaFileType.ALL_F32:
+                        data_qtype = gguf.GGMLQuantizationType.F32
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_F16:
+                        data_qtype = gguf.GGMLQuantizationType.F16
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_BF16:
+                        data_qtype = gguf.GGMLQuantizationType.BF16
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q4_1:
+                        data_qtype = gguf.GGMLQuantizationType.Q4_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q5_1:
+                        data_qtype = gguf.GGMLQuantizationType.Q5_1
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q6_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q6_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    else:
+                        raise ValueError(f"Unknown file type: {self.ftype.name}")
+
+                try:
+                    data = gguf.quants.quantize(data, data_qtype)
+                except gguf.QuantError as e:
+                    logger.warning("%s, %s", e, "falling back to F16")
+                    data_qtype = gguf.GGMLQuantizationType.F16
+                    data = gguf.quants.quantize(data, data_qtype)
+
+                shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
+
+                # reverse shape to make it similar to the internal ggml dimension order
+                shape_str = f"{{{', '.join(str(n) for n in reversed(shape))}}}"
+
+                # n_dims is implicit in the shape
+                logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
+
+                self.gguf_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
 
 
 @Model.register("Qwen3_5VisionModel")
