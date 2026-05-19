@@ -2848,6 +2848,293 @@ class Qwen3_5MoeTextModel(Qwen3NextModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
+class MmprojModel(Model):
+    """Base class for multimodal projector (mmproj) converters.
+
+    Ported from upstream llama.cpp `conversion/base.py:MmprojModel`. Upstream's
+    MmprojModel extends `ModelBase`; ik_llama has no `ModelBase`/`ModelType`
+    split, so this is reparented onto ik_llama's single `Model` base. See the
+    Task 5 commit body for the full list of adaptations.
+    """
+
+    model_arch = gguf.MODEL_ARCH.MMPROJ
+    preprocessor_config: dict[str, Any]
+    global_config: dict[str, Any]
+
+    n_block_keys = ["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth", "layers", "encoder_layers"]
+
+    has_vision_encoder: bool = True  # by default
+    has_audio_encoder: bool = False
+
+    hparams_vision: dict[str, Any] | None = None
+    hparams_audio: dict[str, Any] | None = None
+
+    def __init__(self, *args, **kwargs):
+        # ADAPTATION: ik_llama's `Model.__init__` already loads `self.hparams`
+        # (with `text_config` flattened to root) and builds `self.tensor_map`
+        # for `self.model_arch` (== MMPROJ). Upstream's MmprojModel re-derives
+        # block_count from the vision config and rebuilds tensor_map; we do the
+        # same below after the base constructor runs.
+        super().__init__(*args, **kwargs)
+
+        if self.model_arch != gguf.MODEL_ARCH.MMPROJ:
+            raise TypeError("MmprojModel must be subclassed with model_arch = gguf.MODEL_ARCH.MMPROJ")
+
+        # n_embd of the text model. ik_llama's `load_hparams` flattens
+        # `text_config` into the root dict, so `hidden_size` at root already
+        # reflects the LLM hidden dim. Fall back to the nested dict for safety.
+        text_config = {**self.hparams, **self.hparams.get("text_config", {})}
+        self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
+        assert self.n_embd_text > 0, "n_embd (text) not found in hparams"
+
+        # Preserve the original (pre-flatten) config so subclasses can read
+        # `text_config` / `vision_config` unmodified.
+        import copy
+        self.global_config = copy.deepcopy(self.hparams)
+
+        self.hparams_vision = self.get_vision_config()
+        self.hparams_audio = self.get_audio_config()
+        if self.hparams_vision is None and self.hparams_audio is None:
+            raise ValueError("vision_config / audio_config not found in hparams")
+
+        # ADAPTATION: upstream reassigns `self.hparams = self.hparams_vision`
+        # for vision-only models. We deliberately do NOT — ik_llama's base
+        # `set_gguf_parameters`/`find_hparam` and the Qwen text helpers expect
+        # `self.hparams` to remain the (flattened) language-model config.
+        # Vision hparams are read exclusively via `find_vparam`.
+
+        # Rebuild block_count + tensor_map from the vision depth so per-block
+        # tensor names (`v.blk.N.*`) resolve for every ViT layer.
+        if self.hparams_vision is not None:
+            self.block_count = self._find_param(self.hparams_vision, self.n_block_keys)
+            self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
+
+        # Load the image-preprocessor config (image_mean / image_std live here,
+        # not in config.json).
+        self.preprocessor_config = {}
+        for cfg_name in ("preprocessor_config.json", "processor_config.json"):
+            cfg_path = self.dir_model / cfg_name
+            if cfg_path.is_file():
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    if "image_processor" in cfg:
+                        cfg = {**cfg, **cfg["image_processor"]}
+                    self.preprocessor_config = {**self.preprocessor_config, **cfg}
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        # ADAPTATION: ik_llama's `load_hparams` flattens `text_config` to root
+        # but leaves `vision_config` nested — read it straight from hparams.
+        return self.hparams.get("vision_config")
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        mm_config_key = "whisper_config" if "whisper_config" in self.hparams else "audio_config"
+        return self.hparams.get(mm_config_key)
+
+    def set_type(self):
+        self.gguf_writer.add_type(gguf.GGUFType.MMPROJ)
+
+    def set_vocab(self):
+        # ADAPTATION: upstream's MmprojModel has no vocab and raises in
+        # `write_vocab()`. ik_llama's `prepare_metadata()` unconditionally
+        # calls `set_vocab()` inside the normal `write()` path, so make it a
+        # no-op rather than raising — an mmproj GGUF carries no tokenizer.
+        pass
+
+    def set_gguf_parameters(self):
+        # ADAPTATION: upstream calls `super().set_gguf_parameters()` to reach
+        # `ModelBase`'s mmproj base. ik_llama's `Model.set_gguf_parameters`
+        # emits LANGUAGE-model KV keys (block_count, embedding_length, head
+        # counts, rope, etc.) which are wrong for an mmproj GGUF. So this
+        # method does NOT chain to `super()` — it emits only the CLIP/vision
+        # KV keys, mirroring upstream `MmprojModel.set_gguf_parameters`.
+        self.gguf_writer.add_file_type(self.ftype)
+
+        if self.has_vision_encoder:
+            self.gguf_writer.add_clip_has_vision_encoder(True)
+            self.gguf_writer.add_vision_projection_dim(self.n_embd_text)
+
+            self.image_size = self.find_vparam(["image_size"])
+            self.gguf_writer.add_vision_image_size(self.image_size)
+            self.gguf_writer.add_vision_patch_size(self.find_vparam(["patch_size"]))
+            self.gguf_writer.add_vision_embedding_length(self.find_vparam(["hidden_size", "width"]))
+            self.gguf_writer.add_vision_feed_forward_length(self.find_vparam(["intermediate_size"]))
+            self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys))
+            self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads", "num_heads", "heads"]))
+
+            self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
+            self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
+
+        if self.has_audio_encoder:
+            self.gguf_writer.add_clip_has_audio_encoder(True)
+            self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
+            self.gguf_writer.add_audio_embedding_length(self.find_aparam(["hidden_size"]))
+            self.gguf_writer.add_audio_feed_forward_length(self.find_aparam(["intermediate_size"]))
+            self.gguf_writer.add_audio_block_count(self.find_aparam(self.n_block_keys))
+            self.gguf_writer.add_audio_head_count(self.find_aparam(["num_attention_heads"]))
+
+        if not self.has_vision_encoder and not self.has_audio_encoder:
+            raise ValueError("MmprojModel must have either vision or audio encoder")
+
+    def find_vparam(self, keys: Iterable[str], optional: bool = False) -> Any:
+        assert self.hparams_vision is not None
+        return self._find_param(self.hparams_vision, keys, optional)
+
+    def find_aparam(self, keys: Iterable[str], optional: bool = False) -> Any:
+        assert self.hparams_audio is not None
+        return self._find_param(self.hparams_audio, keys, optional)
+
+    def _find_param(self, obj: dict[str, Any], keys: Iterable[str], optional: bool = False) -> Any:
+        key = next((k for k in keys if k in obj), None)
+        if key is not None:
+            return obj[key]
+        if optional:
+            return None
+        raise KeyError(f"could not find any of: {keys}")
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd.weight" in new_name or ".patch_merger.weight" in new_name:
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
+        return False
+
+
+@Model.register("Qwen3_5VisionModel")
+class Qwen3_5VisionModel(MmprojModel):
+    """Qwen3.6 (Qwen3_5*) vision tower -> mmproj converter.
+
+    Ported from upstream llama.cpp `conversion/qwen3vl.py:Qwen3VLVisionModel`.
+    Registered ONLY under the synthetic key "Qwen3_5VisionModel" — the real HF
+    architecture names (Qwen3_5ForConditionalGeneration /
+    Qwen3_5MoeForConditionalGeneration) are already bound to the TEXT
+    converters in ik_llama's single flat `Model._model_classes` dict; the
+    `--mmproj` dispatch path looks up this synthetic key explicitly.
+    """
+
+    # ADAPTATION: `Model.__init_subclass__` requires `model_arch` in the
+    # subclass `__dict__` directly (inherited attrs do not satisfy the check).
+    # Upstream`s concrete vision converters redeclare it the same way.
+    model_arch = gguf.MODEL_ARCH.MMPROJ
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.hparams_vision is None:
+            logger.info("No vision config found, skipping vision tensor processing")
+            return
+
+        # image_size is absent from Qwen3.6 vision_config; derive it from
+        # num_position_embeddings: num_pos = (image_size / patch_size) ** 2.
+        if "image_size" not in self.hparams_vision:
+            num_pos = self.hparams_vision.get("num_position_embeddings", 2304)
+            patch_size = self.hparams_vision.get("patch_size", 16)
+            self.hparams_vision["image_size"] = int(num_pos ** 0.5 * patch_size)
+
+        # Alias HF vision-config key names to the ones find_vparam expects.
+        self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
+        self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
+
+        self.is_deepstack_layers = [False] * int(self.hparams_vision["num_hidden_layers"] or 0)
+        for idx in self.hparams_vision.get("deepstack_visual_indexes", []):
+            self.is_deepstack_layers[idx] = True
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if not self.has_audio_encoder:
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN3VL)
+        self.gguf_writer.add_vision_use_gelu(True)
+
+        if self.hparams_vision is not None:
+            merge_size = self.hparams_vision.get("spatial_merge_size")
+            if merge_size is not None:
+                self.gguf_writer.add_vision_spatial_merge_size(int(merge_size))
+
+        # Vision attention layernorm eps reuses the text model's rms_norm_eps.
+        # ADAPTATION: ik_llama flattens text_config to root, so look at root
+        # first, then fall back to the nested text_config in global_config.
+        rms_norm_eps = self.hparams.get(
+            "rms_norm_eps",
+            self.global_config.get("text_config", {}).get("rms_norm_eps", 1e-6),
+        )
+        self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
+
+        if self.is_deepstack_layers:
+            self.gguf_writer.add_vision_is_deepstack_layers(self.is_deepstack_layers)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        assert self.hparams_vision is not None
+
+        # INVERTED FILTER: keep only the vision tower (`model.visual.*`), drop
+        # everything else (language model, lm_head, MTP). This is the inverse
+        # of the text converters' `_strip_vlm_prefixes()`.
+        if not name.startswith("model.visual."):
+            return []
+        # Strip the `model.` wrapper so the upstream `visual.*` logic applies.
+        name = name[len("model."):]
+
+        if name.startswith("visual.deepstack_merger_list."):
+            prefix, rest = name.split(".", maxsplit=3)[2:]
+            idx = self.hparams_vision.get("deepstack_visual_indexes", [])[int(prefix)]
+            target = rest
+            if target.startswith("norm."):
+                tensor_type = gguf.MODEL_TENSOR.V_DS_NORM
+                suffix = target.split(".", 1)[1]
+            elif target.startswith("linear_fc1."):
+                tensor_type = gguf.MODEL_TENSOR.V_DS_FC1
+                suffix = target.split(".", 1)[1]
+            elif target.startswith("linear_fc2."):
+                tensor_type = gguf.MODEL_TENSOR.V_DS_FC2
+                suffix = target.split(".", 1)[1]
+            else:
+                raise ValueError(f"Unexpected deepstack tensor: {name}")
+            new_name = self.format_tensor_name(tensor_type, idx, suffix=f".{suffix}")
+            yield (new_name, data_torch)
+            return
+
+        if name.startswith("visual.merger."):
+            suffix = name.split(".", 2)[2]
+            if suffix.startswith("linear_fc"):
+                fc_idx_str, tail = suffix.split(".", 1)
+                fc_num = int(fc_idx_str.replace("linear_fc", ""))
+                # Qwen3VL merger has linear_fc1 / linear_fc2 -> mm.0 / mm.2.
+                if fc_num == 1:
+                    fc_idx = 0
+                elif fc_num == 2:
+                    fc_idx = 2
+                else:
+                    raise ValueError(f"unexpected fc index {fc_num} in {name}")
+                new_name = self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, fc_idx, suffix=f".{tail}")
+            elif suffix.startswith("norm."):
+                new_name = self.format_tensor_name(
+                    gguf.MODEL_TENSOR.V_POST_NORM, suffix=f".{suffix.split('.', 1)[1]}"
+                )
+            else:
+                raise ValueError(f"Unexpected merger tensor: {name}")
+            yield (new_name, data_torch)
+            return
+
+        if name == "visual.patch_embed.proj.weight":
+            # Split Conv3D into two Conv2Ds along the temporal dimension.
+            c1, c2, kt, _, _ = data_torch.shape
+            del c1, c2
+            if kt != 2:
+                raise ValueError("Current implementation only supports temporal_patch_size of 2")
+            base = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH]
+            yield (base + ".weight", data_torch[:, :, 0, ...])
+            yield (base + ".weight.1", data_torch[:, :, 1, ...])
+            return
+
+        if name == "visual.patch_embed.proj.bias":
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias", data_torch)
+            return
+
+        # ViT block tensors (attn_qkv / attn_out / ln1 / ln2 / ffn_*) and
+        # pos_embed fall through to the standard MMPROJ tensor-name map.
+        # NOTE: the packed attn.qkv tensor is intentionally NOT split — the
+        # MMPROJ tensor map routes `visual.blocks.N.attn.qkv` to the packed
+        # `v.blk.N.attn_qkv` name, which clip.cpp's build_qwen3vl() consumes
+        # directly (see runtime-schema.md section 5b).
+        yield (self.map_tensor_name(name), data_torch)
+
+
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
 class Ernie4_5Model(Model):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5
