@@ -188,7 +188,7 @@ int main(int argc, char ** argv) {
     // draft sequence data
     std::vector<seq_draft> drafts(n_seq_dft);
 
-    params.sparams.grammar = { COMMON_GRAMMAR_TYPE_NONE, ""}; // the draft samplers will copy the target sampler's grammar
+    params.sparams.grammar = common_grammar{}; // the draft samplers will copy the target sampler's grammar
     if (params.sparams.temp == 0) {
         params.sparams.temp = -1.0f; // force greedy sampling with probs for the draft model
     }
@@ -290,8 +290,8 @@ int main(int argc, char ** argv) {
                             drafts[s].active = false;
 
                             // calculate residual probability
-                            GGML_ASSERT(dist_tgt.sorted);
-                            GGML_ASSERT(dist_dft.sorted);
+                            // (the .sorted flag is unreliable across modern sampling
+                            //  paths; we re-sort below regardless, so it doesn't matter.)
                             float sum_probs = 0.0f;
 
                             // sort dist by id

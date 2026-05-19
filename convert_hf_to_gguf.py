@@ -3175,6 +3175,267 @@ class Gemma2Model(Model):
         return [(self.map_tensor_name(name), data_torch)]
 
 
+class Gemma4BaseModel(Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA4
+
+    def _text_hparams(self) -> dict[str, Any]:
+        text_hparams = self.hparams.get("text_config")
+        if isinstance(text_hparams, dict):
+            return text_hparams
+        return self.hparams
+
+    def _arch_name(self) -> str:
+        return gguf.MODEL_ARCH_NAMES[self.model_arch]
+
+    def find_hparam(self, keys: Iterable[str], optional: bool = False) -> Any:
+        text_hparams = self.hparams.get("text_config")
+        if isinstance(text_hparams, dict):
+            for key in keys:
+                if key in text_hparams:
+                    return text_hparams[key]
+        return super().find_hparam(keys, optional)
+
+    def set_vocab(self):
+        vocab = gguf.LlamaHfVocab(self.dir_model)
+        tokens = []
+        scores = []
+        toktypes = []
+        visible_tokens = {
+            "<|channel>",
+            "<channel|>",
+            "<|tool_call>",
+            "<tool_call|>",
+            "<|tool_response>",
+            "<tool_response|>",
+            "<|\"|>",
+        }
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            text_str = text.decode()
+            if text_str in visible_tokens:
+                toktypes.append(gguf.TokenType.USER_DEFINED)
+                logger.info(f"Token {text_str!r} is set to USER_DEFINED")
+            else:
+                toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size
+
+        self.gguf_writer.add_tokenizer_model("gemma4")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+        self.gguf_writer.add_add_space_prefix(False)
+        self.gguf_writer.add_add_bos_token(True)
+
+
+@Model.register("Gemma4ForConditionalGeneration")
+class Gemma4Model(Gemma4BaseModel):
+    model_arch = gguf.MODEL_ARCH.GEMMA4
+
+    def set_gguf_parameters(self):
+        hparams = self._text_hparams()
+        block_count = hparams["num_hidden_layers"]
+        arch = self._arch_name()
+
+        self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
+        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
+        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
+        self.gguf_writer.add_layer_norm_rms_eps(hparams["rms_norm_eps"])
+        self.gguf_writer.add_file_type(self.ftype)
+
+        swa_layers = [layer_type == "sliding_attention" for layer_type in hparams["layer_types"]]
+        self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+        self.gguf_writer.add_sliding_window_pattern(swa_layers)
+
+        num_kv_shared_layers = hparams.get("num_kv_shared_layers", 0)
+        self.gguf_writer.add_shared_kv_layers(num_kv_shared_layers)
+
+        n_ff = hparams["intermediate_size"]
+        if hparams.get("use_double_wide_mlp", False):
+            first_kv_shared_layer_idx = block_count - num_kv_shared_layers
+            n_ff_arr = [n_ff if il < first_kv_shared_layer_idx else n_ff * 2 for il in range(block_count)]
+            self.gguf_writer.add_feed_forward_length(n_ff_arr)
+        else:
+            self.gguf_writer.add_feed_forward_length(n_ff)
+
+        expert_intermediate_size = hparams.get("expert_intermediate_size") or hparams.get("moe_intermediate_size")
+        if expert_intermediate_size is not None:
+            self.gguf_writer.add_expert_feed_forward_length(expert_intermediate_size)
+
+        n_pl_embd = hparams.get("hidden_size_per_layer_input") or 0
+        self.gguf_writer.add_embedding_length_per_layer_input(n_pl_embd)
+
+        head_dim_full = int(hparams["global_head_dim"])
+        head_dim_swa = int(hparams["head_dim"])
+        self.gguf_writer.add_key_length(head_dim_full)
+        self.gguf_writer.add_value_length(head_dim_full)
+        self.gguf_writer.add_uint32(f"{arch}.attention.key_length_swa", head_dim_swa)
+        self.gguf_writer.add_uint32(f"{arch}.attention.value_length_swa", head_dim_swa)
+
+        num_kv_full = hparams.get("num_global_key_value_heads")
+        num_kv_swa = hparams.get("num_key_value_heads")
+        if num_kv_full is not None and num_kv_swa is not None:
+            kv_heads = [num_kv_swa if is_swa else num_kv_full for is_swa in swa_layers]
+            self.gguf_writer.add_head_count_kv(kv_heads)
+        elif num_kv_swa is not None:
+            self.gguf_writer.add_head_count_kv(num_kv_swa)
+
+        rope_parameters = hparams.get("rope_parameters", {})
+        rope_full = rope_parameters.get("full_attention", {})
+        rope_swa = rope_parameters.get("sliding_attention", {})
+        self.gguf_writer.add_rope_dimension_count(head_dim_full)
+        partial_rotary_factor_swa = float(rope_swa.get("partial_rotary_factor", hparams.get("partial_rotary_factor", 1.0)))
+        self.gguf_writer.add_uint32(f"{arch}.rope.dimension_count_swa", int(head_dim_swa * partial_rotary_factor_swa))
+        self.gguf_writer.add_rope_freq_base(float(rope_full.get("rope_theta", 1000000.0)))
+        self.gguf_writer.add_float32(f"{arch}.rope.freq_base_swa", float(rope_swa.get("rope_theta", 10000.0)))
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        hparams = self._text_hparams()
+        rope_params_full = hparams["rope_parameters"]["full_attention"]
+        assert rope_params_full["rope_type"] == "proportional"
+
+        head_dim_full = int(hparams["global_head_dim"])
+        partial_rotary_factor_full = rope_params_full["partial_rotary_factor"]
+        n_rot_full = int(head_dim_full * partial_rotary_factor_full / 2)
+        n_unrot_full = int(head_dim_full / 2) - n_rot_full
+        values = [1.0] * n_rot_full + [1e30] * n_unrot_full
+        rope_freqs_full = torch.tensor(values, dtype=torch.float32)
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), rope_freqs_full)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith("per_dim_scale") or name.endswith("layer_scalar"):
+            name = name + ".weight"
+
+        if "language_model." not in name and "rope_freqs" not in name:
+            return []
+
+        name = name.replace("language_model.", "")
+
+        if name == "lm_head.weight":
+            logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
+            return []
+
+        if name.endswith("router.scale"):
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid, ".scale"), data_torch)]
+
+        if ".per_expert_scale" in name:
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid, ".scale"), data_torch)]
+
+        if ".experts." in name and not name.endswith(".weight"):
+            name += ".weight"
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+
+@Model.register("Gemma4AssistantForCausalLM")
+class Gemma4AssistantModel(Gemma4BaseModel):
+    model_arch = gguf.MODEL_ARCH.GEMMA4_MTP
+
+    _root_tensor_map = {
+        "model.embed_tokens.weight": "token_embd.weight",
+        "model.norm.weight": "output_norm.weight",
+        "pre_projection.weight": "mtp_pre_proj.weight",
+        "post_projection.weight": "mtp_post_proj.weight",
+        "masked_embedding.centroids.weight": "mtp_centroids.weight",
+        "masked_embedding.token_ordering": "mtp_token_ordering.weight",
+        "token_ordering": "mtp_token_ordering.weight",
+        "token_ordering.weight": "mtp_token_ordering.weight",
+        "model.token_ordering": "mtp_token_ordering.weight",
+        "model.token_ordering.weight": "mtp_token_ordering.weight",
+        "centroids": "mtp_centroids.weight",
+        "centroids.weight": "mtp_centroids.weight",
+        "model.centroids": "mtp_centroids.weight",
+        "model.centroids.weight": "mtp_centroids.weight",
+    }
+
+    _layer_tensor_map = {
+        "input_layernorm.weight": "attn_norm.weight",
+        "self_attn.q_proj.weight": "attn_q.weight",
+        "self_attn.q_norm.weight": "attn_q_norm.weight",
+        "self_attn.o_proj.weight": "attn_output.weight",
+        "post_attention_layernorm.weight": "post_attention_norm.weight",
+        "pre_feedforward_layernorm.weight": "ffn_norm.weight",
+        "mlp.gate_proj.weight": "ffn_gate.weight",
+        "mlp.up_proj.weight": "ffn_up.weight",
+        "mlp.down_proj.weight": "ffn_down.weight",
+        "post_feedforward_layernorm.weight": "post_ffw_norm.weight",
+        "layer_scalar": "layer_output_scale.weight",
+        "layer_scalar.weight": "layer_output_scale.weight",
+    }
+
+    def set_gguf_parameters(self):
+        hparams = self._text_hparams()
+        arch = self._arch_name()
+        sliding_pattern = [layer_type == "sliding_attention" for layer_type in hparams["layer_types"]]
+
+        head_dim_swa = int(hparams["head_dim"])
+        head_dim_full = int(hparams.get("global_head_dim") or head_dim_swa)
+        n_kv_swa = int(hparams["num_key_value_heads"])
+        n_kv_full = int(hparams.get("num_global_key_value_heads") or n_kv_swa)
+        n_kv = [n_kv_swa if is_sliding else n_kv_full for is_sliding in sliding_pattern]
+
+        self.gguf_writer.add_context_length(int(hparams["max_position_embeddings"]))
+        self.gguf_writer.add_embedding_length(int(hparams["hidden_size"]))
+        self.gguf_writer.add_block_count(int(hparams["num_hidden_layers"]))
+        self.gguf_writer.add_feed_forward_length(int(hparams["intermediate_size"]))
+        self.gguf_writer.add_head_count(int(hparams["num_attention_heads"]))
+        self.gguf_writer.add_head_count_kv(n_kv)
+        self.gguf_writer.add_key_length(head_dim_full)
+        self.gguf_writer.add_value_length(head_dim_full)
+        self.gguf_writer.add_uint32(f"{arch}.attention.key_length_swa", head_dim_swa)
+        self.gguf_writer.add_uint32(f"{arch}.attention.value_length_swa", head_dim_swa)
+        self.gguf_writer.add_layer_norm_rms_eps(float(hparams["rms_norm_eps"]))
+        self.gguf_writer.add_sliding_window(int(hparams["sliding_window"]))
+        self.gguf_writer.add_array(f"{arch}.attention.sliding_window_pattern", sliding_pattern)
+        self.gguf_writer.add_rope_dimension_count(head_dim_full)
+        self.gguf_writer.add_uint32(f"{arch}.rope.dimension_count_swa", head_dim_swa)
+
+        rope_parameters = hparams.get("rope_parameters", {})
+        rope_full = rope_parameters.get("full_attention", {})
+        rope_swa = rope_parameters.get("sliding_attention", {})
+        self.gguf_writer.add_rope_freq_base(float(rope_full.get("rope_theta", 1000000.0)))
+        self.gguf_writer.add_float32(f"{arch}.rope.freq_base_swa", float(rope_swa.get("rope_theta", 10000.0)))
+
+        self.gguf_writer.add_uint32(f"{arch}.backbone_embedding_length", int(self.hparams["backbone_hidden_size"]))
+        self.gguf_writer.add_bool(f"{arch}.use_ordered_embeddings", bool(self.hparams.get("use_ordered_embeddings", False)))
+        self.gguf_writer.add_uint32(f"{arch}.centroid_count", int(self.hparams.get("num_centroids", 0)))
+        self.gguf_writer.add_uint32(f"{arch}.centroid_top_k", int(self.hparams.get("centroid_intermediate_top_k", 0)))
+        self.gguf_writer.add_file_type(self.ftype)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        mapped_name = self._root_tensor_map.get(name)
+        if mapped_name is not None:
+            if mapped_name == "mtp_token_ordering.weight":
+                n_vocab = int(data_torch.shape[0])
+                n_centroids = int(self.hparams.get("num_centroids", 2048))
+                tokens_per_centroid = n_vocab // n_centroids
+                inv_ordering = torch.zeros(n_vocab, dtype=torch.int32)
+                tok_ord_i32 = data_torch.to(dtype=torch.int64)
+                inv_ordering[tok_ord_i32] = torch.arange(n_vocab, dtype=torch.int32)
+                token_to_centroid = (inv_ordering // tokens_per_centroid).to(dtype=torch.int32)
+                return [(mapped_name, token_to_centroid)]
+            return [(mapped_name, data_torch)]
+
+        prefix = "model.layers."
+        if not name.startswith(prefix):
+            raise ValueError(f"Unsupported Gemma 4 assistant tensor: {name}")
+
+        layer_id, suffix = name[len(prefix):].split(".", 1)
+        mapped_suffix = self._layer_tensor_map.get(suffix)
+        if mapped_suffix is None:
+            raise ValueError(f"Unsupported Gemma 4 assistant tensor: {name}")
+
+        return [(f"blk.{layer_id}.{mapped_suffix}", data_torch)]
+
+
 @Model.register("Starcoder2ForCausalLM")
 class StarCoder2Model(Model):
     model_arch = gguf.MODEL_ARCH.STARCODER2

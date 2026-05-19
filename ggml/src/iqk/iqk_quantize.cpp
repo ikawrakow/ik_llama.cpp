@@ -240,6 +240,81 @@ void IQ1BNQuantizer::quantize_one_row_2bn(const float * src, block_iq2_bn * y, i
     }
 }
 
+static inline int num_rows([[maybe_unused]] ggml_type type) {
+#ifdef HAVE_FANCY_SIMD
+    switch (type) {
+        case GGML_TYPE_Q2_K_R4:
+        case GGML_TYPE_Q3_K_R4:
+        case GGML_TYPE_Q6_K_R4:
+        case GGML_TYPE_IQ2_K_R4:
+        case GGML_TYPE_IQ3_K_R4:
+        case GGML_TYPE_IQ4_K_R4:
+        case GGML_TYPE_IQ5_K_R4:
+        case GGML_TYPE_IQ4_KS_R4:
+        case GGML_TYPE_IQ5_KS_R4:
+        case GGML_TYPE_IQ2_XXS_R4:
+        case GGML_TYPE_IQ2_XS_R4:
+        case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ3_XXS_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
+        case GGML_TYPE_IQ3_S_R4: return 4;
+        case GGML_TYPE_IQ4_NL_R4:
+        case GGML_TYPE_Q5_0_R4:
+        case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_IQ2_BN_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q5_K_R4:
+        case GGML_TYPE_Q8_KV:
+        case GGML_TYPE_Q8_KV_R8:
+        case GGML_TYPE_Q8_K_R8: return 8;
+        case GGML_TYPE_Q4_0_R8:
+        case GGML_TYPE_Q8_0_R8:
+        case GGML_TYPE_Q8_1:
+        case GGML_TYPE_Q8_K_R16:
+        case GGML_TYPE_BF16_R16: return 16;
+        default: return 1;
+    }
+#else
+    switch (type) {
+        case GGML_TYPE_Q2_K_R4:
+        case GGML_TYPE_Q3_K_R4:
+        case GGML_TYPE_Q4_K_R4:
+        case GGML_TYPE_Q5_K_R4:
+        case GGML_TYPE_Q6_K_R4:
+        case GGML_TYPE_Q5_0_R4:
+        case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_IQ4_NL_R4:
+        case GGML_TYPE_IQ2_K_R4:
+        case GGML_TYPE_IQ3_K_R4:
+        case GGML_TYPE_IQ4_K_R4:
+        case GGML_TYPE_IQ5_K_R4:
+        case GGML_TYPE_IQ4_KS_R4:
+        case GGML_TYPE_IQ5_KS_R4:
+        case GGML_TYPE_IQ2_XXS_R4:
+        case GGML_TYPE_IQ2_XS_R4:
+        case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ3_XXS_R4:
+        case GGML_TYPE_IQ3_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
+        case GGML_TYPE_IQ2_BN_R4: return 4;
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
+        case GGML_TYPE_Q8_0_R8:
+        case GGML_TYPE_Q8_KV:
+        case GGML_TYPE_Q8_KV_R8:
+        case GGML_TYPE_Q8_1:
+        case GGML_TYPE_Q8_K_R8: return 8;
+        case GGML_TYPE_Q8_K_R16:
+        case GGML_TYPE_BF16_R16: return 16;
+        default: return 1;
+    }
+#endif
+}
+
+
 }
 
 void iqk_quantize_any(int from_type, int to_type,
@@ -251,21 +326,28 @@ void iqk_quantize_any(int from_type, int to_type,
     GGML_ASSERT(ggml_type_size(type_x) == nb0);
     auto type_y = ggml_type(to_type);
     auto row_size_y = ggml_row_size(type_y, ne0);
-    int64_t nrows = ne1*ne2*ne3;
+    auto n_interleaved = num_rows(type_y);
+    GGML_ASSERT(ne1 % n_interleaved == 0);
+    int64_t ne1i  = ne1/n_interleaved;
+    int64_t nrows = ne1i*ne2*ne3;
     int64_t nrows_per_thread = (nrows + nth - 1)/nth;
     int64_t first_row = nrows_per_thread*ith;
     if (first_row >= nrows) return;
     int64_t last_row = std::min(first_row + nrows_per_thread, nrows);
     for (int64_t row = first_row; row < last_row; ++row) {
-        int64_t i3 = row/(ne1*ne2);
-        int64_t i2 = (row - i3*ne1*ne2)/ne1;
-        int64_t i1 = row - i3*ne1*ne2 - i2*ne1;
-        const char * cx = (const char *)x + i1*nb1 + i2*nb2 + i3*nb3;
+        int64_t i3 = row/(ne1i*ne2);
+        int64_t i2 = (row - i3*ne1i*ne2)/ne1i;
+        int64_t i1 = row - i3*ne1i*ne2 - i2*ne1i;
+        auto cx = (const char *)x + i1*n_interleaved*nb1 + i2*nb2 + i3*nb3;
+        auto cy = (char *)y + (i3*ne1*ne2 + i2*ne1 + i1*n_interleaved)*row_size_y;
         // TODO: special case common types such as f16, q8_0
         //       (although the performance gains may be too small to justify the added complexity)
-        to_float((const void *)cx, (float *)work_buffer, ne0);
-        auto cy = (char *)y + (i3*ne1*ne2 + i2*ne1 + i1)*row_size_y;
-        from_float((const float *)work_buffer, (void *)cy, ne0);
+        if (type_x != GGML_TYPE_F32) {
+            to_float((const void *)cx, (float *)work_buffer, ne0*n_interleaved);
+            from_float((const float *)work_buffer, (void *)cy, ne0*n_interleaved);
+        } else {
+            from_float((const float *)cx, (void *)cy, ne0*n_interleaved);
+        }
     }
 }
 

@@ -20,6 +20,8 @@ extern "C" {
 // BREAKING CHANGES are expected.
 //
 
+typedef int32_t (*mtmd_helper_eval_batch_callback)(void * user_data, const struct llama_batch * batch);
+
 // helper function to construct a mtmd_bitmap from a file
 // it calls mtmd_helper_bitmap_init_from_buf() internally
 // returns nullptr on failure
@@ -67,6 +69,19 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                int32_t n_batch,
                                                bool logits_last,
                                                llama_pos * new_n_past);
+
+// works like mtmd_helper_eval_chunk_single(), and calls callback after each successful llama_decode() batch
+// the batch pointer is only valid for the duration of the callback
+MTMD_API int32_t mtmd_helper_eval_chunk_single_with_callback(mtmd_context * ctx,
+                                                             struct llama_context * lctx,
+                                                             const mtmd_input_chunk * chunk,
+                                                             llama_pos n_past,
+                                                             llama_seq_id seq_id,
+                                                             int32_t n_batch,
+                                                             bool logits_last,
+                                                             llama_pos * new_n_past,
+                                                             mtmd_helper_eval_batch_callback callback,
+                                                             void * callback_user_data);
 
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)

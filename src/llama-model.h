@@ -219,6 +219,15 @@ struct llama_layer {
     llama_split_tensor split_sinks;
     llama_split_tensor split_wqkv_gate;
 
+    // MLA per-device shards (-sm graph for DEEPSEEK2/GLM_DSA/MISTRAL4).
+    llama_split_tensor split_wq_a;
+    llama_split_tensor split_wq_b;
+    llama_split_tensor split_wkv_a_mqa;
+    llama_split_tensor split_wk_b;
+    llama_split_tensor split_wv_b;
+    llama_split_tensor split_attn_q_a_norm;
+    llama_split_tensor split_attn_kv_a_norm;
+
     llama_split_tensor split_ssm_wqkv;
     llama_split_tensor split_ssm_wqkv_gate;
     llama_split_tensor split_ssm_in;
@@ -374,6 +383,10 @@ struct llama_layer {
     std::unique_ptr<ggml_tensor> computed_wk_b;
     std::unique_ptr<ggml_tensor> computed_wv_b;
     std::unique_ptr<ggml_tensor> computed_wkv_b;
+
+    // Per-device replicas of computed wk_b/wv_b (-sm graph). Buffers owned via model.bufs.
+    std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_replicas;
+    std::vector<std::unique_ptr<ggml_tensor>> computed_wv_b_replicas;
 };
 
 struct llama_lora_adapter;
@@ -405,11 +418,19 @@ struct llama_model {
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm = nullptr;
 
+    struct ggml_tensor * mtp_pre_proj = nullptr;
+    struct ggml_tensor * mtp_post_proj = nullptr;
+    struct ggml_tensor * mtp_token_ordering = nullptr;
+    struct ggml_tensor * mtp_centroids = nullptr;
+
     struct ggml_tensor * output_norm;
     struct ggml_tensor * output_norm_b;
     struct ggml_tensor * output;
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
+    struct ggml_tensor * output_mtp = nullptr;
+
+    std::unique_ptr<ggml_tensor> output_mtp_ptr;
 
     llama_split_tensor split_output;
     llama_split_tensor split_output_norm;

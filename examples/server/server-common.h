@@ -93,12 +93,45 @@ using raw_buffer = std::vector<uint8_t>;
 
 void server_log(const char* level, const char* function, int line, const char* message, const json& extra);
 
+static const json * json_value_ptr(const json & body, const std::string & key) {
+    auto direct = body.find(key);
+    if (direct != body.end()) {
+        return &(*direct);
+    }
+
+    const json * current = &body;
+    size_t start = 0;
+
+    while (start < key.size()) {
+        const size_t dot = key.find('.', start);
+        const std::string segment = key.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+
+        if (!current->is_object()) {
+            return nullptr;
+        }
+
+        auto it = current->find(segment);
+        if (it == current->end()) {
+            return nullptr;
+        }
+
+        if (dot == std::string::npos) {
+            return &(*it);
+        }
+
+        current = &(*it);
+        start = dot + 1;
+    }
+
+    return nullptr;
+}
+
 template <typename T>
 static T json_value(const json& body, const std::string& key, const T& default_value) {
     // Fallback null to default value
-    if (body.contains(key) && !body.at(key).is_null()) {
+    if (const json * value = json_value_ptr(body, key); value != nullptr && !value->is_null()) {
         try {
-            return body.at(key);
+            return *value;
         }
         catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const& err) {
             std::stringstream ss;
@@ -160,6 +193,9 @@ std::string random_string();
 std::string gen_chatcmplid();
 
 std::string gen_tool_call_id();
+
+// get a random marker; note: each time the server restarts, the marker will be different
+const char * get_media_marker();
 
 //
 // other common utils
@@ -263,12 +299,6 @@ json oaicompat_chat_params_parse(
     json& body, /* openai api json semantics */
     const server_chat_params& opt,
     std::vector<raw_buffer>& out_files);
-
-// convert OpenAI Responses API format to OpenAI Chat Completions API format
-json convert_responses_to_chatcmpl(const json& body);
-
-// convert Anthropic Messages API format to OpenAI Chat Completions API format
-json convert_anthropic_to_oai(const json & body);
 
 
 //
@@ -440,7 +470,9 @@ public:
         size_t idx,
         llama_pos pos,
         int32_t seq_id,
-        size_t& n_tokens_out) const;
+        size_t& n_tokens_out,
+        mtmd_helper_eval_batch_callback callback = nullptr,
+        void * callback_user_data = nullptr) const;
 
     server_tokens clone() const;
 

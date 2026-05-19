@@ -315,7 +315,9 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
     } else {
-        return nullptr;
+        lctx.inp_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, batch.n_tokens);
+        ggml_set_input(lctx.inp_embd);
+        cur = lctx.inp_embd;
     }
 
     cb(cur, "inp_embd", -1);
@@ -436,9 +438,9 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
     for (int i = gf->n_nodes - 1; i >= 0; --i) {
         inp = gf->nodes[i];
 
-        if (strcmp(inp->name, "result_norm") == 0 || 
-            strcmp(inp->name, "result_embd") == 0 || 
-            strcmp(inp->name, "output_normed") == 0) { 
+        if (strcmp(inp->name, "result_norm") == 0 ||
+            strcmp(inp->name, "result_embd") == 0 ||
+            strcmp(inp->name, "output_normed") == 0) {
             break;
         }
         inp = nullptr;
@@ -1537,37 +1539,46 @@ static ggml_tensor * llm_build_kqv(
                     float     kq_scale,
          const llm_build_cb & cb,
                     int       il,
-                ggml_tensor * sinks = nullptr, int n_swa = 0) {
+                ggml_tensor * sinks = nullptr, int n_swa = 0, int kv_il = -1,
+                ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr) {
     const llama_model   & model   = lctx.model;
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
 
-    const int64_t n_ctx         = cparams.n_ctx;
+    const int64_t n_ctx         = kv.size;
     const int64_t n_head        = hparams.n_head(il);
     const int64_t n_head_kv     = hparams.n_head_kv(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
     //const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(il);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(il);
     const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa(il);
+    const int     kv_layer      = kv_il >= 0 ? kv_il : il;
 
     struct ggml_tensor * q = ggml_permute(ctx, q_cur, 0, 2, 1, 3);
     cb(q, "q", il);
 
-    auto k_cache = lctx.model.hparams.has_kv(il) ? kv.k_l[il]
+    auto k_cache = kv_il >= 0 ? kv.k_l[kv_layer]
+                 : lctx.model.hparams.has_kv(il) ? kv.k_l[il]
                  : lctx.model.hparams.swa_layers[il] ? kv.k_l[hparams.n_layer_kv_from_start-2] : kv.k_l[hparams.n_layer_kv_from_start-1];
-    auto v_cache = lctx.model.hparams.has_kv(il) ? kv.v_l[il]
+    auto v_cache = kv_il >= 0 ? kv.v_l[kv_layer]
+                 : lctx.model.hparams.has_kv(il) ? kv.v_l[il]
                  : lctx.model.hparams.swa_layers[il] ? kv.v_l[hparams.n_layer_kv_from_start-2] : kv.v_l[hparams.n_layer_kv_from_start-1];
 
     GGML_ASSERT(k_cache != nullptr && "k_cache is null in llm_build_kqv");
     GGML_ASSERT(v_cache != nullptr && "v_cache is null in llm_build_kqv");
 
-    struct ggml_tensor * k =
-        ggml_view_3d(ctx, k_cache,
-                n_embd_head_k, n_kv, n_head_kv,
-                ggml_row_size(k_cache->type, n_embd_head_k)*n_head_kv, //n_embd_k_gqa),
-                ggml_row_size(k_cache->type, n_embd_head_k),
-                0);
-    cb(k, "k", il);
+    struct ggml_tensor * k = k_cache_view ? *k_cache_view : nullptr;
+    if (!k) {
+        k = ggml_view_3d(ctx, k_cache,
+                    n_embd_head_k, n_kv, n_head_kv,
+                    ggml_row_size(k_cache->type, n_embd_head_k)*n_head_kv, //n_embd_k_gqa),
+                    ggml_row_size(k_cache->type, n_embd_head_k),
+                    0);
+        if (k_cache_view) {
+            *k_cache_view = k;
+        }
+        cb(k, "k", il);
+    }
 
 #ifdef GGML_USE_VULKAN
     constexpr bool use_f32_precision = true;
@@ -1594,13 +1605,18 @@ static ggml_tensor * llm_build_kqv(
         GGML_UNUSED(n_ctx);
 
         // split cached v into n_head heads (not transposed)
-        struct ggml_tensor * v =
-            ggml_view_3d(ctx, v_cache,
-                    n_embd_head_v, n_kv, n_head_kv,
-                    ggml_row_size(v_cache->type, n_embd_v_gqa),
-                    ggml_row_size(v_cache->type, n_embd_head_v),
-                    0);
-        cb(v, "v", il);
+        struct ggml_tensor * v = v_cache_view ? *v_cache_view : nullptr;
+        if (!v) {
+            v = ggml_view_3d(ctx, v_cache,
+                        n_embd_head_v, n_kv, n_head_kv,
+                        ggml_row_size(v_cache->type, n_embd_v_gqa),
+                        ggml_row_size(v_cache->type, n_embd_head_v),
+                        0);
+            if (v_cache_view) {
+                *v_cache_view = v;
+            }
+            cb(v, "v", il);
+        }
 
         cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
@@ -1626,22 +1642,27 @@ static ggml_tensor * llm_build_kqv(
     } else {
 
             // split cached v into n_head heads
-        struct ggml_tensor * v;
-        if (kv.v_trans) {
-            v = ggml_view_3d(ctx, v_cache,
-                    n_kv, n_embd_head_v, n_head_kv,
-                    ggml_element_size(v_cache)*n_ctx,
-                    ggml_element_size(v_cache)*n_ctx*n_embd_head_v,
-                    0);
-        } else {
-            v = ggml_view_3d(ctx, v_cache,
-                    n_embd_head_v, n_kv, n_head_kv,
-                    ggml_row_size(v_cache->type, n_embd_v_gqa),
-                    ggml_row_size(v_cache->type, n_embd_head_v),
-                    0);
-            v = ggml_cont(ctx, ggml_transpose(ctx, v));
+        struct ggml_tensor * v = v_cache_view ? *v_cache_view : nullptr;
+        if (!v) {
+            if (kv.v_trans) {
+                v = ggml_view_3d(ctx, v_cache,
+                        n_kv, n_embd_head_v, n_head_kv,
+                        ggml_element_size(v_cache)*n_ctx,
+                        ggml_element_size(v_cache)*n_ctx*n_embd_head_v,
+                        0);
+            } else {
+                v = ggml_view_3d(ctx, v_cache,
+                        n_embd_head_v, n_kv, n_head_kv,
+                        ggml_row_size(v_cache->type, n_embd_v_gqa),
+                        ggml_row_size(v_cache->type, n_embd_head_v),
+                        0);
+                v = ggml_cont(ctx, ggml_transpose(ctx, v));
+            }
+            if (v_cache_view) {
+                *v_cache_view = v;
+            }
+            cb(v, "v", il);
         }
-        cb(v, "v", il);
 
         auto kq_size = k->ne[1]*q->ne[1]*q->ne[2]*sizeof(float)/(1024*1024);
         if (cparams.attn_max_batch == 0 || cparams.attn_max_batch >= kq_size || k->ne[2] != q->ne[2] || v->ne[2] != q->ne[2] || sinks) {
@@ -1775,7 +1796,8 @@ ggml_tensor * llm_build_context::llm_build_kv(
                     int32_t   kv_head,
                     int32_t   n_kv,
                     float     kq_scale,
-         const llm_build_cb & cb, int il, ggml_tensor * sinks, int n_swa) {
+         const llm_build_cb & cb, int il, ggml_tensor * sinks, int n_swa, int kv_il,
+         ggml_tensor ** k_cache_view, ggml_tensor ** v_cache_view) {
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
 
@@ -1805,7 +1827,8 @@ ggml_tensor * llm_build_context::llm_build_kv(
         llm_build_kv_store(lctx, ctx, hparams, cparams, kv, graph, k_cur, v_cur, n_tokens, kv_head, cb, il);
     }
 
-    auto cur = llm_build_kqv(ctx, lctx, kv, graph, wo, wo_b, q_cur, kq_mask, n_tokens, n_kv, kq_scale, cb, il, sinks, n_swa);
+    auto cur = llm_build_kqv(ctx, lctx, kv, graph, wo, wo_b, q_cur, kq_mask, n_tokens, n_kv, kq_scale, cb, il, sinks, n_swa, kv_il,
+            k_cache_view, v_cache_view);
     cb(cur, "kqv_out", il);
 
     return cur;
@@ -2025,25 +2048,30 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
 }
 
 ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
-        ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb) {
+        ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name) {
     // lm_head
     if (output->extra) {
         auto split_output = (ggml_split_tensor_t *)output->extra;
         auto split_output_norm = output_norm && output_norm->extra ? (ggml_split_tensor_t *)output_norm->extra : nullptr;
         std::vector<ggml_tensor *> o;
         o.reserve(split_output->n_device);
+        ggml_tensor * last_norm = nullptr;
         for (int id = 0; id < split_output->n_device; ++id) {
             auto split = split_output->splits[id];
             if (!split) continue;
             if (output_norm) {
                 auto the_norm = split_output_norm ? split_output_norm->splits[id] : output_norm;
                 auto cur_normed = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, the_norm, NULL, LLM_NORM_RMS, cb, -1);
+                last_norm = cur_normed;
                 cb(cur_normed, "result_norm", 1000*(id+1));
                 o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur_normed));
             } else {
                 o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur));
             }
             cb(o.back(), "output", id);
+            if (add_normed_name && last_norm) {
+                cb(last_norm, "result_norm", -1);
+            }
         }
         GGML_ASSERT(!o.empty());
         if (o.size() == 1) {
@@ -2059,14 +2087,17 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         int idx = lctx.model.default_layer_device[lctx.model.hparams.n_layer];
         int idx_out = ggml_backend_sched_get_backend_idx(lctx.sched, lctx.model.output->buffer);
         if (idx_out >= 0) idx = idx_out;
-        const bool is_qwen_mtp = lctx.model.arch == LLM_ARCH_QWEN35 && lctx.cparams.mtp;
+        const bool is_qwen_mtp = (lctx.model.arch == LLM_ARCH_QWEN35 ||
+                                  lctx.model.arch == LLM_ARCH_QWEN35MOE) && lctx.cparams.mtp;
         if (cur->op == GGML_OP_REDUCE && cur->src[idx] && !is_qwen_mtp) {
             // avoid copy to main GPU
             cur->view_src = cur->src[idx];
         }
         if (output_norm) {
             cur = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, output_norm, NULL, LLM_NORM_RMS, cb, -1);
-            cb(cur, "result_norm", -1);
+            if (add_normed_name) {
+                cb(cur, "result_norm", -1);
+            }
         }
         cur = llm_build_context::llm_build_lora_mm(lctx, ctx, output, cur);
     }
@@ -2330,6 +2361,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_GEMMA4:
             {
                 result = llm.build_gemma4();
+            } break;
+        case LLM_ARCH_GEMMA4_MTP:
+            {
+                result = llm.build_gemma4_mtp();
             } break;
         case LLM_ARCH_STARCODER2:
             {

@@ -12,7 +12,8 @@ endif()
 
 set(TARGET_SRCS
     server.cpp
-    # httplib.h
+    server-chat.cpp
+    server-chat.h
     server-task.cpp
     server-task.h
     server-queue.cpp

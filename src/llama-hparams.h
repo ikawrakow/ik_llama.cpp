@@ -134,6 +134,12 @@ struct llama_hparams {
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 
+    // gemma4 separate assistant MTP
+    uint32_t mtp_backbone_n_embd = 0;
+    bool     mtp_use_ordered_embeddings = false;
+    uint32_t mtp_num_centroids = 0;
+    uint32_t mtp_centroid_top_k = 0;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = -1;
@@ -152,6 +158,7 @@ struct llama_hparams {
         if (this->n_vocab       != other.n_vocab)       return true;
         if (this->n_ctx_train   != other.n_ctx_train)   return true;
         if (this->n_embd        != other.n_embd)        return true;
+        if (this->mtp_backbone_n_embd != other.mtp_backbone_n_embd) return true;
         if (this->n_layer       != other.n_layer)       return true;
         if (this->n_rot         != other.n_rot)         return true;
         if (this->n_swa         != other.n_swa)         return true;
@@ -290,8 +297,8 @@ struct llama_hparams {
         return ssm_d_state * ssm_d_inner;
     }
 
-    uint32_t n_embd_v_s_id(int nv) const {
-        if (ssm_n_group <= 0 || nv < 1 || ssm_dt_rank < 1) return 0;
+    std::pair<uint32_t, uint32_t> n_embd_v_s_dims(int nv) const {
+        if (ssm_n_group <= 0 || nv < 1 || ssm_dt_rank < 1) return {0, 0};
         int num_v_heads = ssm_dt_rank;
         int num_k_heads = ssm_n_group;
         int gqa_ratio   = num_v_heads / num_k_heads;
@@ -301,10 +308,16 @@ struct llama_hparams {
         int head_k_dim  = ssm_d_state;
         int head_v_dim  = ssm_d_inner / num_v_heads;
         uint32_t conv_dim       = 2 * nk * head_k_dim + nv * head_v_dim;
-        uint32_t conv_state_dim = conv_dim * (ssm_d_conv - 1);
+        //uint32_t conv_state_dim = conv_dim * (ssm_d_conv - 1);
+        //uint32_t ssm_state_dim  = head_v_dim * head_v_dim * nv;
+        //return {conv_state_dim, ssm_state_dim};
         uint32_t ssm_state_dim  = head_v_dim * head_v_dim * nv;
-        return conv_state_dim + ssm_state_dim;
+        return {conv_dim, ssm_state_dim};
+    }
 
+    uint32_t n_embd_v_s_id(int nv) const {
+        auto [conv_dim, ssm_state_dim] = n_embd_v_s_dims(nv);
+        return (ssm_d_conv - 1) * conv_dim + ssm_state_dim;
     }
 
     bool is_recurrent(uint32_t il) const {

@@ -1,5 +1,12 @@
 import type { ChatMessagePromptProgress } from './chat';
 
+export type ApiSpeculativeStage = {
+	type: string;
+	n_max?: number;
+	n_min?: number;
+	p_min?: number;
+};
+
 export interface ApiChatMessageContentPart {
 	type: 'text' | 'image_url' | 'input_audio';
 	text?: string;
@@ -124,6 +131,7 @@ export interface ApiLlamaCppServerProps {
 			'speculative.n_max': number;
 			'speculative.n_min': number;
 			'speculative.p_min': number;
+			'speculative.stages'?: ApiSpeculativeStage[];
 			timings_per_token: boolean;
 			post_sampling_probs: boolean;
 			lora: Array<{ name: string; scale: number }>;
@@ -284,6 +292,7 @@ export interface ApiSlotData {
 		'speculative.n_max': number;
 		'speculative.n_min': number;
 		'speculative.p_min': number;
+		'speculative.stages'?: ApiSpeculativeStage[];
 		timings_per_token: boolean;
 		post_sampling_probs: boolean;
 		lora: Array<{ name: string; scale: number }>;

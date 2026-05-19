@@ -70,6 +70,10 @@ struct llama_model_loader {
             offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);
 
             if (offs + ggml_nbytes(tensor) < offs || offs + ggml_nbytes(tensor) > file->size()) {
+                auto data_offset = gguf_get_data_offset(gguf_ctx);
+                auto tensor_offset = gguf_get_tensor_offset(gguf_ctx, tensor_idx);
+                fprintf(stderr, "Error while loading tensor %s: offs = %zu (%zu, %zu), size: %zu, file size: %zu\n", name,
+                        offs, data_offset, tensor_offset, ggml_nbytes(tensor), file->size());
                 throw std::runtime_error(format("tensor '%s' data is not within the file bounds, model is corrupted or incomplete", name));
             }
         }

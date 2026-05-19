@@ -5,8 +5,8 @@
 **To get the Code:**
 
 ```bash
-git clone https://github.com/ggerganov/llama.cpp
-cd llama.cpp
+git clone https://github.com/ikawrakow/ik_llama.cpp
+cd ik_llama.cpp
 ```
 
 In order to build `ik_llama.cpp` you have four different options.
