@@ -3,6 +3,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
+#include "llama-context.h"
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -168,7 +169,30 @@ struct common_speculative_state {
     virtual void accept(uint16_t n_accepted) = 0;
 };
 
-static void mtp_invalidate_cached_draft(const llama_context * ctx);
+struct common_speculative_state_mtp;
+
+static common_speculative_state_mtp * common_speculative_get_mtp_state(common_speculative * spec);
+static const common_speculative_state_mtp * common_speculative_get_mtp_state(const common_speculative * spec);
+static void mtp_invalidate_cached_drafts(common_speculative_state_mtp & state);
+
+static std::vector<llama_token> mtp_speculative_gen_draft(
+    common_speculative_state_mtp & state,
+    struct common_sampler * smpl,
+    struct llama_context * ctx,
+    int n_draft,
+    float p_min,
+    llama_token id_last,
+    llama_pos n_past,
+    llama_seq_id seq_id,
+    bool constant_draft_positions = false);
+
+static int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup);
+
+struct mtp_last_embd {
+    std::vector<float> embd;
+    float prob = 0.0f;
+    int   last_id = -1;
+};
 
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
@@ -176,6 +200,9 @@ struct common_speculative_state_mtp : public common_speculative_state {
     common_sampler * smpl;
     // For Gemma 4 external MTP assistant: draft positions are held constant
     bool constant_draft_positions = false;
+    int n_embd = 0;
+    std::unordered_map<llama_seq_id, std::vector<float>> target_hidden_by_seq;
+    std::unordered_map<llama_seq_id, mtp_last_embd> draft_cache_by_seq;
 
     common_speculative_state_mtp(
             enum common_speculative_type type,
@@ -193,6 +220,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         };
         smpl = common_sampler_init(llama_get_model(ctx_mtp), sparams);
         llama_set_mtp_target_context(ctx_mtp, ctx_tgt);
+        n_embd = llama_mtp_state_n_embd(ctx_mtp);
 
         LOG_INF("%s: MTP context ready (n_ctx=%d, constant_draft_positions=%s)\n", __func__,
                 llama_n_ctx(ctx_mtp), constant_draft_positions ? "true" : "false");
@@ -207,7 +235,8 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
-        mtp_invalidate_cached_draft(ctx_mtp);
+        target_hidden_by_seq.clear();
+        draft_cache_by_seq.clear();
     }
 
     void draft(
@@ -245,7 +274,20 @@ struct common_speculative_state_mtp : public common_speculative_state {
 
         llama_context * ctx = ctx_mtp;
 
+        const auto hidden_it = target_hidden_by_seq.find(seq_id);
+        if (hidden_it == target_hidden_by_seq.end() || (int) hidden_it->second.size() != n_embd) {
+            LOG_WRN("%s: missing target hidden state for seq_id %d\n", __func__, (int) seq_id);
+            result.clear();
+            return;
+        }
+
+        if (!llama_set_draft_input_hidden_state_copy(ctx, hidden_it->second.data(), hidden_it->second.size())) {
+            result.clear();
+            return;
+        }
+
         result = mtp_speculative_gen_draft(
+            *this,
             smpl,
             ctx,
             params.n_max,
@@ -1320,33 +1362,6 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
     }
 }
 
-struct mtp_last_embd {
-    std::vector<float> embd;
-    float prob;
-    int   last_id = -1;
-};
-
-// Hopefully never called concurrently from multiple threads
-static mtp_last_embd & mtp_get_last_embd(const llama_context * ctx) {
-    static std::unordered_map<const llama_context *, mtp_last_embd> map;
-    auto & last = map[ctx];
-    if (last.embd.empty()) {
-        auto n_embd = llama_mtp_state_n_embd(ctx);
-        last.embd.resize(n_embd);
-    }
-    return last;
-}
-
-static void mtp_invalidate_cached_draft(const llama_context * ctx) {
-    if (ctx == nullptr) {
-        return;
-    }
-
-    auto & last = mtp_get_last_embd(ctx);
-    last.last_id = -1;
-    last.prob = 0.0f;
-}
-
 llama_tokens common_speculative_draft(
         common_speculative * spec,
         common_params_speculative & params,
@@ -1437,10 +1452,387 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     }
 
     if (impl->type != COMMON_SPECULATIVE_TYPE_MTP) {
-        if (auto * ctx_mtp = common_speculative_get_mtp_ctx(spec); ctx_mtp != nullptr) {
-            mtp_invalidate_cached_draft(ctx_mtp);
+        if (auto * mtp_state = common_speculative_get_mtp_state(spec); mtp_state != nullptr) {
+            mtp_invalidate_cached_drafts(*mtp_state);
         }
     }
+}
+
+static bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    return std::any_of(spec->configs.begin(), spec->configs.end(), [type](const common_speculative_config & config) {
+        return config.type == type;
+    });
+}
+
+static int common_speculative_ctx_mtp_n_embd(llama_context * ctx) {
+    return ctx ? (int) llama_mtp_state_n_embd(ctx) : 0;
+}
+
+static bool common_speculative_batch_token_has_seq_id(
+        const llama_batch & batch,
+        int token_index,
+        llama_seq_id seq_id) {
+    if (batch.n_seq_id == nullptr || batch.seq_id == nullptr || batch.n_seq_id[token_index] <= 0 || batch.seq_id[token_index] == nullptr) {
+        return false;
+    }
+
+    for (int i = 0; i < batch.n_seq_id[token_index]; ++i) {
+        if (batch.seq_id[token_index][i] == seq_id) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool common_speculative_batch_is_exact_single_seq(
+        const llama_batch & batch,
+        llama_seq_id seq_id) {
+    if (batch.n_tokens <= 0 || batch.n_seq_id == nullptr || batch.seq_id == nullptr) {
+        return false;
+    }
+
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] != 1 || batch.seq_id[i] == nullptr || batch.seq_id[i][0] != seq_id) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static int common_speculative_copy_seq_batch(
+        const llama_batch & batch,
+        llama_seq_id seq_id,
+        llama_batch & seq_batch) {
+    if (batch.token == nullptr || batch.pos == nullptr) {
+        return -1;
+    }
+
+    int n_seq_tokens = 0;
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (common_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
+            ++n_seq_tokens;
+        }
+    }
+
+    if (n_seq_tokens == 0) {
+        return 0;
+    }
+
+    seq_batch = llama_batch_init(n_seq_tokens, 0, 1);
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (!common_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
+            continue;
+        }
+
+        common_batch_add(seq_batch, batch.token[i], batch.pos[i], { seq_id }, batch.logits != nullptr && batch.logits[i]);
+    }
+
+    return n_seq_tokens;
+}
+
+static bool common_speculative_feature_view_copy_batch_rows(
+        const common_speculative_feature_view & view,
+        const llama_batch & batch,
+        llama_seq_id seq_id,
+        std::vector<float> * hidden_rows) {
+    if (hidden_rows == nullptr || view.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE || view.width <= 0 || batch.n_tokens <= 0 || batch.pos == nullptr) {
+        return false;
+    }
+
+    std::unordered_map<llama_pos, const float *> rows_by_pos;
+    rows_by_pos.reserve(view.rows.size());
+    for (const auto & row : view.rows) {
+        if (row.seq_id == seq_id && row.data != nullptr) {
+            rows_by_pos[row.pos] = row.data;
+        }
+    }
+
+    hidden_rows->clear();
+    hidden_rows->reserve((size_t) batch.n_tokens * view.width);
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        auto it = rows_by_pos.find(batch.pos[i]);
+        if (it == rows_by_pos.end()) {
+            hidden_rows->clear();
+            return false;
+        }
+
+        hidden_rows->insert(hidden_rows->end(), it->second, it->second + view.width);
+    }
+
+    return hidden_rows->size() == (size_t) batch.n_tokens * view.width;
+}
+
+static bool common_speculative_capture_target_features(
+        common_speculative * spec,
+        const common_speculative_feature_view & features);
+
+static bool common_speculative_feature_view_from_hidden_rows(
+        const std::vector<float> & hidden_rows,
+        int32_t width,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        common_speculative_feature_view & view) {
+    view = {};
+    view.kind = COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE;
+    view.width = width;
+
+    if (width <= 0 || hidden_rows.empty() || hidden_rows.size() % (size_t) width != 0) {
+        return false;
+    }
+
+    const size_t n_rows = hidden_rows.size() / (size_t) width;
+    view.rows.reserve(n_rows);
+    for (size_t i = 0; i < n_rows; ++i) {
+        view.rows.push_back({
+            /* .seq_id = */ seq_id,
+            /* .pos    = */ pos_base + (llama_pos) i,
+            /* .data   = */ hidden_rows.data() + i * (size_t) width,
+        });
+    }
+
+    return true;
+}
+
+static bool common_speculative_collect_target_batch_features(
+        const common_speculative * spec,
+        llama_context * ctx,
+        const llama_batch & batch,
+        common_speculative_feature_view & features) {
+    features = {};
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    if (!llama_spec_get_hidden_feature_view(ctx, batch, features)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool common_speculative_collect_target_seq_batch_features(
+        const common_speculative * spec,
+        llama_context * ctx,
+        const llama_batch & batch,
+        llama_seq_id seq_id,
+        common_speculative_feature_view & features) {
+    features = {};
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    if (!llama_spec_get_hidden_feature_view_for_seq(ctx, batch, seq_id, features)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool common_speculative_capture_output_hidden(
+        common_speculative * spec,
+        llama_context * ctx,
+        int32_t output_index,
+        llama_seq_id seq_id,
+        llama_pos pos) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    common_speculative_feature_view features;
+    if (!llama_spec_get_hidden_feature_view_from_output_index(ctx, output_index, seq_id, pos, features)) {
+        return false;
+    }
+
+    return common_speculative_capture_target_features(spec, features);
+}
+
+bool common_speculative_ensure_sequence_hidden(
+        common_speculative * spec,
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_pos pos) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) || common_speculative_has_sequence_hidden(spec, seq_id)) {
+        return true;
+    }
+
+    return common_speculative_capture_output_hidden(spec, ctx, -1, seq_id, pos);
+}
+
+int32_t common_speculative_on_target_seq_batch(
+        common_speculative * spec,
+        llama_context * ctx_tgt,
+        const llama_batch & batch,
+        llama_seq_id seq_id,
+        bool is_prompt_warmup) {
+    llama_context * ctx_mtp = common_speculative_get_companion_ctx(spec);
+    ctx_mtp = ctx_mtp ? ctx_mtp : ctx_tgt;
+    if (ctx_tgt == nullptr || ctx_mtp == nullptr || batch.n_tokens <= 0) {
+        return 0;
+    }
+
+    const int n_embd_src = common_speculative_ctx_mtp_n_embd(ctx_tgt);
+    const int n_embd_dst = common_speculative_ctx_mtp_n_embd(ctx_mtp);
+    if (n_embd_src <= 0 || n_embd_dst <= 0) {
+        return -1;
+    }
+
+    if (n_embd_src != n_embd_dst) {
+        LOG_ERR("MTP warmup hidden state width mismatch: n_embd_src = %d, n_embd_dst = %d\n", n_embd_src, n_embd_dst);
+        return -1;
+    }
+
+    common_speculative_feature_view feature_view;
+    const llama_batch * batch_for_spec = &batch;
+    llama_batch seq_batch = {};
+    const bool needs_seq_split = is_prompt_warmup && !common_speculative_batch_is_exact_single_seq(batch, seq_id);
+
+    if (needs_seq_split) {
+        const int n_seq_tokens = common_speculative_copy_seq_batch(batch, seq_id, seq_batch);
+        if (n_seq_tokens <= 0) {
+            return n_seq_tokens < 0 ? -1 : 0;
+        }
+
+        if (!common_speculative_collect_target_seq_batch_features(spec, ctx_tgt, batch, seq_id, feature_view)) {
+            llama_batch_free(seq_batch);
+            return -1;
+        }
+
+        batch_for_spec = &seq_batch;
+    } else {
+        if (!common_speculative_collect_target_batch_features(spec, ctx_tgt, batch, feature_view)) {
+            return -1;
+        }
+    }
+
+    const int32_t ret = common_speculative_on_target_batch(spec, *batch_for_spec, feature_view, is_prompt_warmup);
+    if (needs_seq_split) {
+        llama_batch_free(seq_batch);
+    }
+
+    return ret;
+}
+
+bool common_speculative_copy_output_hidden_rows(
+        const common_speculative * spec,
+        llama_context * ctx,
+        const std::vector<int32_t> & output_indices,
+        std::vector<float> & hidden_rows) {
+    hidden_rows.clear();
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        return true;
+    }
+
+    return llama_spec_copy_hidden_rows_from_output_indices(ctx, output_indices, hidden_rows);
+}
+
+static bool common_speculative_build_commit_tokens(
+        common_speculative_type spec_type_used,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        std::vector<llama_token> & commit_tokens) {
+    commit_tokens.clear();
+    if (ids.empty()) {
+        return true;
+    }
+
+    if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
+        commit_tokens = ids;
+        return true;
+    }
+
+    commit_tokens.reserve(ids.size());
+    commit_tokens.push_back(sampled_before);
+    if (ids.size() > 1) {
+        commit_tokens.insert(commit_tokens.end(), ids.begin(), ids.end() - 1);
+    }
+
+    return commit_tokens.size() == ids.size();
+}
+
+static bool common_speculative_apply_hidden_rows(
+        common_speculative * spec,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        const std::vector<llama_token> & ids,
+        const std::vector<float> & hidden_rows) {
+    auto * mtp_state = common_speculative_get_mtp_state(spec);
+    if (mtp_state == nullptr || ids.empty()) {
+        return true;
+    }
+
+    const size_t expected_floats = ids.size() * (size_t) mtp_state->n_embd;
+    if (mtp_state->n_embd <= 0 || hidden_rows.size() != expected_floats) {
+        return false;
+    }
+
+    llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        common_batch_add(accepted_batch, ids[i], pos_base + (llama_pos) i, { seq_id }, true);
+    }
+
+    common_speculative_feature_view feature_view;
+    const bool have_feature_view = common_speculative_feature_view_from_hidden_rows(
+        hidden_rows, mtp_state->n_embd, seq_id, pos_base, feature_view);
+    const int32_t ret = have_feature_view
+        ? common_speculative_on_target_batch(spec, accepted_batch, feature_view, false)
+        : -1;
+
+    llama_batch_free(accepted_batch);
+    return ret == 0;
+}
+
+bool common_speculative_commit_accepted_hidden_rows(
+        common_speculative * spec,
+        common_speculative_type spec_type_used,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        const std::vector<float> & hidden_rows) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) || ids.empty()) {
+        return true;
+    }
+
+    std::vector<llama_token> commit_tokens;
+    if (!common_speculative_build_commit_tokens(spec_type_used, sampled_before, ids, commit_tokens)) {
+        return false;
+    }
+
+    return common_speculative_apply_hidden_rows(spec, seq_id, pos_base, commit_tokens, hidden_rows);
+}
+
+bool common_speculative_commit_accepted_output(
+        common_speculative * spec,
+        llama_context * ctx,
+        common_speculative_type spec_type_used,
+        llama_seq_id seq_id,
+        llama_pos pos_base,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        const std::vector<int32_t> & output_indices) {
+    if (!common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) || ids.empty()) {
+        return true;
+    }
+
+    std::vector<float> hidden_rows;
+    if (!common_speculative_copy_output_hidden_rows(spec, ctx, output_indices, hidden_rows)) {
+        return false;
+    }
+
+    return common_speculative_commit_accepted_hidden_rows(
+        spec,
+        spec_type_used,
+        seq_id,
+        pos_base,
+        sampled_before,
+        ids,
+        hidden_rows);
 }
 
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded, int n_past, common_params_speculative * active_params) {
@@ -1485,18 +1877,197 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
 // MTP
 // ----------------------------------------------------------------------------
 
-llama_context * common_speculative_get_mtp_ctx(common_speculative * spec) {
-    if (!spec) return nullptr;
+static common_speculative_state_mtp * common_speculative_get_mtp_state(common_speculative * spec) {
+    if (!spec) {
+        return nullptr;
+    }
 
     for (auto & impl : spec->impls) {
-        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
-            auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get());
-            if (mtp_state) {
-                return mtp_state->ctx_mtp;
-            }
+        if (impl->type != COMMON_SPECULATIVE_TYPE_MTP) {
+            continue;
+        }
+
+        if (auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(impl.get())) {
+            return mtp_state;
         }
     }
+
     return nullptr;
+}
+
+static const common_speculative_state_mtp * common_speculative_get_mtp_state(const common_speculative * spec) {
+    return common_speculative_get_mtp_state(const_cast<common_speculative *>(spec));
+}
+
+static mtp_last_embd & mtp_get_last_embd(common_speculative_state_mtp & state, llama_seq_id seq_id) {
+    auto & last = state.draft_cache_by_seq[seq_id];
+    if ((int) last.embd.size() != state.n_embd) {
+        last.embd.resize(state.n_embd);
+    }
+    return last;
+}
+
+static void mtp_invalidate_cached_draft(common_speculative_state_mtp & state, llama_seq_id seq_id) {
+    auto it = state.draft_cache_by_seq.find(seq_id);
+    if (it == state.draft_cache_by_seq.end()) {
+        return;
+    }
+
+    it->second.last_id = -1;
+    it->second.prob = 0.0f;
+}
+
+static void mtp_invalidate_cached_drafts(common_speculative_state_mtp & state) {
+    for (auto & entry : state.draft_cache_by_seq) {
+        entry.second.last_id = -1;
+        entry.second.prob = 0.0f;
+    }
+}
+
+static void mtp_store_target_hidden(
+        common_speculative_state_mtp & state,
+        llama_seq_id seq_id,
+        const float * hidden,
+        int32_t width) {
+    if (hidden == nullptr || width <= 0) {
+        return;
+    }
+
+    auto & stored = state.target_hidden_by_seq[seq_id];
+    stored.assign(hidden, hidden + width);
+}
+
+static void mtp_clear_target_hidden(common_speculative_state_mtp & state, llama_seq_id seq_id) {
+    state.target_hidden_by_seq.erase(seq_id);
+    state.draft_cache_by_seq.erase(seq_id);
+}
+
+static bool common_speculative_capture_target_features(common_speculative * spec, const common_speculative_feature_view & features) {
+    auto * mtp_state = common_speculative_get_mtp_state(spec);
+    if (mtp_state == nullptr || features.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE || features.width <= 0) {
+        return false;
+    }
+
+    bool captured = false;
+    for (const auto & row : features.rows) {
+        if (row.data == nullptr) {
+            continue;
+        }
+
+        mtp_store_target_hidden(*mtp_state, row.seq_id, row.data, features.width);
+        mtp_invalidate_cached_draft(*mtp_state, row.seq_id);
+        captured = true;
+    }
+
+    return captured;
+}
+
+bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id) {
+    const auto * mtp_state = common_speculative_get_mtp_state(spec);
+    if (mtp_state == nullptr) {
+        return false;
+    }
+
+    auto it = mtp_state->target_hidden_by_seq.find(seq_id);
+    return it != mtp_state->target_hidden_by_seq.end() && !it->second.empty();
+}
+
+void common_speculative_clear_sequence_hidden(common_speculative * spec, llama_seq_id seq_id) {
+    auto * mtp_state = common_speculative_get_mtp_state(spec);
+    if (mtp_state == nullptr) {
+        return;
+    }
+
+    mtp_clear_target_hidden(*mtp_state, seq_id);
+}
+
+llama_context * common_speculative_get_companion_ctx(common_speculative * spec) {
+    if (auto * mtp_state = common_speculative_get_mtp_state(spec); mtp_state != nullptr) {
+        return mtp_state->ctx_mtp;
+    }
+
+    return nullptr;
+}
+
+static int32_t mtp_accept_batch(
+        common_speculative_state_mtp & state,
+        const llama_batch & accepted_batch,
+        llama_seq_id seq_id,
+        const float * hidden_rows) {
+    if (accepted_batch.n_tokens == 0 || hidden_rows == nullptr) {
+        return 0;
+    }
+
+    const size_t hidden_rows_floats = (size_t) accepted_batch.n_tokens * state.n_embd;
+    if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, hidden_rows, hidden_rows_floats)) {
+        return -1;
+    }
+    if (mtp_update_kv_cache(state.ctx_mtp, accepted_batch, false) != 0) {
+        return -1;
+    }
+
+    auto & last = mtp_get_last_embd(state, seq_id);
+    const float * embd = llama_get_embeddings_ith(state.ctx_mtp, accepted_batch.n_tokens - 1);
+    if (embd != nullptr) {
+        std::memcpy(last.embd.data(), embd, last.embd.size() * sizeof(float));
+        if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, last.embd.data(), last.embd.size())) {
+            return -1;
+        }
+        last.last_id = common_sampler_sample_speculative(nullptr, state.ctx_mtp, accepted_batch.n_tokens - 1, &last.prob);
+    }
+
+    return 0;
+}
+
+int32_t common_speculative_on_target_batch(
+        common_speculative * spec,
+        const llama_batch & batch,
+        const common_speculative_feature_view & features,
+    bool is_prompt_warmup) {
+    auto * mtp_state = common_speculative_get_mtp_state(spec);
+    if (mtp_state == nullptr) {
+        return 0;
+    }
+
+    if (features.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE || features.width <= 0 || batch.n_tokens <= 0) {
+        return 0;
+    }
+
+    if (batch.n_seq_id == nullptr || batch.seq_id == nullptr || batch.n_seq_id[0] <= 0 || batch.seq_id[0] == nullptr) {
+        return -1;
+    }
+
+    const llama_seq_id seq_id = batch.seq_id[0][0];
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] != 1 || batch.seq_id[i] == nullptr || batch.seq_id[i][0] != seq_id) {
+            return -1;
+        }
+    }
+
+    std::vector<float> hidden_rows_storage;
+    if (!common_speculative_feature_view_copy_batch_rows(features, batch, seq_id, &hidden_rows_storage)) {
+        return -1;
+    }
+
+    const float * first_hidden = hidden_rows_storage.data();
+    const float * last_hidden = hidden_rows_storage.data() + (size_t) (batch.n_tokens - 1) * features.width;
+    mtp_store_target_hidden(*mtp_state, seq_id, last_hidden, features.width);
+
+    if (mtp_state->constant_draft_positions) {
+        mtp_invalidate_cached_draft(*mtp_state, seq_id);
+        return 0;
+    }
+
+    if (is_prompt_warmup) {
+        if (!llama_set_draft_input_hidden_state_copy(mtp_state->ctx_mtp, hidden_rows_storage.data(), hidden_rows_storage.size())) {
+            return -1;
+        }
+        const int32_t ret = mtp_update_kv_cache(mtp_state->ctx_mtp, batch, true);
+        mtp_invalidate_cached_draft(*mtp_state, seq_id);
+        return ret;
+    }
+
+    return mtp_accept_batch(*mtp_state, batch, seq_id, first_hidden);
 }
 
 common_speculative_type common_speculative_current_type(const common_speculative * spec) {
@@ -1513,13 +2084,14 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past) {
-    if (auto * ctx_mtp = common_speculative_get_mtp_ctx(spec); ctx_mtp != nullptr) {
+    if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
         llama_kv_cache_seq_rm (ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
         llama_kv_cache_seq_add(ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
     }
 }
 
 std::vector<llama_token> mtp_speculative_gen_draft(
+    common_speculative_state_mtp & state,
     struct common_sampler * smpl,
     struct llama_context * ctx,
     int n_draft,
@@ -1535,7 +2107,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     if (!smpl) return drafts;
 
     if (n_draft <= 0) {
-        mtp_invalidate_cached_draft(ctx);
+        mtp_invalidate_cached_draft(state, seq_id);
         return drafts;
     }
 
@@ -1551,7 +2123,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_pos current_n_past = n_past;
     const int n_embd = llama_mtp_state_n_embd(ctx);
 
-    auto & last = mtp_get_last_embd(ctx);
+    auto & last = mtp_get_last_embd(state, seq_id);
     int i0 = 0;
     if (last.last_id >= 0) {
         if (last.prob < p_min) {
@@ -1561,7 +2133,11 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         last.last_id = -1;
         drafts.push_back(current_input_id);
         current_n_past++;
-        llama_set_draft_input_hidden_state(ctx, last.embd.data());
+        if (!llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
+            llama_batch_free(mtp_batch);
+            llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+            return drafts;
+        }
         i0 = 1;
     }
 
@@ -1591,7 +2167,9 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
         // Keep a stable copy because later decode steps reuse ctx->embd storage.
         memcpy(last.embd.data(), emb, n_embd * sizeof(float));
-        llama_set_draft_input_hidden_state(ctx, last.embd.data());
+        if (!llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
+            break;
+        }
 
         current_input_id = id_next;
         current_n_past++;
@@ -1654,35 +2232,4 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     const int32_t ret = llama_decode(ctx, mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
     return ret;
-}
-
-void mtp_accept_tokens(
-    struct llama_context * ctx,
-    const std::vector<llama_token> & ids,
-    int32_t n_past_base,
-    llama_seq_id seq_id) {
-    if (ids.empty()) {
-        return;
-    }
-
-    llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
-    for (size_t i = 0; i < ids.size(); ++i) {
-        common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
-    }
-
-    if (mtp_update_kv_cache(ctx, accepted_batch, false) != 0) {
-        LOG_ERR("failed to update MTP KV cache for accepted tokens\n");
-        llama_batch_free(accepted_batch);
-        return;
-    }
-
-    auto & last = mtp_get_last_embd(ctx);
-    auto embd = llama_get_embeddings_ith(ctx, ids.size() - 1);
-    if (embd) {
-        std::memcpy(last.embd.data(), embd, last.embd.size()*sizeof(float));
-        llama_set_draft_input_hidden_state(ctx, last.embd.data());
-        last.last_id = common_sampler_sample_speculative(nullptr, ctx, ids.size() - 1, &last.prob);
-    }
-
-    llama_batch_free(accepted_batch);
 }
