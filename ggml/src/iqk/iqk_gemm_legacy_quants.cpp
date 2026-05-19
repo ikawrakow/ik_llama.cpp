@@ -1983,88 +1983,81 @@ void iqk_convert_qX_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc
 
     Dequantizer deq;
 #ifdef HAVE_FANCY_SIMD
-    // permute index vectors (select 32-bit lane indices). We build them once.
-    // idx0 selects lanes for output words [0..15] from srcA/srcB pair
-    const __m512i idx0 = _mm512_setr_epi32(
-        0,  8,  1,  9,  2, 10,  3, 11,   // take low lanes from v01 & v23 interleaved
-        4, 12,  5, 13,  6, 14,  7, 15
-    );
-    const __m512i idx1 = _mm512_setr_epi32(
-        16, 24, 17, 25, 18, 26, 19, 27,
-        20, 28, 21, 29, 22, 30, 23, 31
-    );
-    // For high-half outputs (32..63) we reuse same idx0/idx1 but applied to the v45/v67 pair.
+alignas(64) uint32_t tmp[8][8];
 
-    for (int ix = 0; ix < nrc_x; ix += 8) {
-        for (int k = 0; k < 8; ++k) x8[k] = (const Block *)((const char *)vx + (ix + k)*bx);
+alignas(64) static const int idx0[16] = {
+     0,  8, 16, 24, 32, 40, 48, 56,
+     1,  9, 17, 25, 33, 41, 49, 57
+};
 
-        for (int i = 0; i < nb; ++i) {
-            // handle d values
-            for (int k = 0; k < 8; ++k) {
-                if constexpr (std::is_same_v<Dequantizer, MXFP40_Dequantizer>) {
-                    y[i].d[k] = GGML_FP32_TO_FP16(GGML_E8M0_TO_FP32_HALF(x8[k][i].e));
-                } else {
-                    y[i].d[k] = x8[k][i].d;
-                }
+
+alignas(64) static const int idx1[16] = {
+     2, 10, 18, 26, 34, 42, 50, 58,
+     3, 11, 19, 27, 35, 43, 51, 59
+};
+
+alignas(64) static const int idx2[16] = {
+     4, 12, 20, 28, 36, 44, 52, 60,
+     5, 13, 21, 29, 37, 45, 53, 61
+};
+
+alignas(64) static const int idx3[16] = {
+     6, 14, 22, 30, 38, 46, 54, 62,
+     7, 15, 23, 31, 39, 47, 55, 63
+};
+
+const __m512i vidx0 = _mm512_load_si512(idx0);
+const __m512i vidx1 = _mm512_load_si512(idx1);
+const __m512i vidx2 = _mm512_load_si512(idx2);
+const __m512i vidx3 = _mm512_load_si512(idx3);
+
+for (int ix = 0; ix < nrc_x; ix += 8) {
+
+    for (int k = 0; k < 8; ++k) {
+        x8[k] =
+            (const Block *)((const char *)vx + (ix + k) * bx);
+    }
+
+    for (int i = 0; i < nb; ++i) {
+
+        for (int k = 0; k < 8; ++k) {
+            if constexpr (std::is_same_v<Dequantizer,
+                                         MXFP40_Dequantizer>) {
+                y[i].d[k] =
+                    GGML_FP32_TO_FP16(
+                        GGML_E8M0_TO_FP32_HALF(x8[k][i].e));
+            } else {
+                y[i].d[k] = x8[k][i].d;
             }
-
-            // Dequantize each k -> __m256i containing 32 bytes (8 x int8 lanes).
-            // Q4\_0\_Dequantizer::dequant returns __m256i with int8 lanes; convert to 8 x 32-bit lanes per half.
-            __m256i bytes256[8];
-            for (int k = 0; k < 8; ++k) {
-                bytes256[k] = deq.dequant(&x8[k][i]); // returns __m256i of 32 bytes (int8 lanes)
-            }
-
-
-            // Convert each 32-byte vector into two __m256i of 32-bit lanes (lo, hi)
-            __m256i lanes_lo[8];
-            __m256i lanes_hi[8];
-            for (int k = 0; k < 8; ++k) {
-                // load low 16 bytes and high 16 bytes from bytes256[k]
-                __m128i b_lo = _mm256_castsi256_si128(bytes256[k]);                       // bytes 0..15
-                __m128i b_hi = _mm256_extracti128_si256(bytes256[k], 1);                 // bytes 16..31
-
-                // sign-extend 8-bit -> 32-bit lanes (returns 8 x 32-bit lanes)
-                lanes_lo[k] = _mm256_cvtepi8_epi32(b_lo); // lanes for words[0..7] low half
-                lanes_hi[k] = _mm256_cvtepi8_epi32(b_hi); // lanes for words[8..15] (we will treat as words[4..7] if needed)
-            }
-
-            // Pack pairs into four __m512i: v01 (k0,k1), v23 (k2,k3), v45 (k4,k5), v67 (k6,k7)
-           __m512i v01 = _mm512_castsi256_si512(lanes_lo[0]);
-            v01 = _mm512_inserti64x4(v01, lanes_lo[1], 1);
-            __m512i v23 = _mm512_castsi256_si512(lanes_lo[2]);
-            v23 = _mm512_inserti64x4(v23, lanes_lo[3], 1);
-            __m512i v45 = _mm512_castsi256_si512(lanes_lo[4]);
-            v45 = _mm512_inserti64x4(v45, lanes_lo[5], 1);
-            __m512i v67 = _mm512_castsi256_si512(lanes_lo[6]);
-            v67 = _mm512_inserti64x4(v67, lanes_lo[7], 1);
-
-            // For the high halves (words[4..7] per original mapping) we need pairs made from lanes\_hi.
-            __m512i v01_hi = _mm512_castsi256_si512(lanes_hi[0]);
-            v01_hi = _mm512_inserti64x4(v01_hi, lanes_hi[1], 1);
-            __m512i v23_hi = _mm512_castsi256_si512(lanes_hi[2]);
-            v23_hi = _mm512_inserti64x4(v23_hi, lanes_hi[3], 1);
-            __m512i v45_hi = _mm512_castsi256_si512(lanes_hi[4]);
-            v45_hi = _mm512_inserti64x4(v45_hi, lanes_hi[5], 1);
-            __m512i v67_hi = _mm512_castsi256_si512(lanes_hi[6]);
-            v67_hi = _mm512_inserti64x4(v67_hi, lanes_hi[7], 1);
-
-
-            // Build first half outputs (qs[0..15] and qs[16..31]) from v01 and v23.
-            // _mm512_permutex2var selects 32-bit lanes from srcA/srcB according to idx.
-            __m512i out0 = _mm512_permutex2var_epi32(v01, idx0, v23);
-            __m512i out1 = _mm512_permutex2var_epi32(v01, idx1, v23);
-
-            // Build second half outputs (qs[32..47] and qs[48..63]) from v45 and v67.
-            __m512i out2 = _mm512_permutex2var_epi32(v45, idx0, v67);
-            __m512i out3 = _mm512_permutex2var_epi32(v45, idx1, v67);
-
-            // Store into destination (assume y[i].qs is uint32_t[64])
-            _mm512_storeu_si512((void*)(y[i].qs + 0),  out0);
-            _mm512_storeu_si512((void*)(y[i].qs + 16), out1);
-            _mm512_storeu_si512((void*)(y[i].qs + 32), out2);
-            _mm512_storeu_si512((void*)(y[i].qs + 48), out3);
         }
+
+        for (int k = 0; k < 8; ++k) {
+            _mm256_store_si256(
+                (__m256i *)tmp[k],
+                deq.dequant(x8[k] + i));
+        }
+
+        const uint32_t * base = &tmp[0][0];
+
+        __m512i out0 =
+            _mm512_i32gather_epi32(vidx0, base, 4);
+
+        __m512i out1 =
+            _mm512_i32gather_epi32(vidx1, base, 4);
+
+        __m512i out2 =
+            _mm512_i32gather_epi32(vidx2, base, 4);
+
+        __m512i out3 =
+            _mm512_i32gather_epi32(vidx3, base, 4);
+
+        char * qs = (char *)y[i].qs;
+
+        _mm512_storeu_si512((__m512i *)(qs +   0), out0);
+        _mm512_storeu_si512((__m512i *)(qs +  64), out1);
+        _mm512_storeu_si512((__m512i *)(qs + 128), out2);
+        _mm512_storeu_si512((__m512i *)(qs + 192), out3);
+    }
 #else
     uint32_t block[8];
 
