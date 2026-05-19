@@ -3052,6 +3052,12 @@ class MmprojModel(Model):
                             gguf.MODEL_TENSOR.FFN_GATE_INP,
                             gguf.MODEL_TENSOR.POS_EMBD,
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
+                            # ADAPTATION: mirrors upstream llama.cpp `conversion/base.py`
+                            # MmprojModel.prepare_tensors force-F32 set. The vision
+                            # positional embedding must stay F32: ik_llama runtime runs
+                            # ggml_interpolate (upscale) on it and the CUDA upscale
+                            # kernel asserts GGML_TYPE_F32 (upscale.cu GGML_ASSERT).
+                            gguf.MODEL_TENSOR.V_ENC_EMBD_POS,
                         )
                     )
                     or not name.endswith(".weight")
