@@ -823,7 +823,12 @@ static bool llama_kv_cache_init(
         const int64_t n_mtp_first = n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
             const bool is_mtp_tail = qwen_mtp && i >= n_mtp_first;
-            if ((split_cache || replicate_mla) && !is_mtp_tail) {
+            // Keep this in lock-step with the per-layer replicate decision in the
+            // cache-alloc loop below: only count buft_matrix for layers that actually
+            // run TP (wo->extra populated). Otherwise a CPU-bound layer under partial
+            // -ngl would reserve a GPU split context it never uses.
+            const bool replicate_this_layer = replicate_mla && model.layers[i].wo && model.layers[i].wo->extra;
+            if ((split_cache || replicate_this_layer) && !is_mtp_tail) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
                 if (model.buft_layer[i].buft != model.buft_layer[i].buft_matrix) {
                     buft_layer_count[model.buft_layer[i].buft]++;
@@ -916,7 +921,11 @@ static bool llama_kv_cache_init(
                 model.arch == LLM_ARCH_QWEN35MOE) &&
                 hparams.nextn_predict_layers > 0 && i >= (int)n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        // Only route the latent KV cache into the split-buffer (buft_matrix) ctx when this
+        // layer is actually on GPU (wo->extra populated). Under partial -ngl, CPU layers
+        // would otherwise get a GPU-typed cache buffer while the layer build runs on CPU.
+        const bool replicate_this_layer = replicate_mla && model.layers[i].wo && model.layers[i].wo->extra;
+        struct ggml_context * ctx = ((split_cache || replicate_this_layer) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -936,30 +945,28 @@ static bool llama_kv_cache_init(
                 cache.v_l.push_back(kvt);
             }
             // Per-device replicas of the compressed latent KV cache (n_device from wo's split).
-            if (replicate_mla && !is_mtp_tail_layer) {
+            // Under partial -ngl this layer may be on CPU (no wo->extra); skip replication then.
+            // build_deepseek2() routes that layer through the non-TP attention path which uses
+            // the singular cache.k_l[i] pushed above.
+            if (replicate_mla && !is_mtp_tail_layer && model.layers[i].wo && model.layers[i].wo->extra) {
                 auto wo = model.layers[i].wo;
-                if (wo && wo->extra) {
-                    auto extra_wo = (const ggml_split_tensor_t *)wo->extra;
-                    int n_device = extra_wo->n_device;
-                    auto & repl_k_l = cache.replicated_k_l.emplace_back();
-                    repl_k_l.tensor_splits.resize(n_device, nullptr);
-                    for (int is = 0; is < n_device; ++is) {
-                        if (!extra_wo->splits[is]) continue;
-                        ggml_tensor * rkv = ggml_new_tensor_2d(ctx, primary_kv_type,
-                                kv_lora_rank + n_embd_head_qk_rope, kv_size);
-                        auto split_name = std::string("cache_k_l") + std::to_string(i) + '.' + std::to_string(is);
-                        ggml_set_name(rkv, split_name.c_str());
-                        repl_k_l.tensor_splits[is] = rkv;
-                        mem_split[is] += ggml_nbytes(rkv);
-                    }
-                    repl_k_l.ggml.n_device  = n_device;
-                    repl_k_l.ggml.split_dim = -1;
-                    repl_k_l.ggml.splits    = repl_k_l.tensor_splits.data();
-                    kv->extra = (void *)&repl_k_l.ggml;
-                } else {
-                    GGML_ABORT("MLA layer %d: wo lacks split metadata under -sm graph "
-                               "(distribute_mla_tensors_for_split_mode_graph not run?)", i);
+                auto extra_wo = (const ggml_split_tensor_t *)wo->extra;
+                int n_device = extra_wo->n_device;
+                auto & repl_k_l = cache.replicated_k_l.emplace_back();
+                repl_k_l.tensor_splits.resize(n_device, nullptr);
+                for (int is = 0; is < n_device; ++is) {
+                    if (!extra_wo->splits[is]) continue;
+                    ggml_tensor * rkv = ggml_new_tensor_2d(ctx, primary_kv_type,
+                            kv_lora_rank + n_embd_head_qk_rope, kv_size);
+                    auto split_name = std::string("cache_k_l") + std::to_string(i) + '.' + std::to_string(is);
+                    ggml_set_name(rkv, split_name.c_str());
+                    repl_k_l.tensor_splits[is] = rkv;
+                    mem_split[is] += ggml_nbytes(rkv);
                 }
+                repl_k_l.ggml.n_device  = n_device;
+                repl_k_l.ggml.split_dim = -1;
+                repl_k_l.ggml.splits    = repl_k_l.tensor_splits.data();
+                kv->extra = (void *)&repl_k_l.ggml;
             }
             n_mla++;
         }
@@ -3374,6 +3381,18 @@ static bool llm_load_tensors(
                 split_buft,
                 llama_default_buffer_type_offload(model, model.default_layer_device[n_layer])
             };
+        } else if (n_gpu_layers > 0) {
+            // Under partial -ngl with -sm graph, route the output projection to the
+            // same single-GPU buffer the last TP layer uses. CPU placement here
+            // forces the final norm + mul_mat through CPU/BLAS, pulling their
+            // GPU-resident REDUCE input across backends asymmetrically and
+            // corrupting the logits. Keeping output on the GPU side mirrors the
+            // fully-offloaded path and lets norm + matmul run where the REDUCE
+            // result already lives.
+            int last_gpu_layer = n_layer - 1;
+            int dev = model.default_layer_device.empty() || last_gpu_layer < 0
+                    ? 0 : std::max(0, model.default_layer_device[last_gpu_layer]);
+            model.buft_output = llama_default_buffer_type_offload(model, dev);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
@@ -6772,6 +6791,19 @@ struct llama_context * llama_init_from_model(
         if (model->has_tensor_overrides() && cparams.split_mode_graph_scheduling) {
             LLAMA_LOG_INFO("XXXXXXXX Split Mode Graph Scheduling is FORCED despite tensor overrides due to user choice.\n");
             LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMGS and every possible tensor overrides.\n");
+        }
+        // Under -sm graph with host-resident weights (any CPU layer), the
+        // `ggml_backend_cuda_offload_op` heuristic auto-promotes mul_mat ops to a
+        // GPU backend whenever batch >= 32 even though weights live on the CPU.
+        // That path is broken under -sm graph and corrupts state across decodes:
+        // -ngl 0 gives correct chunk-1 PPL but NaN-class chunks 2+. Keeping the
+        // mul_mats on their original CPU/BLAS backend avoids the bug and is
+        // already the right call performance-wise (offloading a CPU-resident
+        // weight per op pays its PCIe cost without amortizing). Fully-offloaded
+        // runs (n_gpu_layers >= n_layer) keep offload enabled; their mul_mats
+        // already start on a GPU backend so the heuristic is a no-op for them.
+        if (model->n_gpu_layers < (int)model->hparams.n_layer) {
+            ggml_backend_sched_set_op_offload(ctx->sched, GGML_OP_MUL_MAT, false);
         }
     }
 
