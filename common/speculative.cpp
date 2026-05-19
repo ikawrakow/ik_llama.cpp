@@ -471,16 +471,20 @@ struct common_speculative_state_draft : public common_speculative_state {
 
             common_sampler_accept(smpl, nullptr, id, true);
 
+            // only collect very high-confidence draft tokens
+            if (cur_p->data[0].p < params.p_min) {
+                if (i == 0) {
+                    result.push_back(id);
+                }
+                break;
+            }
+
             result.push_back(id);
 
             if (params.n_max <= (int) result.size()) {
                 break;
             }
 
-            // only collect very high-confidence draft tokens
-            if (cur_p->data[0].p < params.p_min) {
-                break;
-            }
 
             common_batch_add(batch, id, n_past + i + 1, { 0 }, true);
 
