@@ -265,7 +265,8 @@ struct llm_build_context {
             ggml_tensor * rope_cache,
             float kq_scale, float attn_factor_scaled,
             bool use_f32_attn_precision,
-            bool is_lite);
+            bool is_lite,
+            bool pp_opt);
 
     ggml_tensor * build_deepseek2_layer_attention(
             ggml_cgraph * gf, int il,

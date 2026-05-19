@@ -2290,7 +2290,10 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 }
             }
         }
-        auto context_size = max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
+        // tensor_data layout: [wk_b_f32 | wk_b_f32_t | wk_b | wk_b_pp]. wk_b_pp slot is only
+        // populated under -sm graph/attn (pp_opt-favoring layout); allocated unconditionally
+        // for simplicity (one max_wk_size buffer).
+        auto context_size = 2*max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
         context_size *= 2; // just in case;
         std::vector<uint8_t> wkv_buffer;
         if (max_wkv_size > 0) wkv_buffer.resize(max_wkv_size);
@@ -2301,7 +2304,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         ggml_init_params params{context_size, nullptr, true};
         auto ctx = ggml_init(params);
         auto graph = ggml_new_graph_custom(ctx, 8, false);
-        std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
+        std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + 2*max_wk_size);
         for (int il = 0; il < n_layer; ++il) {
             auto& l = model.layers[il];
             if (l.wk_b) continue;
@@ -2380,8 +2383,15 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         const size_t slice_bytes = (size_t)n_head_local * head_block_bytes;
                         auto dev_buft = ggml_backend_buffer_get_type(wo_split->splits[id]->buffer);
                         auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, slice_bytes);
+                        if (!dev_buf) {
+                            throw std::runtime_error("Failed to allocate per-rank buffer for " + tname);
+                        }
                         ggml_backend_buffer_set_usage(dev_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                         model.bufs.push_back(dev_buf);
+                        // Intentionally not updating mem_used[id] here: llm_prepare_mla
+                        // runs post-load, after distribute_mla_tensors has completed its
+                        // allocation rounds, so no downstream allocator consults mem_used
+                        // anymore.
 
                         replicas[id] = std::make_unique<ggml_tensor>(*source);
                         auto rep = replicas[id].get();
@@ -2434,6 +2444,33 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 return computed.get();
             };
 
+            // pp_opt-favoring wk_b_pp = quantize(wk_b_f32) directly. wk_b_f32 here is the
+            // 3D F32 view of wkv_b's K-projection in the [kv_lora_rank, qk_nope, n_head]
+            // orientation: the absorb-favoring wk_b above is its transpose. Materializing
+            // both lets build_deepseek2_tp_attention's pp_opt branch mul_mat against the
+            // latent cache without a per-PP-call F16 cast + permute + ggml_cont.
+            // Only under -sm graph/attn; otherwise skip to keep memory cost zero.
+            if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+                ggml_graph_clear(graph);
+                auto wk_b_pp = ggml_cast(ctx, wk_b_f32, new_type);
+                wk_b_pp->data = (char *)wk_b->data + ggml_nbytes(wk_b);
+                // tensor_data layout is [wk_b_f32 | wk_b_f32_t | wk_b | wk_b_pp]. wk_b and
+                // wk_b_pp are the same quant type and same shape, so wk_b_pp's slot is
+                // exactly one wk_b-sized block past wk_b. The tensor_data vector was sized
+                // 2*F32 + 2*max_wk_size, which covers both wk_b and wk_b_pp.
+                GGML_ASSERT((char *)wk_b_pp->data + ggml_nbytes(wk_b_pp) <=
+                            (char *)tensor_data.data() + tensor_data.size());
+                ggml_build_forward_expand(graph, wk_b_pp);
+                auto plan_pp = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                if (plan_pp.work_size > work_data.size()) work_data.resize(plan_pp.work_size);
+                plan_pp.work_data = work_data.data();
+                auto status_pp = ggml_graph_compute(graph, &plan_pp);
+                if (status_pp != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b_pp");
+                auto name_pp = std::string{"blk."} + std::to_string(il) + ".attn_k_b_pp.weight";
+                l.wk_b_pp = materialize(wk_b_pp, l.computed_wk_b_pp, l.computed_wk_b_pp_replicas, l.split_wk_b_pp, name_pp);
+                ggml_graph_clear(graph);
+            }
+
             l.wk_b = materialize(wk_b, l.computed_wk_b, l.computed_wk_b_replicas, l.split_wk_b, name);
 
             ggml_graph_clear(graph);
@@ -2455,6 +2492,192 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         }
         ggml_free(ctx);
     }
+
+    // Second pass: for layers where wk_b came from the GGUF directly (the first-half
+    // materialize loop skipped them), produce wk_b_pp here. Only under -sm graph/attn.
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+        int n_pp_to_compute = 0;
+        for (auto & l : model.layers) {
+            if (l.wk_b && !l.wk_b_pp) ++n_pp_to_compute;
+        }
+        if (n_pp_to_compute > 0) {
+            const uint32_t n_embd_head_qk_nope_pp = hparams.n_embd_head_k(0) - hparams.n_rot;
+            const uint32_t kv_lora_rank_pp = hparams.n_lora_kv;
+            const int32_t  n_head_pp       = hparams.n_head(0);
+
+            size_t max_wk_size_pp = 0;
+            for (auto & l : model.layers) {
+                if (l.wk_b && !l.wk_b_pp) {
+                    max_wk_size_pp = std::max(max_wk_size_pp, ggml_nbytes(l.wk_b));
+                }
+            }
+            auto context_size_pp = 4 * max_wk_size_pp +
+                4 * (size_t)n_embd_head_qk_nope_pp * kv_lora_rank_pp * n_head_pp * sizeof(float);
+            context_size_pp *= 2;
+
+            std::vector<uint8_t> work_data_pp;
+            // Hoist the full-wk_b assembly buffer outside the per-layer loop so we
+            // don't re-allocate ~max_wk_size_pp bytes per layer.
+            std::vector<uint8_t> full_wk_b_host_buf(max_wk_size_pp);
+            // tensor_data_pp holds, in order: [wk_b_f32 | wk_b_pp_f32 | wk_b_pp_q].
+            // F32 slots size by n_embd_head_qk_nope * kv_lora_rank * n_head * 4; the
+            // requantized slot fits in max_wk_size_pp. After the N->1 graph compute
+            // consolidation we no longer need a second wk_b-sized slot.
+            std::vector<uint8_t> tensor_data_pp(
+                2 * (size_t)n_embd_head_qk_nope_pp * kv_lora_rank_pp * n_head_pp * sizeof(float) +
+                max_wk_size_pp);
+
+            ggml_init_params params_pp{context_size_pp, nullptr, true};
+            auto ctx_pp = ggml_init(params_pp);
+            auto graph_pp = ggml_new_graph_custom(ctx_pp, 8, false);
+            LLAMA_LOG_INFO("============ %s: need to compute %d wk_b_pp tensors\n", __func__, n_pp_to_compute);
+
+            for (int il = 0; il < n_layer; ++il) {
+                auto & l = model.layers[il];
+                if (!l.wk_b || l.wk_b_pp) continue;
+
+                // Under -sm graph/attn (the outer block's gate), distribute_mla_tensors
+                // always populates l.wk_b->extra and l.wo->extra. If either is missing,
+                // we're in a degenerate config and pp_opt falls back to the runtime
+                // transpose in build_deepseek2.cpp; skip here.
+                if (!l.wo || !l.wo->extra || !l.wk_b->extra) continue;
+
+                // Per-rank wk_b slices: each lives on a single device as a regular CUDA
+                // tensor (not the split-buffer wrapper which lacks a get_tensor impl for
+                // split_dim=2). Read each rank's slice independently.
+                auto wk_b_split = (const ggml_split_tensor_t *)l.wk_b->extra;
+                auto wo_split   = (const ggml_split_tensor_t *)l.wo->extra;
+                const int n_device = wo_split->n_device;
+
+                auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b_pp.weight";
+
+                // Build a placeholder wk_b_pp_q on host with the full [kv_lora_rank, qk_nope, n_head]
+                // shape (only used as a template for cloning per-rank metadata; no data filled).
+                ggml_tensor wk_b_pp_template = *l.wk_b;
+                wk_b_pp_template.ne[0] = (int64_t)kv_lora_rank_pp;
+                wk_b_pp_template.ne[1] = (int64_t)n_embd_head_qk_nope_pp;
+                wk_b_pp_template.ne[2] = (int64_t)n_head_pp;
+                wk_b_pp_template.nb[0] = ggml_type_size(l.wk_b->type);
+                wk_b_pp_template.nb[1] = wk_b_pp_template.nb[0] * (wk_b_pp_template.ne[0] / ggml_blck_size(l.wk_b->type));
+                wk_b_pp_template.nb[2] = wk_b_pp_template.nb[1] * wk_b_pp_template.ne[1];
+                wk_b_pp_template.nb[3] = wk_b_pp_template.nb[2] * wk_b_pp_template.ne[2];
+
+                l.computed_wk_b_pp = std::make_unique<ggml_tensor>(wk_b_pp_template);
+                l.computed_wk_b_pp->buffer = nullptr;
+                l.computed_wk_b_pp->data   = nullptr;
+                l.computed_wk_b_pp->op = GGML_OP_NONE;
+                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wk_b_pp->src[j] = nullptr;
+                ggml_set_name(l.computed_wk_b_pp.get(), name.c_str());
+
+                l.computed_wk_b_pp_replicas.resize(n_device);
+                l.split_wk_b_pp.tensor_splits.assign(n_device, nullptr);
+                const size_t per_head_pp_bytes = wk_b_pp_template.nb[2];
+
+                // Build head_offsets[] from per-rank ne[2]; matches the layout used by
+                // prepare_split_tensors(split_dim=2) on wk_b so that head_offsets[id]
+                // points to the start of rank id's head range in the full wk_b layout.
+                std::vector<int> head_offsets(n_device + 1, 0);
+                for (int id = 0; id < n_device; ++id) {
+                    int n_h_id = 0;
+                    if (wk_b_split->splits[id]) {
+                        n_h_id = (int)wk_b_split->splits[id]->ne[2];
+                    }
+                    head_offsets[id + 1] = head_offsets[id] + n_h_id;
+                }
+
+                // Read all per-rank wk_b slices into the hoisted host buffer ordered
+                // by head_offset. The data layout on disk is per-head contiguous, so
+                // sequential rank reads at byte offset head_offsets[id] * per_head_in_bytes
+                // reconstitute the original full wk_b on host.
+                const size_t per_head_in_bytes = l.wk_b->nb[2];
+                const size_t full_wk_b_nbytes  = (size_t)head_offsets[n_device] * per_head_in_bytes;
+                GGML_ASSERT(full_wk_b_nbytes <= full_wk_b_host_buf.size());
+                for (int id = 0; id < n_device; ++id) {
+                    if (!wk_b_split->splits[id]) continue;
+                    auto wk_b_rank = wk_b_split->splits[id];
+                    const size_t rank_nbytes = ggml_nbytes(wk_b_rank);
+                    const size_t byte_offset = (size_t)head_offsets[id] * per_head_in_bytes;
+                    GGML_ASSERT(byte_offset + rank_nbytes <= full_wk_b_nbytes);
+                    ggml_backend_tensor_get(wk_b_rank, full_wk_b_host_buf.data() + byte_offset, 0, rank_nbytes);
+                }
+
+                // ONE graph compute on the full assembled wk_b: dequant -> transpose ->
+                // requant. Per-rank slicing happens on the resulting host buffer.
+                ggml_tensor full_host = *l.wk_b;
+                full_host.data = full_wk_b_host_buf.data();
+                auto f_f32 = ggml_cast(ctx_pp, &full_host, GGML_TYPE_F32);
+                f_f32->data = tensor_data_pp.data();
+                auto f_view = ggml_transpose(ctx_pp, f_f32);
+                auto f_cont = ggml_cont(ctx_pp, f_view);
+                f_cont->data = (char *)f_f32->data + ggml_nbytes(f_f32);
+                auto f_q    = ggml_cast(ctx_pp, f_cont, l.wk_b->type);
+                f_q->data   = (char *)f_cont->data + ggml_nbytes(f_cont);
+                ggml_build_forward_expand(graph_pp, f_q);
+                auto plan = ggml_graph_plan(graph_pp, std::thread::hardware_concurrency()/2);
+                if (plan.work_size > work_data_pp.size()) work_data_pp.resize(plan.work_size);
+                plan.work_data = work_data_pp.data();
+                auto status = ggml_graph_compute(graph_pp, &plan);
+                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b_pp");
+                ggml_graph_clear(graph_pp);
+
+                // Per-rank upload: f_q is the full wk_b_pp in [kv_lora_rank, qk_nope,
+                // n_head] order. Per-head stride matches per_head_pp_bytes by construction.
+                for (int id = 0; id < n_device; ++id) {
+                    if (!wo_split->splits[id] || !wo_split->splits[id]->buffer) continue;
+                    if (!wk_b_split->splits[id]) continue;
+                    const int n_head_local = (int)wk_b_split->splits[id]->ne[2];
+                    if (n_head_local <= 0) continue;
+
+                    const size_t slice_bytes = (size_t)n_head_local * per_head_pp_bytes;
+                    auto dev_buft = ggml_backend_buffer_get_type(wo_split->splits[id]->buffer);
+                    auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, slice_bytes);
+                    if (!dev_buf) {
+                        throw std::runtime_error("Failed to allocate per-rank buffer for " + name);
+                    }
+                    ggml_backend_buffer_set_usage(dev_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    model.bufs.push_back(dev_buf);
+                    // Same mem_used note as Path A: distribute_mla_tensors has already
+                    // closed its books before llm_prepare_mla runs.
+
+                    l.computed_wk_b_pp_replicas[id] = std::make_unique<ggml_tensor>(wk_b_pp_template);
+                    auto rep = l.computed_wk_b_pp_replicas[id].get();
+                    rep->ne[2] = n_head_local;
+                    rep->nb[3] = rep->nb[2] * (size_t)rep->ne[2];
+                    rep->buffer = dev_buf;
+                    rep->data   = ggml_backend_buffer_get_base(dev_buf);
+                    rep->op = GGML_OP_NONE;
+                    for (int j = 0; j < GGML_MAX_SRC; ++j) rep->src[j] = nullptr;
+                    rep->view_src = nullptr;
+                    rep->view_offs = 0;
+                    rep->extra = nullptr;
+                    ggml_set_name(rep, (name + "." + std::to_string(id)).c_str());
+
+                    const size_t byte_offset = (size_t)head_offsets[id] * per_head_pp_bytes;
+                    ggml_backend_tensor_set(rep, (char *)f_q->data + byte_offset, 0, slice_bytes);
+                    if (ggml_backend_buffer_is_host(rep->buffer)) {
+                        iqk_modify_tensor(rep);
+                    }
+                    l.split_wk_b_pp.tensor_splits[id] = rep;
+                }
+
+                l.split_wk_b_pp.ggml.n_device  = n_device;
+                l.split_wk_b_pp.ggml.split_dim = 2;
+                l.split_wk_b_pp.ggml.splits    = l.split_wk_b_pp.tensor_splits.data();
+                l.computed_wk_b_pp->extra = (void *)&l.split_wk_b_pp.ggml;
+                model.tensors_by_name.push_back(std::make_pair(name, l.computed_wk_b_pp.get()));
+                l.wk_b_pp = l.computed_wk_b_pp.get();
+
+                printf("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
+                        name.c_str(),
+                        (int)l.computed_wk_b_pp->ne[0],
+                        (int)l.computed_wk_b_pp->ne[1],
+                        (int)l.computed_wk_b_pp->ne[2],
+                        ggml_type_name(l.computed_wk_b_pp->type), n_device);
+            }
+            ggml_free(ctx_pp);
+        }
+    }
+
     if (mla == 1 || model.split_mode == LLAMA_SPLIT_MODE_GRAPH) return;
 
     n_to_compute = 0;
