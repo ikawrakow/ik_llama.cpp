@@ -663,11 +663,6 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     const float kq_scale = 1.0f*mscale*mscale/sqrtf(float(hparams.n_embd_head_k(0)));
     const float attn_factor_scaled = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
 
-    const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-    const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k(0) - hparams.n_rot;
-    const uint32_t kv_lora_rank = hparams.n_lora_kv;
-    const uint32_t q_lora_rank  = hparams.n_lora_q;
-
     struct ggml_tensor * cur;
     struct ggml_tensor * inpL;
 
