@@ -87,6 +87,19 @@ class TensorNameMap:
 
         MODEL_TENSOR.ROPE_FACTORS_LONG: (),
         MODEL_TENSOR.ROPE_FACTORS_SHORT: (),
+
+        # vision (mmproj / clip.cpp) -- Qwen3-VL non-block tensors
+        MODEL_TENSOR.V_ENC_EMBD_PATCH: (
+            "visual.patch_embed.proj", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_POS: (
+            "visual.pos_embed", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_POST_NORM: (
+            "visual.merger.ln_q", # qwen3vl
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -659,6 +672,47 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
+        ),
+
+        # vision (mmproj / clip.cpp) -- Qwen3-VL
+        MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "visual.blocks.{bid}.attn.qkv", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_O: (
+            "visual.blocks.{bid}.attn.proj", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "visual.blocks.{bid}.norm1", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
+            "visual.blocks.{bid}.norm2", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_UP: (
+            "visual.blocks.{bid}.mlp.linear_fc1", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_DOWN: (
+            "visual.blocks.{bid}.mlp.linear_fc2", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_MMPROJ: (
+            "visual.merger.mlp.{bid}", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_NORM: (
+            "model.visual.deepstack_merger_list.{bid}.norm", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC1: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc1", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC2: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc2", # deepstack in qwen3vl
         ),
     }
 

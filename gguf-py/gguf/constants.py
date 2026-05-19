@@ -195,6 +195,53 @@ class Keys:
         CHUNK_SIZE  = "imatrix.chunk_size"
         DATASETS    = "imatrix.datasets"
 
+    class Clip:
+        PROJECTOR_TYPE        = "clip.projector_type"
+        HAS_VISION_ENCODER    = "clip.has_vision_encoder"
+        HAS_AUDIO_ENCODER     = "clip.has_audio_encoder"
+        HAS_LLAVA_PROJECTOR   = "clip.has_llava_projector"
+
+    class ClipVision:
+        PROJECTOR_TYPE        = "clip.vision.projector_type" # for mixed modality models
+        IMAGE_SIZE            = "clip.vision.image_size"
+        IMAGE_MIN_PIXELS      = "clip.vision.image_min_pixels"
+        IMAGE_MAX_PIXELS      = "clip.vision.image_max_pixels"
+        PREPROC_IMAGE_SIZE    = "clip.vision.preproc_image_size"
+        PATCH_SIZE            = "clip.vision.patch_size"
+        EMBEDDING_LENGTH      = "clip.vision.embedding_length"
+        FEED_FORWARD_LENGTH   = "clip.vision.feed_forward_length"
+        PROJECTION_DIM        = "clip.vision.projection_dim"
+        BLOCK_COUNT           = "clip.vision.block_count"
+        IMAGE_MEAN            = "clip.vision.image_mean"
+        IMAGE_STD             = "clip.vision.image_std"
+        SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
+        USE_GELU              = "clip.use_gelu"
+        USE_SILU              = "clip.use_silu"
+        N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
+        IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
+
+        class Attention:
+            HEAD_COUNT      = "clip.vision.attention.head_count"
+            LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
+
+        class Projector:
+            SCALE_FACTOR    = "clip.vision.projector.scale_factor"
+
+    class ClipAudio:
+        PROJECTOR_TYPE      = "clip.audio.projector_type" # for mixed modality models
+        NUM_MEL_BINS        = "clip.audio.num_mel_bins"
+        EMBEDDING_LENGTH    = "clip.audio.embedding_length"
+        FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
+        PROJECTION_DIM      = "clip.audio.projection_dim"
+        BLOCK_COUNT         = "clip.audio.block_count"
+
+        class Attention:
+            HEAD_COUNT      = "clip.audio.attention.head_count"
+            LAYERNORM_EPS   = "clip.audio.attention.layer_norm_epsilon"
+
+        class Projector:
+            STACK_FACTOR    = "clip.audio.projector.stack_factor"
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -204,9 +251,26 @@ class GGUFType:
     MODEL   = "model"
     ADAPTER = "adapter"
     IMATRIX = "imatrix"
+    MMPROJ  = "mmproj" # dummy, unused for now
+
+
+class VisionProjectorType:
+    GEMMA3 = "gemma3"
+    PHI4 = "phi4"
+    IDEFICS3 = "idefics3"
+    PIXTRAL = "pixtral"
+    LLAMA4 = "llama4"
+    QWEN2VL = "qwen2vl_merger"
+    QWEN25VL = "qwen2.5vl_merger"
+    QWEN3VL = "qwen3vl_merger"
+    INTERNVL = "internvl"
+    QWEN2A = "qwen2a" # audio
+    QWEN25O = "qwen2.5o" # omni
+    ULTRAVOX = "ultravox"
 
 
 class MODEL_ARCH(IntEnum):
+    MMPROJ       = auto() # dummy arch for clip.cpp
     LLAMA        = auto()
     DECI         = auto()
     FALCON       = auto()
@@ -361,9 +425,25 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_HNORM          = auto()   # nextn tensors (glm4moe)
     NEXTN_SHARED_HEAD_HEAD = auto() # nextn tensors (glm4moe)
     NEXTN_SHARED_HEAD_NORM = auto() # nextn tensors (glm4moe)
+    # vision (mmproj / clip.cpp)
+    V_MMPROJ             = auto()
+    V_ENC_EMBD_PATCH     = auto()
+    V_ENC_EMBD_POS       = auto()
+    V_ENC_ATTN_QKV       = auto()
+    V_ENC_ATTN_O         = auto()
+    V_ENC_INPUT_NORM     = auto()
+    V_ENC_POST_ATTN_NORM = auto()
+    V_ENC_FFN_UP         = auto()
+    V_ENC_FFN_DOWN       = auto()
+    V_PRE_NORM           = auto()
+    V_POST_NORM          = auto()
+    V_DS_NORM            = auto() # qwen3vl
+    V_DS_FC1             = auto() # qwen3vl
+    V_DS_FC2             = auto() # qwen3vl
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+    MODEL_ARCH.MMPROJ:         "clip", # dummy arch for clip.cpp
     MODEL_ARCH.LLAMA:          "llama",
     MODEL_ARCH.DECI:           "deci",
     MODEL_ARCH.FALCON:         "falcon",
@@ -520,9 +600,40 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    # vision (mmproj / clip.cpp)
+    MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
+    MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
+    MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
+    MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
+    MODEL_TENSOR.V_ENC_ATTN_O:              "v.blk.{bid}.attn_out",
+    MODEL_TENSOR.V_ENC_INPUT_NORM:          "v.blk.{bid}.ln1",
+    MODEL_TENSOR.V_ENC_POST_ATTN_NORM:      "v.blk.{bid}.ln2",
+    MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
+    MODEL_TENSOR.V_POST_NORM:               "v.post_ln",
+    MODEL_TENSOR.V_DS_NORM:                 "v.deepstack.{bid}.norm",
+    MODEL_TENSOR.V_DS_FC1:                  "v.deepstack.{bid}.fc1",
+    MODEL_TENSOR.V_DS_FC2:                  "v.deepstack.{bid}.fc2",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+    MODEL_ARCH.MMPROJ: [
+        MODEL_TENSOR.V_MMPROJ,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ATTN_QKV,
+        MODEL_TENSOR.V_ENC_ATTN_O,
+        MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_POST_ATTN_NORM,
+        MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_PRE_NORM,
+        MODEL_TENSOR.V_POST_NORM,
+        MODEL_TENSOR.V_DS_NORM,
+        MODEL_TENSOR.V_DS_FC1,
+        MODEL_TENSOR.V_DS_FC2,
+    ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
