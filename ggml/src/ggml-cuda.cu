@@ -4789,8 +4789,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, gg
 }
 
 GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
-    auto ctx = (const ggml_backend_cuda_context *)backend->context;
-    int min_batch_size = ctx->offload_batch_size; //originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
+    auto ctx = (ggml_backend_cuda_context *)backend->context;
+    int min_batch_size = ctx->offload_batch_size; // originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
 
     // Why do we want to do this? The heuristics that the batch must have more than min_batch_size tokens to be worth it
     // offloading the required model weights comes from dense models. For MoE models, the average number of tokens
@@ -4803,13 +4803,17 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
     // as the condition for offloading model weights resinding in RAM to the GPU.
     // In this case, the number of tokens is not as usual in op->ne[1] but rather in op->ne[2].
     if (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE) {
+        if (ctx->offload_batch_size_per_byte >= 0) {
+            auto src0 = op->src[0];
+            auto row_size = ggml_row_size(src0->type, src0->ne[0]);
+            min_batch_size = int(1.*ctx->offload_batch_size_per_byte*row_size/src0->ne[0]);
+        }
         auto ids = op->op == GGML_OP_MUL_MAT_ID ? op->src[2] : op->src[3];
         int64_t batch_size = op->ne[2];
         if (batch_size < min_batch_size) return false;
         int64_t n_experts_tot    = op->src[0]->ne[2];
         int64_t n_experts_active = ids->ne[0];
         bool should_offload = batch_size*n_experts_active >= min_batch_size*n_experts_tot;
-        //printf("%s(%s): op->ne[2] = %ld, n_experts_tot = %ld, n_experts_active = %ld, ids: %s, %ld x %ld x %ld x %ld -> %d (%ld, %ld)\n", __func__, op->name, op->ne[2], n_experts_tot, n_experts_active, ids->name, ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3], should_offload, batch_size*n_experts_active, min_batch_size*n_experts_tot);
         return should_offload;
     }
 
@@ -4906,6 +4910,7 @@ static ggml_guid_t ggml_backend_cuda_guid() {
 struct cuda_params {
     int  fusion = GGML_CUDA_FUSION;
     int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
+    int  offload_batch_size_per_byte = -1;
     int  mmq_id_thresh = 32;
     float fa_offset = 0.6931f;
 #ifdef USE_CUDA_GRAPH
@@ -4955,7 +4960,14 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                 is_good = read_value(parsed[1], params.fusion);
             }
             else if (parsed[0] == "offload-batch-size") {
-                is_good = read_value(parsed[1], params.offload_batch_size);
+                int tmp = 0;
+                is_good = read_value(parsed[1], tmp);
+                if (is_good) {
+                    params.offload_batch_size = tmp;
+                }
+            }
+            else if (parsed[0] == "offload-batch-size-per-byte") {
+                is_good = read_value(parsed[1], params.offload_batch_size_per_byte);
             }
             else if (parsed[0] == "mmq-id-size") {
                 is_good = read_value(parsed[1], params.mmq_id_thresh);
@@ -5015,6 +5027,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         if (params.offload_batch_size != ctx->offload_batch_size) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting offload_batch_size to %d\n", __func__, params.offload_batch_size);
             ctx->offload_batch_size = params.offload_batch_size;
+        }
+        if (params.offload_batch_size_per_byte != ctx->offload_batch_size_per_byte) {
+            GGML_CUDA_LOG_INFO(" =========================== %s: setting offload_batch_size_per_byte to %d\n", __func__, params.offload_batch_size_per_byte);
+            ctx->offload_batch_size_per_byte = params.offload_batch_size_per_byte;
         }
         if (params.mmq_id_thresh != ctx->mmq_id_thresh) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting mmq_id_thresh to %d\n", __func__, params.mmq_id_thresh);
