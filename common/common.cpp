@@ -1956,11 +1956,17 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
 
         params.has_mtp = true;
+        if (params.speculative.type == COMMON_SPECULATIVE_TYPE_NONE) {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_MTP;
+        }
         return true;
     }
     if (arg == "-no-mtp" || arg == "--no-multi-token-prediction") {
         params.has_mtp = false;
         common_speculative_remove_explicit_stage(params.speculative, COMMON_SPECULATIVE_TYPE_MTP);
+        if (params.speculative.stages.empty() && params.speculative.type == COMMON_SPECULATIVE_TYPE_MTP) {
+            params.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+        }
         return true;
     }
     if (arg == "-draft" || arg == "--draft-params") {

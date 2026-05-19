@@ -6,6 +6,30 @@
 
 struct common_speculative;
 
+enum common_speculative_companion_kind {
+    COMMON_SPECULATIVE_COMPANION_NONE,
+    COMMON_SPECULATIVE_COMPANION_MODEL,
+};
+
+struct common_speculative_traits {
+    std::vector<common_speculative_type> configured_types;
+    common_speculative_type active_type = COMMON_SPECULATIVE_TYPE_NONE;
+    common_speculative_companion_kind companion_kind = COMMON_SPECULATIVE_COMPANION_NONE;
+};
+
+struct common_speculative_span {
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+    uint32_t stage_index = 0;
+    uint32_t token_offset = 0;
+    uint32_t n_tokens = 0;
+};
+
+struct common_speculative_draft_result {
+    llama_tokens tokens;
+    std::vector<common_speculative_span> spans;
+    common_speculative_type active_type = COMMON_SPECULATIVE_TYPE_NONE;
+};
+
 // comma separated list of all types
 std::string common_speculative_type_name_str();
 
@@ -30,6 +54,14 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 
 // sample up to n_draft tokens and add them to the batch using the draft model
 // draft_base_pos/draft_seq_id override the MTP position for id_last
+common_speculative_draft_result common_speculative_draft_ex(
+            common_speculative * spec,
+            common_params_speculative & params,
+            const llama_tokens & prompt,
+                llama_token   id_last,
+                llama_pos     draft_base_pos = -1,
+                llama_seq_id  draft_seq_id = 0);
+
 llama_tokens common_speculative_draft(
                      common_speculative * spec,
                      common_params_speculative & params,
@@ -40,6 +72,19 @@ llama_tokens common_speculative_draft(
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
+
+bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type);
+common_speculative_traits common_speculative_get_traits(const common_speculative * spec);
+llama_context * common_speculative_get_companion_ctx(common_speculative * spec);
+void common_speculative_seed_companion_hidden(common_speculative * spec, const float * hidden);
+int32_t common_speculative_on_prompt_batch(common_speculative * spec, const llama_batch & batch, const float * hidden);
+int32_t common_speculative_on_accept_batch(common_speculative * spec, const llama_batch & batch, const float * hidden);
+void common_speculative_accept_tokens(
+    common_speculative * spec,
+    const std::vector<llama_token> & ids,
+    int32_t n_past_base,
+    llama_seq_id seq_id,
+    const float * hidden = nullptr);
 
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0, int n_past = 0, common_params_speculative * active_params = nullptr);
