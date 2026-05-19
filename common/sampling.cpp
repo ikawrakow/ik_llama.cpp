@@ -93,33 +93,36 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         result->grammar_root = "root";
     }
 
+    // Compute prefill tokens from the generation prompt
+    std::vector<llama_token> prefill_tokens;
+    if (!params.generation_prompt.empty()) {
+        GGML_ASSERT(vocab != nullptr);
+        auto tokens = common_tokenize(vocab, params.generation_prompt, false, true);
+        for (size_t i = 0; i < tokens.size(); i++) {
+            std::string piece = common_token_to_piece(vocab, tokens[i], true);
+            if (i == 0 && std::isspace(piece[0]) && !std::isspace(params.generation_prompt[0])) {
+                // Some tokenizers will add a space before the first special token, need to exclude
+                continue;
+            }
+            LOG_DBG("%s: prefill token: %d = %s\n", __func__, tokens[i], piece.c_str());
+            prefill_tokens.push_back(tokens[i]);
+        }
+    }
+
     // Feed generation prompt tokens to the grammar sampler so it advances past
     // tokens the template already placed in the prompt.
     // Only applies to output-format and tool-call grammars; user-supplied grammars must not be prefilled.
-    std::vector<llama_token> prefill_tokens;
-    if (!params.generation_prompt.empty() && common_grammar_needs_prefill(params.grammar)) {
-        GGML_ASSERT(vocab != nullptr);
-        prefill_tokens = common_tokenize(vocab, params.generation_prompt, false, true);
-        if (!prefill_tokens.empty()) {
-            std::string first_token = common_token_to_piece(vocab, prefill_tokens[0], true);
-            if (std::isspace(first_token[0]) && !std::isspace(params.generation_prompt[0])) {
-                // Some tokenizers will add a space before the first special token, need to remove
-                prefill_tokens = std::vector<llama_token>(prefill_tokens.begin() + 1, prefill_tokens.end());
+    if (grmr && !params.grammar_lazy && common_grammar_needs_prefill(params.grammar)) {
+        try {
+            for (const auto & token : prefill_tokens) {
+                llama_grammar_accept_impl(*grmr, vocab, nullptr, token);
+                LOG_DBG("%s: grammar accepted prefill token (%d)\n", __func__, token);
             }
         }
-
-        if (grmr && !params.grammar_lazy) {
-            try {
-                for (const auto & token : prefill_tokens) {
-                    llama_grammar_accept_impl(*grmr, vocab, nullptr, token);
-                    LOG_DBG("%s: accepted prefill token (%d)\n", __func__, token);
-                }
-            }
-            catch (std::exception & e) {
-                LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
-                    common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
-                throw e;
-            }
+        catch (std::exception & e) {
+            LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
+                common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
+            throw e;
         }
     }
 
@@ -130,8 +133,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             params.reasoning_budget_start,
             params.reasoning_budget_end,
             params.reasoning_budget_forced,
-            params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens,
-            prefill_tokens);
+            params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens);
+
+        for (const auto & token : prefill_tokens) {
+            common_reasoning_budget_accept(result->rbudget, token);
+            LOG_DBG("%s: reasoning-budget accepted prefill token (%d)\n", __func__, token);
+        }
     }
 
     llama_sampling_set_rng_seed(result, params.seed);
@@ -689,19 +696,19 @@ void common_sampler_accept(
         struct common_sampler * ctx_sampling,
         struct llama_context * ctx_main,
         llama_token token,
-        bool accept_grammar) {
+        bool is_generated) {
     if (ctx_sampling->prev.size() > 0) {
         ctx_sampling->prev.erase(ctx_sampling->prev.begin());
     }
     ctx_sampling->prev.push_back(token);
 
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
-    accept_grammar = accept_grammar && grammar_should_apply(ctx_sampling);
-    if (ctx_sampling->rbudget) {
+    const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
+    if (ctx_sampling->rbudget && is_generated) {
         common_reasoning_budget_accept(ctx_sampling->rbudget, token);
     }
 
-    if (ctx_sampling->grammar != NULL && accept_grammar) {
+    if (ctx_sampling->grammar && accept_grammar) {
         llama_grammar_accept_token(ctx_sampling->grammar, ctx_main, token);
     }
     if (ctx_sampling->smpl) {
