@@ -5360,6 +5360,10 @@ def parse_args() -> argparse.Namespace:
         "--metadata", type=Path,
         help="Specify the path for an authorship metadata override file"
     )
+    parser.add_argument(
+        "--mmproj", action="store_true",
+        help="convert the vision tower to an mmproj GGUF instead of the language model",
+    )
 
     return parser.parse_args()
 
@@ -5428,7 +5432,11 @@ def main() -> None:
         model_architecture = hparams["architectures"][0]
 
         try:
-            model_class = Model.from_model_architecture(model_architecture)
+            if args.mmproj:
+                # Forward reference: Qwen3_5VisionModel is added in a later task.
+                model_class = Model.from_model_architecture("Qwen3_5VisionModel")
+            else:
+                model_class = Model.from_model_architecture(model_architecture)
         except NotImplementedError:
             logger.error(f"Model {model_architecture} is not supported")
             sys.exit(1)
