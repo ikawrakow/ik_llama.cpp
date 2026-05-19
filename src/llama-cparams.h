@@ -50,6 +50,7 @@ struct llama_cparams {
     int  worst_graph_tokens;
 
     enum ggml_type reduce_type;
+    enum ggml_type graph_attn_precision;
     enum llama_pooling_type pooling_type;
     enum llama_mtp_op_type mtp_op_type;
 
