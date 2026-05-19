@@ -2,7 +2,6 @@
 #include "sampling.h"
 #include "llama-vocab.h"
 #include "common.h"
-#include "reasoning-budget.cpp"
 
 #include <limits>
 #include <random>
@@ -21,7 +20,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->grammar = nullptr;
     result->rbudget = nullptr;
 
-    struct llama_grammar* grmr;
+    struct llama_grammar* grmr = nullptr;
     const std::string & grammar_str = common_grammar_value(params.grammar);
     if (grammar_str.compare(0, 11, "%llguidance") == 0) {
 #ifdef LLAMA_USE_LLGUIDANCE
@@ -136,9 +135,10 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens);
 
         for (const auto & token : prefill_tokens) {
-            common_reasoning_budget_accept(result->rbudget, token);
+            common_reasoning_budget_accept_prefill(result->rbudget, token);
             LOG_DBG("%s: reasoning-budget accepted prefill token (%d)\n", __func__, token);
         }
+        common_reasoning_budget_log_prefill_state(result->rbudget);
     }
 
     llama_sampling_set_rng_seed(result, params.seed);
@@ -174,6 +174,10 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->elb_search_pos = 0;
 
     return result;
+}
+
+struct common_sampler * common_sampler_clone_init() {
+    return new common_sampler();
 }
 
 void common_sampler_free(struct common_sampler * ctx) {
@@ -696,7 +700,8 @@ void common_sampler_accept(
         struct common_sampler * ctx_sampling,
         struct llama_context * ctx_main,
         llama_token token,
-        bool is_generated) {
+        bool is_generated,
+        bool emit_rbudget_logs) {
     if (ctx_sampling->prev.size() > 0) {
         ctx_sampling->prev.erase(ctx_sampling->prev.begin());
     }
@@ -705,7 +710,11 @@ void common_sampler_accept(
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
     const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
     if (ctx_sampling->rbudget && is_generated) {
-        common_reasoning_budget_accept(ctx_sampling->rbudget, token);
+        if (emit_rbudget_logs) {
+            common_reasoning_budget_accept(ctx_sampling->rbudget, token);
+        } else {
+            common_reasoning_budget_accept_silent(ctx_sampling->rbudget, token);
+        }
     }
 
     if (ctx_sampling->grammar && accept_grammar) {

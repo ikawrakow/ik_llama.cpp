@@ -234,6 +234,8 @@ static void discard_speculative_checkpoint(server_slot & slot, llama_context * c
 }
 
 static bool save_speculative_checkpoint(server_slot & slot, llama_model * model, llama_context * ctx, int ckpt_mode) {
+    (void) model;
+
     slot.spec_ckpt.clear();
     const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted.size() + 1);
     slot.spec_ckpt.n_past = slot.cache_tokens.pos_next(n_pre_spec_tokens);
@@ -252,7 +254,7 @@ static bool save_speculative_checkpoint(server_slot & slot, llama_model * model,
         return false;
     }
 
-    slot.spec_ckpt.sampler = common_sampler_init(model, slot.sparams);
+    slot.spec_ckpt.sampler = common_sampler_clone_init();
     if (slot.spec_ckpt.sampler == nullptr) {
         discard_speculative_checkpoint(slot, ctx);
         return false;
@@ -4235,7 +4237,7 @@ static void restore_speculative_checkpoint(
             common_sampler_clone(slot.spec_ckpt.sampler, slot.ctx_sampling);
         }
         for (llama_token id : ids) {
-            common_sampler_accept(slot.ctx_sampling, ctx, id, true);
+            common_sampler_accept(slot.ctx_sampling, ctx, id, true, false);
         }
 
         // Update MTP KV cache and hidden state using embeddings collected before checkpoint restore.
@@ -4331,7 +4333,7 @@ static void restore_speculative_checkpoint(
             }
 
             for (llama_token id : ids) {
-                common_sampler_accept(slot.ctx_sampling, ctx, id, true);
+                common_sampler_accept(slot.ctx_sampling, ctx, id, true, false);
             }
 
             llama_batch_free(re_batch);

@@ -244,6 +244,9 @@ struct common_sampler {
 // Create a new sampling context instance.
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params);
 
+// Create an empty sampling context suitable as a common_sampler_clone() destination.
+struct common_sampler * common_sampler_clone_init();
+
 void common_sampler_free(struct common_sampler * ctx);
 
 // Reset the sampler context
@@ -321,7 +324,8 @@ void common_sampler_accept(
         struct common_sampler * ctx_sampling,
         struct llama_context * ctx_main,
         llama_token id,
-        bool is_generated);
+        bool is_generated,
+        bool emit_rbudget_logs = true);
 
 // returns at least 1 token, up to draft.size()
 // access the internal list of current candidate tokens

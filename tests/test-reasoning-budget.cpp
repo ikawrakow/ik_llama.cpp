@@ -8,6 +8,7 @@
 #undef NDEBUG
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -67,7 +68,7 @@ static void test_reasoning_budget(
             cur[j].logit = logf((float)(j+1));  // reset logits
         }
 
-        llama_sampler_apply(sampler, &cur_p);
+        common_reasoning_budget_apply(sampler, &cur_p);
 
         // Check if forcing is active (all logits except one should be -INFINITY)
         size_t finite_count = 0;
@@ -79,7 +80,7 @@ static void test_reasoning_budget(
             }
         }
 
-        llama_sampler_accept(sampler, sequence[i]);
+        common_reasoning_budget_accept(sampler, sequence[i]);
 
         fprintf(stderr, "    i=%zu: token=%d, finite_count=%zu, finite_token=%d\n", i, (int)sequence[i], finite_count, (int)finite_token);
 
@@ -94,7 +95,7 @@ static void test_reasoning_budget(
         }
     }
 
-    llama_sampler_free(sampler);
+    common_reasoning_budget_free(sampler);
 
     // Verify forcing occurred at expected positions
     if (expected_force_start == SIZE_MAX) {
@@ -147,6 +148,55 @@ static void test_utf8_boundary_detection() {
     // Mixed: ASCII followed by start of multi-byte
     GGML_ASSERT(!common_utf8_is_complete(std::string("hello\xC3", 6)));       // ASCII + incomplete 2-byte
     GGML_ASSERT(common_utf8_is_complete(std::string("hello\xC3\xA9", 7)));    // ASCII + complete 2-byte
+}
+
+static void accept_sequence(
+    common_reasoning_budget_ctx * sampler,
+    const std::vector<llama_token> & sequence,
+    bool prefill) {
+    for (const auto token : sequence) {
+        if (prefill) {
+            common_reasoning_budget_accept_prefill(sampler, token);
+        } else {
+            common_reasoning_budget_accept(sampler, token);
+        }
+    }
+}
+
+static void test_prefill_start_tag_enters_counting() {
+    const std::vector<llama_token> start = {100, 101};
+    const std::vector<llama_token> end = {102};
+    const std::vector<llama_token> forced = {103, 102};
+
+    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, 5);
+    accept_sequence(sampler, start, true);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_COUNTING);
+    common_reasoning_budget_free(sampler);
+}
+
+static void test_prefill_closed_reasoning_reaches_done() {
+    const std::vector<llama_token> start = {100};
+    const std::vector<llama_token> end = {101};
+    const std::vector<llama_token> forced = {102, 101};
+
+    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, 5);
+    accept_sequence(sampler, {100, 50, 101}, true);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+    common_reasoning_budget_free(sampler);
+}
+
+static void test_generated_start_after_done_rearms() {
+    const std::vector<llama_token> start = {100};
+    const std::vector<llama_token> end = {101};
+    const std::vector<llama_token> forced = {102, 101};
+
+    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, 5);
+    accept_sequence(sampler, {100, 50, 101}, true);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+
+    accept_sequence(sampler, start, false);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_COUNTING);
+    common_reasoning_budget_free(sampler);
 }
 
 int main(void) {
@@ -227,7 +277,11 @@ int main(void) {
             3);     // forcing continues through i=3
     }
 
-    printf("OK (5 tests passed)\n");
+    test_prefill_start_tag_enters_counting();
+    test_prefill_closed_reasoning_reaches_done();
+    test_generated_start_after_done_rearms();
+
+    printf("OK (8 tests passed)\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();

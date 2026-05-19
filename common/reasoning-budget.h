@@ -41,3 +41,12 @@ struct common_reasoning_budget_ctx * common_reasoning_budget_init(
     common_reasoning_budget_state    initial_state = REASONING_BUDGET_IDLE);
 
 common_reasoning_budget_state common_reasoning_budget_get_state(const common_reasoning_budget_ctx * smpl);
+
+void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, llama_token token);
+void common_reasoning_budget_accept_silent(common_reasoning_budget_ctx * smpl, llama_token token);
+void common_reasoning_budget_accept_prefill(common_reasoning_budget_ctx * smpl, llama_token token);
+void common_reasoning_budget_log_prefill_state(const common_reasoning_budget_ctx * smpl);
+void common_reasoning_budget_apply(common_reasoning_budget_ctx * smpl, llama_token_data_array * cur_p);
+void common_reasoning_budget_reset(common_reasoning_budget_ctx * smpl);
+common_reasoning_budget_ctx * common_reasoning_budget_clone(const common_reasoning_budget_ctx * smpl);
+void common_reasoning_budget_free(common_reasoning_budget_ctx * smpl);

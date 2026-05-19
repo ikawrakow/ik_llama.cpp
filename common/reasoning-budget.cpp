@@ -56,7 +56,7 @@ static const char * common_reasoning_budget_name(const common_reasoning_budget_c
     return "reasoning-budget";
 }
 
-static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, llama_token token) {
+static void common_reasoning_budget_accept_impl(common_reasoning_budget_ctx * smpl, llama_token token, bool emit_logs) {
     auto * ctx = (common_reasoning_budget_ctx *)smpl;
 
     switch (ctx->state) {
@@ -65,12 +65,16 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
         if (ctx->start_matcher.advance(token)) {
             ctx->state = REASONING_BUDGET_COUNTING;
             ctx->remaining = ctx->budget;
-            LOG_INF("reasoning-budget: activated, budget=%d tokens\n", ctx->budget);
+            if (emit_logs) {
+                LOG_INF("reasoning-budget: activated, budget=%d tokens\n", ctx->budget);
+            }
 
             if (ctx->remaining <= 0) {
                 ctx->state = REASONING_BUDGET_FORCING;
                 ctx->force_pos = 0;
-                LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
+                if (emit_logs) {
+                    LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
+                }
             }
         }
         break;
@@ -80,7 +84,9 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
     {
         if (ctx->end_matcher.advance(token)) {
             ctx->state = REASONING_BUDGET_DONE;
-            LOG_INF("reasoning-budget: deactivated (natural end)\n");
+            if (emit_logs) {
+                LOG_INF("reasoning-budget: deactivated (natural end)\n");
+            }
             break;
         }
 
@@ -95,7 +101,9 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
                 ctx->state = REASONING_BUDGET_FORCING;
                 ctx->force_pos = 0;
                 ctx->end_matcher.reset();
-                LOG_INF("reasoning-budget: UTF-8 complete, now forcing end sequence\n");
+                if (emit_logs) {
+                    LOG_INF("reasoning-budget: UTF-8 complete, now forcing end sequence\n");
+                }
             }
         } else if (ctx->state == REASONING_BUDGET_COUNTING) {
             ctx->remaining--;
@@ -104,11 +112,15 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
                     ctx->state = REASONING_BUDGET_FORCING;
                     ctx->force_pos = 0;
                     ctx->end_matcher.reset();
-                    LOG_INF("reasoning-budget: budget exhausted, forcing end sequence\n");
+                    if (emit_logs) {
+                        LOG_INF("reasoning-budget: budget exhausted, forcing end sequence\n");
+                    }
                 } else {
                     ctx->state = REASONING_BUDGET_WAITING_UTF8;
                     ctx->end_matcher.reset();
-                    LOG_INF("reasoning-budget: budget exhausted, waiting for UTF-8 completion\n");
+                    if (emit_logs) {
+                        LOG_INF("reasoning-budget: budget exhausted, waiting for UTF-8 completion\n");
+                    }
                 }
             }
         }
@@ -118,7 +130,9 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
         ctx->force_pos++;
         if (ctx->force_pos >= ctx->forced_tokens.size()) {
             ctx->state = REASONING_BUDGET_DONE;
-            LOG_INF("reasoning-budget: forced sequence complete, done\n");
+            if (emit_logs) {
+                LOG_INF("reasoning-budget: forced sequence complete, done\n");
+            }
         }
         break;
     case REASONING_BUDGET_DONE:
@@ -128,19 +142,57 @@ static void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, l
             ctx->state = REASONING_BUDGET_COUNTING;
             ctx->remaining = ctx->budget;
             ctx->end_matcher.reset();
-            LOG_INF("reasoning-budget: re-activated on new start tag, budget=%d tokens\n", ctx->budget);
+            if (emit_logs) {
+                LOG_INF("reasoning-budget: re-activated on new start tag, budget=%d tokens\n", ctx->budget);
+            }
 
             if (ctx->remaining <= 0) {
                 ctx->state = REASONING_BUDGET_FORCING;
                 ctx->force_pos = 0;
-                LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
+                if (emit_logs) {
+                    LOG_INF("reasoning-budget: budget=0, forcing immediately\n");
+                }
             }
         }
         break;
     }
 }
 
-static void common_reasoning_budget_apply(struct common_reasoning_budget_ctx * smpl, llama_token_data_array * cur_p) {
+void common_reasoning_budget_accept(common_reasoning_budget_ctx * smpl, llama_token token) {
+    common_reasoning_budget_accept_impl(smpl, token, true);
+}
+
+void common_reasoning_budget_accept_silent(common_reasoning_budget_ctx * smpl, llama_token token) {
+    common_reasoning_budget_accept_impl(smpl, token, false);
+}
+
+void common_reasoning_budget_accept_prefill(common_reasoning_budget_ctx * smpl, llama_token token) {
+    common_reasoning_budget_accept_silent(smpl, token);
+}
+
+void common_reasoning_budget_log_prefill_state(const common_reasoning_budget_ctx * smpl) {
+    const auto * ctx = (const common_reasoning_budget_ctx *)smpl;
+    if (!ctx) {
+        return;
+    }
+
+    switch (ctx->state) {
+    case REASONING_BUDGET_COUNTING:
+        LOG_INF("reasoning-budget: activated by generation prompt, budget=%d tokens\n", ctx->budget);
+        break;
+    case REASONING_BUDGET_WAITING_UTF8:
+        LOG_INF("reasoning-budget: budget exhausted in generation prompt, waiting for UTF-8 completion\n");
+        break;
+    case REASONING_BUDGET_FORCING:
+        LOG_INF("reasoning-budget: budget exhausted in generation prompt, forcing end sequence\n");
+        break;
+    case REASONING_BUDGET_IDLE:
+    case REASONING_BUDGET_DONE:
+        break;
+    }
+}
+
+void common_reasoning_budget_apply(struct common_reasoning_budget_ctx * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (common_reasoning_budget_ctx *)smpl;
     if (!ctx) {
         return;
@@ -164,7 +216,7 @@ static void common_reasoning_budget_apply(struct common_reasoning_budget_ctx * s
     }
 }
 
-static void common_reasoning_budget_reset(common_reasoning_budget_ctx * smpl) {
+void common_reasoning_budget_reset(common_reasoning_budget_ctx * smpl) {
     auto * ctx = (common_reasoning_budget_ctx *)smpl;
     ctx->state = REASONING_BUDGET_IDLE;
     ctx->remaining = ctx->budget;
@@ -179,12 +231,12 @@ static struct common_reasoning_budget_ctx * common_reasoning_budget_init_state(
     const std::vector<llama_token> & end_tokens, const std::vector<llama_token> & forced_tokens,
     int32_t budget, common_reasoning_budget_state initial_state);
 
-static struct common_reasoning_budget_ctx * common_reasoning_budget_clone(const struct common_reasoning_budget_ctx * smpl) {
+struct common_reasoning_budget_ctx * common_reasoning_budget_clone(const struct common_reasoning_budget_ctx * smpl) {
     const auto * ctx = (const common_reasoning_budget_ctx *)smpl;
     return new common_reasoning_budget_ctx(*ctx);
 }
 
-static void common_reasoning_budget_free(struct common_reasoning_budget_ctx * smpl) {
+void common_reasoning_budget_free(struct common_reasoning_budget_ctx * smpl) {
     delete (common_reasoning_budget_ctx *)smpl;
 }
 
