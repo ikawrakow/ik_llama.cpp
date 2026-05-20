@@ -687,7 +687,9 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     for (int il = 0; il < n_active_layers; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        if (tp_mode) {
+        bool is_tp_layer = tp_mode && model.layers[il].wo && model.layers[il].wo->extra;
+
+        if (is_tp_layer) {
             cur = build_deepseek2_tp_attention(gf, il, inpL, KQ_mask, inp_pos, rope_cache,
                                                 kq_scale, attn_factor_scaled,
                                                 use_f32_attn_precision, is_lite);
@@ -709,14 +711,14 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
         // TP path folds residual inside the per-rank FFN reduce; layer mode adds it here.
         struct ggml_tensor * ffn_inp;
-        if (tp_mode) {
+        if (is_tp_layer) {
             ffn_inp = cur;
         } else {
             ffn_inp = ggml_add(ctx0, cur, inpSA);
         }
         cb(ffn_inp, "ffn_inp", il);
 
-        if (tp_mode) {
+        if (is_tp_layer) {
             cur = ffn_inp;
         } else {
             cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -725,16 +727,16 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = llm_build_ffn(ctx0, lctx,
-                    tp_mode ? model.layers[il].ffn_norm : nullptr, cur,
+                    is_tp_layer ? model.layers[il].ffn_norm : nullptr, cur,
                     model.layers[il].ffn_up,   NULL, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, cb, il,
-                    tp_mode ? gf : nullptr,
-                    /*add_input=*/tp_mode);
+                    gf,
+                    /*add_input=*/is_tp_layer);
             cb(cur, "ffn_out", il);
-        } else if (tp_mode) {
+        } else if (is_tp_layer) {
             cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
                     model.layers[il].ffn_gate_inp,    nullptr,
                     model.layers[il].ffn_up_exps,     nullptr,
@@ -767,21 +769,19 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert
-            {
-                ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
-                        model.layers[il].ffn_up_shexp,   NULL, NULL,
-                        model.layers[il].ffn_gate_shexp, NULL, NULL,
-                        model.layers[il].ffn_down_shexp, NULL, NULL,
-                        NULL,
-                        LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-                cb(ffn_shexp, "ffn_shexp", il);
+            ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
+                    model.layers[il].ffn_up_shexp,   NULL, NULL,
+                    model.layers[il].ffn_gate_shexp, NULL, NULL,
+                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf);
+            cb(ffn_shexp, "ffn_shexp", il);
 
-                cur = ggml_add(ctx0, moe_out, ffn_shexp);
-                cb(cur, "ffn_out", il);
-            }
+            cur = ggml_add(ctx0, moe_out, ffn_shexp);
+            cb(cur, "ffn_out", il);
         }
 
-        if (!tp_mode) {
+        if (!is_tp_layer) {
             cur = ggml_add(ctx0, cur, ffn_inp);
         }
         cur = lctx.cvec.apply_to(ctx0, cur, il);
