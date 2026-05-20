@@ -281,7 +281,11 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
             if (use_f32_attn_precision) {
                 ggml_flash_attn_ext_set_prec(kqv_compressed, GGML_PREC_F32);
             }
-            if (cparams.k_cache_hadamard) {
+            // When khad_pretransformed is set, H is folded into wv_b. FA leaves
+            // kqv_compressed in the H-encoded basis; the mul_mat(H@wv_b, kqv_encoded)
+            // below collapses to wv_b^T @ kqv_unencoded by H @ H = I. Skip the
+            // post-FA un-encode so the fold composes correctly.
+            if (cparams.k_cache_hadamard && !model.khad_pretransformed) {
                 kqv_compressed = ggml_hadamard(ctx0, kqv_compressed, 64);
             }
             kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
