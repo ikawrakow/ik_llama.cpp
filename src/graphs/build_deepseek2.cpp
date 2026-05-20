@@ -175,9 +175,14 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
             cb(kv_cache_rope_view, "kv_cache_rope_pp", il_id);
 
             // Un-Hadamard the cache views via the fused dequant+hadamard kernel.
+            // When khad_pretransformed is set, H was folded into wv_b/wk_b_pp at init,
+            // so the cache_nope un-Hadamard is skipped (rope half still goes to FA via
+            // concat — no wk_b multiply, no H to fold into).
             if (cparams.k_cache_hadamard) {
-                kv_cache_nope      = ggml_dequant_hadamard(ctx0, kv_cache_nope,      64);
                 kv_cache_rope_view = ggml_dequant_hadamard(ctx0, kv_cache_rope_view, 64);
+                if (!model.khad_pretransformed) {
+                    kv_cache_nope = ggml_dequant_hadamard(ctx0, kv_cache_nope, 64);
+                }
             }
 
             // CUDA quantized-cache + REPEAT/CONCAT/CPY has known issues, so force F16 here.
