@@ -179,9 +179,9 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
             // so the cache_nope un-Hadamard is skipped (rope half still goes to FA via
             // concat — no wk_b multiply, no H to fold into).
             if (cparams.k_cache_hadamard) {
-                kv_cache_rope_view = ggml_dequant_hadamard(ctx0, kv_cache_rope_view, 64);
+                kv_cache_rope_view = ggml_hadamard(ctx0, kv_cache_rope_view, 64);
                 if (!model.khad_pretransformed) {
-                    kv_cache_nope = ggml_dequant_hadamard(ctx0, kv_cache_nope, 64);
+                    kv_cache_nope = ggml_hadamard(ctx0, kv_cache_nope, 64);
                 }
             }
 

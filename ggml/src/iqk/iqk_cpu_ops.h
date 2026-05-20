@@ -32,8 +32,6 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth);
 
-void iqk_dequant_hadamard(struct ggml_tensor * dst, int ith, int nth);
-
 float iqk_exp_with_thresh(int n, float * logits, float max, float min);
 
 bool iqk_ssm_conv4(int nr, int nc, int nt,

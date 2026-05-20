@@ -622,7 +622,6 @@ extern "C" {
         GGML_OP_MOE_FUSED_UP_GATE,
         GGML_OP_MUL_MULTI_ADD,
         GGML_OP_HADAMARD,
-        GGML_OP_DEQUANT_HADAMARD,
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -1116,13 +1115,8 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // Source may be F32, F16, or a supported quantized type; output is always F32.
     GGML_API struct ggml_tensor * ggml_hadamard(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   n);
-
-    // Fused dequant + Hadamard; equivalent to ggml_hadamard(ggml_cast(a, F32), n).
-    GGML_API struct ggml_tensor * ggml_dequant_hadamard(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n);
