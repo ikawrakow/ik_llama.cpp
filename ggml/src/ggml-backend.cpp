@@ -2697,7 +2697,14 @@ void ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct gg
 ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node) {
     int backend_index = tensor_backend_id(node);
     if (backend_index == -1) {
-        return NULL;
+        if (node->buffer && node->buffer->buft) {
+            for (int i = 0; i < sched->n_backends; ++i) {
+                if (sched->backends[i]->iface.get_default_buffer_type(sched->backends[i]) == node->buffer->buft) {
+                    return sched->backends[i];
+                }
+            }
+        }
+        return nullptr;
     }
     return sched->backends[backend_index];
 }
