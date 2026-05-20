@@ -482,6 +482,8 @@ bool server_context::load_model(const gpt_params& params_) {
         params_dft.cache_type_k = params_base.speculative.cache_type_k.empty() ? params_base.cache_type_k : params_base.speculative.cache_type_k;
         params_dft.cache_type_v = params_base.speculative.cache_type_v.empty() ? params_base.cache_type_v : params_base.speculative.cache_type_v;
         params_dft.flash_attn   = params_base.flash_attn;
+        params_dft.k_cache_hadamard = params_base.k_cache_hadamard;
+        params_dft.v_cache_hadamard = params_base.v_cache_hadamard;
         if (!params_base.speculative.params.empty()) {
             auto [argc, argv] = parse_command_line("llama-server " + params_base.speculative.params);
             if (!gpt_params_parse(argc, argv, params_dft)) {

@@ -936,30 +936,25 @@ static bool llama_kv_cache_init(
                 cache.v_l.push_back(kvt);
             }
             // Per-device replicas of the compressed latent KV cache (n_device from wo's split).
-            if (replicate_mla && !is_mtp_tail_layer) {
+            if (replicate_mla && !is_mtp_tail_layer && model.layers[i].wo && model.layers[i].wo->extra) {
                 auto wo = model.layers[i].wo;
-                if (wo && wo->extra) {
-                    auto extra_wo = (const ggml_split_tensor_t *)wo->extra;
-                    int n_device = extra_wo->n_device;
-                    auto & repl_k_l = cache.replicated_k_l.emplace_back();
-                    repl_k_l.tensor_splits.resize(n_device, nullptr);
-                    for (int is = 0; is < n_device; ++is) {
-                        if (!extra_wo->splits[is]) continue;
-                        ggml_tensor * rkv = ggml_new_tensor_2d(ctx, primary_kv_type,
-                                kv_lora_rank + n_embd_head_qk_rope, kv_size);
-                        auto split_name = std::string("cache_k_l") + std::to_string(i) + '.' + std::to_string(is);
-                        ggml_set_name(rkv, split_name.c_str());
-                        repl_k_l.tensor_splits[is] = rkv;
-                        mem_split[is] += ggml_nbytes(rkv);
-                    }
-                    repl_k_l.ggml.n_device  = n_device;
-                    repl_k_l.ggml.split_dim = -1;
-                    repl_k_l.ggml.splits    = repl_k_l.tensor_splits.data();
-                    kv->extra = (void *)&repl_k_l.ggml;
-                } else {
-                    GGML_ABORT("MLA layer %d: wo lacks split metadata under -sm graph "
-                               "(distribute_mla_tensors_for_split_mode_graph not run?)", i);
+                auto extra_wo = (const ggml_split_tensor_t *)wo->extra;
+                int n_device = extra_wo->n_device;
+                auto & repl_k_l = cache.replicated_k_l.emplace_back();
+                repl_k_l.tensor_splits.resize(n_device, nullptr);
+                for (int is = 0; is < n_device; ++is) {
+                    if (!extra_wo->splits[is]) continue;
+                    ggml_tensor * rkv = ggml_new_tensor_2d(ctx, primary_kv_type,
+                            kv_lora_rank + n_embd_head_qk_rope, kv_size);
+                    auto split_name = std::string("cache_k_l") + std::to_string(i) + '.' + std::to_string(is);
+                    ggml_set_name(rkv, split_name.c_str());
+                    repl_k_l.tensor_splits[is] = rkv;
+                    mem_split[is] += ggml_nbytes(rkv);
                 }
+                repl_k_l.ggml.n_device  = n_device;
+                repl_k_l.ggml.split_dim = -1;
+                repl_k_l.ggml.splits    = repl_k_l.tensor_splits.data();
+                kv->extra = (void *)&repl_k_l.ggml;
             }
             n_mla++;
         }
@@ -1640,7 +1635,7 @@ static void restore_recurrent_cache_tensors(int step, ggml_backend_sched_t sched
         size_t ssm_bytes, size_t conv_bytes,
         ggml_tensor * s_l, ggml_tensor * per_step_ssm, ggml_tensor * per_step_conv,
         std::unordered_set<ggml_backend_t> & backends_to_sync) {
-    auto dst_backend = ggml_backend_sched_get_backend(sched, ggml_backend_sched_get_backend_idx(sched, s_l->buffer));
+    auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l);
     auto dst = *s_l;
     dst.ne[0] = ssm_bytes/sizeof(float);
     dst.nb[1] = dst.nb[2] = dst.nb[3] = ssm_bytes + conv_bytes;
@@ -2975,12 +2970,6 @@ static bool llm_load_tensors(
         const bool unsupported_gemma_split =
             model.arch == LLM_ARCH_GEMMA4_MTP ||
             (model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0);
-        const bool is_mla_arch =
-            model.arch == LLM_ARCH_DEEPSEEK2 ||
-            model.arch == LLM_ARCH_GLM_DSA ||
-            model.arch == LLM_ARCH_MISTRAL4;
-        const bool incompatible_loader_opts = is_mla_arch &&
-            (ml.ncmoe > 0 || ml.repack_tensors || ml.merge_up_gate_exps || ml.tensor_buft_overrides);
 
         if (unsupported_gemma_split) {
             LLAMA_LOG_WARN("\n=========================================================\n");
@@ -2989,16 +2978,6 @@ static bool llm_load_tensors(
                                                       : "this Gemma4 variant");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
-            split_mode = LLAMA_SPLIT_MODE_LAYER;
-        } else if (incompatible_loader_opts) {
-            const char * bad_flag = ml.ncmoe > 0           ? "-ncmoe | --n-cpu-moe"
-                                  : ml.repack_tensors      ? "-rtr | --run-time-repack"
-                                  : ml.merge_up_gate_exps  ? "-muge | --merge-up-gate-experts"
-                                                           : "-ot | --override-tensor";
-            LLAMA_LOG_WARN("\n=======================================================\n");
-            LLAMA_LOG_WARN("Split mode 'graph' is not compatible with %s\n", bad_flag);
-            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
-            LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
         } else if (!is_model_split_supported(model)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
