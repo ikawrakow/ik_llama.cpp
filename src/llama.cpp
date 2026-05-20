@@ -3334,11 +3334,12 @@ static bool llm_load_tensors(
 // simple CPU/GPU placement, and compare CPU-resident repackable bytes against
 // ~90% of available memory.
 //
-// The decision is tri-state-plus-one (KEEP / DISABLE / NOT_APPLICABLE / UNKNOWN).
-// On dense models the swap-bound MoE policy does not apply (NOT_APPLICABLE).
-// On uncertainty (probe exception, OS query failure, unsupported placement)
-// the policy is safety-first: disable repack with a WARN log and preserve the
-// user/default mmap setting.
+// The decision is tri-state (KEEP / DISABLE / UNKNOWN). DISABLE also fires
+// when no CPU-resident tensor would actually be repacked, since keeping
+// repack=true in that case only forces the loader's mmap=false coupling
+// without any benefit. On uncertainty (probe exception, OS query failure,
+// unsupported placement) the policy is safety-first: disable repack with a
+// WARN log and preserve the user/default mmap setting.
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -3559,10 +3560,9 @@ static uint64_t llama_get_available_ram_bytes() {
 }
 
 enum class llama_rtr_auto_decision {
-    KEEP,           // Repack is safe for this load.
-    DISABLE,        // Repack is unsafe; turn it off, log INFO with reason.
-    NOT_APPLICABLE, // Policy does not apply (dense non-MoE); keep repack.
-    UNKNOWN,        // Could not determine; safety-first disable, log WARN.
+    KEEP,    // Repack is safe for this load.
+    DISABLE, // Repack is unsafe or has no work to do; turn it off, log INFO.
+    UNKNOWN, // Could not determine; safety-first disable, log WARN.
 };
 
 struct llama_rtr_auto_override {
@@ -3720,6 +3720,33 @@ static llama_rtr_auto_decision llama_rtr_auto_should_disable(
         return llama_rtr_auto_decision::KEEP;
     }
 
+    // Early UNKNOWN exits — modes whose placement we cannot accurately
+    // simulate from probe metadata alone. Resolve before the probe so we
+    // do not pay the metadata-load cost just to bail out anyway.
+    if (params.fit) {
+        reason = "--fit changes tensor placement during load";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+    if (params.merge_qkv || params.merge_up_gate_exps) {
+        reason = "merged tensor placement is resolved during load";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+    if (params.split_mode == LLAMA_SPLIT_MODE_ATTN || params.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        reason = "split-mode graph/attention tensor placement is not modeled";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
+    const uint64_t avail_ram = llama_get_available_ram_bytes();
+    if (avail_ram == 0) {
+        reason = "could not query available memory";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
+    std::vector<llama_rtr_auto_override> overrides;
+    if (!llama_rtr_auto_compile_overrides(params.tensor_buft_overrides, overrides, reason)) {
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
     try {
         // Metadata-only probe: mmap + no repack to inspect arch/hparams cheaply.
         llama_model_loader probe(
@@ -3739,37 +3766,6 @@ static llama_rtr_auto_decision llama_rtr_auto_should_disable(
         probe_model.hparams.vocab_only = params.vocab_only;
         llm_load_arch(probe, probe_model);
         llm_load_hparams(probe, probe_model);
-
-        const bool is_moe = probe_model.hparams.n_expert > 0
-                         && probe_model.hparams.n_expert_used > 0;
-        if (!is_moe) {
-            reason = "dense model";
-            return llama_rtr_auto_decision::NOT_APPLICABLE;
-        }
-
-        if (params.fit) {
-            reason = "--fit changes tensor placement during load";
-            return llama_rtr_auto_decision::UNKNOWN;
-        }
-        if (params.merge_qkv || params.merge_up_gate_exps) {
-            reason = "merged tensor placement is resolved during load";
-            return llama_rtr_auto_decision::UNKNOWN;
-        }
-        if (params.split_mode == LLAMA_SPLIT_MODE_ATTN || params.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-            reason = "split-mode graph/attention tensor placement is not modeled";
-            return llama_rtr_auto_decision::UNKNOWN;
-        }
-
-        const uint64_t avail_ram = llama_get_available_ram_bytes();
-        if (avail_ram == 0) {
-            reason = "could not query available memory";
-            return llama_rtr_auto_decision::UNKNOWN;
-        }
-
-        std::vector<llama_rtr_auto_override> overrides;
-        if (!llama_rtr_auto_compile_overrides(params.tensor_buft_overrides, overrides, reason)) {
-            return llama_rtr_auto_decision::UNKNOWN;
-        }
 
         uint64_t cpu_total_bytes      = 0;
         uint64_t cpu_repackable_bytes = 0;
@@ -3794,6 +3790,9 @@ static llama_rtr_auto_decision llama_rtr_auto_should_disable(
             }
         }
 
+        // If no CPU-resident tensor would actually be repacked, keeping
+        // repack=true buys nothing but still forces the loader's mmap=false
+        // coupling. Strictly safer to disable in this case.
         if (cpu_repackable_bytes == 0) {
             reason = "no CPU-resident tensors need repacking";
             return llama_rtr_auto_decision::DISABLE;
@@ -3811,17 +3810,12 @@ static llama_rtr_auto_decision llama_rtr_auto_should_disable(
             return llama_rtr_auto_decision::DISABLE;
         }
 
-        if (cpu_repackable_bytes <= threshold) {
-            LLAMA_LOG_INFO("%s: --run-time-repack auto: CPU-resident repackable %.1f GiB, total CPU-resident %.1f GiB, available %.1f GiB\n",
-                    __func__,
-                    cpu_repackable_bytes / 1073741824.0,
-                    cpu_total_bytes / 1073741824.0,
-                    avail_ram / 1073741824.0);
-            return llama_rtr_auto_decision::KEEP;
-        }
-
-        reason = "internal policy fallthrough";
-        return llama_rtr_auto_decision::UNKNOWN;
+        LLAMA_LOG_INFO("%s: --run-time-repack auto: CPU-resident repackable %.1f GiB, total CPU-resident %.1f GiB, available %.1f GiB\n",
+                __func__,
+                cpu_repackable_bytes / 1073741824.0,
+                cpu_total_bytes / 1073741824.0,
+                avail_ram / 1073741824.0);
+        return llama_rtr_auto_decision::KEEP;
     } catch (const std::exception & e) {
         reason = format("probe failed (%s)", e.what());
         return llama_rtr_auto_decision::UNKNOWN;
@@ -3851,12 +3845,6 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                     LLAMA_LOG_WARN("%s: --run-time-repack auto: disabled (uncertainty: %s)\n",
                             __func__, reason.c_str());
                     llama_rtr_auto_log_mmap_override_note(params);
-                    break;
-                case llama_rtr_auto_decision::NOT_APPLICABLE:
-                    // Policy does not apply (e.g. dense model). Leave
-                    // repack and use_mmap untouched.
-                    LLAMA_LOG_INFO("%s: --run-time-repack auto: policy does not apply (%s)\n",
-                            __func__, reason.c_str());
                     break;
                 case llama_rtr_auto_decision::KEEP:
                     // Auto keeps repack enabled — match the legacy `-rtr 1`
