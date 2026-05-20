@@ -174,19 +174,10 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
                     row_size_cache, cache_local->nb[2], 0);
             cb(kv_cache_rope_view, "kv_cache_rope_pp", il_id);
 
-            // Hadamard cache was applied per 64-block during write; un-Hadamard the
-            // read views so the materialize mul_mats see the original latents. Hadamard
-            // requires F32 input, so dequantize the cache views first when the cache is
-            // quantized. Hadamard is its own inverse (the impl handles the scale).
+            // Un-Hadamard the cache views via the fused dequant+hadamard kernel.
             if (cparams.k_cache_hadamard) {
-                ggml_tensor * kn_f32 = kv_cache_nope->type == GGML_TYPE_F32
-                        ? kv_cache_nope
-                        : ggml_cast(ctx0, kv_cache_nope, GGML_TYPE_F32);
-                ggml_tensor * kr_f32 = kv_cache_rope_view->type == GGML_TYPE_F32
-                        ? kv_cache_rope_view
-                        : ggml_cast(ctx0, kv_cache_rope_view, GGML_TYPE_F32);
-                kv_cache_nope      = ggml_hadamard(ctx0, kn_f32, 64);
-                kv_cache_rope_view = ggml_hadamard(ctx0, kr_f32, 64);
+                kv_cache_nope      = ggml_dequant_hadamard(ctx0, kv_cache_nope,      64);
+                kv_cache_rope_view = ggml_dequant_hadamard(ctx0, kv_cache_rope_view, 64);
             }
 
             // CUDA quantized-cache + REPEAT/CONCAT/CPY has known issues, so force F16 here.
