@@ -53,35 +53,6 @@ def write_string(f, s: bytes) -> None:
     f.write(s)
 
 
-def write_val(f, val, vtype: GGUFValueType) -> None:
-    if vtype == GGUFValueType.UINT8:
-        f.write(struct.pack("B", val))
-    elif vtype == GGUFValueType.INT8:
-        f.write(struct.pack("b", val))
-    elif vtype == GGUFValueType.UINT16:
-        f.write(struct.pack("<H", val))
-    elif vtype == GGUFValueType.INT16:
-        f.write(struct.pack("<h", val))
-    elif vtype == GGUFValueType.UINT32:
-        f.write(struct.pack("<I", val))
-    elif vtype == GGUFValueType.INT32:
-        f.write(struct.pack("<i", val))
-    elif vtype == GGUFValueType.UINT64:
-        f.write(struct.pack("<Q", val))
-    elif vtype == GGUFValueType.INT64:
-        f.write(struct.pack("<q", val))
-    elif vtype == GGUFValueType.FLOAT32:
-        f.write(struct.pack("<f", val))
-    elif vtype == GGUFValueType.FLOAT64:
-        f.write(struct.pack("<d", val))
-    elif vtype == GGUFValueType.BOOL:
-        f.write(struct.pack("B", 1 if val else 0))
-    elif vtype == GGUFValueType.STRING:
-        write_string(f, val.encode("utf-8") if isinstance(val, str) else val)
-    else:
-        raise ValueError(f"Unsupported type: {vtype}")
-
-
 # Row meta size for quantized types (from ggml type traits)
 _ROW_META_SIZES = {
     144: 4,   # GGML_TYPE_IQ4_KS
@@ -115,20 +86,16 @@ def _get_arch_prefix(reader: GGUFReader) -> str:
     """Get the architecture prefix from metadata (e.g., 'qwen35', 'qwen3next')."""
     arch = reader.fields.get("general.architecture")
     if arch:
-        # GGUF string fields have parts: [key_len, key, type, str_len, value]
-        # The last part is the actual string value
         if len(arch.parts) >= 2:
             last_part = arch.parts[-1]
             data = bytes(last_part)
             try:
                 decoded = data.decode("utf-8")
-                # The value should be a simple architecture name
                 cleaned = "".join(c for c in decoded if c.isalnum() or c in "._-")
                 if cleaned and len(cleaned) >= 3:
                     return cleaned
             except UnicodeDecodeError:
                 pass
-        # Fallback: try all parts
         for part in reversed(arch.parts):
             data = bytes(part)
             try:
@@ -149,7 +116,6 @@ def _get_block_count(reader: GGUFReader) -> int:
             if isinstance(val, list) and len(val) == 1:
                 return int(val[0])
             return int(val)
-    # Fallback: count from tensors
     return max(
         int(t.name.split(".")[1])
         for t in reader.tensors
@@ -178,10 +144,7 @@ def _rename_tensor(name: str, old_idx: int, new_idx: int) -> str:
 
 
 def extract_mtp(source_path: str, output_path: str) -> dict:
-    """Extract MTP/NextN tensors from a model that has them.
-    
-    Returns the source model's KV data info for use in merging.
-    """
+    """Extract MTP/NextN tensors from a model that has them."""
     reader = GGUFReader(source_path, "r")
     logger.info("Loaded %d tensors from %s", len(reader.tensors), source_path)
 
@@ -195,11 +158,9 @@ def extract_mtp(source_path: str, output_path: str) -> dict:
     if nextn_layers == 0:
         raise ValueError("Source model does not have MTP/NextN layers (nextn_predict_layers=0)")
 
-    # Find the MTP layer(s) — they are the last 'nextn_layers' layers
     mtp_start_layer = block_count - nextn_layers
     logger.info("MTP layers start at layer %d", mtp_start_layer)
 
-    # Collect ALL tensors from MTP layers (both regular and nextn.*)
     mtp_tensors: list[ReaderTensor] = []
     for t in reader.tensors:
         m = re.match(r"blk\.(\d+)\.", t.name)
@@ -215,30 +176,12 @@ def extract_mtp(source_path: str, output_path: str) -> dict:
     for t in mtp_tensors:
         logger.info("  %s", t.name)
 
-    # Extract source KV data bytes
-    if len(reader.tensors) == 0:
-        raise ValueError("No tensors found in source file")
-    kv_data_end = reader.tensors[0].field.offset
-    kv_data_size = kv_data_end - 24
-    with open(source_path, "rb") as f:
-        f.seek(24)
-        source_kv_data = f.read(kv_data_size)
-    # Get actual KV count from header (reader.fields includes synthetic GGUF.* keys)
-    with open(source_path, "rb") as f:
-        f.seek(16)  # After magic (4) + version (4) + tensor_count (8)
-        actual_kv_count = struct.unpack("<Q", f.read(8))[0]
-    logger.info("Extracted source KV data: %d bytes, %d keys (actual from header)", kv_data_size, actual_kv_count)
-
-    # Save extracted MTP tensors as numpy arrays in a Python pickle-like format
-    # This avoids the complexity of writing a valid GGUF file
     import pickle
     mtp_data = {
         "arch_prefix": arch_prefix,
         "block_count": block_count,
         "nextn_predict_layers": nextn_layers,
         "mtp_start_layer": mtp_start_layer,
-        "source_kv_data": source_kv_data,
-        "source_kv_count": actual_kv_count,
         "tensors": [],
     }
     for t in mtp_tensors:
@@ -257,8 +200,7 @@ def extract_mtp(source_path: str, output_path: str) -> dict:
     return mtp_data
 
 
-def merge_mtp(mtp_path: str, target_path: str, output_path: str, 
-              source_kv_data: bytes | None = None, source_kv_count: int | None = None) -> None:
+def merge_mtp(mtp_path: str, target_path: str, output_path: str) -> None:
     """Merge MTP/NextN tensors into a target model."""
     import pickle
 
@@ -280,12 +222,9 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
     if target_nextn > 0:
         logger.warning("Target model already has MTP layers (nextn_predict_layers=%d)", target_nextn)
 
-    # Determine the new layer index for MTP tensors
-    # MTP layers are appended after the last regular layer
     new_mtp_layer_idx = target_block_count
     logger.info("MTP tensors will be placed at layer %d", new_mtp_layer_idx)
 
-    # Rename MTP tensors to the new layer index
     mtp_tensors: list[tuple[str, dict]] = []
     for t in mtp_data["tensors"]:
         m = re.match(r"blk\.(\d+)\.", t["name"])
@@ -296,8 +235,6 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
         else:
             mtp_tensors.append((t["name"], t))
 
-    # Build output tensor list: target tensors + renamed MTP tensors
-    # Target tensors are ReaderTensor objects, MTP tensors are dicts
     output_target_tensors = [(t.name, t) for t in target_reader.tensors]
     output_mtp_tensors = mtp_tensors
 
@@ -305,16 +242,9 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
                 len(output_target_tensors) + len(output_mtp_tensors),
                 len(target_reader.tensors), len(mtp_tensors))
 
-    # Use source KV data if available, otherwise fall back to target's
-    if source_kv_data is None:
-        source_kv_data = mtp_data.get("source_kv_data")
-    if source_kv_count is None:
-        source_kv_count = mtp_data.get("source_kv_count")
-
-    # Write output file
+    # Use target model's original KV data and patch only necessary fields
     with open(target_path, "rb") as fin:
         with open(output_path, "wb") as fout:
-            # Read original header
             magic = fin.read(4)
             version = struct.unpack("<I", fin.read(4))[0]
             orig_tensor_count = struct.unpack("<Q", fin.read(8))[0]
@@ -323,168 +253,113 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
             logger.info("Original header: version=%d, tensors=%d, kv=%d",
                         version, orig_tensor_count, kv_count)
 
-            if source_kv_data is not None and source_kv_count is not None:
-                # Use source model's KV data to ensure same metadata keys as source
-                logger.info("Using source model KV data: %d keys", source_kv_count)
-                new_kv_count = source_kv_count
-                kv_data = bytearray(source_kv_data)
-                
-                # Update block_count in source KV data to match target + 1
-                # The source has block_count=65, target has 64, merged should have 65
-                # Since we're using source KV data, block_count is already 65
-                # But we need to verify it matches
-                logger.info("Using source metadata (block_count already correct for merged model)")
-            else:
-                # Fall back to target KV data + patches
-                logger.info("Using target model KV data with patches")
-                has_nextn = any("nextn_predict_layers" in key.lower() for key in target_reader.fields)
-                new_kv_count = kv_count + (0 if has_nextn else 1)
-                if not has_nextn:
-                    logger.info("Will add nextn_predict_layers field, kv_count: %d -> %d", kv_count, new_kv_count)
+            # Read original KV data
+            if len(target_reader.tensors) == 0:
+                raise ValueError("No tensors found in target file")
+            kv_data_end = target_reader.tensors[0].field.offset
+            kv_data_size = kv_data_end - 24
+            fin.seek(24)
+            kv_data = bytearray(fin.read(kv_data_size))
 
-                # Find KV data end
-                if len(target_reader.tensors) == 0:
-                    raise ValueError("No tensors found in target file")
+            # Update block_count metadata
+            block_count_updated = False
+            for key, field in target_reader.fields.items():
+                if "block_count" in key.lower():
+                    value_offset = field.offset - 24
+                    for part in field.parts[:-1]:
+                        value_offset += part.nbytes
+                    value_part = field.parts[-1]
+                    value_size = value_part.nbytes
+                    old_val = int(value_part.tolist()[0])
+                    new_val = old_val + 1
 
-                kv_data_end = target_reader.tensors[0].field.offset
-                kv_data_size = kv_data_end - 24
-
-                logger.info("KV data section: offset=24, size=%d, end=%d",
-                            kv_data_size, kv_data_end)
-
-                fin.seek(24)
-                kv_data = bytearray(fin.read(kv_data_size))
-
-                if len(kv_data) != kv_data_size:
-                    raise ValueError(f"Could not read full KV data: expected {kv_data_size}, got {len(kv_data)}")
-
-                # Update block_count metadata
-                block_count_updated = False
-                for key, field in target_reader.fields.items():
-                    if "block_count" in key.lower():
-                        value_offset = field.offset - 24
-                        for part in field.parts[:-1]:
-                            value_offset += part.nbytes
-                        value_part = field.parts[-1]
-                        value_size = value_part.nbytes
-                        old_val = int(value_part.tolist()[0])
-                        new_val = old_val + 1  # Add 1 MTP layer
-
-                        if value_offset < 0 or value_offset + value_size > len(kv_data):
-                            logger.error("Field %s: value offset %d out of bounds", key, value_offset)
-                            continue
-
-                        if value_size == 4:
-                            current_val = struct.unpack_from("<I", kv_data, value_offset)[0]
-                        elif value_size == 8:
-                            current_val = struct.unpack_from("<Q", kv_data, value_offset)[0]
-                        else:
-                            logger.warning("Field %s: unsupported value size %d, skipping", key, value_size)
-                            continue
-
-                        if current_val != old_val:
-                            logger.warning("Field %s: value mismatch! expected %d, found %d",
-                                           key, old_val, current_val)
-                            continue
-
-                        logger.info("Updating metadata %s: %d -> %d", key, old_val, new_val)
-
-                        if value_size == 4:
-                            struct.pack_into("<I", kv_data, value_offset, new_val)
-                        elif value_size == 8:
-                            struct.pack_into("<Q", kv_data, value_offset, new_val)
-
-                        block_count_updated = True
-
-                if not block_count_updated:
-                    logger.warning("No block_count field was updated!")
-
-                # Update or add nextn_predict_layers metadata
-                nextn_updated = False
-                for key, field in target_reader.fields.items():
-                    if "nextn_predict_layers" in key.lower():
-                        value_offset = field.offset - 24
-                        for part in field.parts[:-1]:
-                            value_offset += part.nbytes
-                        value_part = field.parts[-1]
-                        value_size = value_part.nbytes
-                        old_val = int(value_part.tolist()[0])
-                        new_val = old_val + mtp_data["nextn_predict_layers"]
-
-                        if value_offset < 0 or value_offset + value_size > len(kv_data):
-                            logger.error("Field %s: value offset %d out of bounds", key, value_offset)
-                            continue
-
-                        if value_size == 4:
-                            current_val = struct.unpack_from("<I", kv_data, value_offset)[0]
-                        elif value_size == 8:
-                            current_val = struct.unpack_from("<Q", kv_data, value_offset)[0]
-                        else:
-                            logger.warning("Field %s: unsupported value size %d, skipping", key, value_size)
-                            continue
-
-                        if current_val != old_val:
-                            logger.warning("Field %s: value mismatch! expected %d, found %d",
-                                           key, old_val, current_val)
-                            continue
-
-                        logger.info("Updating metadata %s: %d -> %d", key, old_val, new_val)
-
-                        if value_size == 4:
-                            struct.pack_into("<I", kv_data, value_offset, new_val)
-                        elif value_size == 8:
-                            struct.pack_into("<Q", kv_data, value_offset, new_val)
-
-                        nextn_updated = True
-
-                if not nextn_updated:
-                    # Target model doesn't have nextn_predict_layers — we need to add it
-                    logger.info("Adding nextn_predict_layers metadata (was missing)")
-                    # Append the new KV field to the KV data
-                    # arch_prefix might be bytes, so decode it properly
-                    if isinstance(target_arch, bytes):
-                        arch_prefix = target_arch.decode("utf-8")
-                    elif isinstance(target_arch, str):
-                        arch_prefix = target_arch
+                    if value_size == 4:
+                        current_val = struct.unpack_from("<I", kv_data, value_offset)[0]
+                    elif value_size == 8:
+                        current_val = struct.unpack_from("<Q", kv_data, value_offset)[0]
                     else:
-                        # Handle numpy array or list
-                        arch_prefix = bytes(target_arch).decode("utf-8") if hasattr(target_arch, '__iter__') else "qwen35"
-                    new_key = f"{arch_prefix}.nextn_predict_layers".encode("utf-8")
-                    # Manually append string (length + bytes)
-                    kv_data.extend(struct.pack("<Q", len(new_key)))
-                    kv_data.extend(new_key)
-                    kv_data.extend(struct.pack("<I", int(GGUFValueType.UINT32)))
-                    kv_data.extend(struct.pack("<I", mtp_data["nextn_predict_layers"]))
-                    nextn_updated = True
-                    # Note: kv_count was already incremented in the header above
+                        continue
 
-                if not nextn_updated:
-                    logger.warning("Failed to add nextn_predict_layers! Model may not recognize MTP layers.")
+                    if current_val != old_val:
+                        logger.warning("Field %s: value mismatch! expected %d, found %d",
+                                       key, old_val, current_val)
+                        continue
+
+                    logger.info("Updating metadata %s: %d -> %d", key, old_val, new_val)
+
+                    if value_size == 4:
+                        struct.pack_into("<I", kv_data, value_offset, new_val)
+                    elif value_size == 8:
+                        struct.pack_into("<Q", kv_data, value_offset, new_val)
+
+                    block_count_updated = True
+
+            if not block_count_updated:
+                logger.warning("No block_count field was updated!")
+
+            # Update or add nextn_predict_layers metadata
+            nextn_updated = False
+            for key, field in target_reader.fields.items():
+                if "nextn_predict_layers" in key.lower():
+                    value_offset = field.offset - 24
+                    for part in field.parts[:-1]:
+                        value_offset += part.nbytes
+                    value_part = field.parts[-1]
+                    value_size = value_part.nbytes
+                    old_val = int(value_part.tolist()[0])
+                    new_val = old_val + mtp_data["nextn_predict_layers"]
+
+                    if value_size == 4:
+                        current_val = struct.unpack_from("<I", kv_data, value_offset)[0]
+                    elif value_size == 8:
+                        current_val = struct.unpack_from("<Q", kv_data, value_offset)[0]
+                    else:
+                        continue
+
+                    if current_val != old_val:
+                        logger.warning("Field %s: value mismatch! expected %d, found %d",
+                                       key, old_val, current_val)
+                        continue
+
+                    logger.info("Updating metadata %s: %d -> %d", key, old_val, new_val)
+
+                    if value_size == 4:
+                        struct.pack_into("<I", kv_data, value_offset, new_val)
+                    elif value_size == 8:
+                        struct.pack_into("<Q", kv_data, value_offset, new_val)
+
+                    nextn_updated = True
+
+            if not nextn_updated:
+                logger.info("Adding nextn_predict_layers metadata (was missing)")
+                arch_prefix = target_arch
+                new_key = f"{arch_prefix}.nextn_predict_layers".encode("utf-8")
+                kv_data.extend(struct.pack("<Q", len(new_key)))
+                kv_data.extend(new_key)
+                kv_data.extend(struct.pack("<I", int(GGUFValueType.UINT32)))
+                kv_data.extend(struct.pack("<I", mtp_data["nextn_predict_layers"]))
+                kv_count += 1
+                nextn_updated = True
+
+            if not nextn_updated:
+                logger.warning("Failed to add nextn_predict_layers!")
 
             # Write new header
             fout.write(magic)
             fout.write(struct.pack("<I", version))
             fout.write(struct.pack("<Q", len(output_target_tensors) + len(output_mtp_tensors)))
-            fout.write(struct.pack("<Q", new_kv_count))
+            fout.write(struct.pack("<Q", kv_count))
 
             fout.write(kv_data)
 
-            # Alignment
             alignment = target_reader.alignment
             logger.info("Using alignment=%d", alignment)
 
-            # NOTE: GGUF format does NOT have padding between KV data and tensor info table.
-            # The tensor info table starts immediately after the last KV field.
-            # Padding is only added after the tensor info table (before tensor data).
-
-            # Build offset map - use relative offsets within the data section
+            # Build offset map
             offset_map: dict[str, int] = {}
-
-            # Map target tensors to their relative offsets within the data section
             for name, t in output_target_tensors:
                 offset_map[name] = t.data_offset - target_reader.data_offset
 
-            # Find end of original tensor data
             orig_data_end = 0
             for t in target_reader.tensors:
                 t_end = t.data_offset + compute_ggml_nbytes(t)
@@ -492,14 +367,12 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
                     orig_data_end = t_end
             logger.info("Original data end (including padding): %d", orig_data_end)
 
-            # New MTP tensors get relative offsets starting from after original data
             current_offset = orig_data_end - target_reader.data_offset
             padding = (alignment - (current_offset % alignment)) % alignment
             current_offset += padding
 
             for name, t_dict in output_mtp_tensors:
                 offset_map[name] = current_offset
-                # Compute nbytes for dict-based tensor
                 tensor_type = t_dict["tensor_type"]
                 shape = t_dict["shape"]
                 n_bytes = t_dict["n_bytes"]
@@ -517,28 +390,21 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
             logger.info("Original data size: %d, new total data size: %d",
                         orig_data_end - target_reader.data_offset, current_offset)
 
-            # Write tensor info table - offsets must be absolute file offsets
-            # First compute the absolute data start offset
-            # The tensor data section starts after: KV data + tensor info table + padding
-            # We need to compute the tensor info table size first
-
             # Compute tensor info table size
             ti_size = 0
             for name, t in output_target_tensors:
-                ti_size += 8 + len(name.encode("utf-8"))  # key
-                ti_size += 4  # n_dims
-                ti_size += len(t.shape) * 8  # shape
-                ti_size += 4  # type
-                ti_size += 8  # offset
+                ti_size += 8 + len(name.encode("utf-8"))
+                ti_size += 4
+                ti_size += len(t.shape) * 8
+                ti_size += 4
+                ti_size += 8
             for name, t_dict in output_mtp_tensors:
-                ti_size += 8 + len(name.encode("utf-8"))  # key
-                ti_size += 4  # n_dims
-                ti_size += len(t_dict["shape"]) * 8  # shape
-                ti_size += 4  # type
-                ti_size += 8  # offset
+                ti_size += 8 + len(name.encode("utf-8"))
+                ti_size += 4
+                ti_size += len(t_dict["shape"]) * 8
+                ti_size += 4
+                ti_size += 8
 
-            # Tensor data starts at: KV data end + tensor info table + padding
-            # NOTE: No padding between KV data and tensor info table
             tensor_info_start = 24 + len(kv_data)
             tensor_info_end = tensor_info_start + ti_size
             data_offset_padding = (alignment - (tensor_info_end % alignment)) % alignment
@@ -547,7 +413,7 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
             logger.info("Tensor info table: offset=%d, size=%d", tensor_info_start, ti_size)
             logger.info("Tensor data starts at absolute offset %d", data_start_abs)
 
-            # Now write tensor info with RELATIVE offsets (relative to data section start)
+            # Write tensor info with RELATIVE offsets
             for name, t in output_target_tensors:
                 write_string(fout, name.encode("utf-8"))
                 shape = list(t.shape)
@@ -574,7 +440,7 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
             if padding > 0:
                 fout.write(b"\x00" * padding)
 
-            # Now copy original tensor data
+            # Copy original tensor data
             new_data_start = fout.tell()
             logger.info("Tensor data section starts at offset %d (expected %d)", new_data_start, data_start_abs)
 
@@ -597,9 +463,7 @@ def merge_mtp(mtp_path: str, target_path: str, output_path: str,
                     padding = expected_offset - current_pos
                     if padding > 0:
                         fout.write(b"\x00" * padding)
-                # Write numpy array data
                 t_dict["data"].tofile(fout)
-                # Add padding if needed for quantized types
                 tensor_type = t_dict["tensor_type"]
                 shape = t_dict["shape"]
                 n_bytes = t_dict["n_bytes"]
@@ -626,10 +490,8 @@ def extract_merge(source_path: str, target_path: str, output_path: str) -> None:
         mtp_temp_path = tmp.name
 
     try:
-        mtp_data = extract_mtp(source_path, mtp_temp_path)
-        merge_mtp(mtp_temp_path, target_path, output_path,
-                  source_kv_data=mtp_data.get("source_kv_data"),
-                  source_kv_count=mtp_data.get("source_kv_count"))
+        extract_mtp(source_path, mtp_temp_path)
+        merge_mtp(mtp_temp_path, target_path, output_path)
     finally:
         if os.path.exists(mtp_temp_path):
             os.remove(mtp_temp_path)
@@ -641,18 +503,15 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Extract command
     extract_parser = subparsers.add_parser("extract", help="Extract MTP layers from a model")
     extract_parser.add_argument("source", type=str, help="Source GGUF model with MTP layers")
     extract_parser.add_argument("output", type=str, help="Output file for extracted MTP layers")
 
-    # Merge command
     merge_parser = subparsers.add_parser("merge", help="Merge extracted MTP layers into a model")
     merge_parser.add_argument("mtp", type=str, help="Extracted MTP layers file")
     merge_parser.add_argument("target", type=str, help="Target GGUF model without MTP")
     merge_parser.add_argument("output", type=str, help="Output GGUF model with MTP")
 
-    # Extract-merge command
     em_parser = subparsers.add_parser("extract-merge", help="Extract MTP from source and merge into target")
     em_parser.add_argument("source", type=str, help="Source GGUF model with MTP layers")
     em_parser.add_argument("target", type=str, help="Target GGUF model without MTP")
