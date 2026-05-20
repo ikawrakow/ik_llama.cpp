@@ -177,9 +177,8 @@ struct llama_layer {
     struct ggml_tensor * wkq_a_mqa = nullptr;
     struct ggml_tensor * wkv_b = nullptr;
     struct ggml_tensor * wk_b = nullptr;
-    // wk_b in pp_opt-favoring layout [kv_lora_rank, qk_nope, n_head]. Materialized in
-    // llm_prepare_mla under -sm graph/attn so the pp_opt K-materialize path avoids a
-    // per-call F16 cast + permute + ggml_cont on wk_b. Null otherwise.
+    // wk_b in pp_opt-favoring layout [kv_lora_rank, qk_nope, n_head], serialized
+    // as "attn_kv_b.weight". Materialized under -sm graph + mla>1; mla=1 skips.
     struct ggml_tensor * wk_b_pp = nullptr;
     struct ggml_tensor * wv_b = nullptr;
     struct ggml_tensor * wq_cross = nullptr;

@@ -141,16 +141,15 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
                 row_size_cache, 0);
         cb(kv_cache, "kv_cache", il_id);
 
-        // pp_opt: at large batch sizes (n_tokens >= 128, gated upstream) materialize per-rank
-        // K/V from the compressed latent cache and run a standard flash_attn instead of the
-        // FlashMLA-3 absorb kernel. The materialize path has a fixed per-layer cost that
-        // only amortizes at non-trivial n_kv; below that, absorb wins. flash_attn is
-        // guaranteed on at this point by the entry abort.
+        // pp_opt (mla > 1, n_tokens >= 128, n_kv >= k_pp_opt_min_kv): materialize
+        // per-rank K/V from the latent cache and use standard flash_attn instead of
+        // FlashMLA-3 absorb.
         constexpr int k_pp_opt_min_kv = 1024;
         const bool tp_pp_opt = pp_opt
                             && (int)n_kv >= k_pp_opt_min_kv
                             && model.layers[il].wk_b
-                            && model.layers[il].wv_b;
+                            && model.layers[il].wv_b
+                            && model.layers[il].wk_b_pp;
 
         ggml_tensor * kqv_2d;
 
@@ -219,28 +218,14 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
                     n_embd_head_v * v_2d->nb[0],
                     0);
 
-            // K_nope: prefer pp_opt-favoring wk_b_pp = transpose(wk_b) layout when
-            // available (materialized in llm_prepare_mla under -sm graph). Saves a
-            // per-PP-call F16 cast + permute + ggml_cont on wk_b.
-            // wk_b_pp_local: [kv_lora_rank, n_embd_head_qk_nope, n_head_local]
-            ggml_tensor * wk_b_T_2d;
-            if (model.layers[il].wk_b_pp && model.layers[il].wk_b_pp->extra) {
-                auto wk_b_pp_split = (const ggml_split_tensor_t *)model.layers[il].wk_b_pp->extra;
-                ggml_tensor * wk_b_pp_local = wk_b_pp_split->splits[id];
-                GGML_ASSERT(wk_b_pp_local);
-                wk_b_T_2d = ggml_reshape_2d(ctx0, wk_b_pp_local,
-                        kv_lora_rank, n_head_local * n_embd_head_qk_nope);
-            } else {
-                // Fallback: derive at runtime each PP call. Hit only if the second-pass
-                // wk_b_pp build in llm_prepare_mla was skipped.
-                ggml_tensor * wk_b_f16 = wk_b_local_pp->type == GGML_TYPE_F16
-                        ? wk_b_local_pp
-                        : ggml_cast(ctx0, wk_b_local_pp, GGML_TYPE_F16);
-                ggml_tensor * wk_b_T = ggml_cont(ctx0,
-                        ggml_permute(ctx0, wk_b_f16, 1, 0, 2, 3));
-                wk_b_T_2d = ggml_reshape_2d(ctx0, wk_b_T,
-                        kv_lora_rank, n_head_local * n_embd_head_qk_nope);
-            }
+            // wk_b_pp is transpose(wk_b) pre-materialized in llm_prepare_mla.
+            // Shape: [kv_lora_rank, n_embd_head_qk_nope, n_head_local].
+            auto wk_b_pp_split = (const ggml_split_tensor_t *)model.layers[il].wk_b_pp->extra;
+            GGML_ASSERT(wk_b_pp_split);
+            ggml_tensor * wk_b_pp_local = wk_b_pp_split->splits[id];
+            GGML_ASSERT(wk_b_pp_local);
+            ggml_tensor * wk_b_T_2d = ggml_reshape_2d(ctx0, wk_b_pp_local,
+                    kv_lora_rank, n_head_local * n_embd_head_qk_nope);
             ggml_tensor * k_nope_2d = ggml_mul_mat(ctx0, wk_b_T_2d, kv_cache_nope);
             cb(k_nope_2d, "k_nope_2d_pp", il_id);
             ggml_tensor * k_nope_f32 = ggml_view_3d(ctx0, k_nope_2d,
@@ -810,7 +795,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case
-    bool pp_opt = n_tokens >= 128; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
+    bool pp_opt = n_tokens >= 128 && lctx.cparams.mla_attn > 1;
 
     auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,

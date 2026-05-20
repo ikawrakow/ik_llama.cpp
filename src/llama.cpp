@@ -859,7 +859,8 @@ static bool llama_kv_cache_init(
     if (is_mla_attn) {
         bool have_wkv_b = true;
         for (auto& l : model.layers) {
-            if (!l.wkv_b) {
+            // Under -sm graph mla>1, wk_b_pp (attn_kv_b) substitutes for wkv_b.
+            if (!l.wkv_b && !l.wk_b_pp) {
                 have_wkv_b = false;
                 break;
             }
@@ -2444,12 +2445,11 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 return computed.get();
             };
 
-            // pp_opt-favoring wk_b_pp = quantize(wk_b_f32) directly. wk_b_f32 here is the
-            // 3D F32 view of wkv_b's K-projection in the [kv_lora_rank, qk_nope, n_head]
-            // orientation: the absorb-favoring wk_b above is its transpose. Materializing
-            // both lets build_deepseek2_tp_attention's pp_opt branch mul_mat against the
-            // latent cache without a per-PP-call F16 cast + permute + ggml_cont.
-            // Only under -sm graph/attn; otherwise skip to keep memory cost zero.
+            // pp_opt-favoring wk_b_pp = quantize(wk_b_f32) directly (absorb-favoring
+            // wk_b above is its transpose). Not gated on mla — wk_b_pp shares wk_b_f32
+            // with the wk_b synthesis above and skipping it breaks absorb on some
+            // quant combinations. Second pass below gates the mla=1 saving for
+            // GGUFs that ship wk_b directly.
             if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
                 ggml_graph_clear(graph);
                 auto wk_b_pp = ggml_cast(ctx, wk_b_f32, new_type);
@@ -2465,8 +2465,8 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 if (plan_pp.work_size > work_data.size()) work_data.resize(plan_pp.work_size);
                 plan_pp.work_data = work_data.data();
                 auto status_pp = ggml_graph_compute(graph, &plan_pp);
-                if (status_pp != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b_pp");
-                auto name_pp = std::string{"blk."} + std::to_string(il) + ".attn_k_b_pp.weight";
+                if (status_pp != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute attn_kv_b");
+                auto name_pp = std::string{"blk."} + std::to_string(il) + ".attn_kv_b.weight";
                 l.wk_b_pp = materialize(wk_b_pp, l.computed_wk_b_pp, l.computed_wk_b_pp_replicas, l.split_wk_b_pp, name_pp);
                 ggml_graph_clear(graph);
             }
@@ -2493,9 +2493,9 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         ggml_free(ctx);
     }
 
-    // Second pass: for layers where wk_b came from the GGUF directly (the first-half
-    // materialize loop skipped them), produce wk_b_pp here. Only under -sm graph/attn.
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+    // Second pass: for layers where wk_b came from the GGUF directly, produce
+    // wk_b_pp here. Only under -sm graph/attn AND mla > 1; mla=1 skips pp_opt.
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && mla > 1) {
         int n_pp_to_compute = 0;
         for (auto & l : model.layers) {
             if (l.wk_b && !l.wk_b_pp) ++n_pp_to_compute;
@@ -2530,7 +2530,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
             ggml_init_params params_pp{context_size_pp, nullptr, true};
             auto ctx_pp = ggml_init(params_pp);
             auto graph_pp = ggml_new_graph_custom(ctx_pp, 8, false);
-            LLAMA_LOG_INFO("============ %s: need to compute %d wk_b_pp tensors\n", __func__, n_pp_to_compute);
+            LLAMA_LOG_INFO("============ %s: need to compute %d attn_kv_b tensors\n", __func__, n_pp_to_compute);
 
             for (int il = 0; il < n_layer; ++il) {
                 auto & l = model.layers[il];
@@ -2549,7 +2549,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 auto wo_split   = (const ggml_split_tensor_t *)l.wo->extra;
                 const int n_device = wo_split->n_device;
 
-                auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b_pp.weight";
+                auto name = std::string{"blk."} + std::to_string(il) + ".attn_kv_b.weight";
 
                 // Build a placeholder wk_b_pp_q on host with the full [kv_lora_rank, qk_nope, n_head]
                 // shape (only used as a template for cloning per-rank metadata; no data filled).
@@ -2617,7 +2617,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 if (plan.work_size > work_data_pp.size()) work_data_pp.resize(plan.work_size);
                 plan.work_data = work_data_pp.data();
                 auto status = ggml_graph_compute(graph_pp, &plan);
-                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b_pp");
+                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute attn_kv_b");
                 ggml_graph_clear(graph_pp);
 
                 // Per-rank upload: f_q is the full wk_b_pp in [kv_lora_rank, qk_nope,
