@@ -177,6 +177,9 @@ struct llama_layer {
     struct ggml_tensor * wkq_a_mqa = nullptr;
     struct ggml_tensor * wkv_b = nullptr;
     struct ggml_tensor * wk_b = nullptr;
+    // wk_b in pp_opt-favoring layout [kv_lora_rank, qk_nope, n_head], serialized
+    // as "attn_kv_b.weight". Materialized under -sm graph + mla>1; mla=1 skips.
+    struct ggml_tensor * wk_b_pp = nullptr;
     struct ggml_tensor * wv_b = nullptr;
     struct ggml_tensor * wq_cross = nullptr;
     struct ggml_tensor * wk_cross = nullptr;
@@ -224,6 +227,7 @@ struct llama_layer {
     llama_split_tensor split_wq_b;
     llama_split_tensor split_wkv_a_mqa;
     llama_split_tensor split_wk_b;
+    llama_split_tensor split_wk_b_pp;
     llama_split_tensor split_wv_b;
     llama_split_tensor split_attn_q_a_norm;
     llama_split_tensor split_attn_kv_a_norm;
@@ -381,11 +385,13 @@ struct llama_layer {
     struct llama_layer_nextn nextn;
 
     std::unique_ptr<ggml_tensor> computed_wk_b;
+    std::unique_ptr<ggml_tensor> computed_wk_b_pp;
     std::unique_ptr<ggml_tensor> computed_wv_b;
     std::unique_ptr<ggml_tensor> computed_wkv_b;
 
     // Per-device replicas of computed wk_b/wv_b (-sm graph). Buffers owned via model.bufs.
     std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_replicas;
+    std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_pp_replicas;
     std::vector<std::unique_ptr<ggml_tensor>> computed_wv_b_replicas;
 };
 
