@@ -7,7 +7,7 @@
 
 #include "common.h"
 #include "llama.h"
-#include "llama-context.h"
+#include "llama-spec-features.h"
 
 #include <cmath>
 #include <cstdio>
@@ -99,8 +99,6 @@ static bool add_and_check_nans(int n, const float * x, float * y, int * counts) 
     return add_and_check_nans_scalar(n, x, y, counts);
 }
 
-
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 
 static llama_model * ik_load_model_from_params(const gpt_params & params, const llama_model_params & mparams) {

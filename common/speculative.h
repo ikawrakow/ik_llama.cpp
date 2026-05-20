@@ -1,9 +1,7 @@
 #pragma once
 
-#include <random>
-
 #include "llama.h"
-#include "llama-context.h"
+#include "llama-spec-features.h"
 #include "common.h"
 #include "spec-tuner.h"
 

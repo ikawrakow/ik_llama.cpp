@@ -3,7 +3,6 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
-#include "llama-context.h"
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -21,7 +20,6 @@
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
@@ -1509,27 +1507,28 @@ static int common_speculative_copy_seq_batch(
         return -1;
     }
 
-    int n_seq_tokens = 0;
-    for (int i = 0; i < batch.n_tokens; ++i) {
-        if (common_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
-            ++n_seq_tokens;
-        }
-    }
-
-    if (n_seq_tokens == 0) {
+    if (batch.n_tokens < 1) {
         return 0;
     }
 
-    seq_batch = llama_batch_init(n_seq_tokens, 0, 1);
+    std::vector<int> token_indices;
+    token_indices.reserve(batch.n_tokens);
     for (int i = 0; i < batch.n_tokens; ++i) {
-        if (!common_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
-            continue;
+        if (common_speculative_batch_token_has_seq_id(batch, i, seq_id)) {
+            token_indices.push_back(i);
         }
+    }
 
+    if (token_indices.empty()) {
+        return 0;
+    }
+
+    seq_batch = llama_batch_init((int) token_indices.size(), 0, 1);
+    for (const int i : token_indices) {
         common_batch_add(seq_batch, batch.token[i], batch.pos[i], { seq_id }, batch.logits != nullptr && batch.logits[i]);
     }
 
-    return n_seq_tokens;
+    return (int) token_indices.size();
 }
 
 static bool common_speculative_feature_view_copy_batch_rows(
