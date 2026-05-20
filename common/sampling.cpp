@@ -784,23 +784,23 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
 static void elb_print(common_params_sampling& sparams, const common_params_sampling::elb_param::elb_entry& entry) {
     #undef X
-    #define X(T, MEMBER, DV) #MEMBER,
+    #define X(T, MEMBER, DV, PRECAST) #MEMBER,
     static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
     #undef X
-    #define X(T, MEMBER, DV) if (std::abs(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]) > 0.0f) \
+    #define X(T, MEMBER, DV, PRECAST) if (std::abs(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]) > 0.0f) \
     { LLAMA_LOG_DEBUG("%s: %s = %f\n", __func__, names[SPARAMS_ ## MEMBER ## _ENUM].c_str(), float(A_DOT_B(sparams, MEMBER))); }
     X_COMMON_PARAMS_SAMPLING
 }
 
 static void elb_add(common_params_sampling& sparams, const common_params_sampling::elb_param::elb_entry& entry) {
     #undef X
-    #define X(T, MEMBER, _) A_DOT_B(sparams, MEMBER) += static_cast<T>(std::round(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]));
+    #define X(T, MEMBER, _, PRECAST) A_DOT_B(sparams, MEMBER) += static_cast<T>(PRECAST(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]));
     X_COMMON_PARAMS_SAMPLING
 }
 
 static void elb_sub(common_params_sampling& sparams, const common_params_sampling::elb_param::elb_entry& entry) {
     #undef X
-    #define X(T, MEMBER, _) A_DOT_B(sparams, MEMBER) -= static_cast<T>(std::round(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]));
+    #define X(T, MEMBER, _, PRECAST) A_DOT_B(sparams, MEMBER) -= static_cast<T>(PRECAST(entry.addsubs[SPARAMS_ ## MEMBER ## _ENUM]));
     X_COMMON_PARAMS_SAMPLING
 }
 
