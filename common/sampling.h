@@ -83,44 +83,44 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
 
 
 #define X_COMMON_PARAMS_SAMPLING                            /*  \
-    */  X( int32_t , min_keep            , 0     , 1e-6f )  /*  0 = disabled, otherwise samplers should return at least min_keep tokens \
-    */  X( int32_t , top_k               , 40    , 1e-6f )  /*  <= 0 to use vocab size \
-    */  X( float   , top_p               , 0.95f , 0.0f  )  /*  1.0 = disabled \
-    */  X( float   , min_p               , 0.05f , 0.0f  )  /*  0.0 = disabled \
-    */  X( float   , tfs_z               , 1.00f , 0.0f  )  /*  1.0 = disabled \
-    */  X( float   , typical_p           , 1.00f , 0.0f  )  /*  1.0 = disabled \
-    */  X( float   , temp                , 0.80f , 0.0f  )  /*  <= 0.0 to sample greedily, 0.0 to not output probabilities \
-    */  X( float   , dynatemp_range      , 0.00f , 0.0f  )  /*  0.0 = disabled \
-    */  X( float   , dynatemp_exponent   , 1.00f , 0.0f  )  /*  controls how entropy maps to temperature in dynamic temperature sampler \
-    */  X( int32_t , penalty_last_n      , 64    , 1e-6f )  /*  last n tokens to penalize (0 = disable penalty, -1 = context size) \
-    */  X( float   , penalty_repeat      , 1.00f , 0.0f  )  /*  1.0 = disabled \
-    */  X( float   , penalty_freq        , 0.00f , 0.0f  )  /*  0.0 = disabled \
-    */  X( float   , penalty_present     , 0.00f , 0.0f  )  /*  0.0 = disabled \
-    */  X( float   , dry_multiplier      , 0.0f  , 0.0f  )  /*  0.0 = disabled; DRY repetition penalty for tokens extending repetition: \
-    */  X( float   , dry_base            , 1.75f , 0.0f  )  /*  0.0 = disabled; multiplier * base ^ (length of sequence before token - allowed length) \
-    */  X( int32_t , dry_allowed_length  , 2     , 1e-6f )  /*  tokens extending repetitions beyond this receive penalty \
-    */  X( int32_t , dry_penalty_last_n  , -1    , 1e-6f )  /*  how many tokens to scan for repetitions (0 = disable penalty, -1 = context size) \
-    */  X( int32_t , mirostat            , 0     , 1e-6f )  /*  0 = disabled, 1 = mirostat, 2 = mirostat 2.0 \
-    */  X( float   , mirostat_tau        , 5.00f , 0.0f  )  /*  target entropy \
-    */  X( float   , mirostat_eta        , 0.10f , 0.0f  )  /*  learning rate \
-    */  X( float   , xtc_probability     , 0.0f  , 0.0f  )  /*  xtc probability \
-    */  X( float   , xtc_threshold       , 1.0f  , 0.0f  )  /*  xtc threshold, disabled if > 0.5 \
-    */  X( float   , top_n_sigma         , 0.0f  , 0.0f  )  /*  top-n-sigma \
-    */  X( float   , adaptive_target     , -1.0f , 0.0f  )  /*  select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled) \
-    */  X( float   , adaptive_decay      , 0.90f , 0.0f  )  /*  decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation) \
-    */  X( bool    , adaptive_updt_w_cur , false , 1e-6f )  /*  update state with current probability \
+    */  X( int32_t , min_keep            , 0     )  /*  0 = disabled, otherwise samplers should return at least min_keep tokens \
+    */  X( int32_t , top_k               , 40    )  /*  <= 0 to use vocab size \
+    */  X( float   , top_p               , 0.95f )  /*  1.0 = disabled \
+    */  X( float   , min_p               , 0.05f )  /*  0.0 = disabled \
+    */  X( float   , tfs_z               , 1.00f )  /*  1.0 = disabled \
+    */  X( float   , typical_p           , 1.00f )  /*  1.0 = disabled \
+    */  X( float   , temp                , 0.80f )  /*  <= 0.0 to sample greedily, 0.0 to not output probabilities \
+    */  X( float   , dynatemp_range      , 0.00f )  /*  0.0 = disabled \
+    */  X( float   , dynatemp_exponent   , 1.00f )  /*  controls how entropy maps to temperature in dynamic temperature sampler \
+    */  X( int32_t , penalty_last_n      , 64    )  /*  last n tokens to penalize (0 = disable penalty, -1 = context size) \
+    */  X( float   , penalty_repeat      , 1.00f )  /*  1.0 = disabled \
+    */  X( float   , penalty_freq        , 0.00f )  /*  0.0 = disabled \
+    */  X( float   , penalty_present     , 0.00f )  /*  0.0 = disabled \
+    */  X( float   , dry_multiplier      , 0.0f  )  /*  0.0 = disabled; DRY repetition penalty for tokens extending repetition: \
+    */  X( float   , dry_base            , 1.75f )  /*  0.0 = disabled; multiplier * base ^ (length of sequence before token - allowed length) \
+    */  X( int32_t , dry_allowed_length  , 2     )  /*  tokens extending repetitions beyond this receive penalty \
+    */  X( int32_t , dry_penalty_last_n  , -1    )  /*  how many tokens to scan for repetitions (0 = disable penalty, -1 = context size) \
+    */  X( int32_t , mirostat            , 0     )  /*  0 = disabled, 1 = mirostat, 2 = mirostat 2.0 \
+    */  X( float   , mirostat_tau        , 5.00f )  /*  target entropy \
+    */  X( float   , mirostat_eta        , 0.10f )  /*  learning rate \
+    */  X( float   , xtc_probability     , 0.0f  )  /*  xtc probability \
+    */  X( float   , xtc_threshold       , 1.0f  )  /*  xtc threshold, disabled if > 0.5 \
+    */  X( float   , top_n_sigma         , 0.0f  )  /*  top-n-sigma \
+    */  X( float   , adaptive_target     , -1.0f )  /*  select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled) \
+    */  X( float   , adaptive_decay      , 0.90f )  /*  decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation) \
+    */  X( bool    , adaptive_updt_w_cur , false )  /*  update state with current probability \
     */
 
 enum {
     #undef X
-    #define X(T, MEMBER, DV, E) SPARAMS_ ## MEMBER ## _ENUM,
+    #define X(T, MEMBER, DV) SPARAMS_ ## MEMBER ## _ENUM,
     X_COMMON_PARAMS_SAMPLING
 };
 
 // sampling parameters
 typedef struct common_params_sampling {
     #undef X
-    #define X(T, MEMBER, DV, _) T MEMBER = DV;
+    #define X(T, MEMBER, DV) T MEMBER = DV;
                 X_COMMON_PARAMS_SAMPLING
     int32_t     n_prev                = 64;                 // number of previous tokens to remember
     int32_t     n_probs               = 0;                  // if greater than 0, output the probabilities of top n_probs tokens.

@@ -5263,7 +5263,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             }
 
             #undef X
-            #define X(T, MEMBER, DV, E) #MEMBER,
+            #define X(T, MEMBER, DV) #MEMBER,
             static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
 
             std::vector<float> addsubs(names.size(), 0.0f);
