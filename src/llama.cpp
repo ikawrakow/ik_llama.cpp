@@ -859,7 +859,7 @@ static bool llama_kv_cache_init(
     if (is_mla_attn) {
         bool have_wkv_b = true;
         for (auto& l : model.layers) {
-            if (!l.wkv_b) {
+            if (!l.wkv_b && !l.wk_b_pp) {
                 have_wkv_b = false;
                 break;
             }
@@ -2495,7 +2495,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
 
     // Second pass: for layers where wk_b came from the GGUF directly (the first-half
     // materialize loop skipped them), produce wk_b_pp here. Only under -sm graph/attn.
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && mla > 1) {
         int n_pp_to_compute = 0;
         for (auto & l : model.layers) {
             if (l.wk_b && !l.wk_b_pp) ++n_pp_to_compute;

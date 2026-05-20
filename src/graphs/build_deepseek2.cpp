@@ -810,7 +810,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case
-    bool pp_opt = n_tokens >= 128; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
+    bool pp_opt = n_tokens >= 128 && cparams.mla_attn > 1; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
 
     auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
