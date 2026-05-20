@@ -12,6 +12,9 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::ordered_json;
 
+struct llama_sampler_adaptive_p * llama_clone_adaptive_p(const struct llama_sampler_adaptive_p * adapt_p_ctx);
+void llama_free_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx);
+
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -160,9 +163,11 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             }
             case llama_sampler_type::ADAPTIVE_P:
             {
-                GGML_ASSERT(vocab);
-                auto n_vocab = llama_vocab_n_tokens(vocab);
-                result->adapt_p_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
+                if (params.adaptive_target >= 0.0f) {
+                    GGML_ASSERT(vocab);
+                    auto n_vocab = llama_vocab_n_tokens(vocab);
+                    result->adapt_p_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
+                }
                 break;
             }
             default:
@@ -185,6 +190,8 @@ void common_sampler_free(struct common_sampler * ctx) {
     }
     if (ctx->smpl)
         llama_sampler_dry_free(ctx->smpl);
+    if (ctx->adapt_p_ctx)
+        llama_free_adaptive_p(ctx->adapt_p_ctx);
     if (ctx->rbudget)
         common_reasoning_budget_free(ctx->rbudget);
     delete ctx;
@@ -253,6 +260,14 @@ void common_sampler_clone(common_sampler * src, common_sampler * dst) {
     }
     if (src->smpl) {
         dst->smpl = llama_sampler_dry_clone(src->smpl);
+    }
+
+    if (dst->adapt_p_ctx) {
+        llama_free_adaptive_p(dst->adapt_p_ctx);
+        dst->adapt_p_ctx = nullptr;
+    }
+    if (src->adapt_p_ctx) {
+        dst->adapt_p_ctx = llama_clone_adaptive_p(src->adapt_p_ctx);
     }
 
     if (dst->rbudget) {
@@ -454,7 +469,7 @@ static void sampler_queue(
                     llama_sample_temp(ctx_main, &cur_p, temp);
                 }
                 break;
-            case llama_sampler_type::ADAPTIVE_P:  use_adaptive_p = true; break;
+            case llama_sampler_type::ADAPTIVE_P:  use_adaptive_p = ctx_sampling->adapt_p_ctx != nullptr; break;
             default : break;
         }
 

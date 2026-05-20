@@ -10393,6 +10393,18 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float
     return llama_init_adaptive_p_impl(n_vocab, target, decay, updt_w_cur, seed);
 }
 
+struct llama_sampler_adaptive_p * llama_clone_adaptive_p(const struct llama_sampler_adaptive_p * adapt_p_ctx) {
+    if (adapt_p_ctx == nullptr) {
+        return nullptr;
+    }
+
+    return new llama_sampler_adaptive_p(*adapt_p_ctx);
+}
+
+void llama_free_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx) {
+    delete adapt_p_ctx;
+}
+
 void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const size_t n_unsent, const bool rewind_status) {
     llama_review_adaptive_p_impl(adapt_p_ctx, n_unsent, rewind_status);
 }
