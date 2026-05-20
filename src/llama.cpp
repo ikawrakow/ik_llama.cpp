@@ -17,6 +17,7 @@
 #include "llama-cparams.h"
 #include "llama-hparams.h"
 #include "llama-context.h"
+#include "llama-spec-features.h"
 #include "llama-quantize.h"
 
 #include "unicode.h"
@@ -25,7 +26,6 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 
 // TODO: fix these includes
@@ -4650,11 +4650,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 // Make sure enough space is available for outputs.
 // Returns max number of outputs for which space was reserved.
 static uint32_t llama_output_embd_width(const llama_context & lctx) {
-    const auto & hparams = lctx.model.hparams;
-    if (lctx.cparams.mtp && lctx.model.arch == LLM_ARCH_GEMMA4_MTP && hparams.mtp_backbone_n_embd > 0) {
-        return hparams.mtp_backbone_n_embd;
-    }
-    return hparams.n_embd;
+    return llama_mtp_state_n_embd(&lctx);
 }
 
 static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
@@ -4775,9 +4771,16 @@ static void llama_graph_compute(
 static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
     ggml_tensor * dst = lctx.inp_mtp_states;
     const float * src = lctx.draft_input_hidden_state;
+    const size_t expected_floats = ggml_nbytes(dst) / sizeof(float);
 
     if (!src) {
         LLAMA_LOG_ERROR("%s: Source hidden state is null\n", __func__);
+        return false;
+    }
+
+    if (lctx.draft_input_hidden_state_n_floats != expected_floats) {
+        LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
+                __func__, lctx.draft_input_hidden_state_n_floats, expected_floats);
         return false;
     }
 
@@ -5262,6 +5265,7 @@ static int llama_decode_internal(
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     lctx.n_outputs = n_outputs;
+    lctx.n_outputs_embd = n_outputs_embd;
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //llama_synchronize(&lctx);
@@ -7918,7 +7922,8 @@ struct llama_data_write {
     }
 
     void write_embeddings(const struct llama_context * ctx) {
-        const uint64_t embeddings_size = std::min((uint64_t) ctx->embd_size, (uint64_t) ctx->n_outputs * ctx->model.hparams.n_embd);
+        const uint64_t row_width = llama_output_embd_width(*ctx);
+        const uint64_t embeddings_size = std::min((uint64_t) ctx->embd_size, (uint64_t) ctx->n_outputs_embd * row_width);
 
         write(&embeddings_size, sizeof(embeddings_size));
 
@@ -8213,6 +8218,13 @@ struct llama_data_read {
         if (ctx->embd_size < embeddings_size) {
             throw std::runtime_error("embeddings buffer too small");
         }
+
+        const uint64_t row_width = llama_output_embd_width(*ctx);
+        if (row_width == 0 || (embeddings_size % row_width) != 0) {
+            throw std::runtime_error("invalid embeddings payload size");
+        }
+
+        ctx->n_outputs_embd = embeddings_size / row_width;
 
         if (embeddings_size) {
             read_to(ctx->embd, embeddings_size * sizeof(float));
@@ -9320,9 +9332,9 @@ float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {
         }
 
         if (i < 0) {
-            j = ctx->n_outputs + i;
+            j = ctx->n_outputs_embd + i;
             if (j < 0) {
-                throw std::runtime_error(format("negative index out of range [0, %d)", ctx->n_outputs));
+                throw std::runtime_error(format("negative index out of range [0, %d)", ctx->n_outputs_embd));
             }
         } else if ((size_t) i >= ctx->output_ids.size()) {
             throw std::runtime_error(format("out of range [0, %lu)", ctx->output_ids.size()));
@@ -9333,12 +9345,12 @@ float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {
         if (j < 0) {
             throw std::runtime_error(format("batch.logits[%d] != true", i));
         }
-        if (j >= ctx->n_outputs) {
+        if (j >= ctx->n_outputs_embd) {
             // This should not happen
-            throw std::runtime_error(format("corrupt output buffer (j=%d, n_outputs=%d)", j, ctx->n_outputs));
+            throw std::runtime_error(format("corrupt output buffer (j=%d, n_outputs_embd=%d)", j, ctx->n_outputs_embd));
         }
 
-        return ctx->embd + j*ctx->model.hparams.n_embd;
+        return ctx->embd + (size_t) j * llama_output_embd_width(*ctx);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid embeddings id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -10566,11 +10578,11 @@ void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_of
 }
 
 void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state) {
+    ctx->draft_input_hidden_state_owned.clear();
     ctx->draft_input_hidden_state = hidden_state;
-}
-
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
-    return llama_output_embd_width(*ctx);
+    ctx->draft_input_hidden_state_n_floats = ctx->inp_mtp_states
+        ? ggml_nbytes(ctx->inp_mtp_states) / sizeof(float)
+        : 0;
 }
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx) {

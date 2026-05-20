@@ -7,6 +7,7 @@
 
 #include "common.h"
 #include "llama.h"
+#include "llama-spec-features.h"
 
 #include <cmath>
 #include <cstdio>
@@ -98,8 +99,6 @@ static bool add_and_check_nans(int n, const float * x, float * y, int * counts) 
     return add_and_check_nans_scalar(n, x, y, counts);
 }
 
-
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 
 static llama_model * ik_load_model_from_params(const gpt_params & params, const llama_model_params & mparams) {
@@ -927,7 +926,11 @@ static bool compute_draft_imatrix_batch(
     }
 
     llama_set_mtp_op_type(ctx_dft, MTP_OP_DRAFT_GEN);
-    llama_set_draft_input_hidden_state(ctx_dft, hidden);
+    if (!llama_set_draft_input_hidden_state_copy(ctx_dft, hidden, (size_t) batch_size * n_embd_dft)) {
+        llama_set_mtp_op_type(ctx_dft, MTP_OP_NONE);
+        fprintf(stderr, "%s: failed to stage paired draft hidden snapshot\n", __func__);
+        return false;
+    }
     const int ret = llama_decode(ctx_dft, llama_batch_get_one(draft_tokens + batch_start, batch_size, batch_pos, 0));
     llama_set_mtp_op_type(ctx_dft, MTP_OP_NONE);
 
