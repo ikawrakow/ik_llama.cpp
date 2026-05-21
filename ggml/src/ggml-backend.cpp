@@ -133,7 +133,7 @@ void ggml_backend_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
 }
 
 bool ggml_backend_buffer_is_host(ggml_backend_buffer_t buffer) {
-    return ggml_backend_buft_is_host(ggml_backend_buffer_get_type(buffer));
+    return buffer && ggml_backend_buft_is_host(ggml_backend_buffer_get_type(buffer));
 }
 
 void ggml_backend_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
