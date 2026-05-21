@@ -496,6 +496,9 @@ struct llama_model {
 
     bool tensor_overrides;
 
+    // Set by llm_apply_khad_pretransform once H is folded into wv_b/wk_b_pp.
+    bool khad_pretransformed = false;
+
     ~llama_model();
 
     size_t max_nodes(int n_tokens) const {

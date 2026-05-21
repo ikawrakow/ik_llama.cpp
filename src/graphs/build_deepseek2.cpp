@@ -174,19 +174,15 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
                     row_size_cache, cache_local->nb[2], 0);
             cb(kv_cache_rope_view, "kv_cache_rope_pp", il_id);
 
-            // Hadamard cache was applied per 64-block during write; un-Hadamard the
-            // read views so the materialize mul_mats see the original latents. Hadamard
-            // requires F32 input, so dequantize the cache views first when the cache is
-            // quantized. Hadamard is its own inverse (the impl handles the scale).
+            // Un-Hadamard the cache views via the fused dequant+hadamard kernel.
+            // When khad_pretransformed is set, H was folded into wv_b/wk_b_pp at init,
+            // so the cache_nope un-Hadamard is skipped (rope half still goes to FA via
+            // concat — no wk_b multiply, no H to fold into).
             if (cparams.k_cache_hadamard) {
-                ggml_tensor * kn_f32 = kv_cache_nope->type == GGML_TYPE_F32
-                        ? kv_cache_nope
-                        : ggml_cast(ctx0, kv_cache_nope, GGML_TYPE_F32);
-                ggml_tensor * kr_f32 = kv_cache_rope_view->type == GGML_TYPE_F32
-                        ? kv_cache_rope_view
-                        : ggml_cast(ctx0, kv_cache_rope_view, GGML_TYPE_F32);
-                kv_cache_nope      = ggml_hadamard(ctx0, kn_f32, 64);
-                kv_cache_rope_view = ggml_hadamard(ctx0, kr_f32, 64);
+                kv_cache_rope_view = ggml_hadamard(ctx0, kv_cache_rope_view, 64);
+                if (!model.khad_pretransformed) {
+                    kv_cache_nope = ggml_hadamard(ctx0, kv_cache_nope, 64);
+                }
             }
 
             // CUDA quantized-cache + REPEAT/CONCAT/CPY has known issues, so force F16 here.
@@ -285,7 +281,11 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
             if (use_f32_attn_precision) {
                 ggml_flash_attn_ext_set_prec(kqv_compressed, GGML_PREC_F32);
             }
-            if (cparams.k_cache_hadamard) {
+            // When khad_pretransformed is set, H is folded into wv_b. FA leaves
+            // kqv_compressed in the H-encoded basis; the mul_mat(H@wv_b, kqv_encoded)
+            // below collapses to wv_b^T @ kqv_unencoded by H @ H = I. Skip the
+            // post-FA un-encode so the fold composes correctly.
+            if (cparams.k_cache_hadamard && !model.khad_pretransformed) {
                 kqv_compressed = ggml_hadamard(ctx0, kqv_compressed, 64);
             }
             kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);

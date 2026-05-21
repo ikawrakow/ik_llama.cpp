@@ -1115,6 +1115,7 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // Source may be F32, F16, or a supported quantized type; output is always F32.
     GGML_API struct ggml_tensor * ggml_hadamard(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,

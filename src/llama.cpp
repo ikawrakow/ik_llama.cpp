@@ -2809,6 +2809,123 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     ggml_free(ctx);
 }
 
+// Fold the 64-block Hadamard into wv_b/wk_b_pp at init; build_deepseek2.cpp then
+// skips the runtime cache_nope un-Hadamard. Math identity by H^T H = I.
+static void llm_apply_khad_pretransform(llama_model & model) {
+    if (model.khad_pretransformed) return;
+    if (model.arch != LLM_ARCH_DEEPSEEK2 && model.arch != LLM_ARCH_GLM_DSA && model.arch != LLM_ARCH_MISTRAL4) return;
+
+    // High-enough bpw to survive one quant->F32->H->quant roundtrip within PPL noise.
+    // Cliff is ~2.7 bpw: IQ3_XXS (3.06) sits at +0.05 noise edge; IQ2_XS (2.31) drifts +0.20.
+    // Below-cliff and unmeasured types fall back to the runtime cache_nope path.
+    auto castable = [](ggml_type t) {
+        return t == GGML_TYPE_F32 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16 ||
+               t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 ||
+               t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1 ||
+               t == GGML_TYPE_Q6_0 || t == GGML_TYPE_Q8_0 ||
+               t == GGML_TYPE_IQ4_NL ||
+               t == GGML_TYPE_Q4_K  || t == GGML_TYPE_Q5_K  || t == GGML_TYPE_Q6_K ||
+               t == GGML_TYPE_IQ4_K || t == GGML_TYPE_IQ5_K ||
+               t == GGML_TYPE_IQ4_KS|| t == GGML_TYPE_IQ4_KSS||
+               t == GGML_TYPE_IQ5_KS;
+    };
+
+    const auto & hparams = model.hparams;
+    const int64_t kv_lora_rank = hparams.n_lora_kv;
+    if (kv_lora_rank <= 0 || kv_lora_rank % 64 != 0) return;
+
+    // All-or-nothing: a partially-folded model would consume H-applied cache
+    // through un-folded weights and produce wrong values.
+    bool all_eligible = true;
+    int n_layers_with_pp = 0;
+    for (auto & l : model.layers) {
+        if (!l.wv_b || !l.wk_b_pp) continue;
+        ++n_layers_with_pp;
+        ggml_type tv = l.wv_b->type;
+        ggml_type tk = l.wk_b_pp->type;
+        if (!castable(tv) || !castable(tk)) {
+            all_eligible = false;
+            break;
+        }
+    }
+    if (!all_eligible || n_layers_with_pp == 0) {
+        LLAMA_LOG_INFO("============ %s: skipping (no eligible wv_b/wk_b_pp; n_pp=%d)\n",
+                       __func__, n_layers_with_pp);
+        return;
+    }
+
+    auto fold_tensor = [&](ggml_tensor * t) -> bool {
+        if (!t) return true;
+        if (t->ne[0] != kv_lora_rank) return false;
+
+        const size_t nbytes = ggml_nbytes(t);
+        std::vector<uint8_t> host_in(nbytes);
+        ggml_backend_tensor_get(t, host_in.data(), 0, nbytes);
+
+        ggml_init_params ip{ ggml_tensor_overhead()*32 + ggml_graph_overhead(), nullptr, true };
+        auto ctx = ggml_init(ip);
+        auto graph = ggml_new_graph(ctx);
+
+        ggml_tensor src_host = *t;
+        src_host.data = host_in.data();
+        src_host.op = GGML_OP_NONE;
+        for (int j = 0; j < GGML_MAX_SRC; ++j) src_host.src[j] = nullptr;
+        src_host.buffer = nullptr;
+        src_host.extra = nullptr;
+        src_host.view_src = nullptr;
+        src_host.view_offs = 0;
+
+        const size_t n_f32_bytes = (size_t)ggml_nelements(t) * sizeof(float);
+        std::vector<uint8_t> f32_buf_a(n_f32_bytes);
+        std::vector<uint8_t> f32_buf_b(n_f32_bytes);
+        std::vector<uint8_t> out_buf(nbytes);
+
+        auto src_f32 = ggml_cast(ctx, &src_host, GGML_TYPE_F32);
+        src_f32->data = f32_buf_a.data();
+        auto had     = ggml_hadamard(ctx, src_f32, 64);
+        had->data    = f32_buf_b.data();
+        auto out_q   = ggml_cast(ctx, had, t->type);
+        out_q->data  = out_buf.data();
+
+        ggml_build_forward_expand(graph, out_q);
+
+        std::vector<uint8_t> work_data;
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+        plan.work_data = work_data.data();
+        bool ok = (ggml_graph_compute(graph, &plan) == GGML_STATUS_SUCCESS);
+        ggml_free(ctx);
+        if (!ok) return false;
+
+        ggml_backend_tensor_set(t, out_buf.data(), 0, nbytes);
+        return true;
+    };
+
+    auto fold_split_or_single = [&](ggml_tensor * full) -> bool {
+        if (!full) return true;
+        if (full->extra) {
+            auto split = (const ggml_split_tensor_t *)full->extra;
+            for (int id = 0; id < split->n_device; ++id) {
+                if (!split->splits[id]) continue;
+                if (!fold_tensor(split->splits[id])) return false;
+            }
+            return true;
+        }
+        return fold_tensor(full);
+    };
+
+    int n_folded = 0;
+    for (auto & l : model.layers) {
+        if (!l.wv_b || !l.wk_b_pp) continue;
+        if (!fold_split_or_single(l.wv_b))   { LLAMA_LOG_ERROR("%s: failed to fold wv_b\n",   __func__); return; }
+        if (!fold_split_or_single(l.wk_b_pp)){ LLAMA_LOG_ERROR("%s: failed to fold wk_b_pp\n",__func__); return; }
+        ++n_folded;
+    }
+
+    model.khad_pretransformed = (n_folded > 0);
+    LLAMA_LOG_INFO("============ %s: folded H into wv_b/wk_b_pp on %d layers\n", __func__, n_folded);
+}
+
 static void llm_scale_gate_inp_s(llama_model & model, bool uses_mmap) {
     auto & hparams = model.hparams;
     printf("%s: n_embd = %d\n", __func__, hparams.n_embd);
@@ -6503,6 +6620,17 @@ struct llama_context * llama_init_from_model(
     cparams.graph_reuse      = params.graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
+    // Folding H into wv_b/wk_b_pp permanently mutates the model; a later context
+    // on the same model with khad=false would consume an H-applied weight against
+    // an un-applied cache and produce wrong values. Force khad=true to keep math
+    // consistent for the rest of the model's lifetime.
+    if (model->khad_pretransformed && !cparams.k_cache_hadamard) {
+        LLAMA_LOG_WARN("%s: model has Hadamard-folded wv_b/wk_b_pp; forcing k_cache_hadamard=true\n", __func__);
+        cparams.k_cache_hadamard = true;
+    }
+    if (cparams.k_cache_hadamard) {
+        llm_apply_khad_pretransform(*model);
+    }
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
