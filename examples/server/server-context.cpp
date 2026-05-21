@@ -735,11 +735,12 @@ void server_slot::prompt_save(server_prompt_cache& prompt_cache) const {
     llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0);
 }
 
-void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens) {
-    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id);
+bool server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, size_t min_common_prefix_tokens) {
+    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id, min_common_prefix_tokens);
     if (!res) {
         LLAMA_LOG_INFO("failed to load prompt from cache\n");
     }
+    return res;
 }
 
 void server_slot::reset() {
@@ -1246,6 +1247,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
         auto& tokens = ret->cache_tokens;
         float f_keep = 0;
         size_t cache_token_size = tokens.size();
+        size_t n_common = tokens.size();
         if (!tokens.empty()) {
             if (ret->params.think_tokens.exclude) {
                 server_tokens cache_exclude_think = tokens.get_tokens_exclude_think(ret->ctx, ret->params.think_tokens);
@@ -1253,12 +1255,20 @@ server_slot* server_context::get_available_slot(const server_task& task) {
 
                 cache_token_size = cache_exclude_think.size();
                 f_keep = calculate_slot_f_keep(*ret, ret->ctx, cache_exclude_think, prompt_exclude_think);
+                const auto prefix = cache_exclude_think.get_common_prefix(ret->ctx, prompt_exclude_think, false);
+                n_common = std::min(prefix.first, prefix.second);
             }
             else {
                 f_keep = calculate_slot_f_keep(*ret, ret->ctx, tokens, task.tokens);
+                const auto prefix = tokens.get_common_prefix(ret->ctx, task.tokens, false);
+                n_common = std::min(prefix.first, prefix.second);
             }
             // if we are about to lose a large portion of the existing context - save it in the prompt cache
             if (f_keep < cache_ram_similarity) {
+                update_cache = true;
+            }
+            // if the slot cannot be reused because the common prefix is too short, save it before eviction
+            if (cache_ram_n_min > 0 && n_common < (size_t) cache_ram_n_min) {
                 update_cache = true;
             }
         }
@@ -1270,8 +1280,8 @@ server_slot* server_context::get_available_slot(const server_task& task) {
         // don't update the cache if the slot's context is above cache_ram_n_min
         update_cache = update_cache && cache_token_size >= cache_ram_n_min;
 
-        LLAMA_LOG_INFO("======== Prompt cache: cache size: %d, n_keep: %d, n_discarded_prompt: %d, cache_ram_n_min: %d, f_keep: %.2f, cache_ram_similarity: %.2f\n",
-            (int)tokens.size(), ret->n_kept_prompt, ret->n_discarded_prompt, cache_ram_n_min, f_keep, cache_ram_similarity);
+        LLAMA_LOG_INFO("======== Prompt cache: cache size: %d, n_keep: %d, n_discarded_prompt: %d, cache_ram_n_min: %d, n_common: %zu, f_keep: %.2f, cache_ram_similarity: %.2f\n",
+            (int)tokens.size(), ret->n_kept_prompt, ret->n_discarded_prompt, cache_ram_n_min, n_common, f_keep, cache_ram_similarity);
         if (update_cache) {
             const int64_t t_start = ggml_time_us();
             LLAMA_LOG_INFO("updating prompt cache\n");
@@ -1286,12 +1296,20 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
-            ret->prompt_load(*prompt_cache, task.tokens);
+            const bool prompt_loaded = ret->prompt_load(*prompt_cache, task.tokens, cache_ram_n_min > 0 ? (size_t) cache_ram_n_min : 0);
             prompt_cache->update();
 
-            ret->cache_tokens = ret->server_cached_prompt.tokens.clone(); // recover cache tokens
-            ret->n_discarded_prompt = ret->server_cached_prompt.n_discarded_prompt;
-            ret->n_kept_prompt = ret->server_cached_prompt.n_kept_prompt;
+            if (prompt_loaded) {
+                ret->cache_tokens = ret->server_cached_prompt.tokens.clone(); // recover cache tokens
+                ret->n_discarded_prompt = ret->server_cached_prompt.n_discarded_prompt;
+                ret->n_kept_prompt = ret->server_cached_prompt.n_kept_prompt;
+            } else {
+                ret->cache_tokens.keep_first(0);
+                ret->server_cached_prompt.checkpoints.clear();
+                ret->server_cached_prompt.data.clear();
+                ret->n_discarded_prompt = 0;
+                ret->n_kept_prompt = 0;
+            }
 
             LLAMA_LOG_INFO("prompt cache load took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
         }
@@ -3979,25 +3997,38 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                 // LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
                                 prefix = prefix_nonexact;
                             }
-                            slot.n_past = prefix.first;
-                            slot.n_past_prompt = prefix.second;
-                            slot.n_past_offset = slot.n_past_prompt - slot.n_past;
+                            const size_t n_common = std::min(prefix.first, prefix.second);
+                            if (!slot.cache_tokens.empty() && cache_ram_n_min > 0 && n_common < (size_t) cache_ram_n_min) {
+                                LLAMA_LOG_WARN("Common prompt prefix below cache_ram_n_min: n_common = %zu, cache_ram_n_min = %d; clearing slot prompt cache\n", n_common, cache_ram_n_min);
+                                slot.n_past = 0;
+                                slot.n_past_prompt = 0;
+                                slot.n_past_offset = 0;
+                                slot.n_discarded_prompt = 0;
+                                slot.n_kept_prompt = 0;
+                                slot.cache_tokens.keep_first(0);
+                                slot.server_cached_prompt.checkpoints.clear();
+                                slot.server_cached_prompt.data.clear();
+                            } else {
+                                slot.n_past = prefix.first;
+                                slot.n_past_prompt = prefix.second;
+                                slot.n_past_offset = slot.n_past_prompt - slot.n_past;
 
-                            //if (slot.n_past != slot.n_past_prompt) {
-                            //    LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
-                            //}
-                            if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
-                            {
-                                LLAMA_LOG_WARN("Common part does not match fully\n");
-                                int32_t back = 4;
-                                if (prefix.second >= back && prefix.first >= back) {
-                                    print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
+                                //if (slot.n_past != slot.n_past_prompt) {
+                                //    LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
+                                //}
+                                if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
+                                {
+                                    LLAMA_LOG_WARN("Common part does not match fully\n");
+                                    int32_t back = 4;
+                                    if (prefix.second >= back && prefix.first >= back) {
+                                        print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
+                                    }
                                 }
-                            }
 
-                            // push the prompt into the sampling context (do not apply grammar)
-                            for (int i = 0; i < slot.n_past; ++i) {
-                                common_sampler_accept(slot.ctx_sampling, ctx, slot.cache_tokens[i], false);
+                                // push the prompt into the sampling context (do not apply grammar)
+                                for (int i = 0; i < slot.n_past; ++i) {
+                                    common_sampler_accept(slot.ctx_sampling, ctx, slot.cache_tokens[i], false);
+                                }
                             }
                         }
                     }

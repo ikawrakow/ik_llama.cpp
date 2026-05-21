@@ -149,7 +149,7 @@ Note: When the available memory is very limited, turn this option off (`-cram 0`
 | - | - | - | - |
 | `-cram, --cache-ram N` | Set the maximum cache size in MiB | 8192 | -1 = no limit, 0 = disable Very useful when the variations of the same prompt are re-sent to the model (coding agents, etc.). [PR 954](https://github.com/ikawrakow/ik_llama.cpp/pull/954) |
 | `-crs, --cache-ram-similarity N` | Max similarity of prompt tokens to cache tokens that triggers prompt cache | 0.50 |  |
-| `-cram-n-min, --cache-ram-n-min N` | Minimum number of cached tokens that triggers prompt cache | 0 |  |
+| `-cram-n-min, --cache-ram-n-min N` | Minimum number of common prompt tokens required to reuse or save prompt cache | 0 |  |
 
 ## Sampling
 

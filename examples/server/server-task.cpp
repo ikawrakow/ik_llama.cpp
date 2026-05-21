@@ -1073,7 +1073,7 @@ size_t server_prompt_cache::n_tokens() const {
 
 }
 
-bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot, size_t min_common_prefix_tokens) {
     thinking_tokens think_tokens;
     for (auto it = states.begin(); it != states.end(); ++it) {
         think_tokens = it->think_tokens;
@@ -1086,13 +1086,18 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
         tokens_new_ex = tokens_new.get_tokens_exclude_think(ctx, think_tokens);
     }
     else {
-        prompt_tokens = std::move(prompt.tokens); 
+        prompt_tokens = prompt.tokens.clone();
         tokens_new_ex = tokens_new.clone();
     }
     const auto lcp_best = prompt_tokens.get_common_prefix(ctx, tokens_new_ex);
-    float f_keep_best = float(lcp_best.second) / prompt_tokens.size();
-    float sim_best = prompt_tokens.get_tokens_similarity(ctx, tokens_new_ex, prompt.n_kept_prompt, prompt.n_discarded_prompt);
-    LLAMA_LOG_INFO(" - looking for better prompt, base f_keep = %.3f, sim = %.3f, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, prompt.n_kept_prompt, prompt.n_discarded_prompt);
+    size_t n_common_best = std::min(lcp_best.first, lcp_best.second);
+    float f_keep_best = prompt_tokens.empty() ? 0.0f : float(lcp_best.second) / prompt_tokens.size();
+    const bool base_is_usable = n_common_best >= min_common_prefix_tokens;
+    float sim_best = base_is_usable ? prompt_tokens.get_tokens_similarity(ctx, tokens_new_ex, prompt.n_kept_prompt, prompt.n_discarded_prompt) : -1.0f;
+    LLAMA_LOG_INFO(" - looking for better prompt, base f_keep = %.3f, sim = %.3f, n_common = %zu, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, n_common_best, prompt.n_kept_prompt, prompt.n_discarded_prompt);
+    if (!base_is_usable) {
+        LLAMA_LOG_INFO(" - current slot prompt has n_common = %zu below cache_ram_n_min = %zu\n", n_common_best, min_common_prefix_tokens);
+    }
 
     auto it_best = states.end();
 
@@ -1103,20 +1108,26 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
             tokens = it->tokens.get_tokens_exclude_think(ctx, think_tokens);
         }
         else {
-            tokens = std::move(it->tokens);
+            tokens = it->tokens.clone();
         }
         const auto lcp_cur = tokens.get_common_prefix(ctx, tokens_new_ex);
+        const size_t n_common_cur = std::min(lcp_cur.first, lcp_cur.second);
+        if (n_common_cur < min_common_prefix_tokens) {
+            LLAMA_LOG_INFO(" - skipping cached prompt with n_common = %zu below cache_ram_n_min = %zu\n", n_common_cur, min_common_prefix_tokens);
+            continue;
+        }
         const float f_keep_cur = float(lcp_cur.first) / tokens.size();
         const float sim_cur = tokens.get_tokens_similarity(ctx, tokens_new_ex, it->n_kept_prompt, it->n_discarded_prompt);
         if (sim_best < sim_cur) {
             f_keep_best = f_keep_cur;
             sim_best = sim_cur;
+            n_common_best = n_common_cur;
             it_best = it;
         }
     }
 
     if (it_best != states.end()) {
-        LLAMA_LOG_INFO(" - found better prompt with f_keep = %.3f, sim = %.3f, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, it_best->n_kept_prompt, it_best->n_discarded_prompt);
+        LLAMA_LOG_INFO(" - found better prompt with f_keep = %.3f, sim = %.3f, n_common = %zu, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, n_common_best, it_best->n_kept_prompt, it_best->n_discarded_prompt);
         const size_t size = it_best->data.size();
         const size_t n = llama_state_seq_set_data(ctx, it_best->data.data(), size, id_slot, 0);
         if (n != size) {
@@ -1130,6 +1141,8 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
         prompt = std::move(*it_best);
 
         states.erase(it_best);
+    } else if (!base_is_usable) {
+        return false;
     }
 
     return true;
