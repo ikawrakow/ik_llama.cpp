@@ -3812,8 +3812,6 @@ static void distribute_mla_tensors_for_split_mode_graph(
     const int n_head        = hparams.n_head(il);
     const int n_embd_head_k = hparams.n_embd_head_k(il);
     const int n_embd_head_v = hparams.n_embd_head_v(il);
-    const int qk_rope       = hparams.n_rot;
-    const int qk_nope       = n_embd_head_k - qk_rope;
 
     // granularity=4: keeps wo row blocks K-quant-aligned (% 256) and gqa_ratio % 4 == 0 for FA-MMA.
     auto split_heads = create_split(n_head, 4, cur_splits, mem_used);

@@ -157,10 +157,8 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
             // Per-rank wk_b/wv_b slices already exist from distribute_mla_tensors:
             //   wk_b_local_pp: [n_embd_head_qk_nope, kv_lora_rank, n_head_local]
             //   wv_b_local_pp: [kv_lora_rank, n_embd_head_v,    n_head_local]
-            auto wk_b_pp_split_raw = (const ggml_split_tensor_t *)model.layers[il].wk_b->extra;
             auto wv_b_pp_split_raw = (const ggml_split_tensor_t *)model.layers[il].wv_b->extra;
-            GGML_ASSERT(wk_b_pp_split_raw && wv_b_pp_split_raw);
-            ggml_tensor * wk_b_local_pp = wk_b_pp_split_raw->splits[id];
+            GGML_ASSERT(wv_b_pp_split_raw);
             ggml_tensor * wv_b_local_pp = wv_b_pp_split_raw->splits[id];
 
             ggml_tensor * kv_cache_nope = ggml_view_2d(ctx0, cache_local,
