@@ -13,6 +13,7 @@
 build*/
 
 models/*
+!models/model.gguf
 
 /llama-cli
 /llama-quantize

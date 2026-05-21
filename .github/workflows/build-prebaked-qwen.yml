@@ -1,0 +1,65 @@
+name: Build and Push Prebaked Qwen Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push-prebaked:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space (Ubuntu)
+        run: |
+          echo "Listing initial disk usage..."
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf /usr/lib/jvm
+          sudo docker image prune -af
+          echo "Listing disk usage after aggressive cleanup..."
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Environment
+        run: |
+          echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+          mkdir -p ./models
+
+      - name: Download GGUF Model File
+        run: |
+          # Downloading directly via curl to avoid huggingface-cli double-caching overhead on disk
+          MODEL_URL="https://huggingface.co/Levosilimo/Qwen3.6-35B-A3B-Asymmetric-IQ4_KS-GGUF/resolve/main/Qwen3.6-35B-A3B-Asymmetric-IQ4_KS.gguf"
+          echo "Downloading 35B model file to local workspace..."
+          curl -L -o ./models/model.gguf "$MODEL_URL"
+          echo "Downloaded model status:"
+          ls -lh ./models/model.gguf
+
+      - name: Build and Push Prebaked Image
+        uses: docker/build-push-action@v6
+        env:
+          REPO_OWNER: ${{ env.REPO_LOWER }}
+        with:
+          context: .
+          file: ./docker/ik_llama-prebaked-cuda12.Containerfile
+          push: true
+          build-args: |
+            BASE_SERVER_IMAGE=ghcr.io/${{ env.REPO_LOWER }}/ik-llama-cpp:cu12-server
+          tags: |
+            ghcr.io/${{ env.REPO_LOWER }}/ik-llama-cpp:qwen3.6-35b-cuda12
