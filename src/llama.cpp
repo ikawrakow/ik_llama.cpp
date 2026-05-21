@@ -3319,6 +3319,12 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
+        } else if (model.arch == LLM_ARCH_QWEN35MOE && mtp) {
+            LLAMA_LOG_WARN("\n=========================================================\n");
+            LLAMA_LOG_WARN("Split mode 'graph' curently does not work with MTP for Qwen35-MoE\n");
+            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
+            LLAMA_LOG_WARN("=======================================================\n\n");
+            split_mode = LLAMA_SPLIT_MODE_LAYER;
         } else if (!is_model_split_supported(model)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for this model\n");
