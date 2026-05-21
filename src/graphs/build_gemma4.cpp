@@ -720,10 +720,18 @@ ggml_cgraph * llm_build_context::build_gemma4() {
 
     auto inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
 
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        return build_gemma4_graph_parallel(*this, lctx, ctx0, inpL, inp_pos, inp_out_ids,
+                                     KQ_mask, KQ_mask_swa, n_tokens,  cb);
+    }
+
+    auto gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+
     ggml_tensor * inp_per_layer = nullptr;
     if (model.tok_embd_per_layer) {
         if (batch.token) {
             inp_per_layer = ggml_get_rows(ctx0, model.tok_embd_per_layer, lctx.inp_tokens);
+            ggml_build_forward_expand(gf, inp_per_layer);
             inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, hparams.n_embd_per_layer, n_layer, n_tokens);
             inp_per_layer = ggml_scale(ctx0, inp_per_layer, sqrtf((float) hparams.n_embd_per_layer));
             cb(inp_per_layer, "inp_per_layer_selected", -1);
@@ -735,6 +743,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             // Extract and dequantize padding token embedding (row 0)
             auto padding = ggml_view_1d(ctx0, model.tok_embd_per_layer, embd_size, 0);
             inp_per_layer = ggml_cast(ctx0, padding, GGML_TYPE_F32);
+            ggml_build_forward_expand(gf, inp_per_layer);
 
             // Reshape to [n_embd_per_layer, n_layer, 1]
             inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, hparams.n_embd_per_layer, n_layer, 1);
@@ -744,13 +753,6 @@ ggml_cgraph * llm_build_context::build_gemma4() {
                 model.hparams.n_embd_per_layer, n_layer, n_tokens, inpL, inp_per_layer);
 
     }
-
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        return build_gemma4_graph_parallel(*this, lctx, ctx0, inpL, inp_pos, inp_out_ids,
-                                     KQ_mask, KQ_mask_swa, n_tokens,  cb);
-    }
-
-    auto gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
 
     // "5-to-1 interleaved attention"
     // 5 layers of local attention followed by 1 layer of global attention
