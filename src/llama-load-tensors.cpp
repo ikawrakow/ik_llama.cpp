@@ -33,7 +33,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool merge_up_gate_exps(const LLM_TN & tn, int i, int bias);
 
-    bool create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags = 0, int n_ff_exps_input = 0);
+    bool create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags = 0, int n_ff_exps_input = 0,
+            ggml_context * ffn_ctx = nullptr);
 
     bool create_tensors() override;
 
@@ -1585,7 +1586,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
         }
 
         layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert }, flags);
-        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, flags, n_ff_exp);
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, flags, n_ff_exp, ctx_split);
 
         // Shared experts
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
@@ -3590,14 +3591,17 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     return true;
 }
 
-bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags, int n_ff_exps_input) {
+bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags, int n_ff_exps_input,
+        ggml_context * ffn_ctx) {
     const int64_t n_expert      = model.hparams.n_expert;
     const int64_t n_expert_used = model.hparams.n_expert_used;
     const int64_t n_ff     = model.hparams.n_ff();
     const int64_t n_ff_exp = n_ff_exps_input > 0 ? n_ff_exps_input : model.hparams.n_ff_exp ? model.hparams.n_ff_exp : n_ff / n_expert_used;
 
     auto & layer = model.layers[i];
-    auto ffn_ctx = ctx_for_layer_split(i);
+    if (!ffn_ctx) {
+        ffn_ctx = ctx_for_layer_split(i);
+    }
 
     bool merged = false;
     auto ug_name = tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", i);

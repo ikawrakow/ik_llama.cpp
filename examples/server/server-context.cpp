@@ -608,6 +608,8 @@ void server_slot::reset() {
     stopping_word = "";
     n_past = 0;
     n_past_prompt = 0;
+    n_discarded_prompt = 0;
+    n_kept_prompt = 0;
     n_sent_text = 0;
     drafted.clear();
     drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
@@ -2056,6 +2058,16 @@ void server_context::kv_cache_clear() {
 
     // clear the entire KV cache
     llama_kv_cache_clear(ctx);
+    for (auto & slot : slots) {
+        if (slot.spec == nullptr) {
+            continue;
+        }
+
+        common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+        if (auto * ctx_companion = common_speculative_get_companion_ctx(slot.spec); ctx_companion != nullptr) {
+            llama_kv_cache_clear(ctx_companion);
+        }
+    }
     clean_kv_cache = false;
 }
 
@@ -2107,6 +2119,22 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
     // release all slots
     for (server_slot& slot : slots) {
         slot.release();
+        slot.cache_tokens.clear();
+        slot.n_past = 0;
+        slot.n_past_prompt = 0;
+        slot.n_past_offset = 0;
+        slot.n_discarded_prompt = 0;
+        slot.n_kept_prompt = 0;
+        slot.n_prompt_tokens_cache = 0;
+        slot.server_cached_prompt.checkpoints.clear();
+        slot.checkpoint_pos = 0;
+        slot.do_checkpoint = false;
+        if (slot.ctx_sampling != nullptr) {
+            common_sampler_reset(slot.ctx_sampling);
+        }
+    }
+    if (prompt_cache) {
+        prompt_cache->states.clear();
     }
 
     system_need_update = true;
@@ -3904,9 +3932,15 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 slot.cache_tokens.keep_first(slot.n_past);
                 int p0 = (int)system_tokens.size() + slot.n_past;
                 p0 = system_tokens.size() + slot.cache_tokens.pos_next();
-                if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
+                auto * ctx_companion = slot.spec ? common_speculative_get_companion_ctx(slot.spec) : nullptr;
+                const bool target_trimmed = llama_kv_cache_seq_rm(ctx, slot.id, p0, -1);
+                const bool companion_trimmed = ctx_companion == nullptr || llama_kv_cache_seq_rm(ctx_companion, slot.id, p0, -1);
+                if (!target_trimmed || !companion_trimmed) {
                     // could not partially delete (likely using a non-Transformer model)
                     llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
+                    if (ctx_companion != nullptr) {
+                        llama_kv_cache_seq_rm(ctx_companion, slot.id, -1, -1);
+                    }
 
                     p0 = (int)system_tokens.size();
                     if (p0 != 0) {
@@ -3915,9 +3949,16 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                     // there is no common part left (except for the system prompt)
+                    slot.cache_tokens.clear();
                     slot.n_past = 0;
+                    slot.n_past_prompt = 0;
+                    slot.n_past_offset = 0;
+                    slot.n_discarded_prompt = 0;
+                    slot.n_kept_prompt = 0;
                     slot.n_past_se = 0;
+                    slot.n_prompt_tokens_cache = 0;
                     slot.ga_i = 0;
+                    slot.server_cached_prompt.checkpoints.clear();
                     // TODO: is the system prompt ever in the sampling context?
                     common_sampler_reset(slot.ctx_sampling);
                 }
