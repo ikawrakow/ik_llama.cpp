@@ -823,7 +823,11 @@ static bool llama_kv_cache_init(
         const int64_t n_mtp_first = n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
             const bool is_mtp_tail = qwen_mtp && i >= n_mtp_first;
-            if ((split_cache || replicate_mla) && !is_mtp_tail) {
+            // Under partial -ngl, CPU layers have no wo->extra (distribute_mla
+            // skips host buffers). Don't reserve a buft_matrix context for them;
+            // the per-rank replicate path is skipped per-layer below.
+            const bool replicate_this_layer = replicate_mla && model.layers[i].wo && model.layers[i].wo->extra;
+            if ((split_cache || replicate_this_layer) && !is_mtp_tail) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
                 if (model.buft_layer[i].buft != model.buft_layer[i].buft_matrix) {
                     buft_layer_count[model.buft_layer[i].buft]++;
@@ -917,7 +921,11 @@ static bool llama_kv_cache_init(
                 model.arch == LLM_ARCH_QWEN35MOE) &&
                 hparams.nextn_predict_layers > 0 && i >= (int)n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        // Per-layer replicate gate: CPU layers under partial -ngl have no
+        // wo->extra and don't TP-split; routing them through buft_matrix
+        // would allocate a GPU-typed KV buffer for a CPU-bound layer.
+        const bool replicate_this_layer = replicate_mla && model.layers[i].wo && model.layers[i].wo->extra;
+        struct ggml_context * ctx = ((split_cache || replicate_this_layer) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
@@ -3676,15 +3684,21 @@ static bool llm_load_tensors(
             split_buft = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         }
         // assign the repeating layers
+        const int n_mtp_tail = (int)hparams.nextn_predict_layers;
         for (int i = i_gpu_start; i < n_layer; ++i) {
             auto buft_layer = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[i]]);
+            // MTP-tail layers don't TP-split (load-tensors skips them); routing
+            // them through split_buft creates an empty ctx that
+            // ggml_backend_alloc_ctx_tensors_from_buft rejects on partial -ngl.
+            const bool is_mtp_tail = n_mtp_tail > 0 && i >= (int)n_layer - n_mtp_tail;
+            ggml_backend_buffer_type_t buft_matrix_for_layer = is_mtp_tail ? buft_layer : split_buft;
             if (split_mode == LLAMA_SPLIT_MODE_ATTN) {
                 int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count,
                         float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
-                model.buft_layer[i] = { split_buft, llama_default_buffer_type_offload(model, model.devices[layer_gpu]) };
+                model.buft_layer[i] = { buft_matrix_for_layer, llama_default_buffer_type_offload(model, model.devices[layer_gpu]) };
                 LLAMA_LOG_INFO("Layer %d: assigning buft_layer to GPU %d\n", i, layer_gpu);
             } else {
-                model.buft_layer[i] = { split_buft, buft_layer };
+                model.buft_layer[i] = { buft_matrix_for_layer, buft_layer };
             }
         }
         // assign the output layer
@@ -3693,6 +3707,15 @@ static bool llm_load_tensors(
                 split_buft,
                 llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[n_layer]])
             };
+        } else if (n_gpu_layers > 0) {
+            // Under partial -ngl with -sm graph, route output to the GPU buffer
+            // the last TP layer uses. CPU placement forces the final norm + mul_mat
+            // through CPU/BLAS while the input REDUCE lives on GPU, and the
+            // asymmetric cross-backend copy corrupts the logits.
+            int last_gpu_layer = (int)n_layer - 1;
+            int dev = model.default_layer_device.empty() || last_gpu_layer < 0
+                    ? 0 : std::max(0, model.default_layer_device[last_gpu_layer]);
+            model.buft_output = llama_default_buffer_type_offload(model, dev);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }

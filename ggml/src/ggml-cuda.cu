@@ -4971,6 +4971,13 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
         return should_offload;
     }
 
+    // 3D MUL_MAT with a weight as src0 (e.g. MLA absorb's wk_b/wv_b with shape
+    // [kv_lora_rank, head_dim, n_head]) corrupts under partial -ngl: the cross-
+    // backend tensor_copy of the CPU weight to GPU mishandles the 3D layout.
+    // Dense models have no 3D weight-src0 mul_mats so they are unaffected.
+    if (op->op == GGML_OP_MUL_MAT && op->ne[2] > 1) {
+        return false;
+    }
     return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
 
     // Original:
