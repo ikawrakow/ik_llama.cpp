@@ -6,14 +6,15 @@
 >
 > - **CPU** — AVX2 required; AVX-512 (AMD Zen4 / Intel Sapphire Rapids+) strongly recommended
 > - **CUDA** — Turing architecture (RTX 20xx / GTX 16xx) or newer required
+> - **ARM** (armv8.2-a+ / NEON)
 >
 > Other backends (Metal, ROCm/hipBLAS, Vulkan, SYCL, OpenBLAS, MUSA) are inherited from upstream
 > `llama.cpp` and are **not actively maintained or tested** in this fork. Their build instructions
 > have been removed to avoid misleading users. If you need one of these, refer to the upstream
 > [llama.cpp build documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).
 
-> **Note on `make`:** The Makefile-based build is **obsolete** and has been removed from this
-> documentation. CMake is the only supported build system.
+> **Note on `make`:** The Makefile-based build is **obsolete** and has been removed.  
+> CMake is the only supported build system.
 
 ---
 
@@ -24,7 +25,9 @@
 | **Git** | [git-scm.com](https://git-scm.com/download/) or system package manager |
 | **CMake 3.21+** | [cmake.org](https://cmake.org/download/) or system package manager |
 | **C++17 compiler** | GCC 10+, Clang 13+, MSVC 2022, or clang-cl |
-| **CUDA Toolkit 12.x** | Required for GPU builds only — [NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive) |
+| **CUDA Toolkit 12.x** or higher | Required for GPU builds only — [NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive) |
+
+**Note**: Avoid using `CUDA Toolkit 13.2` due to a bug in CUDA that might produce garbage in certain combinations of quantizations and models.
 
 Platform-specific installation details are covered in each build section below.
 
@@ -65,7 +68,7 @@ cmake --build build --config Release -j $(nproc)
 ```
 
 `GGML_NATIVE=ON` enables `-march=native`, which is critical for performance. On AVX-512-capable
-hardware (AMD Zen4, Intel Sapphire Rapids+) additional flags are needed to unlock the full IQK
+hardware (AMD Zen4, Intel Sapphire Rapids+) additional flags may be needed to unlock the full IQK
 quantized GEMM path — see the [AVX-512 section](#cpu-build-flags-for-avx-512-zen4--sapphire-rapids).
 
 The environment variable [`CUDA_VISIBLE_DEVICES`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#env-vars)
@@ -88,6 +91,8 @@ brew install cmake git
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON
 cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 ```
+> **Note**: `-DGGML_NATIVE=ON` will actually enable `Metal` support, which may or may not work, depending on model. Be aware that Metal is not officially supported in ik_llama.  
+(Feedback from Mac users on this topic is welcome to help improve this documentation)
 
 ---
 
@@ -116,13 +121,30 @@ and ensure the following are checked:
 - `Desktop development with C++` workload, **or** individually:
   - `MSVC v143 – VS 2022 C++ x64/x86 build tools`
   - `C++ CMake tools for Windows`
-  - `Clang Compiler for Windows` *(optional, but recommended for AVX-512 builds)*
+  - `Clang Compiler for Windows` (see next section) *(optional, but recommended for AVX-512 builds)*
 
-#### 2. CUDA Toolkit 12.x
+#### Compiler Choice: MSVC vs. Clang-CL
+You can install and use two different compilers in Visual Studio:
+1. MSVC (cl.exe): The default. Simplest setup, but lacks automatic CPU feature detection (-march=native is not supported). You must manually enable AVX2/AVX-512.
+2. Clang-CL (clang-cl.exe): Included with VS ("Clang Compiler for Windows" component). Supports -march=native, enabling GGML_NATIVE=ON to auto-detect your CPU's best features (AVX2, AVX-512, etc.). Recommended for maximum performance.
 
-Download from the [NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive).
+To use the `clang-cl` compiler, you have to add the following lines to your cmake args:
+```
+    -DCMAKE_C_COMPILER=clang-cl.exe ^
+    -DCMAKE_CXX_COMPILER=clang-cl.exe
+```
+This will be covered later in the detailled configuration examples.
+
+#### A note on Visual Studio 2026
+
+At the time of writing, CUDA Toolkit 12.x and 13.1 are not compatible with Visual Studio 2026. CUDA Toolkit 13.2 should be compatible, but due to bugs in this version, you should avoid using 13.2. You may be able to use CUDA Toolkit 13.3 successfully with Visual Studio Developer Command Prompt 2026 once it is released.
+
+#### 2. CUDA Toolkit 12.x or later
+
+**Download** from the [NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive).
 During installation, choose *Custom Installation* and uncheck *Driver components* if building
-inside a VM without a physical NVIDIA GPU.
+inside a VM without a physical NVIDIA GPU.  
+**Avoid** using Version 13.2 of the Toolkit.
 
 #### 3. CMake and Ninja
 
@@ -144,6 +166,9 @@ via the Windows Start Menu under *Visual Studio 2022*.
 These terminals automatically configure all required compiler paths, environment variables, and
 SDK settings. Running `cmake` from a plain `cmd.exe` or PowerShell will likely fail with
 "command not found" or wrong-compiler errors due to missing environment initialisation.
+
+The following sections provide explanations about optimizations of a cmake command.  
+You may skip them and go directly to the [full recommended CUDA build commands](#full-recommended-cuda-build-commands) for both compilers.
 
 ---
 
@@ -180,13 +205,22 @@ the table. The following options are strongly recommended and can be appended to
 
 **Enable native CPU optimisations:**
 
+* **If using Clang-CL (Recommended):**  
+Add `-DGGML_NATIVE=ON`. This enables -march=native, automatically tuning the binary to your exact CPU (AVX2, AVX-512, etc.).  
+*Required Flags:* `-DCMAKE_C_COMPILER=clang-cl.exe -DCMAKE_CXX_COMPILER=clang-cl.exe`  
+* **If using MSVC (Default):**  
+`GGML_NATIVE=ON` has no effect. You must explicitly enable instruction sets:  
+  * For most modern CPUs: Add `-DGGML_AVX2=ON`
+  * For Zen4/Sapphire Rapids+: Add `-DGGML_AVX512=ON` (plus VNNI/VBMI flags, see AVX-512 Section)
+
+Since unused cmake args will just give you an informational warning and will otherwise be ignored, you can safely add both to your setup:
 ```
 -DGGML_NATIVE=ON
+-DGGML_AVX2=ON
 ```
 
-This adds `-march=native` (GCC/Clang) or the equivalent MSVC flags, tuning the binary to the
-exact CPU it is compiled on. On AVX-512 hardware (Zen4, Sapphire Rapids+) you additionally need
-the flags described in the [AVX-512 section](#cpu-build-flags-for-avx-512-zen4--sapphire-rapids).
+> ⚠️ **VM Users:** Be careful with `-DGGML_NATIVE=ON` inside Virtual Machines. The hypervisor may not expose all host CPU features correctly. If you experience crashes, specify your CPU architecture explicitly (e.g., `-DGGML_AVX2=ON`) instead of using `NATIVE`.
+
 
 **Target a specific CUDA architecture** (avoids compiling for all architectures, which is slow):
 
@@ -203,48 +237,57 @@ Replace `86` with the compute capability of your GPU. See the
 -G Ninja
 ```
 
-**Further performance and feature options:**
 
+### Full recommended CUDA build commands
+
+putting everything together, here are two recomended Example cmake setups for both compiler chices:
+
+#### Example A: High Performance Build (Clang-CL + RTX 3060)
 ```
--DGGML_CUDA_USE_GRAPHS=ON
--DGGML_SCHED_MAX_COPIES=1
--DGGML_OPENMP=ON
--DLLAMA_CURL=OFF
-```
-
-**Example: a full recommended CUDA build command for an RTX 3060 (Ampere / cc86):**
-
-```bat
 cmake -B build ^
     -G Ninja ^
+    -DCMAKE_C_COMPILER=clang-cl.exe ^
+    -DCMAKE_CXX_COMPILER=clang-cl.exe ^
     -DCMAKE_BUILD_TYPE=Release ^
     -DGGML_NATIVE=ON ^
     -DGGML_CUDA=ON ^
     -DCMAKE_CUDA_ARCHITECTURES="86-real" ^
-    -DGGML_CUDA_USE_GRAPHS=ON ^
-    -DGGML_OPENMP=ON ^
-    -DLLAMA_CURL=OFF
-    
+
+cmake --build build --config Release
+```
+#### Example B: Simple Build (MSVC + RTX 3060)
+```
+cmake -B build ^
+    -G Ninja ^
+    -DCMAKE_BUILD_TYPE=Release ^
+    -DGGML_AVX2=ON ^
+    -DGGML_CUDA=ON ^
+    -DCMAKE_CUDA_ARCHITECTURES="86-real" ^
+
 cmake --build build --config Release
 ```
 
 ---
 
-### Runtime dependencies: DLLs and PATH handling
+### PATH handling, DLLs and Runtime dependencies: 
 
 After building, the executables in `build\bin` require several runtime DLLs. The recommended
 approach is to ensure the relevant directories are on `PATH` — do not copy DLLs into the build
 directory, as this complicates maintenance and breaks on clean rebuilds.
 
-**CUDA DLLs** (`cublas64_12.dll`, `cublasLt64_12.dll`, `cudart64_12.dll`):
-These are located in `%CUDA_PATH%\bin`, which the CUDA Toolkit installer adds to `PATH`
-automatically. No further action is needed.
+**CUDA DLLs** (`cublas64_12.dll`, `cublasLt64_12.dll`, `cudart64_12.dll`):  
+  These are located in `%CUDA_PATH%\bin`, which the CUDA Toolkit installer adds to `PATH`
+  automatically. No further action is needed.
 
-**OpenMP runtime** (`libomp140.x86_64.dll`):
-When building with the Clang/LLVM toolchain, this DLL is located in the LLVM `bin` directory
-(e.g. `%VS_DIR%\VC\Tools\Llvm\x64\bin`). Add this directory to your user or system `PATH`.
-Do not source this file from `C:\Windows\System32` — that copy may be incompatible with
+**OpenMP runtime** (`libomp140.x86_64.dll`):  
+  When building with the Clang/LLVM toolchain (using the `clang-cl` compiler), this DLL is located in the LLVM `bin` directory
+  (e.g. `%VS_DIR%\VC\Tools\Llvm\x64\bin`). Add this directory to your user or system `PATH`.
+  Do not source this file from `C:\Windows\System32`, that copy may be incompatible with
 LLVM-compiled binaries.
+
+**Hint:** Always use forward slashes (`/`) in CMake paths (e.g., `-B build`).  
+  This document avoids using absolute or relative paths as much as possible. Cmake settings inside ik_llama should handle everything correct. But if necessary, please note:
+  If you must use backslashes, escape them (`\\`). CMake on Windows parses `/` correctly and avoids escape-character issues.
 
 ---
 
@@ -280,6 +323,7 @@ cmake --build build --config Debug
 
 ## General build tips
 
+- **Clean builds:** When your cmake build comand stops working at some time after any kind of misbehaviour, if you encounter strange linker errors or outdated behavior, delete the `build` directory and re-run the CMake configuration steps.
 - **Parallel compilation:** pass `-j <N>` to the build step, e.g.
   `cmake --build build --config Release -j 8`.
 - **Faster incremental rebuilds:** install [ccache](https://ccache.dev/) — CMake picks it up
@@ -378,6 +422,27 @@ On Zen4 the AVX-512 implementation is 256-bit double-pumped: each `_mm512_*` op 
 micro-ops with a throughput of roughly one AVX-512 op per two cycles. The wider register width
 and reduced loop overhead still produce measurable gains over AVX2 on prompt processing for
 IQK kernels.
+
+---
+## Verifying your Build
+
+After successfully building with cmake, you will find the executables in subdirectory `build/bin`, `build/bin/release` or something like that, depending on yourenvironment and the exact cmake commandline you used.
+### Simple execution Test
+To ensure your build was successful, run the following command from your build directory:
+
+```bash
+llama-cli --help
+```
+
+If this prints the help menu without errors, your binary is functional.  
+
+### Quick Inference Test
+Use a small model (e.g., Gemma4-E2B) and run a minimal test:
+```bash
+llama-cli -m <path-to-model> -p "Hello!" -n 20
+```
+This will prompt your model to answer with 20 tokens only.  
+If you see text output, your setup is working correctly.
 
 ---
 
