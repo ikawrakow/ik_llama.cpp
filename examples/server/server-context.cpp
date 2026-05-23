@@ -608,6 +608,8 @@ void server_slot::reset() {
     stopping_word = "";
     n_past = 0;
     n_past_prompt = 0;
+    n_discarded_prompt = 0;
+    n_kept_prompt = 0;
     n_sent_text = 0;
     drafted.clear();
     drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
@@ -1927,7 +1929,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     do  // populate expiring logit bias
     {
-        const auto elb_prev_params = slot.sparams.elb_params;
+        const auto prev_elb_params = slot.sparams.elb_params;
 
         const auto& expiring_logit_bias = data.find("expiring_logit_bias");
         if (expiring_logit_bias != data.end() && expiring_logit_bias->is_array()) {
@@ -1953,9 +1955,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             break;
         }
 
-        if (!slot.elb_prev_states.empty() && (elb_params == elb_prev_params)) {
+        if (!slot.prev_elb_states.empty() && (elb_params == prev_elb_params)) {
             // reset and reuse previous states
-            slot.ctx_sampling->elb_states = slot.elb_prev_states;
+            slot.ctx_sampling->elb_states = slot.prev_elb_states;
             for (auto& elb_state: slot.ctx_sampling->elb_states) {
                 elb_state.countup = 0;
             }
@@ -1968,22 +1970,40 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.ctx_sampling->elb_states.reserve(n_elb_param);
 
         // 1 state <-> 1 exitword <-> 1+ entries
-        for (const auto& [entries, exitword]: elb_params) {
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0 });
+        for (int32_t i = 0; i < elb_params.size(); ++i) {
+            const auto& [entries, exitword, op] = elb_params[i];
+
+            if (op == ">>") {
+                for (auto& elb_state: slot.ctx_sampling->elb_states) {
+                    if (elb_state.jumpword.empty()) {
+                        elb_state.jumpword = exitword;
+                        elb_state.jump_idx = i + 1;
+                        elb_state.search_word_len = std::max(elb_state.exitword.length(), elb_state.jumpword.length());
+                    }
+                }
+            }
+
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, exitword.length() });
+
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
             auto& delay = slot.ctx_sampling->elb_states.back().delay;
             auto& max_cond_len = slot.ctx_sampling->elb_states.back().max_cond_len;
 
             // 1 entry <-> 1 phrase <-> 1+ biases
-            for (auto [phrases, biases, duration, is_range]: entries) {
-                for (const auto& phrase: phrases) {
-                    if (phrase.empty()) {
-                        continue;
-                    }
+            for (auto& entry: entries) {
+                auto biases = entry.biases;
+                if (biases.empty()) {
+                    // expiring sampler bias
+                    continue;
+                }
+
+                // expiring logit bias
+                for (const auto& phrase: entry.phrases) {
+                    auto duration = entry.duration;
 
                     const auto ids = common_tokenize(model, phrase, false, true);
-                    if (!is_range) {
+                    if (!entry.is_range) {
                         // extrapolate
                         biases.resize(ids.size(), biases.back());
                     } else if (ids.size() == 1) {
@@ -2038,7 +2058,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             });
         }
     } while (false);
-    slot.elb_prev_states = slot.ctx_sampling->elb_states;
+    slot.prev_elb_states = slot.ctx_sampling->elb_states;
 
     slot.command = SLOT_COMMAND_LOAD_PROMPT;
     // slot.prompt_tokens.clear();
@@ -2056,6 +2076,16 @@ void server_context::kv_cache_clear() {
 
     // clear the entire KV cache
     llama_kv_cache_clear(ctx);
+    for (auto & slot : slots) {
+        if (slot.spec == nullptr) {
+            continue;
+        }
+
+        common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+        if (auto * ctx_companion = common_speculative_get_companion_ctx(slot.spec); ctx_companion != nullptr) {
+            llama_kv_cache_clear(ctx_companion);
+        }
+    }
     clean_kv_cache = false;
 }
 
@@ -2107,6 +2137,22 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
     // release all slots
     for (server_slot& slot : slots) {
         slot.release();
+        slot.cache_tokens.clear();
+        slot.n_past = 0;
+        slot.n_past_prompt = 0;
+        slot.n_past_offset = 0;
+        slot.n_discarded_prompt = 0;
+        slot.n_kept_prompt = 0;
+        slot.n_prompt_tokens_cache = 0;
+        slot.server_cached_prompt.checkpoints.clear();
+        slot.checkpoint_pos = 0;
+        slot.do_checkpoint = false;
+        if (slot.ctx_sampling != nullptr) {
+            common_sampler_reset(slot.ctx_sampling);
+        }
+    }
+    if (prompt_cache) {
+        prompt_cache->states.clear();
     }
 
     system_need_update = true;
@@ -3904,9 +3950,15 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 slot.cache_tokens.keep_first(slot.n_past);
                 int p0 = (int)system_tokens.size() + slot.n_past;
                 p0 = system_tokens.size() + slot.cache_tokens.pos_next();
-                if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
+                auto * ctx_companion = slot.spec ? common_speculative_get_companion_ctx(slot.spec) : nullptr;
+                const bool target_trimmed = llama_kv_cache_seq_rm(ctx, slot.id, p0, -1);
+                const bool companion_trimmed = ctx_companion == nullptr || llama_kv_cache_seq_rm(ctx_companion, slot.id, p0, -1);
+                if (!target_trimmed || !companion_trimmed) {
                     // could not partially delete (likely using a non-Transformer model)
                     llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
+                    if (ctx_companion != nullptr) {
+                        llama_kv_cache_seq_rm(ctx_companion, slot.id, -1, -1);
+                    }
 
                     p0 = (int)system_tokens.size();
                     if (p0 != 0) {
@@ -3915,9 +3967,16 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                     // there is no common part left (except for the system prompt)
+                    slot.cache_tokens.clear();
                     slot.n_past = 0;
+                    slot.n_past_prompt = 0;
+                    slot.n_past_offset = 0;
+                    slot.n_discarded_prompt = 0;
+                    slot.n_kept_prompt = 0;
                     slot.n_past_se = 0;
+                    slot.n_prompt_tokens_cache = 0;
                     slot.ga_i = 0;
+                    slot.server_cached_prompt.checkpoints.clear();
                     // TODO: is the system prompt ever in the sampling context?
                     common_sampler_reset(slot.ctx_sampling);
                 }

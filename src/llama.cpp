@@ -3319,12 +3319,6 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
-        } else if (model.arch == LLM_ARCH_QWEN35MOE && mtp) {
-            LLAMA_LOG_WARN("\n=========================================================\n");
-            LLAMA_LOG_WARN("Split mode 'graph' curently does not work with MTP for Qwen35-MoE\n");
-            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
-            LLAMA_LOG_WARN("=======================================================\n\n");
-            split_mode = LLAMA_SPLIT_MODE_LAYER;
         } else if (!is_model_split_supported(model)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for this model\n");
@@ -3664,11 +3658,11 @@ static bool llm_load_tensors(
     // assign the repeating layers to the devices according to the splits
     if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
         for (int i = i_gpu_start; i < n_layer; ++i) {
-            model.buft_layer[i] = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
+            model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[i]]);
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
-            model.buft_output = llama_default_buffer_type_offload(model, model.default_layer_device[n_layer]);
+            model.buft_output = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[n_layer]]);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
@@ -3683,7 +3677,7 @@ static bool llm_load_tensors(
         }
         // assign the repeating layers
         for (int i = i_gpu_start; i < n_layer; ++i) {
-            auto buft_layer = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
+            auto buft_layer = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[i]]);
             if (split_mode == LLAMA_SPLIT_MODE_ATTN) {
                 int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count,
                         float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
@@ -3697,8 +3691,17 @@ static bool llm_load_tensors(
         if (n_gpu_layers > n_layer) {
             model.buft_output = {
                 split_buft,
-                llama_default_buffer_type_offload(model, model.default_layer_device[n_layer])
+                llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[n_layer]])
             };
+        } else if (n_gpu_layers > 0) {
+            // Under partial -ngl with -sm graph, route output to the GPU buffer
+            // to avoid synchronization issues between the GPU where the last
+            // REDUCE op is performed and the CPU, where the fused RMS norm and
+            // mul_mat with the output tensor would be performed if left on the CPU.
+            int last_gpu_layer = (int)n_layer - 1;
+            int dev = model.default_layer_device.empty() || last_gpu_layer < 0
+                    ? 0 : std::max(0, model.default_layer_device[last_gpu_layer]);
+            model.buft_output = llama_default_buffer_type_offload(model, dev);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
@@ -4891,19 +4894,46 @@ static void llama_graph_compute(
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
-static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
+static bool prepare_mtp_graph_inputs(
+        struct llama_context & lctx,
+        uint32_t cur_token,
+        uint32_t n_tokens,
+        uint32_t n_tokens_all) {
     ggml_tensor * dst = lctx.inp_mtp_states;
-    const float * src = lctx.draft_input_hidden_state;
     const size_t expected_floats = ggml_nbytes(dst) / sizeof(float);
+    const size_t total_floats = lctx.draft_input_hidden_state_n_floats;
+    const float * src = lctx.draft_input_hidden_state;
 
     if (!src) {
         LLAMA_LOG_ERROR("%s: Source hidden state is null\n", __func__);
         return false;
     }
 
-    if (lctx.draft_input_hidden_state_n_floats != expected_floats) {
+    if (total_floats != expected_floats) {
+        if (n_tokens_all == 0 || total_floats % n_tokens_all != 0) {
+            LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
+                    __func__, total_floats, expected_floats);
+            return false;
+        }
+
+        const size_t row_width = total_floats / n_tokens_all;
+        const size_t slice_floats = row_width * n_tokens;
+        const size_t slice_offset = (size_t) cur_token * row_width;
+
+        if (slice_floats != expected_floats ||
+                slice_offset > total_floats ||
+                total_floats - slice_offset < expected_floats) {
+            LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
+                    __func__, total_floats, expected_floats);
+            return false;
+        }
+
+        src += slice_offset;
+    }
+
+    if (src == nullptr) {
         LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
-                __func__, lctx.draft_input_hidden_state_n_floats, expected_floats);
+                __func__, total_floats, expected_floats);
         return false;
     }
 
@@ -4986,7 +5016,7 @@ static int llama_decode_internal(
     }
 
     // reserve output buffer
-    n_outputs_embd = has_mtp ? n_tokens_all : n_outputs;
+    n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
     if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, std::max<size_t>(n_outputs, n_outputs_embd));
         return -2;
@@ -5198,7 +5228,7 @@ static int llama_decode_internal(
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
-            if (!prepare_mtp_graph_inputs(lctx)) {
+            if (!prepare_mtp_graph_inputs(lctx, cur_token, n_tokens, n_tokens_all)) {
                 return GGML_STATUS_FAILED;
             }
         }
@@ -6787,6 +6817,12 @@ struct llama_context * llama_init_from_model(
     GGML_ASSERT(hparams.n_embd_head_v(0) % ggml_blck_size(type_v) == 0);
     if (!hparams.vocab_only) {
         // initialize backends
+        // main_gpu is a local index into model->devices throughout the codebase
+        // (auto-fit assigns device_count-1, MTP clamps to [0, device_count), buffer-type
+        // setup wraps with model.devices[main_gpu]). Translate to a raw device id here.
+        const int main_gpu_id = (model->main_gpu >= 0 && model->main_gpu < (int)model->devices.size())
+            ? model->devices[model->main_gpu]
+            : model->main_gpu;
 #if defined(GGML_USE_METAL)
         if (model->n_gpu_layers > 0) {
             ctx->backend_metal = ggml_backend_metal_init();
@@ -6800,9 +6836,9 @@ struct llama_context * llama_init_from_model(
 #elif defined(GGML_USE_CUDA)
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
             // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
-            ggml_backend_t backend = ggml_backend_cuda_init(model->main_gpu, cparams.cuda_params);
+            ggml_backend_t backend = ggml_backend_cuda_init(main_gpu_id, cparams.cuda_params);
             if (backend == nullptr) {
-                LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, model->main_gpu);
+                LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, main_gpu_id);
                 llama_free(ctx);
                 return nullptr;
             }
@@ -6835,7 +6871,7 @@ struct llama_context * llama_init_from_model(
             return nullptr;
         }
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
-            ggml_backend_t backend = ggml_backend_vk_init(model->main_gpu);
+            ggml_backend_t backend = ggml_backend_vk_init(main_gpu_id);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize Vulkan backend\n", __func__);
                 llama_free(ctx);
@@ -6856,9 +6892,9 @@ struct llama_context * llama_init_from_model(
 #elif defined(GGML_USE_SYCL)
         // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-            ggml_backend_t backend = ggml_backend_sycl_init(model->main_gpu);
+            ggml_backend_t backend = ggml_backend_sycl_init(main_gpu_id);
             if (backend == nullptr) {
-                LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d backend\n", __func__, model->main_gpu);
+                LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d backend\n", __func__, main_gpu_id);
                 llama_free(ctx);
                 return nullptr;
             }
@@ -6877,7 +6913,7 @@ struct llama_context * llama_init_from_model(
         }
 #elif defined(GGML_USE_KOMPUTE)
         if (model->n_gpu_layers > 0) {
-            auto * backend = ggml_backend_kompute_init(model->main_gpu);
+            auto * backend = ggml_backend_kompute_init(main_gpu_id);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize Kompute backend\n", __func__);
                 llama_free(ctx);
@@ -6889,9 +6925,9 @@ struct llama_context * llama_init_from_model(
     // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
     // TODO: ggml_backend_cann is not support split tensor now, just leave code here.
     if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        ggml_backend_t backend = ggml_backend_cann_init(model->main_gpu);
+        ggml_backend_t backend = ggml_backend_cann_init(main_gpu_id);
         if (backend == nullptr) {
-            LLAMA_LOG_ERROR("%s: failed to initialize CANN%d backend\n", __func__, model->main_gpu);
+            LLAMA_LOG_ERROR("%s: failed to initialize CANN%d backend\n", __func__, main_gpu_id);
             llama_free(ctx);
             return nullptr;
         }

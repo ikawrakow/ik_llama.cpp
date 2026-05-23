@@ -169,7 +169,7 @@ struct server_slot {
     common_sampler * ctx_sampling = nullptr;
 
     // expiring logit bias
-    decltype(ctx_sampling->elb_states) elb_prev_states;
+    std::vector<common_sampler::elb_state> prev_elb_states;
 
     bool has_mtp = false;
 
