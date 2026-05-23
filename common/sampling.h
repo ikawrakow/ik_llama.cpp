@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+#define A_DOT_B(a, b) a.b
+
 // sampler types
 enum class llama_sampler_type : char {
     DRY         = 'd',
@@ -80,37 +82,49 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
 }
 
 
+#define X_COMMON_PARAMS_SAMPLING                                 /*  \
+    */  X( int32_t , min_keep            , 0     , std::round )  /*  0 = disabled, otherwise samplers should return at least min_keep tokens \
+    */  X( int32_t , top_k               , 40    , std::round )  /*  <= 0 to use vocab size \
+    */  X( float   , top_p               , 0.95f ,            )  /*  1.0 = disabled \
+    */  X( float   , min_p               , 0.05f ,            )  /*  0.0 = disabled \
+    */  X( float   , tfs_z               , 1.00f ,            )  /*  1.0 = disabled \
+    */  X( float   , typical_p           , 1.00f ,            )  /*  1.0 = disabled \
+    */  X( float   , temp                , 0.80f ,            )  /*  <= 0.0 to sample greedily, 0.0 to not output probabilities \
+    */  X( float   , dynatemp_range      , 0.00f ,            )  /*  0.0 = disabled \
+    */  X( float   , dynatemp_exponent   , 1.00f ,            )  /*  controls how entropy maps to temperature in dynamic temperature sampler \
+    */  X( int32_t , penalty_last_n      , 64    , std::round )  /*  last n tokens to penalize (0 = disable penalty, -1 = context size) \
+    */  X( float   , penalty_repeat      , 1.00f ,            )  /*  1.0 = disabled \
+    */  X( float   , penalty_freq        , 0.00f ,            )  /*  0.0 = disabled \
+    */  X( float   , penalty_present     , 0.00f ,            )  /*  0.0 = disabled \
+    */  X( float   , dry_multiplier      , 0.0f  ,            )  /*  0.0 = disabled; DRY repetition penalty for tokens extending repetition: \
+    */  X( float   , dry_base            , 1.75f ,            )  /*  0.0 = disabled; multiplier * base ^ (length of sequence before token - allowed length) \
+    */  X( int32_t , dry_allowed_length  , 2     , std::round )  /*  tokens extending repetitions beyond this receive penalty \
+    */  X( int32_t , dry_penalty_last_n  , -1    , std::round )  /*  how many tokens to scan for repetitions (0 = disable penalty, -1 = context size) \
+    */  X( int32_t , mirostat            , 0     , std::round )  /*  0 = disabled, 1 = mirostat, 2 = mirostat 2.0 \
+    */  X( float   , mirostat_tau        , 5.00f ,            )  /*  target entropy \
+    */  X( float   , mirostat_eta        , 0.10f ,            )  /*  learning rate \
+    */  X( float   , xtc_probability     , 0.0f  ,            )  /*  xtc probability \
+    */  X( float   , xtc_threshold       , 1.0f  ,            )  /*  xtc threshold, disabled if > 0.5 \
+    */  X( float   , top_n_sigma         , 0.0f  ,            )  /*  top-n-sigma \
+    */  X( float   , adaptive_target     , -1.0f ,            )  /*  select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled) \
+    */  X( float   , adaptive_decay      , 0.90f ,            )  /*  decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation) \
+    */  X( bool    , adaptive_updt_w_cur , false , std::round )  /*  update state with current probability \
+    */
+
+enum {
+    #undef X
+    #define X(T, MEMBER, DV, PRECAST) SPARAMS_ ## MEMBER ## _ENUM,
+    X_COMMON_PARAMS_SAMPLING
+};
+
 // sampling parameters
 typedef struct common_params_sampling {
+    #undef X
+    #define X(T, MEMBER, DV, _) T MEMBER = DV;
+                X_COMMON_PARAMS_SAMPLING
     int32_t     n_prev                = 64;                 // number of previous tokens to remember
     int32_t     n_probs               = 0;                  // if greater than 0, output the probabilities of top n_probs tokens.
-    int32_t     min_keep              = 0;                  // 0 = disabled, otherwise samplers should return at least min_keep tokens
-    int32_t     top_k                 = 40;                 // <= 0 to use vocab size
-    float       top_p                 = 0.95f;              // 1.0 = disabled
-    float       min_p                 = 0.05f;              // 0.0 = disabled
-    float       tfs_z                 = 1.00f;              // 1.0 = disabled
-    float       typical_p             = 1.00f;              // 1.0 = disabled
-    float       temp                  = 0.80f;              // <= 0.0 to sample greedily, 0.0 to not output probabilities
-    float       dynatemp_range        = 0.00f;              // 0.0 = disabled
-    float       dynatemp_exponent     = 1.00f;              // controls how entropy maps to temperature in dynamic temperature sampler
-    int32_t   penalty_last_n        = 64;                 // last n tokens to penalize (0 = disable penalty, -1 = context size)
-    float       penalty_repeat        = 1.00f;              // 1.0 = disabled
-    float       penalty_freq          = 0.00f;              // 0.0 = disabled
-    float       penalty_present       = 0.00f;              // 0.0 = disabled
-    float       dry_multiplier = 0.0f;  // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
-    float       dry_base = 1.75f; // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
-    int32_t   dry_allowed_length = 2;     // tokens extending repetitions beyond this receive penalty
-    int32_t   dry_penalty_last_n = -1;    // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
-    int32_t   total_context_size = 16840;
-    int32_t   mirostat              = 0;                  // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
-    float       mirostat_tau          = 5.00f;              // target entropy
-    float       mirostat_eta          = 0.10f;              // learning rate
-    float       xtc_probability       = 0.0f;               // xtc probability
-    float       xtc_threshold         = 1.0f;               // xtc threshold, disabled if > 0.5
-    float       top_n_sigma           = 0.0f;               // top-n-sigma
-    float       adaptive_target       = -1.0f;              // select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
-    float       adaptive_decay        = 0.90f;              // decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
-    bool        adaptive_updt_w_cur   = false;              // update state with current probability
+    int32_t     total_context_size    = 16840;
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
 
@@ -163,6 +177,10 @@ typedef struct common_params_sampling {
     // expiring logit bias
     struct elb_param {
         struct elb_entry {
+            std::vector<size_t>         posi;           // positions of phrases in generated text
+            std::vector<float>          addsubs;        // add/modify then subtract/restore sampling parameters
+            std::vector<bool>           addflags;       // true if added
+            size_t                      max_phrase_len;
             std::vector<std::string>    phrases;
             std::vector<float>          biases;     // for each phrase, nth bias for nth token, extrapolate
             int32_t                     duration;   // bias duration, unless exitword matches
@@ -171,13 +189,18 @@ typedef struct common_params_sampling {
                 return (is_range == other.is_range)
                     && (duration == other.duration)
                     && (biases == other.biases)
-                    && (phrases == other.phrases);
+                    && (phrases == other.phrases)
+                    && (addflags == other.addflags)
+                    && (addsubs == other.addsubs)
+                    && (posi == other.posi);
             }
         };
         std::vector<struct elb_entry> entries;
         std::string                   exitword;     // move to next state if matched during generation
+        std::string                   op;           // exitword operator
         bool operator == (const struct elb_param& other) const {
-            return (exitword == other.exitword)
+            return (op == other.op)
+                && (exitword == other.exitword)
                 && (entries == other.entries);
         }
     };
@@ -233,10 +256,13 @@ struct common_sampler {
         size_t                        countup;          // compare against duration
         size_t                        delay;            // to avoid early termination of positively biased phrases
         int32_t                       max_cond_len;
+        std::string                   jumpword;
+        size_t                        jump_idx;
+        size_t                        search_word_len;
     };
     std::vector<struct elb_state> elb_states;
     size_t                        elb_idx;          // for elb_states
-    int32_t                       elb_search_pos;   // for exitword
+    size_t                        elb_search_pos;
 };
 
 
