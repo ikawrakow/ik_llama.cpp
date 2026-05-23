@@ -177,6 +177,9 @@ struct llama_layer {
     struct ggml_tensor * wkq_a_mqa = nullptr;
     struct ggml_tensor * wkv_b = nullptr;
     struct ggml_tensor * wk_b = nullptr;
+    // wk_b in pp_opt-favoring layout [kv_lora_rank, qk_nope, n_head], serialized
+    // as "attn_kv_b.weight". Materialized under -sm graph + mla>1; mla=1 skips.
+    struct ggml_tensor * wk_b_pp = nullptr;
     struct ggml_tensor * wv_b = nullptr;
     struct ggml_tensor * wq_cross = nullptr;
     struct ggml_tensor * wk_cross = nullptr;
@@ -218,6 +221,16 @@ struct llama_layer {
     llama_split_tensor split_k_norm;
     llama_split_tensor split_sinks;
     llama_split_tensor split_wqkv_gate;
+
+    // MLA per-device shards (-sm graph for DEEPSEEK2/GLM_DSA/MISTRAL4).
+    llama_split_tensor split_wq_a;
+    llama_split_tensor split_wq_b;
+    llama_split_tensor split_wkv_a_mqa;
+    llama_split_tensor split_wk_b;
+    llama_split_tensor split_wk_b_pp;
+    llama_split_tensor split_wv_b;
+    llama_split_tensor split_attn_q_a_norm;
+    llama_split_tensor split_attn_kv_a_norm;
 
     llama_split_tensor split_ssm_wqkv;
     llama_split_tensor split_ssm_wqkv_gate;
@@ -372,8 +385,14 @@ struct llama_layer {
     struct llama_layer_nextn nextn;
 
     std::unique_ptr<ggml_tensor> computed_wk_b;
+    std::unique_ptr<ggml_tensor> computed_wk_b_pp;
     std::unique_ptr<ggml_tensor> computed_wv_b;
     std::unique_ptr<ggml_tensor> computed_wkv_b;
+
+    // Per-device replicas of computed wk_b/wv_b (-sm graph). Buffers owned via model.bufs.
+    std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_replicas;
+    std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_pp_replicas;
+    std::vector<std::unique_ptr<ggml_tensor>> computed_wv_b_replicas;
 };
 
 struct llama_lora_adapter;
@@ -476,6 +495,9 @@ struct llama_model {
     std::set<llama_lora_adapter *> lora_adapters;
 
     bool tensor_overrides;
+
+    // Set by llm_apply_khad_pretransform once H is folded into wv_b/wk_b_pp.
+    bool khad_pretransformed = false;
 
     ~llama_model();
 

@@ -136,6 +136,7 @@ struct server_slot {
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
+    common_speculative_type drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
 
     json json_schema;
 
@@ -168,11 +169,9 @@ struct server_slot {
     common_sampler * ctx_sampling = nullptr;
 
     // expiring logit bias
-    decltype(ctx_sampling->elb_states) elb_prev_states;
+    std::vector<common_sampler::elb_state> prev_elb_states;
 
     bool has_mtp = false;
-    bool use_gemma4_external_mtp = false;
-    std::vector<float> mtp_hidden_state;
 
     // saves recurrent state before a speculative batch so it can be restored on rejection
     server_speculative_checkpoint spec_ckpt;

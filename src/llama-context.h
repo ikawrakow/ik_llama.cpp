@@ -4,6 +4,8 @@
 #include "llama-cparams.h"
 #include "llama-sampling.h"
 
+#include "llama-spec-features.h"
+
 struct llama_model;
 
 #include <vector>
@@ -65,6 +67,9 @@ struct llama_kv_cache {
     std::vector<llama_split_tensor> split_k_l;
     std::vector<llama_split_tensor> split_v_l;
     std::vector<llama_split_tensor> split_s_l;
+
+    // Per-device replicas of the MLA compressed-latent KV cache (-sm graph for DEEPSEEK2/GLM_DSA/MISTRAL4).
+    std::vector<llama_split_tensor> replicated_k_l;
 
     std::vector<struct ggml_context *> ctxs;
     std::vector<ggml_backend_buffer_t> bufs;
@@ -242,6 +247,7 @@ struct llama_context {
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
     size_t  output_size = 0; // capacity (of tokens positions) for the output buffers
     int32_t n_outputs   = 0; // number of actually-used outputs in the current ubatch or last logical batch
+    int32_t n_outputs_embd = 0; // number of embedding rows produced for the current logical batch
 
     bool logits_all = false;
 
@@ -269,6 +275,8 @@ struct llama_context {
     void *              abort_callback_data = nullptr;
 
     const float * draft_input_hidden_state = nullptr;
+    size_t draft_input_hidden_state_n_floats = 0;
+    std::vector<float> draft_input_hidden_state_owned;
 
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
@@ -312,3 +320,4 @@ struct llama_context {
     void set_mtp_op_type(llama_mtp_op_type value);
 
 };
+

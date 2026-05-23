@@ -438,9 +438,9 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
     for (int i = gf->n_nodes - 1; i >= 0; --i) {
         inp = gf->nodes[i];
 
-        if (strcmp(inp->name, "result_norm") == 0 || 
-            strcmp(inp->name, "result_embd") == 0 || 
-            strcmp(inp->name, "output_normed") == 0) { 
+        if (strcmp(inp->name, "result_norm") == 0 ||
+            strcmp(inp->name, "result_embd") == 0 ||
+            strcmp(inp->name, "output_normed") == 0) {
             break;
         }
         inp = nullptr;
@@ -1400,7 +1400,7 @@ llm_expert_gating_func_type   gating_op,
                         up_shexp,   up_b_shexp,   nullptr,
                         gate_shexp, gate_b_shexp, nullptr,
                         down_shexp, down_b_shexp, nullptr,
-                        nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
+                        nullptr, type_op_shexp, LLM_FFN_PAR, cb, il, graph);
                 cb(shared_out, "ffn_shexp_out", il);
                 if (shexp_gate) {
                     auto shared_gate = llm_build_lora_mm(lctx, ctx, shexp_gate, cur);
@@ -2048,7 +2048,7 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
 }
 
 ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
-    ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name) {
+        ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name) {
     // lm_head
     if (output->extra) {
         auto split_output = (ggml_split_tensor_t *)output->extra;

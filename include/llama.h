@@ -464,6 +464,7 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
         enum ggml_type type_reduce; // data type for reduce operations
+        enum ggml_type type_graph_attn; // flash-attn precision under -sm graph
         enum ggml_type type_k_first;
         enum ggml_type type_k_last;
         enum ggml_type type_v_first;

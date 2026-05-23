@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-chat.h"
 #include "server-common.h"
 #include "server-task.h"
 #include "server-queue.h"
@@ -15,8 +16,6 @@
 #include <iostream>
 #include <regex>
 #include <exception>
-
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1, int32_t offset = 0) {
     if (pos_min == -1) {
@@ -51,154 +50,10 @@ static bool params_use_gemma4_external_mtp(const gpt_params & params_base) {
         llama_model_is_gemma4_mtp_assistant(params_base.speculative.model_dft);
 }
 
-static llama_context * get_slot_mtp_ctx(server_slot & slot, llama_context * ctx) {
-    llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
-    return mtp_ctx ? mtp_ctx : ctx;
-}
-
-static int get_ctx_mtp_n_embd(llama_context * ctx) {
-    return ctx ? (int) llama_mtp_state_n_embd(ctx) : 0;
-}
-
-static int get_slot_mtp_n_embd(server_slot & slot, llama_context * ctx) {
-    return get_ctx_mtp_n_embd(get_slot_mtp_ctx(slot, ctx));
-}
-
-static void cache_slot_mtp_hidden(server_slot & slot, const float * hidden, int n_embd) {
-    if (hidden == nullptr || n_embd <= 0) {
-        return;
-    }
-
-    slot.mtp_hidden_state.assign(hidden, hidden + n_embd);
-}
-
-static void sync_slot_mtp_hidden(server_slot & slot, llama_context * ctx) {
-    if (!slot.has_mtp || !slot.spec || slot.mtp_hidden_state.empty()) {
-        return;
-    }
-
-    const int n_embd = get_slot_mtp_n_embd(slot, ctx);
-    if (n_embd <= 0 || slot.mtp_hidden_state.size() < (size_t) n_embd) {
-        return;
-    }
-
-    const int n_hidden = slot.mtp_hidden_state.size() / n_embd;
-    llama_set_draft_input_hidden_state(get_slot_mtp_ctx(slot, ctx), slot.mtp_hidden_state.data() + (n_hidden - 1) * n_embd);
-}
-
-static void cache_and_sync_slot_mtp_hidden(server_slot & slot, llama_context * ctx, const float * hidden, int n_embd) {
-    cache_slot_mtp_hidden(slot, hidden, n_embd);
-    sync_slot_mtp_hidden(slot, ctx);
-}
-
-static void cache_and_sync_slot_mtp_hidden_from_rows(server_slot & slot, llama_context * ctx, const std::vector<float> & rows, int n_embd) {
-    if (rows.empty() || n_embd <= 0) {
-        return;
-    }
-
-    const size_t n_rows = rows.size() / n_embd;
-    if (n_rows == 0) {
-        return;
-    }
-
-    cache_and_sync_slot_mtp_hidden(slot, ctx, rows.data() + (n_rows - 1) * n_embd, n_embd);
-}
-
-static const float * mtp_hidden_last_row(const std::vector<float> & rows, int n_embd) {
-    if (n_embd <= 0 || rows.size() < (size_t) n_embd) {
-        return nullptr;
-    }
-
-    const size_t n_rows = rows.size() / n_embd;
-    if (n_rows == 0) {
-        return nullptr;
-    }
-
-    return rows.data() + (n_rows - 1) * n_embd;
-}
-
-static bool sync_external_mtp_after_non_mtp_accept(
-        server_slot & slot,
-        llama_context * ctx,
-        const std::vector<float> & mtp_commit_states,
-        int n_embd) {
-    if (!slot.use_gemma4_external_mtp || mtp_commit_states.empty() || n_embd <= 0) {
-        return false;
-    }
-
-    cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, mtp_commit_states, n_embd);
-    return true;
-}
-
-static void apply_slot_mtp_accept(
-        server_slot & slot,
-        llama_context * ctx,
-        const std::vector<float> & mtp_hidden_state,
-        const std::vector<llama_token> & ids,
-        int32_t mtp_n_past_base,
-        int n_embd) {
-    if (!slot.has_mtp || mtp_hidden_state.empty() || n_embd <= 0) {
-        return;
-    }
-
-    llama_context * mtp_ctx = get_slot_mtp_ctx(slot, ctx);
-    if (slot.use_gemma4_external_mtp) {
-        cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, mtp_hidden_state, n_embd);
-        return;
-    }
-
-    slot.mtp_hidden_state = mtp_hidden_state;
-    llama_set_draft_input_hidden_state(mtp_ctx, slot.mtp_hidden_state.data());
-    mtp_accept_tokens(mtp_ctx, ids, mtp_n_past_base, slot.id);
-}
-
-static void set_external_mtp_hidden(server_slot & slot, llama_context * ctx, const float * hidden, int n_embd) {
-    if (!slot.has_mtp || !slot.spec || hidden == nullptr || n_embd <= 0) {
-        return;
-    }
-
-    cache_and_sync_slot_mtp_hidden(slot, ctx, hidden, n_embd);
-}
-
 struct server_mtp_warmup {
     llama_context * ctx_tgt;
     server_slot   * slot;
 };
-
-static int32_t server_mtp_warmup_batch(
-        llama_context * ctx_tgt,
-        llama_context * ctx_mtp,
-        const llama_batch * batch,
-        server_slot & slot) {
-    if (!ctx_tgt || !ctx_mtp || !batch || batch->n_tokens <= 0) {
-        return 0;
-    }
-
-    const float * emb = llama_get_embeddings(ctx_tgt);
-    const int n_embd_src = get_ctx_mtp_n_embd(ctx_tgt);
-    const int n_embd_dst = get_ctx_mtp_n_embd(ctx_mtp);
-    if (emb == nullptr || n_embd_src <= 0 || n_embd_dst <= 0) {
-        return -1;
-    }
-
-    if (n_embd_src != n_embd_dst) {
-        LOG_ERROR("MTP warmup hidden state width mismatch", {
-            {"n_embd_src", n_embd_src},
-            {"n_embd_dst", n_embd_dst},
-        });
-        return -1;
-    }
-
-    const float * last_hidden = emb + (batch->n_tokens - 1) * n_embd_src;
-    if (slot.use_gemma4_external_mtp) {
-        cache_and_sync_slot_mtp_hidden(slot, ctx_tgt, last_hidden, n_embd_dst);
-        return 0;
-    }
-
-    cache_slot_mtp_hidden(slot, last_hidden, n_embd_dst);
-    llama_set_draft_input_hidden_state(ctx_mtp, emb);
-    return mtp_update_kv_cache(ctx_mtp, *batch, true);
-}
 
 static int32_t server_mtp_media_warmup_callback(void * user_data, const llama_batch * batch) {
     auto * data = static_cast<server_mtp_warmup *>(user_data);
@@ -206,7 +61,9 @@ static int32_t server_mtp_media_warmup_callback(void * user_data, const llama_ba
         return 0;
     }
 
-    return server_mtp_warmup_batch(data->ctx_tgt, get_slot_mtp_ctx(*data->slot, data->ctx_tgt), batch, *data->slot);
+    return batch != nullptr
+        ? common_speculative_on_target_seq_batch(data->slot->spec, data->ctx_tgt, *batch, data->slot->id, true)
+        : 0;
 }
 
 static bool server_response_needs_chat_parse(oaicompat_type oaicompat) {
@@ -481,6 +338,8 @@ bool server_context::load_model(const gpt_params& params_) {
         params_dft.cache_type_k = params_base.speculative.cache_type_k.empty() ? params_base.cache_type_k : params_base.speculative.cache_type_k;
         params_dft.cache_type_v = params_base.speculative.cache_type_v.empty() ? params_base.cache_type_v : params_base.speculative.cache_type_v;
         params_dft.flash_attn   = params_base.flash_attn;
+        params_dft.k_cache_hadamard = params_base.k_cache_hadamard;
+        params_dft.v_cache_hadamard = params_base.v_cache_hadamard;
         if (!params_base.speculative.params.empty()) {
             auto [argc, argv] = parse_command_line("llama-server " + params_base.speculative.params);
             if (!gpt_params_parse(argc, argv, params_dft)) {
@@ -589,7 +448,6 @@ void server_context::init() {
                 params_base.speculative.cparams_dft.embeddings   = true;
 
                 slot.has_mtp = true;
-                slot.use_gemma4_external_mtp = has_external_mtp;
                 slot.params.speculative.cparams_dft = params_base.speculative.cparams_dft;
 
                 slot.batch_spec = llama_batch_init(slot.params.speculative.get_max_stage_n_max() + 1, 0, 1);
@@ -750,8 +608,11 @@ void server_slot::reset() {
     stopping_word = "";
     n_past = 0;
     n_past_prompt = 0;
+    n_discarded_prompt = 0;
+    n_kept_prompt = 0;
     n_sent_text = 0;
     drafted.clear();
+    drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
     i_batch_dft.clear();
     spec_ckpt.clear();
     n_sent_token_probs = 0;
@@ -770,7 +631,9 @@ void server_slot::reset() {
     checkpoint_pos = 0;
     image_just_processed = false;
     do_checkpoint = false;
-    mtp_hidden_state.clear();
+    if (spec != nullptr) {
+        common_speculative_clear_sequence_hidden(spec, id);
+    }
 
     positional_bans.clear();
     ban_phrases.clear();
@@ -1624,6 +1487,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
             slot.params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
+        } else {
+            // Reset to default; otherwise a reused slot would apply the previous chat's PEG parser to non-chat outputs (e.g., /v1/completions).
+            slot.params.chat_parser_params.parser = defaults.chat_parser_params.parser;
         }
     }
     {
@@ -2063,7 +1929,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     do  // populate expiring logit bias
     {
-        const auto elb_prev_params = slot.sparams.elb_params;
+        const auto prev_elb_params = slot.sparams.elb_params;
 
         const auto& expiring_logit_bias = data.find("expiring_logit_bias");
         if (expiring_logit_bias != data.end() && expiring_logit_bias->is_array()) {
@@ -2089,9 +1955,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             break;
         }
 
-        if (!slot.elb_prev_states.empty() && (elb_params == elb_prev_params)) {
+        if (!slot.prev_elb_states.empty() && (elb_params == prev_elb_params)) {
             // reset and reuse previous states
-            slot.ctx_sampling->elb_states = slot.elb_prev_states;
+            slot.ctx_sampling->elb_states = slot.prev_elb_states;
             for (auto& elb_state: slot.ctx_sampling->elb_states) {
                 elb_state.countup = 0;
             }
@@ -2104,22 +1970,40 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.ctx_sampling->elb_states.reserve(n_elb_param);
 
         // 1 state <-> 1 exitword <-> 1+ entries
-        for (const auto& [entries, exitword]: elb_params) {
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0 });
+        for (int32_t i = 0; i < elb_params.size(); ++i) {
+            const auto& [entries, exitword, op] = elb_params[i];
+
+            if (op == ">>") {
+                for (auto& elb_state: slot.ctx_sampling->elb_states) {
+                    if (elb_state.jumpword.empty()) {
+                        elb_state.jumpword = exitword;
+                        elb_state.jump_idx = i + 1;
+                        elb_state.search_word_len = std::max(elb_state.exitword.length(), elb_state.jumpword.length());
+                    }
+                }
+            }
+
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, exitword.length() });
+
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
             auto& delay = slot.ctx_sampling->elb_states.back().delay;
             auto& max_cond_len = slot.ctx_sampling->elb_states.back().max_cond_len;
 
             // 1 entry <-> 1 phrase <-> 1+ biases
-            for (auto [phrases, biases, duration, is_range]: entries) {
-                for (const auto& phrase: phrases) {
-                    if (phrase.empty()) {
-                        continue;
-                    }
+            for (auto& entry: entries) {
+                auto biases = entry.biases;
+                if (biases.empty()) {
+                    // expiring sampler bias
+                    continue;
+                }
+
+                // expiring logit bias
+                for (const auto& phrase: entry.phrases) {
+                    auto duration = entry.duration;
 
                     const auto ids = common_tokenize(model, phrase, false, true);
-                    if (!is_range) {
+                    if (!entry.is_range) {
                         // extrapolate
                         biases.resize(ids.size(), biases.back());
                     } else if (ids.size() == 1) {
@@ -2174,7 +2058,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             });
         }
     } while (false);
-    slot.elb_prev_states = slot.ctx_sampling->elb_states;
+    slot.prev_elb_states = slot.ctx_sampling->elb_states;
 
     slot.command = SLOT_COMMAND_LOAD_PROMPT;
     // slot.prompt_tokens.clear();
@@ -2192,6 +2076,16 @@ void server_context::kv_cache_clear() {
 
     // clear the entire KV cache
     llama_kv_cache_clear(ctx);
+    for (auto & slot : slots) {
+        if (slot.spec == nullptr) {
+            continue;
+        }
+
+        common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+        if (auto * ctx_companion = common_speculative_get_companion_ctx(slot.spec); ctx_companion != nullptr) {
+            llama_kv_cache_clear(ctx_companion);
+        }
+    }
     clean_kv_cache = false;
 }
 
@@ -2243,6 +2137,22 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
     // release all slots
     for (server_slot& slot : slots) {
         slot.release();
+        slot.cache_tokens.clear();
+        slot.n_past = 0;
+        slot.n_past_prompt = 0;
+        slot.n_past_offset = 0;
+        slot.n_discarded_prompt = 0;
+        slot.n_kept_prompt = 0;
+        slot.n_prompt_tokens_cache = 0;
+        slot.server_cached_prompt.checkpoints.clear();
+        slot.checkpoint_pos = 0;
+        slot.do_checkpoint = false;
+        if (slot.ctx_sampling != nullptr) {
+            common_sampler_reset(slot.ctx_sampling);
+        }
+    }
+    if (prompt_cache) {
+        prompt_cache->states.clear();
     }
 
     system_need_update = true;
@@ -3646,19 +3556,19 @@ void server_context::add_sampled_tokens() {
             const llama_pos draft_base_pos = slot.has_mtp ? slot.cache_tokens.pos_next() : -1;
 
             if (slot.has_mtp) {
-                if (!slot.mtp_hidden_state.empty()) {
-                    sync_slot_mtp_hidden(slot, ctx);
-                } else {
+                if (!common_speculative_ensure_sequence_hidden(slot.spec, ctx, slot.id, draft_base_pos - 1)) {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
-                    const float* emb_neg1 = llama_get_embeddings_ith(ctx, -1);
-                    if (emb_neg1) {
-                        const int n_embd = get_ctx_mtp_n_embd(ctx);
-                        cache_and_sync_slot_mtp_hidden(slot, ctx, emb_neg1, n_embd);
-                    }
                 }
             }
 
-            llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled, draft_base_pos, slot.id);
+            llama_tokens draft = common_speculative_draft(
+                slot.spec,
+                params_spec,
+                cached_text_tokens,
+                slot.sampled,
+                draft_base_pos,
+                slot.id);
+            slot.drafted_spec_type = common_speculative_current_type(slot.spec);
 
             const int n_draft_max = slot.get_n_draft_max();
 
@@ -3683,6 +3593,7 @@ void server_context::add_sampled_tokens() {
                 // fallback to normal decoding
                 slot.i_batch = slot.i_batch_dft[0];
                 slot.drafted.clear();
+                slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
                 slot.i_batch_dft.clear();
             } else {
                 // keep track of total number of drafted tokens tested
@@ -3699,6 +3610,7 @@ void server_context::add_sampled_tokens() {
         }
         else {
             // no speculative decoding
+            slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
             slot.i_batch = batch.n_tokens;
 
             common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
@@ -4038,9 +3950,15 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 slot.cache_tokens.keep_first(slot.n_past);
                 int p0 = (int)system_tokens.size() + slot.n_past;
                 p0 = system_tokens.size() + slot.cache_tokens.pos_next();
-                if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
+                auto * ctx_companion = slot.spec ? common_speculative_get_companion_ctx(slot.spec) : nullptr;
+                const bool target_trimmed = llama_kv_cache_seq_rm(ctx, slot.id, p0, -1);
+                const bool companion_trimmed = ctx_companion == nullptr || llama_kv_cache_seq_rm(ctx_companion, slot.id, p0, -1);
+                if (!target_trimmed || !companion_trimmed) {
                     // could not partially delete (likely using a non-Transformer model)
                     llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
+                    if (ctx_companion != nullptr) {
+                        llama_kv_cache_seq_rm(ctx_companion, slot.id, -1, -1);
+                    }
 
                     p0 = (int)system_tokens.size();
                     if (p0 != 0) {
@@ -4049,9 +3967,16 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                     // there is no common part left (except for the system prompt)
+                    slot.cache_tokens.clear();
                     slot.n_past = 0;
+                    slot.n_past_prompt = 0;
+                    slot.n_past_offset = 0;
+                    slot.n_discarded_prompt = 0;
+                    slot.n_kept_prompt = 0;
                     slot.n_past_se = 0;
+                    slot.n_prompt_tokens_cache = 0;
                     slot.ga_i = 0;
+                    slot.server_cached_prompt.checkpoints.clear();
                     // TODO: is the system prompt ever in the sampling context?
                     common_sampler_reset(slot.ctx_sampling);
                 }
@@ -4216,10 +4141,8 @@ void server_context::extend_context(const int32_t n_tokens) {
 static void restore_speculative_checkpoint(
         server_slot & slot, llama_context * ctx, llama_model * model,
         common_speculative_type spec_type_used,
-        const std::vector<llama_token> & ids, int n_draft,
-        const std::vector<llama_token> & mtp_commit_tokens,
-        const std::vector<float> & mtp_commit_states,
-        const std::vector<float> & mtp_hidden_state_seed,
+    llama_token sampled_before,
+    const std::vector<llama_token> & ids, int n_draft,
         const std::vector<float> & mtp_hidden_state_pre, int32_t mtp_n_past_base) {
     if (slot.spec_ckpt.per_step_enabled) {
         const int step = (int)ids.size() - 1;
@@ -4234,35 +4157,17 @@ static void restore_speculative_checkpoint(
 
         // Update MTP KV cache and hidden state using embeddings collected before checkpoint restore.
         if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-            llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
-            llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-
-            if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
-                const int n_embd = get_ctx_mtp_n_embd(ctx);
-                apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
-            } else if (!mtp_commit_tokens.empty() && !mtp_commit_states.empty()) {
-                const int n_embd = get_ctx_mtp_n_embd(ctx);
-                if (sync_external_mtp_after_non_mtp_accept(slot, ctx, mtp_commit_states, n_embd)) {
-                    SLT_DBG(slot, "%s", "synced external MTP hidden state from accepted-prefix rows after per-step restore");
-                } else {
-                    const float * seed_hidden = mtp_hidden_last_row(mtp_hidden_state_seed, n_embd);
-
-                    if (seed_hidden == nullptr) {
-                        SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay after per-step restore");
-                        slot.mtp_hidden_state.clear();
-                    } else {
-                        llama_batch accepted_batch = llama_batch_init(mtp_commit_tokens.size(), 0, 1);
-                        for (size_t i = 0; i < mtp_commit_tokens.size(); ++i) {
-                            common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
-                        }
-
-                        llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
-                        mtp_update_kv_cache(mtp_target, accepted_batch, false);
-                        llama_batch_free(accepted_batch);
-
-                        slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
-                    }
-                }
+            if (!common_speculative_commit_accepted_hidden_rows(
+                    slot.spec,
+                    spec_type_used,
+                    slot.id,
+                    mtp_n_past_base,
+                    sampled_before,
+                    ids,
+                    mtp_hidden_state_pre)) {
+                common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+            } else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
+                SLT_DBG(slot, "%s", "synced MTP target hidden state from accepted-prefix rows after per-step restore");
             }
         }
 
@@ -4297,31 +4202,23 @@ static void restore_speculative_checkpoint(
                 SLT_ERR(slot, "failed to re-decode accepted tokens after checkpoint restore: %d\n", ret);
             }
             if (slot.has_mtp) {
-                const int n_embd = get_ctx_mtp_n_embd(ctx);
-
                 const int n_accepted = (int)ids.size();
-                slot.mtp_hidden_state.resize(n_accepted * n_embd);
-                for (int j = 0; j < n_accepted; j++) {
-                    const float * emb_j = llama_get_embeddings_ith(ctx, j);
-                    if (emb_j) {
-                        memcpy(slot.mtp_hidden_state.data() + j * n_embd, emb_j, n_embd * sizeof(float));
-                    }
+                std::vector<int32_t> redecoded_indices(n_accepted);
+                for (int j = 0; j < n_accepted; ++j) {
+                    redecoded_indices[j] = j;
                 }
 
-                if (slot.use_gemma4_external_mtp) {
-                    cache_and_sync_slot_mtp_hidden_from_rows(slot, ctx, slot.mtp_hidden_state, n_embd);
-                } else {
-                    llama_context * mtp_ctx = get_slot_mtp_ctx(slot, ctx);
-                    llama_set_draft_input_hidden_state(mtp_ctx, slot.mtp_hidden_state.data());
-                    mtp_accept_tokens(mtp_ctx, ids, slot.spec_ckpt.n_past, slot.id);
-
-                    if (n_accepted > 1) {
-                        memmove(slot.mtp_hidden_state.data(),
-                                slot.mtp_hidden_state.data() + (n_accepted - 1) * n_embd,
-                                n_embd * sizeof(float));
-                    }
+                if (!common_speculative_commit_accepted_output(
+                        slot.spec,
+                        ctx,
+                        spec_type_used,
+                        slot.id,
+                        slot.spec_ckpt.n_past,
+                        sampled_before,
+                        ids,
+                        redecoded_indices)) {
+                    common_speculative_clear_sequence_hidden(slot.spec, slot.id);
                 }
-                slot.mtp_hidden_state.resize(n_embd);
             }
 
             for (llama_token id : ids) {
@@ -4344,9 +4241,8 @@ void server_context::speculative_decoding_accept() {
         }
 
         const llama_token sampled_before = slot.sampled;
-        const common_speculative_type spec_type_used = common_speculative_current_type(slot.spec);
+        const common_speculative_type spec_type_used = slot.drafted_spec_type;
         size_t n_draft = slot.drafted.size();
-        const std::vector<float> mtp_hidden_state_seed = slot.has_mtp ? slot.mtp_hidden_state : std::vector<float>{};
 
         slot.ctx_sampling->to_generated_text = &slot.generated_text;
         if (n_draft > 0) {
@@ -4375,48 +4271,28 @@ void server_context::speculative_decoding_accept() {
             continue;
         }
 
+        const bool any_rejected = (ids.size() - 1) < n_draft;
         int32_t mtp_n_past_base = 0;
         std::vector<float> mtp_hidden_state_pre;
-        std::vector<llama_token> mtp_commit_tokens;
-        std::vector<float> mtp_commit_states;
+        std::vector<int32_t> accepted_output_indices;
         if (slot.has_mtp) {
             const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted.size() + 1);
             mtp_n_past_base = slot.cache_tokens.pos_next(n_pre_spec_tokens);
 
-            const int n_embd = get_ctx_mtp_n_embd(ctx);
             if (!ids.empty()) {
-                mtp_hidden_state_pre.resize(ids.size() * n_embd);
-                for (size_t i = 0; i < ids.size(); i++) {
-                    const float* emb_i = llama_get_embeddings_ith(ctx, slot.i_batch_dft[i]);
-                    if (emb_i) {
-                        memcpy(mtp_hidden_state_pre.data() + i * n_embd, emb_i, n_embd * sizeof(float));
-                    }
-                }
+                accepted_output_indices.assign(slot.i_batch_dft.begin(), slot.i_batch_dft.begin() + ids.size());
+            }
 
-                if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
-                    mtp_commit_tokens.reserve(ids.size());
-                    mtp_commit_tokens.push_back(sampled_before);
-                    mtp_commit_tokens.insert(mtp_commit_tokens.end(), ids.begin(), ids.end() - 1);
-
-                    mtp_commit_states.resize(ids.size() * n_embd);
-                    for (size_t i = 0; i < ids.size(); ++i) {
-                        const float * emb_i = llama_get_embeddings_ith(ctx, slot.i_batch_dft[i]);
-                        if (emb_i) {
-                            memcpy(mtp_commit_states.data() + i * n_embd, emb_i, n_embd * sizeof(float));
-                        }
-                    }
-                }
-            } else {
-                const float* emb0 = llama_get_embeddings_ith(ctx, 0);
-                if (emb0) {
-                    mtp_hidden_state_pre.resize(n_embd);
-                    memcpy(mtp_hidden_state_pre.data(), emb0, n_embd * sizeof(float));
+            if (any_rejected && slot.spec_ckpt.valid && !accepted_output_indices.empty()) {
+                if (!common_speculative_copy_output_hidden_rows(slot.spec, ctx, accepted_output_indices, mtp_hidden_state_pre)) {
+                    mtp_hidden_state_pre.clear();
                 }
             }
         }
 
         slot.i_batch_dft.clear();
         slot.drafted.clear();
+        slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
 
         slot.n_past += ids.size();
         slot.n_decoded += ids.size();
@@ -4440,40 +4316,22 @@ void server_context::speculative_decoding_accept() {
         slot.n_past = slot.cache_tokens.n_tokens();
 
         // for recurrent/hybrid models: if any drafts were rejected, restore recurrent state
-        const bool any_rejected = (ids.size() - 1) < n_draft;
         if (any_rejected && slot.spec_ckpt.valid) {
-            restore_speculative_checkpoint(slot, ctx, model, spec_type_used, ids, n_draft, mtp_commit_tokens, mtp_commit_states, mtp_hidden_state_seed, mtp_hidden_state_pre, mtp_n_past_base);
+            restore_speculative_checkpoint(slot, ctx, model, spec_type_used, sampled_before, ids, n_draft, mtp_hidden_state_pre, mtp_n_past_base);
         } else {
-            if (slot.has_mtp && !mtp_hidden_state_pre.empty()) {
-                llama_context * mtp_ctx = common_speculative_get_mtp_ctx(slot.spec);
-                llama_context * mtp_target = mtp_ctx ? mtp_ctx : ctx;
-
-                if (spec_type_used == COMMON_SPECULATIVE_TYPE_MTP) {
-                    const int n_embd = get_ctx_mtp_n_embd(ctx);
-                    apply_slot_mtp_accept(slot, ctx, mtp_hidden_state_pre, ids, mtp_n_past_base, n_embd);
-                } else if (!mtp_commit_tokens.empty() && !mtp_commit_states.empty()) {
-                    const int n_embd = get_ctx_mtp_n_embd(ctx);
-                    if (sync_external_mtp_after_non_mtp_accept(slot, ctx, mtp_commit_states, n_embd)) {
-                        SLT_DBG(slot, "%s", "synced external MTP hidden state from accepted-prefix rows");
-                    } else {
-                        const float * seed_hidden = mtp_hidden_last_row(mtp_hidden_state_seed, n_embd);
-
-                        if (seed_hidden == nullptr) {
-                            SLT_WRN(slot, "%s", "missing MTP seed hidden state for accepted-prefix replay");
-                            slot.mtp_hidden_state.clear();
-                        } else {
-                            llama_batch accepted_batch = llama_batch_init(mtp_commit_tokens.size(), 0, 1);
-                            for (size_t i = 0; i < mtp_commit_tokens.size(); ++i) {
-                                common_batch_add(accepted_batch, mtp_commit_tokens[i], mtp_n_past_base + i, { slot.id }, true);
-                            }
-
-                            llama_set_draft_input_hidden_state(mtp_target, seed_hidden);
-                            mtp_update_kv_cache(mtp_target, accepted_batch, false);
-                            llama_batch_free(accepted_batch);
-
-                            slot.mtp_hidden_state.assign(mtp_commit_states.end() - n_embd, mtp_commit_states.end());
-                        }
-                    }
+            if (slot.has_mtp && !accepted_output_indices.empty()) {
+                if (!common_speculative_commit_accepted_output(
+                        slot.spec,
+                        ctx,
+                        spec_type_used,
+                        slot.id,
+                        mtp_n_past_base,
+                        sampled_before,
+                        ids,
+                        accepted_output_indices)) {
+                    common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+                } else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
+                    SLT_DBG(slot, "%s", "synced MTP target hidden state from accepted-prefix rows");
                 }
             }
             llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
@@ -4852,26 +4710,22 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             continue; // continue loop of n_batch
         }
 
-    server_slot * mtp_warmup_slot = nullptr;
     if (server_speculative_has_mtp(params_base.speculative)) {
-            for (auto& slot : slots) {
-                if ((slot.state == SLOT_STATE_PROCESSING && slot.n_decoded == 0) ||
-                    (slot.state == SLOT_STATE_IDLE && slot.command == SLOT_COMMAND_LOAD_PROMPT)) {
-                    bool has_tokens_for_slot = (batch_view.n_tokens > 0 && batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id);
-                    if (has_tokens_for_slot) {
-                        mtp_warmup_slot = &slot;
-                        break;
-                    }
-                }
+        for (auto & slot : slots) {
+            if (!slot.spec || !slot.has_mtp) {
+                continue;
             }
-        }
 
-        if (mtp_warmup_slot && mtp_warmup_slot->spec && mtp_warmup_slot->has_mtp) {
-            llama_context * mtp_ctx = get_slot_mtp_ctx(*mtp_warmup_slot, ctx);
-            if (server_mtp_warmup_batch(ctx, mtp_ctx, &batch_view, *mtp_warmup_slot) != 0) {
-                LOG_ERROR("%s\n", "failed to warm up MTP state from prompt batch");
+            if ((slot.state != SLOT_STATE_PROCESSING || slot.n_decoded != 0) &&
+                (slot.state != SLOT_STATE_IDLE || slot.command != SLOT_COMMAND_LOAD_PROMPT)) {
+                continue;
+            }
+
+            if (common_speculative_on_target_seq_batch(slot.spec, ctx, batch_view, slot.id, true) != 0) {
+                LOG_ERROR("failed to warm up MTP state from prompt batch for slot %d\n", slot.id);
             }
         }
+    }
 
         for (auto& slot : slots) {
             bool is_active_slot = (slot.state == SLOT_STATE_PROCESSING);
@@ -4923,15 +4777,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             const int tok_idx = slot.i_batch - i;
 
             if (slot.has_mtp && slot.n_decoded == 0) {
-                const float* emb_i = llama_get_embeddings_ith(ctx, tok_idx);
-                if (emb_i) {
-                    const int n_embd = get_ctx_mtp_n_embd(ctx);
-                    if (slot.use_gemma4_external_mtp) {
-                        set_external_mtp_hidden(slot, ctx, emb_i, n_embd);
-                    } else {
-                        cache_slot_mtp_hidden(slot, emb_i, n_embd);
-                    }
-                }
+                (void) common_speculative_capture_output_hidden(slot.spec, ctx, tok_idx, slot.id, slot.n_past);
             }
 
             apply_server_biases(slot);
@@ -5028,7 +4874,7 @@ void server_context::update_slots() {
     // start populating the batch for this iteration
     common_batch_clear(batch);
 
-    // frist, add sampled tokens from any ongoing sequences
+    // first, add sampled tokens from any ongoing sequences
     add_sampled_tokens(); // Prepare batch for inference
 
     // process in chunks of params.n_batch

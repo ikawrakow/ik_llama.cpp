@@ -240,7 +240,7 @@
 // if you need to load more than 64 model shards.
 #define GGML_MAX_CONTEXTS       64
 #endif
-#define GGML_MAX_SRC            10
+#define GGML_MAX_SRC            12
 #ifndef GGML_MAX_NAME
 #define GGML_MAX_NAME           64
 #endif
@@ -1115,6 +1115,7 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // Source may be F32, F16, or a supported quantized type; output is always F32.
     GGML_API struct ggml_tensor * ggml_hadamard(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,

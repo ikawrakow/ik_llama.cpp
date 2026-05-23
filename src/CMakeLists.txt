@@ -40,6 +40,7 @@ endif()
 add_library(llama
             ../include/llama.h
             llama.cpp
+            llama-spec-features.cpp
             llama-vocab.cpp
             llama-grammar.cpp
             llama-sampling.cpp

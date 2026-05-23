@@ -433,6 +433,7 @@ struct gpt_params {
     std::string cache_type_v = "f16"; // KV cache data type for the V
 
     std::string reduce_type = "f16";
+    std::string graph_attn_precision = "f16";
 
     std::string type_k_first = "f16";
     std::string type_k_last  = "f16";
@@ -645,6 +646,11 @@ std::vector<std::string> string_split<std::string>(const std::string& input, cha
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
 void string_process_escapes(std::string & input);
+std::string string_unescape(const std::string& str);
+
+std::vector<std::string> string_extract(const std::string& str, const char c, std::vector<size_t>& posi);
+
+bool string_is_found(const std::string& window, const std::string& str, size_t& pos);
 
 //
 // Filesystem utils

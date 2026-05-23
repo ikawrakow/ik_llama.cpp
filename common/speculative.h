@@ -1,10 +1,18 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-spec-features.h"
 #include "common.h"
 #include "spec-tuner.h"
 
 struct common_speculative;
+
+using common_speculative_feature_kind = llama_spec_feature_kind;
+using common_speculative_feature_row_view = llama_spec_feature_row_view;
+using common_speculative_feature_view = llama_spec_feature_view;
+
+static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_NONE = LLAMA_SPEC_FEATURE_NONE;
+static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE = LLAMA_SPEC_FEATURE_HIDDEN_STATE;
 
 // comma separated list of all types
 std::string common_speculative_type_name_str();
@@ -41,11 +49,66 @@ llama_tokens common_speculative_draft(
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
 
+bool common_speculative_ensure_sequence_hidden(
+    common_speculative * spec,
+    llama_context * ctx,
+    llama_seq_id seq_id,
+    llama_pos pos);
+
+bool common_speculative_capture_output_hidden(
+    common_speculative * spec,
+    llama_context * ctx,
+    int32_t output_index,
+    llama_seq_id seq_id,
+    llama_pos pos);
+
+bool common_speculative_copy_output_hidden_rows(
+    const common_speculative * spec,
+    llama_context * ctx,
+    const std::vector<int32_t> & output_indices,
+    std::vector<float> & hidden_rows);
+
+bool common_speculative_commit_accepted_hidden_rows(
+    common_speculative * spec,
+    common_speculative_type spec_type_used,
+    llama_seq_id seq_id,
+    llama_pos pos_base,
+    llama_token sampled_before,
+    const std::vector<llama_token> & ids,
+    const std::vector<float> & hidden_rows);
+
+bool common_speculative_commit_accepted_output(
+    common_speculative * spec,
+    llama_context * ctx,
+    common_speculative_type spec_type_used,
+    llama_seq_id seq_id,
+    llama_pos pos_base,
+    llama_token sampled_before,
+    const std::vector<llama_token> & ids,
+    const std::vector<int32_t> & output_indices);
+
+bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id);
+
+void common_speculative_clear_sequence_hidden(common_speculative * spec, llama_seq_id seq_id);
+
+llama_context * common_speculative_get_companion_ctx(common_speculative * spec);
+
+int32_t common_speculative_on_target_seq_batch(
+    common_speculative * spec,
+    llama_context * ctx,
+    const llama_batch & batch,
+    llama_seq_id seq_id,
+    bool is_prompt_warmup);
+
+int32_t common_speculative_on_target_batch(
+    common_speculative * spec,
+    const llama_batch & batch,
+    const common_speculative_feature_view & features,
+    bool is_prompt_warmup);
+
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0, int n_past = 0, common_params_speculative * active_params = nullptr);
 
-// get the MTP context from the speculative object (nullptr if not MTP type)
-llama_context * common_speculative_get_mtp_ctx(common_speculative * spec);
 common_speculative_type common_speculative_current_type(const common_speculative * spec);
 
 // Context shift for MTP to match how server handle main model
@@ -55,23 +118,3 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past);
-
-// Generates speculative draft tokens using the Multi-Token Prediction (MTP) architecture.
-std::vector<llama_token> mtp_speculative_gen_draft(
-    struct common_sampler * smpl,
-    struct llama_context * ctx,
-    int n_draft,
-    float p_min,
-    llama_token id_last,
-    llama_pos n_past,
-    llama_seq_id seq_id,
-    bool constant_draft_positions = false);
-
-int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup);
-
-void mtp_accept_tokens(
-    struct llama_context * ctx,
-    const std::vector<llama_token> & ids,
-    int32_t n_past_base,
-    llama_seq_id seq_id
-);

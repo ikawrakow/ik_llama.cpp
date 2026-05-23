@@ -1127,6 +1127,18 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             }
         }
     }
+    else if (extra->split_dim == 2) {
+        size_t cur_offset = 0;
+        for (int i = 0; i < extra->n_device; ++i) {
+            auto split = extra->splits[i];
+            if (!split) continue;
+            ggml_cuda_set_device(i);
+            auto size = ggml_nbytes(split);
+            const char * buf_host = (const char *)data + cur_offset;
+            CUDA_CHECK(cudaMemcpyAsync(split->data, buf_host, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            cur_offset += size;
+        }
+    }
     else {
         fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim == 0);
         GGML_ABORT("fatal error");
@@ -1140,12 +1152,125 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
 }
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, const ggml_tensor * tensor,
-        [[maybe_unused]] void * data, size_t offset, size_t size) {
-    // split tensors must always be set in their entirety at once
+        void * data, size_t offset, size_t size) {
+    // split tensors must always be read in their entirety at once
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
-    GGML_ABORT("not implemented");
+    if (!tensor->extra) return;
+
+    // Inverse of split_buffer_set_tensor; refuses paths with no defined inverse.
+    auto extra = (ggml_split_tensor_t *)tensor->extra;
+    GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
+
+    // Repacked types are block-de-interleaved by set_tensor; no runtime inverse.
+    {
+        const ggml_type t = tensor->type;
+        const bool is_repacked =
+            t == GGML_TYPE_Q4_0_R8  || t == GGML_TYPE_Q5_0_R4  || t == GGML_TYPE_Q8_0_R8  ||
+            t == GGML_TYPE_Q2_K_R4  || t == GGML_TYPE_Q3_K_R4  || t == GGML_TYPE_Q4_K_R4  ||
+            t == GGML_TYPE_Q5_K_R4  || t == GGML_TYPE_Q6_K_R4  || t == GGML_TYPE_IQ4_NL_R4 ||
+            t == GGML_TYPE_IQ4_XS_R8 || t == GGML_TYPE_Q6_0_R4;
+        if (is_repacked) {
+            GGML_ABORT("%s: get_tensor of repacked type %s is not invertible",
+                       __func__, ggml_type_name(t));
+        }
+    }
+
+    // Explicit-ranges form (non-contiguous expert assignments) is not invertible.
+    void * extra_ptr = nullptr;
+    memcpy(&extra_ptr, tensor->op_params, sizeof(extra_ptr));
+    if (extra_ptr) {
+        GGML_ABORT("%s: get_tensor with explicit ranges is not implemented", __func__);
+    }
+
+    if (extra->split_dim < 0) {
+        // Replicated: read from first present device.
+        GGML_ASSERT(ggml_is_contiguous(tensor));
+        for (int i = 0; i < extra->n_device; ++i) {
+            auto split = extra->splits[i];
+            if (!split) continue;
+            GGML_ASSERT(split->type == tensor->type);
+            ggml_cuda_set_device(i);
+            CUDA_CHECK(cudaMemcpyAsync(data, split->data, ggml_nbytes(tensor),
+                                       cudaMemcpyDeviceToHost, cudaStreamPerThread));
+            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+            return;
+        }
+        GGML_ABORT("%s: no device holds a copy of the replicated tensor", __func__);
+    }
+    else if (extra->split_dim == 0) {
+        // Row-split (concat along ne[0]).
+        GGML_ASSERT(ggml_is_contiguous(tensor));
+        auto tt = ggml_internal_get_type_traits(tensor->type);
+        GGML_ASSERT(tt.row_meta_size == 0);
+        std::vector<char> host_buffer;
+        int64_t ne0_acc = 0;
+        for (int i = 0; i < extra->n_device; ++i) {
+            auto split = extra->splits[i];
+            if (!split) continue;
+            GGML_ASSERT(split->type == tensor->type);
+            GGML_ASSERT(split->ne[0] % tt.blck_size == 0);
+            const size_t split_row_size = ggml_row_size(split->type, split->ne[0]);
+            const size_t dev_bytes      = (size_t)ggml_nrows(split) * split_row_size;
+            if (host_buffer.size() < dev_bytes) host_buffer.resize(dev_bytes);
+            ggml_cuda_set_device(i);
+            CUDA_CHECK(cudaMemcpyAsync(host_buffer.data(), split->data, dev_bytes,
+                                       cudaMemcpyDeviceToHost, cudaStreamPerThread));
+            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+            const size_t source_offset = (ne0_acc / tt.blck_size) * tt.type_size;
+            for (int64_t i02 = 0; i02 < split->ne[2]; ++i02) {
+                for (int64_t i01 = 0; i01 < split->ne[1]; ++i01) {
+                    const char * src = host_buffer.data() + (i02*split->ne[1] + i01) * split_row_size;
+                    char       * dst = (char *)data + i02*tensor->nb[2] + i01*tensor->nb[1] + source_offset;
+                    memcpy(dst, src, split_row_size);
+                }
+            }
+            ne0_acc += split->ne[0];
+        }
+    }
+    else if (extra->split_dim == 1) {
+        // Column/ne[1] split.
+        const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+        if (tensor->ne[2] > 1) {
+            std::vector<char> host_buffer;
+            int64_t ne1_acc = 0;
+            for (int i = 0; i < extra->n_device; ++i) {
+                auto split = extra->splits[i];
+                if (!split) continue;
+                const size_t dev_bytes = ggml_nbytes(split);
+                if (host_buffer.size() < dev_bytes) host_buffer.resize(dev_bytes);
+                ggml_cuda_set_device(i);
+                CUDA_CHECK(cudaMemcpyAsync(host_buffer.data(), split->data, dev_bytes,
+                                           cudaMemcpyDeviceToHost, cudaStreamPerThread));
+                CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+                for (int64_t i02 = 0; i02 < split->ne[2]; ++i02) {
+                    const char * src = host_buffer.data() + i02 * split->ne[1] * row_size;
+                    char       * dst = (char *)data + i02*tensor->nb[2] + ne1_acc*tensor->nb[1];
+                    memcpy(dst, src, split->ne[1] * row_size);
+                }
+                ne1_acc += split->ne[1];
+            }
+        } else {
+            size_t cur_offset = 0;
+            for (int i = 0; i < extra->n_device; ++i) {
+                auto split = extra->splits[i];
+                if (!split) continue;
+                ggml_cuda_set_device(i);
+                const size_t dev_bytes = ggml_nbytes(split);
+                CUDA_CHECK(cudaMemcpyAsync((char *)data + cur_offset, split->data, dev_bytes,
+                                           cudaMemcpyDeviceToHost, cudaStreamPerThread));
+                cur_offset += dev_bytes;
+            }
+            for (int i = 0; i < extra->n_device; ++i) {
+                if (!extra->splits[i]) continue;
+                CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+            }
+        }
+    }
+    else {
+        GGML_ABORT("%s: not implemented for split_dim %d", __func__, extra->split_dim);
+    }
 }
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -1847,8 +1972,9 @@ static void ggml_cuda_op_mul_mat(
     }
 
     const int64_t src1_col_stride = ne11;
-    if (quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1 && ne02 == ne12 && ne02 == dst->ne[2]) {
-        //printf("invoking fast path for %s x %s\n", src0->name, src1->name);
+    // split-buffer src0 has data == NULL; per-device dispatch happens in the slow path below.
+    const bool src0_is_split = src0->buffer && ggml_backend_buft_is_cuda_split(src0->buffer->buft);
+    if (quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1 && ne02 == ne12 && ne02 == dst->ne[2] && !src0_is_split) {
         int id = ctx.device;
         char  *  src0_dd_i =  dev[id].src0_dd;
         float * src1_ddf_i = dev[id].src1_ddf;
@@ -4307,7 +4433,9 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     auto graph = use_cuda_graph ? ggml_cuda_get_graph(*cuda_ctx, ggml_cuda_graph_get_key(cgraph)) : nullptr;
 #endif
 
-    //printf("======================== %s: graph with %d nodes on device %d. time = %ld\n", __func__, cgraph->n_nodes, cuda_ctx->device, ggml_time_us());
+#if IK_PRINT_TIMING
+    printf("======================== %s: graph with %d nodes on device %d. time = %ld\n", __func__, cgraph->n_nodes, cuda_ctx->device, ggml_time_us());
+#endif
     while (!graph_evaluated_or_captured) {
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
@@ -4452,6 +4580,16 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
 
 GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_tensor * op) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+
+    // Non-mul_mat ops can't read a split-buffer parent (no data ptr); let the scheduler fall back to CPU.
+    if (op->op != GGML_OP_MUL_MAT && op->op != GGML_OP_MUL_MAT_ID) {
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (op->src[i] && op->src[i]->buffer && ggml_backend_buft_is_cuda_split(op->src[i]->buffer->buft)) {
+                return false;
+            }
+        }
+    }
+
     switch (op->op) {
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
@@ -4650,9 +4788,25 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_FAKE_CPY:
         case GGML_OP_ARGMAX:
             return true;
-        case GGML_OP_HADAMARD:
-            return (op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512)
-                && op->ne[0] % op->op_params[0] == 0 && op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_HADAMARD: {
+            if (!(op->op_params[0] == 64 || op->op_params[0] == 128 || op->op_params[0] == 256 || op->op_params[0] == 512)) return false;
+            if (op->ne[0] % op->op_params[0] != 0) return false;
+            if (op->type != GGML_TYPE_F32) return false;
+            switch (op->src[0]->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0:
+                case GGML_TYPE_Q4_1:
+                case GGML_TYPE_Q5_0:
+                case GGML_TYPE_Q5_1:
+                case GGML_TYPE_Q6_0:
+                case GGML_TYPE_IQ4_NL:
+                    return true;
+                default:
+                    return false;
+            }
+        }
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_CONCAT:
@@ -4789,8 +4943,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, gg
 }
 
 GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
-    auto ctx = (const ggml_backend_cuda_context *)backend->context;
-    int min_batch_size = ctx->offload_batch_size; //originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
+    auto ctx = (ggml_backend_cuda_context *)backend->context;
+    int min_batch_size = ctx->offload_batch_size; // originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
 
     // Why do we want to do this? The heuristics that the batch must have more than min_batch_size tokens to be worth it
     // offloading the required model weights comes from dense models. For MoE models, the average number of tokens
@@ -4803,13 +4957,17 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
     // as the condition for offloading model weights resinding in RAM to the GPU.
     // In this case, the number of tokens is not as usual in op->ne[1] but rather in op->ne[2].
     if (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE) {
+        if (ctx->offload_batch_size_per_byte >= 0) {
+            auto src0 = op->src[0];
+            auto row_size = ggml_row_size(src0->type, src0->ne[0]);
+            min_batch_size = int(1.*ctx->offload_batch_size_per_byte*row_size/src0->ne[0]);
+        }
         auto ids = op->op == GGML_OP_MUL_MAT_ID ? op->src[2] : op->src[3];
         int64_t batch_size = op->ne[2];
         if (batch_size < min_batch_size) return false;
         int64_t n_experts_tot    = op->src[0]->ne[2];
         int64_t n_experts_active = ids->ne[0];
         bool should_offload = batch_size*n_experts_active >= min_batch_size*n_experts_tot;
-        //printf("%s(%s): op->ne[2] = %ld, n_experts_tot = %ld, n_experts_active = %ld, ids: %s, %ld x %ld x %ld x %ld -> %d (%ld, %ld)\n", __func__, op->name, op->ne[2], n_experts_tot, n_experts_active, ids->name, ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3], should_offload, batch_size*n_experts_active, min_batch_size*n_experts_tot);
         return should_offload;
     }
 
@@ -4906,6 +5064,7 @@ static ggml_guid_t ggml_backend_cuda_guid() {
 struct cuda_params {
     int  fusion = GGML_CUDA_FUSION;
     int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
+    int  offload_batch_size_per_byte = -1;
     int  mmq_id_thresh = 32;
     float fa_offset = 0.6931f;
 #ifdef USE_CUDA_GRAPH
@@ -4955,7 +5114,14 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
                 is_good = read_value(parsed[1], params.fusion);
             }
             else if (parsed[0] == "offload-batch-size") {
-                is_good = read_value(parsed[1], params.offload_batch_size);
+                int tmp = 0;
+                is_good = read_value(parsed[1], tmp);
+                if (is_good) {
+                    params.offload_batch_size = tmp;
+                }
+            }
+            else if (parsed[0] == "offload-batch-size-per-byte") {
+                is_good = read_value(parsed[1], params.offload_batch_size_per_byte);
             }
             else if (parsed[0] == "mmq-id-size") {
                 is_good = read_value(parsed[1], params.mmq_id_thresh);
@@ -5015,6 +5181,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         if (params.offload_batch_size != ctx->offload_batch_size) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting offload_batch_size to %d\n", __func__, params.offload_batch_size);
             ctx->offload_batch_size = params.offload_batch_size;
+        }
+        if (params.offload_batch_size_per_byte != ctx->offload_batch_size_per_byte) {
+            GGML_CUDA_LOG_INFO(" =========================== %s: setting offload_batch_size_per_byte to %d\n", __func__, params.offload_batch_size_per_byte);
+            ctx->offload_batch_size_per_byte = params.offload_batch_size_per_byte;
         }
         if (params.mmq_id_thresh != ctx->mmq_id_thresh) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting mmq_id_thresh to %d\n", __func__, params.mmq_id_thresh);
