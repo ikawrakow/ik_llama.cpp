@@ -3425,9 +3425,7 @@ static bool llm_load_tensors(
     }
 
     if (model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_MISTRAL4) {
-        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH &&
-            model.n_gpu_layers > 0 && model.n_gpu_layers < model.hparams.n_layer &&
-            mla_attn != 3) {
+        if (model.n_gpu_layers > 0 && model.n_gpu_layers < model.hparams.n_layer && mla_attn != 3) {
             LLAMA_LOG_WARN("=============================================================================\n");
             LLAMA_LOG_WARN("MLA models with ngl < n_layer and split mode graph do not work with mla = %d\n", mla_attn);
             LLAMA_LOG_WARN("    => changing mla to 3\n");
@@ -6762,9 +6760,7 @@ struct llama_context * llama_init_from_model(
     if (model->arch != LLM_ARCH_DEEPSEEK2 && model->arch != LLM_ARCH_GLM_DSA && model->arch != LLM_ARCH_MISTRAL4 && cparams.mla_attn != 0) {
         cparams.mla_attn = 0;
     } else {
-        if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH &&
-            model->n_gpu_layers > 0 && model->n_gpu_layers < model->hparams.n_layer &&
-            cparams.mla_attn != 3) {
+        if (model->n_gpu_layers > 0 && model->n_gpu_layers < model->hparams.n_layer && cparams.mla_attn != 3) {
             LLAMA_LOG_WARN("=============================================================================\n");
             LLAMA_LOG_WARN("MLA models with ngl < n_layer and split mode graph do not work with mla = %d\n", cparams.mla_attn);
             LLAMA_LOG_WARN("    => changing mla to 3\n");
