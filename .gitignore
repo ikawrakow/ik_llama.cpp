@@ -24,20 +24,20 @@
 
 # IDE / OS
 
-/.cache/
-/.ccls-cache/
-/.direnv/
-/.envrc
-/.idea/
-/.swiftpm
-/.vs/
-/.vscode/
-/nppBackup
+.cache/
+.ccls-cache/
+.direnv/
+.envrc
+.idea/
+.swiftpm
+.vs/
+.vscode/
+nppBackup
 
 # Coverage
 
-/gcovr-report/
-/lcov-report/
+gcovr-report/
+lcov-report/
 
 # Build Artifacts
 
@@ -151,13 +151,14 @@ flake.lock
 /run-vim.sh
 /run-chat.sh
 /run-spec.sh
-/.ccache/
+.ccache/
 
 # IDE
 
-/*.code-workspace
-/.windsurf/
+*.code-workspace
+.windsurf/
 # emscripten
+a.out
 a.out.*
 .dev
 .github
