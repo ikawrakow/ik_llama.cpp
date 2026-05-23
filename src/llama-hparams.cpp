@@ -938,15 +938,15 @@ void llm_load_hparams(
                     int n_nead_kv = hparams.n_gqa();
                     if (n_nead_kv%4 != 0 || hparams.n_embd_head_k(0) != expected_head_size_k || hparams.n_embd_head_v(0) != expected_head_size_v ||
                         hparams.n_rot != 64) {
-                        printf("==========================================================================\n");
-                        printf("Detected incompatible DeepSeek model without a known way to fix it.\n");
-                        printf("Consider making your own ik_llama.cpp compatible model or\n");
-                        printf("ask the model provider to make one for you,\n\n");
-                        printf("Sorry, uknown model => cannot fix it => bailing out\n");
-                        printf("==========================================================================\n");
+                        LLAMA_LOG_ERROR("==========================================================================\n");
+                        LLAMA_LOG_ERROR("Detected incompatible DeepSeek model without a known way to fix it.\n");
+                        LLAMA_LOG_ERROR("Consider making your own ik_llama.cpp compatible model or\n");
+                        LLAMA_LOG_ERROR("ask the model provider to make one for you,\n\n");
+                        LLAMA_LOG_ERROR("Sorry, uknown model => cannot fix it => bailing out\n");
+                        LLAMA_LOG_ERROR("==========================================================================\n");
                         GGML_ABORT("Fatal error");
                     }
-                    printf("================= Adjusted mainline llama.cpp MLA tensors to ik_llama.cpp\n");
+                    LLAMA_LOG_INFO("================= Adjusted mainline llama.cpp MLA tensors to ik_llama.cpp\n");
                     for (auto& item : hparams.n_head_kv_arr) item = n_nead_kv;
                     hparams.n_embd_head_k_full = 192;
                     hparams.n_embd_head_v_full = 128;
@@ -976,7 +976,7 @@ void llm_load_hparams(
                     // GLM-4.7-Flash has 47 layers (or 48, if an MTP layer is included in the GGUF).
                     hparams.expert_gating_func = hparams.n_layer == 47 || hparams.n_layer == 48 ?
                         LLM_EXPERT_GATING_FUNC_SIGMOID : LLM_EXPERT_GATING_FUNC_SOFTMAX;
-                    printf("================= Missing experts gating function -> set to %s\n",
+                    LLAMA_LOG_INFO("================= Missing experts gating function -> set to %s\n",
                             llm_expert_gating_func_name(llm_expert_gating_func_type(hparams.expert_gating_func)));
                 }
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false);
@@ -1390,13 +1390,13 @@ void llm_load_hparams(
                     int n_nead_kv = hparams.n_gqa();
                     if (n_nead_kv%4 != 0 || hparams.n_embd_head_k_full != 576 || hparams.n_embd_head_v_full != 512 ||
                         hparams.n_rot != 64) {
-                        printf("==========================================================================\n");
-                        printf("Detected incompatible DeepSeek model without a known way to fix it.\n");
-                        printf("Sorry, uknown model => cannot fix it => bailing out\n");
-                        printf("==========================================================================\n");
+                        LLAMA_LOG_ERROR("==========================================================================\n");
+                        LLAMA_LOG_ERROR("Detected incompatible DeepSeek model without a known way to fix it.\n");
+                        LLAMA_LOG_ERROR("Sorry, uknown model => cannot fix it => bailing out\n");
+                        LLAMA_LOG_ERROR("==========================================================================\n");
                         GGML_ABORT("Fatal error");
                     }
-                    printf("================= Adjusted mainline llama.cpp MLA tensors to ik_llama.cpp\n");
+                    LLAMA_LOG_INFO("================= Adjusted mainline llama.cpp MLA tensors to ik_llama.cpp\n");
                     for (auto& item : hparams.n_head_kv_arr) item = n_nead_kv;
                     hparams.n_embd_head_k_full = 192;
                     hparams.n_embd_head_v_full = 128;
