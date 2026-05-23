@@ -4,7 +4,7 @@
 
 > **Important:** `ik_llama.cpp` focuses on two fully functional and performant compute backends:
 >
-> - **CPU** — AVX2 required; AVX-512 (AMD Zen4 / Intel Sapphire Rapids+) strongly recommended
+> - **CPU** — AVX2 required; AVX-512-capable CPUs (AMD Zen4 / Intel Sapphire Rapids+) are supported and unlock additional performance for quantized prompt processing.
 > - **CUDA** — Turing architecture (RTX 20xx / GTX 16xx) or newer required
 > - **ARM** (armv8.2-a+ / NEON)
 >
@@ -157,15 +157,30 @@ winget install Kitware.CMake Ninja-build.Ninja
 
 Or download from [cmake.org](https://cmake.org/download/).
 
-#### 4. Use the Developer Command Prompt
+#### 4. Use the Developer Command Prompt/PowerShell
 
 Always execute build commands from inside the
 **Developer Command Prompt for VS 2022** or **Developer PowerShell for VS 2022**, accessible
-via the Windows Start Menu under *Visual Studio 2022*.
+via the Windows Start Menu under *Visual Studio 2022* or from the "new tab" dropdown in Windows Terminal.
 
 These terminals automatically configure all required compiler paths, environment variables, and
 SDK settings. Running `cmake` from a plain `cmd.exe` or PowerShell will likely fail with
 "command not found" or wrong-compiler errors due to missing environment initialisation.
+
+**Verification step**  
+To confirm your environment is correctly set up, run:
+```cmd
+cl.exe
+clang-cl --version
+nvcc --version
+```
+- `cl.exe` should print a version header and indicate an **x64** target (e.g., `for x64`, `für x64`, or similar depending on system language).
+- `clang-cl` should show `Target: x86_64-pc-windows-msvc`.
+- `nvcc` should display the installed CUDA version without errors.
+
+If any command is not found or reports a 32-bit target, check if you called the correct Developer shell.
+
+---
 
 The following sections provide explanations about optimizations of a cmake command.  
 You may skip them and go directly to the [full recommended CUDA build commands](#full-recommended-cuda-build-commands) for both compilers.
