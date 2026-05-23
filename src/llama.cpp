@@ -3693,6 +3693,15 @@ static bool llm_load_tensors(
                 split_buft,
                 llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[n_layer]])
             };
+        } else if (n_gpu_layers > 0) {
+            // Under partial -ngl with -sm graph, route output to the GPU buffer
+            // to avoid synchronization issues between the GPU where the last
+            // REDUCE op is performed and the CPU, where the fused RMS norm and
+            // mul_mat with the output tensor would be performed if left on the CPU.
+            int last_gpu_layer = (int)n_layer - 1;
+            int dev = model.default_layer_device.empty() || last_gpu_layer < 0
+                    ? 0 : std::max(0, model.default_layer_device[last_gpu_layer]);
+            model.buft_output = llama_default_buffer_type_offload(model, dev);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
