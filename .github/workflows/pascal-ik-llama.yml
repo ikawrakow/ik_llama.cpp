@@ -1,0 +1,66 @@
+name: Build and Push Pascal ik_llama.cpp
+
+on:
+  workflow_dispatch:
+    inputs:
+      ik_llama_ref:
+        description: 'ik_llama.cpp git ref (tag, branch, commit)'
+        required: false
+        default: 'main'
+      cuda_version:
+        description: 'CUDA version for the build container'
+        required: false
+        default: '12.6.2'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-pascal:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout ik_llama.cpp source
+        uses: actions/checkout@v4
+        with:
+          repository: levosilimo/ik_llama.cpp
+          ref: ${{ github.event.inputs.ik_llama_ref || 'main' }}
+          fetch-depth: 1
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf "/usr/local/share/boost" /usr/lib/jvm
+          docker image prune -af
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Prepare Environment
+        run: |
+          echo "REPO_LOWER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Pascal image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/ik_llama-pascal.Containerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/ik-llama-cpp:cu12-pascal
+            ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/ik-llama-cpp:cu12-pascal-${{ github.sha }}
+          build-args: |
+            CUDA_VERSION=${{ github.event.inputs.cuda_version || '12.6.2' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
