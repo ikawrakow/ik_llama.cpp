@@ -110,52 +110,141 @@ bool common_speculative_type_is_self_spec(enum common_speculative_type type) {
     }
 }
 
-static const char *common_speculative_stage_role_to_cstr(enum common_speculative_stage_role role)
+static const char *common_speculative_stage_phase_to_cstr(enum common_speculative_stage_phase phase)
 {
-    switch (role)
+    switch (phase)
     {
-    case COMMON_SPECULATIVE_STAGE_ROLE_AUTO:
+    case COMMON_SPECULATIVE_STAGE_PHASE_AUTO:
         return "auto";
-    case COMMON_SPECULATIVE_STAGE_ROLE_SINGLE:
-        return "single";
-    case COMMON_SPECULATIVE_STAGE_ROLE_GATE:
-        return "gate";
-    case COMMON_SPECULATIVE_STAGE_ROLE_PREFIX:
-        return "prefix";
-    case COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX:
-        return "suffix";
+    case COMMON_SPECULATIVE_STAGE_PHASE_PROBE:
+        return "probe";
+    case COMMON_SPECULATIVE_STAGE_PHASE_FIRST:
+        return "first";
+    case COMMON_SPECULATIVE_STAGE_PHASE_TAIL:
+        return "tail";
     default:
         return "unknown";
     }
 }
 
-static enum common_speculative_stage_role common_speculative_stage_role_from_name(const std::string &name)
+static void common_speculative_warn_disabled_flag(
+    const char *flag,
+    const std::string &replacement)
+{
+    fprintf(stderr, "warning: %s is deprecated and disabled; use %s instead\n", flag, replacement.c_str());
+}
+
+static void common_speculative_warn_inline_alias(
+    const char *alias,
+    const char *canonical)
+{
+    fprintf(stderr, "warning: speculative stage key %s is deprecated; use %s instead\n", alias, canonical);
+}
+
+static std::vector<std::string> common_speculative_split_stage_options(const std::string &value)
+{
+    std::vector<std::string> options;
+    std::string current;
+    bool escape_next = false;
+
+    for (char ch : value)
+    {
+        if (escape_next)
+        {
+            current.push_back('\\');
+            current.push_back(ch);
+            escape_next = false;
+            continue;
+        }
+
+        if (ch == '\\')
+        {
+            escape_next = true;
+            continue;
+        }
+
+        if (ch == ',')
+        {
+            options.push_back(current);
+            current.clear();
+            continue;
+        }
+
+        current.push_back(ch);
+    }
+
+    if (escape_next)
+    {
+        current.push_back('\\');
+    }
+
+    options.push_back(current);
+    return options;
+}
+
+static std::string common_speculative_unescape_stage_value(const std::string &value)
+{
+    std::string result;
+    result.reserve(value.size());
+
+    bool escape_next = false;
+    for (char ch : value)
+    {
+        if (escape_next)
+        {
+            if (ch == ',' || ch == '\\')
+            {
+                result.push_back(ch);
+            }
+            else
+            {
+                result.push_back('\\');
+                result.push_back(ch);
+            }
+            escape_next = false;
+            continue;
+        }
+
+        if (ch == '\\')
+        {
+            escape_next = true;
+            continue;
+        }
+
+        result.push_back(ch);
+    }
+
+    if (escape_next)
+    {
+        result.push_back('\\');
+    }
+
+    return result;
+}
+
+static enum common_speculative_stage_phase common_speculative_stage_phase_from_name(const std::string &name)
 {
     std::string normalized = name;
     std::replace(normalized.begin(), normalized.end(), '-', '_');
 
     if (normalized == "auto")
     {
-        return COMMON_SPECULATIVE_STAGE_ROLE_AUTO;
+        return COMMON_SPECULATIVE_STAGE_PHASE_AUTO;
     }
-    if (normalized == "single")
+    if (normalized == "probe" || normalized == "gate")
     {
-        return COMMON_SPECULATIVE_STAGE_ROLE_SINGLE;
+        return COMMON_SPECULATIVE_STAGE_PHASE_PROBE;
     }
-    if (normalized == "gate")
+    if (normalized == "first" || normalized == "prefix")
     {
-        return COMMON_SPECULATIVE_STAGE_ROLE_GATE;
+        return COMMON_SPECULATIVE_STAGE_PHASE_FIRST;
     }
-    if (normalized == "prefix")
+    if (normalized == "tail" || normalized == "suffix")
     {
-        return COMMON_SPECULATIVE_STAGE_ROLE_PREFIX;
-    }
-    if (normalized == "suffix")
-    {
-        return COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX;
+        return COMMON_SPECULATIVE_STAGE_PHASE_TAIL;
     }
 
-    return COMMON_SPECULATIVE_STAGE_ROLE_COUNT;
+    return COMMON_SPECULATIVE_STAGE_PHASE_COUNT;
 }
 
 static bool common_speculative_type_is_neural(enum common_speculative_type type)
@@ -177,13 +266,13 @@ static int32_t common_speculative_stage_effective_n_min(
     return stage.has_n_min_override() ? stage.n_min : params.n_min;
 }
 
-static const common_speculative_stage_params *common_speculative_find_stage_by_role(
+static const common_speculative_stage_params *common_speculative_find_stage_by_phase(
     const std::vector<common_speculative_stage_params> &stages,
-    common_speculative_stage_role role)
+    common_speculative_stage_phase phase)
 {
     for (const auto &stage : stages)
     {
-        if (stage.role == role)
+        if (stage.phase == phase)
         {
             return &stage;
         }
@@ -192,15 +281,15 @@ static const common_speculative_stage_params *common_speculative_find_stage_by_r
     return nullptr;
 }
 
-static common_speculative_stage_params common_speculative_stage_with_role(
+static common_speculative_stage_params common_speculative_stage_with_phase(
     common_speculative_stage_params stage,
-    common_speculative_stage_role role)
+    common_speculative_stage_phase phase)
 {
-    stage.role = role;
+    stage.phase = phase;
     return stage;
 }
 
-static enum common_speculative_policy common_speculative_infer_policy(
+static common_speculative_plan common_speculative_build_plan(
     const common_params_speculative &params,
     std::string *error = nullptr)
 {
@@ -210,13 +299,16 @@ static enum common_speculative_policy common_speculative_infer_policy(
         {
             *error = msg;
         }
-        return COMMON_SPECULATIVE_POLICY_INVALID;
+        common_speculative_plan invalid;
+        invalid.valid = false;
+        return invalid;
     };
 
+    common_speculative_plan plan;
     const auto resolved = params.get_resolved_stages();
     if (resolved.empty())
     {
-        return COMMON_SPECULATIVE_POLICY_NONE;
+        return plan;
     }
 
     if (resolved.size() > 3)
@@ -226,78 +318,90 @@ static enum common_speculative_policy common_speculative_infer_policy(
 
     if (resolved.size() == 1)
     {
-        if (resolved[0].role == COMMON_SPECULATIVE_STAGE_ROLE_AUTO || resolved[0].role == COMMON_SPECULATIVE_STAGE_ROLE_SINGLE)
+        if (resolved[0].has_phase_override())
         {
-            return COMMON_SPECULATIVE_POLICY_SINGLE;
+            return fail("single-stage speculative mode does not use explicit phases");
         }
 
-        return fail("single-stage speculative mode only supports the single role");
+        plan.mode = COMMON_SPECULATIVE_PLAN_SINGLE;
+        plan.first_stage = 0;
+        return plan;
     }
 
     if (resolved.size() == 2)
     {
         const auto &first = resolved[0];
         const auto &second = resolved[1];
-        const bool has_explicit_roles = first.has_role_override() || second.has_role_override();
+        const bool has_explicit_phases = first.has_phase_override() || second.has_phase_override();
 
-        if (has_explicit_roles)
+        if (has_explicit_phases)
         {
-            if (first.role != COMMON_SPECULATIVE_STAGE_ROLE_PREFIX || second.role != COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX)
+            if (first.phase != COMMON_SPECULATIVE_STAGE_PHASE_FIRST || second.phase != COMMON_SPECULATIVE_STAGE_PHASE_TAIL)
             {
-                return fail("two-stage combined mode must use prefix:* followed by suffix:*");
+                return fail("two-stage composed mode must use first:* followed by tail:*");
             }
             if (!common_speculative_type_is_neural(first.type))
             {
-                return fail("prefix role requires an mtp or draft stage");
+                return fail("first phase requires an mtp or draft stage");
             }
             if (!common_speculative_type_is_self_spec(second.type))
             {
-                return fail("suffix role requires a self-spec stage");
+                return fail("tail phase requires a self-spec stage");
             }
 
-            return COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE;
+            plan.mode = COMMON_SPECULATIVE_PLAN_COMPOSE;
+            plan.first_stage = 0;
+            plan.tail_stage = 1;
+            return plan;
         }
 
         if (common_speculative_type_is_neural(first.type) && common_speculative_type_is_self_spec(second.type))
         {
-            return COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE;
+            plan.mode = COMMON_SPECULATIVE_PLAN_COMPOSE;
+            plan.first_stage = 0;
+            plan.tail_stage = 1;
+            return plan;
         }
 
         if (common_speculative_type_is_self_spec(first.type) && common_speculative_type_is_neural(second.type))
         {
-            return fail("implicit two-stage self-spec -> neural fallback has been removed; use gate:* + prefix:* + suffix:* or repeated --spec-type self-spec then neural");
+            return fail("implicit two-stage self-spec -> neural fallback has been removed; use repeated --spec-type self-spec then neural");
         }
 
-        return fail("two-stage speculative mode requires either prefix:* + suffix:* or neural followed by self-spec");
+        return fail("two-stage speculative mode requires neural followed by self-spec");
     }
 
-    const auto &gate = resolved[0];
-    const auto &prefix = resolved[1];
-    const auto &suffix = resolved[2];
+    const auto &probe = resolved[0];
+    const auto &first = resolved[1];
+    const auto &tail = resolved[2];
 
-    if (gate.role != COMMON_SPECULATIVE_STAGE_ROLE_GATE ||
-        prefix.role != COMMON_SPECULATIVE_STAGE_ROLE_PREFIX ||
-        suffix.role != COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX)
+    if (probe.phase != COMMON_SPECULATIVE_STAGE_PHASE_PROBE ||
+        first.phase != COMMON_SPECULATIVE_STAGE_PHASE_FIRST ||
+        tail.phase != COMMON_SPECULATIVE_STAGE_PHASE_TAIL)
     {
-        return fail("three-stage combined mode must use gate:*, prefix:*, suffix:*");
+        return fail("three-stage composed mode must use probe:*, first:*, tail:*");
     }
 
-    if (!common_speculative_type_is_self_spec(gate.type))
+    if (!common_speculative_type_is_self_spec(probe.type))
     {
-        return fail("gate role requires a self-spec stage");
+        return fail("probe phase requires a self-spec stage");
     }
 
-    if (!common_speculative_type_is_neural(prefix.type))
+    if (!common_speculative_type_is_neural(first.type))
     {
-        return fail("prefix role requires an mtp or draft stage");
+        return fail("first phase requires an mtp or draft stage");
     }
 
-    if (!common_speculative_type_is_self_spec(suffix.type))
+    if (!common_speculative_type_is_self_spec(tail.type))
     {
-        return fail("suffix role requires a self-spec stage");
+        return fail("tail phase requires a self-spec stage");
     }
 
-    return COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE;
+    plan.mode = COMMON_SPECULATIVE_PLAN_COMPOSE;
+    plan.probe_stage = 0;
+    plan.first_stage = 1;
+    plan.tail_stage = 2;
+    return plan;
 }
 
 std::vector<common_speculative_stage_params> common_params_speculative::get_resolved_stages() const
@@ -354,6 +458,10 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     {
         result.suffix_max_depth = stage.suffix_max_depth;
     }
+    if (stage.has_suffix_corpus_override())
+    {
+        result.suffix_corpus = stage.suffix_corpus;
+    }
 
     result.n_max = std::max(result.n_max, 0);
     result.n_min = std::max(0, std::min(result.n_min, result.n_max));
@@ -379,9 +487,9 @@ bool common_params_speculative::has_composite_stage_chain() const
     return get_resolved_stages().size() > 1;
 }
 
-common_speculative_policy common_params_speculative::get_effective_policy() const
+common_speculative_plan common_params_speculative::get_plan(std::string *error) const
 {
-    return common_speculative_infer_policy(*this);
+    return common_speculative_build_plan(*this, error);
 }
 
 int32_t common_params_speculative::get_max_stage_n_max() const
@@ -401,52 +509,21 @@ int32_t common_params_speculative::get_max_stage_n_max() const
     return std::max(max_n_max, 0);
 }
 
-int32_t common_params_speculative::get_prefix_n_max() const
-{
-    const auto policy = get_effective_policy();
-    if (policy != COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE &&
-        policy != COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE)
-    {
-        return 0;
-    }
-
-    const auto resolved = get_resolved_stages();
-    const auto *stage = common_speculative_find_stage_by_role(resolved, COMMON_SPECULATIVE_STAGE_ROLE_PREFIX);
-    return stage == nullptr ? 0 : std::max(0, common_speculative_stage_effective_n_max(*this, *stage));
-}
-
-int32_t common_params_speculative::get_suffix_n_max() const
-{
-    const auto policy = get_effective_policy();
-    if (policy != COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE &&
-        policy != COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE)
-    {
-        return 0;
-    }
-
-    const auto resolved = get_resolved_stages();
-    const auto *stage = common_speculative_find_stage_by_role(resolved, COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX);
-    return stage == nullptr ? 0 : std::max(0, common_speculative_stage_effective_n_max(*this, *stage));
-}
-
 int32_t common_params_speculative::get_total_candidate_n_max() const
 {
     const int32_t max_stage_n_max = get_max_stage_n_max();
-    const int32_t combined_n_max = get_prefix_n_max() + get_suffix_n_max();
-
-    switch (get_effective_policy())
+    const auto plan = get_plan();
+    if (!plan.valid || plan.mode != COMMON_SPECULATIVE_PLAN_COMPOSE || plan.first_stage < 0 || plan.tail_stage < 0)
     {
-    case COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE:
-        return std::max(max_stage_n_max, combined_n_max);
-    case COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE:
-        return std::max(combined_n_max, 0);
-    case COMMON_SPECULATIVE_POLICY_INVALID:
-    case COMMON_SPECULATIVE_POLICY_NONE:
-    case COMMON_SPECULATIVE_POLICY_SINGLE:
-    case COMMON_SPECULATIVE_POLICY_FALLBACK:
-    default:
         return max_stage_n_max;
     }
+
+    const auto resolved = get_resolved_stages();
+    const int32_t combined_n_max =
+        std::max(0, common_speculative_stage_effective_n_max(*this, resolved[plan.first_stage])) +
+        std::max(0, common_speculative_stage_effective_n_max(*this, resolved[plan.tail_stage]));
+
+    return std::max(max_stage_n_max, combined_n_max);
 }
 
 int32_t common_params_speculative::get_min_usable_stage_n_min() const
@@ -483,14 +560,14 @@ bool common_speculative_validate_chain(const common_params_speculative &params, 
         return true;
     }
 
-    std::string policy_error;
-    const auto policy = common_speculative_infer_policy(params, &policy_error);
-    if (policy == COMMON_SPECULATIVE_POLICY_INVALID)
+    std::string plan_error;
+    const auto plan = common_speculative_build_plan(params, &plan_error);
+    if (!plan.valid)
     {
-        return fail(policy_error);
+        return fail(plan_error);
     }
 
-    std::unordered_map<int, std::unordered_set<int>> seen_type_roles;
+    std::unordered_map<int, std::unordered_set<int>> seen_type_phases;
     for (const auto &stage : resolved)
     {
         if (stage.type == COMMON_SPECULATIVE_TYPE_NONE && resolved.size() > 1)
@@ -498,23 +575,23 @@ bool common_speculative_validate_chain(const common_params_speculative &params, 
             return fail("the 'none' speculative stage cannot be combined with other stages");
         }
 
-        auto &roles_for_type = seen_type_roles[(int)stage.type];
-        if (!roles_for_type.empty())
+        auto &phases_for_type = seen_type_phases[(int)stage.type];
+        if (!phases_for_type.empty())
         {
-            if (!common_speculative_type_is_self_spec(stage.type) || policy != COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE)
+            if (!common_speculative_type_is_self_spec(stage.type) || plan.probe_stage < 0)
             {
                 return fail("duplicate speculative stage type in chain: " + common_speculative_type_to_str(stage.type));
             }
 
-            if (!stage.has_role_override() || (stage.role != COMMON_SPECULATIVE_STAGE_ROLE_GATE && stage.role != COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX))
+            if (!stage.has_phase_override() || (stage.phase != COMMON_SPECULATIVE_STAGE_PHASE_PROBE && stage.phase != COMMON_SPECULATIVE_STAGE_PHASE_TAIL))
             {
-                return fail("duplicate self-spec stage types require explicit gate/suffix roles");
+                return fail("duplicate self-spec stage types require explicit probe/tail phases");
             }
         }
 
-        if (!roles_for_type.insert((int)stage.role).second)
+        if (!phases_for_type.insert((int)stage.phase).second)
         {
-            return fail("duplicate speculative stage role/type combination in chain: " + std::string(common_speculative_stage_role_to_cstr(stage.role)) + ":" + common_speculative_type_to_str(stage.type));
+            return fail("duplicate speculative stage phase/type combination in chain: " + std::string(common_speculative_stage_phase_to_cstr(stage.phase)) + ":" + common_speculative_type_to_str(stage.type));
         }
 
         const auto stage_params = params.with_stage_overrides(stage);
@@ -547,9 +624,9 @@ std::string common_speculative_stage_chain_to_str(const common_params_speculativ
         {
             oss << " -> ";
         }
-        if (resolved[i].has_role_override())
+        if (resolved[i].has_phase_override())
         {
-            oss << common_speculative_stage_role_to_cstr(resolved[i].role) << ":";
+            oss << common_speculative_stage_phase_to_cstr(resolved[i].phase) << ":";
         }
         oss << common_speculative_type_to_str(resolved[i].type);
     }
@@ -903,10 +980,10 @@ static void common_speculative_finalize_stages(gpt_params & params) {
         }
     }
 
-    const bool has_explicit_roles = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params &stage)
-                                                { return stage.has_role_override(); });
+    const bool has_explicit_phases = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params &stage)
+                                                 { return stage.has_phase_override(); });
 
-    if (!has_explicit_roles)
+    if (!has_explicit_phases)
     {
         if (stages.size() == 1)
         {
@@ -916,16 +993,14 @@ static void common_speculative_finalize_stages(gpt_params & params) {
                     .type = wants_mtp ? COMMON_SPECULATIVE_TYPE_MTP : COMMON_SPECULATIVE_TYPE_DRAFT,
                 };
                 spec.stages = {
-                    common_speculative_stage_with_role(stages[0], COMMON_SPECULATIVE_STAGE_ROLE_GATE),
-                    common_speculative_stage_with_role(neural_stage, COMMON_SPECULATIVE_STAGE_ROLE_PREFIX),
-                    common_speculative_stage_with_role(stages[0], COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX),
+                    common_speculative_stage_with_phase(stages[0], COMMON_SPECULATIVE_STAGE_PHASE_PROBE),
+                    common_speculative_stage_with_phase(neural_stage, COMMON_SPECULATIVE_STAGE_PHASE_FIRST),
+                    common_speculative_stage_with_phase(stages[0], COMMON_SPECULATIVE_STAGE_PHASE_TAIL),
                 };
             }
             else
             {
-                spec.stages = {
-                    common_speculative_stage_with_role(stages[0], COMMON_SPECULATIVE_STAGE_ROLE_SINGLE),
-                };
+                spec.stages = stages;
             }
         }
         else if (stages.size() == 2)
@@ -936,16 +1011,16 @@ static void common_speculative_finalize_stages(gpt_params & params) {
             if (common_speculative_type_is_self_spec(first.type) && common_speculative_type_is_neural(second.type))
             {
                 spec.stages = {
-                    common_speculative_stage_with_role(first, COMMON_SPECULATIVE_STAGE_ROLE_GATE),
-                    common_speculative_stage_with_role(second, COMMON_SPECULATIVE_STAGE_ROLE_PREFIX),
-                    common_speculative_stage_with_role(first, COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX),
+                    common_speculative_stage_with_phase(first, COMMON_SPECULATIVE_STAGE_PHASE_PROBE),
+                    common_speculative_stage_with_phase(second, COMMON_SPECULATIVE_STAGE_PHASE_FIRST),
+                    common_speculative_stage_with_phase(first, COMMON_SPECULATIVE_STAGE_PHASE_TAIL),
                 };
             }
             else if (common_speculative_type_is_neural(first.type) && common_speculative_type_is_self_spec(second.type))
             {
                 spec.stages = {
-                    common_speculative_stage_with_role(first, COMMON_SPECULATIVE_STAGE_ROLE_PREFIX),
-                    common_speculative_stage_with_role(second, COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX),
+                    common_speculative_stage_with_phase(first, COMMON_SPECULATIVE_STAGE_PHASE_FIRST),
+                    common_speculative_stage_with_phase(second, COMMON_SPECULATIVE_STAGE_PHASE_TAIL),
                 };
             }
             else
@@ -1174,6 +1249,10 @@ static void common_speculative_stage_apply_kv(
     const std::string key = common_normalize_spec_stage_key(key_raw);
 
     if (key == "draft" || key == "draft_max" || key == "draft_n" || key == "n_max") {
+        if (key != "n_max")
+        {
+            common_speculative_warn_inline_alias(key_raw.c_str(), "n_max");
+        }
         stage.n_max = std::stoi(value_raw);
         if (stage.n_max < 0) {
             throw std::invalid_argument("speculative stage n_max must be >= 0");
@@ -1181,6 +1260,10 @@ static void common_speculative_stage_apply_kv(
         return;
     }
     if (key == "draft_min" || key == "draft_n_min" || key == "n_min") {
+        if (key != "n_min")
+        {
+            common_speculative_warn_inline_alias(key_raw.c_str(), "n_min");
+        }
         stage.n_min = std::stoi(value_raw);
         if (stage.n_min < 0) {
             throw std::invalid_argument("speculative stage n_min must be >= 0");
@@ -1188,6 +1271,10 @@ static void common_speculative_stage_apply_kv(
         return;
     }
     if (key == "draft_p_min" || key == "p_min") {
+        if (key != "p_min")
+        {
+            common_speculative_warn_inline_alias(key_raw.c_str(), "p_min");
+        }
         stage.p_min = std::stof(value_raw);
         if (stage.p_min < 0.0f) {
             throw std::invalid_argument("speculative stage p_min must be >= 0");
@@ -1216,6 +1303,10 @@ static void common_speculative_stage_apply_kv(
         return;
     }
     if (key == "suffix_min_match_len" || key == "suffix_pattern_len") {
+        if (key != "suffix_min_match_len")
+        {
+            common_speculative_warn_inline_alias(key_raw.c_str(), "suffix_min_match_len");
+        }
         stage.suffix_min_match_len = std::stoi(value_raw);
         if (stage.suffix_min_match_len < 1) {
             throw std::invalid_argument("speculative stage suffix_min_match_len must be at least 1");
@@ -1229,36 +1320,38 @@ static void common_speculative_stage_apply_kv(
         }
         return;
     }
+    if (key == "suffix_corpus" || key == "corpus")
+    {
+        if (key != "corpus")
+        {
+            common_speculative_warn_inline_alias(key_raw.c_str(), "corpus");
+        }
+        stage.suffix_corpus = common_speculative_unescape_stage_value(value_raw);
+        if (stage.suffix_corpus.empty())
+        {
+            throw std::invalid_argument("speculative stage corpus must not be empty");
+        }
+        return;
+    }
 
     throw std::invalid_argument("unknown speculative stage parameter: " + key_raw);
 }
 
 static common_speculative_stage_params common_speculative_stage_from_arg(const std::string & value) {
     const auto first_sep = value.find(':');
+    const auto second_sep = first_sep == std::string::npos ? std::string::npos : value.find(':', first_sep + 1);
 
     common_speculative_stage_params stage;
     size_t options_pos = first_sep;
     std::string type_name = value.substr(0, first_sep);
 
-    if (first_sep != std::string::npos)
-    {
-        const auto role = common_speculative_stage_role_from_name(type_name);
-        if (role != COMMON_SPECULATIVE_STAGE_ROLE_COUNT)
-        {
-            const auto second_sep = value.find(':', first_sep + 1);
-            if (second_sep == first_sep + 1 || first_sep + 1 >= value.size())
-            {
-                throw std::invalid_argument("speculative stage role requires a stage type: " + type_name);
-            }
-
-            stage.role = role;
-            type_name = value.substr(first_sep + 1, second_sep == std::string::npos ? std::string::npos : second_sep - first_sep - 1);
-            options_pos = second_sep;
-        }
-    }
-
     stage.type = common_speculative_type_from_name(type_name);
     if (stage.type == COMMON_SPECULATIVE_TYPE_COUNT) {
+        const auto phase = common_speculative_stage_phase_from_name(type_name);
+        if (phase != COMMON_SPECULATIVE_STAGE_PHASE_COUNT && second_sep != std::string::npos)
+        {
+            throw std::invalid_argument("--spec-type does not accept explicit phases; use repeated --spec-type TYPE[:k=v,...] entries instead");
+        }
         throw std::invalid_argument("unknown speculative stage type: " + type_name);
     }
 
@@ -1267,9 +1360,8 @@ static common_speculative_stage_params common_speculative_stage_from_arg(const s
         return stage;
     }
 
-    std::stringstream ss(value.substr(options_pos + 1));
-    std::string kv;
-    while (std::getline(ss, kv, ',')) {
+    for (const auto &kv : common_speculative_split_stage_options(value.substr(options_pos + 1)))
+    {
         const auto eq_pos = kv.find('=');
         if (eq_pos == std::string::npos) {
             throw std::invalid_argument("invalid speculative stage option: " + kv);
@@ -1722,18 +1814,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--draft" || arg == "--draft-max" || arg == "--draft-n") {
         CHECK_ARG
-        params.speculative.n_max = std::stoi(argv[i]);
-        return true;
+        common_speculative_warn_disabled_flag(arg.c_str(), "--spec-type TYPE:n_max=N");
+        throw std::invalid_argument(arg + " is deprecated and disabled; use --spec-type TYPE:n_max=N");
     }
     if (arg == "--draft-min" || arg == "--draft-n-min") {
         CHECK_ARG
-        params.speculative.n_min = std::stoi(argv[i]);
-        return true;
+        common_speculative_warn_disabled_flag(arg.c_str(), "--spec-type TYPE:n_min=N");
+        throw std::invalid_argument(arg + " is deprecated and disabled; use --spec-type TYPE:n_min=N");
     }
     if (arg == "--draft-p-min") {
         CHECK_ARG
-        params.speculative.p_min = std::stof(argv[i]);
-        return true;
+        common_speculative_warn_disabled_flag(arg.c_str(), "--spec-type TYPE:p_min=P");
+        throw std::invalid_argument("--draft-p-min is deprecated and disabled; use --spec-type TYPE:p_min=P");
     }
     if (arg == "--recurrent-ckpt-mode") {
         CHECK_ARG
@@ -1790,21 +1882,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     {
         CHECK_ARG
 
-        fprintf(stderr, "warning: --spec is deprecated and disabled; use repeated --spec-type SPEC[:k=v,...] instead\n");
+        common_speculative_warn_disabled_flag("--spec", "repeated --spec-type SPEC[:k=v,...]");
         throw std::invalid_argument("--spec is deprecated and disabled; use --spec-type");
     }
     if (arg == "--spec-stage") {
         CHECK_ARG
 
-        fprintf(stderr, "warning: --spec-stage is deprecated and disabled; use repeated --spec-type SPEC[:k=v,...] instead\n");
+        common_speculative_warn_disabled_flag("--spec-stage", "repeated --spec-type SPEC[:k=v,...]");
         throw std::invalid_argument("--spec-stage is deprecated and disabled; use --spec-type");
     }
     if (arg == "--spec-type") {
         CHECK_ARG
         const auto stage = common_speculative_stage_from_arg(argv[i]);
-        if (stage.has_role_override())
+        if (stage.has_phase_override())
         {
-            throw std::invalid_argument("--spec-type does not accept explicit roles; use --spec or --spec-stage for role-qualified stages");
+            throw std::invalid_argument("--spec-type does not accept explicit phases; use repeated --spec-type TYPE[:k=v,...] entries instead");
         }
 
         params.speculative.stages.push_back(stage);
@@ -1814,53 +1906,33 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--spec-ngram-size-n") {
         CHECK_ARG
-        int value = std::stoi(argv[i]);
-        if (value < 1 || value > 1024) {
-            throw std::invalid_argument("ngram size N must be between 1 and 1024 inclusive");
-        }
-        params.speculative.ngram_size_n = value;
-        return true;
+        common_speculative_warn_disabled_flag("--spec-ngram-size-n", "--spec-type ngram-*:ngram_size_n=N");
+        throw std::invalid_argument("--spec-ngram-size-n is deprecated and disabled; use --spec-type ngram-*:ngram_size_n=N");
     }
     if (arg == "--spec-ngram-size-m") {
         CHECK_ARG
-        int value = std::stoi(argv[i]);
-        if (value < 1 || value > 1024) {
-            throw std::invalid_argument("ngram size M must be between 1 and 1024 inclusive");
-        }
-        params.speculative.ngram_size_m = value;
-        return true;
+        common_speculative_warn_disabled_flag("--spec-ngram-size-m", "--spec-type ngram-*:ngram_size_m=N");
+        throw std::invalid_argument("--spec-ngram-size-m is deprecated and disabled; use --spec-type ngram-*:ngram_size_m=N");
     }
     if (arg == "--spec-ngram-min-hits") {
         CHECK_ARG
-        int value = std::stoi(argv[i]);
-        if (value < 1) {
-            throw std::invalid_argument("ngram min hits must be at least 1");
-        }
-        params.speculative.ngram_min_hits = value;
-        return true;
+        common_speculative_warn_disabled_flag("--spec-ngram-min-hits", "--spec-type ngram-*:ngram_min_hits=N");
+        throw std::invalid_argument("--spec-ngram-min-hits is deprecated and disabled; use --spec-type ngram-*:ngram_min_hits=N");
     }
     if (arg == "--suffix-pattern-len") {
         CHECK_ARG
-        int value = std::stoi(argv[i]);
-        if (value < 1) {
-            throw std::invalid_argument("suffix pattern length must be at least 1");
-        }
-        params.speculative.suffix_min_match_len = value;
-        return true;
+        common_speculative_warn_disabled_flag("--suffix-pattern-len", "--spec-type suffix:suffix_min_match_len=N");
+        throw std::invalid_argument("--suffix-pattern-len is deprecated and disabled; use --spec-type suffix:suffix_min_match_len=N");
     }
     if (arg == "--suffix-max-depth") {
         CHECK_ARG
-        int value = std::stoi(argv[i]);
-        if (value < 1) {
-            throw std::invalid_argument("suffix max depth must be at least 1");
-        }
-        params.speculative.suffix_max_depth = value;
-        return true;
+        common_speculative_warn_disabled_flag("--suffix-max-depth", "--spec-type suffix:suffix_max_depth=N");
+        throw std::invalid_argument("--suffix-max-depth is deprecated and disabled; use --spec-type suffix:suffix_max_depth=N");
     }
     if (arg == "--suffix-corpus") {
         CHECK_ARG
-        params.speculative.suffix_corpus = argv[i];
-        return true;
+        common_speculative_warn_disabled_flag("--suffix-corpus", "--spec-type suffix:corpus=PATH");
+        throw std::invalid_argument("--suffix-corpus is deprecated and disabled; use --spec-type suffix:corpus=PATH");
     }
     if (arg == "-a" || arg == "--alias") {
         CHECK_ARG
@@ -2288,11 +2360,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
-        fprintf(stderr, "warning: -mtp/--multi-token-prediction is deprecated and disabled; use --spec-type mtp[:k=v,...] instead\n");
+        common_speculative_warn_disabled_flag("-mtp/--multi-token-prediction", "--spec-type mtp[:k=v,...]");
         throw std::invalid_argument("-mtp/--multi-token-prediction is deprecated and disabled; use --spec-type mtp[:k=v,...]");
     }
     if (arg == "-no-mtp" || arg == "--no-multi-token-prediction") {
-        fprintf(stderr, "warning: -no-mtp/--no-multi-token-prediction is deprecated and disabled; remove the mtp --spec-type entry instead\n");
+        common_speculative_warn_disabled_flag("-no-mtp/--no-multi-token-prediction", "remove the mtp --spec-type entry");
         throw std::invalid_argument("-no-mtp/--no-multi-token-prediction is deprecated and disabled; remove the mtp --spec-type entry instead");
     }
     if (arg == "-draft" || arg == "--draft-params") {
@@ -3477,10 +3549,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
     options.push_back({ "*", "-mtp, --multi-token-prediction",          "legacy shortcut for enabling MTP when --spec-stage is not used (default: %s)", params.has_mtp ? "true" : "false" });
     options.push_back({ "*", "-no-mtp, --no-multi-token-prediction",    "disable the legacy MTP shortcut or remove an explicit MTP stage (default: %s)", !params.has_mtp ? "true" : "false" });
-    options.push_back({ "*", "--draft-max, --draft, --draft-n N",
-                                                                        "global default number of tokens to draft for speculative decoding or for stages without an explicit n_max override (default: %d)", params.speculative.n_max });
-    options.push_back({ "*", "--draft-min, --draft-n-min N",   "global default minimum draft threshold or fallback threshold for stages without an explicit n_min override" });
-    options.push_back({ "*", "--draft-p-min P",                "global default minimum speculative decoding probability (greedy) for stages without an explicit p_min override (default: %.1f)", (double)params.speculative.p_min });
+    options.push_back({"*", "--draft-max, --draft, --draft-n N",
+                       "deprecated and disabled; use --spec-type TYPE:n_max=N instead"});
+    options.push_back({"*", "--draft-min, --draft-n-min N", "deprecated and disabled; use --spec-type TYPE:n_min=N instead"});
+    options.push_back({"*", "--draft-p-min P", "deprecated and disabled; use --spec-type TYPE:p_min=P instead"});
     options.push_back({ "*", "--recurrent-ckpt-mode MODE",    "checkpoint strategy for recurrent/hybrid speculative decoding\n"
                                                               "  auto         auto-select: per-step if CUDA full-GPU, gpu-fallback otherwise (default)\n"
                                                               "  per-step     save SSM state per draft step in VRAM; no re-decode on rejection\n"
@@ -3491,15 +3563,17 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({"*", "--spec-type SPEC[:k=v,...]", "canonical speculative selector. repeat for ordered chains without role qualifiers.\n"
                                                           "examples: --spec-type mtp:n_max=2 --spec-type ngram-mod:n_max=16,n_min=1\n"
                                                           "          --spec-type ngram-mod:n_max=64,n_min=2 --spec-type mtp:n_max=2\n"
-                                                          "single entry stays single-spec; self-spec then neural canonicalizes to gate/prefix/suffix fallback-combine"});
-    options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n",params.speculative.ngram_size_n });
+                                                          "          --spec-type suffix:suffix_min_match_len=5,suffix_max_depth=64,corpus=/path/to/corpus.json\n"
+                                                          "canonical keys: n_max, n_min, p_min, ngram_size_n, ngram_size_m, ngram_min_hits, suffix_min_match_len, suffix_max_depth, corpus\n"
+                                                          "single entry stays single-spec; self-spec then neural canonicalizes to an internal probe/first/tail compose chain"});
+    options.push_back({"*", "--spec-ngram-size-n N", "deprecated and disabled; use --spec-type ngram-*:ngram_size_n=N instead"});
 
-    options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
+    options.push_back({"*", "--spec-ngram-size-m N", "deprecated and disabled; use --spec-type ngram-*:ngram_size_m=N instead"});
 
-    options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
-    options.push_back({ "*", "--suffix-pattern-len N",   "minimum context match length for suffix decoding (default: %d)", params.speculative.suffix_min_match_len });
-    options.push_back({ "*", "--suffix-max-depth N",     "suffix tree maximum depth for suffix decoding (default: %d)",    params.speculative.suffix_max_depth });
-    options.push_back({ "*", "--suffix-corpus PATH",     "corpus file to pre-warm the suffix tree: .json (array of strings or conversation messages) or .bin (raw int32 token IDs)" });
+    options.push_back({"*", "--spec-ngram-min-hits N", "deprecated and disabled; use --spec-type ngram-*:ngram_min_hits=N instead"});
+    options.push_back({"*", "--suffix-pattern-len N", "deprecated and disabled; use --spec-type suffix:suffix_min_match_len=N instead"});
+    options.push_back({"*", "--suffix-max-depth N", "deprecated and disabled; use --spec-type suffix:suffix_max_depth=N instead"});
+    options.push_back({"*", "--suffix-corpus PATH", "deprecated and disabled; use --spec-type suffix:corpus=PATH instead"});
     options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
 
     options.push_back({ "retrieval" });

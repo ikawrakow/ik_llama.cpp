@@ -123,22 +123,20 @@ struct common_speculative_position_stats
     uint64_t accepted = 0;
 };
 
-static const char *common_speculative_stage_role_to_cstr_local(enum common_speculative_stage_role role)
+static const char *common_speculative_stage_phase_to_cstr_local(enum common_speculative_stage_phase phase)
 {
-    switch (role)
+    switch (phase)
     {
-    case COMMON_SPECULATIVE_STAGE_ROLE_AUTO:
+    case COMMON_SPECULATIVE_STAGE_PHASE_AUTO:
         return "auto";
-    case COMMON_SPECULATIVE_STAGE_ROLE_SINGLE:
-        return "single";
-    case COMMON_SPECULATIVE_STAGE_ROLE_GATE:
-        return "gate";
-    case COMMON_SPECULATIVE_STAGE_ROLE_PREFIX:
-        return "prefix";
-    case COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX:
-        return "suffix";
-    case COMMON_SPECULATIVE_STAGE_ROLE_COUNT:
-        return "count";
+    case COMMON_SPECULATIVE_STAGE_PHASE_PROBE:
+        return "probe";
+    case COMMON_SPECULATIVE_STAGE_PHASE_FIRST:
+        return "first";
+    case COMMON_SPECULATIVE_STAGE_PHASE_TAIL:
+        return "tail";
+    case COMMON_SPECULATIVE_STAGE_PHASE_COUNT:
+        return "unknown";
     default:
         return "unknown";
     }
@@ -1098,53 +1096,16 @@ static bool common_speculative_autotune_supports_type(common_speculative_type ty
            type != COMMON_SPECULATIVE_TYPE_EAGLE3;
 }
 
-static common_speculative_stage_role common_speculative_get_display_role(
+static common_speculative_stage_phase common_speculative_get_display_phase(
     const common_speculative *spec,
     size_t impl_index)
 {
-    const auto is_neural = [](common_speculative_type type)
+    if (spec == nullptr || impl_index >= spec->configs.size())
     {
-        return type == COMMON_SPECULATIVE_TYPE_MTP || type == COMMON_SPECULATIVE_TYPE_DRAFT;
-    };
-
-    if (spec == nullptr)
-    {
-        return COMMON_SPECULATIVE_STAGE_ROLE_AUTO;
+        return COMMON_SPECULATIVE_STAGE_PHASE_AUTO;
     }
 
-    const common_speculative_stage_role role = spec->configs[impl_index].stage.role;
-    if (role != COMMON_SPECULATIVE_STAGE_ROLE_AUTO)
-    {
-        return role;
-    }
-
-    if (spec->configs.size() == 2 &&
-        is_neural(spec->configs[0].type) &&
-        common_speculative_type_is_self_spec(spec->configs[1].type))
-    {
-        return impl_index == 0
-                   ? COMMON_SPECULATIVE_STAGE_ROLE_PREFIX
-                   : COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX;
-    }
-
-    if (spec->configs.size() == 3 &&
-        common_speculative_type_is_self_spec(spec->configs[0].type) &&
-        is_neural(spec->configs[1].type) &&
-        common_speculative_type_is_self_spec(spec->configs[2].type))
-    {
-        if (impl_index == 0)
-        {
-            return COMMON_SPECULATIVE_STAGE_ROLE_GATE;
-        }
-        if (impl_index == 1)
-        {
-            return COMMON_SPECULATIVE_STAGE_ROLE_PREFIX;
-        }
-
-        return COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX;
-    }
-
-    return role;
+    return spec->configs[impl_index].stage.phase;
 }
 
 static bool common_speculative_stage_chain_matches(
@@ -1178,6 +1139,12 @@ static common_params_speculative common_speculative_get_runtime_params(
         result.suffix_min_match_len = stage.has_suffix_min_match_len_override()
             ? stage.suffix_min_match_len
             : params.suffix_min_match_len;
+        result.suffix_max_depth = stage.has_suffix_max_depth_override()
+                                      ? stage.suffix_max_depth
+                                      : params.suffix_max_depth;
+        result.suffix_corpus = stage.has_suffix_corpus_override()
+                                   ? stage.suffix_corpus
+                                   : params.suffix_corpus;
     }
 
     result.n_max = std::max(result.n_max, 0);
@@ -1285,6 +1252,13 @@ static void common_speculative_append_autotune_stage_arg(
         if (params.suffix_max_depth > 0)
         {
             oss << ",suffix_max_depth=" << params.suffix_max_depth;
+        }
+        if (!params.suffix_corpus.empty())
+        {
+            std::string escaped_corpus = params.suffix_corpus;
+            string_replace_all(escaped_corpus, "\\", "\\\\");
+            string_replace_all(escaped_corpus, ",", "\\,");
+            oss << ",corpus=" << escaped_corpus;
         }
         break;
     default:
@@ -1605,7 +1579,7 @@ common_speculative * common_speculative_init(
             {
                 LOG_WRN("Autotune skipped for %s %s stage — speculative type is not supported for autotuning\n",
                         common_speculative_type_to_str(actual_type).c_str(),
-                        common_speculative_stage_role_to_cstr_local(common_speculative_get_display_role(result, i)));
+                        common_speculative_stage_phase_to_cstr_local(common_speculative_get_display_phase(result, i)));
                 continue;
             }
 
@@ -1618,7 +1592,7 @@ common_speculative * common_speculative_init(
             tuner->init(actual_type, tuned_params, llama_get_model(ctx_tgt));
             LOG_DBG("Autotune initialized for %s %s stage, tuning %zu parameters\n",
                     common_speculative_type_to_str(actual_type).c_str(),
-                    common_speculative_stage_role_to_cstr_local(common_speculative_get_display_role(result, i)),
+                    common_speculative_stage_phase_to_cstr_local(common_speculative_get_display_phase(result, i)),
                     tuner->coords.size());
             result->autotuners.push_back({
                 /* .stage_index = */ i,
@@ -1635,20 +1609,25 @@ common_speculative * common_speculative_init(
     return result;
 }
 
-void common_speculative_free(common_speculative * spec) {
-    if (spec == nullptr) {
+void common_speculative_free(common_speculative *spec)
+{
+    if (spec == nullptr)
+    {
         return;
     }
 
     delete spec;
 }
 
-void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt) {
-    if (spec == nullptr) {
+void common_speculative_begin(common_speculative *spec, const llama_tokens &prompt)
+{
+    if (spec == nullptr)
+    {
         return;
     }
 
-    for (auto & impl : spec->impls) {
+    for (auto &impl : spec->impls)
+    {
         common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
         impl->begin(prompt);
         impl->n_call_begin++;
@@ -1672,7 +1651,6 @@ common_speculative_draft_result common_speculative_draft_ex(
 
     auto runtime_stages = params.get_resolved_stages();
     const bool use_runtime_stage_overrides = common_speculative_stage_chain_matches(runtime_stages, spec->configs);
-    const auto policy = params.get_effective_policy();
     const auto &stage_for_index = [&](size_t i) -> const common_speculative_stage_params &
     {
         return use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
@@ -1705,42 +1683,44 @@ common_speculative_draft_result common_speculative_draft_ex(
         }
     }
 
-    const auto draft_prefix_and_suffix = [&](size_t prefix_index, size_t suffix_index)
+    const auto plan = params.get_plan();
+
+    const auto draft_first_and_tail = [&](size_t first_index, size_t tail_index)
     {
         common_speculative_draft_result combined_result;
 
-        auto &prefix_impl = spec->impls[prefix_index];
-        auto &suffix_impl = spec->impls[suffix_index];
-        const auto &prefix_stage = stage_for_index(prefix_index);
-        const auto &suffix_stage = stage_for_index(suffix_index);
-        common_params_speculative prefix_params = common_speculative_get_runtime_params(spec->configs[prefix_index], params, prefix_stage);
-        common_params_speculative suffix_params = common_speculative_get_runtime_params(spec->configs[suffix_index], params, suffix_stage);
+        auto &first_impl = spec->impls[first_index];
+        auto &tail_impl = spec->impls[tail_index];
+        const auto &first_stage = stage_for_index(first_index);
+        const auto &tail_stage = stage_for_index(tail_index);
+        common_params_speculative first_params = common_speculative_get_runtime_params(spec->configs[first_index], params, first_stage);
+        common_params_speculative tail_params = common_speculative_get_runtime_params(spec->configs[tail_index], params, tail_stage);
 
         {
-            common_time_meas tm(prefix_impl->t_draft_us, !prefix_impl->gen_perf);
-            prefix_impl->draft(prefix_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, combined_result.tokens);
-            prefix_impl->n_call_draft++;
+            common_time_meas tm(first_impl->t_draft_us, !first_impl->gen_perf);
+            first_impl->draft(first_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, combined_result.tokens);
+            first_impl->n_call_draft++;
         }
-        common_speculative_note_autotune_call(spec, prefix_index, combined_result.tokens.size());
+        common_speculative_note_autotune_call(spec, first_index, combined_result.tokens.size());
 
         if (combined_result.tokens.empty())
         {
             return combined_result;
         }
 
-        LOG_DBG("%s: called prefix impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
-                common_speculative_type_to_str(prefix_impl->type).c_str(), prompt_tgt.size(),
-                prefix_impl->n_call_draft, combined_result.tokens.size());
+        LOG_DBG("%s: called first impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                common_speculative_type_to_str(first_impl->type).c_str(), prompt_tgt.size(),
+                first_impl->n_call_draft, combined_result.tokens.size());
 
-        spec->curr_impl = prefix_impl.get();
-        common_speculative_note_generated(prefix_impl.get(), combined_result.tokens.size());
+        spec->curr_impl = first_impl.get();
+        common_speculative_note_generated(first_impl.get(), combined_result.tokens.size());
         combined_result.spans.push_back({
-            /* .type = */ prefix_impl->type,
-            /* .role = */ prefix_stage.role,
+            /* .type = */ first_impl->type,
+            /* .phase = */ first_stage.phase,
             /* .token_offset = */ 0,
             /* .n_tokens = */ combined_result.tokens.size(),
-            /* .impl_index = */ prefix_index,
-            /* .mutates_companion_state = */ prefix_impl->type == COMMON_SPECULATIVE_TYPE_MTP,
+            /* .impl_index = */ first_index,
+            /* .mutates_companion_state = */ first_impl->type == COMMON_SPECULATIVE_TYPE_MTP,
         });
 
         llama_tokens candidate_seed;
@@ -1748,37 +1728,37 @@ common_speculative_draft_result common_speculative_draft_ex(
         candidate_seed.push_back(id_last);
         candidate_seed.insert(candidate_seed.end(), combined_result.tokens.begin(), combined_result.tokens.end());
 
-        llama_tokens suffix_tokens;
+        llama_tokens tail_tokens;
         {
-            common_time_meas tm(suffix_impl->t_draft_us, !suffix_impl->gen_perf);
-            suffix_impl->draft_with_candidate_seed(suffix_params, prompt_tgt, candidate_seed, suffix_tokens);
-            suffix_impl->n_call_draft++;
+            common_time_meas tm(tail_impl->t_draft_us, !tail_impl->gen_perf);
+            tail_impl->draft_with_candidate_seed(tail_params, prompt_tgt, candidate_seed, tail_tokens);
+            tail_impl->n_call_draft++;
         }
-        common_speculative_note_autotune_call(spec, suffix_index, suffix_tokens.size());
+        common_speculative_note_autotune_call(spec, tail_index, tail_tokens.size());
 
-        if (!suffix_tokens.empty())
+        if (!tail_tokens.empty())
         {
-            if (common_speculative_type_is_self_spec(suffix_impl->type) && suffix_params.n_min > 0 && (int)suffix_tokens.size() < suffix_params.n_min)
+            if (common_speculative_type_is_self_spec(tail_impl->type) && tail_params.n_min > 0 && (int)tail_tokens.size() < tail_params.n_min)
             {
-                LOG_DBG("%s: suffix impl %s drafted %zu tokens, below threshold %d - keeping prefix only\n",
-                        __func__, common_speculative_type_to_str(suffix_impl->type).c_str(), suffix_tokens.size(), suffix_params.n_min);
+                LOG_DBG("%s: tail impl %s drafted %zu tokens, below threshold %d - keeping first only\n",
+                        __func__, common_speculative_type_to_str(tail_impl->type).c_str(), tail_tokens.size(), tail_params.n_min);
             }
             else
             {
-                LOG_DBG("%s: called suffix impl %s, seed size = %zu, call_count = %zu, gen = %zu\n", __func__,
-                        common_speculative_type_to_str(suffix_impl->type).c_str(), candidate_seed.size(),
-                        suffix_impl->n_call_draft, suffix_tokens.size());
+                LOG_DBG("%s: called tail impl %s, seed size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                        common_speculative_type_to_str(tail_impl->type).c_str(), candidate_seed.size(),
+                        tail_impl->n_call_draft, tail_tokens.size());
 
-                common_speculative_note_generated(suffix_impl.get(), suffix_tokens.size());
+                common_speculative_note_generated(tail_impl.get(), tail_tokens.size());
                 combined_result.spans.push_back({
-                    /* .type = */ suffix_impl->type,
-                    /* .role = */ suffix_stage.role,
+                    /* .type = */ tail_impl->type,
+                    /* .phase = */ tail_stage.phase,
                     /* .token_offset = */ combined_result.tokens.size(),
-                    /* .n_tokens = */ suffix_tokens.size(),
-                    /* .impl_index = */ suffix_index,
+                    /* .n_tokens = */ tail_tokens.size(),
+                    /* .impl_index = */ tail_index,
                     /* .mutates_companion_state = */ false,
                 });
-                combined_result.tokens.insert(combined_result.tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
+                combined_result.tokens.insert(combined_result.tokens.end(), tail_tokens.begin(), tail_tokens.end());
                 combined_result.combined = true;
             }
         }
@@ -1788,41 +1768,41 @@ common_speculative_draft_result common_speculative_draft_ex(
 
     spec->curr_impl = nullptr; // reset current implementation
 
-    if (policy == COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE && spec->configs.size() >= 3)
+    if (plan.valid && plan.mode == COMMON_SPECULATIVE_PLAN_COMPOSE && plan.probe_stage >= 0 && plan.first_stage >= 0 && plan.tail_stage >= 0)
     {
-        auto &gate_impl = spec->impls[0];
-        const auto &gate_stage = stage_for_index(0);
-        common_params_speculative gate_params = common_speculative_get_runtime_params(spec->configs[0], params, gate_stage);
+        auto &probe_impl = spec->impls[plan.probe_stage];
+        const auto &probe_stage = stage_for_index(plan.probe_stage);
+        common_params_speculative probe_params = common_speculative_get_runtime_params(spec->configs[plan.probe_stage], params, probe_stage);
 
         {
-            common_time_meas tm(gate_impl->t_draft_us, !gate_impl->gen_perf);
-            gate_impl->draft(gate_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result.tokens);
-            gate_impl->n_call_draft++;
+            common_time_meas tm(probe_impl->t_draft_us, !probe_impl->gen_perf);
+            probe_impl->draft(probe_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result.tokens);
+            probe_impl->n_call_draft++;
         }
-        common_speculative_note_autotune_call(spec, 0, result.tokens.size());
+        common_speculative_note_autotune_call(spec, plan.probe_stage, result.tokens.size());
 
         if (!result.tokens.empty())
         {
-            if (common_speculative_type_is_self_spec(gate_impl->type) && gate_params.n_min > 0 && (int)result.tokens.size() < gate_params.n_min)
+            if (common_speculative_type_is_self_spec(probe_impl->type) && probe_params.n_min > 0 && (int)result.tokens.size() < probe_params.n_min)
             {
-                LOG_DBG("%s: gate impl %s drafted %zu tokens, below threshold %d - falling back to combined path\n",
-                        __func__, common_speculative_type_to_str(gate_impl->type).c_str(), result.tokens.size(), gate_params.n_min);
+                LOG_DBG("%s: probe impl %s drafted %zu tokens, below threshold %d - falling back to composed path\n",
+                        __func__, common_speculative_type_to_str(probe_impl->type).c_str(), result.tokens.size(), probe_params.n_min);
                 result.clear();
             }
             else
             {
-                LOG_DBG("%s: gate impl %s won, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
-                        common_speculative_type_to_str(gate_impl->type).c_str(), prompt_tgt.size(),
-                        gate_impl->n_call_draft, result.tokens.size());
+                LOG_DBG("%s: probe impl %s won, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                        common_speculative_type_to_str(probe_impl->type).c_str(), prompt_tgt.size(),
+                        probe_impl->n_call_draft, result.tokens.size());
 
-                spec->curr_impl = gate_impl.get();
-                common_speculative_note_generated(gate_impl.get(), result.tokens.size());
+                spec->curr_impl = probe_impl.get();
+                common_speculative_note_generated(probe_impl.get(), result.tokens.size());
                 result.spans.push_back({
-                    /* .type = */ gate_impl->type,
-                    /* .role = */ gate_stage.role,
+                    /* .type = */ probe_impl->type,
+                    /* .phase = */ probe_stage.phase,
                     /* .token_offset = */ 0,
                     /* .n_tokens = */ result.tokens.size(),
-                    /* .impl_index = */ 0,
+                    /* .impl_index = */ static_cast<size_t>(plan.probe_stage),
                     /* .mutates_companion_state = */ false,
                 });
             }
@@ -1830,15 +1810,15 @@ common_speculative_draft_result common_speculative_draft_ex(
 
         if (result.tokens.empty())
         {
-            result = draft_prefix_and_suffix(1, 2);
+            result = draft_first_and_tail(plan.first_stage, plan.tail_stage);
         }
 
         return result;
     }
 
-    if (policy == COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE && spec->configs.size() >= 2)
+    if (plan.valid && plan.mode == COMMON_SPECULATIVE_PLAN_COMPOSE && plan.probe_stage < 0 && plan.first_stage >= 0 && plan.tail_stage >= 0)
     {
-        result = draft_prefix_and_suffix(0, 1);
+        result = draft_first_and_tail(plan.first_stage, plan.tail_stage);
 
         return result;
     }
@@ -1877,7 +1857,7 @@ common_speculative_draft_result common_speculative_draft_ex(
         common_speculative_note_generated(impl.get(), result.tokens.size());
         result.spans.push_back({
             /* .type = */ impl->type,
-            /* .role = */ runtime_stage.role,
+            /* .phase = */ runtime_stage.phase,
             /* .token_offset = */ 0,
             /* .n_tokens = */ result.tokens.size(),
             /* .impl_index = */ i,
@@ -2412,7 +2392,7 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
     for (size_t i = 0; i < spec->impls.size(); ++i)
     {
         const auto &impl = spec->impls[i];
-        const common_speculative_stage_role role = common_speculative_get_display_role(spec, i);
+        const common_speculative_stage_phase phase = common_speculative_get_display_phase(spec, i);
         std::string str_perf;
         if (impl->gen_perf) {
             std::ostringstream oss;
@@ -2425,10 +2405,10 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
         }
 
         std::string stage_label = common_speculative_type_to_str(impl->type);
-        if (role != COMMON_SPECULATIVE_STAGE_ROLE_AUTO && role != COMMON_SPECULATIVE_STAGE_ROLE_SINGLE)
+        if (phase != COMMON_SPECULATIVE_STAGE_PHASE_AUTO)
         {
             stage_label += "(";
-            stage_label += common_speculative_stage_role_to_cstr_local(role);
+            stage_label += common_speculative_stage_phase_to_cstr_local(phase);
             stage_label += ")";
         }
 

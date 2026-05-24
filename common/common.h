@@ -156,29 +156,34 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 std::string common_speculative_type_to_str(enum common_speculative_type type);
 bool common_speculative_type_is_self_spec(enum common_speculative_type type);
 
-enum common_speculative_stage_role
+enum common_speculative_stage_phase
 {
-    COMMON_SPECULATIVE_STAGE_ROLE_AUTO = 0,
-    COMMON_SPECULATIVE_STAGE_ROLE_SINGLE,
-    COMMON_SPECULATIVE_STAGE_ROLE_GATE,
-    COMMON_SPECULATIVE_STAGE_ROLE_PREFIX,
-    COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX,
-    COMMON_SPECULATIVE_STAGE_ROLE_COUNT,
+    COMMON_SPECULATIVE_STAGE_PHASE_AUTO = 0,
+    COMMON_SPECULATIVE_STAGE_PHASE_PROBE,
+    COMMON_SPECULATIVE_STAGE_PHASE_FIRST,
+    COMMON_SPECULATIVE_STAGE_PHASE_TAIL,
+    COMMON_SPECULATIVE_STAGE_PHASE_COUNT,
 };
 
-enum common_speculative_policy
+enum common_speculative_plan_mode
 {
-    COMMON_SPECULATIVE_POLICY_NONE = 0,
-    COMMON_SPECULATIVE_POLICY_SINGLE,
-    COMMON_SPECULATIVE_POLICY_FALLBACK,
-    COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE,
-    COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE,
-    COMMON_SPECULATIVE_POLICY_INVALID,
+    COMMON_SPECULATIVE_PLAN_NONE = 0,
+    COMMON_SPECULATIVE_PLAN_SINGLE,
+    COMMON_SPECULATIVE_PLAN_COMPOSE,
+};
+
+struct common_speculative_plan
+{
+    common_speculative_plan_mode mode = COMMON_SPECULATIVE_PLAN_NONE;
+    int probe_stage = -1;
+    int first_stage = -1;
+    int tail_stage = -1;
+    bool valid = true;
 };
 
 struct common_speculative_stage_params {
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
-    common_speculative_stage_role role = COMMON_SPECULATIVE_STAGE_ROLE_AUTO;
+    common_speculative_stage_phase phase = COMMON_SPECULATIVE_STAGE_PHASE_AUTO;
 
     int32_t n_max = -1;
     int32_t n_min = -1;
@@ -190,8 +195,9 @@ struct common_speculative_stage_params {
 
     int32_t suffix_min_match_len = -1;
     int32_t suffix_max_depth = -1;
+    std::string suffix_corpus;
 
-    bool has_role_override() const { return role != COMMON_SPECULATIVE_STAGE_ROLE_AUTO; }
+    bool has_phase_override() const { return phase != COMMON_SPECULATIVE_STAGE_PHASE_AUTO; }
     bool has_n_max_override() const { return n_max >= 0; }
     bool has_n_min_override() const { return n_min >= 0; }
     bool has_p_min_override() const { return p_min >= 0.0f; }
@@ -200,6 +206,7 @@ struct common_speculative_stage_params {
     bool has_ngram_min_hits_override() const { return ngram_min_hits > 0; }
     bool has_suffix_min_match_len_override() const { return suffix_min_match_len >= 0; }
     bool has_suffix_max_depth_override() const { return suffix_max_depth >= 0; }
+    bool has_suffix_corpus_override() const { return !suffix_corpus.empty(); }
 };
 
 struct common_params_model {
@@ -273,11 +280,9 @@ struct common_params_speculative {
     bool has_stage_chain() const;
     bool has_stage_type(common_speculative_type stage_type) const;
     bool has_composite_stage_chain() const;
-    common_speculative_policy get_effective_policy() const;
+    common_speculative_plan get_plan(std::string *error = nullptr) const;
     int32_t get_max_stage_n_max() const;
     int32_t get_total_candidate_n_max() const;
-    int32_t get_prefix_n_max() const;
-    int32_t get_suffix_n_max() const;
     int32_t get_min_usable_stage_n_min() const;
 
 };

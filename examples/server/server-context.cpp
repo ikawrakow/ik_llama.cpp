@@ -648,8 +648,9 @@ void server_slot::reset() {
     // Reset speculative decoding stats
     n_draft_total = 0;
     n_draft_accepted = 0;
-    n_draft_prefix = 0;
-    n_draft_suffix = 0;
+    n_draft_probe = 0;
+    n_draft_first = 0;
+    n_draft_tail = 0;
     chat_msg = {};
     json_schema = json();
     generated_tool_call_ids.clear();
@@ -764,13 +765,17 @@ json server_slot::get_formated_timings() const {
     {
         timings["draft_n"] = n_draft_total;
         timings["draft_n_accepted"] = n_draft_accepted;
-        if (n_draft_prefix > 0)
+        if (n_draft_probe > 0)
         {
-            timings["draft_n_prefix"] = n_draft_prefix;
+            timings["draft_n_probe"] = n_draft_probe;
         }
-        if (n_draft_suffix > 0)
+        if (n_draft_first > 0)
         {
-            timings["draft_n_suffix"] = n_draft_suffix;
+            timings["draft_n_first"] = n_draft_first;
+        }
+        if (n_draft_tail > 0)
+        {
+            timings["draft_n_tail"] = n_draft_tail;
         }
     }
 
@@ -3636,13 +3641,17 @@ void server_context::add_sampled_tokens() {
                 slot.n_draft_total += draft_result.tokens.size();
                 for (const auto &span : draft_result.spans)
                 {
-                    if (span.role == COMMON_SPECULATIVE_STAGE_ROLE_PREFIX)
+                    if (span.phase == COMMON_SPECULATIVE_STAGE_PHASE_PROBE)
                     {
-                        slot.n_draft_prefix += span.n_tokens;
+                        slot.n_draft_probe += span.n_tokens;
                     }
-                    else if (span.role == COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX)
+                    else if (span.phase == COMMON_SPECULATIVE_STAGE_PHASE_FIRST)
                     {
-                        slot.n_draft_suffix += span.n_tokens;
+                        slot.n_draft_first += span.n_tokens;
+                    }
+                    else if (span.phase == COMMON_SPECULATIVE_STAGE_PHASE_TAIL)
+                    {
+                        slot.n_draft_tail += span.n_tokens;
                     }
                 }
 

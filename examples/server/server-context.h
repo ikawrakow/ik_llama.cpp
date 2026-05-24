@@ -178,8 +178,9 @@ struct server_slot {
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
-    int32_t n_draft_prefix = 0;     // Draft tokens produced by prefix stages
-    int32_t n_draft_suffix = 0;     // Draft tokens produced by suffix stages
+    int32_t n_draft_probe = 0;      // Draft tokens produced by probe stages
+    int32_t n_draft_first = 0;      // Draft tokens produced by first stages
+    int32_t n_draft_tail = 0;       // Draft tokens produced by tail stages
 
     int32_t n_past_se = 0; // self-extend
 

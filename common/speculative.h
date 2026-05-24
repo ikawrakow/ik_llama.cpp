@@ -17,7 +17,7 @@ static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_HIDD
 struct common_speculative_draft_span
 {
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
-    common_speculative_stage_role role = COMMON_SPECULATIVE_STAGE_ROLE_AUTO;
+    common_speculative_stage_phase phase = COMMON_SPECULATIVE_STAGE_PHASE_AUTO;
     size_t token_offset = 0;
     size_t n_tokens = 0;
     size_t impl_index = 0;
