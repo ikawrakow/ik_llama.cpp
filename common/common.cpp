@@ -192,6 +192,14 @@ static const common_speculative_stage_params *common_speculative_find_stage_by_r
     return nullptr;
 }
 
+static common_speculative_stage_params common_speculative_stage_with_role(
+    common_speculative_stage_params stage,
+    common_speculative_stage_role role)
+{
+    stage.role = role;
+    return stage;
+}
+
 static enum common_speculative_policy common_speculative_infer_policy(
     const common_params_speculative &params,
     std::string *error = nullptr)
@@ -250,17 +258,17 @@ static enum common_speculative_policy common_speculative_infer_policy(
             return COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE;
         }
 
-        if (!common_speculative_type_is_self_spec(first.type))
+        if (common_speculative_type_is_neural(first.type) && common_speculative_type_is_self_spec(second.type))
         {
-            return fail("two-stage speculative fallback requires a self-spec stage first");
+            return COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE;
         }
 
-        if (!common_speculative_type_is_neural(second.type))
+        if (common_speculative_type_is_self_spec(first.type) && common_speculative_type_is_neural(second.type))
         {
-            return fail("two-stage speculative fallback supports only mtp or draft after self-spec");
+            return fail("implicit two-stage self-spec -> neural fallback has been removed; use gate:* + prefix:* + suffix:* or repeated --spec-type self-spec then neural");
         }
 
-        return COMMON_SPECULATIVE_POLICY_FALLBACK;
+        return fail("two-stage speculative mode requires either prefix:* + suffix:* or neural followed by self-spec");
     }
 
     const auto &gate = resolved[0];
@@ -875,29 +883,84 @@ static bool is_autoy(const std::string & value) {
 static void common_speculative_finalize_stages(gpt_params & params) {
     auto & spec = params.speculative;
 
-    if (!spec.stages.empty()) {
-        spec.type = spec.stages.front().type;
-        params.has_mtp = spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
-        return;
-    }
-
     const bool wants_mtp = params.has_mtp;
     const bool wants_draft = spec.has_dft();
 
-    if (spec.type != COMMON_SPECULATIVE_TYPE_NONE) {
-        spec.stages.push_back({ .type = spec.type });
+    std::vector<common_speculative_stage_params> stages = spec.stages;
+    if (stages.empty())
+    {
+        if (spec.type != COMMON_SPECULATIVE_TYPE_NONE)
+        {
+            stages.push_back({.type = spec.type});
+        }
+        else if (wants_mtp)
+        {
+            stages.push_back({.type = COMMON_SPECULATIVE_TYPE_MTP});
+        }
+        else if (wants_draft)
+        {
+            stages.push_back({.type = COMMON_SPECULATIVE_TYPE_DRAFT});
+        }
+    }
 
-        if (common_speculative_type_is_self_spec(spec.type)) {
-            if (wants_mtp) {
-                spec.stages.push_back({ .type = COMMON_SPECULATIVE_TYPE_MTP });
-            } else if (wants_draft) {
-                spec.stages.push_back({ .type = COMMON_SPECULATIVE_TYPE_DRAFT });
+    const bool has_explicit_roles = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params &stage)
+                                                { return stage.has_role_override(); });
+
+    if (!has_explicit_roles)
+    {
+        if (stages.size() == 1)
+        {
+            if (common_speculative_type_is_self_spec(stages[0].type) && (wants_mtp || wants_draft))
+            {
+                common_speculative_stage_params neural_stage = {
+                    .type = wants_mtp ? COMMON_SPECULATIVE_TYPE_MTP : COMMON_SPECULATIVE_TYPE_DRAFT,
+                };
+                spec.stages = {
+                    common_speculative_stage_with_role(stages[0], COMMON_SPECULATIVE_STAGE_ROLE_GATE),
+                    common_speculative_stage_with_role(neural_stage, COMMON_SPECULATIVE_STAGE_ROLE_PREFIX),
+                    common_speculative_stage_with_role(stages[0], COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX),
+                };
+            }
+            else
+            {
+                spec.stages = {
+                    common_speculative_stage_with_role(stages[0], COMMON_SPECULATIVE_STAGE_ROLE_SINGLE),
+                };
             }
         }
-    } else if (wants_mtp) {
-        spec.stages.push_back({ .type = COMMON_SPECULATIVE_TYPE_MTP });
-    } else if (wants_draft) {
-        spec.stages.push_back({ .type = COMMON_SPECULATIVE_TYPE_DRAFT });
+        else if (stages.size() == 2)
+        {
+            const auto &first = stages[0];
+            const auto &second = stages[1];
+
+            if (common_speculative_type_is_self_spec(first.type) && common_speculative_type_is_neural(second.type))
+            {
+                spec.stages = {
+                    common_speculative_stage_with_role(first, COMMON_SPECULATIVE_STAGE_ROLE_GATE),
+                    common_speculative_stage_with_role(second, COMMON_SPECULATIVE_STAGE_ROLE_PREFIX),
+                    common_speculative_stage_with_role(first, COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX),
+                };
+            }
+            else if (common_speculative_type_is_neural(first.type) && common_speculative_type_is_self_spec(second.type))
+            {
+                spec.stages = {
+                    common_speculative_stage_with_role(first, COMMON_SPECULATIVE_STAGE_ROLE_PREFIX),
+                    common_speculative_stage_with_role(second, COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX),
+                };
+            }
+            else
+            {
+                spec.stages = stages;
+            }
+        }
+        else
+        {
+            spec.stages = stages;
+        }
+    }
+    else
+    {
+        spec.stages = stages;
     }
 
     spec.type = spec.stages.empty() ? COMMON_SPECULATIVE_TYPE_NONE : spec.stages.front().type;
@@ -1727,60 +1790,26 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     {
         CHECK_ARG
 
-        if (params.speculative.stages.empty())
-        {
-            if (params.speculative.type != COMMON_SPECULATIVE_TYPE_NONE)
-            {
-                throw std::invalid_argument("--spec cannot be combined with --spec-type; use only --spec/--spec-stage for explicit stage chains");
-            }
-            if (params.has_mtp)
-            {
-                throw std::invalid_argument("--spec cannot be combined with -mtp/--multi-token-prediction; add the mtp stage explicitly with --spec prefix:mtp[:k=v,...] or --spec-stage mtp[:k=v,...]");
-            }
-        }
-
-        params.speculative.stages.push_back(common_speculative_stage_from_arg(argv[i]));
-        if (params.speculative.stages.size() == 1)
-        {
-            params.speculative.type = params.speculative.stages.front().type;
-        }
-        params.has_mtp = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
-        return true;
+        fprintf(stderr, "warning: --spec is deprecated and disabled; use repeated --spec-type SPEC[:k=v,...] instead\n");
+        throw std::invalid_argument("--spec is deprecated and disabled; use --spec-type");
     }
     if (arg == "--spec-stage") {
         CHECK_ARG
 
-        if (params.speculative.stages.empty()) {
-            if (params.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
-                throw std::invalid_argument("--spec-stage cannot be combined with --spec-type; use only --spec-stage for explicit stage chains");
-            }
-            if (params.has_mtp) {
-                throw std::invalid_argument("--spec-stage cannot be combined with -mtp/--multi-token-prediction; add the mtp fallback explicitly with --spec-stage mtp[:k=v,...]");
-            }
-        }
-
-        params.speculative.stages.push_back(common_speculative_stage_from_arg(argv[i]));
-        if (params.speculative.stages.size() == 1) {
-            params.speculative.type = params.speculative.stages.front().type;
-        }
-        params.has_mtp = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
-        return true;
+        fprintf(stderr, "warning: --spec-stage is deprecated and disabled; use repeated --spec-type SPEC[:k=v,...] instead\n");
+        throw std::invalid_argument("--spec-stage is deprecated and disabled; use --spec-type");
     }
     if (arg == "--spec-type") {
         CHECK_ARG
-        if (!params.speculative.stages.empty()) {
-            throw std::invalid_argument("--spec-type cannot be combined with --spec-stage; use only --spec-stage for explicit stage chains");
+        const auto stage = common_speculative_stage_from_arg(argv[i]);
+        if (stage.has_role_override())
+        {
+            throw std::invalid_argument("--spec-type does not accept explicit roles; use --spec or --spec-stage for role-qualified stages");
         }
 
-        const auto type = common_speculative_type_from_name(argv[i]);
-        if (type == COMMON_SPECULATIVE_TYPE_NONE || type == COMMON_SPECULATIVE_TYPE_MTP || common_speculative_type_is_self_spec(type)) {
-            params.speculative.type = type;
-            if (type == COMMON_SPECULATIVE_TYPE_MTP) {
-                params.has_mtp = true;
-            }
-        } else {
-            throw std::invalid_argument("unknown speculative decoding type");
-        }
+        params.speculative.stages.push_back(stage);
+        params.speculative.type = params.speculative.stages.front().type;
+        params.has_mtp = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
         return true;
     }
     if (arg == "--spec-ngram-size-n") {
@@ -2259,17 +2288,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-mtp" || arg == "--multi-token-prediction") {
-        if (!params.speculative.stages.empty()) {
-            throw std::invalid_argument("-mtp/--multi-token-prediction cannot be combined with --spec-stage; add the mtp fallback explicitly with --spec-stage mtp[:k=v,...]");
-        }
-
-        params.has_mtp = true;
-        return true;
+        fprintf(stderr, "warning: -mtp/--multi-token-prediction is deprecated and disabled; use --spec-type mtp[:k=v,...] instead\n");
+        throw std::invalid_argument("-mtp/--multi-token-prediction is deprecated and disabled; use --spec-type mtp[:k=v,...]");
     }
     if (arg == "-no-mtp" || arg == "--no-multi-token-prediction") {
-        params.has_mtp = false;
-        common_speculative_remove_explicit_stage(params.speculative, COMMON_SPECULATIVE_TYPE_MTP);
-        return true;
+        fprintf(stderr, "warning: -no-mtp/--no-multi-token-prediction is deprecated and disabled; remove the mtp --spec-type entry instead\n");
+        throw std::invalid_argument("-no-mtp/--no-multi-token-prediction is deprecated and disabled; remove the mtp --spec-type entry instead");
     }
     if (arg == "-draft" || arg == "--draft-params") {
         CHECK_ARG
@@ -3462,13 +3486,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  per-step     save SSM state per draft step in VRAM; no re-decode on rejection\n"
                                                               "  gpu-fallback copy state to GPU buffer; re-decode on rejection\n"
                                                               "  cpu          serialise state via llama_state_seq; re-decode on rejection" });
-    options.push_back({"*", "--spec ROLE:TYPE[:k=v,...]", "canonical speculative stage selector. repeat for ordered chains.\n"
-                                                          "examples: --spec prefix:mtp:n_max=1 --spec suffix:ngram-mod:n_max=8,n_min=1\n"
-                                                          "legacy fallback shape remains supported: --spec ngram-mod:n_max=64,n_min=2 --spec mtp:n_max=1"});
-    options.push_back({"*", "--spec-stage SPEC[:k=v,...]", "explicit speculative stage. repeat once for a supported two-stage chain.\n"
-                                                           "legacy alias of --spec. examples: --spec-stage ngram-mod:n_max=64,n_min=2 --spec-stage mtp:n_max=1\n"
-                                                           "combined shapes in this PR: prefix:* -> suffix:* and gate:* -> prefix:* -> suffix:*"});
-    options.push_back({ "*", "--spec-type Name [none | mtp | ngram-cache | ngram-simple | ngram-map-k | ngram-map-k4v | ngram-mod | suffix]", "single-stage speculative selection when --spec-stage is not used (default: %d)\n", (int)params.speculative.type});
+    options.push_back({"*", "--spec ROLE:TYPE[:k=v,...]", "deprecated and disabled; use repeated --spec-type SPEC[:k=v,...] instead"});
+    options.push_back({"*", "--spec-stage SPEC[:k=v,...]", "deprecated and disabled; use repeated --spec-type SPEC[:k=v,...] instead"});
+    options.push_back({"*", "--spec-type SPEC[:k=v,...]", "canonical speculative selector. repeat for ordered chains without role qualifiers.\n"
+                                                          "examples: --spec-type mtp:n_max=2 --spec-type ngram-mod:n_max=16,n_min=1\n"
+                                                          "          --spec-type ngram-mod:n_max=64,n_min=2 --spec-type mtp:n_max=2\n"
+                                                          "single entry stays single-spec; self-spec then neural canonicalizes to gate/prefix/suffix fallback-combine"});
     options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n",params.speculative.ngram_size_n });
 
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
