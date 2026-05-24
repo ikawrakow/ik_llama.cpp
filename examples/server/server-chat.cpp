@@ -223,8 +223,17 @@ json server_chat_convert_responses_to_chatcmpl(const json& response_body) {
         for (json resp_tool : response_body.at("tools")) {
             json chatcmpl_tool;
 
-            if (json_value(resp_tool, "type", std::string()) != "function") {
-                throw std::runtime_error("'type' of tool must be 'function'");
+            const std::string tool_type = json_value(resp_tool, "type", std::string());
+
+            // Skip known unsupported Responses built-in tool types seen from Codex CLI.
+            // These are Responses API extensions not supported by Chat Completions.
+            if (tool_type == "namespace" || tool_type == "web_search" || tool_type == "image_generation") {
+                continue;
+            }
+
+            // For non-function tools that are not known unsupported types, reject.
+            if (tool_type != "function") {
+                throw std::runtime_error("'type' of tool must be 'function' or a supported Responses built-in");
             }
             resp_tool.erase("type");
             chatcmpl_tool["type"] = "function";
@@ -236,7 +245,9 @@ json server_chat_convert_responses_to_chatcmpl(const json& response_body) {
             chatcmpl_tools.push_back(chatcmpl_tool);
         }
         chatcmpl_body.erase("tools");
-        chatcmpl_body["tools"] = chatcmpl_tools;
+        if (!chatcmpl_tools.empty()) {
+            chatcmpl_body["tools"] = chatcmpl_tools;
+        }
     }
 
     if (response_body.contains("max_output_tokens")) {
