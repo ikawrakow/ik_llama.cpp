@@ -1111,7 +1111,7 @@ static bool llama_kv_cache_init(
     if (split_cache || replicate_mla) {
         LLAMA_LOG_INFO("%s: KV cache size per device%s:\n", __func__,
                        replicate_mla ? " (MLA replicated)" : "");
-        for (int i = 0; i < int(mem_split.size()); ++i) printf("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
+        for (int i = 0; i < int(mem_split.size()); ++i) LLAMA_LOG_INFO("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
     }
 
 #if 0
@@ -2414,7 +2414,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                     split.ggml.splits    = split.tensor_splits.data();
                     computed->extra = (void *)&split.ggml;
 
-                    printf("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
+                    LLAMA_LOG_INFO("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
                             tname.c_str(), (int)source->ne[0], (int)source->ne[1], (int)source->ne[2],
                             ggml_type_name(source->type), n_device);
                 } else {
@@ -2431,7 +2431,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         iqk_modify_tensor(computed.get());
                     }
 
-                    printf("Computed %s as %d x %d x %d of type %s and stored in buffer %s\n",
+                    LLAMA_LOG_INFO("Computed %s as %d x %d x %d of type %s and stored in buffer %s\n",
                             tname.c_str(), (int)source->ne[0], (int)source->ne[1], (int)source->ne[2],
                             ggml_type_name(source->type), ggml_backend_buffer_name(computed->buffer));
                 }
@@ -2664,7 +2664,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 model.tensors_by_name.push_back(std::make_pair(name, l.computed_wk_b_pp.get()));
                 l.wk_b_pp = l.computed_wk_b_pp.get();
 
-                printf("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
+                LLAMA_LOG_INFO("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
                         name.c_str(),
                         (int)l.computed_wk_b_pp->ne[0],
                         (int)l.computed_wk_b_pp->ne[1],
@@ -2803,7 +2803,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         l.wkv_b = l.computed_wkv_b.get();
         model.tensors_by_name.push_back(std::make_pair(name, l.wkv_b));
 
-        printf("Computed %s as %d x %d of type %s and stored in buffer %s\n", name.c_str(), (int)wkv_b->ne[0], (int)wkv_b->ne[1],
+        LLAMA_LOG_INFO("Computed %s as %d x %d of type %s and stored in buffer %s\n", name.c_str(), (int)wkv_b->ne[0], (int)wkv_b->ne[1],
                     ggml_type_name(wkv_b->type), ggml_backend_buffer_name(l.computed_wkv_b->buffer));
 
         ggml_graph_clear(graph);
@@ -2930,7 +2930,7 @@ static void llm_apply_khad_pretransform(llama_model & model) {
 
 static void llm_scale_gate_inp_s(llama_model & model, bool uses_mmap) {
     auto & hparams = model.hparams;
-    printf("%s: n_embd = %d\n", __func__, hparams.n_embd);
+    LLAMA_LOG_INFO("%s: n_embd = %d\n", __func__, hparams.n_embd);
     std::vector<float> values(hparams.n_embd);
     float scale = 1.0f/sqrtf((float)hparams.n_embd);
     int n_host = 0;
@@ -10776,7 +10776,7 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_off) {
     if (!lctx || !lctx->sched) return;
     const char * op_name = op < 0 || op >= int(GGML_OP_COUNT) ? "all ops" : ggml_op_name(ggml_op(op));
-    printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", op_name, on_or_off);
+    LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", op_name, on_or_off);
     ggml_backend_sched_set_op_offload(lctx->sched, ggml_op(op), on_or_off);
 }
 
