@@ -1,5 +1,21 @@
 # Build ik_llama.cpp
 
+`ik_llama.cpp` has a very minimal set of dependencies: cmake, a functional C++-17 compiler, and, if building with Nvidia GPU support, the CUDA toolkit.
+
+## Table of Contents
+[Supported backends](#supported-backends) ·
+[Prerequisites](#prerequisites) ·
+[Getting the source](#getting-the-source) ·
+[Linux](#building-on-linux) ·
+[macOS](#building-on-macos) ·
+[Windows](#building-on-windows-cpu--cuda) ·
+[Debug builds](#debug-builds) ·
+[Build tips](#general-build-tips) ·
+[AVX-512](#cpu-build-flags-for-avx-512-zen4--sapphire-rapids) ·
+[Verify](#verifying-your-build) ·
+[CUDA reference](#cuda-architecture-reference) ·
+[Other platforms](#other-platforms)
+
 ## Supported backends
 
 > **Important:** `ik_llama.cpp` focuses on two fully functional and performant compute backends:
@@ -24,7 +40,7 @@
 |---|---|
 | **Git** | [git-scm.com](https://git-scm.com/download/) or system package manager |
 | **CMake 3.21+** | [cmake.org](https://cmake.org/download/) or system package manager |
-| **C++17 compiler** | GCC 10+, Clang 13+, MSVC 2022, or clang-cl |
+| **C++17 compiler** | GCC 10+, Clang 13+, MSVC 2019 or newer (2022 recommended), or clang-cl |
 | **CUDA Toolkit 12.x** or higher | Required for GPU builds only — [NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive) |
 
 **Note**: Avoid using `CUDA Toolkit 13.2` due to a bug in CUDA that might produce garbage in certain combinations of quantizations and models.
@@ -91,7 +107,7 @@ brew install cmake git
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON
 cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 ```
-> **Note**: `-DGGML_NATIVE=ON` will actually enable `Metal` support, which may or may not work, depending on model. Be aware that Metal is not officially supported in ik_llama.  
+> ⚠️ **Note:** `-DGGML_NATIVE=ON` will actually enable `Metal` support, which may or may not work, depending on model. Be aware that Metal is not officially supported in ik_llama.  
 (Feedback from Mac users on this topic is welcome to help improve this documentation)
 
 ---
@@ -122,6 +138,7 @@ and ensure the following are checked:
   - `MSVC v143 – VS 2022 C++ x64/x86 build tools`
   - `C++ CMake tools for Windows`
   - `Clang Compiler for Windows` (see next section) *(optional, but recommended for AVX-512 builds)*
+  - `Windows 11 SDK` or `Windows 10 SDK` (depending on your OS)
 
 #### Compiler Choice: MSVC vs. Clang-CL
 You can install and use two different compilers in Visual Studio:
@@ -133,7 +150,7 @@ To use the `clang-cl` compiler, you have to add the following lines to your cmak
     -DCMAKE_C_COMPILER=clang-cl.exe ^
     -DCMAKE_CXX_COMPILER=clang-cl.exe
 ```
-This will be covered later in the detailled configuration examples.
+This will be covered later in the detailed configuration examples.
 
 #### A note on Visual Studio 2026
 
@@ -221,21 +238,21 @@ the table. The following options are strongly recommended and can be appended to
 **Enable native CPU optimisations:**
 
 * **If using Clang-CL (Recommended):**  
-Add `-DGGML_NATIVE=ON`. This enables -march=native, automatically tuning the binary to your exact CPU (AVX2, AVX-512, etc.).  
-*Required Flags:* `-DCMAKE_C_COMPILER=clang-cl.exe -DCMAKE_CXX_COMPILER=clang-cl.exe`  
+  Add `-DGGML_NATIVE=ON`. This enables `-march=native`, automatically tuning the binary to your exact CPU (AVX2, AVX-512, etc.).  
+  *Required Flags:* `-DCMAKE_C_COMPILER=clang-cl.exe -DCMAKE_CXX_COMPILER=clang-cl.exe`  
 * **If using MSVC (Default):**  
-`GGML_NATIVE=ON` has no effect. You must explicitly enable instruction sets:  
+  `GGML_NATIVE=ON` has no effect. You must explicitly enable instruction sets:  
   * For most modern CPUs: Add `-DGGML_AVX2=ON`
-  * For Zen4/Sapphire Rapids+: Add `-DGGML_AVX512=ON` (plus VNNI/VBMI flags, see AVX-512 Section)
+  * For Zen4/Sapphire Rapids+: Add `-DGGML_AVX512=ON` (plus VNNI/VBMI flags, see [AVX-512 section](#cpu-build-flags-for-avx-512-zen4--sapphire-rapids))
 
-Since unused cmake args will just give you an informational warning and will otherwise be ignored, you can safely add both to your setup:
-```
--DGGML_NATIVE=ON
--DGGML_AVX2=ON
-```
+> 💡 **Note on CPU feature detection:**  
+> CMake normally auto-detects your system architecture and available instruction sets.  
+> - Flags like `-DGGML_AVX2=ON` or `-DCMAKE_SYSTEM_PROCESSOR=x86_64` are usually set correctly by default.  
+> - Adding them explicitly is harmless if redundant, and guarantees the expected code paths are enabled (especially on MSVC).  
+> - If you encounter unexpected fallbacks (e.g., in certain VMs or non-standard environments), adding these flags is a safe troubleshooting step.  
+> You can safely include both `-DGGML_NATIVE=ON` and `-DGGML_AVX2=ON` in your command line; CMake will simply ignore the one that is already auto-detected.
 
 > ⚠️ **VM Users:** Be careful with `-DGGML_NATIVE=ON` inside Virtual Machines. The hypervisor may not expose all host CPU features correctly. If you experience crashes, specify your CPU architecture explicitly (e.g., `-DGGML_AVX2=ON`) instead of using `NATIVE`.
-
 
 **Target a specific CUDA architecture** (avoids compiling for all architectures, which is slow):
 
@@ -255,10 +272,10 @@ Replace `86` with the compute capability of your GPU. See the
 
 ### Full recommended CUDA build commands
 
-putting everything together, here are two recomended Example cmake setups for both compiler chices:
+Putting everything together, here are two recommended example CMake setups for both compiler choices:
 
 #### Example A: High Performance Build (Clang-CL + RTX 3060)
-```
+```cmd
 cmake -B build ^
     -G Ninja ^
     -DCMAKE_C_COMPILER=clang-cl.exe ^
@@ -271,7 +288,8 @@ cmake -B build ^
 cmake --build build --config Release
 ```
 #### Example B: Simple Build (MSVC + RTX 3060)
-```
+```cmd
+
 cmake -B build ^
     -G Ninja ^
     -DCMAKE_BUILD_TYPE=Release ^
@@ -338,7 +356,7 @@ cmake --build build --config Debug
 
 ## General build tips
 
-- **Clean builds:** When your cmake build comand stops working at some time after any kind of misbehaviour, if you encounter strange linker errors or outdated behavior, delete the `build` directory and re-run the CMake configuration steps.
+- **Clean builds:** When your CMake build command stops working at some time after any kind of misbehaviour, if you encounter strange linker errors or outdated behavior, delete the `build` directory and re-run the CMake configuration steps.
 - **Parallel compilation:** pass `-j <N>` to the build step, e.g.
   `cmake --build build --config Release -j 8`.
 - **Faster incremental rebuilds:** install [ccache](https://ccache.dev/) — CMake picks it up
@@ -441,7 +459,7 @@ IQK kernels.
 ---
 ## Verifying your Build
 
-After successfully building with cmake, you will find the executables in subdirectory `build/bin`, `build/bin/release` or something like that, depending on yourenvironment and the exact cmake commandline you used.
+After successfully building with cmake, you will find the executables in subdirectory `build/bin`, `build/bin/release` or something like that, depending on your environment and the exact CMake command line you used.
 ### Simple execution Test
 To ensure your build was successful, run the following command from your build directory:
 
@@ -477,7 +495,7 @@ build time and binary size.
 | 9.0 | Hopper | NVIDIA H100, H200 (data centre) |
 | 10.0 | Blackwell | GeForce RTX 5080/5090, GB200 (data centre) |
 
-Use `real` (e.g. `86-real`) to embed only PTX/SASS for that architecture; omit `real` to also
+Use `real` (e.g., `86-real`) to embed only PTX/SASS for that architecture; omit `real` to also
 embed PTX for forward compatibility. For a system with mixed GPU generations, a comma-separated
 list is accepted: `-DCMAKE_CUDA_ARCHITECTURES="75-real;86-real"`.
 
@@ -509,6 +527,6 @@ The following CMake options are available for fine-tuning CUDA performance:
 ## Other Platforms
 
 - **FreeBSD:** Use CMake. `pkg install cmake ninja git llvm`, then standard CMake commands.
-- **Android:** See [android.md](https://chat.qwen.ai/c/android.md).
+- **Android:** See [android.md](https://github.com/ikawrakow/ik_llama.cpp/blob/main/docs/android.md).
 - **Experimental Backends:** Refer to upstream [llama.cpp docs](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).  
   These backends are **not supported** in `ik_llama.cpp`. They may serve as a starting point for contributors who are willing to actively maintain and fix them for this fork.
