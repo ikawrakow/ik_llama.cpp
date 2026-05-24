@@ -80,8 +80,11 @@ llama_tokens common_speculative_draft(
 
 common_speculative_type common_speculative_draft_result_primary_type(const common_speculative_draft_result &result);
 
-// informs the speculative decoder that n_accepted tokens were accepted by the target model
-void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
+// informs the speculative decoder that n_accepted drafted tokens were accepted by the target model
+void common_speculative_accept(
+    common_speculative *spec,
+    const common_speculative_draft_result &result,
+    uint16_t n_accepted);
 
 bool common_speculative_ensure_sequence_hidden(
     common_speculative * spec,

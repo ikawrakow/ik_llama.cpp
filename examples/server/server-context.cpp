@@ -4289,8 +4289,9 @@ void server_context::speculative_decoding_accept() {
         }
 
         const llama_token sampled_before = slot.sampled;
-        const common_speculative_type spec_type_used = common_speculative_draft_result_primary_type(slot.drafted_result);
-        size_t n_draft = slot.drafted_result.tokens.size();
+        const common_speculative_draft_result draft_result = slot.drafted_result;
+        const common_speculative_type spec_type_used = common_speculative_draft_result_primary_type(draft_result);
+        size_t n_draft = draft_result.tokens.size();
 
         slot.ctx_sampling->to_generated_text = &slot.generated_text;
         if (n_draft > 0) {
@@ -4304,7 +4305,7 @@ void server_context::speculative_decoding_accept() {
         // the accepted tokens from the speculation
         std::vector<llama_token> ids;
         try {
-            ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, slot.drafted_result.tokens);
+            ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, draft_result.tokens);
         } catch (const std::exception & e) {
             LOG_ERROR("speculative sampling failed, releasing slot", {
                 {"id_slot", slot.id},
@@ -4324,7 +4325,7 @@ void server_context::speculative_decoding_accept() {
         std::vector<float> mtp_hidden_state_pre;
         std::vector<int32_t> accepted_output_indices;
         if (slot.has_mtp) {
-            const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted_result.tokens.size() + 1);
+            const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(draft_result.tokens.size() + 1);
             mtp_n_past_base = slot.cache_tokens.pos_next(n_pre_spec_tokens);
 
             if (!ids.empty()) {
@@ -4350,7 +4351,7 @@ void server_context::speculative_decoding_accept() {
         slot.n_draft_accepted += ids.size() - 1;
 
         // inform the speculative decoding about the number of accepted tokens
-        common_speculative_accept(slot.spec, ids.size() - 1);
+        common_speculative_accept(slot.spec, draft_result, ids.size() - 1);
 
         // rollback to the state before sampling the draft tokens
         slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - n_draft);
