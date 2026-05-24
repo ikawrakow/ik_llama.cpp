@@ -1929,7 +1929,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     do  // populate expiring logit bias
     {
-        const auto elb_prev_params = slot.sparams.elb_params;
+        const auto prev_elb_params = slot.sparams.elb_params;
 
         const auto& expiring_logit_bias = data.find("expiring_logit_bias");
         if (expiring_logit_bias != data.end() && expiring_logit_bias->is_array()) {
@@ -1955,9 +1955,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             break;
         }
 
-        if (!slot.elb_prev_states.empty() && (elb_params == elb_prev_params)) {
+        if (!slot.prev_elb_states.empty() && (elb_params == prev_elb_params)) {
             // reset and reuse previous states
-            slot.ctx_sampling->elb_states = slot.elb_prev_states;
+            slot.ctx_sampling->elb_states = slot.prev_elb_states;
             for (auto& elb_state: slot.ctx_sampling->elb_states) {
                 elb_state.countup = 0;
             }
@@ -1970,22 +1970,40 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.ctx_sampling->elb_states.reserve(n_elb_param);
 
         // 1 state <-> 1 exitword <-> 1+ entries
-        for (const auto& [entries, exitword]: elb_params) {
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0 });
+        for (int32_t i = 0; i < elb_params.size(); ++i) {
+            const auto& [entries, exitword, op] = elb_params[i];
+
+            if (op == ">>") {
+                for (auto& elb_state: slot.ctx_sampling->elb_states) {
+                    if (elb_state.jumpword.empty()) {
+                        elb_state.jumpword = exitword;
+                        elb_state.jump_idx = i + 1;
+                        elb_state.search_word_len = std::max(elb_state.exitword.length(), elb_state.jumpword.length());
+                    }
+                }
+            }
+
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, exitword.length() });
+
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
             auto& delay = slot.ctx_sampling->elb_states.back().delay;
             auto& max_cond_len = slot.ctx_sampling->elb_states.back().max_cond_len;
 
             // 1 entry <-> 1 phrase <-> 1+ biases
-            for (auto [phrases, biases, duration, is_range]: entries) {
-                for (const auto& phrase: phrases) {
-                    if (phrase.empty()) {
-                        continue;
-                    }
+            for (auto& entry: entries) {
+                auto biases = entry.biases;
+                if (biases.empty()) {
+                    // expiring sampler bias
+                    continue;
+                }
+
+                // expiring logit bias
+                for (const auto& phrase: entry.phrases) {
+                    auto duration = entry.duration;
 
                     const auto ids = common_tokenize(model, phrase, false, true);
-                    if (!is_range) {
+                    if (!entry.is_range) {
                         // extrapolate
                         biases.resize(ids.size(), biases.back());
                     } else if (ids.size() == 1) {
@@ -2040,7 +2058,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             });
         }
     } while (false);
-    slot.elb_prev_states = slot.ctx_sampling->elb_states;
+    slot.prev_elb_states = slot.ctx_sampling->elb_states;
 
     slot.command = SLOT_COMMAND_LOAD_PROMPT;
     // slot.prompt_tokens.clear();

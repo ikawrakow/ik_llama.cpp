@@ -1446,6 +1446,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         // do not quantize relative position bias (T5)
         quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
+        // quantize the extra output tensor
+        quantize = tensor == output_tensor || quantize;
+
         enum ggml_type new_type;
         void * new_data = nullptr;
         size_t new_size = 0;
@@ -1515,6 +1518,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
             if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
                 new_type = params->output_tensor_type;
+            }
+            else if (params->only_copy && tensor == output_tensor) {
+                new_type = tensor->type;
             }
             if (params->ffn_gate_inp_type < GGML_TYPE_COUNT && name.find("ffn_gate_inp.weight") != std::string::npos) {
                 new_type = params->ffn_gate_inp_type;

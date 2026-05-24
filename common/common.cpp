@@ -2966,6 +2966,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
+    options.push_back({ "*",           "       --expiring-logit-bias-file",
+                                                                        "original PR: https://github.com/ikawrakow/ik_llama.cpp/pull/1731\n"});
     options.push_back({ "main",        "       --cfg-negative-prompt PROMPT",
                                                                         "negative prompt to use for guidance (default: '%s')", sparams.cfg_negative_prompt.c_str() });
     options.push_back({ "main",        "       --cfg-negative-prompt-file FNAME",
@@ -3491,6 +3493,28 @@ void string_process_escapes(std::string & input) {
     input.resize(output_idx);
 }
 
+std::string string_unescape(const std::string& str) {
+    std::string result;
+    result.reserve(2 * str.length());
+    for (const auto c: str) {
+        switch (c) {
+        case '\n':
+            result.append("\\n");
+            break;
+        case '\t':
+            result.append("\\t");
+            break;
+        case '\r':
+            result.append("\\r");
+            break;
+        default:
+            result.append(1, c);
+            break;
+        }
+    }
+    return result;
+}
+
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides) {
     const char * sep = strchr(data, '=');
     if (sep == nullptr || sep - data >= 128) {
@@ -3535,6 +3559,42 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
     }
     overrides.emplace_back(std::move(kvo));
     return true;
+}
+
+std::vector<std::string> string_extract(const std::string& str, const char c, std::vector<size_t>& posi) {
+    std::vector<std::string> extracts;
+    auto pos = str.find(c);
+    size_t count = 0;
+    while (pos != std::string::npos) {
+        if (count % 2 == 0) {
+            // opening c
+            posi.push_back(pos);
+            ++count;
+        } else {
+            // closing c must be unescaped
+            auto esc_pos = pos;
+            size_t n_esc = 0;
+            while ((esc_pos > 0) && (str[--esc_pos] == '\\')) {
+                ++n_esc;
+            }
+            if (n_esc % 2 == 0) {
+                extracts.push_back(str.substr(posi.back() + 1, pos - posi.back() - 1));
+                string_process_escapes(extracts.back());
+                posi.push_back(pos);
+                ++count;
+            }
+        }
+        pos = str.find(c, pos + 1);
+    }
+    return extracts;
+}
+
+bool string_is_found(const std::string& window, const std::string& str, size_t& pos) {
+    if (str.empty()) {
+        return false;
+    }
+    pos = window.find(str);
+    return pos != std::string::npos;
 }
 
 //
@@ -5170,121 +5230,169 @@ std::tuple<uint32_t, uint32_t, std::string, float> argparse_allowlist_unicode_ru
 }
 
 void argparse_expiring_logit_bias(const std::string& content, common_params_sampling& sparams) {
-    decltype(sparams.elb_params) elb_params = { { { }, "" } };
+    auto elb_params = sparams.elb_params;
+    elb_params.push_back({ { }, "", "" });
+    auto entries = elb_params[0].entries;
 
-    int32_t saved_duration = 0;
-    std::vector<std::string> saved_phrases;
-    std::vector<float> saved_biases;
-    bool saved_is_range = false;
-
-    for (auto line: string_split(content, "\n")) {
-        string_strip(line);
+    const auto lines = string_split(content, "\n");
+    for (size_t i = 0; i < lines.size(); ++i) {
+        auto line = string_strip(lines[i]);
         const char c0 = line.empty() ? '#' : line[0];
         if (c0 == '#') {
-            // comment
+            LLAMA_LOG_DEBUG("%s: line %zu: comment or empty\n", __func__, i);
             continue;   // next line
         }
+
+        // (... "EXTRACT" ... "EXTRACT" ...)
+        std::vector<size_t> qq_posi = { 0 };
+        auto extracts = string_extract(line, '"', qq_posi);
+        qq_posi.push_back(std::string::npos);
+        for (int32_t j = 0; j < int32_t(qq_posi.size()) - 1; j += 2) {
+            const auto pnd_pos = line.find('#', qq_posi[j]);
+            if (pnd_pos < qq_posi[j + 1]) {
+                LLAMA_LOG_DEBUG("%s: line %zu: inline comment @ %zu\n", __func__, i, pnd_pos);
+                line = string_strip(line.substr(0, pnd_pos));
+                qq_posi.resize(j + 2);
+                qq_posi.back() = std::string::npos;
+                extracts.resize(j / 2);
+                break;
+            }
+        }
+        const auto last_qq_pos = qq_posi[qq_posi.size() - 2];
 
         auto n_char = line.length();
         const char cE = line[n_char - 1];
 
-        if (n_char > 1) {
-            if ('(' == c0 && cE == ')') {
-                const bool is_nested = '(' == line[1] && line[n_char - 2] == ')';
-                if (is_nested) {
-                    if (n_char == 4) {
-                        // (())
-                        saved_phrases.clear();
-                        saved_biases.clear();
-                        continue;   // next line
-                    }
-                    n_char -= 2;
-                    line = line.substr(1, n_char);
-                }
-
-                auto qqpos = line.find('"');
-
-                // (DURATION : ...)
-                int32_t duration = is_nested ? -1 : 1;
-                const auto cpos = line.find(':');
-                if ((cpos != std::string::npos) && (1 < cpos) && (cpos < qqpos)) {
-                    auto sub = line.substr(1, cpos - 1);
-                    duration = std::stoi(sub);
-                }
-                if (duration == 0) {
+        LLAMA_LOG_DEBUG("%s: line %zu: %s\n", __func__, i, line.c_str());
+        if ('(' == c0 && cE == ')') {
+            const bool is_nested = '(' == line[1] && line[n_char - 2] == ')';
+            if (is_nested) {
+                if (n_char == 4) {
+                    // (())
+                    entries.clear();
+                    LLAMA_LOG_DEBUG("%s: line %zu: persistent entry clear\n", __func__, i);
                     continue;   // next line
                 }
+                n_char -= 2;
+                line = line.substr(1, n_char);
+                LLAMA_LOG_DEBUG("%s: line %zu: persistent entry\n", __func__, i);
+            }
 
-                // (... "PHRASE" ... "PHRASE" ...)
-                std::vector<std::string> phrases;
-                auto pos = line.find('"', qqpos + 1);
-                while (pos != std::string::npos) {
-                    if (line[pos - 1] == '\\') {
-                        pos = line.find('"', pos + 1);
-                    } else {
-                        auto phrase = line.substr(qqpos + 1, pos - qqpos - 1);
-                        string_process_escapes(phrase);
-                        phrases.push_back(std::move(phrase));
-                        qqpos = line.find('"', pos + 1);
-                        if (qqpos == std::string::npos) {
-                            break;
-                        }
-                        pos = line.find('"', qqpos + 1);
+            // (DURATION : ...)
+            int32_t duration = is_nested ? -1 : 1;
+            const auto cln_pos = line.find(':');
+            if ((cln_pos != std::string::npos) && (1 < cln_pos) && (cln_pos < qq_posi[1])) {
+                duration = std::stoi(line.substr(1, cln_pos - 1));
+            }
+            if (duration == 0) {
+                LLAMA_LOG_DEBUG("%s: line %zu: invalid duration\n", __func__, i);
+                continue;   // next line
+            }
+
+            #undef X
+            #define X(T, MEMBER, DV, PRECAST) #MEMBER,
+            static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
+
+            std::vector<float> addsubs(names.size(), 0.0f);
+            bool is_sb = false;
+
+            // (... : SPARAM ...)
+            const auto window = line.substr(last_qq_pos + 1);
+            for (int j = 0; j < names.size(); ++j) {
+                const auto& name = names[j];
+                auto pos = window.find(name);
+                if (pos != std::string::npos) {
+                    pos += name.length();
+                    auto next_pos = window.find(",", pos + 1);
+                    if (next_pos == std::string::npos) {
+                        next_pos = n_char - 1;
+                    }
+                    auto sub = string_strip(window.substr(pos, next_pos - pos));
+                    if (sub[0] == '~') {
+                        addsubs[j] += std::stof(sub.substr(1));
+                        is_sb = true;
+                        LLAMA_LOG_DEBUG("%s: line %zu: bias = %f\n", __func__, i, addsubs[j]);
                     }
                 }
-                if (phrases.empty()) {
+            }
+
+            auto& phrases = extracts;
+            if (phrases.empty()) {
+                if (is_sb) {
+                    phrases.push_back("");
+                } else {
                     continue;   // next line
                 }
+            }
 
+            const auto n_phrase = phrases.size();
+            std::vector<float> biases;
+            bool is_range = false;
+
+            if (!is_sb) {
                 // (... : BIAS ...)
-                std::vector<float> biases;
-                bool is_range = false;
-                const auto rcpos = line.rfind(':');
-                if ((rcpos != std::string::npos) && (line.rfind('"') < rcpos)) {
-                    auto sub = line.substr(rcpos + 1, n_char - rcpos - 2);
-                    if (sub.find("~") != std::string::npos) {
-                        // (... : BIAS ~ BIAS)
-                        const auto splits = string_split(sub, '~');
-                        auto split = splits.front();
-                        biases.push_back(std::stof(split));
-                        split = splits.back();
-                        biases.push_back(std::stof(split));
-                        is_range = true;
-                    } else {
-                        // (... : BIAS, BIAS, ..., BIAS)
-                        for (auto split: string_split(sub, ',')) {
-                            if (!split.empty()) {
-                                biases.push_back(std::stof(split));
-                            }
+                const auto cln_rpos = line.rfind(':');
+                auto sub = line.substr(cln_rpos + 1, n_char - cln_rpos - 2);
+                if (sub.find("~") != std::string::npos) {
+                    // (... : BIAS ~ BIAS)
+                    const auto splits = string_split(sub, '~');
+                    biases.push_back(std::stof(splits.front()));
+                    LLAMA_LOG_DEBUG("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
+                    biases.push_back(std::stof(splits.back()));
+                    LLAMA_LOG_DEBUG("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
+                    is_range = true;
+                } else {
+                    // (... : BIAS, BIAS, ..., BIAS)
+                    for (const auto& split: string_split(sub, ',')) {
+                        if (!split.empty()) {
+                            biases.push_back(std::stof(split));
+                            LLAMA_LOG_DEBUG("%s: line %zu: logit bias = %f\n", __func__, i, biases.back());
                         }
                     }
                 }
                 if (biases.empty()) {
                     continue;   // next line
                 }
-
-                if (is_nested) {
-                    saved_duration = duration;
-                    saved_phrases = std::move(phrases);
-                    saved_biases = std::move(biases);
-                    saved_is_range = is_range;
-                } else {
-                    elb_params.back().entries.push_back({ std::move(phrases), std::move(biases), duration, is_range });
-                }
-                continue;   // next line
             }
+
+            size_t max_phrase_len = 0;
+            for (const auto& phrase: phrases) {
+                LLAMA_LOG_DEBUG("%s: line %zu: phrase = \"%s\"\n", __func__, i, phrase.c_str());
+                max_phrase_len = std::max(phrase.length(), max_phrase_len);
+            }
+            LLAMA_LOG_DEBUG("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
+
+            common_params_sampling::elb_param::elb_entry entry = {
+                std::vector<size_t>(n_phrase, 0),
+                std::move(addsubs),
+                std::vector<bool>(n_phrase, false),
+                max_phrase_len,
+                std::move(phrases),
+                std::move(biases),
+                duration,
+                is_range
+            };
+            if (is_nested) {
+                entries.push_back(entry);
+            }
+            elb_params.back().entries.push_back(std::move(entry));
+            continue;   // next line
         }
 
-        // exitword
-        if ('"' == c0 && cE == '"') {
-            line = line.substr(1, n_char - 2);
+        if (last_qq_pos > 0) {
+            elb_params.back().op = string_strip(line.substr(last_qq_pos + 1));
         }
-        string_process_escapes(line);
-        elb_params.back().exitword = std::move(line);
-        if (!saved_phrases.empty() && !saved_biases.empty() && (saved_duration != 0)) {
-            elb_params.back().entries.push_back({ saved_phrases, saved_biases, saved_duration, saved_is_range });
+
+        auto& exitwords = extracts;
+        if (exitwords.empty()) {
+            string_process_escapes(line);
+            exitwords.push_back(std::move(line));
         }
-        elb_params.push_back({ { }, "" });
+
+        // maybe support multiple exitwords in future
+        elb_params.back().exitword = std::move(exitwords[0]);
+
+        elb_params.push_back({ entries, "", "" });
     }
 
     sparams.elb_params = std::move(elb_params);
