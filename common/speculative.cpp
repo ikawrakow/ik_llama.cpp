@@ -1634,6 +1634,17 @@ void common_speculative_begin(common_speculative *spec, const llama_tokens &prom
     }
 }
 
+common_speculative_draft_requirements common_speculative_get_draft_requirements(
+    const common_params_speculative &params)
+{
+    const bool has_mtp = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+
+    return {
+        /* .use_cached_text_prompt = */ !has_mtp || params.has_composite_stage_chain(),
+        /* .requires_sequence_hidden = */ has_mtp,
+    };
+}
+
 common_speculative_draft_result common_speculative_draft_ex(
     common_speculative *spec,
     common_params_speculative &params,
@@ -1883,6 +1894,65 @@ llama_tokens common_speculative_draft(
 common_speculative_type common_speculative_draft_result_primary_type(const common_speculative_draft_result &result)
 {
     return result.spans.empty() ? COMMON_SPECULATIVE_TYPE_NONE : result.spans.front().type;
+}
+
+bool common_speculative_trim_draft_result(
+    common_speculative_draft_result &result,
+    size_t max_tokens)
+{
+    if (result.tokens.size() <= max_tokens)
+    {
+        return false;
+    }
+
+    result.tokens.resize(max_tokens);
+
+    if (!result.spans.empty())
+    {
+        auto span_it = result.spans.begin();
+        while (span_it != result.spans.end())
+        {
+            if (span_it->token_offset >= max_tokens)
+            {
+                span_it = result.spans.erase(span_it);
+                continue;
+            }
+
+            const size_t span_end = std::min(span_it->token_offset + span_it->n_tokens, max_tokens);
+            span_it->n_tokens = span_end - span_it->token_offset;
+            ++span_it;
+        }
+    }
+
+    return true;
+}
+
+common_speculative_draft_phase_counts common_speculative_count_draft_result_phases(
+    const common_speculative_draft_result &result)
+{
+    common_speculative_draft_phase_counts counts;
+
+    for (const auto &span : result.spans)
+    {
+        switch (span.phase)
+        {
+        case COMMON_SPECULATIVE_STAGE_PHASE_PROBE:
+            counts.probe += span.n_tokens;
+            break;
+        case COMMON_SPECULATIVE_STAGE_PHASE_FIRST:
+            counts.first += span.n_tokens;
+            break;
+        case COMMON_SPECULATIVE_STAGE_PHASE_TAIL:
+            counts.tail += span.n_tokens;
+            break;
+        case COMMON_SPECULATIVE_STAGE_PHASE_AUTO:
+        case COMMON_SPECULATIVE_STAGE_PHASE_COUNT:
+        default:
+            break;
+        }
+    }
+
+    return counts;
 }
 
 static void common_speculative_note_generated(common_speculative_state *impl, size_t n_tokens)

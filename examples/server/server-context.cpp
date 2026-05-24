@@ -3570,14 +3570,16 @@ void server_context::add_sampled_tokens() {
             }
 
             static const llama_tokens empty_prompt;
-            const llama_tokens & cached_text_tokens = slot.has_mtp && !slot.params.speculative.has_composite_stage_chain()
-                ? empty_prompt
-                : slot.cache_tokens.get_text_tokens();
+            const auto draft_requirements = common_speculative_get_draft_requirements(slot.params.speculative);
+            const llama_tokens &cached_text_tokens = draft_requirements.use_cached_text_prompt
+                                                         ? slot.cache_tokens.get_text_tokens()
+                                                         : empty_prompt;
 
             auto & params_spec = slot.params.speculative;
-            const llama_pos draft_base_pos = slot.has_mtp ? slot.cache_tokens.pos_next() : -1;
+            const llama_pos draft_base_pos = draft_requirements.requires_sequence_hidden ? slot.cache_tokens.pos_next() : -1;
 
-            if (slot.has_mtp) {
+            if (draft_requirements.requires_sequence_hidden)
+            {
                 if (!common_speculative_ensure_sequence_hidden(slot.spec, ctx, slot.id, draft_base_pos - 1)) {
                     LOG_ERROR("MTP hidden state is empty during speculation", {});
                 }
@@ -3593,31 +3595,13 @@ void server_context::add_sampled_tokens() {
 
             const int n_draft_max = slot.get_n_draft_max();
 
-            if (draft_result.tokens.size() > (size_t)n_draft_max)
+            if (common_speculative_trim_draft_result(draft_result, n_draft_max))
             {
                 if (slot.params.speculative.autotune) {
                     // expected near end-of-response when autotune shrinks n_max
                     SLT_DBG(slot, "draft size %d exceeds max %d, truncating\n", (int)draft_result.tokens.size(), n_draft_max);
                 } else {
                     SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft_result.tokens.size(), n_draft_max);
-                }
-                draft_result.tokens.resize(n_draft_max);
-                if (!draft_result.spans.empty())
-                {
-                    const size_t truncated_size = draft_result.tokens.size();
-                    auto span_it = draft_result.spans.begin();
-                    while (span_it != draft_result.spans.end())
-                    {
-                        if (span_it->token_offset >= truncated_size)
-                        {
-                            span_it = draft_result.spans.erase(span_it);
-                            continue;
-                        }
-
-                        const size_t span_end = std::min(span_it->token_offset + span_it->n_tokens, truncated_size);
-                        span_it->n_tokens = span_end - span_it->token_offset;
-                        ++span_it;
-                    }
                 }
             }
 
@@ -3639,21 +3623,10 @@ void server_context::add_sampled_tokens() {
             {
                 // keep track of total number of drafted tokens tested
                 slot.n_draft_total += draft_result.tokens.size();
-                for (const auto &span : draft_result.spans)
-                {
-                    if (span.phase == COMMON_SPECULATIVE_STAGE_PHASE_PROBE)
-                    {
-                        slot.n_draft_probe += span.n_tokens;
-                    }
-                    else if (span.phase == COMMON_SPECULATIVE_STAGE_PHASE_FIRST)
-                    {
-                        slot.n_draft_first += span.n_tokens;
-                    }
-                    else if (span.phase == COMMON_SPECULATIVE_STAGE_PHASE_TAIL)
-                    {
-                        slot.n_draft_tail += span.n_tokens;
-                    }
-                }
+                const auto draft_phase_counts = common_speculative_count_draft_result_phases(draft_result);
+                slot.n_draft_probe += draft_phase_counts.probe;
+                slot.n_draft_first += draft_phase_counts.first;
+                slot.n_draft_tail += draft_phase_counts.tail;
 
                 // add all drafted tokens to the batch
                 for (size_t i = 0; i < draft_result.tokens.size(); i++)

@@ -38,6 +38,19 @@ struct common_speculative_draft_result
     }
 };
 
+struct common_speculative_draft_requirements
+{
+    bool use_cached_text_prompt = true;
+    bool requires_sequence_hidden = false;
+};
+
+struct common_speculative_draft_phase_counts
+{
+    size_t probe = 0;
+    size_t first = 0;
+    size_t tail = 0;
+};
+
 // comma separated list of all types
 std::string common_speculative_type_name_str();
 
@@ -60,6 +73,9 @@ void common_speculative_free(common_speculative * spec);
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt);
 
+common_speculative_draft_requirements common_speculative_get_draft_requirements(
+    const common_params_speculative &params);
+
 common_speculative_draft_result common_speculative_draft_ex(
     common_speculative *spec,
     common_params_speculative &params,
@@ -79,6 +95,13 @@ llama_tokens common_speculative_draft(
                             llama_seq_id  draft_seq_id = 0);
 
 common_speculative_type common_speculative_draft_result_primary_type(const common_speculative_draft_result &result);
+
+bool common_speculative_trim_draft_result(
+    common_speculative_draft_result &result,
+    size_t max_tokens);
+
+common_speculative_draft_phase_counts common_speculative_count_draft_result_phases(
+    const common_speculative_draft_result &result);
 
 // informs the speculative decoder that n_accepted drafted tokens were accepted by the target model
 void common_speculative_accept(
