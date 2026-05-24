@@ -135,8 +135,7 @@ struct server_slot {
 
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
-    llama_tokens drafted;
-    common_speculative_type drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
+    common_speculative_draft_result drafted_result;
 
     json json_schema;
 
@@ -179,6 +178,8 @@ struct server_slot {
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
+    int32_t n_draft_prefix = 0;     // Draft tokens produced by prefix stages
+    int32_t n_draft_suffix = 0;     // Draft tokens produced by suffix stages
 
     int32_t n_past_se = 0; // self-extend
 

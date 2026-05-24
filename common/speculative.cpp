@@ -164,6 +164,18 @@ struct common_speculative_state {
         draft(params, prompt_tgt, id_last, result);
     }
 
+    virtual void draft_with_candidate_seed(
+        const common_params_speculative &params,
+        const llama_tokens &verified_prompt_tgt,
+        const llama_tokens &candidate_seed,
+        llama_tokens &result)
+    {
+        GGML_UNUSED(params);
+        GGML_UNUSED(verified_prompt_tgt);
+        GGML_UNUSED(candidate_seed);
+        result.clear();
+    }
+
     virtual void accept(uint16_t n_accepted) = 0;
 };
 
@@ -709,36 +721,43 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         }
     }
 
-    void draft(
-            const common_params_speculative & params,
-            const llama_tokens & prompt_tgt,
-            llama_token id_last,
-            llama_tokens & result) override {
-        GGML_UNUSED(params);
-
-        n_draft_last = 0;
-
-        const size_t cur_len = prompt_tgt.size();
+    void update_verified_prompt(const llama_tokens &verified_prompt_tgt)
+    {
+        const size_t cur_len = verified_prompt_tgt.size();
         if (cur_len < mod.get_n()) {
             return;
         }
 
         const size_t n = mod.get_n();
 
-        // add new ngrams in chunks
         if (i_last + 32 < cur_len) {
             for (size_t i = i_last; i < cur_len - n; ++i) {
-                mod.add(prompt_tgt.data() + i);
+                mod.add(verified_prompt_tgt.data() + i);
             }
 
             i_last = cur_len - n;
         }
+    }
+
+    void draft_from_context(
+        const common_params_speculative &params,
+        const llama_tokens &context_tokens,
+        llama_tokens &result)
+    {
+        n_draft_last = 0;
+
+        const size_t n = mod.get_n();
+        if (context_tokens.size() < n)
+        {
+            result.clear();
+            return;
+        }
 
         result.resize(n + params.n_max);
-        for (size_t i = 0; i < n - 1; ++i) {
-            result[i] = prompt_tgt[cur_len - n + 1 + i];
+        for (size_t i = 0; i < n; ++i)
+        {
+            result[i] = context_tokens[context_tokens.size() - n + i];
         }
-        result[n - 1] = id_last;
 
         for (int i = 0; i < params.n_max; ++i) {
             const llama_token token = mod.get(result.data() + i);
@@ -754,14 +773,38 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
             result[n + i] = token;
         }
 
-        // only return the m tokens that were drafted
         for (size_t i = 0; n + i < result.size(); ++i) {
             result[i] = result[n + i];
         }
         result.resize(result.size() - n);
-
-        // store length of drafted n‑gram for later acceptance analysis
         n_draft_last = result.size();
+    }
+
+    void draft(
+        const common_params_speculative &params,
+        const llama_tokens &prompt_tgt,
+        llama_token id_last,
+        llama_tokens &result) override
+    {
+        update_verified_prompt(prompt_tgt);
+
+        llama_tokens context_tokens = prompt_tgt;
+        context_tokens.push_back(id_last);
+        draft_from_context(params, context_tokens, result);
+    }
+
+    void draft_with_candidate_seed(
+        const common_params_speculative &params,
+        const llama_tokens &verified_prompt_tgt,
+        const llama_tokens &candidate_seed,
+        llama_tokens &result) override
+    {
+        update_verified_prompt(verified_prompt_tgt);
+
+        // Query against the unverified seed, but only mutate ngram state from verified prompt growth.
+        llama_tokens context_tokens = verified_prompt_tgt;
+        context_tokens.insert(context_tokens.end(), candidate_seed.begin(), candidate_seed.end());
+        draft_from_context(params, context_tokens, result);
     }
 
     void accept(uint16_t n_accepted) override {
@@ -1187,9 +1230,16 @@ common_speculative * common_speculative_init(
     // Compute the implementations to use based on the resolved stage chain.
     std::vector<common_speculative_config> configs = {};
     configs.reserve(stages.size());
+    std::unordered_map<int, size_t> seen_stage_type_counts;
 
     for (const auto & stage : stages) {
         common_params_speculative stage_params = params.with_stage_overrides(stage);
+        const size_t stage_type_index = seen_stage_type_counts[(int)stage.type]++;
+
+        if (stage.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD && stage_type_index > 0)
+        {
+            stage_params.ngram_mod.reset();
+        }
 
         if (stage.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD && !stage_params.ngram_mod) {
             stage_params.ngram_mod = std::make_shared<common_ngram_mod>(stage_params.ngram_size_n, 4*1024*1024);
@@ -1207,7 +1257,7 @@ common_speculative * common_speculative_init(
     }
 
     if (!configs.empty() && llama_model_has_recurrent(llama_get_model(ctx_tgt))) {
-        const int ckpt_tokens = std::max(1, params.get_max_stage_n_max() + 1);
+        const int ckpt_tokens = std::max(1, params.get_total_candidate_n_max() + 1);
         const int actual_mode = llama_spec_ckpt_init(ctx_tgt, params.recurrent_ckpt_mode, ckpt_tokens);
         if (actual_mode == LLAMA_SPEC_CKPT_NONE) {
             LOG_ERR("%s: failed to prepare recurrent checkpoint mode '%s' during speculative init (max_tokens=%d)\n",
@@ -1360,14 +1410,20 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
     }
 }
 
-llama_tokens common_speculative_draft(
-        common_speculative * spec,
-        common_params_speculative & params,
-        const llama_tokens & prompt_tgt, // specified in target model vocab
-        llama_token id_last,
-        llama_pos draft_base_pos,
-        llama_seq_id draft_seq_id) {
-    llama_tokens result;
+common_speculative_draft_result common_speculative_draft_ex(
+    common_speculative *spec,
+    common_params_speculative &params,
+    const llama_tokens &prompt_tgt, // specified in target model vocab
+    llama_token id_last,
+    llama_pos draft_base_pos,
+    llama_seq_id draft_seq_id)
+{
+    common_speculative_draft_result result;
+
+    if (spec == nullptr)
+    {
+        return result;
+    }
 
     spec->t_step_start_us = ggml_time_us();
 
@@ -1378,48 +1434,161 @@ llama_tokens common_speculative_draft(
 
     const auto runtime_stages = params.get_resolved_stages();
     const bool use_runtime_stage_overrides = common_speculative_stage_chain_matches(runtime_stages, spec->configs);
+    const auto policy = params.get_effective_policy();
+    const auto &stage_for_index = [&](size_t i) -> const common_speculative_stage_params &
+    {
+        return use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
+    };
 
     spec->curr_impl = nullptr; // reset current implementation
 
+    if (policy == COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE && spec->impls.size() >= 2)
+    {
+        auto &prefix_impl = spec->impls[0];
+        auto &suffix_impl = spec->impls[1];
+        const auto &prefix_stage = stage_for_index(0);
+        const auto &suffix_stage = stage_for_index(1);
+        common_params_speculative prefix_params = common_speculative_get_runtime_params(spec->configs[0], params, prefix_stage);
+        common_params_speculative suffix_params = common_speculative_get_runtime_params(spec->configs[1], params, suffix_stage);
+
+        {
+            common_time_meas tm(prefix_impl->t_draft_us, !prefix_impl->gen_perf);
+            prefix_impl->draft(prefix_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result.tokens);
+            prefix_impl->n_call_draft++;
+        }
+
+        if (!result.tokens.empty())
+        {
+            LOG_DBG("%s: called prefix impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                    common_speculative_type_to_str(prefix_impl->type).c_str(), prompt_tgt.size(),
+                    prefix_impl->n_call_draft, result.tokens.size());
+
+            spec->curr_impl = prefix_impl.get();
+            prefix_impl->n_gen_drafts++;
+            prefix_impl->n_gen_tokens += result.tokens.size();
+            result.spans.push_back({
+                /* .type = */ prefix_impl->type,
+                /* .role = */ prefix_stage.role,
+                /* .token_offset = */ 0,
+                /* .n_tokens = */ result.tokens.size(),
+                /* .impl_index = */ 0,
+                /* .mutates_companion_state = */ prefix_impl->type == COMMON_SPECULATIVE_TYPE_MTP,
+            });
+
+            llama_tokens candidate_seed;
+            candidate_seed.reserve(result.tokens.size() + 1);
+            candidate_seed.push_back(id_last);
+            candidate_seed.insert(candidate_seed.end(), result.tokens.begin(), result.tokens.end());
+
+            llama_tokens suffix_tokens;
+            {
+                common_time_meas tm(suffix_impl->t_draft_us, !suffix_impl->gen_perf);
+                suffix_impl->draft_with_candidate_seed(suffix_params, prompt_tgt, candidate_seed, suffix_tokens);
+                suffix_impl->n_call_draft++;
+            }
+
+            if (!suffix_tokens.empty())
+            {
+                if (common_speculative_type_is_self_spec(suffix_impl->type) && suffix_params.n_min > 0 && (int)suffix_tokens.size() < suffix_params.n_min)
+                {
+                    LOG_DBG("%s: suffix impl %s drafted %zu tokens, below threshold %d - keeping prefix only\n",
+                            __func__, common_speculative_type_to_str(suffix_impl->type).c_str(), suffix_tokens.size(), suffix_params.n_min);
+                }
+                else
+                {
+                    LOG_DBG("%s: called suffix impl %s, seed size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                            common_speculative_type_to_str(suffix_impl->type).c_str(), candidate_seed.size(),
+                            suffix_impl->n_call_draft, suffix_tokens.size());
+
+                    suffix_impl->n_gen_drafts++;
+                    suffix_impl->n_gen_tokens += suffix_tokens.size();
+                    result.spans.push_back({
+                        /* .type = */ suffix_impl->type,
+                        /* .role = */ suffix_stage.role,
+                        /* .token_offset = */ result.tokens.size(),
+                        /* .n_tokens = */ suffix_tokens.size(),
+                        /* .impl_index = */ 1,
+                        /* .mutates_companion_state = */ false,
+                    });
+                    result.tokens.insert(result.tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
+                    result.combined = true;
+                }
+            }
+        }
+
+        if (spec->tuner && spec->tuner->enabled)
+        {
+            spec->last_n_drafted = (int)result.tokens.size();
+        }
+
+        return result;
+    }
+
     for (size_t i = 0; i < spec->impls.size(); ++i) {
         auto & impl = spec->impls[i];
-        const auto & runtime_stage = use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
+        const auto &runtime_stage = stage_for_index(i);
         common_params_speculative impl_params = common_speculative_get_runtime_params(spec->configs[i], params, runtime_stage);
         result.clear();
 
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
-            impl->draft(impl_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result);
+            impl->draft(impl_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result.tokens);
             impl->n_call_draft++;
         }
 
-        if (result.empty()) {
+        if (result.tokens.empty())
+        {
             continue;
         }
 
-        if (common_speculative_type_is_self_spec(impl->type) && impl_params.n_min > 0 && (int)result.size() < impl_params.n_min) {
+        if (common_speculative_type_is_self_spec(impl->type) && impl_params.n_min > 0 && (int)result.tokens.size() < impl_params.n_min)
+        {
             LOG_DBG("%s: impl %s drafted %zu tokens, below fallback threshold %d - trying next implementation\n",
-                    __func__, common_speculative_type_to_str(impl->type).c_str(), result.size(), impl_params.n_min);
+                    __func__, common_speculative_type_to_str(impl->type).c_str(), result.tokens.size(), impl_params.n_min);
             result.clear();
             continue;
         }
         LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
                 common_speculative_type_to_str(impl.get()->type).c_str(), prompt_tgt.size(),
-                impl.get()->n_call_draft, result.size());
+                impl.get()->n_call_draft, result.tokens.size());
 
         spec->curr_impl = impl.get();
         impl->n_gen_drafts++;
-        impl->n_gen_tokens += result.size();
+        impl->n_gen_tokens += result.tokens.size();
+        result.spans.push_back({
+            /* .type = */ impl->type,
+            /* .role = */ runtime_stage.role,
+            /* .token_offset = */ 0,
+            /* .n_tokens = */ result.tokens.size(),
+            /* .impl_index = */ i,
+            /* .mutates_companion_state = */ impl->type == COMMON_SPECULATIVE_TYPE_MTP,
+        });
 
         break; // We have a draft, so break out of the loop and return it.
     }
 
     // store draft count for tuner feedback
     if (spec->tuner && spec->tuner->enabled) {
-        spec->last_n_drafted = (int)result.size();
+        spec->last_n_drafted = (int)result.tokens.size();
     }
 
     return result;
+}
+
+llama_tokens common_speculative_draft(
+    common_speculative *spec,
+    common_params_speculative &params,
+    const llama_tokens &prompt_tgt,
+    llama_token id_last,
+    llama_pos draft_base_pos,
+    llama_seq_id draft_seq_id)
+{
+    return common_speculative_draft_ex(spec, params, prompt_tgt, id_last, draft_base_pos, draft_seq_id).tokens;
+}
+
+common_speculative_type common_speculative_draft_result_primary_type(const common_speculative_draft_result &result)
+{
+    return result.spans.empty() ? COMMON_SPECULATIVE_TYPE_NONE : result.spans.front().type;
 }
 
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {

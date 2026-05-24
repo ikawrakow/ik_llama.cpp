@@ -156,8 +156,29 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 std::string common_speculative_type_to_str(enum common_speculative_type type);
 bool common_speculative_type_is_self_spec(enum common_speculative_type type);
 
+enum common_speculative_stage_role
+{
+    COMMON_SPECULATIVE_STAGE_ROLE_AUTO = 0,
+    COMMON_SPECULATIVE_STAGE_ROLE_SINGLE,
+    COMMON_SPECULATIVE_STAGE_ROLE_GATE,
+    COMMON_SPECULATIVE_STAGE_ROLE_PREFIX,
+    COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX,
+    COMMON_SPECULATIVE_STAGE_ROLE_COUNT,
+};
+
+enum common_speculative_policy
+{
+    COMMON_SPECULATIVE_POLICY_NONE = 0,
+    COMMON_SPECULATIVE_POLICY_SINGLE,
+    COMMON_SPECULATIVE_POLICY_FALLBACK,
+    COMMON_SPECULATIVE_POLICY_FALLBACK_COMBINE,
+    COMMON_SPECULATIVE_POLICY_NEURAL_FIRST_COMBINE,
+    COMMON_SPECULATIVE_POLICY_INVALID,
+};
+
 struct common_speculative_stage_params {
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+    common_speculative_stage_role role = COMMON_SPECULATIVE_STAGE_ROLE_AUTO;
 
     int32_t n_max = -1;
     int32_t n_min = -1;
@@ -170,6 +191,7 @@ struct common_speculative_stage_params {
     int32_t suffix_min_match_len = -1;
     int32_t suffix_max_depth = -1;
 
+    bool has_role_override() const { return role != COMMON_SPECULATIVE_STAGE_ROLE_AUTO; }
     bool has_n_max_override() const { return n_max >= 0; }
     bool has_n_min_override() const { return n_min >= 0; }
     bool has_p_min_override() const { return p_min >= 0.0f; }
@@ -251,7 +273,11 @@ struct common_params_speculative {
     bool has_stage_chain() const;
     bool has_stage_type(common_speculative_type stage_type) const;
     bool has_composite_stage_chain() const;
+    common_speculative_policy get_effective_policy() const;
     int32_t get_max_stage_n_max() const;
+    int32_t get_total_candidate_n_max() const;
+    int32_t get_prefix_n_max() const;
+    int32_t get_suffix_n_max() const;
     int32_t get_min_usable_stage_n_min() const;
 
 };
@@ -515,7 +541,7 @@ struct gpt_params {
     bool do_checkpoint = false;               // do checkpoint for recurrent models only
     int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
     int32_t ctx_checkpoints_interval = 512;   // minimum number of tokens between each context checkpoints
-    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint 
+    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens

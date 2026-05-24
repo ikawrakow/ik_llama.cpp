@@ -91,11 +91,11 @@ static void discard_speculative_checkpoint(server_slot & slot, llama_context * c
 
 static bool save_speculative_checkpoint(server_slot & slot, llama_model * model, llama_context * ctx, int ckpt_mode) {
     slot.spec_ckpt.clear();
-    const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted.size() + 1);
+    const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted_result.tokens.size() + 1);
     slot.spec_ckpt.n_past = slot.cache_tokens.pos_next(n_pre_spec_tokens);
     slot.spec_ckpt.sampled = slot.sampled;
 
-    const int max_tokens = (int)slot.drafted.size() + 1;
+    const int max_tokens = (int)slot.drafted_result.tokens.size() + 1;
     const int actual_mode = llama_spec_ckpt_init(ctx, ckpt_mode, max_tokens);
     if (actual_mode == LLAMA_SPEC_CKPT_NONE) {
         return false;
@@ -450,7 +450,7 @@ void server_context::init() {
                 slot.has_mtp = true;
                 slot.params.speculative.cparams_dft = params_base.speculative.cparams_dft;
 
-                slot.batch_spec = llama_batch_init(slot.params.speculative.get_max_stage_n_max() + 1, 0, 1);
+                slot.batch_spec = llama_batch_init(slot.params.speculative.get_total_candidate_n_max() + 1, 0, 1);
                 SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
 
                 SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
@@ -470,7 +470,7 @@ void server_context::init() {
         bool can_spec = true;
         if (!params_base.dry_run) {
             can_spec = common_speculative_is_compat(ctx);
-        }  
+        }
         if (!can_spec) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
@@ -611,8 +611,7 @@ void server_slot::reset() {
     n_discarded_prompt = 0;
     n_kept_prompt = 0;
     n_sent_text = 0;
-    drafted.clear();
-    drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
+    drafted_result.clear();
     i_batch_dft.clear();
     spec_ckpt.clear();
     n_sent_token_probs = 0;
@@ -649,6 +648,8 @@ void server_slot::reset() {
     // Reset speculative decoding stats
     n_draft_total = 0;
     n_draft_accepted = 0;
+    n_draft_prefix = 0;
+    n_draft_suffix = 0;
     chat_msg = {};
     json_schema = json();
     generated_tool_call_ids.clear();
@@ -712,7 +713,7 @@ int server_slot::get_n_draft_max() const {
     }
 
     // determine the max draft that fits the current slot state
-    int n_draft_max = params.speculative.get_max_stage_n_max();
+    int n_draft_max = params.speculative.get_total_candidate_n_max();
 
     // note: slot.prompt is not yet expanded with the `id` token sampled above
     //       also, need to leave space for 1 extra token to allow context shifts
@@ -744,20 +745,36 @@ void server_slot::release() {
 
 
 json server_slot::get_formated_timings() const {
-    return json{
-        {"prompt_n",               n_prompt_tokens_processed},
-        {"prompt_ms",              t_prompt_processing},
-        {"prompt_per_token_ms",    t_prompt_processing / n_prompt_tokens_processed},
-        {"prompt_per_second",      1e3 / t_prompt_processing * n_prompt_tokens_processed},
+    json timings = json{
+        {"prompt_n", n_prompt_tokens_processed},
+        {"prompt_ms", t_prompt_processing},
+        {"prompt_per_token_ms", t_prompt_processing / n_prompt_tokens_processed},
+        {"prompt_per_second", 1e3 / t_prompt_processing * n_prompt_tokens_processed},
 
-        {"predicted_n",            n_decoded},
-        {"predicted_ms",           t_token_generation},
+        {"predicted_n", n_decoded},
+        {"predicted_ms", t_token_generation},
         {"predicted_per_token_ms", t_token_generation / n_decoded},
-        {"predicted_per_second",   1e3 / t_token_generation * n_decoded},
+        {"predicted_per_second", 1e3 / t_token_generation * n_decoded},
 
-        {"n_ctx",           n_ctx},
-        {"n_past",           n_past},
+        {"n_ctx", n_ctx},
+        {"n_past", n_past},
     };
+
+    if (n_draft_total > 0)
+    {
+        timings["draft_n"] = n_draft_total;
+        timings["draft_n_accepted"] = n_draft_accepted;
+        if (n_draft_prefix > 0)
+        {
+            timings["draft_n_prefix"] = n_draft_prefix;
+        }
+        if (n_draft_suffix > 0)
+        {
+            timings["draft_n_suffix"] = n_draft_suffix;
+        }
+    }
+
+    return timings;
 }
 
 result_timings server_slot::get_timings() const {
@@ -1656,7 +1673,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         int32_t banbuffer_size = json_value(data, "banbuffer_size", 0);
         slot.n_buffer = 0; // Ensure buffer calculation starts fresh for this slot
         slot.rewind_count_max = json_value(data, "rewind_count_max", -1);
-        
+
         const auto& banned_strings = data.find("banned_strings");
         if (banned_strings != data.end() && banned_strings->is_array()) {
             slot.ban_phrases.clear();
@@ -2805,7 +2822,7 @@ static size_t load_server_tokens_from_file(const std::string & filename,  server
     size_t pos = 0;
     json token_json;
     if (file.is_open()) {
-        file >> token_json; 
+        file >> token_json;
         pos = file.tellg();
         file.close();
     }
@@ -3561,25 +3578,42 @@ void server_context::add_sampled_tokens() {
                 }
             }
 
-            llama_tokens draft = common_speculative_draft(
+            common_speculative_draft_result draft_result = common_speculative_draft_ex(
                 slot.spec,
                 params_spec,
                 cached_text_tokens,
                 slot.sampled,
                 draft_base_pos,
                 slot.id);
-            slot.drafted_spec_type = common_speculative_current_type(slot.spec);
 
             const int n_draft_max = slot.get_n_draft_max();
 
-            if (draft.size() > (size_t)n_draft_max) {
+            if (draft_result.tokens.size() > (size_t)n_draft_max)
+            {
                 if (slot.params.speculative.autotune) {
                     // expected near end-of-response when autotune shrinks n_max
-                    SLT_DBG(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                    SLT_DBG(slot, "draft size %d exceeds max %d, truncating\n", (int)draft_result.tokens.size(), n_draft_max);
                 } else {
-                    SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                    SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft_result.tokens.size(), n_draft_max);
                 }
-                draft.resize(n_draft_max);
+                draft_result.tokens.resize(n_draft_max);
+                if (!draft_result.spans.empty())
+                {
+                    const size_t truncated_size = draft_result.tokens.size();
+                    auto span_it = draft_result.spans.begin();
+                    while (span_it != draft_result.spans.end())
+                    {
+                        if (span_it->token_offset >= truncated_size)
+                        {
+                            span_it = draft_result.spans.erase(span_it);
+                            continue;
+                        }
+
+                        const size_t span_end = std::min(span_it->token_offset + span_it->n_tokens, truncated_size);
+                        span_it->n_tokens = span_end - span_it->token_offset;
+                        ++span_it;
+                    }
+                }
             }
 
             // add the sampled token to the batch
@@ -3588,29 +3622,43 @@ void server_context::add_sampled_tokens() {
             slot.cache_tokens.push_back(slot.sampled);
 
             const int min_usable_draft = slot.params.speculative.get_min_usable_stage_n_min();
-            if (min_usable_draft > (int)draft.size()) {
-                SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft.size(), min_usable_draft);
+            if (min_usable_draft > (int)draft_result.tokens.size())
+            {
+                SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft_result.tokens.size(), min_usable_draft);
                 // fallback to normal decoding
                 slot.i_batch = slot.i_batch_dft[0];
-                slot.drafted.clear();
-                slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
+                slot.drafted_result.clear();
                 slot.i_batch_dft.clear();
-            } else {
+            }
+            else
+            {
                 // keep track of total number of drafted tokens tested
-                slot.n_draft_total += draft.size();
+                slot.n_draft_total += draft_result.tokens.size();
+                for (const auto &span : draft_result.spans)
+                {
+                    if (span.role == COMMON_SPECULATIVE_STAGE_ROLE_PREFIX)
+                    {
+                        slot.n_draft_prefix += span.n_tokens;
+                    }
+                    else if (span.role == COMMON_SPECULATIVE_STAGE_ROLE_SUFFIX)
+                    {
+                        slot.n_draft_suffix += span.n_tokens;
+                    }
+                }
 
                 // add all drafted tokens to the batch
-                for (size_t i = 0; i < draft.size(); i++) {
+                for (size_t i = 0; i < draft_result.tokens.size(); i++)
+                {
                     slot.i_batch_dft.push_back(batch.n_tokens);
-                    common_batch_add(batch, draft[i], slot.cache_tokens.pos_next(), { slot.id }, true);
-                    slot.cache_tokens.push_back(draft[i]);
+                    common_batch_add(batch, draft_result.tokens[i], slot.cache_tokens.pos_next(), {slot.id}, true);
+                    slot.cache_tokens.push_back(draft_result.tokens[i]);
                 }
-                slot.drafted = std::move(draft);
+                slot.drafted_result = std::move(draft_result);
             }
         }
         else {
             // no speculative decoding
-            slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
+            slot.drafted_result.clear();
             slot.i_batch = batch.n_tokens;
 
             common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
@@ -3727,7 +3775,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
             slot.server_cached_prompt.checkpoints.erase(slot.server_cached_prompt.checkpoints.begin());
         }
-        
+
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
         server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max, slot.n_past_offset);
 
@@ -4060,7 +4108,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         slot.do_checkpoint = true;
                         break;
                     }
-                    
+
                 }
                 LOG_VERBOSE("prompt processing progress", {
                     {"id_slot",  slot.id},
@@ -4241,8 +4289,8 @@ void server_context::speculative_decoding_accept() {
         }
 
         const llama_token sampled_before = slot.sampled;
-        const common_speculative_type spec_type_used = slot.drafted_spec_type;
-        size_t n_draft = slot.drafted.size();
+        const common_speculative_type spec_type_used = common_speculative_draft_result_primary_type(slot.drafted_result);
+        size_t n_draft = slot.drafted_result.tokens.size();
 
         slot.ctx_sampling->to_generated_text = &slot.generated_text;
         if (n_draft > 0) {
@@ -4256,7 +4304,7 @@ void server_context::speculative_decoding_accept() {
         // the accepted tokens from the speculation
         std::vector<llama_token> ids;
         try {
-            ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, slot.drafted);
+            ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, slot.drafted_result.tokens);
         } catch (const std::exception & e) {
             LOG_ERROR("speculative sampling failed, releasing slot", {
                 {"id_slot", slot.id},
@@ -4267,7 +4315,7 @@ void server_context::speculative_decoding_accept() {
             slot.release();
             slot.i_batch = -1;
             slot.i_batch_dft.clear();
-            slot.drafted.clear();
+            slot.drafted_result.clear();
             continue;
         }
 
@@ -4276,7 +4324,7 @@ void server_context::speculative_decoding_accept() {
         std::vector<float> mtp_hidden_state_pre;
         std::vector<int32_t> accepted_output_indices;
         if (slot.has_mtp) {
-            const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted.size() + 1);
+            const int32_t n_pre_spec_tokens = slot.cache_tokens.n_tokens() - (int32_t)(slot.drafted_result.tokens.size() + 1);
             mtp_n_past_base = slot.cache_tokens.pos_next(n_pre_spec_tokens);
 
             if (!ids.empty()) {
@@ -4291,8 +4339,7 @@ void server_context::speculative_decoding_accept() {
         }
 
         slot.i_batch_dft.clear();
-        slot.drafted.clear();
-        slot.drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
+        slot.drafted_result.clear();
 
         slot.n_past += ids.size();
         slot.n_decoded += ids.size();
@@ -4309,17 +4356,22 @@ void server_context::speculative_decoding_accept() {
         slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - n_draft);
 
         // add accepted tokens to the prompt
-        for (auto it = ids.begin(); it != ids.end() - 1; ++it) {
+        for (auto it = ids.begin(); it != ids.end() - 1; ++it)
+        {
             slot.cache_tokens.push_back(*it);
         }
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
 
         // for recurrent/hybrid models: if any drafts were rejected, restore recurrent state
-        if (any_rejected && slot.spec_ckpt.valid) {
+        if (any_rejected && slot.spec_ckpt.valid)
+        {
             restore_speculative_checkpoint(slot, ctx, model, spec_type_used, sampled_before, ids, n_draft, mtp_hidden_state_pre, mtp_n_past_base);
-        } else {
-            if (slot.has_mtp && !accepted_output_indices.empty()) {
+        }
+        else
+        {
+            if (slot.has_mtp && !accepted_output_indices.empty())
+            {
                 if (!common_speculative_commit_accepted_output(
                         slot.spec,
                         ctx,
@@ -4328,9 +4380,12 @@ void server_context::speculative_decoding_accept() {
                         mtp_n_past_base,
                         sampled_before,
                         ids,
-                        accepted_output_indices)) {
+                        accepted_output_indices))
+                {
                     common_speculative_clear_sequence_hidden(slot.spec, slot.id);
-                } else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
+                }
+                else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP)
+                {
                     SLT_DBG(slot, "%s", "synced MTP target hidden state from accepted-prefix rows");
                 }
             }
@@ -4338,27 +4393,34 @@ void server_context::speculative_decoding_accept() {
             discard_speculative_checkpoint(slot, ctx);
         }
 
-        for (size_t i = 0; i < ids.size(); ++i) {
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
             completion_token_output result;
 
             result.tok = ids[i];
             result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
             result.prob = 1.0f; // set later
 
-            if (slot.sparams.n_probs > 0) {
+            if (slot.sparams.n_probs > 0)
+            {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, i);
             }
 
-            if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
-                if (!process_token(result, slot)) {
+            if (slot.n_buffer == 0 || !params_base.can_ban_phrases)
+            {
+                if (!process_token(result, slot))
+                {
                     // release slot because of stop condition
                     send_final_response(slot);
                     release_slot_after_final_response(slot);
                     break;
                 }
-            } else {
+            }
+            else
+            {
                 buffer_and_check_string_ban(slot, result);
-                if (slot.task == nullptr) {
+                if (slot.task == nullptr)
+                {
                     break;
                 }
             }
@@ -4367,13 +4429,11 @@ void server_context::speculative_decoding_accept() {
 
             update_allowlist_state(slot);
         }
-        SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int)ids.size() - 1, (int)slot.drafted.size(), slot.n_past);
-        LOG_VERBOSE("speculative decoding result", {
-            {"id_slot", slot.id},
-            {"accepted", (int)ids.size() - 1},
-            {"total", (int)slot.drafted.size()},
-            {"new_n_past", slot.n_past}
-            });
+        SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int)ids.size() - 1, (int)n_draft, slot.n_past);
+        LOG_VERBOSE("speculative decoding result", {{"id_slot", slot.id},
+                                                    {"accepted", (int)ids.size() - 1},
+                                                    {"total", (int)n_draft},
+                                                    {"new_n_past", slot.n_past}});
     }
 }
 
@@ -4395,15 +4455,15 @@ void server_context::release_slot_after_final_response(server_slot & slot) {
 void server_context::send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n) {
     int count = 0;
     bool released = false;
-    
+
     int32_t start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
 
     for (auto& it : results) {
         bool has_next = process_token(it, slot);
-        
+
         // Clean up positional bans for the token we just confirmed/sent
         slot.positional_bans.erase(start_pos + count);
-        
+
         count++;
         if (!has_next) {
             if (slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
@@ -4436,7 +4496,7 @@ inline int32_t check_ban_phrase(server_slot& slot) {
 
     std::string string_buffer;
     std::vector<size_t> token_offsets;
-    
+
     for (const auto& it : slot.token_buffer) {
         token_offsets.push_back(string_buffer.size());
         string_buffer += it.text_to_send;
@@ -4488,10 +4548,10 @@ inline int32_t check_ban_phrase(server_slot& slot) {
     if (found) {
         int32_t token_idx = -1;
         for (size_t i = 0; i < token_offsets.size(); ++i) {
-            size_t len = (i == token_offsets.size() - 1) 
-                ? string_buffer.size() - token_offsets[i] 
+            size_t len = (i == token_offsets.size() - 1)
+                ? string_buffer.size() - token_offsets[i]
                 : token_offsets[i+1] - token_offsets[i];
-            
+
             if (best_start >= token_offsets[i] && best_start < token_offsets[i] + len) {
                 token_idx = (int32_t)i;
                 break;
@@ -4509,7 +4569,7 @@ inline int32_t check_ban_phrase(server_slot& slot) {
 
 inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.rewind_count++;
-    
+
     int32_t buffer_start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
     int32_t n_keep_buffer = ban_pos - buffer_start_pos;
     if (n_keep_buffer < 0) n_keep_buffer = 0;
@@ -4518,9 +4578,9 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
         int32_t n = 0;
         for (auto result = slot.token_buffer.begin() + n_keep_buffer; result != slot.token_buffer.end(); result++) {
             llama_token banned_tok = result->tok;
-            
+
             if (n == 0) {
-                LLAMA_LOG_DEBUG("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n", 
+                LLAMA_LOG_DEBUG("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n",
                     ban_pos, banned_tok, result->text_to_send.c_str());
             }
 
@@ -4533,7 +4593,7 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     }
 
     int32_t n_rewind_total = (slot.n_past + 1) - ban_pos;
-   
+
     size_t n_keep_cache = 0;
     if (ban_pos > 0) {
         n_keep_cache = (size_t)(ban_pos - 1);
@@ -4546,13 +4606,13 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     if (n_keep_cache < slot.cache_tokens.size()) {
         slot.sampled = slot.cache_tokens[n_keep_cache];
     } else {
-        slot.sampled = 0; 
+        slot.sampled = 0;
     }
 
     // Truncate cache
     slot.cache_tokens.keep_first(n_keep_cache);
     slot.n_past = slot.cache_tokens.n_tokens();
-    
+
     // Remove from KV cache
     llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
 
@@ -4590,13 +4650,13 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
             // Automatic / Heuristic logic
             // Account for strings + regex + regex_ci
             size_t total_bans = slot.ban_phrases.size() + slot.ban_regex.size() + slot.ban_regex_ci.size();
-            
+
             // Heuristic: Allow if under 20 OR under 2 * total_bans
             // Conversely: Stop if >= 20 AND > 2 * total_bans
             if (slot.rewind_count >= 20 && slot.rewind_count > 2 * total_bans) {
                 allow_rewind = false;
             }
-        } 
+        }
         else if (slot.rewind_count_max > 0) {
             // Strict limit logic
             if (slot.rewind_count >= slot.rewind_count_max) {
@@ -4613,7 +4673,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     else if (buffer_full || !next_token) {
         slot.rewind_status = false;
         slot.rewind_count = 0;
-        
+
         if (!next_token) {
             // send all remaining tokens
             send_token_results(slot.token_buffer, slot);
@@ -4625,7 +4685,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     }
     else {
         // buffer the result, wait for more tokens to validate string
-        slot.sampled = result.tok; 
+        slot.sampled = result.tok;
     }
 }
 

@@ -14,6 +14,30 @@ using common_speculative_feature_view = llama_spec_feature_view;
 static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_NONE = LLAMA_SPEC_FEATURE_NONE;
 static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE = LLAMA_SPEC_FEATURE_HIDDEN_STATE;
 
+struct common_speculative_draft_span
+{
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+    common_speculative_stage_role role = COMMON_SPECULATIVE_STAGE_ROLE_AUTO;
+    size_t token_offset = 0;
+    size_t n_tokens = 0;
+    size_t impl_index = 0;
+    bool mutates_companion_state = false;
+};
+
+struct common_speculative_draft_result
+{
+    llama_tokens tokens;
+    std::vector<common_speculative_draft_span> spans;
+    bool combined = false;
+
+    void clear()
+    {
+        tokens.clear();
+        spans.clear();
+        combined = false;
+    }
+};
+
 // comma separated list of all types
 std::string common_speculative_type_name_str();
 
@@ -36,6 +60,14 @@ void common_speculative_free(common_speculative * spec);
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt);
 
+common_speculative_draft_result common_speculative_draft_ex(
+    common_speculative *spec,
+    common_params_speculative &params,
+    const llama_tokens &prompt,
+    llama_token id_last,
+    llama_pos draft_base_pos = -1,
+    llama_seq_id draft_seq_id = 0);
+
 // sample up to n_draft tokens and add them to the batch using the draft model
 // draft_base_pos/draft_seq_id override the MTP position for id_last
 llama_tokens common_speculative_draft(
@@ -45,6 +77,8 @@ llama_tokens common_speculative_draft(
                             llama_token   id_last,
                             llama_pos     draft_base_pos = -1,
                             llama_seq_id  draft_seq_id = 0);
+
+common_speculative_type common_speculative_draft_result_primary_type(const common_speculative_draft_result &result);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);
