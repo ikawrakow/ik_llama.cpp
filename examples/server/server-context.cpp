@@ -3597,12 +3597,7 @@ void server_context::add_sampled_tokens() {
 
             if (common_speculative_trim_draft_result(draft_result, n_draft_max))
             {
-                if (slot.params.speculative.autotune) {
-                    // expected near end-of-response when autotune shrinks n_max
-                    SLT_DBG(slot, "draft size %d exceeds max %d, truncating\n", (int)draft_result.tokens.size(), n_draft_max);
-                } else {
-                    SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft_result.tokens.size(), n_draft_max);
-                }
+                SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft_result.tokens.size(), n_draft_max);
             }
 
             // add the sampled token to the batch

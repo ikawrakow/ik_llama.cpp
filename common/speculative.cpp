@@ -1060,22 +1060,10 @@ struct common_speculative {
     std::vector<common_speculative_config> configs; // resolved stage config for each implementation
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
-    struct autotune_state
-    {
-        size_t stage_index = 0;
-        std::unique_ptr<spec_tuner> tuner;
-        int last_n_drafted = 0;
-        bool was_called = false;
-    };
-    std::vector<autotune_state> autotuners;
+    std::unique_ptr<spec_tuner> tuner;
+    int last_n_drafted = 0;
     int64_t t_step_start_us = 0;
 };
-
-static bool common_speculative_autotune_supports_type(common_speculative_type type)
-{
-    return type != COMMON_SPECULATIVE_TYPE_NONE &&
-           type != COMMON_SPECULATIVE_TYPE_EAGLE3;
-}
 
 static common_speculative_stage_phase common_speculative_get_display_phase(
     const common_speculative *spec,
@@ -1135,144 +1123,6 @@ static common_params_speculative common_speculative_get_runtime_params(
     return result;
 }
 
-static void common_speculative_apply_tuned_stage(
-    common_params_speculative &params,
-    size_t stage_index,
-    const common_params_speculative &tuned_params)
-{
-    auto stages = params.get_resolved_stages();
-    if (stage_index >= stages.size())
-    {
-        return;
-    }
-
-    params.stages = std::move(stages);
-    auto &stage = params.stages[stage_index];
-    stage.n_max = tuned_params.n_max;
-    stage.n_min = tuned_params.n_min;
-    stage.p_min = tuned_params.p_min;
-    stage.ngram_size_n = tuned_params.ngram_size_n;
-    stage.ngram_size_m = tuned_params.ngram_size_m;
-    stage.ngram_min_hits = tuned_params.ngram_min_hits;
-    stage.suffix_min_match_len = tuned_params.suffix_min_match_len;
-    stage.suffix_max_depth = tuned_params.suffix_max_depth;
-
-    if (!params.stages.empty())
-    {
-        params.type = params.stages.front().type;
-    }
-}
-
-static void common_speculative_begin_autotune_step(common_speculative *spec)
-{
-    if (spec == nullptr)
-    {
-        return;
-    }
-
-    for (auto &autotuner : spec->autotuners)
-    {
-        autotuner.last_n_drafted = 0;
-        autotuner.was_called = false;
-    }
-}
-
-static void common_speculative_note_autotune_call(common_speculative *spec, size_t stage_index, size_t n_drafted)
-{
-    if (spec == nullptr)
-    {
-        return;
-    }
-
-    for (auto &autotuner : spec->autotuners)
-    {
-        if (autotuner.stage_index != stage_index)
-        {
-            continue;
-        }
-
-        autotuner.was_called = true;
-        autotuner.last_n_drafted = (int)n_drafted;
-        return;
-    }
-}
-
-static void common_speculative_append_autotune_stage_arg(
-    std::ostringstream &oss,
-    common_speculative_type type,
-    const common_params_speculative &params)
-{
-    oss << common_speculative_type_to_str(type)
-        << ":n_max=" << params.n_max
-        << ",n_min=" << params.n_min;
-
-    switch (type)
-    {
-    case COMMON_SPECULATIVE_TYPE_DRAFT:
-    case COMMON_SPECULATIVE_TYPE_MTP:
-        oss << ",p_min=" << std::fixed << std::setprecision(2) << params.p_min;
-        break;
-    case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
-    case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
-    case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
-    case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
-    case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
-        oss << ",ngram_size_n=" << params.ngram_size_n;
-        if (params.ngram_size_m > 0)
-        {
-            oss << ",ngram_size_m=" << params.ngram_size_m;
-        }
-        if (params.ngram_min_hits > 0)
-        {
-            oss << ",ngram_min_hits=" << params.ngram_min_hits;
-        }
-        break;
-    case COMMON_SPECULATIVE_TYPE_SUFFIX:
-        oss << ",p_min=" << std::fixed << std::setprecision(2) << params.p_min
-            << ",suffix_min_match_len=" << params.suffix_min_match_len;
-        if (params.suffix_max_depth > 0)
-        {
-            oss << ",suffix_max_depth=" << params.suffix_max_depth;
-        }
-        if (!params.suffix_corpus.empty())
-        {
-            std::string escaped_corpus = params.suffix_corpus;
-            string_replace_all(escaped_corpus, "\\", "\\\\");
-            string_replace_all(escaped_corpus, ",", "\\,");
-            oss << ",corpus=" << escaped_corpus;
-        }
-        break;
-    default:
-        break;
-    }
-}
-
-static void common_speculative_log_autotune_reuse(
-    const common_speculative *spec,
-    const common_params_speculative &params)
-{
-    if (spec == nullptr || spec->autotuners.empty())
-    {
-        return;
-    }
-
-    const auto stages = params.get_resolved_stages();
-    if (!common_speculative_stage_chain_matches(stages, spec->configs))
-    {
-        return;
-    }
-
-    std::ostringstream oss;
-    oss << "Autotune reuse:";
-    for (size_t i = 0; i < spec->configs.size(); ++i)
-    {
-        const common_params_speculative stage_params = common_speculative_get_runtime_params(spec->configs[i], params, stages[i]);
-        oss << " --spec-type ";
-        common_speculative_append_autotune_stage_arg(oss, spec->configs[i].type, stage_params);
-    }
-
-    LOG_INF("%s\n", oss.str().c_str());
-}
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
     uint16_t size_key   = config.params.ngram_size_n;
@@ -1551,39 +1401,20 @@ common_speculative * common_speculative_init(
         /* .impls = */ std::move(impls)};
 
     // initialize autotune if requested
-    if (params.autotune)
-    {
-        for (size_t i = 0; i < result->impls.size() && i < result->configs.size(); ++i)
-        {
-            const auto actual_type = result->impls[i]->type;
-            if (!common_speculative_autotune_supports_type(actual_type))
-            {
-                LOG_WRN("Autotune skipped for %s %s stage — speculative type is not supported for autotuning\n",
-                        common_speculative_type_to_str(actual_type).c_str(),
-                        common_speculative_stage_phase_to_cstr(common_speculative_get_display_phase(result, i)));
-                continue;
-            }
-
-            common_params_speculative tuned_params = common_speculative_get_runtime_params(
-                result->configs[i],
-                params,
-                result->configs[i].stage);
-
-            auto tuner = std::make_unique<spec_tuner>();
-            tuner->init(actual_type, tuned_params, llama_get_model(ctx_tgt));
-            LOG_DBG("Autotune initialized for %s %s stage, tuning %zu parameters\n",
+    if (params.autotune && params.has_composite_stage_chain()) {
+        LOG_WRN("Autotune disabled — explicit speculative stage chains are not supported yet\n");
+    } else if (params.autotune && !result->impls.empty()) {
+        auto actual_type = result->impls[0]->type;
+        if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
+            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
+            result->tuner = std::make_unique<spec_tuner>();
+            result->tuner->init(actual_type, params, llama_get_model(ctx_tgt));
+            LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
                     common_speculative_type_to_str(actual_type).c_str(),
-                    common_speculative_stage_phase_to_cstr(common_speculative_get_display_phase(result, i)),
-                    tuner->coords.size());
-            result->autotuners.push_back({
-                /* .stage_index = */ i,
-                /* .tuner = */ std::move(tuner),
-            });
-        }
-
-        if (result->autotuners.empty())
-        {
-            LOG_WRN("Autotune disabled — no speculative stages in this chain support autotuning\n");
+                    result->tuner->coords.size());
+        } else {
+            LOG_WRN("Autotune disabled — speculative type %s is not supported for autotuning\n",
+                    common_speculative_type_to_str(actual_type).c_str());
         }
     }
 
@@ -1641,39 +1472,20 @@ common_speculative_draft_result common_speculative_draft_ex(
         return result;
     }
 
-    auto runtime_stages = params.get_resolved_stages();
+    spec->t_step_start_us = ggml_time_us();
+
+    // apply autotune proposal if enabled
+    if (spec->tuner && spec->tuner->enabled)
+    {
+        spec->tuner->propose(params);
+    }
+
+    const auto runtime_stages = params.get_resolved_stages();
     const bool use_runtime_stage_overrides = common_speculative_stage_chain_matches(runtime_stages, spec->configs);
     const auto &stage_for_index = [&](size_t i) -> const common_speculative_stage_params &
     {
         return use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
     };
-
-    spec->t_step_start_us = ggml_time_us();
-
-    // apply autotune proposal if enabled
-    if (!spec->autotuners.empty())
-    {
-        common_speculative_begin_autotune_step(spec);
-        for (auto &autotuner : spec->autotuners)
-        {
-            if (!autotuner.tuner || !autotuner.tuner->enabled)
-            {
-                continue;
-            }
-            if (autotuner.stage_index >= spec->configs.size() || autotuner.stage_index >= runtime_stages.size())
-            {
-                continue;
-            }
-
-            common_params_speculative tuned_params = common_speculative_get_runtime_params(
-                spec->configs[autotuner.stage_index],
-                params,
-                stage_for_index(autotuner.stage_index));
-            autotuner.tuner->propose(tuned_params);
-            common_speculative_apply_tuned_stage(params, autotuner.stage_index, tuned_params);
-            runtime_stages = params.get_resolved_stages();
-        }
-    }
 
     const auto plan = params.get_plan();
 
@@ -1693,8 +1505,6 @@ common_speculative_draft_result common_speculative_draft_ex(
             first_impl->draft(first_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, combined_result.tokens);
             first_impl->n_call_draft++;
         }
-        common_speculative_note_autotune_call(spec, first_index, combined_result.tokens.size());
-
         if (combined_result.tokens.empty())
         {
             return combined_result;
@@ -1726,8 +1536,6 @@ common_speculative_draft_result common_speculative_draft_ex(
             tail_impl->draft_with_candidate_seed(tail_params, prompt_tgt, candidate_seed, tail_tokens);
             tail_impl->n_call_draft++;
         }
-        common_speculative_note_autotune_call(spec, tail_index, tail_tokens.size());
-
         if (!tail_tokens.empty())
         {
             if (common_speculative_type_is_self_spec(tail_impl->type) && tail_params.n_min > 0 && (int)tail_tokens.size() < tail_params.n_min)
@@ -1771,8 +1579,6 @@ common_speculative_draft_result common_speculative_draft_ex(
             probe_impl->draft(probe_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result.tokens);
             probe_impl->n_call_draft++;
         }
-        common_speculative_note_autotune_call(spec, plan.probe_stage, result.tokens.size());
-
         if (!result.tokens.empty())
         {
             if (common_speculative_type_is_self_spec(probe_impl->type) && probe_params.n_min > 0 && (int)result.tokens.size() < probe_params.n_min)
@@ -1805,12 +1611,20 @@ common_speculative_draft_result common_speculative_draft_ex(
             result = draft_first_and_tail(plan.first_stage, plan.tail_stage);
         }
 
+        if (spec->tuner && spec->tuner->enabled) {
+            spec->last_n_drafted = (int) result.tokens.size();
+        }
+
         return result;
     }
 
     if (plan.valid && plan.mode == COMMON_SPECULATIVE_PLAN_COMPOSE && plan.probe_stage < 0 && plan.first_stage >= 0 && plan.tail_stage >= 0)
     {
         result = draft_first_and_tail(plan.first_stage, plan.tail_stage);
+
+        if (spec->tuner && spec->tuner->enabled) {
+            spec->last_n_drafted = (int) result.tokens.size();
+        }
 
         return result;
     }
@@ -1827,8 +1641,6 @@ common_speculative_draft_result common_speculative_draft_ex(
             impl->draft(impl_params, prompt_tgt, id_last, draft_base_pos, draft_seq_id, result.tokens);
             impl->n_call_draft++;
         }
-        common_speculative_note_autotune_call(spec, i, result.tokens.size());
-
         if (result.tokens.empty())
         {
             continue;
@@ -1858,6 +1670,11 @@ common_speculative_draft_result common_speculative_draft_ex(
 
         break; // We have a draft, so break out of the loop and return it.
     }
+
+    if (spec->tuner && spec->tuner->enabled) {
+        spec->last_n_drafted = (int) result.tokens.size();
+    }
+
     return result;
 }
 
@@ -1980,21 +1797,13 @@ void common_speculative_accept(
     const common_speculative_draft_result &result,
     uint16_t n_accepted)
 {
-    if (spec != nullptr && !spec->autotuners.empty() && spec->t_step_start_us > 0)
+    if (spec != nullptr && spec->tuner && spec->tuner->enabled && spec->t_step_start_us > 0)
     {
         int64_t step_time_us = ggml_time_us() - spec->t_step_start_us;
         double step_tps = (step_time_us > 100)
             ? (n_accepted + 1.0) * 1e6 / (double)step_time_us
             : 0.0;
-        for (auto &autotuner : spec->autotuners)
-        {
-            if (!autotuner.was_called || !autotuner.tuner || !autotuner.tuner->enabled)
-            {
-                continue;
-            }
-
-            autotuner.tuner->accept_feedback(n_accepted, autotuner.last_n_drafted, step_tps);
-        }
+        spec->tuner->accept_feedback(n_accepted, spec->last_n_drafted, step_tps);
         spec->t_step_start_us = 0;
     }
 
@@ -2513,43 +2322,14 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                 str_perf.c_str());
     }
 
-    if (!spec->autotuners.empty() && slot_tps > 0.0 && n_decoded > 0)
+    if (spec->tuner && spec->tuner->enabled && slot_tps > 0.0 && n_decoded > 0)
     {
         auto * mutable_spec = const_cast<common_speculative *>(spec);
         if (active_params) {
-            for (auto &autotuner : mutable_spec->autotuners)
-            {
-                if (!autotuner.tuner || !autotuner.tuner->enabled || autotuner.stage_index >= mutable_spec->configs.size())
-                {
-                    continue;
-                }
-
-                const auto runtime_stages = active_params->get_resolved_stages();
-                if (autotuner.stage_index >= runtime_stages.size())
-                {
-                    continue;
-                }
-
-                common_params_speculative tuned_params = common_speculative_get_runtime_params(
-                    mutable_spec->configs[autotuner.stage_index],
-                    *active_params,
-                    runtime_stages[autotuner.stage_index]);
-                autotuner.tuner->end_of_request(slot_tps, n_past, tuned_params);
-                common_speculative_apply_tuned_stage(*active_params, autotuner.stage_index, tuned_params);
-            }
-
-            common_speculative_log_autotune_reuse(mutable_spec, *active_params);
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, *active_params);
         } else {
-            for (auto &autotuner : mutable_spec->autotuners)
-            {
-                if (!autotuner.tuner || !autotuner.tuner->enabled)
-                {
-                    continue;
-                }
-
-                common_params_speculative tmp_params;
-                autotuner.tuner->end_of_request(slot_tps, n_past, tmp_params);
-            }
+            common_params_speculative tmp_params;
+            mutable_spec->tuner->end_of_request(slot_tps, n_past, tmp_params);
         }
     }
 }
