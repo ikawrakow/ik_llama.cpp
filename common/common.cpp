@@ -110,7 +110,7 @@ bool common_speculative_type_is_self_spec(enum common_speculative_type type) {
     }
 }
 
-static const char *common_speculative_stage_phase_to_cstr(enum common_speculative_stage_phase phase)
+const char *common_speculative_stage_phase_to_cstr(enum common_speculative_stage_phase phase)
 {
     switch (phase)
     {
@@ -289,6 +289,35 @@ static common_speculative_stage_params common_speculative_stage_with_phase(
     return stage;
 }
 
+static common_speculative_stage_phase common_speculative_stage_effective_phase(
+    const common_speculative_plan &plan,
+    const common_speculative_stage_params &stage,
+    size_t stage_index)
+{
+    if (stage.has_phase_override())
+    {
+        return stage.phase;
+    }
+
+    if (plan.mode == COMMON_SPECULATIVE_PLAN_COMPOSE)
+    {
+        if ((int)stage_index == plan.probe_stage)
+        {
+            return COMMON_SPECULATIVE_STAGE_PHASE_PROBE;
+        }
+        if ((int)stage_index == plan.first_stage)
+        {
+            return COMMON_SPECULATIVE_STAGE_PHASE_FIRST;
+        }
+        if ((int)stage_index == plan.tail_stage)
+        {
+            return COMMON_SPECULATIVE_STAGE_PHASE_TAIL;
+        }
+    }
+
+    return stage.phase;
+}
+
 static common_speculative_plan common_speculative_build_plan(
     const common_params_speculative &params,
     std::string *error = nullptr)
@@ -374,10 +403,12 @@ static common_speculative_plan common_speculative_build_plan(
     const auto &probe = resolved[0];
     const auto &first = resolved[1];
     const auto &tail = resolved[2];
+    const bool has_explicit_phases = probe.has_phase_override() || first.has_phase_override() || tail.has_phase_override();
 
-    if (probe.phase != COMMON_SPECULATIVE_STAGE_PHASE_PROBE ||
-        first.phase != COMMON_SPECULATIVE_STAGE_PHASE_FIRST ||
-        tail.phase != COMMON_SPECULATIVE_STAGE_PHASE_TAIL)
+    if (has_explicit_phases &&
+        (probe.phase != COMMON_SPECULATIVE_STAGE_PHASE_PROBE ||
+         first.phase != COMMON_SPECULATIVE_STAGE_PHASE_FIRST ||
+         tail.phase != COMMON_SPECULATIVE_STAGE_PHASE_TAIL))
     {
         return fail("three-stage composed mode must use probe:*, first:*, tail:*");
     }
@@ -568,8 +599,11 @@ bool common_speculative_validate_chain(const common_params_speculative &params, 
     }
 
     std::unordered_map<int, std::unordered_set<int>> seen_type_phases;
-    for (const auto &stage : resolved)
+    for (size_t i = 0; i < resolved.size(); ++i)
     {
+        const auto &stage = resolved[i];
+        const auto effective_phase = common_speculative_stage_effective_phase(plan, stage, i);
+
         if (stage.type == COMMON_SPECULATIVE_TYPE_NONE && resolved.size() > 1)
         {
             return fail("the 'none' speculative stage cannot be combined with other stages");
@@ -583,15 +617,15 @@ bool common_speculative_validate_chain(const common_params_speculative &params, 
                 return fail("duplicate speculative stage type in chain: " + common_speculative_type_to_str(stage.type));
             }
 
-            if (!stage.has_phase_override() || (stage.phase != COMMON_SPECULATIVE_STAGE_PHASE_PROBE && stage.phase != COMMON_SPECULATIVE_STAGE_PHASE_TAIL))
+            if (effective_phase != COMMON_SPECULATIVE_STAGE_PHASE_PROBE && effective_phase != COMMON_SPECULATIVE_STAGE_PHASE_TAIL)
             {
                 return fail("duplicate self-spec stage types require explicit probe/tail phases");
             }
         }
 
-        if (!phases_for_type.insert((int)stage.phase).second)
+        if (!phases_for_type.insert((int)effective_phase).second)
         {
-            return fail("duplicate speculative stage phase/type combination in chain: " + std::string(common_speculative_stage_phase_to_cstr(stage.phase)) + ":" + common_speculative_type_to_str(stage.type));
+            return fail("duplicate speculative stage phase/type combination in chain: " + std::string(common_speculative_stage_phase_to_cstr(effective_phase)) + ":" + common_speculative_type_to_str(stage.type));
         }
 
         const auto stage_params = params.with_stage_overrides(stage);
@@ -602,7 +636,7 @@ bool common_speculative_validate_chain(const common_params_speculative &params, 
 
         if (stage.type == COMMON_SPECULATIVE_TYPE_DRAFT && !params.has_dft())
         {
-            return fail("draft speculative stage requires a draft model or draft params");
+            return fail("draft speculative stage requires a draft model; --draft-params only configures the draft backend");
         }
     }
 
@@ -1021,6 +1055,27 @@ static void common_speculative_finalize_stages(gpt_params & params) {
                 spec.stages = {
                     common_speculative_stage_with_phase(first, COMMON_SPECULATIVE_STAGE_PHASE_FIRST),
                     common_speculative_stage_with_phase(second, COMMON_SPECULATIVE_STAGE_PHASE_TAIL),
+                };
+            }
+            else
+            {
+                spec.stages = stages;
+            }
+        }
+        else if (stages.size() == 3)
+        {
+            const auto &probe = stages[0];
+            const auto &first = stages[1];
+            const auto &tail = stages[2];
+
+            if (common_speculative_type_is_self_spec(probe.type) &&
+                common_speculative_type_is_neural(first.type) &&
+                common_speculative_type_is_self_spec(tail.type))
+            {
+                spec.stages = {
+                    common_speculative_stage_with_phase(probe, COMMON_SPECULATIVE_STAGE_PHASE_PROBE),
+                    common_speculative_stage_with_phase(first, COMMON_SPECULATIVE_STAGE_PHASE_FIRST),
+                    common_speculative_stage_with_phase(tail, COMMON_SPECULATIVE_STAGE_PHASE_TAIL),
                 };
             }
             else
@@ -3482,7 +3537,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
-    options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
+    options.push_back({"*", "-draft, --draft-params", "comma separate list of draft model parameters for the draft backend; does not enable draft speculation by itself"});
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -3542,13 +3597,13 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "layer range to apply the control vector(s) to, start and end inclusive" });
     options.push_back({ "*",           "-m,    --model FNAME",          "model path (default: models/$filename with filename from --hf-file\n"
                                                                         "or --model-url if set, otherwise %s)", DEFAULT_MODEL_PATH });
-    options.push_back({ "*",           "-md,   --model-draft FNAME",    "draft model for speculative decoding (default: unused)" });
+    options.push_back({"*", "-md,   --model-draft FNAME", "draft model or assistant model for speculative decoding; -md alone implies an implicit draft stage"});
     options.push_back({ "*",           "-mu,   --model-url MODEL_URL",  "model download url (default: unused)" });
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
-    options.push_back({ "*", "-mtp, --multi-token-prediction",          "legacy shortcut for enabling MTP when --spec-stage is not used (default: %s)", params.has_mtp ? "true" : "false" });
-    options.push_back({ "*", "-no-mtp, --no-multi-token-prediction",    "disable the legacy MTP shortcut or remove an explicit MTP stage (default: %s)", !params.has_mtp ? "true" : "false" });
+    options.push_back({"*", "-mtp, --multi-token-prediction", "deprecated and disabled; use --spec-type mtp[:k=v,...] instead"});
+    options.push_back({"*", "-no-mtp, --no-multi-token-prediction", "deprecated and disabled; remove the mtp --spec-type entry instead"});
     options.push_back({"*", "--draft-max, --draft, --draft-n N",
                        "deprecated and disabled; use --spec-type TYPE:n_max=N instead"});
     options.push_back({"*", "--draft-min, --draft-n-min N", "deprecated and disabled; use --spec-type TYPE:n_min=N instead"});
@@ -3563,6 +3618,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({"*", "--spec-type SPEC[:k=v,...]", "canonical speculative selector. repeat for ordered chains without role qualifiers.\n"
                                                           "examples: --spec-type mtp:n_max=2 --spec-type ngram-mod:n_max=16,n_min=1\n"
                                                           "          --spec-type ngram-mod:n_max=64,n_min=2 --spec-type mtp:n_max=2\n"
+                                                          "          --spec-type ngram-mod:n_max=64,n_min=2 --spec-type mtp:n_max=2 --spec-type ngram-mod:n_max=8,n_min=1\n"
                                                           "          --spec-type suffix:suffix_min_match_len=5,suffix_max_depth=64,corpus=/path/to/corpus.json\n"
                                                           "canonical keys: n_max, n_min, p_min, ngram_size_n, ngram_size_m, ngram_min_hits, suffix_min_match_len, suffix_max_depth, corpus\n"
                                                           "single entry stays single-spec; self-spec then neural canonicalizes to an internal probe/first/tail compose chain"});

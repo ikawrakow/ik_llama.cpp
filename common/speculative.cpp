@@ -123,25 +123,6 @@ struct common_speculative_position_stats
     uint64_t accepted = 0;
 };
 
-static const char *common_speculative_stage_phase_to_cstr_local(enum common_speculative_stage_phase phase)
-{
-    switch (phase)
-    {
-    case COMMON_SPECULATIVE_STAGE_PHASE_AUTO:
-        return "auto";
-    case COMMON_SPECULATIVE_STAGE_PHASE_PROBE:
-        return "probe";
-    case COMMON_SPECULATIVE_STAGE_PHASE_FIRST:
-        return "first";
-    case COMMON_SPECULATIVE_STAGE_PHASE_TAIL:
-        return "tail";
-    case COMMON_SPECULATIVE_STAGE_PHASE_COUNT:
-        return "unknown";
-    default:
-        return "unknown";
-    }
-}
-
 // state of an implementation of speculative decoding
 //
 // each implementation has a unique type and a state that is implementation-specific
@@ -1403,7 +1384,7 @@ common_speculative * common_speculative_init(
         });
 
         if (has_draft_stage) {
-            LOG_ERR("%s: Gemma4 assistant models only support MTP stages; omit -md for self-spec-only runs or use -mtp/--spec-stage mtp for assistant-backed MTP\n", __func__);
+            LOG_ERR("%s: Gemma4 assistant models only support MTP stages; omit -md for self-spec-only runs or use --spec-type mtp[:k=v,...] for assistant-backed MTP\n", __func__);
             return nullptr;
         }
     }
@@ -1579,7 +1560,7 @@ common_speculative * common_speculative_init(
             {
                 LOG_WRN("Autotune skipped for %s %s stage — speculative type is not supported for autotuning\n",
                         common_speculative_type_to_str(actual_type).c_str(),
-                        common_speculative_stage_phase_to_cstr_local(common_speculative_get_display_phase(result, i)));
+                        common_speculative_stage_phase_to_cstr(common_speculative_get_display_phase(result, i)));
                 continue;
             }
 
@@ -1592,7 +1573,7 @@ common_speculative * common_speculative_init(
             tuner->init(actual_type, tuned_params, llama_get_model(ctx_tgt));
             LOG_DBG("Autotune initialized for %s %s stage, tuning %zu parameters\n",
                     common_speculative_type_to_str(actual_type).c_str(),
-                    common_speculative_stage_phase_to_cstr_local(common_speculative_get_display_phase(result, i)),
+                    common_speculative_stage_phase_to_cstr(common_speculative_get_display_phase(result, i)),
                     tuner->coords.size());
             result->autotuners.push_back({
                 /* .stage_index = */ i,
@@ -2478,7 +2459,7 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
         if (phase != COMMON_SPECULATIVE_STAGE_PHASE_AUTO)
         {
             stage_label += "(";
-            stage_label += common_speculative_stage_phase_to_cstr_local(phase);
+            stage_label += common_speculative_stage_phase_to_cstr(phase);
             stage_label += ")";
         }
 

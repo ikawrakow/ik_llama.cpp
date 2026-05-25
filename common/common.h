@@ -165,6 +165,8 @@ enum common_speculative_stage_phase
     COMMON_SPECULATIVE_STAGE_PHASE_COUNT,
 };
 
+const char *common_speculative_stage_phase_to_cstr(enum common_speculative_stage_phase phase);
+
 enum common_speculative_plan_mode
 {
     COMMON_SPECULATIVE_PLAN_NONE = 0,
@@ -271,8 +273,7 @@ struct common_params_speculative {
     bool autotune = false; // automatically optimize speculative params for max tokens/sec
 
     bool has_dft() const {
-        return !model.empty() || !params.empty();
-        //return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();
+        return model_dft != nullptr || !model.empty();
     }
 
     std::vector<common_speculative_stage_params> get_resolved_stages() const;

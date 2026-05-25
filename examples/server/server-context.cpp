@@ -1312,10 +1312,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             llama_model_has_recurrent(model) &&
             slot.params.speculative.n_max > params_base.speculative.n_max) {
             send_error(task,
-                    "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
-                    " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
-                    "; restart the server with a higher --draft-max to reserve checkpoint capacity",
-                    ERROR_TYPE_INVALID_REQUEST);
+                       "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
+                           " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
+                           "; restart the server with a higher speculative stage n_max reservation to reserve checkpoint capacity",
+                       ERROR_TYPE_INVALID_REQUEST);
             return false;
         }
 
