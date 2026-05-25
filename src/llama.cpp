@@ -5048,7 +5048,8 @@ static int llama_decode_internal(
     }
 
     // reserve output buffer
-    n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
+    const bool reserve_all_mtp_embd = has_mtp && cparams.mtp_op_type != MTP_OP_WARMUP;
+    n_outputs_embd = reserve_all_mtp_embd ? n_tokens_all : n_outputs;
     if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, std::max<size_t>(n_outputs, n_outputs_embd));
         return -2;
@@ -5450,7 +5451,7 @@ static int llama_decode_internal(
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     lctx.n_outputs = n_outputs;
-    lctx.n_outputs_embd = n_outputs_embd;
+    lctx.n_outputs_embd = n_outputs_prev_embd;
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //llama_synchronize(&lctx);

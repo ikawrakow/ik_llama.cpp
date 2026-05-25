@@ -369,11 +369,11 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
     cb(cur, "ffn_out", il);
 
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
-    cb(cur, "result_norm", -1);
 
     if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
+    cb(cur, "result_norm", -1);
 
     // If nextn.shared_head_head is missing (GLM-4.6), use model.output (Main LM Head)
     ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;

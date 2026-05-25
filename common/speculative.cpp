@@ -2006,7 +2006,7 @@ static int32_t mtp_accept_batch(
     }
 
     auto & last = mtp_get_last_embd(state, seq_id);
-    const float * embd = llama_get_embeddings_ith(state.ctx_mtp, accepted_batch.n_tokens - 1);
+    const float * embd = llama_get_embeddings_ith(state.ctx_mtp, -1);
     if (embd != nullptr) {
         std::memcpy(last.embd.data(), embd, last.embd.size() * sizeof(float));
         if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, last.embd.data(), last.embd.size())) {
