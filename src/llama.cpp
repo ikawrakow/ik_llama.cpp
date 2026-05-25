@@ -17,6 +17,7 @@
 #include "llama-cparams.h"
 #include "llama-hparams.h"
 #include "llama-context.h"
+#include "llama-spec-features.h"
 #include "llama-quantize.h"
 
 #include "unicode.h"
@@ -25,7 +26,6 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 
 // TODO: fix these includes
@@ -857,13 +857,13 @@ static bool llama_kv_cache_init(
     }
 
     if (is_mla_attn) {
-        bool have_wkv_b = true;
+        int n_have_wkv_b = 0;
         for (auto& l : model.layers) {
-            if (!l.wkv_b) {
-                have_wkv_b = false;
-                break;
+            if (l.wkv_b || l.wk_b_pp) {
+                ++n_have_wkv_b;
             }
         }
+        bool have_wkv_b = n_have_wkv_b > 0;
         if (!have_wkv_b) {
             if (cparams.mla_attn != 1) {
                 LLAMA_LOG_WARN("=========================================================\n");
@@ -1111,7 +1111,7 @@ static bool llama_kv_cache_init(
     if (split_cache || replicate_mla) {
         LLAMA_LOG_INFO("%s: KV cache size per device%s:\n", __func__,
                        replicate_mla ? " (MLA replicated)" : "");
-        for (int i = 0; i < int(mem_split.size()); ++i) printf("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
+        for (int i = 0; i < int(mem_split.size()); ++i) LLAMA_LOG_INFO("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
     }
 
 #if 0
@@ -2285,7 +2285,10 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                 }
             }
         }
-        auto context_size = max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
+        // tensor_data layout: [wk_b_f32 | wk_b_f32_t | wk_b | wk_b_pp]. wk_b_pp slot is only
+        // populated under -sm graph/attn (pp_opt-favoring layout); allocated unconditionally
+        // for simplicity (one max_wk_size buffer).
+        auto context_size = 2*max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
         context_size *= 2; // just in case;
         std::vector<uint8_t> wkv_buffer;
         if (max_wkv_size > 0) wkv_buffer.resize(max_wkv_size);
@@ -2296,7 +2299,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         ggml_init_params params{context_size, nullptr, true};
         auto ctx = ggml_init(params);
         auto graph = ggml_new_graph_custom(ctx, 8, false);
-        std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
+        std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + 2*max_wk_size);
         for (int il = 0; il < n_layer; ++il) {
             auto& l = model.layers[il];
             if (l.wk_b) continue;
@@ -2375,8 +2378,15 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         const size_t slice_bytes = (size_t)n_head_local * head_block_bytes;
                         auto dev_buft = ggml_backend_buffer_get_type(wo_split->splits[id]->buffer);
                         auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, slice_bytes);
+                        if (!dev_buf) {
+                            throw std::runtime_error("Failed to allocate per-rank buffer for " + tname);
+                        }
                         ggml_backend_buffer_set_usage(dev_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                         model.bufs.push_back(dev_buf);
+                        // Intentionally not updating mem_used[id] here: llm_prepare_mla
+                        // runs post-load, after distribute_mla_tensors has completed its
+                        // allocation rounds, so no downstream allocator consults mem_used
+                        // anymore.
 
                         replicas[id] = std::make_unique<ggml_tensor>(*source);
                         auto rep = replicas[id].get();
@@ -2404,7 +2414,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                     split.ggml.splits    = split.tensor_splits.data();
                     computed->extra = (void *)&split.ggml;
 
-                    printf("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
+                    LLAMA_LOG_INFO("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
                             tname.c_str(), (int)source->ne[0], (int)source->ne[1], (int)source->ne[2],
                             ggml_type_name(source->type), n_device);
                 } else {
@@ -2421,13 +2431,39 @@ static void llm_prepare_mla(llama_model & model, int mla) {
                         iqk_modify_tensor(computed.get());
                     }
 
-                    printf("Computed %s as %d x %d x %d of type %s and stored in buffer %s\n",
+                    LLAMA_LOG_INFO("Computed %s as %d x %d x %d of type %s and stored in buffer %s\n",
                             tname.c_str(), (int)source->ne[0], (int)source->ne[1], (int)source->ne[2],
                             ggml_type_name(source->type), ggml_backend_buffer_name(computed->buffer));
                 }
                 model.tensors_by_name.push_back(std::make_pair(tname, computed.get()));
                 return computed.get();
             };
+
+            // pp_opt-favoring wk_b_pp = quantize(wk_b_f32) directly (absorb-favoring
+            // wk_b above is its transpose). Not gated on mla — wk_b_pp shares wk_b_f32
+            // with the wk_b synthesis above and skipping it breaks absorb on some
+            // quant combinations. Second pass below gates the mla=1 saving for
+            // GGUFs that ship wk_b directly.
+            if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+                ggml_graph_clear(graph);
+                auto wk_b_pp = ggml_cast(ctx, wk_b_f32, new_type);
+                wk_b_pp->data = (char *)wk_b->data + ggml_nbytes(wk_b);
+                // tensor_data layout is [wk_b_f32 | wk_b_f32_t | wk_b | wk_b_pp]. wk_b and
+                // wk_b_pp are the same quant type and same shape, so wk_b_pp's slot is
+                // exactly one wk_b-sized block past wk_b. The tensor_data vector was sized
+                // 2*F32 + 2*max_wk_size, which covers both wk_b and wk_b_pp.
+                GGML_ASSERT((char *)wk_b_pp->data + ggml_nbytes(wk_b_pp) <=
+                            (char *)tensor_data.data() + tensor_data.size());
+                ggml_build_forward_expand(graph, wk_b_pp);
+                auto plan_pp = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                if (plan_pp.work_size > work_data.size()) work_data.resize(plan_pp.work_size);
+                plan_pp.work_data = work_data.data();
+                auto status_pp = ggml_graph_compute(graph, &plan_pp);
+                if (status_pp != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute attn_kv_b");
+                auto name_pp = std::string{"blk."} + std::to_string(il) + ".attn_kv_b.weight";
+                l.wk_b_pp = materialize(wk_b_pp, l.computed_wk_b_pp, l.computed_wk_b_pp_replicas, l.split_wk_b_pp, name_pp);
+                ggml_graph_clear(graph);
+            }
 
             l.wk_b = materialize(wk_b, l.computed_wk_b, l.computed_wk_b_replicas, l.split_wk_b, name);
 
@@ -2450,7 +2486,196 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         }
         ggml_free(ctx);
     }
-    if (mla == 1 || model.split_mode == LLAMA_SPLIT_MODE_GRAPH) return;
+
+    // Second pass: for layers where wk_b came from the GGUF directly, produce
+    // wk_b_pp here. Only under -sm graph/attn AND mla > 1; mla=1 skips pp_opt.
+    int n_computed = 0;
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && mla > 1) {
+        int n_pp_to_compute = 0;
+        for (auto & l : model.layers) {
+            if (l.wk_b && !l.wk_b_pp) ++n_pp_to_compute;
+        }
+        if (n_pp_to_compute > 0) {
+            const uint32_t n_embd_head_qk_nope_pp = hparams.n_embd_head_k(0) - hparams.n_rot;
+            const uint32_t kv_lora_rank_pp = hparams.n_lora_kv;
+            const int32_t  n_head_pp       = hparams.n_head(0);
+
+            size_t max_wk_size_pp = 0;
+            for (auto & l : model.layers) {
+                if (l.wk_b && !l.wk_b_pp) {
+                    max_wk_size_pp = std::max(max_wk_size_pp, ggml_nbytes(l.wk_b));
+                }
+            }
+            auto context_size_pp = 4 * max_wk_size_pp +
+                4 * (size_t)n_embd_head_qk_nope_pp * kv_lora_rank_pp * n_head_pp * sizeof(float);
+            context_size_pp *= 2;
+
+            std::vector<uint8_t> work_data_pp;
+            // Hoist the full-wk_b assembly buffer outside the per-layer loop so we
+            // don't re-allocate ~max_wk_size_pp bytes per layer.
+            std::vector<uint8_t> full_wk_b_host_buf(max_wk_size_pp);
+            // tensor_data_pp holds, in order: [wk_b_f32 | wk_b_pp_f32 | wk_b_pp_q].
+            // F32 slots size by n_embd_head_qk_nope * kv_lora_rank * n_head * 4; the
+            // requantized slot fits in max_wk_size_pp. After the N->1 graph compute
+            // consolidation we no longer need a second wk_b-sized slot.
+            std::vector<uint8_t> tensor_data_pp(
+                2 * (size_t)n_embd_head_qk_nope_pp * kv_lora_rank_pp * n_head_pp * sizeof(float) +
+                max_wk_size_pp);
+
+            ggml_init_params params_pp{context_size_pp, nullptr, true};
+            auto ctx_pp = ggml_init(params_pp);
+            auto graph_pp = ggml_new_graph_custom(ctx_pp, 8, false);
+            LLAMA_LOG_INFO("============ %s: need to compute %d attn_kv_b tensors\n", __func__, n_pp_to_compute);
+
+            for (int il = 0; il < n_layer; ++il) {
+                auto & l = model.layers[il];
+                if (!l.wk_b || l.wk_b_pp) continue;
+
+                // Under -sm graph/attn (the outer block's gate), distribute_mla_tensors
+                // always populates l.wk_b->extra and l.wo->extra. If either is missing,
+                // we're in a degenerate config and pp_opt falls back to the runtime
+                // transpose in build_deepseek2.cpp; skip here.
+                if (!l.wo || !l.wo->extra || !l.wk_b->extra) continue;
+
+                ++n_computed;
+
+                // Per-rank wk_b slices: each lives on a single device as a regular CUDA
+                // tensor (not the split-buffer wrapper which lacks a get_tensor impl for
+                // split_dim=2). Read each rank's slice independently.
+                auto wk_b_split = (const ggml_split_tensor_t *)l.wk_b->extra;
+                auto wo_split   = (const ggml_split_tensor_t *)l.wo->extra;
+                const int n_device = wo_split->n_device;
+
+                auto name = std::string{"blk."} + std::to_string(il) + ".attn_kv_b.weight";
+
+                // Build a placeholder wk_b_pp_q on host with the full [kv_lora_rank, qk_nope, n_head]
+                // shape (only used as a template for cloning per-rank metadata; no data filled).
+                ggml_tensor wk_b_pp_template = *l.wk_b;
+                wk_b_pp_template.ne[0] = (int64_t)kv_lora_rank_pp;
+                wk_b_pp_template.ne[1] = (int64_t)n_embd_head_qk_nope_pp;
+                wk_b_pp_template.ne[2] = (int64_t)n_head_pp;
+                wk_b_pp_template.nb[0] = ggml_type_size(l.wk_b->type);
+                wk_b_pp_template.nb[1] = wk_b_pp_template.nb[0] * (wk_b_pp_template.ne[0] / ggml_blck_size(l.wk_b->type));
+                wk_b_pp_template.nb[2] = wk_b_pp_template.nb[1] * wk_b_pp_template.ne[1];
+                wk_b_pp_template.nb[3] = wk_b_pp_template.nb[2] * wk_b_pp_template.ne[2];
+
+                l.computed_wk_b_pp = std::make_unique<ggml_tensor>(wk_b_pp_template);
+                l.computed_wk_b_pp->buffer = nullptr;
+                l.computed_wk_b_pp->data   = nullptr;
+                l.computed_wk_b_pp->op = GGML_OP_NONE;
+                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wk_b_pp->src[j] = nullptr;
+                ggml_set_name(l.computed_wk_b_pp.get(), name.c_str());
+
+                l.computed_wk_b_pp_replicas.resize(n_device);
+                l.split_wk_b_pp.tensor_splits.assign(n_device, nullptr);
+                const size_t per_head_pp_bytes = wk_b_pp_template.nb[2];
+
+                // Build head_offsets[] from per-rank ne[2]; matches the layout used by
+                // prepare_split_tensors(split_dim=2) on wk_b so that head_offsets[id]
+                // points to the start of rank id's head range in the full wk_b layout.
+                std::vector<int> head_offsets(n_device + 1, 0);
+                for (int id = 0; id < n_device; ++id) {
+                    int n_h_id = 0;
+                    if (wk_b_split->splits[id]) {
+                        n_h_id = (int)wk_b_split->splits[id]->ne[2];
+                    }
+                    head_offsets[id + 1] = head_offsets[id] + n_h_id;
+                }
+
+                // Read all per-rank wk_b slices into the hoisted host buffer ordered
+                // by head_offset. The data layout on disk is per-head contiguous, so
+                // sequential rank reads at byte offset head_offsets[id] * per_head_in_bytes
+                // reconstitute the original full wk_b on host.
+                const size_t per_head_in_bytes = l.wk_b->nb[2];
+                const size_t full_wk_b_nbytes  = (size_t)head_offsets[n_device] * per_head_in_bytes;
+                GGML_ASSERT(full_wk_b_nbytes <= full_wk_b_host_buf.size());
+                for (int id = 0; id < n_device; ++id) {
+                    if (!wk_b_split->splits[id]) continue;
+                    auto wk_b_rank = wk_b_split->splits[id];
+                    const size_t rank_nbytes = ggml_nbytes(wk_b_rank);
+                    const size_t byte_offset = (size_t)head_offsets[id] * per_head_in_bytes;
+                    GGML_ASSERT(byte_offset + rank_nbytes <= full_wk_b_nbytes);
+                    ggml_backend_tensor_get(wk_b_rank, full_wk_b_host_buf.data() + byte_offset, 0, rank_nbytes);
+                }
+
+                // ONE graph compute on the full assembled wk_b: dequant -> transpose ->
+                // requant. Per-rank slicing happens on the resulting host buffer.
+                ggml_tensor full_host = *l.wk_b;
+                full_host.data = full_wk_b_host_buf.data();
+                auto f_f32 = ggml_cast(ctx_pp, &full_host, GGML_TYPE_F32);
+                f_f32->data = tensor_data_pp.data();
+                auto f_view = ggml_transpose(ctx_pp, f_f32);
+                auto f_cont = ggml_cont(ctx_pp, f_view);
+                f_cont->data = (char *)f_f32->data + ggml_nbytes(f_f32);
+                auto f_q    = ggml_cast(ctx_pp, f_cont, l.wk_b->type);
+                f_q->data   = (char *)f_cont->data + ggml_nbytes(f_cont);
+                ggml_build_forward_expand(graph_pp, f_q);
+                auto plan = ggml_graph_plan(graph_pp, std::thread::hardware_concurrency()/2);
+                if (plan.work_size > work_data_pp.size()) work_data_pp.resize(plan.work_size);
+                plan.work_data = work_data_pp.data();
+                auto status = ggml_graph_compute(graph_pp, &plan);
+                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute attn_kv_b");
+                ggml_graph_clear(graph_pp);
+
+                // Per-rank upload: f_q is the full wk_b_pp in [kv_lora_rank, qk_nope,
+                // n_head] order. Per-head stride matches per_head_pp_bytes by construction.
+                for (int id = 0; id < n_device; ++id) {
+                    if (!wo_split->splits[id] || !wo_split->splits[id]->buffer) continue;
+                    if (!wk_b_split->splits[id]) continue;
+                    const int n_head_local = (int)wk_b_split->splits[id]->ne[2];
+                    if (n_head_local <= 0) continue;
+
+                    const size_t slice_bytes = (size_t)n_head_local * per_head_pp_bytes;
+                    auto dev_buft = ggml_backend_buffer_get_type(wo_split->splits[id]->buffer);
+                    auto dev_buf  = ggml_backend_buft_alloc_buffer(dev_buft, slice_bytes);
+                    if (!dev_buf) {
+                        throw std::runtime_error("Failed to allocate per-rank buffer for " + name);
+                    }
+                    ggml_backend_buffer_set_usage(dev_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    model.bufs.push_back(dev_buf);
+                    // Same mem_used note as Path A: distribute_mla_tensors has already
+                    // closed its books before llm_prepare_mla runs.
+
+                    l.computed_wk_b_pp_replicas[id] = std::make_unique<ggml_tensor>(wk_b_pp_template);
+                    auto rep = l.computed_wk_b_pp_replicas[id].get();
+                    rep->ne[2] = n_head_local;
+                    rep->nb[3] = rep->nb[2] * (size_t)rep->ne[2];
+                    rep->buffer = dev_buf;
+                    rep->data   = ggml_backend_buffer_get_base(dev_buf);
+                    rep->op = GGML_OP_NONE;
+                    for (int j = 0; j < GGML_MAX_SRC; ++j) rep->src[j] = nullptr;
+                    rep->view_src = nullptr;
+                    rep->view_offs = 0;
+                    rep->extra = nullptr;
+                    ggml_set_name(rep, (name + "." + std::to_string(id)).c_str());
+
+                    const size_t byte_offset = (size_t)head_offsets[id] * per_head_pp_bytes;
+                    ggml_backend_tensor_set(rep, (char *)f_q->data + byte_offset, 0, slice_bytes);
+                    if (ggml_backend_buffer_is_host(rep->buffer)) {
+                        iqk_modify_tensor(rep);
+                    }
+                    l.split_wk_b_pp.tensor_splits[id] = rep;
+                }
+
+                l.split_wk_b_pp.ggml.n_device  = n_device;
+                l.split_wk_b_pp.ggml.split_dim = 2;
+                l.split_wk_b_pp.ggml.splits    = l.split_wk_b_pp.tensor_splits.data();
+                l.computed_wk_b_pp->extra = (void *)&l.split_wk_b_pp.ggml;
+                model.tensors_by_name.push_back(std::make_pair(name, l.computed_wk_b_pp.get()));
+                l.wk_b_pp = l.computed_wk_b_pp.get();
+
+                LLAMA_LOG_INFO("Computed %s as %d x %d x %d of type %s, split across %d devices on dim=2\n",
+                        name.c_str(),
+                        (int)l.computed_wk_b_pp->ne[0],
+                        (int)l.computed_wk_b_pp->ne[1],
+                        (int)l.computed_wk_b_pp->ne[2],
+                        ggml_type_name(l.computed_wk_b_pp->type), n_device);
+            }
+            ggml_free(ctx_pp);
+        }
+    }
+
+    if (mla == 1 || (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && n_computed == n_layer)) return;
 
     n_to_compute = 0;
     for (auto& l : model.layers) {
@@ -2485,7 +2710,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     std::vector<char> tmp_buffer;
     for (int il = 0; il < n_layer; ++il) {
         auto& l = model.layers[il];
-        if (l.wkv_b || !l.wk_b || !l.wv_b) continue;
+        if (l.wkv_b || !l.wk_b || !l.wv_b || (l.wo && l.wo->extra)) continue;
         auto wk_b = *l.wk_b;
         auto wv_b = *l.wv_b;
         if (!ggml_backend_buffer_is_host(l.wk_b->buffer)) {
@@ -2578,7 +2803,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         l.wkv_b = l.computed_wkv_b.get();
         model.tensors_by_name.push_back(std::make_pair(name, l.wkv_b));
 
-        printf("Computed %s as %d x %d of type %s and stored in buffer %s\n", name.c_str(), (int)wkv_b->ne[0], (int)wkv_b->ne[1],
+        LLAMA_LOG_INFO("Computed %s as %d x %d of type %s and stored in buffer %s\n", name.c_str(), (int)wkv_b->ne[0], (int)wkv_b->ne[1],
                     ggml_type_name(wkv_b->type), ggml_backend_buffer_name(l.computed_wkv_b->buffer));
 
         ggml_graph_clear(graph);
@@ -2586,9 +2811,126 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     ggml_free(ctx);
 }
 
+// Fold the 64-block Hadamard into wv_b/wk_b_pp at init; build_deepseek2.cpp then
+// skips the runtime cache_nope un-Hadamard. Math identity by H^T H = I.
+static void llm_apply_khad_pretransform(llama_model & model) {
+    if (model.khad_pretransformed) return;
+    if (model.arch != LLM_ARCH_DEEPSEEK2 && model.arch != LLM_ARCH_GLM_DSA && model.arch != LLM_ARCH_MISTRAL4) return;
+
+    // High-enough bpw to survive one quant->F32->H->quant roundtrip within PPL noise.
+    // Cliff is ~2.7 bpw: IQ3_XXS (3.06) sits at +0.05 noise edge; IQ2_XS (2.31) drifts +0.20.
+    // Below-cliff and unmeasured types fall back to the runtime cache_nope path.
+    auto castable = [](ggml_type t) {
+        return t == GGML_TYPE_F32 || t == GGML_TYPE_F16 || t == GGML_TYPE_BF16 ||
+               t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_1 ||
+               t == GGML_TYPE_Q5_0 || t == GGML_TYPE_Q5_1 ||
+               t == GGML_TYPE_Q6_0 || t == GGML_TYPE_Q8_0 ||
+               t == GGML_TYPE_IQ4_NL ||
+               t == GGML_TYPE_Q4_K  || t == GGML_TYPE_Q5_K  || t == GGML_TYPE_Q6_K ||
+               t == GGML_TYPE_IQ4_K || t == GGML_TYPE_IQ5_K ||
+               t == GGML_TYPE_IQ4_KS|| t == GGML_TYPE_IQ4_KSS||
+               t == GGML_TYPE_IQ5_KS;
+    };
+
+    const auto & hparams = model.hparams;
+    const int64_t kv_lora_rank = hparams.n_lora_kv;
+    if (kv_lora_rank <= 0 || kv_lora_rank % 64 != 0) return;
+
+    // All-or-nothing: a partially-folded model would consume H-applied cache
+    // through un-folded weights and produce wrong values.
+    bool all_eligible = true;
+    int n_layers_with_pp = 0;
+    for (auto & l : model.layers) {
+        if (!l.wv_b || !l.wk_b_pp) continue;
+        ++n_layers_with_pp;
+        ggml_type tv = l.wv_b->type;
+        ggml_type tk = l.wk_b_pp->type;
+        if (!castable(tv) || !castable(tk)) {
+            all_eligible = false;
+            break;
+        }
+    }
+    if (!all_eligible || n_layers_with_pp == 0) {
+        LLAMA_LOG_INFO("============ %s: skipping (no eligible wv_b/wk_b_pp; n_pp=%d)\n",
+                       __func__, n_layers_with_pp);
+        return;
+    }
+
+    auto fold_tensor = [&](ggml_tensor * t) -> bool {
+        if (!t) return true;
+        if (t->ne[0] != kv_lora_rank) return false;
+
+        const size_t nbytes = ggml_nbytes(t);
+        std::vector<uint8_t> host_in(nbytes);
+        ggml_backend_tensor_get(t, host_in.data(), 0, nbytes);
+
+        ggml_init_params ip{ ggml_tensor_overhead()*32 + ggml_graph_overhead(), nullptr, true };
+        auto ctx = ggml_init(ip);
+        auto graph = ggml_new_graph(ctx);
+
+        ggml_tensor src_host = *t;
+        src_host.data = host_in.data();
+        src_host.op = GGML_OP_NONE;
+        for (int j = 0; j < GGML_MAX_SRC; ++j) src_host.src[j] = nullptr;
+        src_host.buffer = nullptr;
+        src_host.extra = nullptr;
+        src_host.view_src = nullptr;
+        src_host.view_offs = 0;
+
+        const size_t n_f32_bytes = (size_t)ggml_nelements(t) * sizeof(float);
+        std::vector<uint8_t> f32_buf_a(n_f32_bytes);
+        std::vector<uint8_t> f32_buf_b(n_f32_bytes);
+        std::vector<uint8_t> out_buf(nbytes);
+
+        auto src_f32 = ggml_cast(ctx, &src_host, GGML_TYPE_F32);
+        src_f32->data = f32_buf_a.data();
+        auto had     = ggml_hadamard(ctx, src_f32, 64);
+        had->data    = f32_buf_b.data();
+        auto out_q   = ggml_cast(ctx, had, t->type);
+        out_q->data  = out_buf.data();
+
+        ggml_build_forward_expand(graph, out_q);
+
+        std::vector<uint8_t> work_data;
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+        plan.work_data = work_data.data();
+        bool ok = (ggml_graph_compute(graph, &plan) == GGML_STATUS_SUCCESS);
+        ggml_free(ctx);
+        if (!ok) return false;
+
+        ggml_backend_tensor_set(t, out_buf.data(), 0, nbytes);
+        return true;
+    };
+
+    auto fold_split_or_single = [&](ggml_tensor * full) -> bool {
+        if (!full) return true;
+        if (full->extra) {
+            auto split = (const ggml_split_tensor_t *)full->extra;
+            for (int id = 0; id < split->n_device; ++id) {
+                if (!split->splits[id]) continue;
+                if (!fold_tensor(split->splits[id])) return false;
+            }
+            return true;
+        }
+        return fold_tensor(full);
+    };
+
+    int n_folded = 0;
+    for (auto & l : model.layers) {
+        if (!l.wv_b || !l.wk_b_pp) continue;
+        if (!fold_split_or_single(l.wv_b))   { LLAMA_LOG_ERROR("%s: failed to fold wv_b\n",   __func__); return; }
+        if (!fold_split_or_single(l.wk_b_pp)){ LLAMA_LOG_ERROR("%s: failed to fold wk_b_pp\n",__func__); return; }
+        ++n_folded;
+    }
+
+    model.khad_pretransformed = (n_folded > 0);
+    LLAMA_LOG_INFO("============ %s: folded H into wv_b/wk_b_pp on %d layers\n", __func__, n_folded);
+}
+
 static void llm_scale_gate_inp_s(llama_model & model, bool uses_mmap) {
     auto & hparams = model.hparams;
-    printf("%s: n_embd = %d\n", __func__, hparams.n_embd);
+    LLAMA_LOG_INFO("%s: n_embd = %d\n", __func__, hparams.n_embd);
     std::vector<float> values(hparams.n_embd);
     float scale = 1.0f/sqrtf((float)hparams.n_embd);
     int n_host = 0;
@@ -2938,7 +3280,7 @@ static bool llm_load_tensors(
         llama_model_loader & ml,
         llama_model & model,
         int n_gpu_layers,
-        int mla_attn,
+        int & mla_attn,
         enum llama_split_mode split_mode,
         int main_gpu,
         int max_gpu,
@@ -2951,6 +3293,7 @@ static bool llm_load_tensors(
         int n_ubatch,
         int amb,
         int fit_margin,
+        const int * fit_margin_array,
         int worst_case_tokens,
         bool flash_attn,
         bool use_mlock,
@@ -3022,6 +3365,23 @@ static bool llm_load_tensors(
     model.mtp          = mtp;
 
     size_t mem_margin  = fit_margin > 0 ? size_t(fit_margin)*1024*1024 : k_default_mem_margin;
+    auto get_mem_margin = [mem_margin, fit_margin_array, n_gpu = int(model.devices.size()), func = __func__] (int gpu) {
+        size_t result = mem_margin;
+        bool have_margin_override = false;
+        if (fit_margin_array) {
+            for (int i = 0; ; i += 2) {
+                if (fit_margin_array[i] < 0) break;
+                if (fit_margin_array[i] == gpu && fit_margin_array[i+1] >= 0) {
+                    result = size_t(fit_margin_array[i+1])*1024*1024;
+                    have_margin_override = true;
+                }
+            }
+        }
+        if (have_margin_override) {
+            LLAMA_LOG_INFO("%s: using %0.2f MiB as fit margin for GPU %d\n", func, result/1024./1024., gpu);
+        }
+        return result;
+    };
 
     const int n_layer     = hparams.n_layer;
     int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
@@ -3040,10 +3400,11 @@ static bool llm_load_tensors(
     std::vector<size_t> device_mem(model.devices.size());
     for (int i = 0; i < int(device_mem.size()); ++i) {
         device_mem[i] = llama_get_device_memory(model, model.devices[i]);
-        if (device_mem[i] > mem_margin) {
-            device_mem[i] -= mem_margin;
+        auto this_margin = get_mem_margin(i);
+        if (device_mem[i] > this_margin) {
+            device_mem[i] -= this_margin;
         } else {
-            LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the %zu MiB safety margin\n", device_mem[i]/(1024*1024), model.devices[i], mem_margin/(1024*1024));
+            LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the %zu MiB safety margin\n", device_mem[i]/(1024*1024), model.devices[i], this_margin/(1024*1024));
             device_mem[i] = 0;
         }
     }
@@ -3081,6 +3442,17 @@ static bool llm_load_tensors(
     if (fit && device_count > 1) {
         model.main_gpu = device_count - 1;
     }
+
+    if (model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_MISTRAL4) {
+        if (model.n_gpu_layers > 0 && model.n_gpu_layers < model.hparams.n_layer && mla_attn != 3) {
+            LLAMA_LOG_WARN("=============================================================================\n");
+            LLAMA_LOG_WARN("MLA models with ngl < n_layer and split mode graph do not work with mla = %d\n", mla_attn);
+            LLAMA_LOG_WARN("    => changing mla to 3\n");
+            LLAMA_LOG_WARN("=============================================================================\n");
+            mla_attn = 3;
+        }
+    }
+
     model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
     int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     std::vector<llama_model_tensor_buft_override> overrides;
@@ -3318,11 +3690,11 @@ static bool llm_load_tensors(
     // assign the repeating layers to the devices according to the splits
     if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
         for (int i = i_gpu_start; i < n_layer; ++i) {
-            model.buft_layer[i] = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
+            model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[i]]);
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
-            model.buft_output = llama_default_buffer_type_offload(model, model.default_layer_device[n_layer]);
+            model.buft_output = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[n_layer]]);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
@@ -3337,7 +3709,7 @@ static bool llm_load_tensors(
         }
         // assign the repeating layers
         for (int i = i_gpu_start; i < n_layer; ++i) {
-            auto buft_layer = llama_default_buffer_type_offload(model, model.default_layer_device[i]);
+            auto buft_layer = llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[i]]);
             if (split_mode == LLAMA_SPLIT_MODE_ATTN) {
                 int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count,
                         float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
@@ -3351,8 +3723,17 @@ static bool llm_load_tensors(
         if (n_gpu_layers > n_layer) {
             model.buft_output = {
                 split_buft,
-                llama_default_buffer_type_offload(model, model.default_layer_device[n_layer])
+                llama_default_buffer_type_offload(model, model.devices[model.default_layer_device[n_layer]])
             };
+        } else if (n_gpu_layers > 0) {
+            // Under partial -ngl with -sm graph, route output to the GPU buffer
+            // to avoid synchronization issues between the GPU where the last
+            // REDUCE op is performed and the CPU, where the fused RMS norm and
+            // mul_mat with the output tensor would be performed if left on the CPU.
+            int last_gpu_layer = (int)n_layer - 1;
+            int dev = model.default_layer_device.empty() || last_gpu_layer < 0
+                    ? 0 : std::max(0, model.default_layer_device[last_gpu_layer]);
+            model.buft_output = llama_default_buffer_type_offload(model, dev);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
         }
@@ -3709,7 +4090,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.extra_output_type,
-            params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin,
+            params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.fit_margin_array,
             params.worst_graph_tokens, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
@@ -4427,11 +4808,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 // Make sure enough space is available for outputs.
 // Returns max number of outputs for which space was reserved.
 static uint32_t llama_output_embd_width(const llama_context & lctx) {
-    const auto & hparams = lctx.model.hparams;
-    if (lctx.cparams.mtp && lctx.model.arch == LLM_ARCH_GEMMA4_MTP && hparams.mtp_backbone_n_embd > 0) {
-        return hparams.mtp_backbone_n_embd;
-    }
-    return hparams.n_embd;
+    return llama_mtp_state_n_embd(&lctx);
 }
 
 static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
@@ -4549,12 +4926,46 @@ static void llama_graph_compute(
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
-static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
+static bool prepare_mtp_graph_inputs(
+        struct llama_context & lctx,
+        uint32_t cur_token,
+        uint32_t n_tokens,
+        uint32_t n_tokens_all) {
     ggml_tensor * dst = lctx.inp_mtp_states;
+    const size_t expected_floats = ggml_nbytes(dst) / sizeof(float);
+    const size_t total_floats = lctx.draft_input_hidden_state_n_floats;
     const float * src = lctx.draft_input_hidden_state;
 
     if (!src) {
         LLAMA_LOG_ERROR("%s: Source hidden state is null\n", __func__);
+        return false;
+    }
+
+    if (total_floats != expected_floats) {
+        if (n_tokens_all == 0 || total_floats % n_tokens_all != 0) {
+            LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
+                    __func__, total_floats, expected_floats);
+            return false;
+        }
+
+        const size_t row_width = total_floats / n_tokens_all;
+        const size_t slice_floats = row_width * n_tokens;
+        const size_t slice_offset = (size_t) cur_token * row_width;
+
+        if (slice_floats != expected_floats ||
+                slice_offset > total_floats ||
+                total_floats - slice_offset < expected_floats) {
+            LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
+                    __func__, total_floats, expected_floats);
+            return false;
+        }
+
+        src += slice_offset;
+    }
+
+    if (src == nullptr) {
+        LLAMA_LOG_ERROR("%s: Source hidden state size mismatch (have %zu floats, need %zu)\n",
+                __func__, total_floats, expected_floats);
         return false;
     }
 
@@ -4637,7 +5048,7 @@ static int llama_decode_internal(
     }
 
     // reserve output buffer
-    n_outputs_embd = has_mtp ? n_tokens_all : n_outputs;
+    n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
     if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, std::max<size_t>(n_outputs, n_outputs_embd));
         return -2;
@@ -4849,7 +5260,7 @@ static int llama_decode_internal(
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
-            if (!prepare_mtp_graph_inputs(lctx)) {
+            if (!prepare_mtp_graph_inputs(lctx, cur_token, n_tokens, n_tokens_all)) {
                 return GGML_STATUS_FAILED;
             }
         }
@@ -5039,6 +5450,7 @@ static int llama_decode_internal(
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     lctx.n_outputs = n_outputs;
+    lctx.n_outputs_embd = n_outputs_embd;
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //llama_synchronize(&lctx);
@@ -5810,6 +6222,7 @@ struct llama_model_params llama_model_default_params() {
         /*.n_last_v                    =*/ -1,
         /*.extra_output_type           =*/ GGML_TYPE_COUNT,
         /*.tensor_split                =*/ nullptr,
+        /*.fit_margin_array            =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
@@ -6276,6 +6689,17 @@ struct llama_context * llama_init_from_model(
     cparams.graph_reuse      = params.graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
+    // Folding H into wv_b/wk_b_pp permanently mutates the model; a later context
+    // on the same model with khad=false would consume an H-applied weight against
+    // an un-applied cache and produce wrong values. Force khad=true to keep math
+    // consistent for the rest of the model's lifetime.
+    if (model->khad_pretransformed && !cparams.k_cache_hadamard) {
+        LLAMA_LOG_WARN("%s: model has Hadamard-folded wv_b/wk_b_pp; forcing k_cache_hadamard=true\n", __func__);
+        cparams.k_cache_hadamard = true;
+    }
+    if (cparams.k_cache_hadamard) {
+        llm_apply_khad_pretransform(*model);
+    }
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
@@ -6355,6 +6779,14 @@ struct llama_context * llama_init_from_model(
 
     if (model->arch != LLM_ARCH_DEEPSEEK2 && model->arch != LLM_ARCH_GLM_DSA && model->arch != LLM_ARCH_MISTRAL4 && cparams.mla_attn != 0) {
         cparams.mla_attn = 0;
+    } else {
+        if (model->n_gpu_layers > 0 && model->n_gpu_layers < model->hparams.n_layer && cparams.mla_attn != 3) {
+            LLAMA_LOG_WARN("=============================================================================\n");
+            LLAMA_LOG_WARN("MLA models with ngl < n_layer and split mode graph do not work with mla = %d\n", cparams.mla_attn);
+            LLAMA_LOG_WARN("    => changing mla to 3\n");
+            LLAMA_LOG_WARN("=============================================================================\n");
+            cparams.mla_attn = 3;
+        }
     }
     if (model->arch == LLM_ARCH_OPENAI_MOE && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         if (cparams.reduce_type == GGML_TYPE_F16) {
@@ -6426,6 +6858,12 @@ struct llama_context * llama_init_from_model(
     GGML_ASSERT(hparams.n_embd_head_v(0) % ggml_blck_size(type_v) == 0);
     if (!hparams.vocab_only) {
         // initialize backends
+        // main_gpu is a local index into model->devices throughout the codebase
+        // (auto-fit assigns device_count-1, MTP clamps to [0, device_count), buffer-type
+        // setup wraps with model.devices[main_gpu]). Translate to a raw device id here.
+        const int main_gpu_id = (model->main_gpu >= 0 && model->main_gpu < (int)model->devices.size())
+            ? model->devices[model->main_gpu]
+            : model->main_gpu;
 #if defined(GGML_USE_METAL)
         if (model->n_gpu_layers > 0) {
             ctx->backend_metal = ggml_backend_metal_init();
@@ -6439,9 +6877,9 @@ struct llama_context * llama_init_from_model(
 #elif defined(GGML_USE_CUDA)
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
             // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
-            ggml_backend_t backend = ggml_backend_cuda_init(model->main_gpu, cparams.cuda_params);
+            ggml_backend_t backend = ggml_backend_cuda_init(main_gpu_id, cparams.cuda_params);
             if (backend == nullptr) {
-                LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, model->main_gpu);
+                LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, main_gpu_id);
                 llama_free(ctx);
                 return nullptr;
             }
@@ -6474,7 +6912,7 @@ struct llama_context * llama_init_from_model(
             return nullptr;
         }
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
-            ggml_backend_t backend = ggml_backend_vk_init(model->main_gpu);
+            ggml_backend_t backend = ggml_backend_vk_init(main_gpu_id);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize Vulkan backend\n", __func__);
                 llama_free(ctx);
@@ -6495,9 +6933,9 @@ struct llama_context * llama_init_from_model(
 #elif defined(GGML_USE_SYCL)
         // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-            ggml_backend_t backend = ggml_backend_sycl_init(model->main_gpu);
+            ggml_backend_t backend = ggml_backend_sycl_init(main_gpu_id);
             if (backend == nullptr) {
-                LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d backend\n", __func__, model->main_gpu);
+                LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d backend\n", __func__, main_gpu_id);
                 llama_free(ctx);
                 return nullptr;
             }
@@ -6516,7 +6954,7 @@ struct llama_context * llama_init_from_model(
         }
 #elif defined(GGML_USE_KOMPUTE)
         if (model->n_gpu_layers > 0) {
-            auto * backend = ggml_backend_kompute_init(model->main_gpu);
+            auto * backend = ggml_backend_kompute_init(main_gpu_id);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize Kompute backend\n", __func__);
                 llama_free(ctx);
@@ -6528,9 +6966,9 @@ struct llama_context * llama_init_from_model(
     // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
     // TODO: ggml_backend_cann is not support split tensor now, just leave code here.
     if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        ggml_backend_t backend = ggml_backend_cann_init(model->main_gpu);
+        ggml_backend_t backend = ggml_backend_cann_init(main_gpu_id);
         if (backend == nullptr) {
-            LLAMA_LOG_ERROR("%s: failed to initialize CANN%d backend\n", __func__, model->main_gpu);
+            LLAMA_LOG_ERROR("%s: failed to initialize CANN%d backend\n", __func__, main_gpu_id);
             llama_free(ctx);
             return nullptr;
         }
@@ -7695,7 +8133,8 @@ struct llama_data_write {
     }
 
     void write_embeddings(const struct llama_context * ctx) {
-        const uint64_t embeddings_size = std::min((uint64_t) ctx->embd_size, (uint64_t) ctx->n_outputs * ctx->model.hparams.n_embd);
+        const uint64_t row_width = llama_output_embd_width(*ctx);
+        const uint64_t embeddings_size = std::min((uint64_t) ctx->embd_size, (uint64_t) ctx->n_outputs_embd * row_width);
 
         write(&embeddings_size, sizeof(embeddings_size));
 
@@ -7990,6 +8429,13 @@ struct llama_data_read {
         if (ctx->embd_size < embeddings_size) {
             throw std::runtime_error("embeddings buffer too small");
         }
+
+        const uint64_t row_width = llama_output_embd_width(*ctx);
+        if (row_width == 0 || (embeddings_size % row_width) != 0) {
+            throw std::runtime_error("invalid embeddings payload size");
+        }
+
+        ctx->n_outputs_embd = embeddings_size / row_width;
 
         if (embeddings_size) {
             read_to(ctx->embd, embeddings_size * sizeof(float));
@@ -9097,9 +9543,9 @@ float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {
         }
 
         if (i < 0) {
-            j = ctx->n_outputs + i;
+            j = ctx->n_outputs_embd + i;
             if (j < 0) {
-                throw std::runtime_error(format("negative index out of range [0, %d)", ctx->n_outputs));
+                throw std::runtime_error(format("negative index out of range [0, %d)", ctx->n_outputs_embd));
             }
         } else if ((size_t) i >= ctx->output_ids.size()) {
             throw std::runtime_error(format("out of range [0, %lu)", ctx->output_ids.size()));
@@ -9110,12 +9556,12 @@ float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {
         if (j < 0) {
             throw std::runtime_error(format("batch.logits[%d] != true", i));
         }
-        if (j >= ctx->n_outputs) {
+        if (j >= ctx->n_outputs_embd) {
             // This should not happen
-            throw std::runtime_error(format("corrupt output buffer (j=%d, n_outputs=%d)", j, ctx->n_outputs));
+            throw std::runtime_error(format("corrupt output buffer (j=%d, n_outputs_embd=%d)", j, ctx->n_outputs_embd));
         }
 
-        return ctx->embd + j*ctx->model.hparams.n_embd;
+        return ctx->embd + (size_t) j * llama_output_embd_width(*ctx);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid embeddings id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -10170,6 +10616,18 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float
     return llama_init_adaptive_p_impl(n_vocab, target, decay, updt_w_cur, seed);
 }
 
+struct llama_sampler_adaptive_p * llama_clone_adaptive_p(const struct llama_sampler_adaptive_p * adapt_p_ctx) {
+    if (adapt_p_ctx == nullptr) {
+        return nullptr;
+    }
+
+    return new llama_sampler_adaptive_p(*adapt_p_ctx);
+}
+
+void llama_free_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx) {
+    delete adapt_p_ctx;
+}
+
 void llama_review_adaptive_p(struct llama_sampler_adaptive_p * adapt_p_ctx, const size_t n_unsent, const bool rewind_status) {
     llama_review_adaptive_p_impl(adapt_p_ctx, n_unsent, rewind_status);
 }
@@ -10338,16 +10796,16 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_off) {
     if (!lctx || !lctx->sched) return;
     const char * op_name = op < 0 || op >= int(GGML_OP_COUNT) ? "all ops" : ggml_op_name(ggml_op(op));
-    printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", op_name, on_or_off);
+    LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", op_name, on_or_off);
     ggml_backend_sched_set_op_offload(lctx->sched, ggml_op(op), on_or_off);
 }
 
 void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state) {
+    ctx->draft_input_hidden_state_owned.clear();
     ctx->draft_input_hidden_state = hidden_state;
-}
-
-uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
-    return llama_output_embd_width(*ctx);
+    ctx->draft_input_hidden_state_n_floats = ctx->inp_mtp_states
+        ? ggml_nbytes(ctx->inp_mtp_states) / sizeof(float)
+        : 0;
 }
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx) {

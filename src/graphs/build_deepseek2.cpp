@@ -13,7 +13,8 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
         ggml_tensor * rope_cache,
         float kq_scale, float attn_factor_scaled,
         bool use_f32_attn_precision,
-        bool is_lite) {
+        bool is_lite,
+        bool pp_opt) {
     if (!lctx.cparams.flash_attn || lctx.cparams.mla_attn < 1) {
         GGML_ABORT("-sm graph for MLA archs (DEEPSEEK2/GLM_DSA/MISTRAL4) requires -fa on and -mla >= 1. "
                    "Got mla_attn=%d, flash_attn=%d.",
@@ -140,48 +141,163 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
                 row_size_cache, 0);
         cb(kv_cache, "kv_cache", il_id);
 
-        // wk_b is split per-head (split_dim=2); each rank's tensor already contains only its n_head_local heads.
-        auto wk_b_split = (const ggml_split_tensor_t *)model.layers[il].wk_b->extra;
-        GGML_ASSERT(wk_b_split);
-        ggml_tensor * wk_b_local = wk_b_split->splits[id];
+        // pp_opt (mla > 1, n_tokens >= 128, n_kv >= k_pp_opt_min_kv): materialize
+        // per-rank K/V from the latent cache and use standard flash_attn instead of
+        // FlashMLA-3 absorb.
+        constexpr int k_pp_opt_min_kv = 1024;
+        const bool tp_pp_opt = pp_opt
+                            && (int)n_kv >= k_pp_opt_min_kv
+                            && model.layers[il].wk_b
+                            && model.layers[il].wv_b
+                            && model.layers[il].wk_b_pp;
 
-        ggml_tensor * q_nope_perm = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
-        ggml_tensor * q_nope2     = ggml_mul_mat(ctx0, wk_b_local, q_nope_perm);
+        ggml_tensor * kqv_2d;
 
-        ggml_tensor * q_combined = ggml_concat(ctx0,
-                ggml_permute(ctx0, q_rope, 0, 2, 1, 3), q_nope2, 0);
-        if (cparams.k_cache_hadamard) {
-            q_combined = ggml_hadamard(ctx0, q_combined, 64);
+        if (tp_pp_opt) {
+            // Per-rank wk_b/wv_b slices already exist from distribute_mla_tensors:
+            //   wk_b_local_pp: [n_embd_head_qk_nope, kv_lora_rank, n_head_local]
+            //   wv_b_local_pp: [kv_lora_rank, n_embd_head_v,    n_head_local]
+            auto wv_b_pp_split_raw = (const ggml_split_tensor_t *)model.layers[il].wv_b->extra;
+            GGML_ASSERT(wv_b_pp_split_raw);
+            ggml_tensor * wv_b_local_pp = wv_b_pp_split_raw->splits[id];
+
+            ggml_tensor * kv_cache_nope = ggml_view_2d(ctx0, cache_local,
+                    kv_lora_rank, n_kv,
+                    row_size_cache,
+                    ggml_row_size(cache_local->type, n_embd_head_qk_rope));
+            cb(kv_cache_nope, "kv_cache_nope_pp", il_id);
+
+            ggml_tensor * kv_cache_rope_view = ggml_view_3d(ctx0, cache_local,
+                    n_embd_head_qk_rope, n_kv, 1,
+                    row_size_cache, cache_local->nb[2], 0);
+            cb(kv_cache_rope_view, "kv_cache_rope_pp", il_id);
+
+            // Un-Hadamard the cache views via the fused dequant+hadamard kernel.
+            // When khad_pretransformed is set, H was folded into wv_b/wk_b_pp at init,
+            // so the cache_nope un-Hadamard is skipped (rope half still goes to FA via
+            // concat — no wk_b multiply, no H to fold into).
+            if (cparams.k_cache_hadamard) {
+                kv_cache_rope_view = ggml_hadamard(ctx0, kv_cache_rope_view, 64);
+                if (!model.khad_pretransformed) {
+                    kv_cache_nope = ggml_hadamard(ctx0, kv_cache_nope, 64);
+                }
+            }
+
+            // CUDA quantized-cache + REPEAT/CONCAT/CPY has known issues, so force F16 here.
+            const auto kv_type = GGML_TYPE_F16;
+
+            ggml_tensor repeater;
+            repeater.ne[0] = n_embd_head_qk_rope;
+            repeater.ne[1] = n_kv;
+            repeater.ne[2] = n_head_local;
+            repeater.ne[3] = 1;
+            ggml_tensor * k_rope_rep;
+            if (kv_cache_rope_view->type == kv_type) {
+                k_rope_rep = ggml_repeat(ctx0, kv_cache_rope_view, &repeater);
+            } else {
+                auto kv_rope_f16 = ggml_cast(ctx0, kv_cache_rope_view, kv_type);
+                k_rope_rep = ggml_repeat(ctx0, kv_rope_f16, &repeater);
+            }
+            cb(k_rope_rep, "k_rope_rep_pp", il_id);
+
+            // V: wv_b_local viewed as 2D [kv_lora_rank, n_head_local * n_embd_head_v].
+            // Per-rank, no cross-device transfer per call.
+            auto wv_b_2d = ggml_reshape_2d(ctx0, wv_b_local_pp,
+                    kv_lora_rank, n_head_local * n_embd_head_v);
+            ggml_tensor * v_2d = ggml_mul_mat(ctx0, wv_b_2d, kv_cache_nope);
+            cb(v_2d, "v_2d_pp", il_id);
+            ggml_tensor * v_f32 = ggml_view_3d(ctx0, v_2d,
+                    n_embd_head_v, n_kv, n_head_local,
+                    v_2d->nb[1],
+                    n_embd_head_v * v_2d->nb[0],
+                    0);
+
+            // wk_b_pp is transpose(wk_b) pre-materialized in llm_prepare_mla.
+            // Shape: [kv_lora_rank, n_embd_head_qk_nope, n_head_local].
+            auto wk_b_pp_split = (const ggml_split_tensor_t *)model.layers[il].wk_b_pp->extra;
+            GGML_ASSERT(wk_b_pp_split);
+            ggml_tensor * wk_b_pp_local = wk_b_pp_split->splits[id];
+            GGML_ASSERT(wk_b_pp_local);
+            ggml_tensor * wk_b_T_2d = ggml_reshape_2d(ctx0, wk_b_pp_local,
+                    kv_lora_rank, n_head_local * n_embd_head_qk_nope);
+            ggml_tensor * k_nope_2d = ggml_mul_mat(ctx0, wk_b_T_2d, kv_cache_nope);
+            cb(k_nope_2d, "k_nope_2d_pp", il_id);
+            ggml_tensor * k_nope_f32 = ggml_view_3d(ctx0, k_nope_2d,
+                    n_embd_head_qk_nope, n_kv, n_head_local,
+                    k_nope_2d->nb[1],
+                    n_embd_head_qk_nope * k_nope_2d->nb[0],
+                    0);
+
+            ggml_tensor * v      = ggml_cast(ctx0, v_f32,      kv_type);
+            ggml_tensor * k_nope = ggml_cast(ctx0, k_nope_f32, kv_type);
+            ggml_build_forward_expand(gf, v);
+            ggml_build_forward_expand(gf, k_nope);
+
+            ggml_tensor * k = ggml_concat(ctx0, k_rope_rep, k_nope, 0);
+            ggml_build_forward_expand(gf, k);
+            cb(k, "k_full_pp", il_id);
+
+            ggml_tensor * q = ggml_concat(ctx0, q_rope, q_nope, 0);
+            q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+            ggml_build_forward_expand(gf, q);
+            cb(q, "q_concat_pp", il_id);
+
+            ggml_tensor * kqv = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask,
+                    kq_scale, hparams.f_max_alibi_bias, 0.f);
+            if (use_f32_attn_precision || q->ne[1] <= 8) {
+                ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+            }
+            cb(kqv, "kqv_pp", il_id);
+
+            kqv_2d = ggml_reshape_2d(ctx0, kqv, n_embd_head_v * n_head_local, n_tokens);
+        } else {
+            // Absorb path: FlashMLA-3 with the compressed latent cache, then project via wv_b.
+            auto wk_b_split = (const ggml_split_tensor_t *)model.layers[il].wk_b->extra;
+            GGML_ASSERT(wk_b_split);
+            ggml_tensor * wk_b_local = wk_b_split->splits[id];
+
+            ggml_tensor * q_nope_perm = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+            ggml_tensor * q_nope2     = ggml_mul_mat(ctx0, wk_b_local, q_nope_perm);
+
+            ggml_tensor * q_combined = ggml_concat(ctx0,
+                    ggml_permute(ctx0, q_rope, 0, 2, 1, 3), q_nope2, 0);
+            if (cparams.k_cache_hadamard) {
+                q_combined = ggml_hadamard(ctx0, q_combined, 64);
+            }
+
+            // FlashMLA-3 path: K = kv_cache (full latent + rope), V = kv_cache_lora (latent only)
+            ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, cache_local,
+                    kv_lora_rank, n_kv,
+                    row_size_cache,
+                    ggml_row_size(cache_local->type, n_embd_head_qk_rope));
+            cb(kv_cache_lora, "kv_cache_lora", il_id);
+
+            ggml_tensor * kqv_compressed = ggml_flash_attn_ext(ctx0,
+                    q_combined, kv_cache, kv_cache_lora, KQ_mask,
+                    kq_scale, hparams.f_max_alibi_bias, 0.f);
+            cb(kqv_compressed, "kqv_compressed", il_id);
+            if (use_f32_attn_precision) {
+                ggml_flash_attn_ext_set_prec(kqv_compressed, GGML_PREC_F32);
+            }
+            // When khad_pretransformed is set, H is folded into wv_b. FA leaves
+            // kqv_compressed in the H-encoded basis; the mul_mat(H@wv_b, kqv_encoded)
+            // below collapses to wv_b^T @ kqv_unencoded by H @ H = I. Skip the
+            // post-FA un-encode so the fold composes correctly.
+            if (cparams.k_cache_hadamard && !model.khad_pretransformed) {
+                kqv_compressed = ggml_hadamard(ctx0, kqv_compressed, 64);
+            }
+            kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
+
+            auto wv_b_split = (const ggml_split_tensor_t *)model.layers[il].wv_b->extra;
+            GGML_ASSERT(wv_b_split);
+            ggml_tensor * wv_b_local = wv_b_split->splits[id];
+
+            ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_local, kqv_compressed);
+            if (n_tokens > 1) {
+                kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
+            }
+            kqv_2d = ggml_reshape_2d(ctx0, kqv, n_embd_head_v * n_head_local, n_tokens);
         }
-
-        // FlashMLA-3 path: K = kv_cache (full latent + rope), V = kv_cache_lora (latent only)
-        ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, cache_local,
-                kv_lora_rank, n_kv,
-                row_size_cache,
-                ggml_row_size(cache_local->type, n_embd_head_qk_rope));
-        cb(kv_cache_lora, "kv_cache_lora", il_id);
-
-        ggml_tensor * kqv_compressed = ggml_flash_attn_ext(ctx0,
-                q_combined, kv_cache, kv_cache_lora, KQ_mask,
-                kq_scale, hparams.f_max_alibi_bias, 0.f);
-        cb(kqv_compressed, "kqv_compressed", il_id);
-        if (use_f32_attn_precision) {
-            ggml_flash_attn_ext_set_prec(kqv_compressed, GGML_PREC_F32);
-        }
-        if (cparams.k_cache_hadamard) {
-            kqv_compressed = ggml_hadamard(ctx0, kqv_compressed, 64);
-        }
-        kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
-
-        auto wv_b_split = (const ggml_split_tensor_t *)model.layers[il].wv_b->extra;
-        GGML_ASSERT(wv_b_split);
-        ggml_tensor * wv_b_local = wv_b_split->splits[id];
-
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_local, kqv_compressed);
-        if (n_tokens > 1) {
-            kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
-        }
-        ggml_tensor * kqv_2d = ggml_reshape_2d(ctx0, kqv, n_embd_head_v * n_head_local, n_tokens);
 
         ggml_tensor * partial = llm_build_lora_mm(lctx, ctx0, wo_split->splits[id], kqv_2d);
 
@@ -677,7 +793,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case
-    bool pp_opt = n_tokens >= 128; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
+    bool pp_opt = n_tokens >= 128 && lctx.cparams.mla_attn > 1;
 
     auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -692,7 +808,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         if (is_tp_layer) {
             cur = build_deepseek2_tp_attention(gf, il, inpL, KQ_mask, inp_pos, rope_cache,
                                                 kq_scale, attn_factor_scaled,
-                                                use_f32_attn_precision, is_lite);
+                                                use_f32_attn_precision, is_lite, pp_opt);
         } else {
             cur = build_deepseek2_layer_attention(gf, il, inpL, KQ_mask, inp_pos, rope_cache,
                                                   kq_scale, attn_factor_scaled,

@@ -351,6 +351,7 @@ struct gpt_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;
+    std::vector<int> fit_margin_array;
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
     std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
@@ -646,6 +647,11 @@ std::vector<std::string> string_split<std::string>(const std::string& input, cha
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
 void string_process_escapes(std::string & input);
+std::string string_unescape(const std::string& str);
+
+std::vector<std::string> string_extract(const std::string& str, const char c, std::vector<size_t>& posi);
+
+bool string_is_found(const std::string& window, const std::string& str, size_t& pos);
 
 //
 // Filesystem utils

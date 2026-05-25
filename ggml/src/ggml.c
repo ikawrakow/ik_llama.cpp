@@ -6255,7 +6255,6 @@ struct ggml_tensor * ggml_hadamard(
         struct ggml_tensor  * a,
         int                   n) {
 
-    GGML_ASSERT(a->type == GGML_TYPE_F32); // will not bother implementing for other data types
     GGML_ASSERT(n > 1);                    // no point in Hadamard transforms with less than 2 elements
     GGML_ASSERT(a->ne[0] % n == 0);
     GGML_ASSERT(popcount(n) == 1);         // must be a power of 2
