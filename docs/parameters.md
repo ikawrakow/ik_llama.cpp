@@ -151,6 +151,10 @@ Note: When the available memory is very limited, turn this option off (`-cram 0`
 | `-crs, --cache-ram-similarity N` | Max similarity of prompt tokens to cache tokens that triggers prompt cache | 0.50 |  |
 | `-cram-n-min, --cache-ram-n-min N` | Minimum number of cached tokens that triggers prompt cache | 0 |  |
 
+When restoring a prompt from RAM cache, the server ranks candidates by reusable common prefix first and uses similarity as a tie-breaker. A candidate is skipped if its reusable prefix is below `--cache-ram-n-min`, if the reusable fraction is below `--cache-ram-similarity`, or if the cached KV range cannot be rewound safely for SWA/sliding-window attention.
+
+For SWA models, cached prompt entries track the KV position range saved with the state. If the active KV window starts after the reusable prefix, restore is only allowed when an earlier context checkpoint can rewind to that prefix. Otherwise the candidate is rejected before loading state, so a bad RAM-cache hit does not mutate the slot and then force full prompt re-processing. When context checkpoints are capped, the server keeps the earliest checkpoint as a rewind anchor when possible.
+
 ## Sampling
 
 Sampling refers to the techniques used by models to generate text by selecting the next word or token based on probabilities.
