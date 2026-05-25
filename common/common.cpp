@@ -110,6 +110,10 @@ bool common_speculative_type_is_self_spec(enum common_speculative_type type) {
     }
 }
 
+bool common_speculative_type_supports_candidate_seed(enum common_speculative_type type) {
+    return type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+}
+
 const char * common_speculative_stage_phase_to_cstr(enum common_speculative_stage_phase phase) {
     switch (phase) {
         case COMMON_SPECULATIVE_STAGE_PHASE_AUTO:  return "auto";
@@ -212,16 +216,14 @@ static bool common_speculative_type_is_neural(enum common_speculative_type type)
 }
 
 static int32_t common_speculative_stage_effective_n_max(
-    const common_params_speculative &params,
-    const common_speculative_stage_params &stage)
-{
+        const common_params_speculative & params,
+        const common_speculative_stage_params & stage) {
     return stage.has_n_max_override() ? stage.n_max : params.n_max;
 }
 
 static int32_t common_speculative_stage_effective_n_min(
-    const common_params_speculative &params,
-    const common_speculative_stage_params &stage)
-{
+        const common_params_speculative & params,
+        const common_speculative_stage_params & stage) {
     return stage.has_n_min_override() ? stage.n_min : params.n_min;
 }
 
@@ -301,6 +303,9 @@ static common_speculative_plan common_speculative_build_plan(
             if (!common_speculative_type_is_self_spec(second.type)) {
                 return fail("tail phase requires a self-spec stage");
             }
+            if (!common_speculative_type_supports_candidate_seed(second.type)) {
+                return fail("tail phase currently requires a seed-aware self-spec stage (supported: ngram-mod)");
+            }
 
             plan.mode = COMMON_SPECULATIVE_PLAN_COMPOSE;
             plan.first_stage = 0;
@@ -309,6 +314,10 @@ static common_speculative_plan common_speculative_build_plan(
         }
 
         if (common_speculative_type_is_neural(first.type) && common_speculative_type_is_self_spec(second.type)) {
+            if (!common_speculative_type_supports_candidate_seed(second.type)) {
+                return fail("combined neural-first mode currently requires a seed-aware self-spec tail stage (supported: ngram-mod)");
+            }
+
             plan.mode = COMMON_SPECULATIVE_PLAN_COMPOSE;
             plan.first_stage = 0;
             plan.tail_stage = 1;
@@ -344,6 +353,9 @@ static common_speculative_plan common_speculative_build_plan(
 
     if (!common_speculative_type_is_self_spec(tail.type)) {
         return fail("tail phase requires a self-spec stage");
+    }
+    if (!common_speculative_type_supports_candidate_seed(tail.type)) {
+        return fail("tail phase currently requires a seed-aware self-spec stage (supported: ngram-mod)");
     }
 
     plan.mode = COMMON_SPECULATIVE_PLAN_COMPOSE;
@@ -382,7 +394,7 @@ std::vector<common_speculative_stage_params> common_params_speculative::get_reso
         return {};
     }
 
-    return {{.type = type}};
+    return {{ .type = type }};
 }
 
 common_params_speculative common_params_speculative::with_stage_overrides(const common_speculative_stage_params & stage) const {
@@ -488,7 +500,7 @@ int32_t common_params_speculative::get_min_usable_stage_n_min() const {
     return min_n_min == INT_MAX ? 0 : min_n_min;
 }
 
-bool common_speculative_validate_chain(const common_params_speculative &params, std::string *error) {
+bool common_speculative_validate_chain(const common_params_speculative & params, std::string * error) {
     const auto fail = [error](const std::string & msg) {
         if (error != nullptr) {
             *error = msg;
@@ -536,15 +548,15 @@ bool common_speculative_validate_chain(const common_params_speculative &params, 
             return fail("speculative stage has n_min greater than n_max");
         }
 
-        if (stage.type == COMMON_SPECULATIVE_TYPE_DRAFT && !params.has_dft()) {
-            return fail("draft speculative stage requires a draft model; --draft-params only configures the draft backend");
+        if (stage.type == COMMON_SPECULATIVE_TYPE_DRAFT && !params.has_dft_config()) {
+            return fail("draft speculative stage requires a draft model or draft params");
         }
     }
 
     return true;
 }
 
-std::string common_speculative_stage_chain_to_str(const common_params_speculative &params) {
+std::string common_speculative_stage_chain_to_str(const common_params_speculative & params) {
     const auto resolved = params.get_resolved_stages();
     if (resolved.empty()) {
         return "none";
@@ -3474,9 +3486,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n", params.speculative.ngram_size_n });
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
     options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
-    options.push_back({ "*", "--suffix-pattern-len N", "minimum context match length for suffix decoding (default: %d)", params.speculative.suffix_min_match_len });
-    options.push_back({ "*", "--suffix-max-depth N",   "suffix tree maximum depth for suffix decoding (default: %d)", params.speculative.suffix_max_depth });
-    options.push_back({ "*", "--suffix-corpus PATH",   "corpus file to pre-warm the suffix tree: .json (array of strings or conversation messages) or .bin (raw int32 token IDs)" });
+    options.push_back({ "*", "--suffix-pattern-len N",   "minimum context match length for suffix decoding (default: %d)", params.speculative.suffix_min_match_len });
+    options.push_back({ "*", "--suffix-max-depth N",     "suffix tree maximum depth for suffix decoding (default: %d)",    params.speculative.suffix_max_depth });
+    options.push_back({ "*", "--suffix-corpus PATH",     "corpus file to pre-warm the suffix tree: .json (array of strings or conversation messages) or .bin (raw int32 token IDs)" });
     options.push_back({ "*", "--spec-autotune",          "automatically tune speculative params to maximize tokens/sec" });
 
     options.push_back({ "retrieval" });

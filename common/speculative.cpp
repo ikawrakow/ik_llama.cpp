@@ -1227,6 +1227,11 @@ common_speculative * common_speculative_init(
         return nullptr;
     }
 
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_DRAFT) && !params.has_dft()) {
+        LOG_ERR("%s: draft speculative stage requires a loaded draft model; draft backend parameters must resolve to a model before speculative init\n", __func__);
+        return nullptr;
+    }
+
     const auto stages = params.get_resolved_stages();
     if (params.model_dft && llama_model_is_gemma4_mtp_assistant(params.model_dft)) {
         const bool has_draft_stage = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params & stage) {
@@ -1234,7 +1239,7 @@ common_speculative * common_speculative_init(
         });
 
         if (has_draft_stage) {
-            LOG_ERR("%s: Gemma4 assistant models only support MTP stages; omit -md for self-spec-only runs or use --spec-type mtp[:k=v,...] for assistant-backed MTP\n", __func__);
+            LOG_ERR("%s: Gemma4 assistant models only support MTP stages; omit -md for self-spec-only runs or use -mtp/--spec-stage mtp for assistant-backed MTP\n", __func__);
             return nullptr;
         }
     }
@@ -1396,9 +1401,10 @@ common_speculative * common_speculative_init(
         return nullptr;
     }
 
-    auto *result = new common_speculative{
+    auto * result = new common_speculative {
         /* .configs = */ std::move(configs),
-        /* .impls = */ std::move(impls)};
+        /* .impls = */ std::move(impls)
+    };
 
     // initialize autotune if requested
     if (params.autotune && params.has_composite_stage_chain()) {
@@ -1421,25 +1427,20 @@ common_speculative * common_speculative_init(
     return result;
 }
 
-void common_speculative_free(common_speculative *spec)
-{
-    if (spec == nullptr)
-    {
+void common_speculative_free(common_speculative * spec) {
+    if (spec == nullptr) {
         return;
     }
 
     delete spec;
 }
 
-void common_speculative_begin(common_speculative *spec, const llama_tokens &prompt)
-{
-    if (spec == nullptr)
-    {
+void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt) {
+    if (spec == nullptr) {
         return;
     }
 
-    for (auto &impl : spec->impls)
-    {
+    for (auto & impl : spec->impls) {
         common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
         impl->begin(prompt);
         impl->n_call_begin++;
@@ -1475,8 +1476,7 @@ common_speculative_draft_result common_speculative_draft_ex(
     spec->t_step_start_us = ggml_time_us();
 
     // apply autotune proposal if enabled
-    if (spec->tuner && spec->tuner->enabled)
-    {
+    if (spec->tuner && spec->tuner->enabled) {
         spec->tuner->propose(params);
     }
 
@@ -1529,6 +1529,12 @@ common_speculative_draft_result common_speculative_draft_ex(
         candidate_seed.reserve(combined_result.tokens.size() + 1);
         candidate_seed.push_back(id_last);
         candidate_seed.insert(candidate_seed.end(), combined_result.tokens.begin(), combined_result.tokens.end());
+
+        if (!common_speculative_type_supports_candidate_seed(tail_impl->type)) {
+            LOG_ERR("%s: composed tail stage %s does not support seeded tail drafting\n",
+                    __func__, common_speculative_type_to_str(tail_impl->type).c_str());
+            return combined_result;
+        }
 
         llama_tokens tail_tokens;
         {

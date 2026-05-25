@@ -286,7 +286,7 @@ bool server_context::load_model(const gpt_params& params_) {
         params_base.speculative.model_dft = nullptr;
     }
 
-    bool has_draft_model = !params_base.speculative.model.empty() || !params_base.speculative.params.empty();
+    const bool has_draft_backend = params_base.speculative.has_dft_config();
     std::string& mmproj_path = params_base.mmproj.path;
     if (!mmproj_path.empty()) {
         mtmd_context_params mparams = mtmd_context_params_default();
@@ -311,7 +311,7 @@ bool server_context::load_model(const gpt_params& params_) {
         //    SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
         //}
 
-        if (has_draft_model) {
+        if (has_draft_backend) {
             LOG_ERROR("%s\n", "err: speculative decode is not supported by multimodal");
             return false;
         }
@@ -326,7 +326,7 @@ bool server_context::load_model(const gpt_params& params_) {
         }
     }
     // Load draft model for speculative decoding if specified
-    if (has_draft_model) {
+    if (has_draft_backend) {
         LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n");
 
         gpt_params params_dft;
@@ -747,18 +747,18 @@ void server_slot::release() {
 
 json server_slot::get_formated_timings() const {
     json timings = json{
-        {"prompt_n", n_prompt_tokens_processed},
-        {"prompt_ms", t_prompt_processing},
-        {"prompt_per_token_ms", t_prompt_processing / n_prompt_tokens_processed},
-        {"prompt_per_second", 1e3 / t_prompt_processing * n_prompt_tokens_processed},
+        {"prompt_n",               n_prompt_tokens_processed},
+        {"prompt_ms",              t_prompt_processing},
+        {"prompt_per_token_ms",    t_prompt_processing / n_prompt_tokens_processed},
+        {"prompt_per_second",      1e3 / t_prompt_processing * n_prompt_tokens_processed},
 
-        {"predicted_n", n_decoded},
-        {"predicted_ms", t_token_generation},
+        {"predicted_n",            n_decoded},
+        {"predicted_ms",           t_token_generation},
         {"predicted_per_token_ms", t_token_generation / n_decoded},
-        {"predicted_per_second", 1e3 / t_token_generation * n_decoded},
+        {"predicted_per_second",   1e3 / t_token_generation * n_decoded},
 
-        {"n_ctx", n_ctx},
-        {"n_past", n_past},
+        {"n_ctx",           n_ctx},
+        {"n_past",           n_past},
     };
 
     if (n_draft_total > 0)
@@ -1312,10 +1312,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             llama_model_has_recurrent(model) &&
             slot.params.speculative.n_max > params_base.speculative.n_max) {
             send_error(task,
-                       "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
-                           " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
-                           "; restart the server with a higher speculative stage n_max reservation to reserve checkpoint capacity",
-                       ERROR_TYPE_INVALID_REQUEST);
+                    "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
+                    " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
+                    "; restart the server with a higher --draft-max to reserve checkpoint capacity",
+                    ERROR_TYPE_INVALID_REQUEST);
             return false;
         }
 

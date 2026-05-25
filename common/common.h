@@ -155,6 +155,7 @@ std::string common_speculative_type_name_str();
 enum common_speculative_type common_speculative_type_from_name(const std::string & name);
 std::string common_speculative_type_to_str(enum common_speculative_type type);
 bool common_speculative_type_is_self_spec(enum common_speculative_type type);
+bool common_speculative_type_supports_candidate_seed(enum common_speculative_type type);
 
 enum common_speculative_stage_phase
 {
@@ -274,6 +275,10 @@ struct common_params_speculative {
 
     bool has_dft() const {
         return model_dft != nullptr || !model.empty();
+    }
+
+    bool has_dft_config() const {
+        return has_dft() || !params.empty();
     }
 
     std::vector<common_speculative_stage_params> get_resolved_stages() const;
