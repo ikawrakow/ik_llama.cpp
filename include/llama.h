@@ -399,6 +399,8 @@ extern "C" {
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 
+        const int   * fit_margin_array;
+
         // comma separated list of RPC servers to use for offloading
         const char * rpc_servers;
 

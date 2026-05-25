@@ -1150,6 +1150,10 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     if (!params.tensor_buft_overrides.empty()) {
         params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
+    if (!params.fit_margin_array.empty()) {
+        params.fit_margin_array.push_back(-1);
+        params.fit_margin_array.push_back(0);
+    }
 
     if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
         throw std::runtime_error(string_format(
@@ -2406,6 +2410,23 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         if (!parse_buft_overrides(std::string{ argv[i] }, params.tensor_buft_overrides)) {
             fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
             invalid_param = true;
+        }
+        return true;
+    }
+    if (arg == "--gpu-fit-margin" || arg == "-gfm") {
+        CHECK_ARG
+        auto p = string_split_pairs<int,int>(argv[i], ',');
+        if (p.empty()) {
+            fprintf(stderr, "error: invalid GPU split margin argument: %s\n", argv[i]);
+            invalid_param = true;
+        } else {
+            auto cur_size = params.fit_margin_array.size();
+            params.fit_margin_array.resize(cur_size + 2*p.size());
+            for (auto & pair : p) {
+                params.fit_margin_array[cur_size+0] = pair.first;
+                params.fit_margin_array[cur_size+1] = pair.second;
+                cur_size += 2;
+            }
         }
         return true;
     }
@@ -4533,6 +4554,11 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     }
     if (!mparams.flash_attn && ggml_is_quantized(mparams.type_v)) {
         throw std::runtime_error("Quantized V cache cannot be used without flash attention");
+    }
+    if (!params.fit_margin_array.empty()) {
+        GGML_ASSERT(params.fit_margin_array.size() % 2 == 0 && "Fit margin array does not have even number of elements");
+        GGML_ASSERT(params.fit_margin_array[params.fit_margin_array.size()-2] == -1 && "Fit margin array is not correctly termionated");
+        mparams.fit_margin_array = params.fit_margin_array.data();
     }
 
     return mparams;
