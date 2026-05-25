@@ -553,6 +553,7 @@ int main(int argc, char ** argv) {
     // Necessary similarity of prompt for slot selection
     ctx_server.slot_prompt_similarity = params.slot_prompt_similarity;
     ctx_server.cache_ram_n_min = params.cache_ram_n_min;
+    ctx_server.cache_ram_reuse_n_min = params.cache_ram_reuse_n_min;
     ctx_server.cache_ram_similarity = params.cache_ram_similarity;
 #ifdef SQLITE3_MODERN_CPP_SUPPORT
     auto db_handle = std::make_shared<DatabaseHandle>(params.sql_save_file);

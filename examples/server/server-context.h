@@ -297,6 +297,7 @@ struct server_context {
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
     int32_t cache_ram_n_min = 0;
+    int32_t cache_ram_reuse_n_min = 0;
     float cache_ram_similarity = 0.5f;
 
     ~server_context();

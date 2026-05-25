@@ -1148,7 +1148,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
-            ret->prompt_load(*prompt_cache, task.tokens, (size_t) std::max(0, cache_ram_n_min), cache_ram_similarity);
+            ret->prompt_load(*prompt_cache, task.tokens, (size_t) std::max(0, cache_ram_reuse_n_min), cache_ram_similarity);
             prompt_cache->update();
 
             ret->cache_tokens = ret->server_cached_prompt.tokens.clone(); // recover cache tokens
