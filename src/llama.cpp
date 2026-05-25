@@ -3293,6 +3293,7 @@ static bool llm_load_tensors(
         int n_ubatch,
         int amb,
         int fit_margin,
+        const int * fit_margin_array,
         int worst_case_tokens,
         bool flash_attn,
         bool use_mlock,
@@ -3364,6 +3365,23 @@ static bool llm_load_tensors(
     model.mtp          = mtp;
 
     size_t mem_margin  = fit_margin > 0 ? size_t(fit_margin)*1024*1024 : k_default_mem_margin;
+    auto get_mem_margin = [mem_margin, fit_margin_array, n_gpu = int(model.devices.size()), func = __func__] (int gpu) {
+        size_t result = mem_margin;
+        bool have_margin_override = false;
+        if (fit_margin_array) {
+            for (int i = 0; ; i += 2) {
+                if (fit_margin_array[i] < 0) break;
+                if (fit_margin_array[i] == gpu && fit_margin_array[i+1] >= 0) {
+                    result = size_t(fit_margin_array[i+1])*1024*1024;
+                    have_margin_override = true;
+                }
+            }
+        }
+        if (have_margin_override) {
+            LLAMA_LOG_INFO("%s: using %0.2f MiB as fit margin for GPU %d\n", func, result/1024./1024., gpu);
+        }
+        return result;
+    };
 
     const int n_layer     = hparams.n_layer;
     int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
@@ -3382,10 +3400,11 @@ static bool llm_load_tensors(
     std::vector<size_t> device_mem(model.devices.size());
     for (int i = 0; i < int(device_mem.size()); ++i) {
         device_mem[i] = llama_get_device_memory(model, model.devices[i]);
-        if (device_mem[i] > mem_margin) {
-            device_mem[i] -= mem_margin;
+        auto this_margin = get_mem_margin(i);
+        if (device_mem[i] > this_margin) {
+            device_mem[i] -= this_margin;
         } else {
-            LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the %zu MiB safety margin\n", device_mem[i]/(1024*1024), model.devices[i], mem_margin/(1024*1024));
+            LLAMA_LOG_WARN("Free memory %zu MiB on device %d is less the %zu MiB safety margin\n", device_mem[i]/(1024*1024), model.devices[i], this_margin/(1024*1024));
             device_mem[i] = 0;
         }
     }
@@ -4071,7 +4090,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.extra_output_type,
-            params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin,
+            params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.fit_margin_array,
             params.worst_graph_tokens, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
@@ -6203,6 +6222,7 @@ struct llama_model_params llama_model_default_params() {
         /*.n_last_v                    =*/ -1,
         /*.extra_output_type           =*/ GGML_TYPE_COUNT,
         /*.tensor_split                =*/ nullptr,
+        /*.fit_margin_array            =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
