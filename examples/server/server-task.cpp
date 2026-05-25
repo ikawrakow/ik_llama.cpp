@@ -1073,7 +1073,7 @@ size_t server_prompt_cache::n_tokens() const {
 
 }
 
-bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot, size_t min_reusable_prefix, float min_reusable_fraction) {
     thinking_tokens think_tokens;
     for (auto it = states.begin(); it != states.end(); ++it) {
         think_tokens = it->think_tokens;
@@ -1086,37 +1086,49 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
         tokens_new_ex = tokens_new.get_tokens_exclude_think(ctx, think_tokens);
     }
     else {
-        prompt_tokens = std::move(prompt.tokens); 
+        prompt_tokens = prompt.tokens.clone();
         tokens_new_ex = tokens_new.clone();
     }
     const auto lcp_best = prompt_tokens.get_common_prefix(ctx, tokens_new_ex);
-    float f_keep_best = float(lcp_best.second) / prompt_tokens.size();
+    float f_keep_best = prompt_tokens.empty() ? 0.0f : float(lcp_best.first) / prompt_tokens.size();
     float sim_best = prompt_tokens.get_tokens_similarity(ctx, tokens_new_ex, prompt.n_kept_prompt, prompt.n_discarded_prompt);
-    LLAMA_LOG_INFO(" - looking for better prompt, base f_keep = %.3f, sim = %.3f, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, prompt.n_kept_prompt, prompt.n_discarded_prompt);
+    size_t lcp_best_tokens = lcp_best.first;
+    LLAMA_LOG_INFO(" - looking for better prompt, base f_keep = %.3f, sim = %.3f, lcp = %zu, min_reusable_prefix = %zu, min_reusable_fraction = %.3f, n_keep = %d, n_discarded_prompt = %d\n",
+        f_keep_best, sim_best, lcp_best_tokens, min_reusable_prefix, min_reusable_fraction, prompt.n_kept_prompt, prompt.n_discarded_prompt);
 
     auto it_best = states.end();
 
-    // find the most similar cached prompt, that would also preserve the most context
+    // find the cached prompt with the best reusable prefix; similarity is only a tie-breaker
     for (auto it = states.begin(); it != states.end(); ++it) {
         server_tokens tokens;
         if (think_tokens.exclude) {
             tokens = it->tokens.get_tokens_exclude_think(ctx, think_tokens);
         }
         else {
-            tokens = std::move(it->tokens);
+            tokens = it->tokens.clone();
         }
         const auto lcp_cur = tokens.get_common_prefix(ctx, tokens_new_ex);
-        const float f_keep_cur = float(lcp_cur.first) / tokens.size();
+        const float f_keep_cur = tokens.empty() ? 0.0f : float(lcp_cur.first) / tokens.size();
         const float sim_cur = tokens.get_tokens_similarity(ctx, tokens_new_ex, it->n_kept_prompt, it->n_discarded_prompt);
-        if (sim_best < sim_cur) {
+        const bool prefix_ok = lcp_cur.first >= min_reusable_prefix;
+        const bool fraction_ok = f_keep_cur >= min_reusable_fraction;
+        const bool rewind_ok = it->has_rewind_checkpoint(lcp_cur.first);
+        if (!prefix_ok || !fraction_ok || !rewind_ok) {
+            LLAMA_LOG_INFO(" - skipping prompt cache candidate: lcp = %zu, f_keep = %.3f, sim = %.3f, pos_min = %d, checkpoints = %zu, prefix_ok = %d, fraction_ok = %d, rewind_ok = %d\n",
+                lcp_cur.first, f_keep_cur, sim_cur, it->pos_min, it->checkpoints.size(), (int) prefix_ok, (int) fraction_ok, (int) rewind_ok);
+            continue;
+        }
+        if (lcp_best_tokens < lcp_cur.first || (lcp_best_tokens == lcp_cur.first && sim_best < sim_cur)) {
             f_keep_best = f_keep_cur;
             sim_best = sim_cur;
+            lcp_best_tokens = lcp_cur.first;
             it_best = it;
         }
     }
 
     if (it_best != states.end()) {
-        LLAMA_LOG_INFO(" - found better prompt with f_keep = %.3f, sim = %.3f, n_keep = %d, n_discarded_prompt = %d\n", f_keep_best, sim_best, it_best->n_kept_prompt, it_best->n_discarded_prompt);
+        LLAMA_LOG_INFO(" - found better prompt with f_keep = %.3f, sim = %.3f, lcp = %zu, pos_min = %d, checkpoints = %zu, n_keep = %d, n_discarded_prompt = %d\n",
+            f_keep_best, sim_best, lcp_best_tokens, it_best->pos_min, it_best->checkpoints.size(), it_best->n_kept_prompt, it_best->n_discarded_prompt);
         const size_t size = it_best->data.size();
         const size_t n = llama_state_seq_set_data(ctx, it_best->data.data(), size, id_slot, 0);
         if (n != size) {
@@ -1182,6 +1194,8 @@ server_prompt* server_prompt_cache::alloc(const server_prompt& prompt, size_t st
         /*.n_keep          =*/ prompt.n_kept_prompt,
         /*.n_discarded_prompt     =*/ prompt.n_discarded_prompt,
         /*.think_tokens                   =*/ prompt.think_tokens,
+        /*.pos_min         =*/ prompt.pos_min,
+        /*.pos_max         =*/ prompt.pos_max,
         /*.data            =*/ std::move(state_data),
         /*.checkpoints     =*/ prompt.checkpoints,
     };

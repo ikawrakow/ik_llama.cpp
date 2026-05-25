@@ -202,6 +202,14 @@ llama_build_and_test(
 )
 llama_build_and_test(test-regex-partial.cpp)
 
+llama_build_and_test(test-server-prompt-cache.cpp)
+target_link_libraries(test-server-prompt-cache PRIVATE mtmd)
+target_include_directories(test-server-prompt-cache PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../examples/server
+    ${CMAKE_CURRENT_SOURCE_DIR}/../examples/mtmd
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+)
+
 # llama_target_and_test(test-opt.cpp) # SLOW
 
 llama_target_and_test(test-model-load-cancel.cpp  LABEL "model")
@@ -212,5 +220,3 @@ llama_target_and_test(test-autorelease.cpp        LABEL "model")
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
-
-
