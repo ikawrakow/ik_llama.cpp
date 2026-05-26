@@ -3953,8 +3953,23 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 auto * ctx_companion = slot.spec ? common_speculative_get_companion_ctx(slot.spec) : nullptr;
                 const bool target_trimmed = llama_kv_cache_seq_rm(ctx, slot.id, p0, -1);
                 const bool companion_trimmed = ctx_companion == nullptr || llama_kv_cache_seq_rm(ctx_companion, slot.id, p0, -1);
-                if (!target_trimmed || !companion_trimmed) {
-                    // could not partially delete (likely using a non-Transformer model)
+
+                // When MTP companion ctx fails partial trim at p0 (common after
+                // generation due to unvalidated draft tokens leaving companion
+                // KV positions out of sync with primary), wipe just the
+                // companion entirely so it re-populates on next prefill. The
+                // primary cache is intact and reusable; clearing it discards
+                // hard-won prefill state for an issue confined to the draft
+                // ctx. This restores prefix-cache reuse for recurrent / MTP
+                // models that would otherwise force a full re-prefill on every
+                // request.
+                if (target_trimmed && ctx_companion != nullptr && !companion_trimmed) {
+                    LLAMA_LOG_WARN("MTP companion ctx out-of-sync at p0=%d; wiping companion only, primary cache preserved\n", p0);
+                    llama_kv_cache_seq_rm(ctx_companion, slot.id, -1, -1);
+                }
+                else if (!target_trimmed) {
+                    // Primary trim failed (likely using a non-Transformer model
+                    // that cannot partially delete). Full reset.
                     llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
                     if (ctx_companion != nullptr) {
                         llama_kv_cache_seq_rm(ctx_companion, slot.id, -1, -1);
