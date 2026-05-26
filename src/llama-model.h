@@ -515,6 +515,10 @@ struct llama_model {
         return tensor_overrides;
     }
 
+    bool is_mla_model() const {
+        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
+    }
+
     size_t cache_size(int il, ggml_type type_k, ggml_type type_v, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const;
 
     void set_tensor_overrides(const llama_model_params& params);
