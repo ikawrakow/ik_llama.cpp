@@ -5048,8 +5048,7 @@ static int llama_decode_internal(
     }
 
     // reserve output buffer
-    const bool reserve_all_mtp_embd = has_mtp && cparams.mtp_op_type != MTP_OP_WARMUP;
-    n_outputs_embd = reserve_all_mtp_embd ? n_tokens_all : n_outputs;
+    n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
     if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, std::max<size_t>(n_outputs, n_outputs_embd));
         return -2;
