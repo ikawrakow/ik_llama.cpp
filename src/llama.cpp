@@ -6649,13 +6649,13 @@ struct llama_context * llama_init_from_model(
         params.k_cache_hadamard = false;
     }
     if (params.k_cache_hadamard) {
+        int nok = 0;
         for (int il = 0; il < model->hparams.n_layer; ++il) {
-            int n_head_k = model->hparams.n_embd_head_k(il);
-            if ((n_head_k & ~(n_head_k - 1)) != n_head_k) {
-                LLAMA_LOG_WARN("%s: K-head size %d in layer %d is not a power of 2. Turning K-cache Hadamard off\n",
-                        __func__, n_head_k, il);
-                params.k_cache_hadamard = false;
-            }
+            if (model->hadamard_size_k(il) > 0) ++nok;
+        }
+        if (nok == 0) {
+            LLAMA_LOG_WARN("%s: no layer allows a K-head Hadamard transform. Turning K-cache Hadamard off\n", __func__);
+            params.k_cache_hadamard = false;
         }
     }
 
@@ -6664,13 +6664,13 @@ struct llama_context * llama_init_from_model(
         params.v_cache_hadamard = false;
     }
     if (params.v_cache_hadamard) {
+        int nok = 0;
         for (int il = 0; il < model->hparams.n_layer; ++il) {
-            int n_head_v = model->hparams.n_embd_head_v(il);
-            if ((n_head_v & ~(n_head_v - 1)) != n_head_v) {
-                LLAMA_LOG_WARN("%s: V-head size %d in layer %d is not a power of 2. Turning V-cache Hadamard off\n",
-                        __func__, n_head_v, il);
-                params.v_cache_hadamard = false;
-            }
+            if (model->hadamard_size_v(il) > 0) ++nok;
+        }
+        if (nok == 0) {
+            LLAMA_LOG_WARN("%s: no layer allows a V-head Hadamard transform. Turning V-cache Hadamard off\n", __func__);
+            params.v_cache_hadamard = false;
         }
     }
 

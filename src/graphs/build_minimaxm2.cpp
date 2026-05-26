@@ -103,17 +103,21 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 cb(Kcur, "Kcur_roped", il_id);
 
                 if (cparams.k_cache_hadamard) {
-                    Qcur = ggml_hadamard(ctx0, Qcur, n_embd_head_k);
-                    Kcur = ggml_hadamard(ctx0, Kcur, n_embd_head_k);
-                    cb(Qcur, "Qcur_hadamard", il_id);
-                    cb(Kcur, "Kcur_hadamard", il_id);
+                    if (int block_size = lctx.model.hadamard_size_k(il); block_size > 0) {
+                        Qcur = ggml_hadamard(ctx0, Qcur, block_size);
+                        Kcur = ggml_hadamard(ctx0, Kcur, block_size);
+                        cb(Qcur, "Qcur_hadamard", il_id);
+                        cb(Kcur, "Kcur_hadamard", il_id);
+                    }
                 }
                 ggml_build_forward_expand(gf, Qcur);
                 ggml_build_forward_expand(gf, Kcur);
                 if (cparams.v_cache_hadamard) {
-                    Vcur = ggml_hadamard(ctx0, Vcur, n_embd_head_v);
-                    cb(Vcur, "Vcur_hadamard", il_id);
-                    ggml_build_forward_expand(gf, Vcur);
+                    if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+                        Vcur = ggml_hadamard(ctx0, Vcur, block_size);
+                        cb(Vcur, "Vcur_hadamard", il_id);
+                        ggml_build_forward_expand(gf, Vcur);
+                    }
                 }
 
                 // Store K, V in KV cache
@@ -150,8 +154,10 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 cb(cur, "fa", il_id);
 
                 if (cparams.v_cache_hadamard) {
-                    cur = ggml_hadamard(ctx0, cur, n_embd_head_v);
-                    cb(cur, "fa_h", il_id);
+                    if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+                        cur = ggml_hadamard(ctx0, cur, block_size);
+                        cb(cur, "fa_h", il_id);
+                    }
                 }
 
                 cur = ggml_reshape_2d(ctx0, cur, wo->splits[id]->ne[0], n_tokens);
