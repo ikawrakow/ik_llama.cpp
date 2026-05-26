@@ -5403,6 +5403,11 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 
     struct ggml_object * const obj_new = ggml_new_object(ctx, GGML_OBJECT_TYPE_TENSOR, GGML_TENSOR_SIZE + obj_alloc_size);
 
+    if (!obj_new) {
+        GGML_PRINT("%s: failed to create new object (context memory exhausted)\n", __func__);
+        return NULL;
+    }
+
     // TODO: for recoverable errors, we would need to free the data allocated from the scratch buffer here
 
     struct ggml_tensor * const result = (struct ggml_tensor *)((char *)ctx->mem_buffer + obj_new->offs);
