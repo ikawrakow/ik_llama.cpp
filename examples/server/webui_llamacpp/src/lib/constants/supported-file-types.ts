@@ -1,5 +1,5 @@
 /**
- * Comprehensive dictionary of all supported file types in webui
+ * Comprehensive dictionary of all supported file types in llama-ui
  * Organized by category with TypeScript enums for better type safety
  */
 
@@ -13,10 +13,12 @@ import {
 	FileTypePdf,
 	FileTypeText,
 	MimeTypeAudio,
+	MimeTypeVideo,
 	MimeTypeImage,
 	MimeTypeApplication,
 	MimeTypeText
-} from '$lib/enums/files';
+} from '$lib/enums';
+import { FileExtensionVideo, FileTypeVideo } from '$lib/enums/files.enums';
 
 // File type configuration using enums
 export const AUDIO_FILE_TYPES = {
@@ -27,6 +29,17 @@ export const AUDIO_FILE_TYPES = {
 	[FileTypeAudio.WAV]: {
 		extensions: [FileExtensionAudio.WAV],
 		mimeTypes: [MimeTypeAudio.WAV]
+	}
+} as const;
+
+export const VIDEO_FILE_TYPES = {
+	[FileTypeVideo.MP4]: {
+		extensions: [FileExtensionVideo.MP4],
+		mimeTypes: [MimeTypeVideo.MP4]
+	},
+	[FileTypeVideo.OGG]: {
+		extensions: [FileExtensionVideo.OGG],
+		mimeTypes: [MimeTypeVideo.OGG]
 	}
 } as const;
 
@@ -126,8 +139,13 @@ export const TEXT_FILE_TYPES = {
 		mimeTypes: [MimeTypeText.JAVA]
 	},
 	[FileTypeText.CPP]: {
-		extensions: [FileExtensionText.CPP, FileExtensionText.C, FileExtensionText.H],
-		mimeTypes: [MimeTypeText.CPP_SRC, MimeTypeText.C_SRC, MimeTypeText.C_HDR]
+		extensions: [
+			FileExtensionText.CPP,
+			FileExtensionText.C,
+			FileExtensionText.H,
+			FileExtensionText.HPP
+		],
+		mimeTypes: [MimeTypeText.CPP_SRC, MimeTypeText.CPP_HDR, MimeTypeText.C_SRC, MimeTypeText.C_HDR]
 	},
 	[FileTypeText.PHP]: {
 		extensions: [FileExtensionText.PHP],
@@ -183,10 +201,30 @@ export const TEXT_FILE_TYPES = {
 	},
 	[FileTypeText.LATEX]: {
 		extensions: [FileExtensionText.TEX],
-		mimeTypes: [MimeTypeText.LATEX]
+		mimeTypes: [MimeTypeText.LATEX, MimeTypeText.TEX, MimeTypeText.TEX_APP]
 	},
 	[FileTypeText.BIBTEX]: {
 		extensions: [FileExtensionText.BIB],
 		mimeTypes: [MimeTypeText.BIBTEX]
+	},
+	[FileTypeText.CUDA]: {
+		extensions: [FileExtensionText.CU, FileExtensionText.CUH],
+		mimeTypes: [MimeTypeText.CUDA]
+	},
+	[FileTypeText.VULKAN]: {
+		extensions: [FileExtensionText.COMP],
+		mimeTypes: [MimeTypeText.PLAIN]
+	},
+	[FileTypeText.HASKELL]: {
+		extensions: [FileExtensionText.HS],
+		mimeTypes: [MimeTypeText.HASKELL]
+	},
+	[FileTypeText.CSHARP]: {
+		extensions: [FileExtensionText.CS],
+		mimeTypes: [MimeTypeText.CSHARP]
+	},
+	[FileTypeText.PROPERTIES]: {
+		extensions: [FileExtensionText.PROPERTIES],
+		mimeTypes: [MimeTypeText.PROPERTIES]
 	}
 } as const;
