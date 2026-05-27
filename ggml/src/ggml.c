@@ -6238,17 +6238,17 @@ struct ggml_tensor * ggml_mul_multi_add(
     return result;
 }
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#include <intrin.h>
-#include <ammintrin.h>
-#include <nmmintrin.h>
-#include <immintrin.h>
-#include <stdlib.h>
-static inline int popcount(uint32_t x) { return __popcnt(x); }
-#else
-static inline int popcount(uint32_t x) { return __builtin_popcount(x); }
-#endif
+//#if defined(_MSC_VER)
+//#pragma warning(disable: 4244 4267) // possible loss of data
+//#include <intrin.h>
+//#include <ammintrin.h>
+//#include <nmmintrin.h>
+//#include <immintrin.h>
+//#include <stdlib.h>
+//static inline int popcount(uint32_t x) { return __popcnt(x); }
+//#else
+//static inline int popcount(uint32_t x) { return __builtin_popcount(x); }
+//#endif
 
 struct ggml_tensor * ggml_hadamard(
         struct ggml_context * ctx,
@@ -6256,8 +6256,16 @@ struct ggml_tensor * ggml_hadamard(
         int                   n) {
 
     GGML_ASSERT(n > 1);                    // no point in Hadamard transforms with less than 2 elements
-    GGML_ASSERT(a->ne[0] % n == 0);
-    GGML_ASSERT(popcount(n) == 1);         // must be a power of 2
+    if (a->ne[0] % n != 0) {
+        fprintf(stderr, "%s: head size %ld is not a multiple of block size %d for tensor %s\n", __func__, a->ne[0], n, a->name);
+        GGML_ABORT("Fatal error");
+    }
+    if ((n & ~(n-1)) != n) {
+        fprintf(stderr, "%s: block size %d is not a power of 2 for tensor %s\n", __func__, n, a->name);
+        GGML_ABORT("Fatal error");
+    }
+    //GGML_ASSERT(a->ne[0] % n == 0);
+    //GGML_ASSERT(popcount(n) == 1);         // must be a power of 2
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, a->ne);
 

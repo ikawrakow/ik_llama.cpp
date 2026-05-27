@@ -301,14 +301,18 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             const int64_t n_head_kv     = wk->splits[id]->ne[1] / n_embd_head_k;
 
             if (cparams.k_cache_hadamard) {
-                Qcur = ggml_hadamard(ctx0, Qcur, n_embd_head_k);
-                Kcur = ggml_hadamard(ctx0, Kcur, n_embd_head_k);
-                cb(Qcur, "Qcur_h", il_cb);
-                cb(Kcur, "Kcur_h", il_cb);
+                if (int block_size = lctx.model.hadamard_size_k(il); block_size > 0) {
+                    Qcur = ggml_hadamard(ctx0, Qcur, block_size);
+                    Kcur = ggml_hadamard(ctx0, Kcur, block_size);
+                    cb(Qcur, "Qcur_h", il_cb);
+                    cb(Kcur, "Kcur_h", il_cb);
+                }
             }
             if (cparams.v_cache_hadamard) {
-                Vcur = ggml_hadamard(ctx0, Vcur, n_embd_head_v);
-                cb(Vcur, "Vcur_h", il_cb);
+                if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+                    Vcur = ggml_hadamard(ctx0, Vcur, block_size);
+                    cb(Vcur, "Vcur_h", il_cb);
+                }
             }
 
             GGML_ASSERT(kv_self.size == cparams.n_ctx);
@@ -357,8 +361,10 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             cb(cur, "fa", il_cb);
             cur->op_params[4] = n_swa;
             if (cparams.v_cache_hadamard) {
-                cur = ggml_hadamard(ctx0, cur, n_embd_head_v);
-                cb(cur, "fa_h", il_cb);
+                if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+                    cur = ggml_hadamard(ctx0, cur, block_size);
+                    cb(cur, "fa_h", il_cb);
+                }
             }
             cur = ggml_reshape_2d(ctx0, cur, wo->splits[id]->ne[0], n_tokens);
             if (il == hparams.n_layer-1 && inp_out_ids) {

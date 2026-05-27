@@ -1635,8 +1635,10 @@ static ggml_tensor * llm_build_kqv(
         //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
 
         if (cparams.v_cache_hadamard) {
-            cur = ggml_hadamard(ctx, cur, n_embd_head_v);
-            cb(cur, "fa_h", il);
+            if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+                cur = ggml_hadamard(ctx, cur, block_size);
+                cb(cur, "fa_h", il);
+            }
         }
         cur = ggml_reshape_2d(ctx, cur, n_embd_head_v*n_head, n_tokens);
     } else {
@@ -1802,15 +1804,19 @@ ggml_tensor * llm_build_context::llm_build_kv(
     const llama_cparams & cparams = lctx.cparams;
 
     if (cparams.k_cache_hadamard) {
-        q_cur = ggml_hadamard(ctx, q_cur, hparams.n_embd_head_k(il));
-        if (k_cur) {
-            k_cur = ggml_hadamard(ctx, k_cur, hparams.n_embd_head_k(il));
-            cb(k_cur, "Kcur_hadamard", il);
+        if (int block_size = lctx.model.hadamard_size_k(il); block_size > 0) {
+            q_cur = ggml_hadamard(ctx, q_cur, block_size);
+            if (k_cur) {
+                k_cur = ggml_hadamard(ctx, k_cur, block_size);
+                cb(k_cur, "Kcur_hadamard", il);
+            }
+            cb(q_cur, "Qcur_hadamard", il);
         }
-        cb(q_cur, "Qcur_hadamard", il);
     }
     if (cparams.v_cache_hadamard && v_cur) {
-        v_cur = ggml_hadamard(ctx, v_cur, hparams.n_embd_head_v(il));
+        if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+            v_cur = ggml_hadamard(ctx, v_cur, block_size);
+        }
     }
 
     // these nodes are added to the graph together so that they are not reordered
@@ -2649,14 +2655,18 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cb(Qcur, "Qcur_temp_scaled", il_cb);
                 }
                 if (cparams.k_cache_hadamard) {
-                    Qcur = ggml_hadamard(ctx0, Qcur, hparams.n_embd_head_k(il));
-                    Kcur = ggml_hadamard(ctx0, Kcur, hparams.n_embd_head_k(il));
-                    cb(Qcur, "Qcur_hadamard", il_cb);
-                    cb(Kcur, "Kcur_hadamard", il_cb);
+                    if (int block_size = lctx.model.hadamard_size_k(il); block_size > 0) {
+                        Qcur = ggml_hadamard(ctx0, Qcur, block_size);
+                        Kcur = ggml_hadamard(ctx0, Kcur, block_size);
+                        cb(Qcur, "Qcur_hadamard", il_cb);
+                        cb(Kcur, "Kcur_hadamard", il_cb);
+                    }
                 }
                 if (cparams.v_cache_hadamard) {
-                    Vcur = ggml_hadamard(ctx0, Vcur, hparams.n_embd_head_v(il));
-                    cb(Vcur, "Vcur_hadamard", il_cb);
+                    if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+                        Vcur = ggml_hadamard(ctx0, Vcur, block_size);
+                        cb(Vcur, "Vcur_hadamard", il_cb);
+                    }
                 }
                 ggml_build_forward_expand(gf, Qcur);
                 ggml_build_forward_expand(gf, Kcur);
@@ -2732,8 +2742,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
 
                 if (cparams.v_cache_hadamard) {
-                    cur = ggml_hadamard(ctx0, cur, n_embd_head_v);
-                    cb(cur, "flash_attn_h", il_cb);
+                    if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
+                        cur = ggml_hadamard(ctx0, cur, block_size);
+                        cb(cur, "flash_attn_h", il_cb);
+                    }
                 }
 
                 if (model.layers[il].wqkv_gate) {
