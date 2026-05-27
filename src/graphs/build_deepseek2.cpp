@@ -969,7 +969,7 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
     const float attn_factor_scaled = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
-    struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+    struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
 
     // Token embedding
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
@@ -1226,6 +1226,10 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
     cb(ffn_inp, "mtp_ffn_inp", il);
 
+    if (inp_out_ids) {
+        ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+    }
+
     cur = llm_build_norm(ctx0, ffn_inp, hparams, mtp_layer.ffn_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "ffn_norm", il);
 
@@ -1269,10 +1273,6 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
 
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "result_norm", -1);
-
-    if (inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    }
 
     // If nextn.shared_head_head is missing, use model.output (Main LM Head)
     ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;
