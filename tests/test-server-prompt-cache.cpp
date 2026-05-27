@@ -23,7 +23,7 @@ int main() {
     prompt_aligned.pos_min_prompt = 40;
     prompt_aligned.pos_max_prompt = 64;
     prompt.checkpoints.push_back(prompt_aligned);
-    assert(prompt.has_rewind_checkpoint(64));
+    assert(!prompt.has_rewind_checkpoint(64));
 
     prompt.checkpoints.clear();
     prompt.pos_min = 32;

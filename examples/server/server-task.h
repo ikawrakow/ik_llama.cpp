@@ -404,7 +404,7 @@ struct server_prompt {
             return true;
         }
         for (const auto & checkpoint : checkpoints) {
-            if (checkpoint.pos_max <= (llama_pos) lcp || checkpoint.pos_max_prompt <= (llama_pos) lcp) {
+            if (checkpoint.pos_max <= (llama_pos) lcp) {
                 return true;
             }
         }

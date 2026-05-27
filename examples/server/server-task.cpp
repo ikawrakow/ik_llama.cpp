@@ -1098,7 +1098,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
 
     auto it_best = states.end();
 
-    // find the cached prompt with the best reusable prefix; similarity is only a tie-breaker
+    // find the most similar viable cached prompt; common prefix breaks ties
     for (auto it = states.begin(); it != states.end(); ++it) {
         server_tokens tokens;
         if (think_tokens.exclude) {
@@ -1118,7 +1118,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
                 lcp_cur.first, f_keep_cur, sim_cur, it->pos_min, it->checkpoints.size(), (int) prefix_ok, (int) fraction_ok, (int) rewind_ok);
             continue;
         }
-        if (lcp_best_tokens < lcp_cur.first || (lcp_best_tokens == lcp_cur.first && sim_best < sim_cur)) {
+        if (sim_best < sim_cur || (sim_best == sim_cur && lcp_best_tokens < lcp_cur.first)) {
             f_keep_best = f_keep_cur;
             sim_best = sim_cur;
             lcp_best_tokens = lcp_cur.first;
