@@ -1,5 +1,5 @@
 set(ARCH_FLAGS "")
-if (NOT MSVC)
+if (NOT MSVC AND GGML_NATIVE)
     list(APPEND ARCH_FLAGS -march=native)
 endif()
 message(STATUS "ARCH_FLAGS = ${ARCH_FLAGS}")

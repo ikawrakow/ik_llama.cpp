@@ -174,7 +174,9 @@ struct create_tensors_helper : public create_tensors_helper_interface {
         return ctx_map.at(model.buft_layer[i].buft);
     }
     inline ggml_context * ctx_for_layer_split(int i) const {
-        return ctx_map.at(model.buft_layer[i].buft_matrix);
+        const bool is_mtp_layer = model.hparams.nextn_predict_layers > 0 &&
+                                  static_cast<uint32_t>(i) >= model.hparams.n_layer - model.hparams.nextn_predict_layers;
+        return is_mtp_layer ? ctx_map.at(model.buft_layer[i].buft) : ctx_map.at(model.buft_layer[i].buft_matrix);
     }
 
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
@@ -2732,6 +2734,10 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
 
+        if (is_mtp_layer) {
+            ctx_split = ctx_layer;
+        }
+
         int flags = 0;
         // Skip loading MTP layers if the feature is disabled
         if (!model.mtp) {
@@ -2783,7 +2789,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
             layer.ffn_exp_probs_b = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, flags);
 
             // MoE branch
-            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, flags);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, flags, 0, ffn_ctx);
 
             // Shared expert
             if (n_expert_shared > 0) {
