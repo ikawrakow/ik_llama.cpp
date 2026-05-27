@@ -524,7 +524,7 @@ struct llama_model {
         // Note: we do not include 32 as an option because the CUDA Hadamard implementation
         //       does not hcurrently andle a block size of 32.
         for (int i = 512; i >= 64; i >>= 1) {
-            if (head_size % i) return i;
+            if (head_size % i == 0) return i;
         }
         return 0;
     }
