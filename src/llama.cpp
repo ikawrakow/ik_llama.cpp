@@ -770,7 +770,7 @@ static bool llama_kv_cache_init(
     const struct llama_hparams & hparams = model.hparams;
 
     const int64_t  n_layer = model.mtp ? hparams.n_layer
-                                  : hparams.n_layer - hparams.nextn_predict_layers;
+                                       : hparams.n_layer - hparams.nextn_predict_layers;
 
     cache.has_shift = false;
 
@@ -818,11 +818,12 @@ static bool llama_kv_cache_init(
     // count used buffer types
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
-        const bool qwen_mtp = (model.arch == LLM_ARCH_QWEN35 ||
-                               model.arch == LLM_ARCH_QWEN35MOE) && hparams.nextn_predict_layers > 0;
-        const int64_t n_mtp_first = n_layer - hparams.nextn_predict_layers;
+        const bool is_mtp = (model.arch == LLM_ARCH_GLM_DSA ||
+                             model.arch == LLM_ARCH_QWEN35 ||
+                             model.arch == LLM_ARCH_QWEN35MOE) && hparams.nextn_predict_layers > 0;
+        const int64_t n_mtp_first = hparams.n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
-            const bool is_mtp_tail = qwen_mtp && i >= n_mtp_first;
+            const bool is_mtp_tail = is_mtp && i >= n_mtp_first;
             if ((split_cache || replicate_mla) && !is_mtp_tail) {
                 buft_layer_count[model.buft_layer[i].buft_matrix]++;
                 if (model.buft_layer[i].buft != model.buft_layer[i].buft_matrix) {
@@ -898,7 +899,7 @@ static bool llama_kv_cache_init(
 
     int n_mla = 0;
     int n_kv_active_layers = 0;
-    const int64_t n_mtp_first_layer = n_layer - hparams.nextn_predict_layers;
+    const int64_t n_mtp_first_layer = hparams.n_layer - hparams.nextn_predict_layers;
     for (int i = 0; i < (int) n_layer; i++) {
         // For MTP-only context, skip KV allocation for non-MTP layers
         if (cparams.mtp_op_type != MTP_OP_NONE && i < (int)n_mtp_first_layer) {
@@ -915,7 +916,8 @@ static bool llama_kv_cache_init(
         const uint32_t n_embd_head_k= hparams.n_embd_head_k(i);
 
         const bool is_mtp_tail_layer = (model.arch == LLM_ARCH_QWEN35 ||
-                model.arch == LLM_ARCH_QWEN35MOE) &&
+                                        model.arch == LLM_ARCH_QWEN35MOE ||
+                                        model.arch == LLM_ARCH_GLM_DSA) &&
                 hparams.nextn_predict_layers > 0 && i >= (int)n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();

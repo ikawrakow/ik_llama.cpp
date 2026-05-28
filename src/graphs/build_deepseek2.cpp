@@ -32,6 +32,9 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
     const uint32_t n_embd_head_v       = hparams.n_embd_head_v(il);
 
     auto cache_repl = (const ggml_split_tensor_t *)kv_self.k_l[il]->extra;
+    if (!cache_repl) {
+        LLAMA_LOG_ERROR("%s: no cache split for layer %d?\n", __func__, il);
+    }
     GGML_ASSERT(cache_repl);
     GGML_ASSERT(cache_repl->n_device == n_device);
 
