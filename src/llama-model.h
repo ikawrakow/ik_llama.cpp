@@ -428,6 +428,8 @@ struct llama_model {
     struct ggml_tensor * mtp_post_proj = nullptr;
     struct ggml_tensor * mtp_token_ordering = nullptr;
     struct ggml_tensor * mtp_centroids = nullptr;
+    struct ggml_tensor * dflash_fc = nullptr;
+    struct ggml_tensor * dflash_hidden_norm = nullptr;
 
     struct ggml_tensor * output_norm;
     struct ggml_tensor * output_norm_b;
@@ -621,4 +623,3 @@ struct LLM_TN {
 std::string llama_model_ftype_name(llama_ftype ftype);
 
 const char * llama_model_type_name(e_model type);
-

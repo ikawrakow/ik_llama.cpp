@@ -148,6 +148,9 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     if (stage.has_p_min_override()) {
         result.p_min = stage.p_min;
     }
+    if (stage.has_dflash_cross_ctx_override()) {
+        result.dflash_cross_ctx = stage.dflash_cross_ctx;
+    }
     if (stage.has_ngram_size_n_override()) {
         result.ngram_size_n = stage.ngram_size_n;
         result.ngram_mod.reset();
@@ -247,8 +250,12 @@ bool common_speculative_validate_chain(const common_params_speculative & params,
             return fail("speculative stage has n_min greater than n_max");
         }
 
-        if (stage.type == COMMON_SPECULATIVE_TYPE_DRAFT && !params.has_dft()) {
-            return fail("draft speculative stage requires a draft model or draft params");
+        if ((stage.type == COMMON_SPECULATIVE_TYPE_DRAFT || stage.type == COMMON_SPECULATIVE_TYPE_DFLASH) && !params.has_dft()) {
+            return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires a draft model or draft params");
+        }
+
+        if (stage.type == COMMON_SPECULATIVE_TYPE_DFLASH && stage_params.dflash_cross_ctx < 1) {
+            return fail("dflash speculative stage requires cross_ctx >= 1");
         }
     }
 
@@ -871,6 +878,13 @@ static void common_speculative_stage_apply_kv(
         }
         return;
     }
+    if (key == "cross_ctx" || key == "dflash_cross_ctx") {
+        stage.dflash_cross_ctx = std::stoi(value_raw);
+        if (stage.dflash_cross_ctx < 1) {
+            throw std::invalid_argument("speculative stage dflash cross_ctx must be at least 1");
+        }
+        return;
+    }
     if (key == "ngram_size_n") {
         stage.ngram_size_n = std::stoi(value_raw);
         if (stage.ngram_size_n < 1 || stage.ngram_size_n > 1024) {
@@ -1468,8 +1482,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             throw std::invalid_argument("--spec-type cannot be combined with --spec-stage; use only --spec-stage for explicit stage chains");
         }
 
-        const auto type = common_speculative_type_from_name(argv[i]);
-        if (type == COMMON_SPECULATIVE_TYPE_NONE || type == COMMON_SPECULATIVE_TYPE_MTP || common_speculative_type_is_self_spec(type)) {
+        const auto stage = common_speculative_stage_from_arg(argv[i]);
+        const auto type = stage.type;
+        if (type == COMMON_SPECULATIVE_TYPE_NONE || type == COMMON_SPECULATIVE_TYPE_DFLASH || type == COMMON_SPECULATIVE_TYPE_MTP || common_speculative_type_is_self_spec(type)) {
+            params.speculative = params.speculative.with_stage_overrides(stage);
             params.speculative.type = type;
             if (type == COMMON_SPECULATIVE_TYPE_MTP) {
                 params.has_mtp = true;
@@ -3178,7 +3194,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*", "--spec-stage SPEC[:k=v,...]",    "explicit speculative stage. repeat once for a supported two-stage chain.\n"
                                                               "examples: --spec-stage ngram-mod:n_max=64,n_min=2 --spec-stage mtp:n_max=1\n"
                                                               "supported two-stage shape in this PR: self-spec first, then mtp or draft fallback" });
-    options.push_back({ "*", "--spec-type Name [none | mtp | ngram-cache | ngram-simple | ngram-map-k | ngram-map-k4v | ngram-mod | suffix]", "single-stage speculative selection when --spec-stage is not used (default: %d)\n", (int)params.speculative.type});
+    options.push_back({ "*", "--spec-type Name[:k=v,...] [none | dflash | mtp | ngram-cache | ngram-simple | ngram-map-k | ngram-map-k4v | ngram-mod | suffix]", "single-stage speculative selection when --spec-stage is not used (default: %d)\n", (int)params.speculative.type});
     options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n",params.speculative.ngram_size_n });
 
     options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });

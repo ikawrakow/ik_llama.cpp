@@ -112,6 +112,9 @@ void llm_build_context::init() {
     lctx.inp_pos_bucket    = nullptr;
     lctx.inp_embd_enc      = nullptr;
     lctx.inp_KQ_mask_cross = nullptr;
+    lctx.inp_dflash_target_features = nullptr;
+    lctx.inp_dflash_pos_ctx = nullptr;
+    lctx.inp_dflash_kq_mask = nullptr;
 }
 
 void llm_build_context::free() {
@@ -2371,6 +2374,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_GEMMA4_MTP:
             {
                 result = llm.build_gemma4_mtp();
+            } break;
+        case LLM_ARCH_DFLASH_DRAFT:
+            {
+                result = llm.build_dflash();
             } break;
         case LLM_ARCH_STARCODER2:
             {

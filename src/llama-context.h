@@ -278,6 +278,25 @@ struct llama_context {
     size_t draft_input_hidden_state_n_floats = 0;
     std::vector<float> draft_input_hidden_state_owned;
 
+    const float * dflash_target_features = nullptr;
+    size_t dflash_target_features_n_floats = 0;
+    int32_t dflash_target_features_n_rows = 0;
+    std::vector<float> dflash_target_features_owned;
+    std::vector<float> dflash_target_features_padded;
+    std::vector<float> dflash_feature_view_buffer;
+    std::vector<llama_pos> dflash_pos_ctx_data;
+    std::vector<float> dflash_kq_mask_data;
+
+    struct dflash_capture_state {
+        std::vector<int32_t> layer_ids;
+        std::vector<std::vector<float>> layer_rows;
+        int32_t row_count = 0;
+        int32_t row_width = 0;
+        ggml_backend_sched_eval_callback prev_cb_eval = nullptr;
+        void * prev_cb_eval_user_data = nullptr;
+    };
+    std::unique_ptr<dflash_capture_state> dflash_capture;
+
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
@@ -297,6 +316,9 @@ struct llama_context {
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
     struct ggml_tensor * inp_mtp_states = nullptr;
+    struct ggml_tensor * inp_dflash_target_features = nullptr; // F32 [n_target_features, cross_ctx]
+    struct ggml_tensor * inp_dflash_pos_ctx = nullptr;         // I32 [cross_ctx]
+    struct ggml_tensor * inp_dflash_kq_mask = nullptr;         // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
@@ -320,4 +342,3 @@ struct llama_context {
     void set_mtp_op_type(llama_mtp_op_type value);
 
 };
-

@@ -3,6 +3,7 @@
 #include "llama-model-loader.h"
 #include "llama-model.h"
 
+#include <limits>
 #include <map>
 
 #define LLAMA_MAX_EXPERTS 512  // Qwen3 Next
@@ -33,6 +34,89 @@ static inline const char * llm_expert_gating_func_name(llm_expert_gating_func_ty
         case LLM_EXPERT_GATING_FUNC_SIGMOID: return "sigmoid";
         case LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT: return "weight";
         default: return "none";
+    }
+}
+
+static bool load_dflash_target_layer_ids(
+        llama_model_loader & ml,
+        const std::string & key,
+        llama_hparams & hparams,
+        bool required) {
+    const int kid = gguf_find_key(ml.meta, key.c_str());
+    if (kid < 0 || gguf_get_kv_type(ml.meta, kid) != GGUF_TYPE_ARRAY) {
+        if (required) {
+            throw std::runtime_error(format("array key not found in model: %s", key.c_str()));
+        }
+        return false;
+    }
+
+    const enum gguf_type type = gguf_get_arr_type(ml.meta, kid);
+    if (type != GGUF_TYPE_UINT32 && type != GGUF_TYPE_INT32) {
+        throw std::runtime_error(format("dflash: %s must be a uint32/int32 array", key.c_str()));
+    }
+
+    const size_t n = gguf_get_arr_n(ml.meta, kid);
+    if (n == 0) {
+        throw std::runtime_error(format("dflash: %s must not be empty", key.c_str()));
+    }
+    if (n > 8) {
+        throw std::runtime_error(format("dflash: %s has %zu entries, max is 8", key.c_str(), n));
+    }
+
+    hparams.dflash_n_target_layers = (uint32_t) n;
+    for (uint32_t & id : hparams.dflash_target_layer_ids) {
+        id = 0;
+    }
+
+    const void * data = gguf_get_arr_data(ml.meta, kid);
+    for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+        if (type == GGUF_TYPE_INT32) {
+            const int32_t id = ((const int32_t *) data)[i];
+            if (id < 0) {
+                throw std::runtime_error(format("dflash: %s contains negative layer id %d", key.c_str(), id));
+            }
+            hparams.dflash_target_layer_ids[i] = (uint32_t) id;
+        } else {
+            hparams.dflash_target_layer_ids[i] = ((const uint32_t *) data)[i];
+        }
+    }
+
+    return true;
+}
+
+static void validate_dflash_hparams(llama_hparams & hparams, llm_arch arch) {
+    if (hparams.dflash_block_size <= 1) {
+        throw std::runtime_error(format("%s: dflash block_size must be > 1", llama_model_arch_name(arch)));
+    }
+    if (hparams.dflash_n_target_layers == 0) {
+        throw std::runtime_error(format("%s: dflash target_layer_ids are required", llama_model_arch_name(arch)));
+    }
+
+    if (arch == LLM_ARCH_DFLASH_DRAFT && hparams.n_embd > 0) {
+        const uint32_t expected_n_target_features = hparams.n_embd * hparams.dflash_n_target_layers;
+        if (expected_n_target_features > 0 && hparams.dflash_n_target_features != expected_n_target_features) {
+            LLAMA_LOG_WARN(
+                "%s: overriding dflash n_target_features from %u to %u based on n_embd=%u and n_target_layers=%u\n",
+                llama_model_arch_name(arch),
+                hparams.dflash_n_target_features,
+                expected_n_target_features,
+                hparams.n_embd,
+                hparams.dflash_n_target_layers);
+            hparams.dflash_n_target_features = expected_n_target_features;
+        }
+    }
+
+    if (hparams.dflash_n_target_features == 0) {
+        throw std::runtime_error(format(
+            "%s: dflash n_target_features must be > 0",
+            llama_model_arch_name(arch)));
+    }
+    if (hparams.dflash_n_target_features % hparams.dflash_n_target_layers != 0) {
+        throw std::runtime_error(format(
+            "%s: dflash n_target_features=%u must be divisible by n_target_layers=%u",
+            llama_model_arch_name(arch),
+            hparams.dflash_n_target_features,
+            hparams.dflash_n_target_layers));
     }
 }
 
@@ -773,6 +857,18 @@ void llm_load_hparams(
                     case 5376: model.type = e_model::MODEL_32B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
+            } break;
+        case LLM_ARCH_DFLASH_DRAFT:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_DFLASH_BLOCK_SIZE,        hparams.dflash_block_size, false);
+                ml.get_key(LLM_KV_DFLASH_MASK_TOKEN_ID,     hparams.dflash_mask_token_id, false);
+                ml.get_key(LLM_KV_DFLASH_N_TARGET_FEATURES, hparams.dflash_n_target_features, false);
+                load_dflash_target_layer_ids(ml, LLM_KV(model.arch)(LLM_KV_DFLASH_TARGET_LAYER_IDS), hparams, false);
+                validate_dflash_hparams(hparams, model.arch);
+
+                hparams.n_layer_kv_from_start = hparams.n_layer;
+                model.type = e_model::MODEL_UNKNOWN;
             } break;
 
         case LLM_ARCH_STARCODER2:

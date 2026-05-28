@@ -3125,6 +3125,10 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight") {
             continue;
         }
+        if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight") {
+            output_misc_size += size;
+            continue;
+        }
         auto pos = name.find("blk.");
         if (pos != 0) {
             LLAMA_LOG_WARN("Oops: tensor with strange name %s\n", name.c_str());
@@ -4977,6 +4981,61 @@ static bool prepare_mtp_graph_inputs(
     return true;
 }
 
+static bool prepare_dflash_graph_inputs(
+        struct llama_context & lctx,
+        uint32_t n_tokens) {
+    ggml_tensor * target_hidden = lctx.inp_dflash_target_features;
+    ggml_tensor * pos_ctx = lctx.inp_dflash_pos_ctx;
+    ggml_tensor * kq_mask = lctx.inp_dflash_kq_mask;
+
+    if (target_hidden == nullptr || pos_ctx == nullptr || kq_mask == nullptr) {
+        LLAMA_LOG_ERROR("%s: DFlash graph inputs are not initialized\n", __func__);
+        return false;
+    }
+
+    const float * src = lctx.dflash_target_features;
+    const size_t total_floats = lctx.dflash_target_features_n_floats;
+    const int32_t n_rows = lctx.dflash_target_features_n_rows;
+    const int32_t width = (int32_t) target_hidden->ne[0];
+    const int32_t cross_ctx = (int32_t) target_hidden->ne[1];
+    const int32_t n_mask_tokens = (int32_t) kq_mask->ne[1];
+    const int32_t n_kv_total = (int32_t) kq_mask->ne[0];
+
+    if (src == nullptr || total_floats == 0 || n_rows <= 0) {
+        LLAMA_LOG_ERROR("%s: missing DFlash target features\n", __func__);
+        return false;
+    }
+
+    if (n_rows > cross_ctx || total_floats != (size_t) n_rows * (size_t) width) {
+        LLAMA_LOG_ERROR("%s: invalid DFlash target feature shape (rows=%d width=%d floats=%zu cross_ctx=%d)\n",
+                __func__, n_rows, width, total_floats, cross_ctx);
+        return false;
+    }
+
+    lctx.dflash_target_features_padded.assign((size_t) cross_ctx * (size_t) width, 0.0f);
+    const size_t dst_offset = (size_t) (cross_ctx - n_rows) * (size_t) width;
+    std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset);
+    ggml_backend_tensor_set(target_hidden, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(target_hidden));
+
+    lctx.dflash_pos_ctx_data.resize((size_t) cross_ctx);
+    for (int32_t i = 0; i < cross_ctx; ++i) {
+        lctx.dflash_pos_ctx_data[i] = i;
+    }
+    ggml_backend_tensor_set(pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(pos_ctx));
+
+    lctx.dflash_kq_mask_data.assign((size_t) n_kv_total * (size_t) n_mask_tokens, -INFINITY);
+    const int32_t left_pad = cross_ctx - n_rows;
+    for (uint32_t j = 0; j < n_tokens; ++j) {
+        float * row = lctx.dflash_kq_mask_data.data() + (size_t) j * (size_t) n_kv_total;
+        for (int32_t i = left_pad; i < n_kv_total; ++i) {
+            row[i] = 0.0f;
+        }
+    }
+    ggml_backend_tensor_set(kq_mask, lctx.dflash_kq_mask_data.data(), 0, ggml_nbytes(kq_mask));
+
+    return true;
+}
+
 // decode a batch of tokens by evaluating the transformer
 //
 //   - lctx:      llama context
@@ -5265,6 +5324,12 @@ static int llama_decode_internal(
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
             if (!prepare_mtp_graph_inputs(lctx, cur_token, n_tokens, n_tokens_all)) {
+                return GGML_STATUS_FAILED;
+            }
+        }
+
+        if (lctx.model.arch == LLM_ARCH_DFLASH_DRAFT) {
+            if (!prepare_dflash_graph_inputs(lctx, n_tokens)) {
                 return GGML_STATUS_FAILED;
             }
         }
@@ -7371,6 +7436,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
+        case LLM_ARCH_DFLASH_DRAFT:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

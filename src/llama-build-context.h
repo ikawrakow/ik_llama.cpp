@@ -242,6 +242,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_gemma4_mtp();
 
+    ggml_cgraph * build_dflash();
+
     ggml_cgraph * build_starcoder2();
 
     ggml_cgraph * build_mamba();

@@ -140,6 +140,7 @@ thinking_tokens thinking_tokens_from_string(const std::string& format);
 enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
+    COMMON_SPECULATIVE_TYPE_DFLASH,        // DFlash draft model
     COMMON_SPECULATIVE_TYPE_MTP,           // MTP model
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
@@ -162,6 +163,7 @@ struct common_speculative_stage_params {
     int32_t n_max = -1;
     int32_t n_min = -1;
     float   p_min = -1.0f;
+    int32_t dflash_cross_ctx = -1;
 
     uint16_t ngram_size_n = 0;
     uint16_t ngram_size_m = 0;
@@ -173,6 +175,7 @@ struct common_speculative_stage_params {
     bool has_n_max_override() const { return n_max >= 0; }
     bool has_n_min_override() const { return n_min >= 0; }
     bool has_p_min_override() const { return p_min >= 0.0f; }
+    bool has_dflash_cross_ctx_override() const { return dflash_cross_ctx >= 0; }
     bool has_ngram_size_n_override() const { return ngram_size_n > 0; }
     bool has_ngram_size_m_override() const { return ngram_size_m > 0; }
     bool has_ngram_min_hits_override() const { return ngram_min_hits > 0; }
@@ -204,6 +207,7 @@ struct common_params_speculative {
     int32_t n_max = 16; // number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
     std::vector<common_speculative_stage_params> stages; // explicit stage chain for single-spec or self-spec + model fallback
+    int32_t dflash_cross_ctx = 512; // target-feature context window for DFlash
 
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min = 0.75f; // minimum speculative decoding probability (greedy)
@@ -516,7 +520,7 @@ struct gpt_params {
     bool do_checkpoint = false;               // do checkpoint for recurrent models only
     int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
     int32_t ctx_checkpoints_interval = 512;   // minimum number of tokens between each context checkpoints
-    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint 
+    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens

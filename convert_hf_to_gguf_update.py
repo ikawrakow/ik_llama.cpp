@@ -78,6 +78,10 @@ models = [
     {"name": "refact",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/smallcloudai/Refact-1_6-base", },
     {"name": "command-r",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/CohereForAI/c4ai-command-r-v01", },
     {"name": "qwen2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen1.5-7B", },
+    {"name": "qwen35",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3.5-9B-Instruct", "chkhsh": "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4", },
+    {"name": "qwen35",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3.5-27B", "chkhsh": "99cc61242f7106804ce24fdf3a6451e4a55251078dffd5453c806e11b2310db3", },
+    {"name": "qwen35",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/z-lab/Qwen3.5-27B-DFlash", "chkhsh": "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f", },
+    {"name": "qwen35",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B", "chkhsh": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", },
     {"name": "olmo",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/allenai/OLMo-1.7-7B-hf", },
     {"name": "dbrx",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/databricks/dbrx-base", },
     {"name": "jina-v2-en",     "tokt": TOKENIZER_TYPE.WPM, "repo": "https://huggingface.co/jinaai/jina-embeddings-v2-base-en", }, # WPM!
@@ -154,39 +158,46 @@ for model in models:
     if tokt == TOKENIZER_TYPE.SPM or tokt == TOKENIZER_TYPE.UGM:
         continue
 
-    # Skip if the tokenizer folder does not exist or there are other download issues previously
-    if not os.path.exists(f"models/tokenizers/{name}"):
-        logger.warning(f"Directory for tokenizer {name} not found. Skipping...")
-        continue
+    chkhsh = model.get("chkhsh")
 
-    # create the tokenizer
-    try:
-        if name == "t5":
-            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
-    except (OSError, TypeError) as e:
-        logger.error(f"Error loading tokenizer for model {name}. The model may not exist or is not accessible with the provided token. Error: {e}")
-        continue  # Skip to the next model if the tokenizer can't be loaded
+    if chkhsh is None:
+        # Skip if the tokenizer folder does not exist or there are other download issues previously
+        if not os.path.exists(f"models/tokenizers/{name}"):
+            logger.warning(f"Directory for tokenizer {name} not found. Skipping...")
+            continue
 
-    chktok = tokenizer.encode(CHK_TXT)
-    chkhsh = sha256(str(chktok).encode()).hexdigest()
+        # create the tokenizer
+        try:
+            if name == "t5":
+                tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
+            else:
+                tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
+        except (OSError, TypeError) as e:
+            logger.error(f"Error loading tokenizer for model {name}. The model may not exist or is not accessible with the provided token. Error: {e}")
+            continue  # Skip to the next model if the tokenizer can't be loaded
+
+        chktok = tokenizer.encode(CHK_TXT)
+        chkhsh = sha256(str(chktok).encode()).hexdigest()
 
     logger.info(f"model: {name}")
     logger.info(f"tokt: {tokt}")
     logger.info(f"repo: {model['repo']}")
-    logger.info(f"chktok: {chktok}")
     logger.info(f"chkhsh: {chkhsh}")
 
-    # print the "pre_tokenizer" content from the tokenizer.json
-    with open(f"models/tokenizers/{name}/tokenizer.json", "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-        normalizer = cfg["normalizer"]
-        logger.info("normalizer: " + json.dumps(normalizer, indent=4))
-        pre_tokenizer = cfg["pre_tokenizer"]
-        logger.info("pre_tokenizer: " + json.dumps(pre_tokenizer, indent=4))
-        if "ignore_merges" in cfg["model"]:
-            logger.info("ignore_merges: " + json.dumps(cfg["model"]["ignore_merges"], indent=4))
+    if model.get("chkhsh") is None:
+        logger.info(f"chktok: {chktok}")
+
+        # print the "pre_tokenizer" content from the tokenizer.json
+        with open(f"models/tokenizers/{name}/tokenizer.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            normalizer = cfg["normalizer"]
+            logger.info("normalizer: " + json.dumps(normalizer, indent=4))
+            pre_tokenizer = cfg["pre_tokenizer"]
+            logger.info("pre_tokenizer: " + json.dumps(pre_tokenizer, indent=4))
+            if "ignore_merges" in cfg["model"]:
+                logger.info("ignore_merges: " + json.dumps(cfg["model"]["ignore_merges"], indent=4))
+    else:
+        logger.info("using manually provided tokenizer hash")
 
     logger.info("")
 
@@ -353,6 +364,6 @@ logger.info("\nRun the following commands to generate the vocab files for testin
 for model in models:
     name = model["name"]
 
-    print(f"python3 convert_hf_to_gguf.py models/tokenizers/{name}/ --outfile models/ggml-vocab-{name}.gguf --vocab-only") # noqa: NP100
+    logger.info(f"python3 convert_hf_to_gguf.py models/tokenizers/{name}/ --outfile models/ggml-vocab-{name}.gguf --vocab-only") # noqa: NP100
 
 logger.info("\n")
