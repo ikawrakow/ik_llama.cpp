@@ -32,6 +32,9 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
     const uint32_t n_embd_head_v       = hparams.n_embd_head_v(il);
 
     auto cache_repl = (const ggml_split_tensor_t *)kv_self.k_l[il]->extra;
+    if (!cache_repl) {
+        LLAMA_LOG_ERROR("%s: no cache split for layer %d?\n", __func__, il);
+    }
     GGML_ASSERT(cache_repl);
     GGML_ASSERT(cache_repl->n_device == n_device);
 
@@ -799,6 +802,32 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
+        if (model.arch != LLM_ARCH_GLM_DSA || !model.mtp || hparams.nextn_predict_layers == 0) {
+            GGML_ABORT("MTP tail is only wired for GLM_DSA models with NextN layers enabled");
+        }
+
+        ggml_tensor * hidden_states_from_main_model;
+
+        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
+            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+        } else {
+            hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
+        }
+        ggml_set_name(hidden_states_from_main_model, "inp_mtp_states");
+        ggml_set_input(hidden_states_from_main_model);
+
+        lctx.inp_mtp_states = hidden_states_from_main_model;
+
+        const int il_mtp = hparams.n_layer - 1;
+        const auto & mtp_layer = model.layers[il_mtp];
+
+        cur = build_deepseek2_mtp(mtp_layer, hidden_states_from_main_model, gf, inp_pos, rope_cache);
+
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
+
     int n_active_layers = hparams.n_layer - hparams.nextn_predict_layers;
     for (int il = 0; il < n_active_layers; ++il) {
         struct ggml_tensor * inpSA = inpL;
@@ -815,7 +844,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                                                   use_f32_attn_precision, is_lite, pp_opt);
         }
 
-        if (il == n_active_layers - 1) {
+        if (il == n_active_layers - 1 && !lctx.cparams.mtp) {
             // skip computing output for unused tokens
             struct ggml_tensor * inp_out_ids = build_inp_out_ids();
             n_tokens = n_outputs;
@@ -913,4 +942,115 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     ggml_build_forward_expand(gf, cur);
 
     return gf;
+}
+
+struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
+    const llama_layer & mtp_layer,
+    struct ggml_tensor * prev_embeddings,
+    struct ggml_cgraph * gf,
+    struct ggml_tensor * inp_pos,
+    [[maybe_unused]] struct ggml_tensor * rope_cache) {
+#ifdef GGML_USE_VULKAN
+    constexpr bool use_f32_attn_precision = true;
+#else
+    constexpr bool use_f32_attn_precision = false;
+#endif
+
+    const int il = hparams.n_layer - 1;
+
+    const uint32_t n_embd_head_k_mtp   = hparams.n_embd_head_k(il);
+
+    const float mscale = attn_factor * (1.0f + hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
+    const float kq_scale = 1.0f*mscale*mscale/sqrtf(float(n_embd_head_k_mtp));
+    const float attn_factor_scaled = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
+
+    struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+
+    // Token embedding
+    ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
+    if (mtp_embd_weights == nullptr) {
+        mtp_embd_weights = model.tok_embd;
+    }
+    ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
+
+    // Normalize and project
+    ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
+    ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
+
+    if (mtp_layer.nextn.eh_proj == nullptr) {
+        GGML_ABORT("GLM_DSA MTP requires nextn.eh_proj");
+    }
+
+    ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
+    cb(combined, "mtp_concat", il);
+    ggml_tensor * cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
+
+    struct ggml_tensor * inpSA = cur;
+
+    cur = build_deepseek2_layer_attention(gf, il, cur, KQ_mask, inp_pos, nullptr,
+                                                  kq_scale, attn_factor_scaled,
+                                                  use_f32_attn_precision, false, false);
+
+    // Residual + FFN
+    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+    cb(ffn_inp, "mtp_ffn_inp", il);
+
+    if (inp_out_ids) {
+        ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+    }
+
+    cur = llm_build_norm(ctx0, ffn_inp, hparams, mtp_layer.ffn_norm, NULL, LLM_NORM_RMS, cb, il);
+    cb(cur, "ffn_norm", il);
+
+    // MoE FFN (MTP layer is always in the MoE range, not dense)
+    {
+        ggml_tensor * moe_out =
+            llm_build_moe_ffn(ctx0, lctx, cur,
+                    mtp_layer.ffn_gate_inp,
+                    mtp_layer.ffn_up_exps,
+                    mtp_layer.ffn_gate_exps,
+                    mtp_layer.ffn_down_exps,
+                    mtp_layer.ffn_exp_probs_b,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, hparams.expert_weights_norm,
+                    true, hparams.expert_weights_scale,
+                    (enum llm_expert_gating_func_type) hparams.expert_gating_func,
+                    cb, il, gf, false, mtp_layer.ffn_up_gate_exps);
+        cb(moe_out, "ffn_moe_out", il);
+
+        // Shared Expert FFN
+        ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
+                mtp_layer.ffn_up_shexp,   NULL, NULL,
+                mtp_layer.ffn_gate_shexp, NULL, NULL,
+                mtp_layer.ffn_down_shexp, NULL, NULL,
+                NULL,
+                LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+        cb(ffn_shexp, "ffn_shexp", il);
+
+        cur = ggml_add(ctx0, moe_out, ffn_shexp);
+        cb(cur, "ffn_out", il);
+    }
+
+    cur = ggml_add(ctx0, cur, ffn_inp);
+    cur = lctx.cvec.apply_to(ctx0, cur, il);
+    cb(cur, "mtp_ffn_out_resid", il);
+
+    // Output head
+    if (mtp_layer.nextn.shared_head_norm == nullptr) {
+        GGML_ABORT("GLM_DSA MTP requires nextn.shared_head_norm");
+    }
+
+    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
+    cb(cur, "result_norm", -1);
+
+    // If nextn.shared_head_head is missing, use model.output (Main LM Head)
+    ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;
+    if (mtp_head_weights == nullptr) {
+        mtp_head_weights = model.output;
+    }
+    cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
+    cb(cur, "result_output", -1);
+
+    return cur;
 }
