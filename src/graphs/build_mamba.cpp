@@ -3,7 +3,7 @@
 #include "../llama-context.h"
 
 ggml_cgraph * llm_build_context::build_mamba() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t d_model = n_embd;
     const int64_t d_conv  = hparams.ssm_d_conv;

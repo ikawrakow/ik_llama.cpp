@@ -696,6 +696,37 @@ llama_context::~llama_context() {
     ggml_backend_buffer_free(buf_output);
 }
 
+int llama_context::max_nodes(int n_tokens, int n_kv) const {
+    int max_nodes = model.max_nodes(n_tokens);
+    if (model.is_mla_model() &&
+        cparams.mla_attn > 1 &&
+        n_tokens >= 128 &&
+        cparams.attn_max_batch > 0 &&
+        model.split_mode != LLAMA_SPLIT_MODE_GRAPH &&
+        model.layers[0].wkv_b) {
+        // In this case we perform the attention computation iteratively, and this adds
+        // 10 nodes per layer per iteration. Although in many cases the 65536 nodes we
+        // estimate by default are enough to accomodate, to be safe we add the additional
+        // number of nodes required for the iterative MLA evaluation.
+        int n_head = model.hparams.n_head();
+        auto wkv_b = model.layers[0].wkv_b;
+        auto kv_f32_size = wkv_b->ne[1] * n_kv * sizeof(float) / (1024*1024);
+        if (cparams.attn_max_batch < kv_f32_size) {
+            int n_max_head = 1;
+            for (int niter = 2; niter < n_head; ++niter) {
+                if (n_head % niter == 0 && kv_f32_size/niter <= cparams.attn_max_batch) {
+                    n_max_head = n_head/niter;
+                    break;
+                }
+            }
+            GGML_ASSERT(n_head % n_max_head == 0);
+            int n_iter = n_head / n_max_head;
+            max_nodes += (n_iter - 1) * 10 * model.hparams.n_layer;
+        }
+    }
+    return max_nodes;
+}
+
 //
 // kv cache helpers
 //
@@ -7128,7 +7159,7 @@ struct llama_context * llama_init_from_model(
             }
 
             int n_tokens = (int)std::min(cparams.n_ctx, cparams.n_ubatch);
-            const size_t max_nodes = model->max_nodes(n_tokens);
+            const size_t max_nodes = ctx->max_nodes(n_tokens, cparams.n_ctx);
 
             // buffer used to store the computation graph and the tensor meta data
             ctx->buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
