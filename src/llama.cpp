@@ -6700,7 +6700,7 @@ struct llama_context * llama_init_from_model(
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
     cparams.mla_attn         = params.mla_attn;
-    cparams.attn_max_batch   = params.attn_max_batch;
+    cparams.attn_max_batch   = params.attn_max_batch > 0 ? std::max(256, params.attn_max_batch) : 0;
     cparams.fused_moe_up_gate= params.fused_moe_up_gate;
     cparams.grouped_expert_routing = params.grouped_expert_routing;
     cparams.fused_up_gate    = params.fused_up_gate;
