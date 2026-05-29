@@ -769,7 +769,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 #else
     const bool use_f32_attn_precision = lctx.cparams.graph_attn_precision == GGML_TYPE_F32;
 #endif
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     // mutable variable, needed during the last layer of the computation to skip unused tokens
     int32_t n_tokens = this->n_tokens;
