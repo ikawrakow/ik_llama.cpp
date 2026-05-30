@@ -1788,6 +1788,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-amb" || arg == "--attention-max-batch") {
         CHECK_ARG
         params.attn_max_batch = std::stoi(argv[i]);
+        if (params.attn_max_batch > 0 && params.attn_max_batch < 128) {
+            LLAMA_LOG_WARN("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX amb = %d is too low. Changing to 128\n", params.attn_max_batch);
+            params.attn_max_batch = 128;
+        }
         return true;
     }
     if (arg == "-no-fmoe" || arg == "--no-fused-moe") {

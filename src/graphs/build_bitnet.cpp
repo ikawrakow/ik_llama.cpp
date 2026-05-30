@@ -3,7 +3,7 @@
 #include "../llama-context.h"
 
 ggml_cgraph * llm_build_context::build_bitnet() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
@@ -148,7 +148,7 @@ ggml_cgraph * llm_build_context::build_bitnet() {
 }
 
 ggml_cgraph * llm_build_context::build_bitnet_158() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     // mutable variable, needed during the last layer of the computation to skip unused tokens
     int32_t n_tokens = this->n_tokens;

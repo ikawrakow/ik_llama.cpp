@@ -2935,3 +2935,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 int32_t llama_model_n_nextn_layer(const llama_model * model) {
     return model->hparams.nextn_predict_layers;
 }
+
+ggml_cgraph * llm_build_context::new_graph_custom() {
+    int max_nodes = lctx.max_nodes(n_tokens, n_kv);
+    return ggml_new_graph_custom(ctx0, max_nodes, false);
+}

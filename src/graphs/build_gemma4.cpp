@@ -169,7 +169,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
     int n_device = model.splits.size();
     GGML_ASSERT(n_device > 1);
     GGML_ASSERT(cparams.flash_attn);
-    auto gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = llm.new_graph_custom();
 
     bool is_moe = hparams.n_expert > 0;
 
@@ -527,7 +527,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
 }
 
 ggml_cgraph * llm_build_context::build_gemma4_mtp() {
-    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd          = hparams.n_embd;
     const int64_t n_vocab         = hparams.n_vocab;
@@ -731,7 +731,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
                                      KQ_mask, KQ_mask_swa, n_tokens,  cb);
     }
 
-    auto gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     ggml_tensor * inp_per_layer = nullptr;
     if (model.tok_embd_per_layer) {

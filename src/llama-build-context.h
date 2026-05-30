@@ -509,4 +509,6 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_cgraph * gf,
         struct ggml_tensor * inp_pos
     );
+
+    ggml_cgraph * new_graph_custom();
 };

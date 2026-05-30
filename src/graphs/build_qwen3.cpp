@@ -3,7 +3,7 @@
 #include "../llama-context.h"
 
 ggml_cgraph * llm_build_context::build_qwen3() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
@@ -104,7 +104,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
 }
 
 ggml_cgraph * llm_build_context::build_qwen3moe() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
@@ -167,7 +167,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
 }
 
 ggml_cgraph * llm_build_context::build_qwen3vl() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_full = hparams.n_embd; // main embd + deepstack embds
     const size_t n_deepstack_layers = hparams.n_deepstack_layers;
@@ -236,7 +236,7 @@ ggml_cgraph * llm_build_context::build_qwen3vl() {
 }
 
 ggml_cgraph * llm_build_context::build_qwen3vlmoe() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     // mutable variable, needed during the last layer of the computation to skip unused tokens
     int32_t n_tokens = this->n_tokens;
