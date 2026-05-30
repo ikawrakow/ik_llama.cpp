@@ -501,6 +501,7 @@ struct gpt_params {
 
     // "advanced" endpoints are disabled by default for better security
     common_webui webui = COMMON_WEBUI_AUTO;
+    bool webui_mcp_proxy  = false;
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
