@@ -176,6 +176,8 @@ struct server_slot {
     // saves recurrent state before a speculative batch so it can be restored on rejection
     server_speculative_checkpoint spec_ckpt;
 
+    bool spec_prompt_warmup_failed = false;
+
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted

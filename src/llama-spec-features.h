@@ -51,7 +51,8 @@ bool llama_set_dflash_target_features_copy(
         struct llama_context * ctx,
         const float * target_features,
         size_t n_floats,
-        int32_t n_rows);
+        int32_t n_rows,
+        const llama_pos * target_positions);
 
 bool llama_set_dflash_capture_layers(
         struct llama_context * ctx,

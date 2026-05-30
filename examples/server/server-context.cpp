@@ -367,6 +367,9 @@ bool server_context::load_model(const gpt_params& params_) {
         if (params_dft.n_ctx == 0) {
             params_dft.n_ctx = params_base.speculative.n_ctx;
         }
+        if (server_speculative_has_dflash(params_base.speculative) && params_dft.n_gpu_layers < 0) {
+            params_dft.n_gpu_layers = params_base.n_gpu_layers;
+        }
         params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
         params_dft.n_parallel = 1;
         params_dft.n_batch = params_dft.n_ctx;
@@ -629,6 +632,7 @@ void server_slot::reset() {
     drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
     i_batch_dft.clear();
     spec_ckpt.clear();
+    spec_prompt_warmup_failed = false;
     n_sent_token_probs = 0;
     infill = false;
     ga_i = 0;
@@ -717,7 +721,7 @@ void server_slot::add_token_string(const completion_token_output& token) {
 }
 
 bool server_slot::can_speculate() const {
-    return (!!spec || has_mtp);
+    return !spec_prompt_warmup_failed && (!!spec || has_mtp);
 }
 
 int server_slot::get_n_draft_max() const {
@@ -3347,7 +3351,7 @@ void server_context::discard_n_kv_and_cache_tokens(llama_context* ctx, server_sl
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(kv_keep), slot.cache_tokens.pos_next(kv_keep + kv_discard));
     llama_kv_cache_seq_add(ctx, slot.id, kv_keep + kv_discard, kv_past, -kv_discard);
-    if (slot.has_mtp && slot.spec) {
+    if (slot.spec) {
         common_speculative_context_shift(slot.spec, slot.id, kv_keep, kv_discard, kv_past);
     }
     if (slot.params.cache_prompt) {
@@ -4730,12 +4734,18 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 continue;
             }
 
+            if (slot.spec_prompt_warmup_failed) {
+                continue;
+            }
+
             if ((slot.state != SLOT_STATE_PROCESSING || slot.n_decoded != 0) &&
                 (slot.state != SLOT_STATE_IDLE || slot.command != SLOT_COMMAND_LOAD_PROMPT)) {
                 continue;
             }
 
             if (common_speculative_on_target_seq_batch(slot.spec, ctx, batch_view, slot.id, true) != 0) {
+                common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+                slot.spec_prompt_warmup_failed = true;
                 LOG_ERROR("failed to warm up speculative target-feature state from prompt batch for slot %d\n", slot.id);
             }
         }

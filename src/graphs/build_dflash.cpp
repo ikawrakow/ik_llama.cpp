@@ -28,6 +28,8 @@ ggml_cgraph * llm_build_context::build_dflash() {
     ggml_set_input(lctx.inp_dflash_kq_mask);
     cb(lctx.inp_dflash_kq_mask, "dflash_kq_mask", -1);
 
+    ggml_tensor * dflash_kq_mask = flash_attn ? ggml_cast(ctx0, lctx.inp_dflash_kq_mask, GGML_TYPE_F16) : lctx.inp_dflash_kq_mask;
+
     ggml_tensor * tok_embd = model.tok_embd;
     if (tok_embd == nullptr) {
         tok_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_Q4_0, n_embd, hparams.n_vocab);
@@ -35,6 +37,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
+    ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
 
     ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, lctx.inp_dflash_target_features);
     fused_target = llm_build_norm(ctx0, fused_target, hparams, model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
@@ -85,10 +88,9 @@ ggml_cgraph * llm_build_context::build_dflash() {
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
 
-        Qcur = ggml_cast(ctx0, Qcur, GGML_TYPE_F16);
         Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F16);
         Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F16);
-        cb(Qcur, "Qcur_f16", il);
+        cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur_f16", il);
         cb(Vcur, "Vcur_f16", il);
 
@@ -99,7 +101,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
         cb(k, "k", il);
         cb(v, "v", il);
 
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, lctx.inp_dflash_kq_mask, kq_scale, hparams.f_max_alibi_bias,
+        cur = ggml_flash_attn_ext(ctx0, q, k, v, dflash_kq_mask, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, "flash_attn", il);
         ggml_build_forward_expand(gf, cur);
@@ -136,7 +138,13 @@ ggml_cgraph * llm_build_context::build_dflash() {
         output = ggml_new_tensor_2d(ctx0, GGML_TYPE_Q4_0, n_embd, hparams.n_vocab);
     }
 
-    ggml_tensor * result = build_output(lctx, ctx0, inpL, output, model.output_norm, cb);
+    ggml_tensor * result_input = inpL;
+    if (inp_out_ids) {
+        result_input = ggml_get_rows(ctx0, result_input, inp_out_ids);
+        cb(result_input, "result_output_rows", -1);
+    }
+
+    ggml_tensor * result = build_output(lctx, ctx0, result_input, output, model.output_norm, cb);
     cb(result, "result_output", -1);
     ggml_build_forward_expand(gf, result);
 

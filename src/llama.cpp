@@ -4994,7 +4994,9 @@ static bool prepare_dflash_graph_inputs(
     }
 
     const float * src = lctx.dflash_target_features;
+    const llama_pos * src_pos = lctx.dflash_target_positions;
     const size_t total_floats = lctx.dflash_target_features_n_floats;
+    const size_t total_positions = lctx.dflash_target_positions_n;
     const int32_t n_rows = lctx.dflash_target_features_n_rows;
     const int32_t width = (int32_t) target_hidden->ne[0];
     const int32_t cross_ctx = (int32_t) target_hidden->ne[1];
@@ -5014,20 +5016,26 @@ static bool prepare_dflash_graph_inputs(
 
     lctx.dflash_target_features_padded.assign((size_t) cross_ctx * (size_t) width, 0.0f);
     const size_t dst_offset = (size_t) (cross_ctx - n_rows) * (size_t) width;
+    const int32_t left_pad = cross_ctx - n_rows;
     std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset);
     ggml_backend_tensor_set(target_hidden, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(target_hidden));
 
     lctx.dflash_pos_ctx_data.resize((size_t) cross_ctx);
-    for (int32_t i = 0; i < cross_ctx; ++i) {
-        lctx.dflash_pos_ctx_data[i] = i;
+    std::fill(lctx.dflash_pos_ctx_data.begin(), lctx.dflash_pos_ctx_data.end(), 0);
+    if (src_pos != nullptr && total_positions == (size_t) n_rows) {
+        std::copy(src_pos, src_pos + n_rows, lctx.dflash_pos_ctx_data.begin() + (ptrdiff_t) left_pad);
+    } else {
+        for (int32_t i = 0; i < n_rows; ++i) {
+            lctx.dflash_pos_ctx_data[(size_t) left_pad + (size_t) i] = i;
+        }
     }
     ggml_backend_tensor_set(pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(pos_ctx));
 
     lctx.dflash_kq_mask_data.assign((size_t) n_kv_total * (size_t) n_mask_tokens, -INFINITY);
-    const int32_t left_pad = cross_ctx - n_rows;
     for (uint32_t j = 0; j < n_tokens; ++j) {
         float * row = lctx.dflash_kq_mask_data.data() + (size_t) j * (size_t) n_kv_total;
-        for (int32_t i = left_pad; i < n_kv_total; ++i) {
+        const int32_t visible_kv = cross_ctx + (int32_t) j + 1;
+        for (int32_t i = left_pad; i < visible_kv; ++i) {
             row[i] = 0.0f;
         }
     }

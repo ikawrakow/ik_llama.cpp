@@ -281,7 +281,10 @@ struct llama_context {
     const float * dflash_target_features = nullptr;
     size_t dflash_target_features_n_floats = 0;
     int32_t dflash_target_features_n_rows = 0;
+    const llama_pos * dflash_target_positions = nullptr;
+    size_t dflash_target_positions_n = 0;
     std::vector<float> dflash_target_features_owned;
+    std::vector<llama_pos> dflash_target_positions_owned;
     std::vector<float> dflash_target_features_padded;
     std::vector<float> dflash_feature_view_buffer;
     std::vector<llama_pos> dflash_pos_ctx_data;

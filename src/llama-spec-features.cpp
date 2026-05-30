@@ -96,7 +96,8 @@ bool llama_set_dflash_target_features_copy(
         struct llama_context * ctx,
         const float * target_features,
         size_t n_floats,
-        int32_t n_rows) {
+        int32_t n_rows,
+        const llama_pos * target_positions) {
     if (ctx == nullptr || target_features == nullptr || n_floats == 0 || n_rows <= 0) {
         return false;
     }
@@ -105,6 +106,15 @@ bool llama_set_dflash_target_features_copy(
     ctx->dflash_target_features = ctx->dflash_target_features_owned.data();
     ctx->dflash_target_features_n_floats = n_floats;
     ctx->dflash_target_features_n_rows = n_rows;
+    if (target_positions != nullptr) {
+        ctx->dflash_target_positions_owned.assign(target_positions, target_positions + n_rows);
+        ctx->dflash_target_positions = ctx->dflash_target_positions_owned.data();
+        ctx->dflash_target_positions_n = (size_t) n_rows;
+    } else {
+        ctx->dflash_target_positions_owned.clear();
+        ctx->dflash_target_positions = nullptr;
+        ctx->dflash_target_positions_n = 0;
+    }
     return true;
 }
 
@@ -361,9 +371,25 @@ bool llama_spec_get_dflash_feature_view(
         return false;
     }
 
-    std::vector<int32_t> row_indices((size_t) batch.n_tokens);
-    for (int32_t i = 0; i < batch.n_tokens; ++i) {
-        row_indices[(size_t) i] = i;
+    int32_t row_count = 0;
+    int32_t row_width = 0;
+    int32_t n_layers = 0;
+    if (!llama_spec_prepare_dflash_capture(ctx, row_count, row_width, n_layers)) {
+        return false;
+    }
+
+    const int32_t batch_row_offset = std::max<int32_t>(0, batch.n_tokens - row_count);
+    std::vector<int32_t> row_indices;
+    std::vector<int32_t> batch_indices;
+    row_indices.reserve((size_t) (batch.n_tokens - batch_row_offset));
+    batch_indices.reserve((size_t) (batch.n_tokens - batch_row_offset));
+    for (int32_t i = batch_row_offset; i < batch.n_tokens; ++i) {
+        row_indices.push_back(i - batch_row_offset);
+        batch_indices.push_back(i);
+    }
+
+    if (row_indices.empty()) {
+        return false;
     }
 
     view = {};
@@ -372,17 +398,17 @@ bool llama_spec_get_dflash_feature_view(
         return false;
     }
 
-    view.rows.reserve((size_t) batch.n_tokens);
-    for (int32_t i = 0; i < batch.n_tokens; ++i) {
-        if (batch.n_seq_id[i] <= 0 || batch.seq_id[i] == nullptr) {
+    view.rows.reserve(batch_indices.size());
+    for (int32_t batch_index : batch_indices) {
+        if (batch.n_seq_id[batch_index] <= 0 || batch.seq_id[batch_index] == nullptr) {
             view.rows.clear();
             return false;
         }
 
         view.rows.push_back({
-            /* .seq_id = */ batch.seq_id[i][0],
-            /* .pos    = */ batch.pos[i],
-            /* .data   = */ ctx->dflash_feature_view_buffer.data() + (size_t) i * (size_t) view.width,
+            /* .seq_id = */ batch.seq_id[batch_index][0],
+            /* .pos    = */ batch.pos[batch_index],
+            /* .data   = */ ctx->dflash_feature_view_buffer.data() + view.rows.size() * (size_t) view.width,
         });
     }
 
@@ -398,18 +424,26 @@ bool llama_spec_get_dflash_feature_view_for_seq(
         return false;
     }
 
+    int32_t row_count = 0;
+    int32_t row_width = 0;
+    int32_t n_layers = 0;
+    if (!llama_spec_prepare_dflash_capture(ctx, row_count, row_width, n_layers)) {
+        return false;
+    }
+
+    const int32_t batch_row_offset = std::max<int32_t>(0, batch.n_tokens - row_count);
     std::vector<int32_t> row_indices;
     row_indices.reserve((size_t) batch.n_tokens);
     std::vector<int32_t> batch_indices;
     batch_indices.reserve((size_t) batch.n_tokens);
-    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+    for (int32_t i = batch_row_offset; i < batch.n_tokens; ++i) {
         if (batch.n_seq_id[i] <= 0 || batch.seq_id[i] == nullptr) {
             return false;
         }
 
         for (int32_t j = 0; j < batch.n_seq_id[i]; ++j) {
             if (batch.seq_id[i][j] == seq_id) {
-                row_indices.push_back(i);
+                row_indices.push_back(i - batch_row_offset);
                 batch_indices.push_back(i);
                 break;
             }
