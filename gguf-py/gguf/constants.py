@@ -99,6 +99,7 @@ class Keys:
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
+        FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
         ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
 
     class Attention:
@@ -120,6 +121,7 @@ class Keys:
 
     class Rope:
         DIMENSION_COUNT          = "{arch}.rope.dimension_count"
+        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
         FREQ_BASE                = "{arch}.rope.freq_base"
         SCALING_TYPE             = "{arch}.rope.scaling.type"
         SCALING_FACTOR           = "{arch}.rope.scaling.factor"
@@ -142,6 +144,8 @@ class Keys:
         INNER_SIZE     = "{arch}.ssm.inner_size"
         STATE_SIZE     = "{arch}.ssm.state_size"
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
+        GROUP_COUNT    = "{arch}.ssm.group_count"
+        DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
 
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
@@ -191,6 +195,53 @@ class Keys:
         CHUNK_SIZE  = "imatrix.chunk_size"
         DATASETS    = "imatrix.datasets"
 
+    class Clip:
+        PROJECTOR_TYPE        = "clip.projector_type"
+        HAS_VISION_ENCODER    = "clip.has_vision_encoder"
+        HAS_AUDIO_ENCODER     = "clip.has_audio_encoder"
+        HAS_LLAVA_PROJECTOR   = "clip.has_llava_projector"
+
+    class ClipVision:
+        PROJECTOR_TYPE        = "clip.vision.projector_type" # for mixed modality models
+        IMAGE_SIZE            = "clip.vision.image_size"
+        IMAGE_MIN_PIXELS      = "clip.vision.image_min_pixels"
+        IMAGE_MAX_PIXELS      = "clip.vision.image_max_pixels"
+        PREPROC_IMAGE_SIZE    = "clip.vision.preproc_image_size"
+        PATCH_SIZE            = "clip.vision.patch_size"
+        EMBEDDING_LENGTH      = "clip.vision.embedding_length"
+        FEED_FORWARD_LENGTH   = "clip.vision.feed_forward_length"
+        PROJECTION_DIM        = "clip.vision.projection_dim"
+        BLOCK_COUNT           = "clip.vision.block_count"
+        IMAGE_MEAN            = "clip.vision.image_mean"
+        IMAGE_STD             = "clip.vision.image_std"
+        SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
+        USE_GELU              = "clip.use_gelu"
+        USE_SILU              = "clip.use_silu"
+        N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
+        IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
+
+        class Attention:
+            HEAD_COUNT      = "clip.vision.attention.head_count"
+            LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
+
+        class Projector:
+            SCALE_FACTOR    = "clip.vision.projector.scale_factor"
+
+    class ClipAudio:
+        PROJECTOR_TYPE      = "clip.audio.projector_type" # for mixed modality models
+        NUM_MEL_BINS        = "clip.audio.num_mel_bins"
+        EMBEDDING_LENGTH    = "clip.audio.embedding_length"
+        FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
+        PROJECTION_DIM      = "clip.audio.projection_dim"
+        BLOCK_COUNT         = "clip.audio.block_count"
+
+        class Attention:
+            HEAD_COUNT      = "clip.audio.attention.head_count"
+            LAYERNORM_EPS   = "clip.audio.attention.layer_norm_epsilon"
+
+        class Projector:
+            STACK_FACTOR    = "clip.audio.projector.stack_factor"
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -200,9 +251,26 @@ class GGUFType:
     MODEL   = "model"
     ADAPTER = "adapter"
     IMATRIX = "imatrix"
+    MMPROJ  = "mmproj" # dummy, unused for now
+
+
+class VisionProjectorType:
+    GEMMA3 = "gemma3"
+    PHI4 = "phi4"
+    IDEFICS3 = "idefics3"
+    PIXTRAL = "pixtral"
+    LLAMA4 = "llama4"
+    QWEN2VL = "qwen2vl_merger"
+    QWEN25VL = "qwen2.5vl_merger"
+    QWEN3VL = "qwen3vl_merger"
+    INTERNVL = "internvl"
+    QWEN2A = "qwen2a" # audio
+    QWEN25O = "qwen2.5o" # omni
+    ULTRAVOX = "ultravox"
 
 
 class MODEL_ARCH(IntEnum):
+    MMPROJ       = auto() # dummy arch for clip.cpp
     LLAMA        = auto()
     DECI         = auto()
     FALCON       = auto()
@@ -224,6 +292,9 @@ class MODEL_ARCH(IntEnum):
     QWEN2MOE     = auto()
     QWEN3        = auto()
     QWEN3MOE     = auto()
+    QWEN3NEXT    = auto()
+    QWEN35       = auto()
+    QWEN35MOE    = auto()
     PHI2         = auto()
     PHI3         = auto()
     PLAMO        = auto()
@@ -305,6 +376,11 @@ class MODEL_TENSOR(IntEnum):
     SSM_A                = auto()
     SSM_D                = auto()
     SSM_OUT              = auto()
+    SSM_NORM             = auto()  # qwen3.5/qwen3.6 linear_attn RMS norm
+    SSM_BETA             = auto()  # qwen3.5/qwen3.6 in_proj_b gate
+    SSM_BETA_ALPHA       = auto()  # qwen3-next combined in_proj_ba gate
+    SSM_ALPHA            = auto()  # qwen3.5/qwen3.6 in_proj_a gate
+    ATTN_GATE            = auto()  # qwen3-next/qwen3.5 linear_attn z-gate (in_proj_z)
     ATTN_Q_A             = auto()
     ATTN_Q_B             = auto()
     ATTN_KV_A_MQA        = auto()
@@ -349,9 +425,25 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_HNORM          = auto()   # nextn tensors (glm4moe)
     NEXTN_SHARED_HEAD_HEAD = auto() # nextn tensors (glm4moe)
     NEXTN_SHARED_HEAD_NORM = auto() # nextn tensors (glm4moe)
+    # vision (mmproj / clip.cpp)
+    V_MMPROJ             = auto()
+    V_ENC_EMBD_PATCH     = auto()
+    V_ENC_EMBD_POS       = auto()
+    V_ENC_ATTN_QKV       = auto()
+    V_ENC_ATTN_O         = auto()
+    V_ENC_INPUT_NORM     = auto()
+    V_ENC_POST_ATTN_NORM = auto()
+    V_ENC_FFN_UP         = auto()
+    V_ENC_FFN_DOWN       = auto()
+    V_PRE_NORM           = auto()
+    V_POST_NORM          = auto()
+    V_DS_NORM            = auto() # qwen3vl
+    V_DS_FC1             = auto() # qwen3vl
+    V_DS_FC2             = auto() # qwen3vl
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+    MODEL_ARCH.MMPROJ:         "clip", # dummy arch for clip.cpp
     MODEL_ARCH.LLAMA:          "llama",
     MODEL_ARCH.DECI:           "deci",
     MODEL_ARCH.FALCON:         "falcon",
@@ -373,6 +465,9 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2MOE:       "qwen2moe",
     MODEL_ARCH.QWEN3:          "qwen3",
     MODEL_ARCH.QWEN3MOE:       "qwen3moe",
+    MODEL_ARCH.QWEN3NEXT:      "qwen3next",
+    MODEL_ARCH.QWEN35:         "qwen35",
+    MODEL_ARCH.QWEN35MOE:      "qwen35moe",
     MODEL_ARCH.PHI2:           "phi2",
     MODEL_ARCH.PHI3:           "phi3",
     MODEL_ARCH.PLAMO:          "plamo",
@@ -455,6 +550,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_A:                "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_OUT:              "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_NORM:             "blk.{bid}.ssm_norm",
+    MODEL_TENSOR.SSM_BETA:             "blk.{bid}.ssm_beta",
+    MODEL_TENSOR.SSM_BETA_ALPHA:       "blk.{bid}.ssm_ba",
+    MODEL_TENSOR.SSM_ALPHA:            "blk.{bid}.ssm_alpha",
+    MODEL_TENSOR.ATTN_GATE:            "blk.{bid}.attn_gate",
     MODEL_TENSOR.ATTN_Q_A:             "blk.{bid}.attn_q_a",
     MODEL_TENSOR.ATTN_Q_B:             "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:        "blk.{bid}.attn_kv_a_mqa",
@@ -500,9 +600,40 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    # vision (mmproj / clip.cpp)
+    MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
+    MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
+    MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
+    MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
+    MODEL_TENSOR.V_ENC_ATTN_O:              "v.blk.{bid}.attn_out",
+    MODEL_TENSOR.V_ENC_INPUT_NORM:          "v.blk.{bid}.ln1",
+    MODEL_TENSOR.V_ENC_POST_ATTN_NORM:      "v.blk.{bid}.ln2",
+    MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
+    MODEL_TENSOR.V_POST_NORM:               "v.post_ln",
+    MODEL_TENSOR.V_DS_NORM:                 "v.deepstack.{bid}.norm",
+    MODEL_TENSOR.V_DS_FC1:                  "v.deepstack.{bid}.fc1",
+    MODEL_TENSOR.V_DS_FC2:                  "v.deepstack.{bid}.fc2",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+    MODEL_ARCH.MMPROJ: [
+        MODEL_TENSOR.V_MMPROJ,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ATTN_QKV,
+        MODEL_TENSOR.V_ENC_ATTN_O,
+        MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_POST_ATTN_NORM,
+        MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_PRE_NORM,
+        MODEL_TENSOR.V_POST_NORM,
+        MODEL_TENSOR.V_DS_NORM,
+        MODEL_TENSOR.V_DS_FC1,
+        MODEL_TENSOR.V_DS_FC2,
+    ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -812,6 +943,106 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.QWEN35MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_QKV,   # linear_attn in_proj_qkv
+        MODEL_TENSOR.ATTN_GATE,  # linear_attn in_proj_z
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_ALPHA,  # linear_attn in_proj_a
+        MODEL_TENSOR.SSM_BETA,   # linear_attn in_proj_b
+        MODEL_TENSOR.SSM_NORM,   # linear_attn norm
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        # MTP tail layer (per qwen35moe.nextn_predict_layers metadata)
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.QWEN35: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.QWEN3NEXT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_BETA_ALPHA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,

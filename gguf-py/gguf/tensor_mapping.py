@@ -87,6 +87,19 @@ class TensorNameMap:
 
         MODEL_TENSOR.ROPE_FACTORS_LONG: (),
         MODEL_TENSOR.ROPE_FACTORS_SHORT: (),
+
+        # vision (mmproj / clip.cpp) -- Qwen3-VL non-block tensors
+        MODEL_TENSOR.V_ENC_EMBD_PATCH: (
+            "visual.patch_embed.proj", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_POS: (
+            "visual.pos_embed", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_POST_NORM: (
+            "visual.merger.ln_q", # qwen3vl
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -127,6 +140,8 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.Wqkv",                                  # mpt
             "transformer.blocks.{bid}.norm_attn_norm.attn.Wqkv",                   # dbrx
             "transformer.h.{bid}.self_attention.query_key_value",                  # falcon
+            "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5 / qwen3.6 linear_attn QKV
+            "model.layers.{bid}.linear_attn.in_proj_qkvz",                         # qwen3-next linear_attn QKVZ (Z split off into ATTN_GATE in modify_tensors)
             "h.{bid}.self_attention.query_key_value",                              # bloom
             "language_model.encoder.layers.{bid}.self_attention.query_key_value",  # persimmon
             "model.layers.{bid}.self_attn.query_key_value",                        # persimmon
@@ -149,6 +164,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.self_attn.q_proj",                # plamo
             "model.layers.{bid}.attention.wq",                           # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
+            "model.layers.{bid}.q_proj",                                  # qwen3-next (flat attention)
         ),
 
         # Attention key
@@ -161,6 +177,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.self_attn.k_proj",              # plamo
             "model.layers.{bid}.attention.wk",                         # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
+            "model.layers.{bid}.k_proj",                                  # qwen3-next (flat attention)
         ),
 
         # Attention value
@@ -172,7 +189,8 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.v",                                # refact
             "model.layers.layers.{bid}.self_attn.v_proj",                # plamo
             "model.layers.{bid}.attention.wv",                           # internlm2
-            "transformer.decoder_layer.{bid}.multi_head_attention.value" # Grok
+            "transformer.decoder_layer.{bid}.multi_head_attention.value", # Grok
+            "model.layers.{bid}.v_proj",                                  # qwen3-next (flat attention)
         ),
 
         # Attention output
@@ -199,6 +217,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.norm_attn_norm.attn.out_proj",        # dbrx
             "encoder.layers.{bid}.self_attention.dense",                    # chatglm
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
+            "model.layers.{bid}.o_proj",                                    # qwen3-next (flat attention)
         ),
 
         # Attention output norm
@@ -211,7 +230,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",     # gemma2
+            "model.layers.{bid}.post_attention_layernorm",     # gemma2 / qwen3.5
         ),
 
         # Rotary embeddings
@@ -421,6 +440,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_CONV1D: (
             "model.layers.{bid}.conv1d",
             "backbone.layers.{bid}.mixer.conv1d",
+            "model.layers.{bid}.linear_attn.conv1d",  # qwen3.5 / qwen3.6
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -431,11 +451,13 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_DT: (
             "model.layers.{bid}.dt_proj",
             "backbone.layers.{bid}.mixer.dt_proj",
+            "model.layers.{bid}.linear_attn.dt_proj",  # qwen3.5 / qwen3.6 (renamed from dt_bias in modify_tensors)
         ),
 
         MODEL_TENSOR.SSM_A: (
             "model.layers.{bid}.A_log",
             "backbone.layers.{bid}.mixer.A_log",
+            "model.layers.{bid}.linear_attn.A_log",  # qwen3.5 / qwen3.6
         ),
 
         MODEL_TENSOR.SSM_D: (
@@ -446,6 +468,27 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",
             "backbone.layers.{bid}.mixer.out_proj",
+            "model.layers.{bid}.linear_attn.out_proj",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.linear_attn.norm",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.SSM_BETA: (
+            "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.SSM_BETA_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_ba",  # qwen3-next
+        ),
+
+        MODEL_TENSOR.SSM_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5 / qwen3.6
+        ),
+
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5 / qwen3.6 z-gate
         ),
 
         MODEL_TENSOR.ATTN_Q_A: (
@@ -630,6 +673,47 @@ class TensorNameMap:
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
         ),
+
+        # vision (mmproj / clip.cpp) -- Qwen3-VL
+        MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "visual.blocks.{bid}.attn.qkv", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_O: (
+            "visual.blocks.{bid}.attn.proj", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "visual.blocks.{bid}.norm1", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
+            "visual.blocks.{bid}.norm2", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_UP: (
+            "visual.blocks.{bid}.mlp.linear_fc1", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_DOWN: (
+            "visual.blocks.{bid}.mlp.linear_fc2", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_MMPROJ: (
+            "visual.merger.mlp.{bid}", # qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_NORM: (
+            "model.visual.deepstack_merger_list.{bid}.norm", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC1: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc1", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC2: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc2", # deepstack in qwen3vl
+        ),
     }
 
     # architecture-specific block mappings
@@ -668,10 +752,12 @@ class TensorNameMap:
                     key = key.format(bid = bid)
                     self.mapping[key] = (tensor, tensor_name)
 
-    def get_type_and_name(self, key: str, try_suffixes: Sequence[str] = ()) -> tuple[MODEL_TENSOR, str] | None:
+    def get_type_and_name(self, key: str, try_suffixes: Sequence[str] | None = None) -> tuple[MODEL_TENSOR, str] | None:
         result = self.mapping.get(key)
         if result is not None:
             return result
+        if try_suffixes is None:
+            try_suffixes = (".weight", ".bias")
         for suffix in try_suffixes:
             if key.endswith(suffix):
                 result = self.mapping.get(key[:-len(suffix)])
@@ -679,13 +765,13 @@ class TensorNameMap:
                     return result[0], result[1] + suffix
         return None
 
-    def get_name(self, key: str, try_suffixes: Sequence[str] = ()) -> str | None:
+    def get_name(self, key: str, try_suffixes: Sequence[str] | None = None) -> str | None:
         result = self.get_type_and_name(key, try_suffixes = try_suffixes)
         if result is None:
             return None
         return result[1]
 
-    def get_type(self, key: str, try_suffixes: Sequence[str] = ()) -> MODEL_TENSOR | None:
+    def get_type(self, key: str, try_suffixes: Sequence[str] | None = None) -> MODEL_TENSOR | None:
         result = self.get_type_and_name(key, try_suffixes = try_suffixes)
         if result is None:
             return None
