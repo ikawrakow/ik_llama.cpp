@@ -169,6 +169,7 @@ struct common_speculative_stage_params {
 
     int32_t suffix_min_match_len = -1;
     int32_t suffix_max_depth = -1;
+    std::string suffix_corpus;
 
     bool has_n_max_override() const { return n_max >= 0; }
     bool has_n_min_override() const { return n_min >= 0; }
@@ -178,6 +179,7 @@ struct common_speculative_stage_params {
     bool has_ngram_min_hits_override() const { return ngram_min_hits > 0; }
     bool has_suffix_min_match_len_override() const { return suffix_min_match_len >= 0; }
     bool has_suffix_max_depth_override() const { return suffix_max_depth >= 0; }
+    bool has_suffix_corpus_override() const { return !suffix_corpus.empty(); }
 };
 
 struct common_params_model {
@@ -516,7 +518,7 @@ struct gpt_params {
     bool do_checkpoint = false;               // do checkpoint for recurrent models only
     int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
     int32_t ctx_checkpoints_interval = 512;   // minimum number of tokens between each context checkpoints
-    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint 
+    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens

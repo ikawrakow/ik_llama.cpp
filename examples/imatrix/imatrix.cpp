@@ -1232,7 +1232,7 @@ int main(int argc, char ** argv) {
     }
 
     if (!use_paired_gemma4_mtp && llama_model_is_gemma4_mtp_assistant(model) && !params.process_output) {
-        fprintf(stderr, "%s: warning: standalone Gemma 4 assistant imatrix does not exercise the assistant layers. Use '-m <target> -md <assistant> -mtp' for meaningful calibration.\n", __func__);
+        fprintf(stderr, "%s: warning: standalone Gemma 4 assistant imatrix does not exercise the assistant layers. Use '-m <target> -md <assistant> --spec-type mtp:n_max=1,p_min=0.0' for meaningful calibration.\n", __func__);
     }
 
     const int n_ctx_train = llama_n_ctx_train(model);
