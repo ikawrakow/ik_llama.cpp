@@ -2,6 +2,8 @@
 
 #include "llama.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <vector>
 
 struct llama_context;
@@ -24,6 +26,19 @@ struct llama_spec_feature_view {
 };
 
 struct llama_dflash_profile_stats {
+        uint64_t decode_internal_chunks = 0;
+        uint64_t decode_graph_rebuilds = 0;
+        uint64_t decode_sync_profile_points = 0;
+        uint64_t decode_prelude_us = 0;
+        uint64_t decode_sched_reset_us = 0;
+        uint64_t decode_build_graph_us = 0;
+        uint64_t decode_sched_alloc_graph_us = 0;
+        uint64_t decode_set_inputs_us = 0;
+        uint64_t decode_graph_compute_us = 0;
+        uint64_t decode_result_us = 0;
+        uint64_t decode_embedding_us = 0;
+        uint64_t decode_final_sched_reset_us = 0;
+
         uint64_t decode_output_reserve_calls = 0;
         uint64_t decode_output_reserve_us = 0;
         uint64_t decode_output_reserve_reallocs = 0;
@@ -71,6 +86,20 @@ struct llama_dflash_profile_stats {
         uint64_t graph_kv_cache_read_concat_pad_calls = 0;
         uint64_t graph_kv_cache_cached_bytes = 0;
         uint64_t graph_kv_cache_calls = 0;
+        uint64_t graph_kv_node_fused_target_calls = 0;
+        uint64_t graph_kv_node_fused_target_us = 0;
+        uint64_t graph_kv_node_k_proj_calls = 0;
+        uint64_t graph_kv_node_k_proj_us = 0;
+        uint64_t graph_kv_node_k_norm_calls = 0;
+        uint64_t graph_kv_node_k_norm_us = 0;
+        uint64_t graph_kv_node_k_rope_calls = 0;
+        uint64_t graph_kv_node_k_rope_us = 0;
+        uint64_t graph_kv_node_v_proj_calls = 0;
+        uint64_t graph_kv_node_v_proj_us = 0;
+        uint64_t graph_kv_node_k_store_calls = 0;
+        uint64_t graph_kv_node_k_store_us = 0;
+        uint64_t graph_kv_node_v_store_calls = 0;
+        uint64_t graph_kv_node_v_store_us = 0;
         uint64_t graph_feature_bytes = 0;
         uint64_t graph_pos_bytes = 0;
         uint64_t graph_mask_bytes = 0;
@@ -96,9 +125,75 @@ struct llama_dflash_profile_stats {
         llama_pos last_pos_last = -1;
 };
 
+struct llama_dflash_window_update {
+        uint64_t version = 0;
+        int32_t keep_rows = 0;
+        int32_t append_rows = 0;
+        bool replace = false;
+        const float * append_features = nullptr;
+        size_t append_floats = 0;
+};
+
+struct llama_dflash_kv_cache_transition {
+        bool cache_up_to_date = false;
+        bool rebuild_cache = false;
+        int32_t append_rows = 0;
+        int32_t next_n_filled = 0;
+        int32_t next_write_pos = 0;
+};
+
+static inline llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition(
+                int32_t cross_ctx,
+                int32_t current_n_filled,
+                int32_t current_write_pos,
+                bool cache_valid,
+                uint64_t applied_window_version,
+                uint64_t target_window_version,
+                int32_t keep_rows,
+                int32_t append_rows,
+                bool replace,
+                int32_t n_rows) {
+        llama_dflash_kv_cache_transition plan;
+
+        const int32_t safe_cross_ctx = std::max<int32_t>(1, cross_ctx);
+        const int32_t bounded_n_filled = std::clamp(current_n_filled, 0, safe_cross_ctx);
+        const int32_t bounded_append_rows = std::clamp(append_rows, 0, n_rows);
+        const int32_t bounded_keep_rows = std::clamp(keep_rows, 0, n_rows);
+        const int32_t expected_keep_rows = std::min(bounded_n_filled, std::max<int32_t>(0, safe_cross_ctx - bounded_append_rows));
+
+        plan.cache_up_to_date = cache_valid && applied_window_version == target_window_version;
+        plan.rebuild_cache = !cache_valid || replace || bounded_append_rows <= 0 || bounded_append_rows > n_rows;
+        if (!plan.rebuild_cache && bounded_keep_rows != expected_keep_rows) {
+                plan.rebuild_cache = true;
+        }
+
+        plan.append_rows = bounded_append_rows;
+        if (plan.cache_up_to_date) {
+                plan.next_n_filled = bounded_n_filled;
+                plan.next_write_pos = safe_cross_ctx > 0
+                                ? ((current_write_pos % safe_cross_ctx) + safe_cross_ctx) % safe_cross_ctx
+                                : 0;
+        } else if (plan.rebuild_cache) {
+                plan.next_n_filled = std::min(safe_cross_ctx, n_rows);
+                plan.next_write_pos = plan.next_n_filled % safe_cross_ctx;
+        } else {
+                plan.next_n_filled = std::min(safe_cross_ctx, bounded_n_filled + bounded_append_rows);
+                plan.next_write_pos = (current_write_pos + bounded_append_rows) % safe_cross_ctx;
+        }
+
+        return plan;
+}
+
+llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
+                const struct llama_context * ctx,
+                const llama_dflash_window_update & window_update,
+                int32_t n_rows);
+
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
 void llama_dflash_profile_reset(struct llama_context * ctx);
+
+void llama_reset_dflash_kv_cache_state(struct llama_context * ctx);
 
 void llama_set_dflash_visible_cross_ctx(
         struct llama_context * ctx,
@@ -156,14 +251,16 @@ bool llama_set_dflash_target_features_copy(
         const float * target_features,
         size_t n_floats,
         int32_t n_rows,
-        const llama_pos * target_positions);
+        const llama_pos * target_positions,
+        const llama_dflash_window_update * window_update = nullptr);
 
 bool llama_set_dflash_target_features_view(
         struct llama_context * ctx,
         const float * target_features,
         size_t n_floats,
         int32_t n_rows,
-        const llama_pos * target_positions);
+        const llama_pos * target_positions,
+        const llama_dflash_window_update * window_update = nullptr);
 
 bool llama_set_dflash_capture_layers(
         struct llama_context * ctx,

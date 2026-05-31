@@ -171,6 +171,129 @@ static std::vector<std::string> string_split(const std::string& str, const std::
     return parts;
 }
 
+static bool llama_env_flag_enabled(const char * name) {
+    const char * env = std::getenv(name);
+    return env != nullptr && *env != '\0' &&
+            std::strcmp(env, "0") != 0 &&
+            std::strcmp(env, "false") != 0 &&
+            std::strcmp(env, "off") != 0;
+}
+
+enum llama_dflash_kv_node_kind {
+    LLAMA_DFLASH_KV_NODE_NONE = 0,
+    LLAMA_DFLASH_KV_NODE_FUSED_TARGET,
+    LLAMA_DFLASH_KV_NODE_K_PROJ,
+    LLAMA_DFLASH_KV_NODE_K_NORM,
+    LLAMA_DFLASH_KV_NODE_K_ROPE,
+    LLAMA_DFLASH_KV_NODE_V_PROJ,
+    LLAMA_DFLASH_KV_NODE_K_STORE,
+    LLAMA_DFLASH_KV_NODE_V_STORE,
+};
+
+struct llama_dflash_kv_node_profiler {
+    llama_dflash_profile_stats * profile = nullptr;
+    int64_t t_start_us = 0;
+    llama_dflash_kv_node_kind active_kind = LLAMA_DFLASH_KV_NODE_NONE;
+};
+
+static bool llama_dflash_tensor_name_has_prefix(const struct ggml_tensor * tensor, const char * prefix) {
+    if (tensor == nullptr || prefix == nullptr || prefix[0] == '\0') {
+        return false;
+    }
+
+    return std::strncmp(tensor->name, prefix, std::strlen(prefix)) == 0;
+}
+
+static llama_dflash_kv_node_kind llama_dflash_kv_node_kind_from_tensor(const struct ggml_tensor * tensor) {
+    if (llama_dflash_tensor_name_has_prefix(tensor, "dflash_kv_fused_target")) {
+        return LLAMA_DFLASH_KV_NODE_FUSED_TARGET;
+    }
+    if (llama_dflash_tensor_name_has_prefix(tensor, "dflash_kv_k_proj")) {
+        return LLAMA_DFLASH_KV_NODE_K_PROJ;
+    }
+    if (llama_dflash_tensor_name_has_prefix(tensor, "dflash_kv_k_norm")) {
+        return LLAMA_DFLASH_KV_NODE_K_NORM;
+    }
+    if (llama_dflash_tensor_name_has_prefix(tensor, "dflash_kv_k_rope")) {
+        return LLAMA_DFLASH_KV_NODE_K_ROPE;
+    }
+    if (llama_dflash_tensor_name_has_prefix(tensor, "dflash_kv_v_proj")) {
+        return LLAMA_DFLASH_KV_NODE_V_PROJ;
+    }
+    if (llama_dflash_tensor_name_has_prefix(tensor, "dflash_kv_k_store")) {
+        return LLAMA_DFLASH_KV_NODE_K_STORE;
+    }
+    if (llama_dflash_tensor_name_has_prefix(tensor, "dflash_kv_v_store")) {
+        return LLAMA_DFLASH_KV_NODE_V_STORE;
+    }
+
+    return LLAMA_DFLASH_KV_NODE_NONE;
+}
+
+static void llama_dflash_kv_node_profile_add(
+        llama_dflash_profile_stats & profile,
+        llama_dflash_kv_node_kind kind,
+        uint64_t elapsed_us) {
+    switch (kind) {
+        case LLAMA_DFLASH_KV_NODE_FUSED_TARGET:
+            profile.graph_kv_node_fused_target_calls++;
+            profile.graph_kv_node_fused_target_us += elapsed_us;
+            break;
+        case LLAMA_DFLASH_KV_NODE_K_PROJ:
+            profile.graph_kv_node_k_proj_calls++;
+            profile.graph_kv_node_k_proj_us += elapsed_us;
+            break;
+        case LLAMA_DFLASH_KV_NODE_K_NORM:
+            profile.graph_kv_node_k_norm_calls++;
+            profile.graph_kv_node_k_norm_us += elapsed_us;
+            break;
+        case LLAMA_DFLASH_KV_NODE_K_ROPE:
+            profile.graph_kv_node_k_rope_calls++;
+            profile.graph_kv_node_k_rope_us += elapsed_us;
+            break;
+        case LLAMA_DFLASH_KV_NODE_V_PROJ:
+            profile.graph_kv_node_v_proj_calls++;
+            profile.graph_kv_node_v_proj_us += elapsed_us;
+            break;
+        case LLAMA_DFLASH_KV_NODE_K_STORE:
+            profile.graph_kv_node_k_store_calls++;
+            profile.graph_kv_node_k_store_us += elapsed_us;
+            break;
+        case LLAMA_DFLASH_KV_NODE_V_STORE:
+            profile.graph_kv_node_v_store_calls++;
+            profile.graph_kv_node_v_store_us += elapsed_us;
+            break;
+        case LLAMA_DFLASH_KV_NODE_NONE:
+            break;
+    }
+}
+
+static bool llama_dflash_kv_node_eval_callback(struct ggml_tensor * tensor, bool ask, void * user_data) {
+    auto * profiler = static_cast<llama_dflash_kv_node_profiler *>(user_data);
+    if (profiler == nullptr || profiler->profile == nullptr) {
+        return false;
+    }
+
+    const llama_dflash_kv_node_kind kind = llama_dflash_kv_node_kind_from_tensor(tensor);
+    if (ask) {
+        if (kind == LLAMA_DFLASH_KV_NODE_NONE) {
+            return false;
+        }
+
+        profiler->active_kind = kind;
+        profiler->t_start_us = ggml_time_us();
+        return true;
+    }
+
+    if (kind != LLAMA_DFLASH_KV_NODE_NONE && profiler->active_kind == kind && profiler->t_start_us > 0) {
+        llama_dflash_kv_node_profile_add(*profiler->profile, kind, (uint64_t) (ggml_time_us() - profiler->t_start_us));
+    }
+
+    profiler->active_kind = LLAMA_DFLASH_KV_NODE_NONE;
+    profiler->t_start_us = 0;
+    return true;
+}
+
 // extract ip and port from RPC[ip:port] for rpc and keep other device names
 static std::vector<rpc_device>  extract_device_from_rpc_device(std::vector<std::string> devices) {
     std::vector<rpc_device> rpc_servers;
@@ -689,6 +812,7 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
     }
 
     dflash_profile.last_kv_cache_host_layers = host_layers;
+    llama_reset_dflash_kv_cache_state(this);
     LLAMA_LOG_INFO("%s: DFlash K/V cache placement cross_ctx=%d host_layers=%d/%d first=%s last=%s\n",
             __func__,
             target_cross_ctx,
@@ -703,6 +827,15 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
 void llama_context::free_dflash_kv_cache_tensors() {
     dflash_k_ctx_cache.clear();
     dflash_v_ctx_cache.clear();
+    dflash_kv_cache_write_pos = 0;
+    dflash_kv_cache_n_filled = 0;
+    dflash_kv_cache_update_rows = 0;
+    dflash_kv_cache_reserved_rows = 0;
+    dflash_kv_cache_view_write_pos = 0;
+    dflash_kv_cache_view_n_filled = 0;
+    dflash_kv_cache_applied_window_version = 0;
+    dflash_kv_cache_valid = false;
+    dflash_kv_cache_view_valid = false;
     dflash_kv_input_target_features = nullptr;
     dflash_kv_input_pos_ctx = nullptr;
     dflash_kq_mask_tensor = nullptr;
@@ -5271,11 +5404,8 @@ static bool validate_dflash_graph_contract(const llama_context & lctx) {
 static bool prepare_dflash_graph_inputs(
         struct llama_context & lctx,
         uint32_t n_tokens) {
-    const char * dflash_kv_cache_env = std::getenv("IK_DFLASH_KV_CACHE");
-    const bool use_kv_cache = dflash_kv_cache_env != nullptr && *dflash_kv_cache_env != '\0' &&
-            std::strcmp(dflash_kv_cache_env, "0") != 0 &&
-            std::strcmp(dflash_kv_cache_env, "false") != 0 &&
-            std::strcmp(dflash_kv_cache_env, "off") != 0;
+    const bool use_kv_cache = llama_env_flag_enabled("IK_DFLASH_KV_CACHE");
+    const bool kv_node_timing = llama_env_flag_enabled("IK_DFLASH_KV_NODE_TIMING");
     auto & profile = lctx.dflash_profile;
     const int32_t cross_ctx = lctx.dflash_visible_cross_ctx > 0
             ? lctx.dflash_visible_cross_ctx
@@ -5304,10 +5434,13 @@ static bool prepare_dflash_graph_inputs(
     }
 
     const float * src = lctx.dflash_target_features;
+    const float * append_src = lctx.dflash_target_append_features;
     const llama_pos * src_pos = lctx.dflash_target_positions;
     const size_t total_floats = lctx.dflash_target_features_n_floats;
+    const size_t append_floats = lctx.dflash_target_append_features_n_floats;
     const size_t total_positions = lctx.dflash_target_positions_n;
     const int32_t n_rows = lctx.dflash_target_features_n_rows;
+    const int32_t append_rows_available = lctx.dflash_target_append_features_n_rows;
     const int32_t width = (int32_t) lctx.model.hparams.dflash_n_target_features;
     const int32_t graph_cross_ctx = use_kv_cache
             ? (lctx.dflash_k_ctx_cache.front() != nullptr ? (int32_t) lctx.dflash_k_ctx_cache.front()->ne[2] : 0)
@@ -5330,16 +5463,23 @@ static bool prepare_dflash_graph_inputs(
                 __func__, graph_cross_ctx, cross_ctx);
         return false;
     }
-    if (src == nullptr || total_floats == 0 || n_rows <= 0) {
+    if (n_rows <= 0) {
         profile.graph_shape_failures++;
-        LLAMA_LOG_ERROR("%s: missing DFlash target features\n", __func__);
+        LLAMA_LOG_ERROR("%s: missing DFlash target feature rows\n", __func__);
         return false;
     }
 
-    if (n_rows > cross_ctx || total_floats != (size_t) n_rows * (size_t) width) {
+    const bool have_full_src = src != nullptr && total_floats == (size_t) n_rows * (size_t) width;
+    if (n_rows > cross_ctx || (src != nullptr && !have_full_src)) {
         profile.graph_shape_failures++;
         LLAMA_LOG_ERROR("%s: invalid DFlash target feature shape (rows=%d width=%d floats=%zu cross_ctx=%d)\n",
                 __func__, n_rows, width, total_floats, cross_ctx);
+        return false;
+    }
+
+    if (!use_kv_cache && !have_full_src) {
+        profile.graph_shape_failures++;
+        LLAMA_LOG_ERROR("%s: missing contiguous DFlash target features for inline path\n", __func__);
         return false;
     }
 
@@ -5351,24 +5491,26 @@ static bool prepare_dflash_graph_inputs(
     }
 
     const int32_t left_pad = cross_ctx - n_rows;
-    const size_t padded_floats = (size_t) cross_ctx * (size_t) width;
-    const size_t dst_offset = (size_t) left_pad * (size_t) width;
-    const int64_t t_feature_us = ggml_time_us();
     profile.last_left_pad = left_pad;
-    if (lctx.dflash_target_features_padded.size() != padded_floats) {
-        lctx.dflash_target_features_padded.resize(padded_floats);
-    }
-    if (left_pad == 0 && total_floats == padded_floats) {
-        std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin());
-    } else {
-        if (dst_offset > 0) {
-            std::fill(lctx.dflash_target_features_padded.begin(),
-                    lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset, 0.0f);
+    if (!use_kv_cache) {
+        const size_t padded_floats = (size_t) cross_ctx * (size_t) width;
+        const size_t dst_offset = (size_t) left_pad * (size_t) width;
+        const int64_t t_feature_us = ggml_time_us();
+        if (lctx.dflash_target_features_padded.size() != padded_floats) {
+            lctx.dflash_target_features_padded.resize(padded_floats);
         }
-        std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset);
+        if (left_pad == 0 && total_floats == padded_floats) {
+            std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin());
+        } else {
+            if (dst_offset > 0) {
+                std::fill(lctx.dflash_target_features_padded.begin(),
+                        lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset, 0.0f);
+            }
+            std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset);
+        }
+        profile.graph_feature_copy_us += (uint64_t) (ggml_time_us() - t_feature_us);
+        profile.graph_feature_bytes += padded_floats * sizeof(float);
     }
-    profile.graph_feature_copy_us += (uint64_t) (ggml_time_us() - t_feature_us);
-    profile.graph_feature_bytes += padded_floats * sizeof(float);
 
     const int64_t t_pos_us = ggml_time_us();
     lctx.dflash_pos_ctx_data.resize((size_t) cross_ctx);
@@ -5403,22 +5545,32 @@ static bool prepare_dflash_graph_inputs(
     profile.graph_pos_bytes += lctx.dflash_pos_ctx_data.size() * sizeof(llama_pos);
 
     if (use_kv_cache) {
+        const llama_dflash_kv_cache_transition cache_plan = llama_plan_dflash_kv_cache_transition(
+            cross_ctx,
+            lctx.dflash_kv_cache_n_filled,
+            lctx.dflash_kv_cache_write_pos,
+            lctx.dflash_kv_cache_valid,
+            lctx.dflash_kv_cache_applied_window_version,
+            lctx.dflash_target_window_version,
+            lctx.dflash_target_window_keep_rows,
+            lctx.dflash_target_window_append_rows,
+            lctx.dflash_target_window_replace,
+            n_rows);
+
+        const bool have_append_src = append_src != nullptr &&
+            append_rows_available == cache_plan.append_rows &&
+            append_floats == (size_t) cache_plan.append_rows * (size_t) width;
+
+        const int32_t update_rows = cache_plan.cache_up_to_date
+                ? 0
+            : (cache_plan.rebuild_cache ? n_rows : cache_plan.append_rows);
         const size_t max_nodes = lctx.model.max_nodes((int) std::max<int32_t>(1, cross_ctx)) + 24 * lctx.model.hparams.n_layer;
         const size_t meta_size = ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false);
         if (lctx.dflash_buf_compute_meta.size() != meta_size) {
             lctx.dflash_buf_compute_meta.resize(meta_size);
         }
 
-        const int64_t t_build_us = ggml_time_us();
-        ggml_cgraph * gf_kv = llm_build_context::llama_build_graph_dflash_kv_cache(lctx);
-        profile.graph_kv_cache_build_us += (uint64_t) (ggml_time_us() - t_build_us);
-        if (gf_kv == nullptr || lctx.dflash_kv_input_target_features == nullptr || lctx.dflash_kv_input_pos_ctx == nullptr) {
-            profile.graph_shape_failures++;
-            LLAMA_LOG_ERROR("%s: failed to build DFlash K/V cache graph\n", __func__);
-            return false;
-        }
-
-        if (lctx.dflash_sched == nullptr) {
+        if (lctx.dflash_sched == nullptr || lctx.dflash_kv_cache_reserved_rows != cross_ctx) {
             std::vector<ggml_backend_buffer_type_t> backend_buft;
             backend_buft.reserve(lctx.backends.size());
             for (auto * backend : lctx.backends) {
@@ -5429,51 +5581,117 @@ static bool prepare_dflash_graph_inputs(
                 }
             }
 
+            if (lctx.dflash_sched != nullptr) {
+                ggml_backend_sched_free(lctx.dflash_sched);
+                lctx.dflash_sched = nullptr;
+            }
+
+            const int32_t saved_update_rows = lctx.dflash_kv_cache_update_rows;
+            lctx.dflash_kv_cache_update_rows = cross_ctx;
+            const int64_t t_build_us = ggml_time_us();
+            ggml_cgraph * gf_reserve = llm_build_context::llama_build_graph_dflash_kv_cache(lctx);
+            profile.graph_kv_cache_build_us += (uint64_t) (ggml_time_us() - t_build_us);
+            lctx.dflash_kv_cache_update_rows = saved_update_rows;
+            if (gf_reserve == nullptr) {
+                profile.graph_shape_failures++;
+                LLAMA_LOG_ERROR("%s: failed to build DFlash K/V cache reserve graph\n", __func__);
+                return false;
+            }
+
             const int64_t t_reserve_us = ggml_time_us();
             lctx.dflash_sched = ggml_backend_sched_new(lctx.backends.data(), backend_buft.data(), lctx.backends.size(), max_nodes, false);
-            const bool reserved = lctx.dflash_sched != nullptr && ggml_backend_sched_reserve(lctx.dflash_sched, gf_kv);
+            const bool reserved = lctx.dflash_sched != nullptr && ggml_backend_sched_reserve(lctx.dflash_sched, gf_reserve);
             profile.graph_kv_cache_reserve_us += (uint64_t) (ggml_time_us() - t_reserve_us);
             if (!reserved) {
                 profile.graph_shape_failures++;
                 LLAMA_LOG_ERROR("%s: failed to initialize DFlash K/V scheduler\n", __func__);
                 return false;
             }
+            lctx.dflash_kv_cache_reserved_rows = cross_ctx;
         }
 
-        const int64_t t_reset_us = ggml_time_us();
-        ggml_backend_sched_reset(lctx.dflash_sched);
-        profile.graph_kv_cache_reset_us += (uint64_t) (ggml_time_us() - t_reset_us);
+        if (update_rows > 0) {
+            const float * update_src = nullptr;
+            if (have_append_src && update_rows == cache_plan.append_rows) {
+                update_src = append_src;
+            } else if (have_full_src) {
+                update_src = src + (size_t) (n_rows - update_rows) * (size_t) width;
+            }
+            const llama_pos * update_pos = src_pos + (n_rows - update_rows);
 
-        const int64_t t_alloc_us = ggml_time_us();
-        ggml_backend_sched_alloc_graph(lctx.dflash_sched, gf_kv);
-        profile.graph_kv_cache_alloc_us += (uint64_t) (ggml_time_us() - t_alloc_us);
+            if (update_src == nullptr) {
+                profile.graph_shape_failures++;
+                LLAMA_LOG_ERROR("%s: missing DFlash appended target features for cached update (rows=%d append_rows=%d floats=%zu)\n",
+                        __func__, n_rows, update_rows, append_floats);
+                return false;
+            }
 
-        ggml_backend_t kv_feature_backend = llama_backend_for_tensor(lctx, lctx.dflash_kv_input_target_features);
-        const int64_t t_feature_upload_us = ggml_time_us();
-        if (kv_feature_backend != nullptr) {
-            ggml_backend_tensor_set_async(kv_feature_backend, lctx.dflash_kv_input_target_features, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(lctx.dflash_kv_input_target_features));
-        } else {
-            ggml_backend_tensor_set(lctx.dflash_kv_input_target_features, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(lctx.dflash_kv_input_target_features));
+            if (cache_plan.rebuild_cache) {
+                llama_reset_dflash_kv_cache_state(&lctx);
+            }
+
+            lctx.dflash_kv_cache_update_rows = update_rows;
+            const int64_t t_build_us = ggml_time_us();
+            ggml_cgraph * gf_kv = llm_build_context::llama_build_graph_dflash_kv_cache(lctx);
+            profile.graph_kv_cache_build_us += (uint64_t) (ggml_time_us() - t_build_us);
+            if (gf_kv == nullptr || lctx.dflash_kv_input_target_features == nullptr || lctx.dflash_kv_input_pos_ctx == nullptr) {
+                profile.graph_shape_failures++;
+                LLAMA_LOG_ERROR("%s: failed to build DFlash K/V cache graph\n", __func__);
+                return false;
+            }
+
+            const int64_t t_reset_us = ggml_time_us();
+            ggml_backend_sched_reset(lctx.dflash_sched);
+            profile.graph_kv_cache_reset_us += (uint64_t) (ggml_time_us() - t_reset_us);
+
+            const int64_t t_alloc_us = ggml_time_us();
+            ggml_backend_sched_alloc_graph(lctx.dflash_sched, gf_kv);
+            profile.graph_kv_cache_alloc_us += (uint64_t) (ggml_time_us() - t_alloc_us);
+
+            ggml_backend_t kv_feature_backend = llama_backend_for_tensor(lctx, lctx.dflash_kv_input_target_features);
+            const int64_t t_feature_upload_us = ggml_time_us();
+            if (kv_feature_backend != nullptr) {
+                ggml_backend_tensor_set_async(kv_feature_backend, lctx.dflash_kv_input_target_features, update_src, 0, ggml_nbytes(lctx.dflash_kv_input_target_features));
+            } else {
+                ggml_backend_tensor_set(lctx.dflash_kv_input_target_features, update_src, 0, ggml_nbytes(lctx.dflash_kv_input_target_features));
+            }
+            profile.graph_kv_cache_feature_upload_us += (uint64_t) (ggml_time_us() - t_feature_upload_us);
+            profile.graph_feature_bytes += (size_t) update_rows * (size_t) width * sizeof(float);
+
+            ggml_backend_t kv_pos_backend = llama_backend_for_tensor(lctx, lctx.dflash_kv_input_pos_ctx);
+            const int64_t t_pos_upload_us = ggml_time_us();
+            if (kv_pos_backend != nullptr) {
+                ggml_backend_tensor_set_async(kv_pos_backend, lctx.dflash_kv_input_pos_ctx, update_pos, 0, ggml_nbytes(lctx.dflash_kv_input_pos_ctx));
+            } else {
+                ggml_backend_tensor_set(lctx.dflash_kv_input_pos_ctx, update_pos, 0, ggml_nbytes(lctx.dflash_kv_input_pos_ctx));
+            }
+            profile.graph_kv_cache_pos_upload_us += (uint64_t) (ggml_time_us() - t_pos_upload_us);
+
+            const int64_t t_kv_cache_us = ggml_time_us();
+            llama_dflash_kv_node_profiler kv_node_profiler;
+            if (kv_node_timing) {
+                kv_node_profiler.profile = &profile;
+                ggml_backend_sched_set_eval_callback(lctx.dflash_sched, llama_dflash_kv_node_eval_callback, &kv_node_profiler);
+            }
+            llama_graph_compute_sched(lctx, lctx.dflash_sched, gf_kv, lctx.cparams.n_threads);
+            if (kv_node_timing) {
+                ggml_backend_sched_set_eval_callback(lctx.dflash_sched, nullptr, nullptr);
+            }
+            profile.graph_kv_cache_compute_us += (uint64_t) (ggml_time_us() - t_kv_cache_us);
+
+            const int64_t t_sync_us = ggml_time_us();
+            ggml_backend_sched_synchronize(lctx.dflash_sched);
+            profile.graph_kv_cache_sync_us += (uint64_t) (ggml_time_us() - t_sync_us);
+            profile.graph_kv_cache_calls++;
+
+            lctx.dflash_kv_cache_n_filled = std::min(cross_ctx, lctx.dflash_kv_cache_n_filled + update_rows);
+            lctx.dflash_kv_cache_write_pos = (lctx.dflash_kv_cache_write_pos + update_rows) % cross_ctx;
+            lctx.dflash_kv_cache_applied_window_version = lctx.dflash_target_window_version;
+            lctx.dflash_kv_cache_valid = true;
+            lctx.dflash_kv_cache_view_n_filled = lctx.dflash_kv_cache_n_filled;
+            lctx.dflash_kv_cache_view_write_pos = lctx.dflash_kv_cache_write_pos;
+            lctx.dflash_kv_cache_view_valid = true;
         }
-        profile.graph_kv_cache_feature_upload_us += (uint64_t) (ggml_time_us() - t_feature_upload_us);
-
-        ggml_backend_t kv_pos_backend = llama_backend_for_tensor(lctx, lctx.dflash_kv_input_pos_ctx);
-        const int64_t t_pos_upload_us = ggml_time_us();
-        if (kv_pos_backend != nullptr) {
-            ggml_backend_tensor_set_async(kv_pos_backend, lctx.dflash_kv_input_pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(lctx.dflash_kv_input_pos_ctx));
-        } else {
-            ggml_backend_tensor_set(lctx.dflash_kv_input_pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(lctx.dflash_kv_input_pos_ctx));
-        }
-        profile.graph_kv_cache_pos_upload_us += (uint64_t) (ggml_time_us() - t_pos_upload_us);
-
-        const int64_t t_kv_cache_us = ggml_time_us();
-        llama_graph_compute_sched(lctx, lctx.dflash_sched, gf_kv, lctx.cparams.n_threads);
-        profile.graph_kv_cache_compute_us += (uint64_t) (ggml_time_us() - t_kv_cache_us);
-
-        const int64_t t_sync_us = ggml_time_us();
-        ggml_backend_sched_synchronize(lctx.dflash_sched);
-        profile.graph_kv_cache_sync_us += (uint64_t) (ggml_time_us() - t_sync_us);
-        profile.graph_kv_cache_calls++;
     } else {
         ggml_backend_tensor_set(lctx.inp_dflash_target_features, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(lctx.inp_dflash_target_features));
         ggml_backend_tensor_set(lctx.inp_dflash_pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(lctx.inp_dflash_pos_ctx));
@@ -5586,6 +5804,9 @@ static int llama_decode_internal(
     }
     lctx.n_queued_tokens += n_tokens_all;
 
+    auto * dflash_profile = lctx.model.arch == LLM_ARCH_DFLASH_DRAFT ? &lctx.dflash_profile : nullptr;
+    const bool dflash_decode_timing = dflash_profile != nullptr && llama_env_flag_enabled("IK_DFLASH_DECODE_TIMING");
+
     auto & kv_self = lctx.kv_self;
 
     const int64_t n_embd  = hparams.n_embd;
@@ -5670,6 +5891,10 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         auto tim1 = ggml_time_us();
 #endif
+        const int64_t t_dflash_prelude_us = dflash_decode_timing ? ggml_time_us() : 0;
+        if (dflash_decode_timing) {
+            dflash_profile->decode_internal_chunks++;
+        }
         uint32_t n_tokens = std::min(n_ubatch, n_tokens_all - cur_token);
         if (llm_arch_is_hybrid(model.arch) &&
                 n_tokens > 1 &&
@@ -5804,6 +6029,9 @@ static int llama_decode_internal(
         auto tim2 = ggml_time_us();
         printf("prelude(...): %d us\n", int(tim2-tim1));
 #endif
+        if (dflash_decode_timing) {
+            dflash_profile->decode_prelude_us += (uint64_t) (ggml_time_us() - t_dflash_prelude_us);
+        }
 
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
@@ -5811,30 +6039,45 @@ static int llama_decode_internal(
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         if (!lctx.can_reuse_graph(u_batch)) {
+            if (dflash_decode_timing) {
+                dflash_profile->decode_graph_rebuilds++;
+            }
+            const int64_t t_dflash_sched_reset_us = dflash_decode_timing ? ggml_time_us() : 0;
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("sched_reset(...): %d us\n", int(tim2-tim1));
 #endif
+            if (dflash_decode_timing) {
+                dflash_profile->decode_sched_reset_us += (uint64_t) (ggml_time_us() - t_dflash_sched_reset_us);
+            }
 
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
+            const int64_t t_dflash_build_graph_us = dflash_decode_timing ? ggml_time_us() : 0;
             gf = llm_build_context::llama_build_graph(lctx, u_batch, false);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("build_graph(...): %d us\n", int(tim2-tim1));
 #endif
+            if (dflash_decode_timing) {
+                dflash_profile->decode_build_graph_us += (uint64_t) (ggml_time_us() - t_dflash_build_graph_us);
+            }
 
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
+            const int64_t t_dflash_sched_alloc_us = dflash_decode_timing ? ggml_time_us() : 0;
             ggml_backend_sched_alloc_graph(lctx.sched, gf);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
+            if (dflash_decode_timing) {
+                dflash_profile->decode_sched_alloc_graph_us += (uint64_t) (ggml_time_us() - t_dflash_sched_alloc_us);
+            }
             //if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
             if (u_batch.embd == nullptr && lctx.cparams.graph_reuse &&
                     !(lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)) {
@@ -5855,16 +6098,15 @@ static int llama_decode_internal(
             }
         }
 
-        if (lctx.model.arch == LLM_ARCH_DFLASH_DRAFT) {
-            auto & profile = lctx.dflash_profile;
-            profile.decode_prepare_calls++;
+        if (dflash_profile != nullptr) {
+            dflash_profile->decode_prepare_calls++;
             const int64_t t_prepare_dflash_us = ggml_time_us();
             if (!prepare_dflash_graph_inputs(lctx, n_tokens)) {
-                profile.decode_prepare_failures++;
-                profile.decode_prepare_us += (uint64_t) (ggml_time_us() - t_prepare_dflash_us);
+                dflash_profile->decode_prepare_failures++;
+                dflash_profile->decode_prepare_us += (uint64_t) (ggml_time_us() - t_prepare_dflash_us);
                 return GGML_STATUS_FAILED;
             }
-            profile.decode_prepare_us += (uint64_t) (ggml_time_us() - t_prepare_dflash_us);
+            dflash_profile->decode_prepare_us += (uint64_t) (ggml_time_us() - t_prepare_dflash_us);
         }
 
         // the output is always the last tensor in the graph
@@ -5910,16 +6152,26 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
+    const int64_t t_dflash_set_inputs_us = dflash_decode_timing ? ggml_time_us() : 0;
         llama_set_inputs(lctx, u_batch);
 #if IK_PRINT_TIMING == 1
         tim2 = ggml_time_us();
         printf("set_inputs(...): %d us\n", int(tim2-tim1));
 #endif
+    if (dflash_decode_timing) {
+        dflash_profile->decode_set_inputs_us += (uint64_t) (ggml_time_us() - t_dflash_set_inputs_us);
+    }
 
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
+    const int64_t t_dflash_graph_compute_us = dflash_decode_timing ? ggml_time_us() : 0;
         llama_graph_compute(lctx, gf, n_threads);
+    if (dflash_decode_timing) {
+        llama_synchronize(&lctx);
+        dflash_profile->decode_sync_profile_points++;
+        dflash_profile->decode_graph_compute_us += (uint64_t) (ggml_time_us() - t_dflash_graph_compute_us);
+    }
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
         tim2 = ggml_time_us();
@@ -5950,6 +6202,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
+            const int64_t t_dflash_get_result_us = dflash_decode_timing ? ggml_time_us() : 0;
             // Do not process logits if MTP is only updating the KV cache.
             if (cparams.mtp_op_type != MTP_OP_WARMUP) { // && cparams.mtp_op_type != MTP_OP_UPDATE_ACCEPTED) {
                 ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(lctx.sched, res);
@@ -5980,6 +6233,11 @@ static int llama_decode_internal(
                     }
                 }
             }
+            if (dflash_decode_timing) {
+                llama_synchronize(&lctx);
+                dflash_profile->decode_sync_profile_points++;
+                dflash_profile->decode_result_us += (uint64_t) (ggml_time_us() - t_dflash_get_result_us);
+            }
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("get_result(...): %d us\n", int(tim2-tim1));
@@ -5992,6 +6250,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
+            const int64_t t_dflash_get_embedding_us = dflash_decode_timing ? ggml_time_us() : 0;
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(lctx.sched, embd);
             GGML_ASSERT(backend_embd != nullptr);
 
@@ -6030,6 +6289,11 @@ static int llama_decode_internal(
                     {
                         GGML_ABORT("unknown pooling type");
                     }
+            }
+            if (dflash_decode_timing) {
+                llama_synchronize(&lctx);
+                dflash_profile->decode_sync_profile_points++;
+                dflash_profile->decode_embedding_us += (uint64_t) (ggml_time_us() - t_dflash_get_embedding_us);
             }
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
@@ -6074,8 +6338,12 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
+    const int64_t t_dflash_final_sched_reset_us = dflash_decode_timing ? ggml_time_us() : 0;
     if (!lctx.prev) {
         lctx.reset_scheduler();
+    }
+    if (dflash_decode_timing) {
+        dflash_profile->decode_final_sched_reset_us += (uint64_t) (ggml_time_us() - t_dflash_final_sched_reset_us);
     }
 #if IK_PRINT_TIMING
         auto tim2 = ggml_time_us();

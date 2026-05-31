@@ -253,6 +253,8 @@ static const common_speculative_state_mtp * common_speculative_get_mtp_state(con
 static common_speculative_state_dflash * common_speculative_get_dflash_state(common_speculative * spec);
 static const common_speculative_state_dflash * common_speculative_get_dflash_state(const common_speculative * spec);
 static int32_t common_speculative_feature_width(const common_speculative * spec);
+static void dflash_materialize_target_window_features(common_speculative_state_dflash & state);
+static void dflash_ring_reset_rows(common_speculative_state_dflash & state, const float * rows, int32_t n_rows);
 static void dflash_append_target_features(
     common_speculative_state_dflash & state,
     const float * feature_rows,
@@ -275,6 +277,17 @@ static int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch
 
 static bool dflash_contract_log_enabled() {
     const char * env = std::getenv("IK_DFLASH_CONTRACT_LOG");
+    if (env == nullptr || *env == '\0') {
+        return false;
+    }
+
+    return std::strcmp(env, "0") != 0 &&
+           std::strcmp(env, "false") != 0 &&
+           std::strcmp(env, "off") != 0;
+}
+
+static bool dflash_use_kv_cache_experiment() {
+    const char * env = std::getenv("IK_DFLASH_KV_CACHE");
     if (env == nullptr || *env == '\0') {
         return false;
     }
@@ -479,7 +492,18 @@ struct common_speculative_state_dflash : public common_speculative_state {
     std::vector<int32_t> target_layer_ids;
     std::vector<float> target_window;
     std::vector<llama_pos> target_window_pos;
+    std::vector<float> target_window_stage;
+    std::vector<llama_pos> target_window_pos_stage;
+    std::vector<float> target_window_ring;
+    std::vector<float> target_window_append_features;
     int32_t target_window_rows = 0;
+    int32_t target_window_ring_write_pos = 0;
+    int32_t target_window_ring_filled = 0;
+    uint64_t target_window_version = 0;
+    int32_t target_window_keep_rows = 0;
+    int32_t target_window_append_rows = 0;
+    bool target_window_replace = false;
+    bool target_window_materialized = false;
     llama_pos last_target_pos = -1;
     size_t n_window_updates = 0;
     size_t n_rows_seen = 0;
@@ -497,6 +521,13 @@ struct common_speculative_state_dflash : public common_speculative_state {
     uint64_t t_accept_output_copy_us = 0;
     uint64_t t_accept_commit_us = 0;
     uint64_t t_accept_append_us = 0;
+    uint64_t t_accept_append_filter_us = 0;
+    uint64_t t_accept_append_window_alloc_us = 0;
+    uint64_t t_accept_append_replace_us = 0;
+    uint64_t t_accept_append_keep_old_us = 0;
+    uint64_t t_accept_append_new_rows_us = 0;
+    uint64_t t_accept_append_commit_detail_us = 0;
+    uint64_t t_accept_append_log_us = 0;
     size_t n_warmup_collect_calls = 0;
     size_t n_warmup_collect_rows = 0;
     size_t n_warmup_append_calls = 0;
@@ -507,6 +538,8 @@ struct common_speculative_state_dflash : public common_speculative_state {
     size_t n_accept_commit_rows = 0;
     size_t n_accept_append_calls = 0;
     size_t n_accept_append_rows = 0;
+    size_t n_accept_append_replace_calls = 0;
+    size_t n_accept_append_slide_calls = 0;
 
     common_speculative_state_dflash(
             enum common_speculative_type type,
@@ -614,6 +647,12 @@ struct common_speculative_state_dflash : public common_speculative_state {
         }
 
         batch = llama_batch_init(std::max(1, block_size), 0, 1);
+        target_window.reserve((size_t) this->cross_ctx * (size_t) n_target_features);
+        target_window_stage.reserve((size_t) this->cross_ctx * (size_t) n_target_features);
+        target_window_ring.resize((size_t) this->cross_ctx * (size_t) n_target_features);
+        target_window_append_features.reserve((size_t) this->cross_ctx * (size_t) n_target_features);
+        target_window_pos.reserve((size_t) this->cross_ctx);
+        target_window_pos_stage.reserve((size_t) this->cross_ctx);
         ready = true;
 
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
@@ -648,6 +687,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
         llama_kv_cache_clear(ctx_dft);
+        llama_reset_dflash_kv_cache_state(ctx_dft);
         n_window_updates = 0;
         n_rows_seen = 0;
         n_rows_dropped = 0;
@@ -663,6 +703,13 @@ struct common_speculative_state_dflash : public common_speculative_state {
         t_accept_output_copy_us = 0;
         t_accept_commit_us = 0;
         t_accept_append_us = 0;
+        t_accept_append_filter_us = 0;
+        t_accept_append_window_alloc_us = 0;
+        t_accept_append_replace_us = 0;
+        t_accept_append_keep_old_us = 0;
+        t_accept_append_new_rows_us = 0;
+        t_accept_append_commit_detail_us = 0;
+        t_accept_append_log_us = 0;
         n_warmup_collect_calls = 0;
         n_warmup_collect_rows = 0;
         n_warmup_append_calls = 0;
@@ -673,6 +720,8 @@ struct common_speculative_state_dflash : public common_speculative_state {
         n_accept_commit_rows = 0;
         n_accept_append_calls = 0;
         n_accept_append_rows = 0;
+        n_accept_append_replace_calls = 0;
+        n_accept_append_slide_calls = 0;
         llama_dflash_profile_reset(ctx_tgt);
         llama_dflash_profile_reset(ctx_dft);
     }
@@ -695,7 +744,33 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return;
         }
 
-        if (!llama_set_dflash_target_features_view(ctx_dft, target_window.data(), target_window.size(), target_window_rows, target_window_pos.data())) {
+        const bool use_kv_cache = dflash_use_kv_cache_experiment();
+        const float * target_features = nullptr;
+        size_t target_feature_floats = 0;
+        llama_dflash_window_update window_update = {
+            target_window_version,
+            target_window_keep_rows,
+            target_window_append_rows,
+            target_window_replace,
+            target_window_append_features.empty() ? nullptr : target_window_append_features.data(),
+            target_window_append_features.size(),
+        };
+        const llama_dflash_kv_cache_transition cache_plan = use_kv_cache
+                ? llama_plan_dflash_kv_cache_transition_for_ctx(ctx_dft, window_update, target_window_rows)
+                : llama_dflash_kv_cache_transition{};
+
+        if (!use_kv_cache || cache_plan.rebuild_cache) {
+            dflash_materialize_target_window_features(*this);
+            target_features = target_window.data();
+            target_feature_floats = target_window.size();
+        }
+        if (use_kv_cache && cache_plan.rebuild_cache) {
+            window_update.append_features = target_window.data();
+            window_update.append_floats = target_window.size();
+            window_update.append_rows = target_window_rows;
+        }
+
+        if (!llama_set_dflash_target_features_view(ctx_dft, target_features, target_feature_floats, target_window_rows, target_window_pos.data(), &window_update)) {
             LOG_ERR("%s: failed to set DFlash target features\n", __func__);
             n_set_target_fail++;
             return;
@@ -2522,6 +2597,24 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                     const double kv_compute_ms = (double) graph_stats.graph_kv_cache_compute_us / 1000.0;
                     const double kv_sync_ms = (double) graph_stats.graph_kv_cache_sync_us / 1000.0;
                     const double replay_append_ms = (double) dflash_state->t_accept_append_us / 1000.0;
+                    const double feature_path_ms = (double) (
+                        capture_stats.capture_prepare_sync_us +
+                        capture_stats.capture_materialize_us +
+                        graph_stats.set_target_copy_us +
+                        graph_stats.graph_feature_copy_us +
+                        graph_stats.graph_pos_copy_us +
+                        graph_stats.graph_mask_build_us) / 1000.0;
+                    const double decode_internal_ms = (double) (
+                        graph_stats.decode_prelude_us +
+                        graph_stats.decode_sched_reset_us +
+                        graph_stats.decode_build_graph_us +
+                        graph_stats.decode_sched_alloc_graph_us +
+                        graph_stats.decode_prepare_us +
+                        graph_stats.decode_set_inputs_us +
+                        graph_stats.decode_graph_compute_us +
+                        graph_stats.decode_result_us +
+                        graph_stats.decode_embedding_us +
+                        graph_stats.decode_final_sched_reset_us) / 1000.0;
 
                         LOG_INF("statistics dflash profile: capture(sync/materialize)=%.3f/%.3f ms calls=%llu/%llu bytes=%llu phase(prompt/verify batches changes)=%llu/%llu %llu/%llu, set_target=%.3f ms rows=%llu bytes=%llu, decode(llama_output_reserve/prepare)=%.3f/%.3f ms calls=%llu/%llu realloc(bytes)=%llu/%llu, prep(total/features/pos/mask)=%.3f/%.3f/%.3f/%.3f ms kv_cache(total/build/reserve/reset/alloc/up_f/up_p/compute/sync/read)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls(prepare/cache/read)=%llu/%llu/%llu bytes(feature/pos/mask/read)=%llu/%llu/%llu/%llu host_layers=%d, fallback_pos(copy/graph)=%llu/%llu, nonmono(copy/graph)=%llu/%llu, capture_fail=%llu/%llu decode_prepare_fail=%llu, visible_kv_max=%llu, last(rows=%d width=%d left_pad=%d n_tokens=%d n_kv=%d pos=[%d..%d])\n",
                             (double) capture_stats.capture_prepare_sync_us / 1000.0,
@@ -2580,6 +2673,81 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                             (int) graph_stats.last_pos_first,
                             (int) graph_stats.last_pos_last);
 
+                            LOG_INF("statistics dflash features: total=%.3f ms capture(sync/materialize)=%.3f/%.3f ms set_target=%.3f ms prep(feature/pos/mask)=%.3f/%.3f/%.3f ms rows(materialize/set_target)=%llu/%llu bytes(materialize/set_target/feature/pos/mask)=%llu/%llu/%llu/%llu/%llu\n",
+                                feature_path_ms,
+                                (double) capture_stats.capture_prepare_sync_us / 1000.0,
+                                (double) capture_stats.capture_materialize_us / 1000.0,
+                                (double) graph_stats.set_target_copy_us / 1000.0,
+                                (double) graph_stats.graph_feature_copy_us / 1000.0,
+                                (double) graph_stats.graph_pos_copy_us / 1000.0,
+                                (double) graph_stats.graph_mask_build_us / 1000.0,
+                                (unsigned long long) capture_stats.capture_materialize_rows,
+                                (unsigned long long) graph_stats.set_target_rows,
+                                (unsigned long long) capture_stats.capture_materialize_bytes,
+                                (unsigned long long) graph_stats.set_target_copy_bytes,
+                                (unsigned long long) graph_stats.graph_feature_bytes,
+                                (unsigned long long) graph_stats.graph_pos_bytes,
+                                (unsigned long long) graph_stats.graph_mask_bytes);
+
+                            LOG_INF("statistics dflash kv: total=%.3f ms build/reserve/reset/alloc/upload_f/upload_p/compute/sync/read=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu cached_bytes=%llu host_layers=%d\n",
+                                kv_cache_total_ms,
+                                (double) graph_stats.graph_kv_cache_build_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_reserve_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_reset_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_alloc_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_feature_upload_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_pos_upload_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_compute_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_sync_us / 1000.0,
+                                (double) graph_stats.graph_kv_cache_read_concat_pad_us / 1000.0,
+                                (unsigned long long) graph_stats.graph_kv_cache_calls,
+                                (unsigned long long) graph_stats.graph_kv_cache_cached_bytes,
+                                graph_stats.last_kv_cache_host_layers);
+
+                            if (graph_stats.decode_internal_chunks > 0) {
+                            LOG_INF("statistics dflash decode: llama_decode(total)=%.3f ms calls=%zu chunks=%llu rebuilds=%llu sync_points=%llu internal(total/prelude/sched_reset/build/alloc/prepare/set_inputs/compute/get_result/get_embedding/final_reset)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms\n",
+                                (double) dflash_state->t_draft_decode_us / 1000.0,
+                                dflash_state->n_call_draft,
+                                (unsigned long long) graph_stats.decode_internal_chunks,
+                                (unsigned long long) graph_stats.decode_graph_rebuilds,
+                                (unsigned long long) graph_stats.decode_sync_profile_points,
+                                decode_internal_ms,
+                                (double) graph_stats.decode_prelude_us / 1000.0,
+                                (double) graph_stats.decode_sched_reset_us / 1000.0,
+                                (double) graph_stats.decode_build_graph_us / 1000.0,
+                                (double) graph_stats.decode_sched_alloc_graph_us / 1000.0,
+                                (double) graph_stats.decode_prepare_us / 1000.0,
+                                (double) graph_stats.decode_set_inputs_us / 1000.0,
+                                (double) graph_stats.decode_graph_compute_us / 1000.0,
+                                (double) graph_stats.decode_result_us / 1000.0,
+                                (double) graph_stats.decode_embedding_us / 1000.0,
+                                (double) graph_stats.decode_final_sched_reset_us / 1000.0);
+                            }
+
+                            if (graph_stats.graph_kv_node_fused_target_calls > 0 ||
+                                    graph_stats.graph_kv_node_k_proj_calls > 0 ||
+                                    graph_stats.graph_kv_node_k_norm_calls > 0 ||
+                                    graph_stats.graph_kv_node_k_rope_calls > 0 ||
+                                    graph_stats.graph_kv_node_v_proj_calls > 0 ||
+                                    graph_stats.graph_kv_node_k_store_calls > 0 ||
+                                    graph_stats.graph_kv_node_v_store_calls > 0) {
+                                LOG_INF("statistics dflash kv nodes: fused_target/k_proj/k_norm/k_rope/v_proj/k_store/v_store=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu/%llu/%llu/%llu/%llu/%llu/%llu\n",
+                                        (double) graph_stats.graph_kv_node_fused_target_us / 1000.0,
+                                        (double) graph_stats.graph_kv_node_k_proj_us / 1000.0,
+                                        (double) graph_stats.graph_kv_node_k_norm_us / 1000.0,
+                                        (double) graph_stats.graph_kv_node_k_rope_us / 1000.0,
+                                        (double) graph_stats.graph_kv_node_v_proj_us / 1000.0,
+                                        (double) graph_stats.graph_kv_node_k_store_us / 1000.0,
+                                        (double) graph_stats.graph_kv_node_v_store_us / 1000.0,
+                                        (unsigned long long) graph_stats.graph_kv_node_fused_target_calls,
+                                        (unsigned long long) graph_stats.graph_kv_node_k_proj_calls,
+                                        (unsigned long long) graph_stats.graph_kv_node_k_norm_calls,
+                                        (unsigned long long) graph_stats.graph_kv_node_k_rope_calls,
+                                        (unsigned long long) graph_stats.graph_kv_node_v_proj_calls,
+                                        (unsigned long long) graph_stats.graph_kv_node_k_store_calls,
+                                        (unsigned long long) graph_stats.graph_kv_node_v_store_calls);
+                            }
+
                             LOG_INF("statistics dflash hot: kv(upload_f/upload_p/upload/compute/sync)=%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu replay(accepted_prefix_append)=%.3f ms calls=%zu rows=%zu\n",
                                 kv_upload_feature_ms,
                                 kv_upload_pos_ms,
@@ -2609,6 +2777,20 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                             dflash_state->n_accept_commit_rows,
                             dflash_state->n_accept_output_copy_rows,
                             dflash_state->n_accept_append_rows);
+
+                    if (dflash_state->n_accept_append_calls > 0) {
+                        LOG_INF("statistics dflash replay: append(filter/window_alloc/replace/keep_old/new_rows/commit/log)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%zu replace/slide=%zu/%zu\n",
+                                (double) dflash_state->t_accept_append_filter_us / 1000.0,
+                            (double) dflash_state->t_accept_append_window_alloc_us / 1000.0,
+                                (double) dflash_state->t_accept_append_replace_us / 1000.0,
+                                (double) dflash_state->t_accept_append_keep_old_us / 1000.0,
+                                (double) dflash_state->t_accept_append_new_rows_us / 1000.0,
+                                (double) dflash_state->t_accept_append_commit_detail_us / 1000.0,
+                                (double) dflash_state->t_accept_append_log_us / 1000.0,
+                                dflash_state->n_accept_append_calls,
+                                dflash_state->n_accept_append_replace_calls,
+                                dflash_state->n_accept_append_slide_calls);
+                    }
                 }
             }
         }
@@ -2728,11 +2910,113 @@ static void mtp_clear_target_hidden(common_speculative_state_mtp & state, llama_
     state.draft_cache_by_seq.erase(seq_id);
 }
 
+struct dflash_append_breakdown {
+    uint64_t filter_us = 0;
+    uint64_t window_alloc_us = 0;
+    uint64_t replace_us = 0;
+    uint64_t keep_old_us = 0;
+    uint64_t new_rows_us = 0;
+    uint64_t commit_us = 0;
+    uint64_t log_us = 0;
+    bool replace_call = false;
+};
+
+static void dflash_record_window_update(
+        common_speculative_state_dflash & state,
+        int32_t keep_rows,
+        int32_t append_rows,
+        bool replace) {
+    state.target_window_keep_rows = std::max<int32_t>(0, keep_rows);
+    state.target_window_append_rows = std::max<int32_t>(0, append_rows);
+    state.target_window_replace = replace;
+    state.target_window_version++;
+}
+
+static void dflash_ring_reset_rows(
+        common_speculative_state_dflash & state,
+        const float * rows,
+        int32_t n_rows) {
+    const size_t row_width = (size_t) state.n_target_features;
+    if (n_rows <= 0 || rows == nullptr) {
+        state.target_window_ring_write_pos = 0;
+        state.target_window_ring_filled = 0;
+        return;
+    }
+
+    if (state.target_window_ring.size() != (size_t) state.cross_ctx * row_width) {
+        state.target_window_ring.resize((size_t) state.cross_ctx * row_width);
+    }
+
+    std::memcpy(state.target_window_ring.data(), rows, (size_t) n_rows * row_width * sizeof(float));
+    state.target_window_ring_write_pos = n_rows % state.cross_ctx;
+    state.target_window_ring_filled = n_rows;
+    state.target_window_materialized = false;
+}
+
+static void dflash_ring_append_rows(
+        common_speculative_state_dflash & state,
+        const float * rows,
+        int32_t n_rows) {
+    const size_t row_width = (size_t) state.n_target_features;
+    if (n_rows <= 0 || rows == nullptr) {
+        return;
+    }
+
+    if (state.target_window_ring.size() != (size_t) state.cross_ctx * row_width) {
+        state.target_window_ring.resize((size_t) state.cross_ctx * row_width);
+    }
+
+    int32_t write_pos = state.target_window_ring_write_pos;
+    int32_t remaining = n_rows;
+    const float * src = rows;
+    while (remaining > 0) {
+        const int32_t chunk_rows = std::min<int32_t>(remaining, state.cross_ctx - write_pos);
+        std::memcpy(
+                state.target_window_ring.data() + (size_t) write_pos * row_width,
+                src,
+                (size_t) chunk_rows * row_width * sizeof(float));
+        src += (size_t) chunk_rows * row_width;
+        remaining -= chunk_rows;
+        write_pos = (write_pos + chunk_rows) % state.cross_ctx;
+    }
+
+    state.target_window_ring_write_pos = write_pos;
+    state.target_window_ring_filled = std::min(state.cross_ctx, state.target_window_ring_filled + n_rows);
+    state.target_window_materialized = false;
+}
+
+static void dflash_materialize_target_window_features(common_speculative_state_dflash & state) {
+    if (state.target_window_materialized || state.target_window_rows <= 0) {
+        return;
+    }
+
+    const size_t row_width = (size_t) state.n_target_features;
+    state.target_window.resize((size_t) state.target_window_rows * row_width);
+
+    const int32_t read_start = (state.target_window_ring_write_pos - state.target_window_rows + state.cross_ctx) % state.cross_ctx;
+    const int32_t first_rows = std::min<int32_t>(state.target_window_rows, state.cross_ctx - read_start);
+    std::memcpy(
+            state.target_window.data(),
+            state.target_window_ring.data() + (size_t) read_start * row_width,
+            (size_t) first_rows * row_width * sizeof(float));
+
+    const int32_t second_rows = state.target_window_rows - first_rows;
+    if (second_rows > 0) {
+        std::memcpy(
+                state.target_window.data() + (size_t) first_rows * row_width,
+                state.target_window_ring.data(),
+                (size_t) second_rows * row_width * sizeof(float));
+    }
+
+    state.target_window_materialized = true;
+}
+
 static bool dflash_append_target_features(
         common_speculative_state_dflash & state,
         const common_speculative_feature_view & features,
         const llama_batch & batch,
-        llama_seq_id seq_id) {
+        llama_seq_id seq_id,
+        dflash_append_breakdown * breakdown = nullptr) {
     GGML_UNUSED(batch);
 
     if (features.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE ||
@@ -2748,6 +3032,7 @@ static bool dflash_append_target_features(
     new_rows.reserve(features.rows.size() * row_width);
     new_positions.reserve(features.rows.size());
 
+    const int64_t t_filter_us = ggml_time_us();
     for (const auto & row : features.rows) {
         if (row.seq_id != seq_id || row.data == nullptr) {
             continue;
@@ -2755,6 +3040,9 @@ static bool dflash_append_target_features(
 
         new_positions.push_back(row.pos);
         new_rows.insert(new_rows.end(), row.data, row.data + row_width);
+    }
+    if (breakdown != nullptr) {
+        breakdown->filter_us += (uint64_t) (ggml_time_us() - t_filter_us);
     }
 
     if (new_positions.empty()) {
@@ -2767,46 +3055,93 @@ static bool dflash_append_target_features(
     if (n_rows >= state.cross_ctx) {
         state.n_rows_dropped += (size_t) state.target_window_rows + (size_t) (n_rows - state.cross_ctx);
         const int32_t keep_from = n_rows - state.cross_ctx;
-        state.target_window.assign(
+        const int64_t t_replace_us = ggml_time_us();
+        state.target_window_pos.assign(new_positions.begin() + keep_from, new_positions.end());
+        state.target_window_append_features.assign(
                 new_rows.begin() + (ptrdiff_t) keep_from * (ptrdiff_t) row_width,
                 new_rows.end());
-        state.target_window_pos.assign(new_positions.begin() + keep_from, new_positions.end());
+        dflash_ring_reset_rows(state, state.target_window_append_features.data(), state.cross_ctx);
+        if (breakdown != nullptr) {
+            breakdown->replace_us += (uint64_t) (ggml_time_us() - t_replace_us);
+            breakdown->replace_call = true;
+        }
+
+        const int64_t t_commit_us = ggml_time_us();
         state.target_window_rows = state.cross_ctx;
+        state.target_window_ring_filled = state.target_window_rows;
         state.last_target_pos = state.target_window_pos.empty() ? -1 : state.target_window_pos.back();
+        dflash_record_window_update(state, 0, state.target_window_rows, true);
+        if (breakdown != nullptr) {
+            breakdown->commit_us += (uint64_t) (ggml_time_us() - t_commit_us);
+        }
+
+        const int64_t t_log_us = ggml_time_us();
         dflash_contract_log_append(state, seq_id, new_positions);
+        if (breakdown != nullptr) {
+            breakdown->log_us += (uint64_t) (ggml_time_us() - t_log_us);
+        }
         return true;
     }
 
     const int32_t keep_old_rows = std::min<int32_t>(state.target_window_rows, state.cross_ctx - n_rows);
     state.n_rows_dropped += (size_t) std::max<int32_t>(0, state.target_window_rows - keep_old_rows);
-    std::vector<float> next_window((size_t) (keep_old_rows + n_rows) * row_width);
-    std::vector<llama_pos> next_window_pos((size_t) (keep_old_rows + n_rows));
-
-    if (keep_old_rows > 0) {
-        const float * old_src = state.target_window.data() + (size_t) (state.target_window_rows - keep_old_rows) * row_width;
-        std::memcpy(next_window.data(), old_src, (size_t) keep_old_rows * row_width * sizeof(float));
-        std::copy(state.target_window_pos.end() - keep_old_rows, state.target_window_pos.end(), next_window_pos.begin());
+    const int64_t t_window_alloc_us = ggml_time_us();
+    std::vector<llama_pos> & next_window_pos = state.target_window_pos_stage;
+    next_window_pos.resize((size_t) (keep_old_rows + n_rows));
+    if (breakdown != nullptr) {
+        breakdown->window_alloc_us += (uint64_t) (ggml_time_us() - t_window_alloc_us);
     }
 
-    std::memcpy(
-            next_window.data() + (size_t) keep_old_rows * row_width,
-            new_rows.data(),
-            (size_t) n_rows * row_width * sizeof(float));
-    std::copy(new_positions.begin(), new_positions.end(), next_window_pos.begin() + keep_old_rows);
+    if (keep_old_rows > 0) {
+        const int64_t t_keep_old_us = ggml_time_us();
+        std::copy(state.target_window_pos.end() - keep_old_rows, state.target_window_pos.end(), next_window_pos.begin());
+        if (breakdown != nullptr) {
+            breakdown->keep_old_us += (uint64_t) (ggml_time_us() - t_keep_old_us);
+        }
+    }
 
-    state.target_window = std::move(next_window);
-    state.target_window_pos = std::move(next_window_pos);
+    const int64_t t_new_rows_us = ggml_time_us();
+    state.target_window_append_features.assign(new_rows.begin(), new_rows.end());
+    dflash_ring_append_rows(state, state.target_window_append_features.data(), n_rows);
+    std::copy(new_positions.begin(), new_positions.end(), next_window_pos.begin() + keep_old_rows);
+    if (breakdown != nullptr) {
+        breakdown->new_rows_us += (uint64_t) (ggml_time_us() - t_new_rows_us);
+    }
+
+    const int64_t t_commit_us = ggml_time_us();
+    state.target_window_pos.swap(next_window_pos);
+    next_window_pos.clear();
     state.target_window_rows = keep_old_rows + n_rows;
+    state.target_window_ring_filled = state.target_window_rows;
     state.last_target_pos = state.target_window_pos.empty() ? -1 : state.target_window_pos.back();
+    dflash_record_window_update(state, keep_old_rows, n_rows, false);
+    if (breakdown != nullptr) {
+        breakdown->commit_us += (uint64_t) (ggml_time_us() - t_commit_us);
+    }
+
+    const int64_t t_log_us = ggml_time_us();
     dflash_contract_log_append(state, seq_id, new_positions);
+    if (breakdown != nullptr) {
+        breakdown->log_us += (uint64_t) (ggml_time_us() - t_log_us);
+    }
     return true;
 }
 
 static void dflash_clear_target_features(common_speculative_state_dflash & state) {
     state.target_window.clear();
     state.target_window_pos.clear();
+    state.target_window_stage.clear();
+    state.target_window_pos_stage.clear();
+    state.target_window_append_features.clear();
     state.target_window_rows = 0;
+    state.target_window_ring_write_pos = 0;
+    state.target_window_ring_filled = 0;
+    state.target_window_keep_rows = 0;
+    state.target_window_append_rows = 0;
+    state.target_window_replace = false;
+    state.target_window_materialized = false;
     state.last_target_pos = -1;
+    llama_reset_dflash_kv_cache_state(state.ctx_dft);
 }
 
 static void dflash_context_shift(
@@ -2814,9 +3149,11 @@ static void dflash_context_shift(
         llama_pos kv_keep,
         llama_pos kv_discard,
         llama_pos kv_past) {
-    if (kv_discard <= 0 || state.target_window_rows <= 0 || state.target_window.empty() || state.target_window_pos.empty()) {
+    if (kv_discard <= 0 || state.target_window_rows <= 0 || state.target_window_pos.empty()) {
         return;
     }
+
+    dflash_materialize_target_window_features(state);
 
     const size_t row_width = (size_t) state.n_target_features;
     const llama_pos discard_begin = kv_keep;
@@ -2845,7 +3182,10 @@ static void dflash_context_shift(
     state.target_window = std::move(shifted_rows);
     state.target_window_pos = std::move(shifted_positions);
     state.target_window_rows = (int32_t) state.target_window_pos.size();
+    dflash_ring_reset_rows(state, state.target_window.data(), state.target_window_rows);
     state.last_target_pos = state.target_window_pos.empty() ? -1 : state.target_window_pos.back();
+    dflash_record_window_update(state, 0, state.target_window_rows, true);
+    llama_reset_dflash_kv_cache_state(state.ctx_dft);
     state.n_context_shifts++;
 }
 
@@ -2959,8 +3299,9 @@ int32_t common_speculative_on_target_batch(
             }
         }
 
+        dflash_append_breakdown append_breakdown;
         const int64_t t_append_us = ggml_time_us();
-        if (!dflash_append_target_features(*dflash_state, features, batch, seq_id)) {
+        if (!dflash_append_target_features(*dflash_state, features, batch, seq_id, &append_breakdown)) {
             return -1;
         }
 
@@ -2971,8 +3312,20 @@ int32_t common_speculative_on_target_batch(
             dflash_state->n_warmup_append_rows += (size_t) batch.n_tokens;
         } else {
             dflash_state->t_accept_append_us += append_us;
+            dflash_state->t_accept_append_filter_us += append_breakdown.filter_us;
+            dflash_state->t_accept_append_window_alloc_us += append_breakdown.window_alloc_us;
+            dflash_state->t_accept_append_replace_us += append_breakdown.replace_us;
+            dflash_state->t_accept_append_keep_old_us += append_breakdown.keep_old_us;
+            dflash_state->t_accept_append_new_rows_us += append_breakdown.new_rows_us;
+            dflash_state->t_accept_append_commit_detail_us += append_breakdown.commit_us;
+            dflash_state->t_accept_append_log_us += append_breakdown.log_us;
             dflash_state->n_accept_append_calls++;
             dflash_state->n_accept_append_rows += (size_t) batch.n_tokens;
+            if (append_breakdown.replace_call) {
+                dflash_state->n_accept_append_replace_calls++;
+            } else {
+                dflash_state->n_accept_append_slide_calls++;
+            }
         }
 
         return 0;

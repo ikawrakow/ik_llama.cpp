@@ -55,6 +55,56 @@ void llama_dflash_profile_reset(struct llama_context * ctx) {
     ctx->dflash_profile = {};
 }
 
+void llama_reset_dflash_kv_cache_state(struct llama_context * ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    ctx->dflash_kv_cache_write_pos = 0;
+    ctx->dflash_kv_cache_n_filled = 0;
+    ctx->dflash_kv_cache_update_rows = 0;
+    ctx->dflash_kv_cache_view_write_pos = 0;
+    ctx->dflash_kv_cache_view_n_filled = 0;
+    ctx->dflash_kv_cache_applied_window_version = 0;
+    ctx->dflash_kv_cache_valid = false;
+    ctx->dflash_kv_cache_view_valid = false;
+
+    for (ggml_backend_buffer_t buf : ctx->dflash_cache_bufs) {
+        if (buf != nullptr) {
+            ggml_backend_buffer_clear(buf, 0);
+        }
+    }
+}
+
+llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
+        const struct llama_context * ctx,
+        const llama_dflash_window_update & window_update,
+        int32_t n_rows) {
+    if (ctx == nullptr) {
+        llama_dflash_kv_cache_transition plan;
+        plan.rebuild_cache = true;
+        plan.append_rows = std::clamp(window_update.append_rows, 0, n_rows);
+        plan.next_n_filled = n_rows;
+        return plan;
+    }
+
+    const int32_t cross_ctx = ctx->dflash_visible_cross_ctx > 0
+            ? ctx->dflash_visible_cross_ctx
+            : std::max<int32_t>(1, (int32_t) ctx->cparams.n_ctx - (int32_t) ctx->model.hparams.dflash_block_size);
+
+    return llama_plan_dflash_kv_cache_transition(
+            cross_ctx,
+            ctx->dflash_kv_cache_n_filled,
+            ctx->dflash_kv_cache_write_pos,
+            ctx->dflash_kv_cache_valid,
+            ctx->dflash_kv_cache_applied_window_version,
+            window_update.version,
+            window_update.keep_rows,
+            window_update.append_rows,
+            window_update.replace,
+            n_rows);
+}
+
 void llama_set_dflash_visible_cross_ctx(
         struct llama_context * ctx,
         int32_t cross_ctx) {
@@ -205,26 +255,91 @@ static bool llama_set_dflash_target_features_impl(
         size_t n_floats,
         int32_t n_rows,
         const llama_pos * target_positions,
-        bool copy_data) {
-    if (ctx == nullptr || target_features == nullptr || n_floats == 0 || n_rows <= 0) {
+        bool copy_data,
+        const llama_dflash_window_update * window_update) {
+    const bool have_full_features = target_features != nullptr && n_floats > 0;
+    const bool have_append_features = window_update != nullptr &&
+            window_update->append_features != nullptr &&
+            window_update->append_floats > 0 &&
+            window_update->append_rows > 0;
+
+    if (ctx == nullptr || n_rows <= 0 || (!have_full_features && !have_append_features)) {
         return false;
     }
 
     auto & profile = ctx->dflash_profile;
     const int64_t t_start_us = ggml_time_us();
-    const int32_t row_width = n_rows > 0 ? (int32_t) (n_floats / (size_t) n_rows) : 0;
+    const int32_t row_width = have_full_features
+            ? (n_rows > 0 ? (int32_t) (n_floats / (size_t) n_rows) : 0)
+            : (window_update->append_rows > 0 ? (int32_t) (window_update->append_floats / (size_t) window_update->append_rows) : 0);
     llama_pos first_pos = -1;
     llama_pos last_pos = -1;
 
-    if (copy_data) {
+    if (have_full_features && copy_data) {
         ctx->dflash_target_features_owned.assign(target_features, target_features + n_floats);
         ctx->dflash_target_features = ctx->dflash_target_features_owned.data();
-    } else {
+    } else if (have_full_features) {
         ctx->dflash_target_features_owned.clear();
         ctx->dflash_target_features = target_features;
+    } else {
+        ctx->dflash_target_features_owned.clear();
+        ctx->dflash_target_features = nullptr;
     }
-    ctx->dflash_target_features_n_floats = n_floats;
+    ctx->dflash_target_features_n_floats = have_full_features ? n_floats : 0;
     ctx->dflash_target_features_n_rows = n_rows;
+    if (have_append_features && copy_data) {
+        ctx->dflash_target_append_features_owned.assign(
+                window_update->append_features,
+                window_update->append_features + window_update->append_floats);
+        ctx->dflash_target_append_features = ctx->dflash_target_append_features_owned.data();
+    } else if (have_append_features) {
+        ctx->dflash_target_append_features_owned.clear();
+        ctx->dflash_target_append_features = window_update->append_features;
+    } else {
+        ctx->dflash_target_append_features_owned.clear();
+        ctx->dflash_target_append_features = nullptr;
+    }
+    ctx->dflash_target_append_features_n_floats = have_append_features ? window_update->append_floats : 0;
+    ctx->dflash_target_append_features_n_rows = have_append_features ? window_update->append_rows : 0;
+        ctx->dflash_target_window_version = window_update != nullptr && window_update->version > 0
+            ? window_update->version
+            : ctx->dflash_target_window_version + 1;
+        ctx->dflash_target_window_keep_rows = window_update != nullptr
+            ? std::max<int32_t>(0, std::min(n_rows, window_update->keep_rows))
+            : 0;
+        ctx->dflash_target_window_append_rows = window_update != nullptr
+            ? std::max<int32_t>(0, std::min(n_rows, window_update->append_rows))
+            : n_rows;
+        ctx->dflash_target_window_replace = window_update != nullptr
+            ? window_update->replace
+            : true;
+        if (ctx->dflash_target_window_keep_rows + ctx->dflash_target_window_append_rows > n_rows) {
+        ctx->dflash_target_window_keep_rows = std::max<int32_t>(0, n_rows - ctx->dflash_target_window_append_rows);
+        }
+
+            const int32_t cross_ctx = ctx->dflash_visible_cross_ctx > 0
+                ? ctx->dflash_visible_cross_ctx
+                : std::max<int32_t>(1, (int32_t) ctx->cparams.n_ctx - (int32_t) ctx->model.hparams.dflash_block_size);
+            const llama_dflash_window_update cache_window_update = {
+                ctx->dflash_target_window_version,
+                ctx->dflash_target_window_keep_rows,
+                ctx->dflash_target_window_append_rows,
+                ctx->dflash_target_window_replace,
+                ctx->dflash_target_append_features,
+                ctx->dflash_target_append_features_n_floats,
+            };
+            const llama_dflash_kv_cache_transition cache_plan = llama_plan_dflash_kv_cache_transition_for_ctx(ctx, cache_window_update, n_rows);
+
+        if (cache_plan.cache_up_to_date) {
+            ctx->dflash_kv_cache_view_n_filled = ctx->dflash_kv_cache_n_filled;
+            ctx->dflash_kv_cache_view_write_pos = ctx->dflash_kv_cache_write_pos;
+            ctx->dflash_kv_cache_view_valid = ctx->dflash_kv_cache_valid;
+        } else if (cross_ctx > 0) {
+            ctx->dflash_kv_cache_view_n_filled = cache_plan.next_n_filled;
+            ctx->dflash_kv_cache_view_write_pos = cache_plan.next_write_pos;
+            ctx->dflash_kv_cache_view_valid = cache_plan.next_n_filled > 0;
+        }
+
     if (target_positions != nullptr) {
         if (copy_data) {
             ctx->dflash_target_positions_owned.assign(target_positions, target_positions + n_rows);
@@ -243,7 +358,10 @@ static bool llama_set_dflash_target_features_impl(
     profile.set_target_copy_calls++;
     profile.set_target_copy_us += (uint64_t) (ggml_time_us() - t_start_us);
     profile.set_target_rows += (uint64_t) n_rows;
-    profile.set_target_copy_bytes += n_floats * sizeof(float) + (target_positions ? (size_t) n_rows * sizeof(llama_pos) : 0);
+        profile.set_target_copy_bytes +=
+            (have_full_features ? n_floats : 0) * sizeof(float) +
+            (have_append_features ? window_update->append_floats : 0) * sizeof(float) +
+            (target_positions ? (size_t) n_rows * sizeof(llama_pos) : 0);
     profile.last_n_rows = n_rows;
     profile.last_width = row_width;
 
@@ -267,8 +385,9 @@ bool llama_set_dflash_target_features_copy(
         const float * target_features,
         size_t n_floats,
         int32_t n_rows,
-        const llama_pos * target_positions) {
-    return llama_set_dflash_target_features_impl(ctx, target_features, n_floats, n_rows, target_positions, true);
+        const llama_pos * target_positions,
+        const llama_dflash_window_update * window_update) {
+    return llama_set_dflash_target_features_impl(ctx, target_features, n_floats, n_rows, target_positions, true, window_update);
 }
 
 bool llama_set_dflash_target_features_view(
@@ -276,8 +395,9 @@ bool llama_set_dflash_target_features_view(
         const float * target_features,
         size_t n_floats,
         int32_t n_rows,
-        const llama_pos * target_positions) {
-    return llama_set_dflash_target_features_impl(ctx, target_features, n_floats, n_rows, target_positions, false);
+        const llama_pos * target_positions,
+        const llama_dflash_window_update * window_update) {
+    return llama_set_dflash_target_features_impl(ctx, target_features, n_floats, n_rows, target_positions, false, window_update);
 }
 
 static void llama_record_dflash_capture_phase(

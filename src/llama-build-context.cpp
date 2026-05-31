@@ -2173,7 +2173,27 @@ struct ggml_cgraph * llm_build_context::llama_build_graph_dflash_kv_cache(llama_
     llama_batch dummy;
     dummy.n_tokens = 0;
 
-    llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
+    llm_build_cb cb = [&](struct ggml_tensor * cur, const char * name, int il) {
+        if (il >= 0) {
+            int j = 0;
+            for (; j < GGML_MAX_NAME - 1; ++j) {
+                cur->name[j] = name[j];
+                if (!name[j]) {
+                    break;
+                }
+            }
+            if (j < GGML_MAX_NAME - 3) {
+                cur->name[j++] = '-';
+                auto sil = std::to_string(il);
+                for (int k = 0; k < (int) sil.size() && j < GGML_MAX_NAME - 1; ++k) {
+                    cur->name[j++] = sil[k];
+                }
+            }
+            cur->name[j] = 0;
+        } else {
+            ggml_set_name(cur, name);
+        }
+    };
 
     struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash_buf_compute_meta);
 
