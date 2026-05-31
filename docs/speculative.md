@@ -135,7 +135,16 @@ Canonical stage keys:
 | `suffix_max_depth` | Maximum suffix-tree depth |
 | `suffix_corpus` | Optional suffix corpus file for pre-warming |
 
-String-valued stage keys such as `suffix_corpus` may either quote the value inside the stage payload or escape commas as `\,`.
+String-valued stage keys such as `suffix_corpus` need shell-safe quoting when the value contains commas. From a normal shell, quote the value inside the stage payload so the parser sees the comma as part of the string value.
+
+Example shell-safe form:
+
+```bash
+./llama-server [...] \
+    --spec-type "suffix:n_max=16,n_min=2,suffix_min_match_len=5,suffix_max_depth=64,suffix_corpus='/tmp/spec,type-corpus.json'"
+```
+
+If you are constructing `argv` directly without shell unescaping, the parser also accepts escaped commas as `\,`.
 
 Examples:
 
@@ -157,6 +166,10 @@ Examples:
 # Suffix stage with pre-warmed corpus
 ./llama-server [...] \
     --spec-type suffix:n_max=16,n_min=2,suffix_min_match_len=5,suffix_max_depth=64,suffix_corpus=/path/to/corpus.json
+
+# Suffix stage with a comma-bearing corpus path from a normal shell
+./llama-server [...] \
+    --spec-type "suffix:n_max=16,n_min=2,suffix_min_match_len=5,suffix_max_depth=64,suffix_corpus='/tmp/spec,type-corpus.json'"
 ```
 
 ### `--spec-autotune`
