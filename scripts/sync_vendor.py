@@ -7,6 +7,7 @@ vendor = {
     "https://github.com/nlohmann/json/releases/latest/download/json_fwd.hpp": "common/json_fwd.hpp",
 
     # "https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image.h": "vendor/stb/stb_image.h",
+    # "https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image_resize2.h": "vendor/stb/stb_image_resize2.h",
 
     # "https://github.com/mackron/miniaudio/raw/refs/tags/0.11.22/miniaudio.h": "vendor/miniaudio/miniaudio.h",
 

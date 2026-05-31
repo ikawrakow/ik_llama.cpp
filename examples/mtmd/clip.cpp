@@ -36,6 +36,8 @@
 #include <functional>
 #include <cfloat>
 
+#include "stb/stb_image_resize2.h"
+
 #define DEFAULT_INTERPOLATION_MODE ((int)GGML_SCALE_MODE_BILINEAR | (int)GGML_SCALE_FLAG_ALIGN_CORNERS)
 
 // TODO: allow to pass callback from user code
@@ -4264,109 +4266,25 @@ private:
     static void resize_bilinear(const clip_image_u8 & src, clip_image_u8 & dst, int target_width, int target_height) {
         dst.nx = target_width;
         dst.ny = target_height;
-        dst.buf.resize(3 * target_width * target_height);
+        dst.buf.resize(3 * (size_t) target_width * (size_t) target_height);
 
-        float x_ratio = static_cast<float>(src.nx - 1) / target_width;
-        float y_ratio = static_cast<float>(src.ny - 1) / target_height;
-
-        for (int y = 0; y < target_height; y++) {
-            for (int x = 0; x < target_width; x++) {
-                float px = x_ratio * x;
-                float py = y_ratio * y;
-                int x_floor = static_cast<int>(px);
-                int y_floor = static_cast<int>(py);
-                float x_lerp = px - x_floor;
-                float y_lerp = py - y_floor;
-
-                for (int c = 0; c < 3; c++) {
-                    float top = lerp(
-                        static_cast<float>(src.buf[3 * (y_floor * src.nx + x_floor) + c]),
-                        static_cast<float>(src.buf[3 * (y_floor * src.nx + (x_floor + 1)) + c]),
-                        x_lerp
-                    );
-                    float bottom = lerp(
-                        static_cast<float>(src.buf[3 * ((y_floor + 1) * src.nx + x_floor) + c]),
-                        static_cast<float>(src.buf[3 * ((y_floor + 1) * src.nx + (x_floor + 1)) + c]),
-                        x_lerp
-                    );
-                    dst.buf[3 * (y * target_width + x) + c] = static_cast<uint8_t>(lerp(top, bottom, y_lerp));
-                }
-            }
-        }
+        stbir_resize(
+            src.buf.data(), src.nx, src.ny, src.nx * 3,
+            dst.buf.data(), target_width, target_height, target_width * 3,
+            STBIR_RGB, STBIR_TYPE_UINT8, STBIR_EDGE_CLAMP, STBIR_FILTER_TRIANGLE);
     }
 
     // Bicubic resize function
-    // part of image will be cropped if the aspect ratio is different
     static bool resize_bicubic(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
-        const int nx = img.nx;
-        const int ny = img.ny;
-
         dst.nx = target_width;
         dst.ny = target_height;
-        dst.buf.resize(3 * target_width * target_height);
+        dst.buf.resize(3 * (size_t) target_width * (size_t) target_height);
 
-        float Cc;
-        float C[5] = {};
-        float d0, d2, d3, a0, a1, a2, a3;
-        int i, j, k, jj;
-        int x, y;
-        float dx, dy;
-        float tx, ty;
-
-        tx = (float)nx / (float)target_width;
-        ty = (float)ny / (float)target_height;
-
-        // Bicubic interpolation; adapted from ViT.cpp, inspired from :
-        //    -> https://github.com/yglukhov/bicubic-interpolation-image-processing/blob/master/libimage.c#L36
-        //    -> https://en.wikipedia.org/wiki/Bicubic_interpolation
-
-        for (i = 0; i < target_height; i++) {
-            for (j = 0; j < target_width; j++) {
-                x = (int)(tx * j);
-                y = (int)(ty * i);
-
-                dx = tx * j - x;
-                dy = ty * i - y;
-
-                for (k = 0; k < 3; k++) {
-                    for (jj = 0; jj <= 3; jj++) {
-                        d0 = img.buf[(clip(y - 1 + jj, 0, ny - 1) * nx + clip(x - 1, 0, nx - 1)) * 3 + k] - img.buf[(clip(y - 1 + jj, 0, ny - 1) * nx + clip(x, 0, nx - 1)) * 3 + k];
-                        d2 = img.buf[(clip(y - 1 + jj, 0, ny - 1) * nx + clip(x + 1, 0, nx - 1)) * 3 + k] - img.buf[(clip(y - 1 + jj, 0, ny - 1) * nx + clip(x, 0, nx - 1)) * 3 + k];
-                        d3 = img.buf[(clip(y - 1 + jj, 0, ny - 1) * nx + clip(x + 2, 0, nx - 1)) * 3 + k] - img.buf[(clip(y - 1 + jj, 0, ny - 1) * nx + clip(x, 0, nx - 1)) * 3 + k];
-                        a0 = img.buf[(clip(y - 1 + jj, 0, ny - 1) * nx + clip(x, 0, nx - 1)) * 3 + k];
-
-                        a1 = -1.0 / 3 * d0 + d2 - 1.0 / 6 * d3;
-                        a2 =  1.0 / 2 * d0 +      1.0 / 2 * d2;
-                        a3 = -1.0 / 6 * d0 -      1.0 / 2 * d2 + 1.0 / 6 * d3;
-
-                        C[jj] = a0 + a1 * dx + a2 * dx * dx + a3 * dx * dx * dx;
-
-                        d0 = C[0] - C[1];
-                        d2 = C[2] - C[1];
-                        d3 = C[3] - C[1];
-                        a0 = C[1];
-                        a1 = -1.0 / 3 * d0 + d2 - 1.0 / 6 * d3;
-                        a2 =  1.0 / 2 * d0 +      1.0 / 2 * d2;
-                        a3 = -1.0 / 6 * d0 -      1.0 / 2 * d2 + 1.0 / 6 * d3;
-                        Cc = a0 + a1 * dy + a2 * dy * dy + a3 * dy * dy * dy;
-
-                        const uint8_t Cc2 = std::min(std::max(std::round(Cc), 0.0f), 255.0f);
-                        dst.buf[(i * target_width + j) * 3 + k] = float(Cc2);
-                    }
-                }
-            }
-        }
-
+        stbir_resize(
+            img.buf.data(), img.nx, img.ny, img.nx * 3,
+            dst.buf.data(), target_width, target_height, target_width * 3,
+            STBIR_RGB, STBIR_TYPE_UINT8, STBIR_EDGE_CLAMP, STBIR_FILTER_CATMULLROM);
         return true;
-    }
-
-    static inline int clip(int x, int lower, int upper) {
-        return std::max(lower, std::min(x, upper));
-    }
-
-    // Linear interpolation between two points
-    static inline float lerp(float s, float e, float t) {
-        return s + (e - s) * t;
     }
 };
 
