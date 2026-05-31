@@ -1529,7 +1529,7 @@ static int common_speculative_copy_seq_batch(
 
     seq_batch = llama_batch_init((int) token_indices.size(), 0, 1);
     for (const int i : token_indices) {
-        common_batch_add(seq_batch, batch.token[i], batch.pos[i], { seq_id }, batch.logits != nullptr && batch.logits[i]);
+        common_batch_add(seq_batch, batch.token[i], batch.pos[i].t, { seq_id }, batch.logits != nullptr && batch.logits[i]);
     }
 
     return (int) token_indices.size();
@@ -1555,7 +1555,7 @@ static bool common_speculative_feature_view_copy_batch_rows(
     hidden_rows->clear();
     hidden_rows->reserve((size_t) batch.n_tokens * view.width);
     for (int i = 0; i < batch.n_tokens; ++i) {
-        auto it = rows_by_pos.find(batch.pos[i]);
+        auto it = rows_by_pos.find(batch.pos[i].t);
         if (it == rows_by_pos.end()) {
             hidden_rows->clear();
             return false;
@@ -2203,7 +2203,7 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     }
 
     llama_seq_id seq_id    = batch.seq_id[0][0];
-    llama_pos    start_pos = batch.pos[0];
+    llama_pos    start_pos = batch.pos[0].t;
 
     if (llama_kv_cache_seq_pos_max(ctx, seq_id) >= start_pos) {
         llama_kv_cache_seq_rm(ctx, seq_id, start_pos, -1);

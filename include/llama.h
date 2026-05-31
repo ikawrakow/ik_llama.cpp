@@ -72,6 +72,20 @@ extern "C" {
     typedef int32_t llama_token;
     typedef int32_t llama_seq_id;
 
+    // Per-token position carrier. For normal RoPE only `t` (the sequence
+    // position) is meaningful. For m-rope (Qwen2VL/Qwen3VL) the four fields are
+    // the temporal, height and width components plus an unused 4th dimension:
+    //   text token : { t, t, t, 0 }
+    //   image patch: { base, base+y, base+x, 0 }
+    // This is an array-of-structs (one per token), so slicing a batch is plain
+    // element-wise pointer arithmetic - no section-major stride math required.
+    typedef struct llama_mrope_pos {
+        int32_t t;
+        int32_t h;
+        int32_t w;
+        int32_t extra;
+    } llama_mrope_pos;
+
     enum llama_vocab_type {
         LLAMA_VOCAB_TYPE_NONE   = 0, // For models without vocab
         LLAMA_VOCAB_TYPE_SPM    = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
@@ -320,7 +334,7 @@ extern "C" {
 
         llama_token  *  token;
         float        *  embd;
-        llama_pos    *  pos;
+        llama_mrope_pos * pos;
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
         int8_t       *  logits; // TODO: rename this to "output"

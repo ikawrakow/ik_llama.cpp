@@ -609,10 +609,10 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
                 for (int k = 0; k < batch_size; ++k) {
                     const int idx = seq*n_ctx + k;
                     batch.token   [idx]    = tokens[seq_start + k];
-                    batch.pos     [idx]    = j*n_batch + k;
+                    batch.pos     [idx]    = { j*n_batch + k, j*n_batch + k, j*n_batch + k, 0 };
                     batch.n_seq_id[idx]    = 1;
                     batch.seq_id  [idx][0] = seq;
-                    batch.logits  [idx]    = batch.pos[idx] >= first ? 1 : 0;
+                    batch.logits  [idx]    = batch.pos[idx].t >= first ? 1 : 0;
 
                     n_outputs += batch.logits[idx] != 0;
                 }

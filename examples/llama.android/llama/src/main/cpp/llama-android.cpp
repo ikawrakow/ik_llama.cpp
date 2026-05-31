@@ -300,7 +300,7 @@ Java_android_llama_cpp_LLamaAndroid_new_1batch(JNIEnv *, jobject, jint n_tokens,
         batch->token = (llama_token *) malloc(sizeof(llama_token) * n_tokens);
     }
 
-    batch->pos      = (llama_pos *)     malloc(sizeof(llama_pos)      * n_tokens);
+    batch->pos      = (llama_mrope_pos *) malloc(sizeof(llama_mrope_pos) * n_tokens);
     batch->n_seq_id = (int32_t *)       malloc(sizeof(int32_t)        * n_tokens);
     batch->seq_id   = (llama_seq_id **) malloc(sizeof(llama_seq_id *) * n_tokens);
     for (int i = 0; i < n_tokens; ++i) {

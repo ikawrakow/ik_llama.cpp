@@ -80,7 +80,7 @@ bool llama_spec_get_hidden_feature_view(
 
         view.rows.push_back({
             /* .seq_id = */ batch.seq_id[i][0],
-            /* .pos    = */ batch.pos[i],
+            /* .pos    = */ batch.pos[i].t,
             /* .data   = */ ctx->embd + (size_t) i * view.width,
         });
     }
@@ -114,7 +114,7 @@ bool llama_spec_get_hidden_feature_view_for_seq(
 
             view.rows.push_back({
                 /* .seq_id = */ seq_id,
-                /* .pos    = */ batch.pos[i],
+                /* .pos    = */ batch.pos[i].t,
                 /* .data   = */ ctx->embd + (size_t) i * view.width,
             });
             break;

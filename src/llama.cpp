@@ -1201,16 +1201,16 @@ static bool llama_kv_cache_find_slot(
                         min = seq_id;
                     }
                     // Assuming the tokens are in-order
-                    if (batch.pos[i] != cache.cells[seq_id].pos + 1) {
+                    if (batch.pos[i].t != cache.cells[seq_id].pos + 1) {
                         // What should happen when the pos backtracks or skips a value?
                         // Clearing the state mid-batch would require special-casing which isn't done.
                         LLAMA_LOG_WARN("%s: non-consecutive token position %d after %d for sequence %d\n",
-                            __func__, batch.pos[i], cache.cells[seq_id].pos, seq_id);
+                            __func__, batch.pos[i].t, cache.cells[seq_id].pos, seq_id);
                     }
-                    if (cache.cells[seq_id].pos < 0 && 0 <= batch.pos[i]) {
+                    if (cache.cells[seq_id].pos < 0 && 0 <= batch.pos[i].t) {
                         cache.used += 1;
                     }
-                    cache.cells[seq_id].pos = batch.pos[i];
+                    cache.cells[seq_id].pos = batch.pos[i].t;
                     // NOTE: seq_ids are not inserted here; they are handled when the input tensors are set
                 } else {
                     // too big seq_id
@@ -1265,7 +1265,7 @@ static bool llama_kv_cache_find_slot(
     }
 
     for (uint32_t i = 0; i < n_tokens; i++) {
-        cache.cells[cache.head + i].pos = batch.pos[i];
+        cache.cells[cache.head + i].pos = batch.pos[i].t;
 
         for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
             cache.cells[cache.head + i].seq_id.insert(batch.seq_id[i][j]);
@@ -4234,18 +4234,19 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
         const int64_t n_tokens = batch.n_tokens;
         const int n_pos_per_embd =  hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
-        if (batch.token && n_pos_per_embd == 4) {
-            std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
-            for (int i = 0; i < n_tokens; ++i) {
-                pos_data[               i] = batch.pos[i];
-                pos_data[    n_tokens + i] = batch.pos[i];
-                pos_data[2 * n_tokens + i] = batch.pos[i];
-                pos_data[3 * n_tokens + i] = 0; // 4th dim is 0
+        // Scatter the AoS per-token positions into the section-major (SoA) layout
+        // the rope kernels expect for inp_pos: [all t][all h][all w][all extra].
+        // For normal rope (n_pos_per_embd == 1) only the temporal component is used.
+        std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
+        for (int i = 0; i < n_tokens; ++i) {
+            pos_data[i] = batch.pos[i].t;
+            if (n_pos_per_embd == 4) {
+                pos_data[    n_tokens + i] = batch.pos[i].h;
+                pos_data[2 * n_tokens + i] = batch.pos[i].w;
+                pos_data[3 * n_tokens + i] = batch.pos[i].extra;
             }
-            ggml_backend_tensor_set(lctx.inp_pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(lctx.inp_pos));
-        } else {
-            ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(lctx.inp_pos));
         }
+        ggml_backend_tensor_set(lctx.inp_pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(lctx.inp_pos));
 #if IK_PRINT_TIMING == 2
         auto tim2 = ggml_time_us();
         printf("set_inputs(pos): %d us\n", int(tim2-tim1));
@@ -4261,7 +4262,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         if (int(lctx.scale_data.size()) < n_tokens) lctx.scale_data.resize(n_tokens);
         int n_pos_per_token = 1;
         for (int i = 0; i < n_tokens; ++i) {
-            lctx.scale_data[i] = std::log(std::floor((batch.pos[i] + 1.0f) / hparams.n_attn_temp_floor_scale) + 1.0f) * hparams.f_attn_temp_scale + 1.0f;
+            lctx.scale_data[i] = std::log(std::floor((batch.pos[i].t + 1.0f) / hparams.n_attn_temp_floor_scale) + 1.0f) * hparams.f_attn_temp_scale + 1.0f;
         }
         ggml_backend_tensor_set(lctx.inp_scale, lctx.scale_data.data(), 0, n_tokens*n_pos_per_token*ggml_element_size(lctx.inp_scale));
 #if IK_PRINT_TIMING == 2
@@ -4385,7 +4386,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     int last  = std::min(int(n_kv), first + npt);
                     if (last <= first) return;
                     for (int j = 0; j < n_tokens; ++j) {
-                        const llama_pos    pos    = batch.pos[j];
+                        const llama_pos    pos    = batch.pos[j].t;
                         const llama_seq_id seq_id = batch.seq_id[j][0];
 
                         if (!hparams.use_alibi && cparams.flash_attn) {
@@ -4466,7 +4467,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             // It's assumed that if a token in the batch has multiple sequences, they are equivalent.
             for (int h = 0; h < 1; ++h) {
                 for (int j = 0; j < n_tokens; ++j) {
-                    const llama_pos    pos    = batch.pos[j];
+                    const llama_pos    pos    = batch.pos[j].t;
                     const llama_seq_id seq_id = batch.seq_id[j][0];
 
                     if (!hparams.use_alibi && cparams.flash_attn) {
@@ -4577,7 +4578,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                         for (int s = 0; s < batch.n_seq_id[i]; ++s) {
                             if (batch.seq_id[i][s] == seq_id) {
                                 if (hparams.use_alibi) {
-                                    f = -std::abs(batch.pos[i] - batch.pos[j]);
+                                    f = -std::abs(batch.pos[i].t - batch.pos[j].t);
                                 } else {
                                     f = 0.0f;
                                 }
@@ -4594,12 +4595,12 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
                         if (data_swa || data_swa_f16) {
                             if (hparams.n_attn_chunk) {
-                                llama_pos pos_chunk_start = (batch.pos[i] / hparams.n_attn_chunk) * hparams.n_attn_chunk;
-                                if (lctx.kv_self.cells[i].pos < pos_chunk_start || batch.pos[i] < pos_chunk_start) {
+                                llama_pos pos_chunk_start = (batch.pos[i].t / hparams.n_attn_chunk) * hparams.n_attn_chunk;
+                                if (lctx.kv_self.cells[i].pos < pos_chunk_start || batch.pos[i].t < pos_chunk_start) {
                                     f = -INFINITY;
                                 }
                             } else {
-                                if (batch.pos[i] - kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                if (batch.pos[i].t - kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
                                     f = -INFINITY;
                                 }
                             }
@@ -4675,7 +4676,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
         for (int i = 0; i < n_tokens; ++i) {
             const llama_seq_id seq_id = batch.seq_id[i][0];
-            const llama_pos    pos    = batch.pos[i];
+            const llama_pos    pos    = batch.pos[i].t;
 
             GGML_ASSERT(seq_id < n_tokens && "seq_id cannot be larger than n_tokens with pooling_type == CLS");
 
@@ -4699,7 +4700,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
         for (int i = 0; i < n_tokens; ++i) {
             const llama_seq_id seq_id = batch.seq_id[i][0];
-            const llama_pos    pos    = batch.pos[i];
+            const llama_pos    pos    = batch.pos[i].t;
 
             GGML_ASSERT(seq_id < n_tokens && "seq_id cannot be larger than n_tokens with pooling_type == LAST");
 
@@ -4787,7 +4788,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             for (int h = 0; h < 1; ++h) {
                 for (int j = 0; j < n_tokens; ++j) {
                     for (int i = 0; i < n_kv; ++i) {
-                        data[h*(n_kv*n_tokens) + j*n_kv + i] = llama_relative_position_bucket(lctx.kv_self.cells[i].pos, batch.pos[j], hparams.n_rel_attn_bkts, lctx.is_encoding);
+                        data[h*(n_kv*n_tokens) + j*n_kv + i] = llama_relative_position_bucket(lctx.kv_self.cells[i].pos, batch.pos[j].t, hparams.n_rel_attn_bkts, lctx.is_encoding);
                     }
                 }
             }
@@ -4795,7 +4796,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             for (int h = 0; h < 1; ++h) {
                 for (int j = 0; j < n_tokens; ++j) {
                     for (int i = 0; i < n_tokens; ++i) {
-                        data[h*(n_tokens*n_tokens) + j*n_tokens + i] = llama_relative_position_bucket(batch.pos[i], batch.pos[j], hparams.n_rel_attn_bkts, lctx.is_encoding);
+                        data[h*(n_tokens*n_tokens) + j*n_tokens + i] = llama_relative_position_bucket(batch.pos[i].t, batch.pos[j].t, hparams.n_rel_attn_bkts, lctx.is_encoding);
                     }
                 }
             }
@@ -5060,7 +5061,7 @@ static int llama_decode_internal(
     const auto n_ubatch = cparams.n_ubatch;
 
     // TODO: simplify or deprecate
-    std::vector<llama_pos> pos;
+    std::vector<llama_mrope_pos> pos;
     std::vector<int32_t>                   n_seq_id;
     std::vector<llama_seq_id *>            seq_id_arr;
     std::vector<std::vector<llama_seq_id>> seq_id;
@@ -5197,7 +5198,8 @@ static int llama_decode_internal(
         if (u_batch.pos == nullptr) {
             pos.resize(n_tokens);
             for (uint32_t i = 0; i < n_tokens; i++) {
-                pos[i] = u_batch.all_pos_0 + i*u_batch.all_pos_1;
+                const llama_pos v = u_batch.all_pos_0 + i*u_batch.all_pos_1;
+                pos[i] = { v, v, v, 0 };
             }
 
             u_batch.pos = pos.data();
@@ -5558,7 +5560,7 @@ static int llama_encode_internal(
     const int64_t n_embd = hparams.n_embd;
 
     // TODO: simplify or deprecate
-    std::vector<llama_pos> pos;
+    std::vector<llama_mrope_pos> pos;
     std::vector<int32_t>                   n_seq_id;
     std::vector<llama_seq_id *>            seq_id_arr;
     std::vector<std::vector<llama_seq_id>> seq_id;
@@ -5584,7 +5586,8 @@ static int llama_encode_internal(
     if (batch.pos == nullptr) {
         pos.resize(n_tokens);
         for (uint32_t i = 0; i < n_tokens; i++) {
-            pos[i] = batch.all_pos_0 + i*batch.all_pos_1;
+            const llama_pos v = batch.all_pos_0 + i*batch.all_pos_1;
+            pos[i] = { v, v, v, 0 };
         }
 
         batch.pos = pos.data();
@@ -8521,7 +8524,7 @@ struct llama_data_read {
                     return false;
                 }
 
-                batch.pos[i] = pos;
+                batch.pos[i] = { pos, pos, pos, 0 };
                 batch.n_seq_id[i] = 1;
                 batch.seq_id[i][0] = dest_seq_id;
             }
@@ -8534,8 +8537,8 @@ struct llama_data_read {
             // DEBUG CHECK: kv_self.head should be our first cell, kv_self.head + cell_count - 1 should be our last cell (verify seq_id and pos values)
             // Assume that this is one contiguous block of cells
             GGML_ASSERT(kv_self.head + cell_count <= kv_self.size);
-            GGML_ASSERT(kv_self.cells[kv_self.head].pos == batch.pos[0]);
-            GGML_ASSERT(kv_self.cells[kv_self.head + cell_count - 1].pos == batch.pos[cell_count - 1]);
+            GGML_ASSERT(kv_self.cells[kv_self.head].pos == batch.pos[0].t);
+            GGML_ASSERT(kv_self.cells[kv_self.head + cell_count - 1].pos == batch.pos[cell_count - 1].t);
             GGML_ASSERT(kv_self.cells[kv_self.head].has_seq_id(dest_seq_id));
             GGML_ASSERT(kv_self.cells[kv_self.head + cell_count - 1].has_seq_id(dest_seq_id));
 
@@ -9493,7 +9496,7 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
         batch.token = (llama_token *) malloc(sizeof(llama_token) * n_tokens_alloc);
     }
 
-    batch.pos      = (llama_pos *)     malloc(sizeof(llama_pos)      * n_tokens_alloc);
+    batch.pos      = (llama_mrope_pos *) malloc(sizeof(llama_mrope_pos) * n_tokens_alloc);
     batch.n_seq_id = (int32_t *)       malloc(sizeof(int32_t)        * n_tokens_alloc);
     batch.seq_id   = (llama_seq_id **) malloc(sizeof(llama_seq_id *) * (n_tokens_alloc + 1));
     for (int i = 0; i < n_tokens_alloc; ++i) {
