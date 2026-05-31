@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <unordered_map>
@@ -130,6 +131,31 @@ static bool common_speculative_are_dflash_compatible(
 
     if (llama_vocab_type(vocab_tgt) != llama_vocab_type(vocab_dft)) {
         LOG_DBG("%s: DFlash draft model vocab type must match the target model\n", __func__);
+        return false;
+    }
+
+    const bool add_bos_tgt = llama_vocab_get_add_bos(vocab_tgt);
+    const bool add_bos_dft = llama_vocab_get_add_bos(vocab_dft);
+    const bool add_eos_tgt = llama_vocab_get_add_eos(vocab_tgt);
+    const bool add_eos_dft = llama_vocab_get_add_eos(vocab_dft);
+    const llama_token bos_tgt = llama_vocab_bos(vocab_tgt);
+    const llama_token bos_dft = llama_vocab_bos(vocab_dft);
+    const llama_token eos_tgt = llama_vocab_eos(vocab_tgt);
+    const llama_token eos_dft = llama_vocab_eos(vocab_dft);
+
+    if (add_bos_tgt != add_bos_dft || add_eos_tgt != add_eos_dft ||
+        (add_bos_tgt && bos_tgt != bos_dft) ||
+        (add_eos_tgt && eos_tgt != eos_dft)) {
+        LOG_DBG("%s: DFlash draft special tokens must match the target model (add_bos=%d/%d add_eos=%d/%d bos=%d/%d eos=%d/%d)\n",
+                __func__,
+                (int) add_bos_tgt,
+                (int) add_bos_dft,
+                (int) add_eos_tgt,
+                (int) add_eos_dft,
+                (int) bos_tgt,
+                (int) bos_dft,
+                (int) eos_tgt,
+                (int) eos_dft);
         return false;
     }
 
@@ -464,6 +490,24 @@ struct common_speculative_state_dflash : public common_speculative_state {
     size_t n_decode_fail = 0;
     llama_pos last_draft_pos_base = -1;
 
+    uint64_t t_draft_decode_us = 0;
+    uint64_t t_draft_sample_us = 0;
+    uint64_t t_warmup_collect_us = 0;
+    uint64_t t_warmup_append_us = 0;
+    uint64_t t_accept_output_copy_us = 0;
+    uint64_t t_accept_commit_us = 0;
+    uint64_t t_accept_append_us = 0;
+    size_t n_warmup_collect_calls = 0;
+    size_t n_warmup_collect_rows = 0;
+    size_t n_warmup_append_calls = 0;
+    size_t n_warmup_append_rows = 0;
+    size_t n_accept_output_copy_calls = 0;
+    size_t n_accept_output_copy_rows = 0;
+    size_t n_accept_commit_calls = 0;
+    size_t n_accept_commit_rows = 0;
+    size_t n_accept_append_calls = 0;
+    size_t n_accept_append_rows = 0;
+
     common_speculative_state_dflash(
             enum common_speculative_type type,
             llama_context * ctx_tgt,
@@ -474,9 +518,10 @@ struct common_speculative_state_dflash : public common_speculative_state {
         , ctx_dft(ctx_dft)
         , cross_ctx(std::max(1, cross_ctx))
     {
+        const llama_model * model_tgt = llama_get_model(ctx_tgt);
         const llama_model * model_dft = llama_get_model(ctx_dft);
 
-        if (!common_speculative_are_dflash_compatible(llama_get_model(ctx_tgt), model_dft)) {
+        if (!common_speculative_are_dflash_compatible(model_tgt, model_dft)) {
             LOG_ERR("%s: DFlash draft model vocab/tokenizer is incompatible with the target model\n", __func__);
             return;
         }
@@ -496,6 +541,70 @@ struct common_speculative_state_dflash : public common_speculative_state {
         if (llama_model_dflash_target_layer_ids(model_dft, target_layer_ids.data(), n_target_layers) != n_target_layers) {
             LOG_ERR("%s: failed to read DFlash target layer ids\n", __func__);
             target_layer_ids.clear();
+            return;
+        }
+
+        const auto * vocab_tgt = llama_model_get_vocab(model_tgt);
+        const auto * vocab_dft = llama_model_get_vocab(model_dft);
+        const int32_t target_vocab_size = llama_vocab_n_tokens(vocab_tgt);
+        const int32_t draft_vocab_size = llama_vocab_n_tokens(vocab_dft);
+        const int32_t target_hidden_size = llama_model_n_embd(model_tgt);
+        const int32_t draft_hidden_size = llama_model_n_embd(model_dft);
+        const int32_t target_mask_token_id = llama_model_dflash_target_mask_token_id(model_tgt);
+        const int32_t expected_n_target_features = target_hidden_size > 0 ? target_hidden_size * n_target_layers : 0;
+
+        if (target_mask_token_id != (int32_t) LLAMA_TOKEN_NULL && mask_token_id != target_mask_token_id) {
+            LOG_ERR("%s: DFlash mask token mismatch (draft=%d target=%d)\n",
+                    __func__, mask_token_id, target_mask_token_id);
+            return;
+        }
+
+        if (target_hidden_size <= 0 || draft_hidden_size <= 0) {
+            LOG_ERR("%s: invalid DFlash hidden sizes (draft=%d target=%d)\n",
+                    __func__, draft_hidden_size, target_hidden_size);
+            return;
+        }
+
+        if (expected_n_target_features <= 0 || n_target_features != expected_n_target_features) {
+            LOG_ERR("%s: DFlash target feature width mismatch (metadata=%d expected=%d target_hidden=%d target_layers=%d)\n",
+                    __func__, n_target_features, expected_n_target_features, target_hidden_size, n_target_layers);
+            return;
+        }
+
+        std::vector<int32_t> sorted_target_layer_ids = target_layer_ids;
+        std::sort(sorted_target_layer_ids.begin(), sorted_target_layer_ids.end());
+        if (std::adjacent_find(sorted_target_layer_ids.begin(), sorted_target_layer_ids.end()) != sorted_target_layer_ids.end()) {
+            LOG_ERR("%s: duplicate DFlash target layer ids survived into runtime validation\n", __func__);
+            target_layer_ids.clear();
+            return;
+        }
+
+        const int32_t n_target_model_layers = llama_n_layer(model_tgt);
+        for (int32_t layer_id : target_layer_ids) {
+            if (layer_id < 0 || layer_id >= n_target_model_layers) {
+                LOG_ERR("%s: invalid DFlash target layer id %d for target model with %d layers\n",
+                        __func__, layer_id, n_target_model_layers);
+                target_layer_ids.clear();
+                return;
+            }
+        }
+
+        const int32_t io_mode = llama_model_dflash_io_mode(model_dft, model_tgt);
+        if (io_mode == LLAMA_DFLASH_IO_MODE_INVALID) {
+            LOG_ERR("%s: DFlash draft is missing required IO tensors after target sharing\n", __func__);
+            return;
+        }
+
+        if (io_mode == LLAMA_DFLASH_IO_MODE_MIXED) {
+            LOG_ERR("%s: DFlash IO contract must be fully shared or fully self-contained, but resolved to mixed mode\n", __func__);
+            return;
+        }
+
+        if (io_mode == LLAMA_DFLASH_IO_MODE_SELF_CONTAINED && !llama_model_dflash_io_tensors_match(model_dft, target_hidden_size, target_vocab_size)) {
+            LOG_ERR("%s: DFlash self-contained IO tensors do not match the target hidden/vocab contract (target_hidden=%d target_vocab=%d)\n",
+                    __func__,
+                    target_hidden_size,
+                    target_vocab_size);
             return;
         }
 
@@ -519,8 +628,11 @@ struct common_speculative_state_dflash : public common_speculative_state {
             layers_oss << target_layer_ids[i];
         }
 
+        const char * io_mode_name = io_mode == LLAMA_DFLASH_IO_MODE_SHARED ? "shared" : "self-contained";
         LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, cross_ctx=%d, n_target_features=%d, target_layer_ids=[%s])\n",
-                __func__, llama_n_ctx(ctx_dft), block_size, this->cross_ctx, n_target_features, layers_oss.str().c_str());
+            __func__, llama_n_ctx(ctx_dft), block_size, this->cross_ctx, n_target_features, layers_oss.str().c_str());
+        LOG_INF("%s: DFlash artifact io=%s draft_vocab=%d target_vocab=%d draft_hidden=%d target_hidden=%d mask_token_id=%d target_mask_token_id=%d\n",
+            __func__, io_mode_name, draft_vocab_size, target_vocab_size, draft_hidden_size, target_hidden_size, mask_token_id, target_mask_token_id);
     }
 
     ~common_speculative_state_dflash() override {
@@ -544,6 +656,23 @@ struct common_speculative_state_dflash : public common_speculative_state {
         n_set_target_fail = 0;
         n_decode_fail = 0;
         last_draft_pos_base = -1;
+        t_draft_decode_us = 0;
+        t_draft_sample_us = 0;
+        t_warmup_collect_us = 0;
+        t_warmup_append_us = 0;
+        t_accept_output_copy_us = 0;
+        t_accept_commit_us = 0;
+        t_accept_append_us = 0;
+        n_warmup_collect_calls = 0;
+        n_warmup_collect_rows = 0;
+        n_warmup_append_calls = 0;
+        n_warmup_append_rows = 0;
+        n_accept_output_copy_calls = 0;
+        n_accept_output_copy_rows = 0;
+        n_accept_commit_calls = 0;
+        n_accept_commit_rows = 0;
+        n_accept_append_calls = 0;
+        n_accept_append_rows = 0;
         llama_dflash_profile_reset(ctx_tgt);
         llama_dflash_profile_reset(ctx_dft);
     }
@@ -554,7 +683,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
             llama_token id_last,
             llama_tokens & result) override {
         GGML_UNUSED(prompt_tgt);
-        GGML_UNUSED(id_last);
 
         result.clear();
         if (!ready || target_window_rows <= 0) {
@@ -562,7 +690,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return;
         }
 
-        const int32_t n_keep = std::min<int32_t>(params.n_max, block_size);
+        const int32_t n_keep = std::min<int32_t>(params.n_max, block_size - 1);
         if (n_keep <= 0) {
             return;
         }
@@ -575,23 +703,30 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_kv_cache_clear(ctx_dft);
         batch.n_tokens = 0;
+        const int32_t batch_len = n_keep + 1;
         const llama_pos draft_pos_base = last_target_pos >= 0 ? last_target_pos + 1 : (llama_pos) target_window_rows;
+        const llama_pos seed_pos = last_target_pos >= 0 ? last_target_pos : draft_pos_base - 1;
         last_draft_pos_base = draft_pos_base;
-        for (int32_t i = 0; i < block_size; ++i) {
-            common_batch_add(batch, mask_token_id, draft_pos_base + i, { 0 }, i < n_keep);
+        common_batch_add(batch, id_last, seed_pos, { 0 }, false);
+        for (int32_t i = 1; i < batch_len; ++i) {
+            common_batch_add(batch, mask_token_id, draft_pos_base + (i - 1), { 0 }, i <= n_keep);
         }
 
+        const int64_t t_decode_us = ggml_time_us();
         if (llama_decode(ctx_dft, batch) != 0) {
             LOG_ERR("%s: llama_decode() failed for DFlash draft batch\n", __func__);
             n_decode_fail++;
             batch.n_tokens = 0;
             return;
         }
+        t_draft_decode_us += (uint64_t) (ggml_time_us() - t_decode_us);
 
         result.reserve((size_t) n_keep);
+        const int64_t t_sample_us = ggml_time_us();
         for (int32_t i = 0; i < n_keep; ++i) {
-            result.push_back(common_sampler_sample_speculative(nullptr, ctx_dft, i, nullptr));
+            result.push_back(common_sampler_sample_speculative(nullptr, ctx_dft, i + 1, nullptr));
         }
+        t_draft_sample_us += (uint64_t) (ggml_time_us() - t_sample_us);
 
         batch.n_tokens = 0;
         dflash_contract_log_draft(*this, n_keep, result.size());
@@ -657,8 +792,13 @@ static void dflash_contract_log_draft(
     const int draft_delta = (state.last_target_pos >= 0 && state.last_draft_pos_base >= 0)
             ? (int) (state.last_draft_pos_base - state.last_target_pos)
             : -1;
+        const llama_pos seed_pos = state.last_target_pos;
+        const llama_pos mask_first_pos = state.last_draft_pos_base;
+        const llama_pos mask_last_pos = state.last_draft_pos_base >= 0
+            ? state.last_draft_pos_base + n_keep - 1
+            : -1;
 
-    LOG_INF("dflash contract draft[%llu]: window_rows=%d window_pos=%s pos=[%d..%d] gaps=%d nonmono=%d last_target_pos=%d draft_pos_base=%d delta=%d n_keep=%d result=%zu set_target(missing/nonmono)=%llu/%llu graph(fallback/nonmono)=%llu/%llu graph_pos=[%d..%d]\n",
+        LOG_INF("dflash contract draft[%llu]: window_rows=%d window_pos=%s pos=[%d..%d] gaps=%d nonmono=%d last_target_pos=%d seed_pos=%d mask_pos=[%d..%d] sample_rows=[1..%d] output_rows=[1..%d] draft_pos_base=%d delta=%d n_keep=%d result=%zu set_target(missing/nonmono)=%llu/%llu graph(fallback/nonmono)=%llu/%llu graph_pos=[%d..%d]\n",
             (unsigned long long) (ordinal + 1),
             state.target_window_rows,
             dflash_contract_format_values(state.target_window_pos).c_str(),
@@ -667,6 +807,11 @@ static void dflash_contract_log_draft(
             window.gap_count,
             window.nonmono_count,
             (int) state.last_target_pos,
+            (int) seed_pos,
+            (int) mask_first_pos,
+            (int) mask_last_pos,
+            n_keep,
+            n_keep,
             (int) state.last_draft_pos_base,
             draft_delta,
             n_keep,
@@ -1583,7 +1728,14 @@ common_speculative * common_speculative_init(
                 return nullptr;
             }
 
-            cparams_dft.n_ctx = (uint32_t) (max_cross_ctx + block_size);
+            const int64_t required_n_ctx = (int64_t) max_cross_ctx + (int64_t) block_size;
+            if (required_n_ctx > std::numeric_limits<int32_t>::max()) {
+                LOG_ERR("%s: invalid DFlash draft context size cross_ctx=%d block_size=%d required_n_ctx=%lld\n",
+                        __func__, max_cross_ctx, block_size, (long long) required_n_ctx);
+                return nullptr;
+            }
+
+            cparams_dft.n_ctx = (uint32_t) required_n_ctx;
         }
 
         ctx_dft = llama_init_from_model(params.model_dft, cparams_dft);
@@ -2127,6 +2279,8 @@ int32_t common_speculative_on_target_seq_batch(
     const llama_batch * batch_for_spec = &batch;
     llama_batch seq_batch = {};
     const bool needs_seq_split = is_prompt_warmup && !common_speculative_batch_is_exact_single_seq(batch, seq_id);
+    auto * dflash_state = common_speculative_get_dflash_state(spec);
+    const bool measure_dflash_warmup_collect = dflash_state != nullptr && is_prompt_warmup;
 
     if (needs_seq_split) {
         const int n_seq_tokens = common_speculative_copy_seq_batch(batch, seq_id, seq_batch);
@@ -2134,15 +2288,27 @@ int32_t common_speculative_on_target_seq_batch(
             return n_seq_tokens < 0 ? -1 : 0;
         }
 
+        const int64_t t_collect_us = measure_dflash_warmup_collect ? ggml_time_us() : 0;
         if (!common_speculative_collect_target_seq_batch_features(spec, ctx_tgt, batch, seq_id, feature_view)) {
             llama_batch_free(seq_batch);
             return -1;
         }
+        if (measure_dflash_warmup_collect) {
+            dflash_state->t_warmup_collect_us += (uint64_t) (ggml_time_us() - t_collect_us);
+            dflash_state->n_warmup_collect_calls++;
+            dflash_state->n_warmup_collect_rows += (size_t) n_seq_tokens;
+        }
 
         batch_for_spec = &seq_batch;
     } else {
+        const int64_t t_collect_us = measure_dflash_warmup_collect ? ggml_time_us() : 0;
         if (!common_speculative_collect_target_batch_features(spec, ctx_tgt, batch, feature_view)) {
             return -1;
+        }
+        if (measure_dflash_warmup_collect) {
+            dflash_state->t_warmup_collect_us += (uint64_t) (ggml_time_us() - t_collect_us);
+            dflash_state->n_warmup_collect_calls++;
+            dflash_state->n_warmup_collect_rows += (size_t) batch.n_tokens;
         }
     }
 
@@ -2244,7 +2410,16 @@ bool common_speculative_commit_accepted_hidden_rows(
         return false;
     }
 
-    return common_speculative_apply_hidden_rows(spec, seq_id, pos_base, commit_tokens, hidden_rows);
+    auto * dflash_state = common_speculative_get_dflash_state(spec);
+    const int64_t t_commit_us = dflash_state != nullptr ? ggml_time_us() : 0;
+    const bool ok = common_speculative_apply_hidden_rows(spec, seq_id, pos_base, commit_tokens, hidden_rows);
+    if (dflash_state != nullptr) {
+        dflash_state->t_accept_commit_us += (uint64_t) (ggml_time_us() - t_commit_us);
+        dflash_state->n_accept_commit_calls++;
+        dflash_state->n_accept_commit_rows += commit_tokens.size();
+    }
+
+    return ok;
 }
 
 bool common_speculative_commit_accepted_output(
@@ -2261,8 +2436,15 @@ bool common_speculative_commit_accepted_output(
     }
 
     std::vector<float> hidden_rows;
+    auto * dflash_state = common_speculative_get_dflash_state(spec);
+    const int64_t t_copy_us = dflash_state != nullptr ? ggml_time_us() : 0;
     if (!common_speculative_copy_output_hidden_rows(spec, ctx, output_indices, hidden_rows)) {
         return false;
+    }
+    if (dflash_state != nullptr) {
+        dflash_state->t_accept_output_copy_us += (uint64_t) (ggml_time_us() - t_copy_us);
+        dflash_state->n_accept_output_copy_calls++;
+        dflash_state->n_accept_output_copy_rows += output_indices.size();
     }
 
     return common_speculative_commit_accepted_hidden_rows(
@@ -2324,7 +2506,24 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                         (int) dflash_state->last_draft_pos_base);
 
                 if (have_capture || have_graph) {
-                        LOG_INF("statistics dflash profile: capture(sync/materialize)=%.3f/%.3f ms calls=%llu/%llu bytes=%llu phase(prompt/verify batches changes)=%llu/%llu %llu/%llu, set_target=%.3f ms rows=%llu bytes=%llu, prep(total/features/pos/mask)=%.3f/%.3f/%.3f/%.3f ms kv_cache=%.3f ms calls=%llu/%llu bytes=%llu/%llu/%llu, fallback_pos(copy/graph)=%llu/%llu, nonmono(copy/graph)=%llu/%llu, capture_fail=%llu/%llu, visible_kv_max=%llu, last(rows=%d width=%d left_pad=%d n_tokens=%d n_kv=%d pos=[%d..%d])\n",
+                    const double kv_cache_total_ms = (double) (
+                        graph_stats.graph_kv_cache_build_us +
+                        graph_stats.graph_kv_cache_reserve_us +
+                        graph_stats.graph_kv_cache_reset_us +
+                        graph_stats.graph_kv_cache_alloc_us +
+                        graph_stats.graph_kv_cache_feature_upload_us +
+                        graph_stats.graph_kv_cache_pos_upload_us +
+                        graph_stats.graph_kv_cache_compute_us +
+                        graph_stats.graph_kv_cache_sync_us +
+                        graph_stats.graph_kv_cache_read_concat_pad_us) / 1000.0;
+                    const double kv_upload_feature_ms = (double) graph_stats.graph_kv_cache_feature_upload_us / 1000.0;
+                    const double kv_upload_pos_ms = (double) graph_stats.graph_kv_cache_pos_upload_us / 1000.0;
+                    const double kv_upload_total_ms = kv_upload_feature_ms + kv_upload_pos_ms;
+                    const double kv_compute_ms = (double) graph_stats.graph_kv_cache_compute_us / 1000.0;
+                    const double kv_sync_ms = (double) graph_stats.graph_kv_cache_sync_us / 1000.0;
+                    const double replay_append_ms = (double) dflash_state->t_accept_append_us / 1000.0;
+
+                        LOG_INF("statistics dflash profile: capture(sync/materialize)=%.3f/%.3f ms calls=%llu/%llu bytes=%llu phase(prompt/verify batches changes)=%llu/%llu %llu/%llu, set_target=%.3f ms rows=%llu bytes=%llu, decode(llama_output_reserve/prepare)=%.3f/%.3f ms calls=%llu/%llu realloc(bytes)=%llu/%llu, prep(total/features/pos/mask)=%.3f/%.3f/%.3f/%.3f ms kv_cache(total/build/reserve/reset/alloc/up_f/up_p/compute/sync/read)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls(prepare/cache/read)=%llu/%llu/%llu bytes(feature/pos/mask/read)=%llu/%llu/%llu/%llu host_layers=%d, fallback_pos(copy/graph)=%llu/%llu, nonmono(copy/graph)=%llu/%llu, capture_fail=%llu/%llu decode_prepare_fail=%llu, visible_kv_max=%llu, last(rows=%d width=%d left_pad=%d n_tokens=%d n_kv=%d pos=[%d..%d])\n",
                             (double) capture_stats.capture_prepare_sync_us / 1000.0,
                             (double) capture_stats.capture_materialize_us / 1000.0,
                             (unsigned long long) capture_stats.capture_prepare_calls,
@@ -2337,22 +2536,41 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                             (double) graph_stats.set_target_copy_us / 1000.0,
                             (unsigned long long) graph_stats.set_target_rows,
                             (unsigned long long) graph_stats.set_target_copy_bytes,
+                            (double) graph_stats.decode_output_reserve_us / 1000.0,
+                            (double) graph_stats.decode_prepare_us / 1000.0,
+                            (unsigned long long) graph_stats.decode_output_reserve_calls,
+                            (unsigned long long) graph_stats.decode_prepare_calls,
+                            (unsigned long long) graph_stats.decode_output_reserve_reallocs,
+                            (unsigned long long) graph_stats.decode_output_reserve_realloc_bytes,
                             (double) graph_stats.graph_prepare_total_us / 1000.0,
                             (double) graph_stats.graph_feature_copy_us / 1000.0,
                             (double) graph_stats.graph_pos_copy_us / 1000.0,
                             (double) graph_stats.graph_mask_build_us / 1000.0,
+                            kv_cache_total_ms,
+                            (double) graph_stats.graph_kv_cache_build_us / 1000.0,
+                            (double) graph_stats.graph_kv_cache_reserve_us / 1000.0,
+                            (double) graph_stats.graph_kv_cache_reset_us / 1000.0,
+                            (double) graph_stats.graph_kv_cache_alloc_us / 1000.0,
+                            (double) graph_stats.graph_kv_cache_feature_upload_us / 1000.0,
+                            (double) graph_stats.graph_kv_cache_pos_upload_us / 1000.0,
                             (double) graph_stats.graph_kv_cache_compute_us / 1000.0,
+                            (double) graph_stats.graph_kv_cache_sync_us / 1000.0,
+                            (double) graph_stats.graph_kv_cache_read_concat_pad_us / 1000.0,
                             (unsigned long long) graph_stats.graph_prepare_calls,
                             (unsigned long long) graph_stats.graph_kv_cache_calls,
+                            (unsigned long long) graph_stats.graph_kv_cache_read_concat_pad_calls,
                             (unsigned long long) graph_stats.graph_feature_bytes,
                             (unsigned long long) graph_stats.graph_pos_bytes,
                             (unsigned long long) graph_stats.graph_mask_bytes,
+                            (unsigned long long) graph_stats.graph_kv_cache_cached_bytes,
+                            graph_stats.last_kv_cache_host_layers,
                             (unsigned long long) graph_stats.set_target_missing_positions,
                             (unsigned long long) graph_stats.graph_pos_fallbacks,
                             (unsigned long long) graph_stats.set_target_non_monotonic_positions,
                             (unsigned long long) graph_stats.graph_pos_non_monotonic,
                             (unsigned long long) capture_stats.capture_prepare_failures,
                             (unsigned long long) capture_stats.capture_materialize_failures,
+                            (unsigned long long) graph_stats.decode_prepare_failures,
                             (unsigned long long) graph_stats.graph_visible_kv_max,
                             graph_stats.last_n_rows,
                             graph_stats.last_width,
@@ -2361,6 +2579,36 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                             graph_stats.last_n_kv_total,
                             (int) graph_stats.last_pos_first,
                             (int) graph_stats.last_pos_last);
+
+                            LOG_INF("statistics dflash hot: kv(upload_f/upload_p/upload/compute/sync)=%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu replay(accepted_prefix_append)=%.3f ms calls=%zu rows=%zu\n",
+                                kv_upload_feature_ms,
+                                kv_upload_pos_ms,
+                                kv_upload_total_ms,
+                                kv_compute_ms,
+                                kv_sync_ms,
+                                (unsigned long long) graph_stats.graph_kv_cache_calls,
+                                replay_append_ms,
+                                dflash_state->n_accept_append_calls,
+                                dflash_state->n_accept_append_rows);
+
+                    LOG_INF("statistics dflash stages: draft(decode/sample)=%.3f/%.3f ms warmup(collect/append)=%.3f/%.3f ms calls=%zu/%zu rows=%zu/%zu accept(total/output_copy/append)=%.3f/%.3f/%.3f ms calls=%zu/%zu/%zu rows=%zu/%zu/%zu\n",
+                            (double) dflash_state->t_draft_decode_us / 1000.0,
+                            (double) dflash_state->t_draft_sample_us / 1000.0,
+                            (double) dflash_state->t_warmup_collect_us / 1000.0,
+                            (double) dflash_state->t_warmup_append_us / 1000.0,
+                            dflash_state->n_warmup_collect_calls,
+                            dflash_state->n_warmup_append_calls,
+                            dflash_state->n_warmup_collect_rows,
+                            dflash_state->n_warmup_append_rows,
+                            (double) dflash_state->t_accept_commit_us / 1000.0,
+                            (double) dflash_state->t_accept_output_copy_us / 1000.0,
+                            (double) dflash_state->t_accept_append_us / 1000.0,
+                            dflash_state->n_accept_commit_calls,
+                            dflash_state->n_accept_output_copy_calls,
+                            dflash_state->n_accept_append_calls,
+                            dflash_state->n_accept_commit_rows,
+                            dflash_state->n_accept_output_copy_rows,
+                            dflash_state->n_accept_append_rows);
                 }
             }
         }
@@ -2690,8 +2938,6 @@ int32_t common_speculative_on_target_batch(
         const common_speculative_feature_view & features,
     bool is_prompt_warmup) {
     if (auto * dflash_state = common_speculative_get_dflash_state(spec); dflash_state != nullptr) {
-        GGML_UNUSED(is_prompt_warmup);
-
         if (features.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE || batch.n_tokens <= 0) {
             return 0;
         }
@@ -2713,9 +2959,22 @@ int32_t common_speculative_on_target_batch(
             }
         }
 
+        const int64_t t_append_us = ggml_time_us();
         if (!dflash_append_target_features(*dflash_state, features, batch, seq_id)) {
             return -1;
         }
+
+        const uint64_t append_us = (uint64_t) (ggml_time_us() - t_append_us);
+        if (is_prompt_warmup) {
+            dflash_state->t_warmup_append_us += append_us;
+            dflash_state->n_warmup_append_calls++;
+            dflash_state->n_warmup_append_rows += (size_t) batch.n_tokens;
+        } else {
+            dflash_state->t_accept_append_us += append_us;
+            dflash_state->n_accept_append_calls++;
+            dflash_state->n_accept_append_rows += (size_t) batch.n_tokens;
+        }
+
         return 0;
     }
 

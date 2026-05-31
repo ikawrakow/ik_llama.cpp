@@ -126,6 +126,17 @@ static void server_dflash_contract_log_accept(
             server_dflash_contract_format_indices(output_indices).c_str());
 }
 
+static bool server_slot_prompt_batch_overlaps(
+        const server_slot & slot,
+        int32_t batch_i0,
+        int32_t batch_i1) {
+    if (slot.prompt_batch_i0 < 0 || slot.prompt_batch_i1 <= slot.prompt_batch_i0) {
+        return false;
+    }
+
+    return slot.prompt_batch_i0 < batch_i1 && batch_i0 < slot.prompt_batch_i1;
+}
+
 static bool params_use_gemma4_external_mtp(const gpt_params & params_base) {
     return params_base.has_mtp &&
         llama_model_is_gemma4_mtp_assistant(params_base.speculative.model_dft);
@@ -708,6 +719,8 @@ void server_slot::reset() {
     n_past_prompt = 0;
     n_discarded_prompt = 0;
     n_kept_prompt = 0;
+    prompt_batch_i0 = -1;
+    prompt_batch_i1 = -1;
     n_sent_text = 0;
     drafted.clear();
     drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
@@ -3840,6 +3853,9 @@ bool server_context::create_checkpoint(server_slot & slot) {
 void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type) {
     if (params_base.cont_batching || batch.n_tokens == 0) {
         for (auto& slot : slots) {
+            slot.prompt_batch_i0 = -1;
+            slot.prompt_batch_i1 = -1;
+
             // this slot still has a prompt to be processed
             if (slot.state == SLOT_STATE_IDLE && slot.command == SLOT_COMMAND_LOAD_PROMPT) {
                 auto& prompt_tokens = slot.prompt_tokens;
@@ -4127,6 +4143,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 int32_t ga_i = slot.ga_i;
                 int32_t ga_n = slot.ga_n;
                 int32_t ga_w = slot.ga_w;
+                const int32_t prompt_batch_i0 = batch.n_tokens;
 
                 // add prompt tokens for processing in the current batch
                 // TODO: the self-extend stuff here is a mess - simplify and/or abstract it somehow
@@ -4161,6 +4178,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                 }
+                slot.prompt_batch_i0 = prompt_batch_i0;
+                slot.prompt_batch_i1 = batch.n_tokens;
+
                 LOG_VERBOSE("prompt processing progress", {
                     {"id_slot",  slot.id},
                     {"n_past",   slot.n_past},
@@ -4770,6 +4790,7 @@ void server_context::update_allowlist_state(server_slot& slot) {
 void server_context::process_batch_tokens(int32_t & n_batch) {
     for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
         const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
+        bool finish_prompt_warmup_batch = false;
         extend_context(n_tokens);
 
         llama_batch batch_view = {
@@ -4830,7 +4851,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         }
 
     if (server_speculative_has_target_features(params_base.speculative)) {
-        bool finished_prompt_warmup_batch = false;
         for (auto & slot : slots) {
             if (!slot.spec || !server_speculative_has_target_features(slot.params.speculative)) {
                 continue;
@@ -4840,7 +4860,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 continue;
             }
 
-            if (slot.command != SLOT_COMMAND_LOAD_PROMPT) {
+            if (!server_slot_prompt_batch_overlaps(slot, i, i + n_tokens)) {
                 continue;
             }
 
@@ -4849,12 +4869,8 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 slot.spec_prompt_warmup_failed = true;
                 LOG_ERROR("failed to warm up speculative target-feature state from prompt batch for slot %d\n", slot.id);
             } else {
-                finished_prompt_warmup_batch = true;
+                finish_prompt_warmup_batch = true;
             }
-        }
-
-        if (finished_prompt_warmup_batch) {
-            llama_finish_dflash_capture_batch(ctx, true);
         }
     }
 
@@ -4974,6 +4990,10 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         }
         // speculative decoding - main model sample and accept
         speculative_decoding_accept();
+
+        if (finish_prompt_warmup_batch) {
+            llama_finish_dflash_capture_batch(ctx, true);
+        }
     }
 }
 
@@ -5004,6 +5024,11 @@ void server_context::update_slots() {
 
     // start populating the batch for this iteration
     common_batch_clear(batch);
+
+    for (auto & slot : slots) {
+        slot.prompt_batch_i0 = -1;
+        slot.prompt_batch_i1 = -1;
+    }
 
     // first, add sampled tokens from any ongoing sequences
     add_sampled_tokens(); // Prepare batch for inference

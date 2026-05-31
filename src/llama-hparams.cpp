@@ -79,6 +79,17 @@ static bool load_dflash_target_layer_ids(
         } else {
             hparams.dflash_target_layer_ids[i] = ((const uint32_t *) data)[i];
         }
+
+        const uint32_t id = hparams.dflash_target_layer_ids[i];
+
+        for (uint32_t j = 0; j < i; ++j) {
+            if (hparams.dflash_target_layer_ids[j] == id) {
+                throw std::runtime_error(format(
+                    "dflash: %s contains duplicate layer id %u",
+                    key.c_str(),
+                    id));
+            }
+        }
     }
 
     return true;
@@ -92,19 +103,8 @@ static void validate_dflash_hparams(llama_hparams & hparams, llm_arch arch) {
         throw std::runtime_error(format("%s: dflash target_layer_ids are required", llama_model_arch_name(arch)));
     }
 
-    if (arch == LLM_ARCH_DFLASH_DRAFT && hparams.n_embd > 0) {
-        const uint32_t expected_n_target_features = hparams.n_embd * hparams.dflash_n_target_layers;
-        if (expected_n_target_features > 0 && hparams.dflash_n_target_features != expected_n_target_features) {
-            LLAMA_LOG_WARN(
-                "%s: overriding dflash n_target_features from %u to %u based on n_embd=%u and n_target_layers=%u\n",
-                llama_model_arch_name(arch),
-                hparams.dflash_n_target_features,
-                expected_n_target_features,
-                hparams.n_embd,
-                hparams.dflash_n_target_layers);
-            hparams.dflash_n_target_features = expected_n_target_features;
-        }
-    }
+    // DFlash feature width is target-model specific. Keep the serialized metadata intact here
+    // and validate it against the live target model during DFlash init.
 
     if (hparams.dflash_n_target_features == 0) {
         throw std::runtime_error(format(

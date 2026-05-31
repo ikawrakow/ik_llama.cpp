@@ -113,6 +113,53 @@ int32_t llama_model_dflash_target_layer_ids(
     return n_layers;
 }
 
+int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model) {
+    if (model == nullptr) {
+        return (int32_t) LLAMA_TOKEN_NULL;
+    }
+
+    return (int32_t) model->vocab.token_mask();
+}
+
+int32_t llama_model_dflash_io_mode(
+        const struct llama_model * draft_model,
+        const struct llama_model * target_model) {
+    if (draft_model == nullptr || target_model == nullptr || draft_model->arch != LLM_ARCH_DFLASH_DRAFT) {
+        return LLAMA_DFLASH_IO_MODE_INVALID;
+    }
+
+    const ggml_tensor * target_output = target_model->output != nullptr ? target_model->output : target_model->tok_embd;
+    if (draft_model->tok_embd == nullptr || draft_model->output == nullptr || target_model->tok_embd == nullptr || target_output == nullptr) {
+        return LLAMA_DFLASH_IO_MODE_INVALID;
+    }
+
+    const bool shared_tok = draft_model->tok_embd == target_model->tok_embd;
+    const bool shared_output = draft_model->output == target_output;
+    if (shared_tok && shared_output) {
+        return LLAMA_DFLASH_IO_MODE_SHARED;
+    }
+
+    if (!shared_tok && !shared_output) {
+        return LLAMA_DFLASH_IO_MODE_SELF_CONTAINED;
+    }
+
+    return LLAMA_DFLASH_IO_MODE_MIXED;
+}
+
+bool llama_model_dflash_io_tensors_match(
+        const struct llama_model * draft_model,
+        int32_t n_embd,
+        int32_t n_vocab) {
+    if (draft_model == nullptr || draft_model->tok_embd == nullptr || draft_model->output == nullptr || n_embd <= 0 || n_vocab <= 0) {
+        return false;
+    }
+
+    return (int32_t) draft_model->tok_embd->ne[0] == n_embd &&
+           (int32_t) draft_model->tok_embd->ne[1] == n_vocab &&
+           (int32_t) draft_model->output->ne[0] == n_embd &&
+           (int32_t) draft_model->output->ne[1] == n_vocab;
+}
+
 bool llama_model_share_dflash_io_tensors(
         struct llama_model * draft_model,
         const struct llama_model * target_model) {
@@ -323,11 +370,19 @@ static bool llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool
     }
 
     auto & capture = *ctx->dflash_capture;
+    if (capture.capture_batch_id == 0) {
+        capture.capture_batch_id = 1;
+    }
+    if (capture.layer_seen_batch_id.size() != capture.layer_ids.size()) {
+        capture.layer_seen_batch_id.assign(capture.layer_ids.size(), 0);
+    }
+
     auto & rows = capture.layer_rows[(size_t) layer_idx];
     rows.resize((size_t) row_count * (size_t) row_width);
     ggml_backend_tensor_get(tensor, rows.data(), 0, ggml_nbytes(tensor));
     capture.row_width = row_width;
     capture.row_count = row_count;
+    capture.layer_seen_batch_id[(size_t) layer_idx] = capture.capture_batch_id;
     return true;
 }
 
@@ -342,6 +397,7 @@ bool llama_set_dflash_capture_layers(
     auto capture = std::make_unique<llama_context::dflash_capture_state>();
     capture->layer_ids.assign(layer_ids, layer_ids + n_layers);
     capture->layer_rows.resize((size_t) n_layers);
+    capture->layer_seen_batch_id.assign((size_t) n_layers, 0);
     capture->prev_cb_eval = ctx->cparams.cb_eval;
     capture->prev_cb_eval_user_data = ctx->cparams.cb_eval_user_data;
     ctx->dflash_capture = std::move(capture);
@@ -378,6 +434,18 @@ void llama_clear_dflash_capture(struct llama_context * ctx) {
             ggml_backend_sched_set_eval_callback(ctx->sched, prev_cb_eval, prev_cb_eval_user_data);
         }
     }
+}
+
+void llama_begin_dflash_capture_batch(struct llama_context * ctx) {
+    if (ctx == nullptr || !ctx->dflash_capture) {
+        return;
+    }
+
+    auto & capture = *ctx->dflash_capture;
+    capture.capture_batch_id++;
+    capture.row_count = 0;
+    capture.row_width = 0;
+    std::fill(capture.layer_seen_batch_id.begin(), capture.layer_seen_batch_id.end(), 0);
 }
 
 void llama_finish_dflash_capture_batch(
@@ -420,7 +488,35 @@ static bool llama_spec_prepare_dflash_capture(
         return false;
     }
 
+    if (capture.capture_batch_id == 0 || capture.layer_seen_batch_id.size() != (size_t) n_layers) {
+        profile.capture_prepare_failures++;
+        profile.capture_layer_batch_mismatch++;
+        if (profile.capture_layer_batch_mismatch <= 3) {
+            LLAMA_LOG_WARN("%s: DFlash capture batch markers are not initialized (batch_id=%llu layers=%zu expected=%d)\n",
+                    __func__,
+                    (unsigned long long) capture.capture_batch_id,
+                    capture.layer_seen_batch_id.size(),
+                    n_layers);
+        }
+        return false;
+    }
+
     for (int32_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
+        if (capture.layer_seen_batch_id[(size_t) layer_idx] != capture.capture_batch_id) {
+            profile.capture_prepare_failures++;
+            profile.capture_layer_batch_mismatch++;
+            if (profile.capture_layer_batch_mismatch <= 3) {
+                LLAMA_LOG_WARN("%s: DFlash capture is stale for layer %d (seen_batch=%llu current_batch=%llu rows=%d width=%d)\n",
+                        __func__,
+                        capture.layer_ids[(size_t) layer_idx],
+                        (unsigned long long) capture.layer_seen_batch_id[(size_t) layer_idx],
+                        (unsigned long long) capture.capture_batch_id,
+                        row_count,
+                        row_width);
+            }
+            return false;
+        }
+
         const auto & rows = capture.layer_rows[(size_t) layer_idx];
         if (rows.size() != (size_t) row_count * (size_t) row_width) {
             profile.capture_prepare_failures++;
@@ -595,8 +691,38 @@ static void llama_dflash_contract_log_output_indices(
             have_capture ? "true" : "false");
 }
 
+        static bool llama_spec_materialize_dflash_rows_prepared(
+            struct llama_context * ctx,
+            int32_t row_count,
+            int32_t row_width,
+            int32_t n_layers,
+            const std::vector<int32_t> & row_indices,
+            std::vector<float> & rows_out,
+            int32_t & combined_width);
+
 static bool llama_spec_materialize_dflash_rows(
         struct llama_context * ctx,
+        const std::vector<int32_t> & row_indices,
+        std::vector<float> & rows_out,
+        int32_t & combined_width) {
+    int32_t row_count = 0;
+    int32_t row_width = 0;
+    int32_t n_layers = 0;
+    if (!llama_spec_prepare_dflash_capture(ctx, row_count, row_width, n_layers)) {
+        if (ctx != nullptr) {
+            ctx->dflash_profile.capture_materialize_failures++;
+        }
+        return false;
+    }
+
+    return llama_spec_materialize_dflash_rows_prepared(ctx, row_count, row_width, n_layers, row_indices, rows_out, combined_width);
+}
+
+static bool llama_spec_materialize_dflash_rows_prepared(
+        struct llama_context * ctx,
+        int32_t row_count,
+        int32_t row_width,
+        int32_t n_layers,
         const std::vector<int32_t> & row_indices,
         std::vector<float> & rows_out,
         int32_t & combined_width) {
@@ -610,10 +736,7 @@ static bool llama_spec_materialize_dflash_rows(
     profile.capture_materialize_calls++;
     const int64_t t_start_us = ggml_time_us();
 
-    int32_t row_count = 0;
-    int32_t row_width = 0;
-    int32_t n_layers = 0;
-    if (!llama_spec_prepare_dflash_capture(ctx, row_count, row_width, n_layers)) {
+    if (row_count <= 0 || row_width <= 0 || n_layers <= 0 || ctx->dflash_capture == nullptr) {
         profile.capture_materialize_failures++;
         return false;
     }
@@ -735,7 +858,7 @@ bool llama_spec_get_dflash_feature_view(
 
     view = {};
     view.kind = LLAMA_SPEC_FEATURE_HIDDEN_STATE;
-    if (!llama_spec_materialize_dflash_rows(ctx, row_indices, ctx->dflash_feature_view_buffer, view.width)) {
+    if (!llama_spec_materialize_dflash_rows_prepared(ctx, row_count, row_width, n_layers, row_indices, ctx->dflash_feature_view_buffer, view.width)) {
         return false;
     }
 
@@ -808,7 +931,7 @@ bool llama_spec_get_dflash_feature_view_for_seq(
 
     view = {};
     view.kind = LLAMA_SPEC_FEATURE_HIDDEN_STATE;
-    if (!llama_spec_materialize_dflash_rows(ctx, row_indices, ctx->dflash_feature_view_buffer, view.width)) {
+    if (!llama_spec_materialize_dflash_rows_prepared(ctx, row_count, row_width, n_layers, row_indices, ctx->dflash_feature_view_buffer, view.width)) {
         return false;
     }
 

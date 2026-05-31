@@ -24,6 +24,14 @@ struct llama_spec_feature_view {
 };
 
 struct llama_dflash_profile_stats {
+        uint64_t decode_output_reserve_calls = 0;
+        uint64_t decode_output_reserve_us = 0;
+        uint64_t decode_output_reserve_reallocs = 0;
+        uint64_t decode_output_reserve_realloc_bytes = 0;
+        uint64_t decode_prepare_calls = 0;
+        uint64_t decode_prepare_us = 0;
+        uint64_t decode_prepare_failures = 0;
+
         uint64_t set_target_copy_calls = 0;
         uint64_t set_target_copy_us = 0;
         uint64_t set_target_rows = 0;
@@ -35,6 +43,7 @@ struct llama_dflash_profile_stats {
         uint64_t capture_prepare_sync_us = 0;
         uint64_t capture_prepare_failures = 0;
         uint64_t capture_layer_shape_mismatch = 0;
+        uint64_t capture_layer_batch_mismatch = 0;
         uint64_t capture_prompt_batches = 0;
         uint64_t capture_prompt_shape_changes = 0;
         uint64_t capture_verify_batches = 0;
@@ -50,7 +59,17 @@ struct llama_dflash_profile_stats {
         uint64_t graph_feature_copy_us = 0;
         uint64_t graph_pos_copy_us = 0;
         uint64_t graph_mask_build_us = 0;
+        uint64_t graph_kv_cache_build_us = 0;
+        uint64_t graph_kv_cache_reserve_us = 0;
+        uint64_t graph_kv_cache_reset_us = 0;
+        uint64_t graph_kv_cache_alloc_us = 0;
+        uint64_t graph_kv_cache_feature_upload_us = 0;
+        uint64_t graph_kv_cache_pos_upload_us = 0;
         uint64_t graph_kv_cache_compute_us = 0;
+        uint64_t graph_kv_cache_sync_us = 0;
+        uint64_t graph_kv_cache_read_concat_pad_us = 0;
+        uint64_t graph_kv_cache_read_concat_pad_calls = 0;
+        uint64_t graph_kv_cache_cached_bytes = 0;
         uint64_t graph_kv_cache_calls = 0;
         uint64_t graph_feature_bytes = 0;
         uint64_t graph_pos_bytes = 0;
@@ -68,6 +87,7 @@ struct llama_dflash_profile_stats {
         int32_t last_left_pad = 0;
         int32_t last_n_tokens = 0;
         int32_t last_n_kv_total = 0;
+        int32_t last_kv_cache_host_layers = 0;
         int32_t capture_prompt_last_rows = 0;
         int32_t capture_prompt_last_width = 0;
         int32_t capture_verify_last_rows = 0;
@@ -104,6 +124,24 @@ int32_t llama_model_dflash_target_layer_ids(
         int32_t * layer_ids,
         int32_t capacity);
 
+enum llama_dflash_io_mode {
+    LLAMA_DFLASH_IO_MODE_INVALID = 0,
+    LLAMA_DFLASH_IO_MODE_SHARED,
+    LLAMA_DFLASH_IO_MODE_SELF_CONTAINED,
+    LLAMA_DFLASH_IO_MODE_MIXED,
+};
+
+int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model);
+
+int32_t llama_model_dflash_io_mode(
+        const struct llama_model * draft_model,
+        const struct llama_model * target_model);
+
+bool llama_model_dflash_io_tensors_match(
+        const struct llama_model * draft_model,
+        int32_t n_embd,
+        int32_t n_vocab);
+
 bool llama_model_share_dflash_io_tensors(
         struct llama_model * draft_model,
         const struct llama_model * target_model);
@@ -133,6 +171,8 @@ bool llama_set_dflash_capture_layers(
         int32_t n_layers);
 
 void llama_clear_dflash_capture(struct llama_context * ctx);
+
+void llama_begin_dflash_capture_batch(struct llama_context * ctx);
 
 void llama_finish_dflash_capture_batch(
         struct llama_context * ctx,

@@ -64,6 +64,8 @@ struct server_slot {
 
     int32_t i_batch = -1;
     int32_t n_predict = -1; // TODO: disambiguate from params.n_predict
+    int32_t prompt_batch_i0 = -1;
+    int32_t prompt_batch_i1 = -1;
 
     int32_t n_prompt_tokens = 0;
     int32_t n_prompt_tokens_cache = 0;

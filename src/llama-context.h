@@ -289,22 +289,26 @@ struct llama_context {
     std::vector<float> dflash_feature_view_buffer;
     std::vector<llama_pos> dflash_pos_ctx_data;
     std::vector<float> dflash_kq_mask_data;
+    std::vector<float> dflash_kq_mask_swa_data;
     int32_t dflash_visible_cross_ctx = 0;
     std::vector<struct ggml_tensor *> dflash_k_ctx_cache;
     std::vector<struct ggml_tensor *> dflash_v_ctx_cache;
     struct ggml_context * dflash_cache_ctx = nullptr;
-    ggml_backend_buffer_t dflash_cache_buf = nullptr;
+    std::vector<ggml_backend_buffer_t> dflash_cache_bufs;
     std::vector<uint8_t> dflash_buf_compute_meta;
     ggml_backend_sched_t dflash_sched = nullptr;
     struct ggml_tensor * dflash_kv_input_target_features = nullptr;
     struct ggml_tensor * dflash_kv_input_pos_ctx = nullptr;
     struct ggml_tensor * dflash_kq_mask_tensor = nullptr;
+    struct ggml_tensor * dflash_kq_mask_swa_tensor = nullptr;
 
     struct dflash_capture_state {
         std::vector<int32_t> layer_ids;
         std::vector<std::vector<float>> layer_rows;
         int32_t row_count = 0;
         int32_t row_width = 0;
+        uint64_t capture_batch_id = 0;
+        std::vector<uint64_t> layer_seen_batch_id;
         ggml_backend_sched_eval_callback prev_cb_eval = nullptr;
         void * prev_cb_eval_user_data = nullptr;
     };
@@ -333,6 +337,7 @@ struct llama_context {
     struct ggml_tensor * inp_dflash_target_features = nullptr; // F32 [n_target_features, cross_ctx]
     struct ggml_tensor * inp_dflash_pos_ctx = nullptr;         // I32 [cross_ctx]
     struct ggml_tensor * inp_dflash_kq_mask = nullptr;         // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
+    struct ggml_tensor * inp_dflash_kq_mask_swa = nullptr;     // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 

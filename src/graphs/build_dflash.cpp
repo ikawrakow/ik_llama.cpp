@@ -64,6 +64,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
     const int64_t n_target_features = hparams.dflash_n_target_features;
+    auto & profile = lctx.dflash_profile;
     const bool use_kv_cache = dflash_use_kv_cache_experiment();
     const int64_t ctx_len = lctx.dflash_visible_cross_ctx > 0
             ? (int64_t) lctx.dflash_visible_cross_ctx
@@ -77,12 +78,30 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(n_tokens, ctx_len)) + 32 * n_layer, false);
 
+    bool have_swa_layers = false;
+    for (int il = 0; il < n_layer; ++il) {
+        if (hparams.swa_layers[il]) {
+            have_swa_layers = true;
+            break;
+        }
+    }
+
     lctx.inp_dflash_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_total, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
     lctx.dflash_kq_mask_tensor = lctx.inp_dflash_kq_mask;
     ggml_set_input(lctx.inp_dflash_kq_mask);
     cb(lctx.inp_dflash_kq_mask, "dflash_kq_mask", -1);
 
-    ggml_tensor * dflash_kq_mask = flash_attn ? ggml_cast(ctx0, lctx.inp_dflash_kq_mask, GGML_TYPE_F16) : lctx.inp_dflash_kq_mask;
+    ggml_tensor * dflash_kq_mask_full = flash_attn ? ggml_cast(ctx0, lctx.inp_dflash_kq_mask, GGML_TYPE_F16) : lctx.inp_dflash_kq_mask;
+    ggml_tensor * dflash_kq_mask_swa = nullptr;
+    lctx.inp_dflash_kq_mask_swa = nullptr;
+    lctx.dflash_kq_mask_swa_tensor = nullptr;
+    if (have_swa_layers && hparams.n_swa > 0) {
+        lctx.inp_dflash_kq_mask_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_total, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        lctx.dflash_kq_mask_swa_tensor = lctx.inp_dflash_kq_mask_swa;
+        ggml_set_input(lctx.inp_dflash_kq_mask_swa);
+        cb(lctx.inp_dflash_kq_mask_swa, "dflash_kq_mask_swa", -1);
+        dflash_kq_mask_swa = flash_attn ? ggml_cast(ctx0, lctx.inp_dflash_kq_mask_swa, GGML_TYPE_F16) : lctx.inp_dflash_kq_mask_swa;
+    }
 
     ggml_tensor * fused_target = nullptr;
     ggml_tensor * pos_ctx = nullptr;
@@ -137,6 +156,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
         Vcur_noise = ggml_reshape_3d(ctx0, Vcur_noise, n_embd_head_v, n_head_kv, n_tokens);
         cb(Vcur_noise, "Vcur_noise", il);
 
+        const int64_t t_cache_read_us = use_kv_cache ? ggml_time_us() : 0;
         ggml_tensor * Kcur_ctx = nullptr;
         ggml_tensor * Vcur_ctx = nullptr;
         if (use_kv_cache) {
@@ -164,6 +184,11 @@ ggml_cgraph * llm_build_context::build_dflash() {
             Kcur = ggml_pad(ctx0, Kcur, 0, 0, (int) n_kv_pad, 0);
             Vcur = ggml_pad(ctx0, Vcur, 0, 0, (int) n_kv_pad, 0);
         }
+        if (use_kv_cache) {
+            profile.graph_kv_cache_read_concat_pad_us += (uint64_t) (ggml_time_us() - t_cache_read_us);
+            profile.graph_kv_cache_read_concat_pad_calls++;
+            profile.graph_kv_cache_cached_bytes += ggml_nbytes(lctx.dflash_k_ctx_cache[(size_t) il]) + ggml_nbytes(lctx.dflash_v_ctx_cache[(size_t) il]);
+        }
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
         cb(Qcur, "Qcur", il);
@@ -173,11 +198,14 @@ ggml_cgraph * llm_build_context::build_dflash() {
         ggml_tensor * q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
         ggml_tensor * k = ggml_cont(ctx0, ggml_permute(ctx0, Kcur, 0, 2, 1, 3));
         ggml_tensor * v = ggml_cont(ctx0, ggml_permute(ctx0, Vcur, 0, 2, 1, 3));
+        ggml_tensor * dflash_kq_mask_l = (hparams.swa_layers[il] && dflash_kq_mask_swa != nullptr)
+            ? dflash_kq_mask_swa
+            : dflash_kq_mask_full;
         cb(q, "q", il);
         cb(k, "k", il);
         cb(v, "v", il);
 
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, dflash_kq_mask, kq_scale, hparams.f_max_alibi_bias,
+        cur = ggml_flash_attn_ext(ctx0, q, k, v, dflash_kq_mask_l, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, "flash_attn", il);
         ggml_build_forward_expand(gf, cur);

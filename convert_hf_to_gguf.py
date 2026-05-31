@@ -2287,6 +2287,8 @@ class DFlashDraftModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH_DRAFT
 
     _target_hparams: dict[str, Any] | None = None
+    _saw_token_embd = False
+    _saw_output = False
 
     def _require_target_model_dir(self) -> Path:
         if self.target_model_dir is None:
@@ -2338,25 +2340,28 @@ class DFlashDraftModel(Qwen3Model):
         elif "n_target_features" in self.hparams:
             n_target_features = int(self.hparams["n_target_features"])
         else:
+            target_hparams = self._get_target_hparams()
+            target_hidden_size = target_hparams.get("hidden_size")
+            if target_hidden_size is None:
+                raise ValueError("DFlashDraftModel: target config is missing hidden_size")
+
             draft_hidden_size = self.hparams.get("hidden_size")
             if draft_hidden_size is None:
                 raise ValueError("DFlashDraftModel: draft config is missing hidden_size")
 
-            n_target_features = int(draft_hidden_size) * len(target_layer_ids)
+            n_target_features = int(target_hidden_size) * len(target_layer_ids)
 
-            target_hparams = self._get_target_hparams()
-            target_hidden_size = target_hparams.get("hidden_size")
             if target_hidden_size is not None and int(target_hidden_size) != int(draft_hidden_size):
                 logger.warning(
-                    "DFlashDraftModel: target hidden_size=%d differs from draft hidden_size=%d; using draft hidden width for n_target_features",
+                    "DFlashDraftModel: target hidden_size=%d differs from draft hidden_size=%d; using target hidden width for n_target_features",
                     int(target_hidden_size),
                     int(draft_hidden_size),
                 )
 
             logger.info(
-                "DFlashDraftModel: inferred n_target_features=%d from draft hidden_size=%d and n_target_layers=%d",
+                "DFlashDraftModel: inferred n_target_features=%d from target hidden_size=%d and n_target_layers=%d",
                 n_target_features,
-                int(draft_hidden_size),
+                int(target_hidden_size),
                 len(target_layer_ids),
             )
 
@@ -2370,17 +2375,52 @@ class DFlashDraftModel(Qwen3Model):
             n_target_features,
         )
 
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._saw_output and not self._saw_token_embd:
+            raise ValueError(
+                "DFlashDraftModel conversion requires token_embd.weight when output.weight is present"
+            )
+
+        if self._saw_token_embd and self._saw_output:
+            io_mode = "self-contained"
+        elif self._saw_token_embd:
+            io_mode = "self-contained-tied"
+        else:
+            io_mode = "shared-target"
+
+        logger.info(
+            "DFlashDraftModel IO contract: io=%s token_embd=%s output=%s target_model_dir=%s",
+            io_mode,
+            self._saw_token_embd,
+            self._saw_output,
+            self._require_target_model_dir(),
+        )
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == "fc.weight":
+        top_level_name = name[6:] if name.startswith("model.") else name
+
+        if top_level_name == "fc.weight":
             return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_FC]}.weight", data_torch)]
-        if name == "hidden_norm.weight":
+        if top_level_name == "hidden_norm.weight":
             return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_HIDDEN_NORM]}.weight", data_torch)]
         if name == "norm.weight":
             name = "model.norm.weight"
         elif name.startswith("layers."):
             name = f"model.{name}"
 
-        return super().modify_tensors(data_torch, name, bid)
+        tensors = list(super().modify_tensors(data_torch, name, bid))
+        token_embd_name = f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.TOKEN_EMBD]}.weight"
+        output_name = f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.OUTPUT]}.weight"
+
+        for tensor_name, _ in tensors:
+            if tensor_name == token_embd_name:
+                self._saw_token_embd = True
+            elif tensor_name == output_name:
+                self._saw_output = True
+
+        return tensors
 
 
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
