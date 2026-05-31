@@ -130,6 +130,10 @@ static void server_remove_speculative_stage(common_params_speculative & spec, co
     }
 }
 
+static bool server_speculative_needs_draft_model(const common_params_speculative & spec) {
+    return spec.has_stage_type(COMMON_SPECULATIVE_TYPE_DRAFT);
+}
+
 static bool server_speculative_has_mtp(const common_params_speculative & spec) {
     return spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
 }
@@ -274,15 +278,20 @@ bool server_context::load_model(const gpt_params& params_) {
     add_bos_token = llama_should_add_bos_token(model);
     has_eos_token = llama_add_eos_token(model) != 1;
 
-    if (params_base.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && params_base.n_parallel > 1) {
-        LOG_WARNING("MTP is not supported with parallel slots yet, disabling MTP to avoid cross-slot corruption.\n", {
+    if (params_base.n_parallel > 1 && server_speculative_has_mtp(params_base.speculative)) {
+        LOG_WARNING("MTP is not supported with parallel slots yet, removing the MTP stage to avoid cross-slot corruption.\n", {
             {"n_parallel", params_base.n_parallel},
+            {"stage_chain", common_speculative_stage_chain_to_str(params_base.speculative)},
         });
+
         params_base.has_mtp = false;
         server_remove_speculative_stage(params_base.speculative, COMMON_SPECULATIVE_TYPE_MTP);
-        params_base.speculative.model.clear();
-        params_base.speculative.params.clear();
-        params_base.speculative.model_dft = nullptr;
+
+        if (!server_speculative_needs_draft_model(params_base.speculative)) {
+            params_base.speculative.model.clear();
+            params_base.speculative.params.clear();
+            params_base.speculative.model_dft = nullptr;
+        }
     }
 
     bool has_draft_model = !params_base.speculative.model.empty() || !params_base.speculative.params.empty();
