@@ -35,7 +35,9 @@ llm_build_context::llm_build_context(
     const llm_build_cb & cb,
     bool   worst_case,
     bool   warmup,
-    int    n_outputs_) :
+    int    n_outputs_,
+    bool   clear_lctx_inputs,
+    std::vector<uint8_t> * buf_compute_meta_override) :
         model            (lctx.model),
         lctx             (lctx),
         hparams          (model.hparams),
@@ -82,8 +84,9 @@ llm_build_context::llm_build_context(
         thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
         rope_type        (hparams.rope_type),
+        clear_lctx_inputs(clear_lctx_inputs),
         cb               (cb),
-        buf_compute_meta (lctx.buf_compute_meta) {
+        buf_compute_meta (buf_compute_meta_override ? *buf_compute_meta_override : lctx.buf_compute_meta) {
             // all initializations should be done in init()
 }
 
@@ -96,25 +99,27 @@ void llm_build_context::init() {
 
     ctx0 = ggml_init(params);
 
-    lctx.inp_tokens      = nullptr;
-    lctx.inp_embd        = nullptr;
-    lctx.inp_pos         = nullptr;
-    lctx.inp_out_ids     = nullptr;
-    lctx.inp_KQ_mask     = nullptr;
-    lctx.inp_KQ_mask_swa = nullptr;
-    lctx.inp_K_shift     = nullptr;
-    lctx.inp_mean        = nullptr;
-    lctx.inp_cls         = nullptr;
-    lctx.inp_s_copy      = nullptr;
-    lctx.inp_s_mask      = nullptr;
-    lctx.inp_s_seq       = nullptr;
-    lctx.inp_s_seq_qnext = nullptr;
-    lctx.inp_pos_bucket    = nullptr;
-    lctx.inp_embd_enc      = nullptr;
-    lctx.inp_KQ_mask_cross = nullptr;
-    lctx.inp_dflash_target_features = nullptr;
-    lctx.inp_dflash_pos_ctx = nullptr;
-    lctx.inp_dflash_kq_mask = nullptr;
+    if (clear_lctx_inputs) {
+        lctx.inp_tokens      = nullptr;
+        lctx.inp_embd        = nullptr;
+        lctx.inp_pos         = nullptr;
+        lctx.inp_out_ids     = nullptr;
+        lctx.inp_KQ_mask     = nullptr;
+        lctx.inp_KQ_mask_swa = nullptr;
+        lctx.inp_K_shift     = nullptr;
+        lctx.inp_mean        = nullptr;
+        lctx.inp_cls         = nullptr;
+        lctx.inp_s_copy      = nullptr;
+        lctx.inp_s_mask      = nullptr;
+        lctx.inp_s_seq       = nullptr;
+        lctx.inp_s_seq_qnext = nullptr;
+        lctx.inp_pos_bucket    = nullptr;
+        lctx.inp_embd_enc      = nullptr;
+        lctx.inp_KQ_mask_cross = nullptr;
+        lctx.inp_dflash_target_features = nullptr;
+        lctx.inp_dflash_pos_ctx = nullptr;
+        lctx.inp_dflash_kq_mask = nullptr;
+    }
 }
 
 void llm_build_context::free() {
@@ -2158,6 +2163,23 @@ struct ggml_cgraph * llm_build_context::llama_build_graph_s_copy(llama_context &
     llm.init();
 
     struct ggml_cgraph * result = llm.build_s_copy();
+
+    llm.free();
+
+    return result;
+}
+
+struct ggml_cgraph * llm_build_context::llama_build_graph_dflash_kv_cache(llama_context & lctx) {
+    llama_batch dummy;
+    dummy.n_tokens = 0;
+
+    llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
+
+    struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash_buf_compute_meta);
+
+    llm.init();
+
+    struct ggml_cgraph * result = llm.build_dflash_kv_cache();
 
     llm.free();
 

@@ -565,6 +565,84 @@ void llama_context::reset_scheduler() {
     prev_mtp.reset();
 }
 
+bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
+    const int32_t target_cross_ctx = std::max<int32_t>(1, cross_ctx);
+    const int32_t n_layer = model.hparams.n_layer;
+    const int64_t n_embd_head_k = model.hparams.n_embd_head_k(0);
+    const int64_t n_embd_head_v = model.hparams.n_embd_head_v(0);
+    const int64_t n_head_kv = model.hparams.n_head_kv();
+
+    if (dflash_cache_ctx != nullptr && !dflash_k_ctx_cache.empty()) {
+        if ((int32_t) dflash_k_ctx_cache.size() == n_layer &&
+                dflash_k_ctx_cache.front() != nullptr &&
+                (int32_t) dflash_k_ctx_cache.front()->ne[2] == target_cross_ctx) {
+            return true;
+        }
+
+        free_dflash_kv_cache_tensors();
+        if (dflash_sched != nullptr) {
+            ggml_backend_sched_free(dflash_sched);
+            dflash_sched = nullptr;
+        }
+        dflash_buf_compute_meta.clear();
+    }
+
+    ggml_backend_buffer_type_t buft = llama_default_buffer_type_cpu(true);
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ (size_t) (2 * std::max(1, n_layer)) * ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+
+    dflash_cache_ctx = ggml_init(params);
+    if (dflash_cache_ctx == nullptr) {
+        return false;
+    }
+
+    dflash_k_ctx_cache.resize((size_t) n_layer);
+    dflash_v_ctx_cache.resize((size_t) n_layer);
+    for (int32_t il = 0; il < n_layer; ++il) {
+        dflash_k_ctx_cache[(size_t) il] = ggml_new_tensor_3d(dflash_cache_ctx, GGML_TYPE_F32, n_embd_head_k, n_head_kv, target_cross_ctx);
+        dflash_v_ctx_cache[(size_t) il] = ggml_new_tensor_3d(dflash_cache_ctx, GGML_TYPE_F32, n_embd_head_v, n_head_kv, target_cross_ctx);
+        if (dflash_k_ctx_cache[(size_t) il] == nullptr || dflash_v_ctx_cache[(size_t) il] == nullptr) {
+            free_dflash_kv_cache_tensors();
+            return false;
+        }
+
+        ggml_set_input(dflash_k_ctx_cache[(size_t) il]);
+        ggml_set_input(dflash_v_ctx_cache[(size_t) il]);
+        ggml_format_name(dflash_k_ctx_cache[(size_t) il], "dflash_k_ctx_cache_%d", il);
+        ggml_format_name(dflash_v_ctx_cache[(size_t) il], "dflash_v_ctx_cache_%d", il);
+    }
+
+    dflash_cache_buf = ggml_backend_alloc_ctx_tensors_from_buft(dflash_cache_ctx, buft);
+    if (dflash_cache_buf == nullptr) {
+        free_dflash_kv_cache_tensors();
+        return false;
+    }
+
+    ggml_backend_buffer_clear(dflash_cache_buf, 0);
+    return true;
+}
+
+void llama_context::free_dflash_kv_cache_tensors() {
+    dflash_k_ctx_cache.clear();
+    dflash_v_ctx_cache.clear();
+    dflash_kv_input_target_features = nullptr;
+    dflash_kv_input_pos_ctx = nullptr;
+    dflash_kq_mask_tensor = nullptr;
+
+    if (dflash_cache_buf != nullptr) {
+        ggml_backend_buffer_free(dflash_cache_buf);
+        dflash_cache_buf = nullptr;
+    }
+    if (dflash_cache_ctx != nullptr) {
+        ggml_free(dflash_cache_ctx);
+        dflash_cache_ctx = nullptr;
+    }
+}
+
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
     //if (kv_self.save_per_step_ssm) return false;
@@ -687,6 +765,10 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
 }
 
 llama_context::~llama_context() {
+    if (dflash_sched != nullptr) {
+        ggml_backend_sched_free(dflash_sched);
+    }
+    free_dflash_kv_cache_tensors();
     ggml_backend_sched_free(sched);
 
     for (ggml_backend_t backend : backends) {
@@ -4934,6 +5016,30 @@ static void llama_graph_compute(
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
+static void llama_graph_compute_sched(
+        llama_context & lctx,
+        ggml_backend_sched_t sched,
+          ggml_cgraph * gf,
+                  int   n_threads) {
+#ifdef GGML_USE_METAL
+    if (ggml_backend_is_metal(lctx.backend_metal)) {
+        ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
+    }
+#endif
+
+    if (lctx.backend_cpu != nullptr) {
+        ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+        ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+    }
+#ifdef GGML_USE_BLAS
+    if (lctx.backend_blas != nullptr) {
+        ggml_backend_blas_set_n_threads(lctx.backend_blas, n_threads);
+    }
+#endif
+
+    ggml_backend_sched_graph_compute_async(sched, gf);
+}
+
 static bool prepare_mtp_graph_inputs(
         struct llama_context & lctx,
         uint32_t cur_token,
@@ -4984,12 +5090,28 @@ static bool prepare_mtp_graph_inputs(
 static bool prepare_dflash_graph_inputs(
         struct llama_context & lctx,
         uint32_t n_tokens) {
-    ggml_tensor * target_hidden = lctx.inp_dflash_target_features;
-    ggml_tensor * pos_ctx = lctx.inp_dflash_pos_ctx;
-    ggml_tensor * kq_mask = lctx.inp_dflash_kq_mask;
+    const char * dflash_kv_cache_env = std::getenv("IK_DFLASH_KV_CACHE");
+    const bool use_kv_cache = dflash_kv_cache_env != nullptr && *dflash_kv_cache_env != '\0' &&
+            std::strcmp(dflash_kv_cache_env, "0") != 0 &&
+            std::strcmp(dflash_kv_cache_env, "false") != 0 &&
+            std::strcmp(dflash_kv_cache_env, "off") != 0;
+    const int32_t cross_ctx = lctx.dflash_visible_cross_ctx > 0
+            ? lctx.dflash_visible_cross_ctx
+            : std::max<int32_t>(1, (int32_t) lctx.cparams.n_ctx - (int32_t) lctx.model.hparams.dflash_block_size);
+    ggml_tensor * kq_mask = lctx.dflash_kq_mask_tensor;
 
-    if (target_hidden == nullptr || pos_ctx == nullptr || kq_mask == nullptr) {
+    if (kq_mask == nullptr) {
         LLAMA_LOG_ERROR("%s: DFlash graph inputs are not initialized\n", __func__);
+        return false;
+    }
+
+    if (use_kv_cache) {
+        if (!lctx.ensure_dflash_kv_cache_tensors(cross_ctx) || lctx.dflash_k_ctx_cache.empty() || lctx.dflash_v_ctx_cache.empty()) {
+            LLAMA_LOG_ERROR("%s: DFlash K/V cache inputs are not initialized\n", __func__);
+            return false;
+        }
+    } else if (lctx.inp_dflash_target_features == nullptr || lctx.inp_dflash_pos_ctx == nullptr) {
+        LLAMA_LOG_ERROR("%s: DFlash inline inputs are not initialized\n", __func__);
         return false;
     }
 
@@ -4998,48 +5120,176 @@ static bool prepare_dflash_graph_inputs(
     const size_t total_floats = lctx.dflash_target_features_n_floats;
     const size_t total_positions = lctx.dflash_target_positions_n;
     const int32_t n_rows = lctx.dflash_target_features_n_rows;
-    const int32_t width = (int32_t) target_hidden->ne[0];
-    const int32_t cross_ctx = (int32_t) target_hidden->ne[1];
+    const int32_t width = (int32_t) lctx.model.hparams.dflash_n_target_features;
+    const int32_t graph_cross_ctx = use_kv_cache
+            ? (lctx.dflash_k_ctx_cache.front() != nullptr ? (int32_t) lctx.dflash_k_ctx_cache.front()->ne[2] : 0)
+            : (lctx.inp_dflash_target_features != nullptr ? (int32_t) lctx.inp_dflash_target_features->ne[1] : 0);
     const int32_t n_mask_tokens = (int32_t) kq_mask->ne[1];
     const int32_t n_kv_total = (int32_t) kq_mask->ne[0];
+    auto & profile = lctx.dflash_profile;
+    const int64_t t_total_us = ggml_time_us();
 
+    profile.graph_prepare_calls++;
+    profile.last_n_rows = n_rows;
+    profile.last_width = width;
+    profile.last_cross_ctx = cross_ctx;
+    profile.last_n_tokens = (int32_t) n_tokens;
+    profile.last_n_kv_total = n_kv_total;
+
+    if (graph_cross_ctx != cross_ctx) {
+        profile.graph_shape_failures++;
+
+        LLAMA_LOG_ERROR("%s: DFlash graph cross_ctx drift (graph=%d configured=%d)\n",
+                __func__, graph_cross_ctx, cross_ctx);
+        return false;
+    }
     if (src == nullptr || total_floats == 0 || n_rows <= 0) {
+        profile.graph_shape_failures++;
         LLAMA_LOG_ERROR("%s: missing DFlash target features\n", __func__);
         return false;
     }
 
     if (n_rows > cross_ctx || total_floats != (size_t) n_rows * (size_t) width) {
+        profile.graph_shape_failures++;
         LLAMA_LOG_ERROR("%s: invalid DFlash target feature shape (rows=%d width=%d floats=%zu cross_ctx=%d)\n",
                 __func__, n_rows, width, total_floats, cross_ctx);
         return false;
     }
 
-    lctx.dflash_target_features_padded.assign((size_t) cross_ctx * (size_t) width, 0.0f);
-    const size_t dst_offset = (size_t) (cross_ctx - n_rows) * (size_t) width;
-    const int32_t left_pad = cross_ctx - n_rows;
-    std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset);
-    ggml_backend_tensor_set(target_hidden, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(target_hidden));
+    if (n_kv_total < cross_ctx + (int32_t) n_tokens) {
+        profile.graph_mask_overflow++;
+        LLAMA_LOG_ERROR("%s: invalid DFlash mask shape (n_kv_total=%d < cross_ctx+n_tokens=%d)\n",
+                __func__, n_kv_total, cross_ctx + (int32_t) n_tokens);
+        return false;
+    }
 
+    const int32_t left_pad = cross_ctx - n_rows;
+    const size_t padded_floats = (size_t) cross_ctx * (size_t) width;
+    const size_t dst_offset = (size_t) left_pad * (size_t) width;
+    const int64_t t_feature_us = ggml_time_us();
+    profile.last_left_pad = left_pad;
+    if (lctx.dflash_target_features_padded.size() != padded_floats) {
+        lctx.dflash_target_features_padded.resize(padded_floats);
+    }
+    if (left_pad == 0 && total_floats == padded_floats) {
+        std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin());
+    } else {
+        if (dst_offset > 0) {
+            std::fill(lctx.dflash_target_features_padded.begin(),
+                    lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset, 0.0f);
+        }
+        std::copy(src, src + total_floats, lctx.dflash_target_features_padded.begin() + (ptrdiff_t) dst_offset);
+    }
+    profile.graph_feature_copy_us += (uint64_t) (ggml_time_us() - t_feature_us);
+    profile.graph_feature_bytes += padded_floats * sizeof(float);
+
+    const int64_t t_pos_us = ggml_time_us();
     lctx.dflash_pos_ctx_data.resize((size_t) cross_ctx);
     std::fill(lctx.dflash_pos_ctx_data.begin(), lctx.dflash_pos_ctx_data.end(), 0);
     if (src_pos != nullptr && total_positions == (size_t) n_rows) {
+        bool monotonic = true;
+        for (int32_t i = 1; i < n_rows; ++i) {
+            if (src_pos[i] <= src_pos[i - 1]) {
+                monotonic = false;
+                break;
+            }
+        }
+        if (!monotonic) {
+            profile.graph_pos_non_monotonic++;
+            if (profile.graph_pos_non_monotonic <= 3) {
+                LLAMA_LOG_WARN("%s: DFlash target positions are not strictly increasing (rows=%d first=%d last=%d)\n",
+                        __func__, n_rows, (int) src_pos[0], (int) src_pos[n_rows - 1]);
+            }
+        }
+        profile.last_pos_first = src_pos[0];
+        profile.last_pos_last = src_pos[n_rows - 1];
         std::copy(src_pos, src_pos + n_rows, lctx.dflash_pos_ctx_data.begin() + (ptrdiff_t) left_pad);
     } else {
+        profile.graph_pos_fallbacks++;
+        profile.last_pos_first = -1;
+        profile.last_pos_last = -1;
+        if (profile.graph_pos_fallbacks <= 3) {
+            LLAMA_LOG_WARN("%s: using synthetic DFlash positions (rows=%d positions=%zu cross_ctx=%d)\n",
+                    __func__, n_rows, total_positions, cross_ctx);
+        }
         for (int32_t i = 0; i < n_rows; ++i) {
             lctx.dflash_pos_ctx_data[(size_t) left_pad + (size_t) i] = i;
         }
     }
-    ggml_backend_tensor_set(pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(pos_ctx));
+    profile.graph_pos_copy_us += (uint64_t) (ggml_time_us() - t_pos_us);
+    profile.graph_pos_bytes += lctx.dflash_pos_ctx_data.size() * sizeof(llama_pos);
 
+    if (use_kv_cache) {
+        const size_t max_nodes = lctx.model.max_nodes((int) std::max<int32_t>(1, cross_ctx)) + 24 * lctx.model.hparams.n_layer;
+        const size_t meta_size = ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false);
+        if (lctx.dflash_buf_compute_meta.size() != meta_size) {
+            lctx.dflash_buf_compute_meta.resize(meta_size);
+        }
+
+        ggml_cgraph * gf_kv = llm_build_context::llama_build_graph_dflash_kv_cache(lctx);
+        if (gf_kv == nullptr || lctx.dflash_kv_input_target_features == nullptr || lctx.dflash_kv_input_pos_ctx == nullptr) {
+            profile.graph_shape_failures++;
+            LLAMA_LOG_ERROR("%s: failed to build DFlash K/V cache graph\n", __func__);
+            return false;
+        }
+
+        if (lctx.dflash_sched == nullptr) {
+            std::vector<ggml_backend_buffer_type_t> backend_buft;
+            backend_buft.reserve(lctx.backends.size());
+            for (auto * backend : lctx.backends) {
+                if (ggml_backend_is_cpu(backend)) {
+                    backend_buft.push_back(llama_default_buffer_type_cpu(true));
+                } else {
+                    backend_buft.push_back(ggml_backend_get_default_buffer_type(backend));
+                }
+            }
+
+            lctx.dflash_sched = ggml_backend_sched_new(lctx.backends.data(), backend_buft.data(), lctx.backends.size(), max_nodes, false);
+            if (lctx.dflash_sched == nullptr || !ggml_backend_sched_reserve(lctx.dflash_sched, gf_kv)) {
+                profile.graph_shape_failures++;
+                LLAMA_LOG_ERROR("%s: failed to initialize DFlash K/V scheduler\n", __func__);
+                return false;
+            }
+        }
+
+        ggml_backend_sched_reset(lctx.dflash_sched);
+        ggml_backend_sched_alloc_graph(lctx.dflash_sched, gf_kv);
+        ggml_backend_tensor_set(lctx.dflash_kv_input_target_features, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(lctx.dflash_kv_input_target_features));
+        ggml_backend_tensor_set(lctx.dflash_kv_input_pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(lctx.dflash_kv_input_pos_ctx));
+        const int64_t t_kv_cache_us = ggml_time_us();
+        llama_graph_compute_sched(lctx, lctx.dflash_sched, gf_kv, lctx.cparams.n_threads);
+        llama_synchronize(&lctx);
+        profile.graph_kv_cache_compute_us += (uint64_t) (ggml_time_us() - t_kv_cache_us);
+        profile.graph_kv_cache_calls++;
+    } else {
+        ggml_backend_tensor_set(lctx.inp_dflash_target_features, lctx.dflash_target_features_padded.data(), 0, ggml_nbytes(lctx.inp_dflash_target_features));
+        ggml_backend_tensor_set(lctx.inp_dflash_pos_ctx, lctx.dflash_pos_ctx_data.data(), 0, ggml_nbytes(lctx.inp_dflash_pos_ctx));
+    }
+
+    const int64_t t_mask_us = ggml_time_us();
     lctx.dflash_kq_mask_data.assign((size_t) n_kv_total * (size_t) n_mask_tokens, -INFINITY);
+    int32_t visible_kv_max = 0;
     for (uint32_t j = 0; j < n_tokens; ++j) {
         float * row = lctx.dflash_kq_mask_data.data() + (size_t) j * (size_t) n_kv_total;
         const int32_t visible_kv = cross_ctx + (int32_t) j + 1;
+        visible_kv_max = std::max(visible_kv_max, visible_kv);
+        profile.graph_visible_kv_sum += (uint64_t) visible_kv;
         for (int32_t i = left_pad; i < visible_kv; ++i) {
             row[i] = 0.0f;
         }
     }
     ggml_backend_tensor_set(kq_mask, lctx.dflash_kq_mask_data.data(), 0, ggml_nbytes(kq_mask));
+    profile.graph_mask_build_us += (uint64_t) (ggml_time_us() - t_mask_us);
+    profile.graph_mask_bytes += ggml_nbytes(kq_mask);
+    profile.graph_visible_kv_max = std::max<uint64_t>(profile.graph_visible_kv_max, (uint64_t) visible_kv_max);
+    profile.graph_prepare_total_us += (uint64_t) (ggml_time_us() - t_total_us);
+
+    if (profile.graph_prepare_calls == 1) {
+        LLAMA_LOG_INFO("%s: DFlash graph contract rows=%d width=%d cross_ctx=%d n_tokens=%u left_pad=%d n_kv_total=%d draft_n_ctx=%u pos=%s [%d..%d]\n",
+            __func__, n_rows, width, cross_ctx, n_tokens, left_pad, n_kv_total, lctx.cparams.n_ctx,
+                (src_pos != nullptr && total_positions == (size_t) n_rows) ? "target" : "synthetic",
+                (int) profile.last_pos_first, (int) profile.last_pos_last);
+    }
 
     return true;
 }

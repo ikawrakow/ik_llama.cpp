@@ -289,6 +289,16 @@ struct llama_context {
     std::vector<float> dflash_feature_view_buffer;
     std::vector<llama_pos> dflash_pos_ctx_data;
     std::vector<float> dflash_kq_mask_data;
+    int32_t dflash_visible_cross_ctx = 0;
+    std::vector<struct ggml_tensor *> dflash_k_ctx_cache;
+    std::vector<struct ggml_tensor *> dflash_v_ctx_cache;
+    struct ggml_context * dflash_cache_ctx = nullptr;
+    ggml_backend_buffer_t dflash_cache_buf = nullptr;
+    std::vector<uint8_t> dflash_buf_compute_meta;
+    ggml_backend_sched_t dflash_sched = nullptr;
+    struct ggml_tensor * dflash_kv_input_target_features = nullptr;
+    struct ggml_tensor * dflash_kv_input_pos_ctx = nullptr;
+    struct ggml_tensor * dflash_kq_mask_tensor = nullptr;
 
     struct dflash_capture_state {
         std::vector<int32_t> layer_ids;
@@ -299,6 +309,7 @@ struct llama_context {
         void * prev_cb_eval_user_data = nullptr;
     };
     std::unique_ptr<dflash_capture_state> dflash_capture;
+    llama_dflash_profile_stats dflash_profile;
 
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
@@ -339,6 +350,9 @@ struct llama_context {
     std::vector<CacheCopy> cache_copies;
 
     bool update_cache_copies();
+
+    bool ensure_dflash_kv_cache_tensors(int32_t cross_ctx);
+    void free_dflash_kv_cache_tensors();
 
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);

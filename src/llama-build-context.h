@@ -89,6 +89,7 @@ struct llm_build_context {
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
+    const bool clear_lctx_inputs;
 
     const llm_build_cb & cb;
 
@@ -103,7 +104,9 @@ struct llm_build_context {
     const llm_build_cb & cb,
     bool   worst_case,
     bool   warmup,
-    int    n_outputs = 0);
+    int    n_outputs = 0,
+    bool   clear_lctx_inputs = true,
+    std::vector<uint8_t> * buf_compute_meta_override = nullptr);
 
     void init();
 
@@ -243,6 +246,8 @@ struct llm_build_context {
     ggml_cgraph * build_gemma4_mtp();
 
     ggml_cgraph * build_dflash();
+
+    ggml_cgraph * build_dflash_kv_cache();
 
     ggml_cgraph * build_starcoder2();
 
@@ -458,6 +463,8 @@ llm_expert_gating_func_type   gating_op,
     static ggml_cgraph * llama_build_graph_k_shift(llama_context & lctx);
 
     static ggml_cgraph * llama_build_graph_s_copy(llama_context & lctx);
+
+    static ggml_cgraph * llama_build_graph_dflash_kv_cache(llama_context & lctx);
 
     static ggml_cgraph * llama_build_graph(llama_context & lctx, const llama_batch & batch, bool worst_case, int n_outputs = 0);
 

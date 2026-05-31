@@ -3,32 +3,102 @@
 #include "../llama-model.h"
 
 #include <cmath>
+#include <cstdlib>
+
+static bool dflash_use_kv_cache_experiment() {
+    const char * env = std::getenv("IK_DFLASH_KV_CACHE");
+    if (env == nullptr || *env == '\0') {
+        return false;
+    }
+
+    return std::strcmp(env, "0") != 0 &&
+           std::strcmp(env, "false") != 0 &&
+           std::strcmp(env, "off") != 0;
+}
+
+ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
+    const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
+    const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
+    const int64_t n_target_features = hparams.dflash_n_target_features;
+    const int64_t ctx_len = lctx.dflash_visible_cross_ctx > 0
+            ? (int64_t) lctx.dflash_visible_cross_ctx
+            : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
+
+    GGML_ASSERT(n_embd_head_k == n_embd_head_v);
+    GGML_ASSERT(n_target_features > 0);
+    GGML_ASSERT(lctx.ensure_dflash_kv_cache_tensors((int32_t) ctx_len));
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(1, ctx_len)) + 24 * n_layer, false);
+
+    lctx.dflash_kv_input_target_features = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_target_features, ctx_len);
+    ggml_set_input(lctx.dflash_kv_input_target_features);
+
+    lctx.dflash_kv_input_pos_ctx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ctx_len);
+    ggml_set_input(lctx.dflash_kv_input_pos_ctx);
+
+    ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, lctx.dflash_kv_input_target_features);
+    fused_target = llm_build_norm(ctx0, fused_target, hparams, model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
+
+    for (int il = 0; il < n_layer; ++il) {
+        GGML_ASSERT((size_t) il < lctx.dflash_k_ctx_cache.size());
+        GGML_ASSERT((size_t) il < lctx.dflash_v_ctx_cache.size());
+
+        ggml_tensor * Kcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, fused_target);
+        Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx, n_embd_head_k, n_head_kv, ctx_len);
+        Kcur_ctx = llm_build_norm(ctx0, Kcur_ctx, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
+        Kcur_ctx = ggml_rope_ext(ctx0, Kcur_ctx, lctx.dflash_kv_input_pos_ctx, nullptr,
+                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+
+        ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
+        Vcur_ctx = ggml_reshape_3d(ctx0, Vcur_ctx, n_embd_head_v, n_head_kv, ctx_len);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur_ctx, lctx.dflash_k_ctx_cache[(size_t) il]));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur_ctx, lctx.dflash_v_ctx_cache[(size_t) il]));
+    }
+
+    return gf;
+}
 
 ggml_cgraph * llm_build_context::build_dflash() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
     const int64_t n_target_features = hparams.dflash_n_target_features;
-        const int64_t ctx_len = std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
-    const int64_t n_kv_total = ctx_len + n_tokens;
+    const bool use_kv_cache = dflash_use_kv_cache_experiment();
+    const int64_t ctx_len = lctx.dflash_visible_cross_ctx > 0
+            ? (int64_t) lctx.dflash_visible_cross_ctx
+            : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
+        const int64_t n_kv_total = GGML_PAD(ctx_len + n_tokens, flash_attn ? 256 : 32);
+        const int64_t n_kv_pad = n_kv_total - (ctx_len + n_tokens);
 
     GGML_ASSERT(n_embd_head_k == n_embd_head_v);
     GGML_ASSERT(n_target_features > 0);
+    GGML_ASSERT(!use_kv_cache || lctx.ensure_dflash_kv_cache_tensors((int32_t) ctx_len));
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(n_tokens, ctx_len)) + 32 * n_layer, false);
 
-    lctx.inp_dflash_target_features = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_target_features, ctx_len);
-    ggml_set_input(lctx.inp_dflash_target_features);
-    cb(lctx.inp_dflash_target_features, "dflash_target_features", -1);
-
-    lctx.inp_dflash_pos_ctx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ctx_len);
-    ggml_set_input(lctx.inp_dflash_pos_ctx);
-    cb(lctx.inp_dflash_pos_ctx, "dflash_pos_ctx", -1);
-
     lctx.inp_dflash_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_total, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+    lctx.dflash_kq_mask_tensor = lctx.inp_dflash_kq_mask;
     ggml_set_input(lctx.inp_dflash_kq_mask);
     cb(lctx.inp_dflash_kq_mask, "dflash_kq_mask", -1);
 
     ggml_tensor * dflash_kq_mask = flash_attn ? ggml_cast(ctx0, lctx.inp_dflash_kq_mask, GGML_TYPE_F16) : lctx.inp_dflash_kq_mask;
+
+    ggml_tensor * fused_target = nullptr;
+    ggml_tensor * pos_ctx = nullptr;
+    if (!use_kv_cache) {
+        lctx.inp_dflash_target_features = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_target_features, ctx_len);
+        ggml_set_input(lctx.inp_dflash_target_features);
+        cb(lctx.inp_dflash_target_features, "dflash_target_features", -1);
+
+        lctx.inp_dflash_pos_ctx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ctx_len);
+        ggml_set_input(lctx.inp_dflash_pos_ctx);
+        cb(lctx.inp_dflash_pos_ctx, "dflash_pos_ctx", -1);
+
+        fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, lctx.inp_dflash_target_features);
+        fused_target = llm_build_norm(ctx0, fused_target, hparams, model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
+        pos_ctx = lctx.inp_dflash_pos_ctx;
+    }
 
     ggml_tensor * tok_embd = model.tok_embd;
     if (tok_embd == nullptr) {
@@ -38,10 +108,6 @@ ggml_cgraph * llm_build_context::build_dflash() {
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
-
-    ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, lctx.inp_dflash_target_features);
-    fused_target = llm_build_norm(ctx0, fused_target, hparams, model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
-    cb(fused_target, "dflash_target_fused", -1);
 
     const float kq_scale = 1.0f / std::sqrt((float) n_embd_head_k);
 
@@ -71,25 +137,35 @@ ggml_cgraph * llm_build_context::build_dflash() {
         Vcur_noise = ggml_reshape_3d(ctx0, Vcur_noise, n_embd_head_v, n_head_kv, n_tokens);
         cb(Vcur_noise, "Vcur_noise", il);
 
-        ggml_tensor * Kcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, fused_target);
-        Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx, n_embd_head_k, n_head_kv, ctx_len);
-        Kcur_ctx = llm_build_norm(ctx0, Kcur_ctx, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
-        Kcur_ctx = ggml_rope_ext(ctx0, Kcur_ctx, lctx.inp_dflash_pos_ctx, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-        cb(Kcur_ctx, "Kcur_ctx", il);
+        ggml_tensor * Kcur_ctx = nullptr;
+        ggml_tensor * Vcur_ctx = nullptr;
+        if (use_kv_cache) {
+            Kcur_ctx = lctx.dflash_k_ctx_cache[(size_t) il];
+            Vcur_ctx = lctx.dflash_v_ctx_cache[(size_t) il];
+            cb(Kcur_ctx, "Kcur_ctx_cache", il);
+            cb(Vcur_ctx, "Vcur_ctx_cache", il);
+        } else {
+            Kcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, fused_target);
+            Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx, n_embd_head_k, n_head_kv, ctx_len);
+            Kcur_ctx = llm_build_norm(ctx0, Kcur_ctx, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
+            Kcur_ctx = ggml_rope_ext(ctx0, Kcur_ctx, pos_ctx, nullptr,
+                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
 
-        ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
-        Vcur_ctx = ggml_reshape_3d(ctx0, Vcur_ctx, n_embd_head_v, n_head_kv, ctx_len);
-        cb(Vcur_ctx, "Vcur_ctx", il);
+            Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
+            Vcur_ctx = ggml_reshape_3d(ctx0, Vcur_ctx, n_embd_head_v, n_head_kv, ctx_len);
+            cb(Kcur_ctx, "Kcur_ctx", il);
+            cb(Vcur_ctx, "Vcur_ctx", il);
+        }
 
         ggml_tensor * Kcur = ggml_concat(ctx0, Kcur_ctx, Kcur_noise, 2);
         ggml_tensor * Vcur = ggml_concat(ctx0, Vcur_ctx, Vcur_noise, 2);
+        if (n_kv_pad > 0) {
+            Kcur = ggml_pad(ctx0, Kcur, 0, 0, (int) n_kv_pad, 0);
+            Vcur = ggml_pad(ctx0, Vcur, 0, 0, (int) n_kv_pad, 0);
+        }
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
-
-        Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F16);
-        Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F16);
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur_f16", il);
         cb(Vcur, "Vcur_f16", il);
