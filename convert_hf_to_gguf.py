@@ -2287,6 +2287,7 @@ class DFlashDraftModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH_DRAFT
 
     _target_hparams: dict[str, Any] | None = None
+    _target_raw_hparams: dict[str, Any] | None = None
     _saw_token_embd = False
     _saw_output = False
 
@@ -2300,10 +2301,83 @@ class DFlashDraftModel(Qwen3Model):
             self._target_hparams = Model.load_text_hparams(self._require_target_model_dir())
         return self._target_hparams
 
+    def _get_target_raw_hparams(self) -> dict[str, Any]:
+        if self._target_raw_hparams is None:
+            self._target_raw_hparams = Model.load_hparams(self._require_target_model_dir())
+        return self._target_raw_hparams
+
+    def _target_uses_gemma4_vocab(self) -> bool:
+        raw_hparams = self._get_target_raw_hparams()
+        model_type = str(raw_hparams.get("model_type", ""))
+        if model_type.startswith("gemma4"):
+            return True
+        architectures = raw_hparams.get("architectures")
+        if isinstance(architectures, list):
+            return any(str(arch).startswith("Gemma4") for arch in architectures)
+        return False
+
+    def _get_target_hidden_size(self) -> int | None:
+        raw_hparams = self._get_target_raw_hparams()
+        if (hidden_size := raw_hparams.get("hidden_size")) is not None:
+            return int(hidden_size)
+        if (hidden_size := raw_hparams.get("backbone_hidden_size")) is not None:
+            return int(hidden_size)
+        text_hparams = raw_hparams.get("text_config")
+        if isinstance(text_hparams, dict) and (hidden_size := text_hparams.get("hidden_size")) is not None:
+            return int(hidden_size)
+        return None
+
+    def _set_vocab_gemma4(self, dir_model: Path, vocab_size: int | None = None) -> None:
+        vocab = gguf.LlamaHfVocab(dir_model)
+        tokens = []
+        scores = []
+        toktypes = []
+        visible_tokens = {
+            "<|channel>",
+            "<channel|>",
+            "<|tool_call>",
+            "<tool_call|>",
+            "<|tool_response>",
+            "<tool_response|>",
+            "<|\"|>",
+        }
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            text_str = text.decode()
+            if text_str in visible_tokens:
+                toktypes.append(gguf.TokenType.USER_DEFINED)
+                logger.info(f"Token {text_str!r} is set to USER_DEFINED")
+            else:
+                toktypes.append(toktype)
+
+        if vocab_size is not None and len(tokens) != int(vocab_size):
+            raise ValueError(
+                f"DFlashDraftModel: Gemma4 tokenizer size {len(tokens)} does not match expected vocab_size={int(vocab_size)}"
+            )
+
+        self.gguf_writer.add_tokenizer_model("gemma4")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+        self.gguf_writer.add_add_space_prefix(False)
+        self.gguf_writer.add_add_bos_token(True)
+
     def set_vocab(self):
         target_hparams = self._get_target_hparams()
+        target_model_dir = self._require_target_model_dir()
+        if self._target_uses_gemma4_vocab():
+            self._set_vocab_gemma4(
+                dir_model=target_model_dir,
+                vocab_size=target_hparams.get("vocab_size"),
+            )
+            return
         self._set_vocab_gpt2(
-            dir_model=self._require_target_model_dir(),
+            dir_model=target_model_dir,
             vocab_size=target_hparams.get("vocab_size"),
         )
 
@@ -2312,6 +2386,29 @@ class DFlashDraftModel(Qwen3Model):
 
         self.gguf_writer.add_causal_attention(False)
         self.gguf_writer.add_rope_dimension_count(self.hparams.get("head_dim", 128))
+
+        rope_scaling = self.hparams.get("rope_scaling")
+        if isinstance(rope_scaling, dict):
+            rope_type = rope_scaling.get("rope_type", rope_scaling.get("type"))
+            rope_factor = rope_scaling.get("factor")
+
+            if rope_type == "linear" and rope_factor is not None:
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+                self.gguf_writer.add_rope_scaling_factor(rope_factor)
+            elif rope_type == "yarn" and rope_factor is not None:
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+                self.gguf_writer.add_rope_scaling_factor(rope_factor)
+
+                if (orig_ctx_len := rope_scaling.get("original_max_position_embeddings")) is not None:
+                    self.gguf_writer.add_rope_scaling_orig_ctx_len(orig_ctx_len)
+                if (yarn_ext_factor := rope_scaling.get("extrapolation_factor")) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_ext_factor(yarn_ext_factor)
+                if (yarn_attn_factor := rope_scaling.get("attention_factor", rope_scaling.get("attn_factor"))) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_attn_factor(yarn_attn_factor)
+                if (yarn_beta_fast := rope_scaling.get("beta_fast")) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_beta_fast)
+                if (yarn_beta_slow := rope_scaling.get("beta_slow")) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_beta_slow)
 
         arch = self.gguf_writer.arch
         dflash_cfg = self.hparams.get("dflash_config")
@@ -2340,8 +2437,7 @@ class DFlashDraftModel(Qwen3Model):
         elif "n_target_features" in self.hparams:
             n_target_features = int(self.hparams["n_target_features"])
         else:
-            target_hparams = self._get_target_hparams()
-            target_hidden_size = target_hparams.get("hidden_size")
+            target_hidden_size = self._get_target_hidden_size()
             if target_hidden_size is None:
                 raise ValueError("DFlashDraftModel: target config is missing hidden_size")
 

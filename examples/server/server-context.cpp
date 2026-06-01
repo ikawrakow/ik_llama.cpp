@@ -446,6 +446,18 @@ bool server_context::load_model(const gpt_params& params_) {
         params_dft.flash_attn   = params_base.flash_attn;
         params_dft.k_cache_hadamard = params_base.k_cache_hadamard;
         params_dft.v_cache_hadamard = params_base.v_cache_hadamard;
+        if (server_speculative_has_dflash(params_base.speculative)) {
+            params_dft.split_mode = params_base.split_mode;
+            for (size_t i = 0; i < std::size(params_dft.tensor_split); ++i) {
+                params_dft.tensor_split[i] = params_base.tensor_split[i];
+            }
+            params_dft.attn_max_batch = params_base.attn_max_batch;
+            params_dft.graph_reuse = params_base.graph_reuse;
+            params_dft.split_mode_graph_scheduling = params_base.split_mode_graph_scheduling;
+            params_dft.scheduler_async = params_base.scheduler_async;
+            params_dft.max_extra_alloc_MiB = params_base.max_extra_alloc_MiB;
+            params_dft.reduce_type = params_base.reduce_type;
+        }
         if (!params_base.speculative.params.empty()) {
             auto [argc, argv] = parse_command_line("llama-server " + params_base.speculative.params);
             if (!gpt_params_parse(argc, argv, params_dft)) {
