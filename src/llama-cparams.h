@@ -25,6 +25,10 @@ struct llama_cparams {
     float yarn_attn_factor;
     float yarn_beta_fast;
     float yarn_beta_slow;
+    float yarn_ext_factor_swa;
+    float yarn_attn_factor_swa;
+    float yarn_beta_fast_swa;
+    float yarn_beta_slow_swa;
     float defrag_thold;
 
     bool embeddings;

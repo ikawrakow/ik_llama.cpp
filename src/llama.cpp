@@ -3070,6 +3070,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MINIMAX_M2,
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
+        LLM_ARCH_LAGUNA,
         //LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,
@@ -6730,6 +6731,10 @@ struct llama_context * llama_init_from_model(
     cparams.yarn_attn_factor = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast >= 0.0f ? params.yarn_beta_fast : hparams.yarn_beta_fast;
     cparams.yarn_beta_slow   = params.yarn_beta_slow >= 0.0f ? params.yarn_beta_slow : hparams.yarn_beta_slow;
+    cparams.yarn_ext_factor_swa  = params.yarn_ext_factor >= 0.0f ? params.yarn_ext_factor : hparams.yarn_ext_factor_swa;
+    cparams.yarn_attn_factor_swa = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor_swa;
+    cparams.yarn_beta_fast_swa   = params.yarn_beta_fast >= 0.0f ? params.yarn_beta_fast : hparams.yarn_beta_fast_swa;
+    cparams.yarn_beta_slow_swa   = params.yarn_beta_slow >= 0.0f ? params.yarn_beta_slow : hparams.yarn_beta_slow_swa;
     cparams.defrag_thold     = params.defrag_thold;
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
@@ -6811,8 +6816,12 @@ struct llama_context * llama_init_from_model(
     if (cparams.yarn_ext_factor < 0.0f) { // negative indicates 'not set'
         cparams.yarn_ext_factor = rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN ? 1.0f : 0.0f;
     }
+    if (cparams.yarn_ext_factor_swa < 0.0f) {
+        cparams.yarn_ext_factor_swa = rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN ? 1.0f : 0.0f;
+    }
 
     cparams.yarn_attn_factor *= hparams.rope_attn_factor;
+    cparams.yarn_attn_factor_swa *= hparams.rope_attn_factor;
 
     if (cparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
         if (hparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
@@ -7401,6 +7410,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_LAGUNA:
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
             return LLAMA_ROPE_TYPE_NEOX;

@@ -1368,6 +1368,62 @@ void llm_load_hparams(
                     hparams.rope_freq_base_per_layer, hparams.n_layer, false);
                 GGML_ASSERT(hparams.has_rope_freq_base_per_layer || have_rfb_train_swa);
             } break;
+        case LLM_ARCH_LAGUNA:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_TYPE_NONE;
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,          hparams.n_layer_dense_lead, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,                hparams.n_expert_shared, false);
+                // Older Laguna GGUFs encode one shared expert through the shared FFN length.
+                if (hparams.n_expert_shared == 0 && hparams.n_ff_shexp > 0) {
+                    hparams.n_expert_shared = 1;
+                }
+                if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
+                    hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                }
+
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false)) {
+                    // Laguna XS.2 alternates full-attention and SWA layers via per-layer head counts.
+                    const uint32_t n_head_full = hparams.n_head(0);
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        hparams.swa_layers[i] = hparams.n_head(i) != n_head_full;
+                    }
+                }
+
+                if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR, hparams.yarn_ext_factor, false) && hparams.yarn_ext_factor != 0.0f) {
+                    LLAMA_LOG_WARN("%s: ignoring Laguna yarn_ext_factor metadata (%g); fresh converter and Lucebox GGUFs omit it, and honoring it causes known-bad decode\n",
+                            __func__, hparams.yarn_ext_factor);
+                    hparams.yarn_ext_factor = -1.0f;
+                }
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast,   false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow,   false);
+
+                // Laguna applies YaRN on global-attention layers; SWA layers use plain RoPE.
+                hparams.yarn_ext_factor_swa  = 0.0f;
+                hparams.yarn_attn_factor_swa = 1.0f;
+                hparams.yarn_beta_fast_swa   = 32.0f;
+                hparams.yarn_beta_slow_swa   = 1.0f;
+
+                if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer, false)) {
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        hparams.rope_dim_per_layer[i] = hparams.swa_layers[i] ? hparams.n_rot_swa : hparams.n_rot;
+                    }
+                }
+
+                switch (hparams.n_layer) {
+                    case 40: model.type = e_model::MODEL_33B_A3B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_GLM_DSA:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp);
