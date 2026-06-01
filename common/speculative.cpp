@@ -2596,6 +2596,32 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                     const double kv_upload_total_ms = kv_upload_feature_ms + kv_upload_pos_ms;
                     const double kv_compute_ms = (double) graph_stats.graph_kv_cache_compute_us / 1000.0;
                     const double kv_sync_ms = (double) graph_stats.graph_kv_cache_sync_us / 1000.0;
+                    const double kv_workspace_total_ms = (double) (
+                        graph_stats.graph_kv_workspace_build_us +
+                        graph_stats.graph_kv_workspace_reserve_us +
+                        graph_stats.graph_kv_workspace_reset_us +
+                        graph_stats.graph_kv_workspace_alloc_us +
+                        graph_stats.graph_kv_workspace_compute_us +
+                        graph_stats.graph_kv_workspace_sync_us) / 1000.0;
+                    const double draft_kv_traffic_ms = (double) (
+                        graph_stats.graph_main_node_k_ctx_view_us +
+                        graph_stats.graph_main_node_v_ctx_view_us +
+                        graph_stats.graph_main_node_k_concat_us +
+                        graph_stats.graph_main_node_v_concat_us +
+                        graph_stats.graph_main_node_k_pad_us +
+                        graph_stats.graph_main_node_v_pad_us +
+                        graph_stats.graph_main_node_k_perm_cont_us +
+                        graph_stats.graph_main_node_v_perm_cont_us) / 1000.0;
+                    const double draft_main_profiled_ms = (double) (
+                        graph_stats.graph_main_node_qcur_us +
+                        graph_stats.graph_main_node_k_draft_us +
+                        graph_stats.graph_main_node_v_draft_us +
+                        graph_stats.graph_main_node_flash_attn_us +
+                        graph_stats.graph_main_node_attn_out_us +
+                        graph_stats.graph_main_node_ffn_us +
+                        graph_stats.graph_main_node_result_rows_us +
+                        graph_stats.graph_main_node_result_norm_us +
+                        graph_stats.graph_main_node_result_us) / 1000.0;
                     const double replay_append_ms = (double) dflash_state->t_accept_append_us / 1000.0;
                     const double feature_path_ms = (double) (
                         capture_stats.capture_prepare_sync_us +
@@ -2704,6 +2730,18 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                                 (unsigned long long) graph_stats.graph_kv_cache_cached_bytes,
                                 graph_stats.last_kv_cache_host_layers);
 
+                            if (graph_stats.graph_kv_workspace_calls > 0) {
+                                LOG_INF("statistics dflash kv workspace: total=%.3f ms build/reserve/reset/alloc/compute/sync=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu\n",
+                                        kv_workspace_total_ms,
+                                        (double) graph_stats.graph_kv_workspace_build_us / 1000.0,
+                                        (double) graph_stats.graph_kv_workspace_reserve_us / 1000.0,
+                                        (double) graph_stats.graph_kv_workspace_reset_us / 1000.0,
+                                        (double) graph_stats.graph_kv_workspace_alloc_us / 1000.0,
+                                        (double) graph_stats.graph_kv_workspace_compute_us / 1000.0,
+                                        (double) graph_stats.graph_kv_workspace_sync_us / 1000.0,
+                                        (unsigned long long) graph_stats.graph_kv_workspace_calls);
+                            }
+
                             if (graph_stats.decode_internal_chunks > 0) {
                             LOG_INF("statistics dflash decode: llama_decode(total)=%.3f ms calls=%zu chunks=%llu rebuilds=%llu sync_points=%llu internal(total/prelude/sched_reset/build/alloc/prepare/set_inputs/compute/get_result/get_embedding/final_reset)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms\n",
                                 (double) dflash_state->t_draft_decode_us / 1000.0,
@@ -2747,6 +2785,67 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                                         (unsigned long long) graph_stats.graph_kv_node_k_store_calls,
                                         (unsigned long long) graph_stats.graph_kv_node_v_store_calls);
                             }
+
+                                            if (graph_stats.graph_main_node_qcur_calls > 0 ||
+                                                graph_stats.graph_main_node_k_draft_calls > 0 ||
+                                                graph_stats.graph_main_node_v_draft_calls > 0 ||
+                                                graph_stats.graph_main_node_flash_attn_calls > 0 ||
+                                                graph_stats.graph_main_node_attn_out_calls > 0 ||
+                                                graph_stats.graph_main_node_ffn_calls > 0 ||
+                                                graph_stats.graph_main_node_result_rows_calls > 0 ||
+                                                graph_stats.graph_main_node_result_norm_calls > 0 ||
+                                                graph_stats.graph_main_node_result_calls > 0) {
+                                            LOG_INF("statistics dflash draft nodes: profiled=%.3f ms graph_compute=%.3f ms qcur/k_draft/v_draft/flash_attn/attn_out/ffn/result_rows/result_norm/result=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu\n",
+                                                draft_main_profiled_ms,
+                                                (double) graph_stats.decode_graph_compute_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_qcur_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_k_draft_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_v_draft_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_flash_attn_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_attn_out_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_ffn_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_result_rows_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_result_norm_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_result_us / 1000.0,
+                                                (unsigned long long) graph_stats.graph_main_node_qcur_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_k_draft_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_v_draft_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_flash_attn_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_attn_out_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_ffn_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_result_rows_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_result_norm_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_result_calls);
+                                            }
+
+                                            if (graph_stats.graph_main_node_k_ctx_view_calls > 0 ||
+                                                graph_stats.graph_main_node_v_ctx_view_calls > 0 ||
+                                                graph_stats.graph_main_node_k_concat_calls > 0 ||
+                                                graph_stats.graph_main_node_v_concat_calls > 0 ||
+                                                graph_stats.graph_main_node_k_pad_calls > 0 ||
+                                                graph_stats.graph_main_node_v_pad_calls > 0 ||
+                                                graph_stats.graph_main_node_k_perm_cont_calls > 0 ||
+                                                graph_stats.graph_main_node_v_perm_cont_calls > 0) {
+                                            LOG_INF("statistics dflash draft kv traffic: total=%.3f ms graph_compute=%.3f ms k_ctx_view/v_ctx_view/k_concat/v_concat/k_pad/v_pad/k_perm_cont/v_perm_cont=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu\n",
+                                                draft_kv_traffic_ms,
+                                                (double) graph_stats.decode_graph_compute_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_k_ctx_view_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_v_ctx_view_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_k_concat_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_v_concat_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_k_pad_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_v_pad_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_k_perm_cont_us / 1000.0,
+                                                (double) graph_stats.graph_main_node_v_perm_cont_us / 1000.0,
+                                                (unsigned long long) graph_stats.graph_main_node_k_ctx_view_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_v_ctx_view_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_k_concat_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_v_concat_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_k_pad_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_v_pad_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_k_perm_cont_calls,
+                                                (unsigned long long) graph_stats.graph_main_node_v_perm_cont_calls);
+                                            }
 
                             LOG_INF("statistics dflash hot: kv(upload_f/upload_p/upload/compute/sync)=%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu replay(accepted_prefix_append)=%.3f ms calls=%zu rows=%zu\n",
                                 kv_upload_feature_ms,

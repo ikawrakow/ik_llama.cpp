@@ -249,6 +249,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_dflash_kv_cache();
 
+    ggml_cgraph * build_dflash_kv_workspace();
+
     ggml_cgraph * build_starcoder2();
 
     ggml_cgraph * build_mamba();
@@ -465,6 +467,8 @@ llm_expert_gating_func_type   gating_op,
     static ggml_cgraph * llama_build_graph_s_copy(llama_context & lctx);
 
     static ggml_cgraph * llama_build_graph_dflash_kv_cache(llama_context & lctx);
+
+    static ggml_cgraph * llama_build_graph_dflash_kv_workspace(llama_context & lctx);
 
     static ggml_cgraph * llama_build_graph(llama_context & lctx, const llama_batch & batch, bool worst_case, int n_outputs = 0);
 

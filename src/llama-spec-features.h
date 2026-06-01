@@ -86,6 +86,13 @@ struct llama_dflash_profile_stats {
         uint64_t graph_kv_cache_read_concat_pad_calls = 0;
         uint64_t graph_kv_cache_cached_bytes = 0;
         uint64_t graph_kv_cache_calls = 0;
+        uint64_t graph_kv_workspace_build_us = 0;
+        uint64_t graph_kv_workspace_reserve_us = 0;
+        uint64_t graph_kv_workspace_reset_us = 0;
+        uint64_t graph_kv_workspace_alloc_us = 0;
+        uint64_t graph_kv_workspace_compute_us = 0;
+        uint64_t graph_kv_workspace_sync_us = 0;
+        uint64_t graph_kv_workspace_calls = 0;
         uint64_t graph_kv_node_fused_target_calls = 0;
         uint64_t graph_kv_node_fused_target_us = 0;
         uint64_t graph_kv_node_k_proj_calls = 0;
@@ -100,6 +107,40 @@ struct llama_dflash_profile_stats {
         uint64_t graph_kv_node_k_store_us = 0;
         uint64_t graph_kv_node_v_store_calls = 0;
         uint64_t graph_kv_node_v_store_us = 0;
+        uint64_t graph_main_node_qcur_calls = 0;
+        uint64_t graph_main_node_qcur_us = 0;
+        uint64_t graph_main_node_k_draft_calls = 0;
+        uint64_t graph_main_node_k_draft_us = 0;
+        uint64_t graph_main_node_v_draft_calls = 0;
+        uint64_t graph_main_node_v_draft_us = 0;
+        uint64_t graph_main_node_k_ctx_view_calls = 0;
+        uint64_t graph_main_node_k_ctx_view_us = 0;
+        uint64_t graph_main_node_v_ctx_view_calls = 0;
+        uint64_t graph_main_node_v_ctx_view_us = 0;
+        uint64_t graph_main_node_k_concat_calls = 0;
+        uint64_t graph_main_node_k_concat_us = 0;
+        uint64_t graph_main_node_v_concat_calls = 0;
+        uint64_t graph_main_node_v_concat_us = 0;
+        uint64_t graph_main_node_k_pad_calls = 0;
+        uint64_t graph_main_node_k_pad_us = 0;
+        uint64_t graph_main_node_v_pad_calls = 0;
+        uint64_t graph_main_node_v_pad_us = 0;
+        uint64_t graph_main_node_k_perm_cont_calls = 0;
+        uint64_t graph_main_node_k_perm_cont_us = 0;
+        uint64_t graph_main_node_v_perm_cont_calls = 0;
+        uint64_t graph_main_node_v_perm_cont_us = 0;
+        uint64_t graph_main_node_flash_attn_calls = 0;
+        uint64_t graph_main_node_flash_attn_us = 0;
+        uint64_t graph_main_node_attn_out_calls = 0;
+        uint64_t graph_main_node_attn_out_us = 0;
+        uint64_t graph_main_node_ffn_calls = 0;
+        uint64_t graph_main_node_ffn_us = 0;
+        uint64_t graph_main_node_result_rows_calls = 0;
+        uint64_t graph_main_node_result_rows_us = 0;
+        uint64_t graph_main_node_result_norm_calls = 0;
+        uint64_t graph_main_node_result_norm_us = 0;
+        uint64_t graph_main_node_result_calls = 0;
+        uint64_t graph_main_node_result_us = 0;
         uint64_t graph_feature_bytes = 0;
         uint64_t graph_pos_bytes = 0;
         uint64_t graph_mask_bytes = 0;
@@ -231,6 +272,9 @@ int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model
 int32_t llama_model_dflash_io_mode(
         const struct llama_model * draft_model,
         const struct llama_model * target_model);
+
+const struct ggml_tensor * llama_model_dflash_output_tensor(
+        const struct llama_model * model);
 
 bool llama_model_dflash_io_tensors_match(
         const struct llama_model * draft_model,

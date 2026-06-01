@@ -16,6 +16,119 @@ static bool dflash_use_kv_cache_experiment() {
            std::strcmp(env, "off") != 0;
 }
 
+static bool dflash_use_kv_workspace_experiment() {
+    const char * env = std::getenv("IK_DFLASH_KV_WORKSPACE");
+    if (env == nullptr || *env == '\0') {
+        return false;
+    }
+
+    return std::strcmp(env, "0") != 0 &&
+           std::strcmp(env, "false") != 0 &&
+           std::strcmp(env, "off") != 0;
+}
+
+ggml_cgraph * llm_build_context::build_dflash_kv_workspace() {
+    const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
+    const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
+    const int64_t ctx_len = lctx.dflash_visible_cross_ctx > 0
+        ? (int64_t) lctx.dflash_visible_cross_ctx
+        : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
+    const int32_t cache_rows = std::clamp(lctx.dflash_kv_cache_view_n_filled, 0, (int32_t) ctx_len);
+    const int32_t cache_write_pos = ctx_len > 0
+        ? ((lctx.dflash_kv_cache_view_write_pos % (int32_t) ctx_len) + (int32_t) ctx_len) % (int32_t) ctx_len
+        : 0;
+
+    GGML_ASSERT(n_embd_head_k == n_embd_head_v);
+    GGML_ASSERT(lctx.ensure_dflash_kv_cache_tensors((int32_t) ctx_len));
+    GGML_ASSERT((int32_t) lctx.dflash_k_ctx_workspace.size() == n_layer);
+    GGML_ASSERT((int32_t) lctx.dflash_v_ctx_workspace.size() == n_layer);
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(1, ctx_len)) + 16 * n_layer, false);
+
+    auto build_ordered_cache_view = [&](ggml_tensor * cache) -> ggml_tensor * {
+    if (!lctx.dflash_kv_cache_view_valid || cache_rows <= 0) {
+        return cache;
+    }
+
+    if (cache_rows < ctx_len) {
+        ggml_tensor * zero_pad = ggml_view_3d(ctx0, cache,
+            cache->ne[0],
+            cache->ne[1],
+            ctx_len - cache_rows,
+            cache->nb[1],
+            cache->nb[2],
+            (size_t) cache_rows * cache->nb[2]);
+        ggml_tensor * valid = ggml_view_3d(ctx0, cache,
+            cache->ne[0],
+            cache->ne[1],
+            cache_rows,
+            cache->nb[1],
+            cache->nb[2],
+            0);
+        return ggml_concat(ctx0, zero_pad, valid, 2);
+    }
+
+    if (cache_write_pos == 0) {
+        return cache;
+    }
+
+    ggml_tensor * tail = ggml_view_3d(ctx0, cache,
+        cache->ne[0],
+        cache->ne[1],
+        ctx_len - cache_write_pos,
+        cache->nb[1],
+        cache->nb[2],
+        (size_t) cache_write_pos * cache->nb[2]);
+    ggml_tensor * head = ggml_view_3d(ctx0, cache,
+        cache->ne[0],
+        cache->ne[1],
+        cache_write_pos,
+        cache->nb[1],
+        cache->nb[2],
+        0);
+    return ggml_concat(ctx0, tail, head, 2);
+    };
+
+    for (int il = 0; il < n_layer; ++il) {
+    GGML_ASSERT((size_t) il < lctx.dflash_k_ctx_cache.size());
+    GGML_ASSERT((size_t) il < lctx.dflash_v_ctx_cache.size());
+
+    ggml_tensor * Kordered = build_ordered_cache_view(lctx.dflash_k_ctx_cache[(size_t) il]);
+    ggml_tensor * Vordered = build_ordered_cache_view(lctx.dflash_v_ctx_cache[(size_t) il]);
+    cb(Kordered, "dflash_workspace_k_ctx_view", il);
+    cb(Vordered, "dflash_workspace_v_ctx_view", il);
+
+    ggml_tensor * Kworkspace = ggml_cont(ctx0, ggml_permute(ctx0, Kordered, 0, 2, 1, 3));
+    ggml_tensor * Vworkspace = ggml_cont(ctx0, ggml_permute(ctx0, Vordered, 0, 2, 1, 3));
+    cb(Kworkspace, "dflash_workspace_k_perm_cont", il);
+    cb(Vworkspace, "dflash_workspace_v_perm_cont", il);
+
+    ggml_tensor * Kdst = ggml_view_3d(ctx0, lctx.dflash_k_ctx_workspace[(size_t) il],
+        lctx.dflash_k_ctx_workspace[(size_t) il]->ne[0],
+        ctx_len,
+        lctx.dflash_k_ctx_workspace[(size_t) il]->ne[2],
+        lctx.dflash_k_ctx_workspace[(size_t) il]->nb[1],
+        lctx.dflash_k_ctx_workspace[(size_t) il]->nb[2],
+        0);
+    ggml_tensor * Vdst = ggml_view_3d(ctx0, lctx.dflash_v_ctx_workspace[(size_t) il],
+        lctx.dflash_v_ctx_workspace[(size_t) il]->ne[0],
+        ctx_len,
+        lctx.dflash_v_ctx_workspace[(size_t) il]->ne[2],
+        lctx.dflash_v_ctx_workspace[(size_t) il]->nb[1],
+        lctx.dflash_v_ctx_workspace[(size_t) il]->nb[2],
+        0);
+
+    ggml_tensor * Kstore = ggml_cpy(ctx0, Kworkspace, Kdst);
+    ggml_tensor * Vstore = ggml_cpy(ctx0, Vworkspace, Vdst);
+    cb(Kstore, "dflash_workspace_k_store", il);
+    cb(Vstore, "dflash_workspace_v_store", il);
+    ggml_build_forward_expand(gf, Kstore);
+    ggml_build_forward_expand(gf, Vstore);
+    }
+
+    return gf;
+}
+
 ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
@@ -160,6 +273,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
     const int64_t n_target_features = hparams.dflash_n_target_features;
     auto & profile = lctx.dflash_profile;
     const bool use_kv_cache = dflash_use_kv_cache_experiment();
+    const bool use_kv_workspace = use_kv_cache && dflash_use_kv_workspace_experiment();
     const int64_t ctx_len = lctx.dflash_visible_cross_ctx > 0
             ? (int64_t) lctx.dflash_visible_cross_ctx
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
@@ -226,6 +340,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
+    bool result_rows_selected = false;
 
     const float kq_scale = 1.0f / std::sqrt((float) n_embd_head_k);
 
@@ -258,7 +373,30 @@ ggml_cgraph * llm_build_context::build_dflash() {
         const int64_t t_cache_read_us = use_kv_cache ? ggml_time_us() : 0;
         ggml_tensor * Kcur_ctx = nullptr;
         ggml_tensor * Vcur_ctx = nullptr;
-        if (use_kv_cache) {
+        const bool have_workspace_ctx = use_kv_workspace &&
+            (size_t) il < lctx.dflash_k_ctx_workspace.size() &&
+            (size_t) il < lctx.dflash_v_ctx_workspace.size() &&
+            lctx.dflash_k_ctx_workspace[(size_t) il] != nullptr &&
+            lctx.dflash_v_ctx_workspace[(size_t) il] != nullptr;
+
+        if (have_workspace_ctx) {
+            Kcur_ctx = ggml_view_3d(ctx0, lctx.dflash_k_ctx_workspace[(size_t) il],
+                lctx.dflash_k_ctx_workspace[(size_t) il]->ne[0],
+                ctx_len,
+                lctx.dflash_k_ctx_workspace[(size_t) il]->ne[2],
+                lctx.dflash_k_ctx_workspace[(size_t) il]->nb[1],
+                lctx.dflash_k_ctx_workspace[(size_t) il]->nb[2],
+                0);
+            Vcur_ctx = ggml_view_3d(ctx0, lctx.dflash_v_ctx_workspace[(size_t) il],
+                lctx.dflash_v_ctx_workspace[(size_t) il]->ne[0],
+                ctx_len,
+                lctx.dflash_v_ctx_workspace[(size_t) il]->ne[2],
+                lctx.dflash_v_ctx_workspace[(size_t) il]->nb[1],
+                lctx.dflash_v_ctx_workspace[(size_t) il]->nb[2],
+                0);
+            cb(Kcur_ctx, "Kcur_ctx_workspace", il);
+            cb(Vcur_ctx, "Vcur_ctx_workspace", il);
+        } else if (use_kv_cache) {
             auto build_ordered_cache_view = [&](ggml_tensor * cache) -> ggml_tensor * {
                 if (!lctx.dflash_kv_cache_view_valid || cache_rows <= 0) {
                     return cache;
@@ -267,19 +405,19 @@ ggml_cgraph * llm_build_context::build_dflash() {
                 if (cache_rows < ctx_len) {
                     ggml_tensor * zero_pad = ggml_view_3d(ctx0, cache,
                             cache->ne[0],
-                            cache->ne[1],
+                    cache->ne[1],
                             ctx_len - cache_rows,
                             cache->nb[1],
                             cache->nb[2],
-                            (size_t) cache_rows * cache->nb[2]);
+                    (size_t) cache_rows * cache->nb[2]);
                     ggml_tensor * valid = ggml_view_3d(ctx0, cache,
                             cache->ne[0],
-                            cache->ne[1],
+                    cache->ne[1],
                             cache_rows,
                             cache->nb[1],
                             cache->nb[2],
                             0);
-                    return ggml_concat(ctx0, zero_pad, valid, 2);
+                return ggml_concat(ctx0, zero_pad, valid, 2);
                 }
 
                 if (cache_write_pos == 0) {
@@ -288,19 +426,19 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
                 ggml_tensor * tail = ggml_view_3d(ctx0, cache,
                         cache->ne[0],
-                        cache->ne[1],
+                cache->ne[1],
                         ctx_len - cache_write_pos,
                         cache->nb[1],
                         cache->nb[2],
-                        (size_t) cache_write_pos * cache->nb[2]);
+                (size_t) cache_write_pos * cache->nb[2]);
                 ggml_tensor * head = ggml_view_3d(ctx0, cache,
                         cache->ne[0],
-                        cache->ne[1],
+                cache->ne[1],
                         cache_write_pos,
                         cache->nb[1],
                         cache->nb[2],
                         0);
-                return ggml_concat(ctx0, tail, head, 2);
+            return ggml_concat(ctx0, tail, head, 2);
             };
 
             Kcur_ctx = build_ordered_cache_view(lctx.dflash_k_ctx_cache[(size_t) il]);
@@ -321,32 +459,58 @@ ggml_cgraph * llm_build_context::build_dflash() {
             cb(Vcur_ctx, "Vcur_ctx", il);
         }
 
-        ggml_tensor * Kcur = ggml_concat(ctx0, Kcur_ctx, Kcur_noise, 2);
-        ggml_tensor * Vcur = ggml_concat(ctx0, Vcur_ctx, Vcur_noise, 2);
-        if (n_kv_pad > 0) {
-            Kcur = ggml_pad(ctx0, Kcur, 0, 0, (int) n_kv_pad, 0);
-            Vcur = ggml_pad(ctx0, Vcur, 0, 0, (int) n_kv_pad, 0);
+        ggml_tensor * Kcur = nullptr;
+        ggml_tensor * Vcur = nullptr;
+        if (have_workspace_ctx) {
+            ggml_tensor * Kcur_draft = ggml_cont(ctx0, ggml_permute(ctx0, Kcur_noise, 0, 2, 1, 3));
+            ggml_tensor * Vcur_draft = ggml_cont(ctx0, ggml_permute(ctx0, Vcur_noise, 0, 2, 1, 3));
+            cb(Kcur_draft, "dflash_main_k_perm_cont", il);
+            cb(Vcur_draft, "dflash_main_v_perm_cont", il);
+
+            Kcur = ggml_concat(ctx0, Kcur_ctx, Kcur_draft, 1);
+            Vcur = ggml_concat(ctx0, Vcur_ctx, Vcur_draft, 1);
+            cb(Kcur, "dflash_main_k_concat", il);
+            cb(Vcur, "dflash_main_v_concat", il);
+
+            if (n_kv_pad > 0) {
+                Kcur = ggml_pad(ctx0, Kcur, 0, (int) n_kv_pad, 0, 0);
+                Vcur = ggml_pad(ctx0, Vcur, 0, (int) n_kv_pad, 0, 0);
+                cb(Kcur, "dflash_main_k_pad", il);
+                cb(Vcur, "dflash_main_v_pad", il);
+            }
+        } else {
+            ggml_tensor * Kcur_concat = ggml_concat(ctx0, Kcur_ctx, Kcur_noise, 2);
+            ggml_tensor * Vcur_concat = ggml_concat(ctx0, Vcur_ctx, Vcur_noise, 2);
+            cb(Kcur_concat, "dflash_main_k_concat", il);
+            cb(Vcur_concat, "dflash_main_v_concat", il);
+
+            Kcur = Kcur_concat;
+            Vcur = Vcur_concat;
+            if (n_kv_pad > 0) {
+                Kcur = ggml_pad(ctx0, Kcur, 0, 0, (int) n_kv_pad, 0);
+                Vcur = ggml_pad(ctx0, Vcur, 0, 0, (int) n_kv_pad, 0);
+                cb(Kcur, "dflash_main_k_pad", il);
+                cb(Vcur, "dflash_main_v_pad", il);
+            }
         }
         if (use_kv_cache) {
             profile.graph_kv_cache_read_concat_pad_us += (uint64_t) (ggml_time_us() - t_cache_read_us);
             profile.graph_kv_cache_read_concat_pad_calls++;
             profile.graph_kv_cache_cached_bytes += ggml_nbytes(lctx.dflash_k_ctx_cache[(size_t) il]) + ggml_nbytes(lctx.dflash_v_ctx_cache[(size_t) il]);
         }
-        cb(Kcur, "Kcur", il);
-        cb(Vcur, "Vcur", il);
         cb(Qcur, "Qcur", il);
-        cb(Kcur, "Kcur_f16", il);
-        cb(Vcur, "Vcur_f16", il);
 
         ggml_tensor * q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
-        ggml_tensor * k = ggml_cont(ctx0, ggml_permute(ctx0, Kcur, 0, 2, 1, 3));
-        ggml_tensor * v = ggml_cont(ctx0, ggml_permute(ctx0, Vcur, 0, 2, 1, 3));
+        ggml_tensor * k = have_workspace_ctx ? Kcur : ggml_cont(ctx0, ggml_permute(ctx0, Kcur, 0, 2, 1, 3));
+        ggml_tensor * v = have_workspace_ctx ? Vcur : ggml_cont(ctx0, ggml_permute(ctx0, Vcur, 0, 2, 1, 3));
         ggml_tensor * dflash_kq_mask_l = (hparams.swa_layers[il] && dflash_kq_mask_swa != nullptr)
             ? dflash_kq_mask_swa
             : dflash_kq_mask_full;
         cb(q, "q", il);
-        cb(k, "k", il);
-        cb(v, "v", il);
+        if (!have_workspace_ctx) {
+            cb(k, "dflash_main_k_perm_cont", il);
+            cb(v, "dflash_main_v_perm_cont", il);
+        }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, dflash_kq_mask_l, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
@@ -361,6 +525,12 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
         cur = ggml_add(ctx0, cur, inpSA);
         cb(cur, "attn_residual", il);
+
+        if (inp_out_ids != nullptr && il == n_layer - 1) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+            cb(cur, "result_output_rows", -1);
+            result_rows_selected = true;
+        }
 
         ggml_tensor * ffn_residual = cur;
         cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
@@ -380,13 +550,13 @@ ggml_cgraph * llm_build_context::build_dflash() {
         inpL = cur;
     }
 
-    ggml_tensor * output = model.output;
+    ggml_tensor * output = const_cast<ggml_tensor *>(llama_model_dflash_output_tensor(&model));
     if (output == nullptr) {
         output = ggml_new_tensor_2d(ctx0, GGML_TYPE_Q4_0, n_embd, hparams.n_vocab);
     }
 
     ggml_tensor * result_input = inpL;
-    if (inp_out_ids) {
+    if (inp_out_ids && !result_rows_selected) {
         result_input = ggml_get_rows(ctx0, result_input, inp_out_ids);
         cb(result_input, "result_output_rows", -1);
     }

@@ -68,6 +68,11 @@ void llama_reset_dflash_kv_cache_state(struct llama_context * ctx) {
     ctx->dflash_kv_cache_applied_window_version = 0;
     ctx->dflash_kv_cache_valid = false;
     ctx->dflash_kv_cache_view_valid = false;
+    ctx->dflash_kv_workspace_write_pos = 0;
+    ctx->dflash_kv_workspace_n_filled = 0;
+    ctx->dflash_kv_workspace_applied_window_version = 0;
+    ctx->dflash_kv_workspace_valid = false;
+    ctx->dflash_kv_workspace_sync_pending = false;
 
     for (ggml_backend_buffer_t buf : ctx->dflash_cache_bufs) {
         if (buf != nullptr) {
@@ -171,6 +176,65 @@ int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model
     return (int32_t) model->vocab.token_mask();
 }
 
+const struct ggml_tensor * llama_model_dflash_output_tensor(
+        const struct llama_model * model) {
+    if (model == nullptr) {
+        return nullptr;
+    }
+
+    if (model->output_mtp != nullptr) {
+        return model->output_mtp;
+    }
+
+    if (model->output != nullptr) {
+        return model->output;
+    }
+
+    return model->tok_embd;
+}
+
+static const char * llama_dflash_io_mode_name(int32_t io_mode) {
+    switch (io_mode) {
+        case LLAMA_DFLASH_IO_MODE_SHARED:
+            return "shared";
+        case LLAMA_DFLASH_IO_MODE_SELF_CONTAINED:
+            return "self-contained";
+        case LLAMA_DFLASH_IO_MODE_MIXED:
+            return "mixed";
+        default:
+            return "invalid";
+    }
+}
+
+static const char * llama_dflash_output_head_kind(
+        const struct llama_model * draft_model,
+        const struct llama_model * target_model) {
+    const struct ggml_tensor * output = llama_model_dflash_output_tensor(draft_model);
+    if (output == nullptr) {
+        return "missing";
+    }
+
+    if (output == draft_model->tok_embd) {
+        return draft_model->tok_embd == (target_model ? target_model->tok_embd : nullptr)
+                ? "shared_token_embedding"
+                : "token_embedding";
+    }
+
+    if (draft_model->output_mtp != nullptr && output == draft_model->output_mtp) {
+        if (target_model != nullptr && target_model->output_mtp != nullptr && output == target_model->output_mtp) {
+            return "output_mtp";
+        }
+
+        if (std::strcmp(output->name, "output_extra.weight") == 0) {
+            return "output_extra";
+        }
+
+        return "output_mtp";
+    }
+
+    return "output";
+}
+
 int32_t llama_model_dflash_io_mode(
         const struct llama_model * draft_model,
         const struct llama_model * target_model) {
@@ -178,13 +242,14 @@ int32_t llama_model_dflash_io_mode(
         return LLAMA_DFLASH_IO_MODE_INVALID;
     }
 
-    const ggml_tensor * target_output = target_model->output != nullptr ? target_model->output : target_model->tok_embd;
-    if (draft_model->tok_embd == nullptr || draft_model->output == nullptr || target_model->tok_embd == nullptr || target_output == nullptr) {
+    const ggml_tensor * draft_output = llama_model_dflash_output_tensor(draft_model);
+    const ggml_tensor * target_output = llama_model_dflash_output_tensor(target_model);
+    if (draft_model->tok_embd == nullptr || draft_output == nullptr || target_model->tok_embd == nullptr || target_output == nullptr) {
         return LLAMA_DFLASH_IO_MODE_INVALID;
     }
 
     const bool shared_tok = draft_model->tok_embd == target_model->tok_embd;
-    const bool shared_output = draft_model->output == target_output;
+    const bool shared_output = draft_output == target_output;
     if (shared_tok && shared_output) {
         return LLAMA_DFLASH_IO_MODE_SHARED;
     }
@@ -200,14 +265,15 @@ bool llama_model_dflash_io_tensors_match(
         const struct llama_model * draft_model,
         int32_t n_embd,
         int32_t n_vocab) {
-    if (draft_model == nullptr || draft_model->tok_embd == nullptr || draft_model->output == nullptr || n_embd <= 0 || n_vocab <= 0) {
+    const ggml_tensor * output = llama_model_dflash_output_tensor(draft_model);
+    if (draft_model == nullptr || draft_model->tok_embd == nullptr || output == nullptr || n_embd <= 0 || n_vocab <= 0) {
         return false;
     }
 
     return (int32_t) draft_model->tok_embd->ne[0] == n_embd &&
            (int32_t) draft_model->tok_embd->ne[1] == n_vocab &&
-           (int32_t) draft_model->output->ne[0] == n_embd &&
-           (int32_t) draft_model->output->ne[1] == n_vocab;
+           (int32_t) output->ne[0] == n_embd &&
+           (int32_t) output->ne[1] == n_vocab;
 }
 
 bool llama_model_share_dflash_io_tensors(
@@ -232,7 +298,25 @@ bool llama_model_share_dflash_io_tensors(
         }
     }
 
-    return draft_model->tok_embd != nullptr && draft_model->output != nullptr;
+    const bool uses_shared_tok = draft_model->tok_embd == target_model->tok_embd;
+    const bool uses_shared_output = draft_model->output == target_model->output ||
+            draft_model->output == target_model->tok_embd;
+
+    if (draft_model->output_mtp == nullptr && target_model->output_mtp != nullptr && uses_shared_tok && uses_shared_output) {
+        draft_model->output_mtp = target_model->output_mtp;
+    }
+
+    const struct ggml_tensor * output = llama_model_dflash_output_tensor(draft_model);
+    if (draft_model->tok_embd != nullptr && output != nullptr) {
+        LLAMA_LOG_INFO("%s: DFlash IO mode=%s output_head=%s tensor=%s type=%s\n",
+                __func__,
+                llama_dflash_io_mode_name(llama_model_dflash_io_mode(draft_model, target_model)),
+                llama_dflash_output_head_kind(draft_model, target_model),
+                output->name[0] != '\0' ? output->name : "(unnamed)",
+                ggml_type_name(output->type));
+    }
+
+    return draft_model->tok_embd != nullptr && output != nullptr;
 }
 
 bool llama_set_draft_input_hidden_state_copy(
