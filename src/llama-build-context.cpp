@@ -116,9 +116,9 @@ void llm_build_context::init() {
         lctx.inp_pos_bucket    = nullptr;
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
-        lctx.inp_dflash_target_features = nullptr;
-        lctx.inp_dflash_pos_ctx = nullptr;
-        lctx.inp_dflash_kq_mask = nullptr;
+        lctx.dflash.inputs.target_features = nullptr;
+        lctx.dflash.inputs.pos_ctx = nullptr;
+        lctx.dflash.inputs.kq_mask = nullptr;
     }
 }
 
@@ -2195,7 +2195,7 @@ struct ggml_cgraph * llm_build_context::llama_build_graph_dflash_kv_cache(llama_
         }
     };
 
-    struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash_buf_compute_meta);
+    struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash.kv.cache_compute_meta);
 
     llm.init();
 
@@ -2232,7 +2232,7 @@ struct ggml_cgraph * llm_build_context::llama_build_graph_dflash_kv_workspace(ll
         }
     };
 
-    struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash_workspace_buf_compute_meta);
+    struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash.kv.workspace_compute_meta);
 
     llm.init();
 

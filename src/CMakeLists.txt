@@ -41,6 +41,8 @@ add_library(llama
             ../include/llama.h
             llama.cpp
             llama-spec-features.cpp
+            llama-spec-features-dflash.cpp
+            llama-dflash.cpp
             llama-vocab.cpp
             llama-grammar.cpp
             llama-sampling.cpp
