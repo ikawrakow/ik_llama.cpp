@@ -607,7 +607,7 @@ void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_to
 
 void server_slot::reset() {
     n_prompt_tokens = 0;
-    last_gentxt_size = 0;
+    last_gentxt_len = 0;
     generated_text = "";
     truncated = false;
     stopped_eos = false;
@@ -2214,7 +2214,7 @@ bool server_context::process_token(completion_token_output& result, server_slot&
     slot.sampled = result.tok;
 
     // search stop word and delete it
-    slot.last_gentxt_size = slot.generated_text.size();
+    slot.last_gentxt_len = slot.generated_text.size();
     slot.generated_text += token_str;
     slot.has_next_token = true;
 
@@ -4664,7 +4664,7 @@ void server_context::update_allowlist_state(server_slot& slot) {
 
     // search for keyword
     auto kw = kws[idx];
-    auto pos = slot.generated_text.find(kw, std::max(0, slot.last_gentxt_size - (int32_t)kw.length() + 1));
+    auto pos = slot.generated_text.find(kw, std::max(0, slot.last_gentxt_len - (int32_t)kw.length() + 1));
     while (pos != std::string::npos) {
         if (++idx >= kws.size()) {
             break;
