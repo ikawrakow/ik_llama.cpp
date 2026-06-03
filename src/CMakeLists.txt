@@ -83,6 +83,7 @@ add_library(llama
             graphs/build_qwen.cpp
             graphs/build_qwen2.cpp
             graphs/build_qwen3.cpp
+            graphs/build_mellum.cpp
             graphs/build_qwen3next.cpp
             graphs/build_qwen35.cpp
             graphs/build_phi2.cpp
