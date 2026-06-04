@@ -1390,6 +1390,7 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
                 ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                hparams.rope_freq_scale_train_swa = 1.0f;
                 if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false)) {
                     // Laguna XS.2 alternates full-attention and SWA layers via per-layer head counts.
                     const uint32_t n_head_full = hparams.n_head(0);
@@ -1398,11 +1399,13 @@ void llm_load_hparams(
                     }
                 }
 
-                if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR, hparams.yarn_ext_factor, false) && hparams.yarn_ext_factor != 0.0f) {
-                    LLAMA_LOG_WARN("%s: ignoring Laguna yarn_ext_factor metadata (%g); fresh converter and Lucebox GGUFs omit it, and honoring it causes known-bad decode\n",
-                            __func__, hparams.yarn_ext_factor);
-                    hparams.yarn_ext_factor = -1.0f;
-                }
+                // GGUF stores the Poolside partial-rotary setting; the graph RoPE
+                // argument for full-attention Laguna layers follows the upstream
+                // Laguna loader and uses half of that count. SWA layers remain
+                // full-head rotary via n_rot_swa.
+                hparams.n_rot /= 2;
+
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR, hparams.yarn_ext_factor, false);
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor, false);
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast,   false);
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow,   false);
@@ -1416,6 +1419,12 @@ void llm_load_hparams(
                 if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer, false)) {
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                         hparams.rope_dim_per_layer[i] = hparams.swa_layers[i] ? hparams.n_rot_swa : hparams.n_rot;
+                    }
+                } else {
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        if (!hparams.swa_layers[i]) {
+                            hparams.rope_dim_per_layer[i] /= 2;
+                        }
                     }
                 }
 

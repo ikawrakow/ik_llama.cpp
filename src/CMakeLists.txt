@@ -79,6 +79,7 @@ add_library(llama
             graphs/build_mpt.cpp
             graphs/build_stablelm.cpp
             graphs/build_seedoss.cpp
+            graphs/build_laguna.cpp
             graphs/build_step35.cpp
             graphs/build_qwen.cpp
             graphs/build_qwen2.cpp

@@ -5097,8 +5097,7 @@ class LagunaModel(Model):
                 "original_max_position_embeddings",
                 rope_params.get("original_max_position_embeddings", hparams["max_position_embeddings"]),
             )))
-            # Laguna GGUFs omit yarn_ext_factor; emitting Poolside's factor here
-            # makes otherwise byte-identical BF16 conversions decode incorrectly.
+            self.gguf_writer.add_rope_scaling_yarn_ext_factor(float(full_rope.get("factor", 1.0)))
             self.gguf_writer.add_rope_scaling_yarn_attn_factor(float(full_rope.get("attention_factor", 1.0)))
             self.gguf_writer.add_rope_scaling_yarn_beta_fast(float(full_rope.get("beta_fast", 32.0)))
             self.gguf_writer.add_rope_scaling_yarn_beta_slow(float(full_rope.get("beta_slow", 1.0)))

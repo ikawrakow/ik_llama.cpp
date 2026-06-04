@@ -6820,6 +6820,41 @@ struct llama_context * llama_init_from_model(
         cparams.yarn_ext_factor_swa = rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN ? 1.0f : 0.0f;
     }
 
+    static auto get_mscale = [](float scale, float mscale) {
+        return scale <= 1.0f ? 1.0f : (0.1f * mscale * logf(scale) + 1.0f);
+    };
+
+    if (cparams.yarn_ext_factor != 0.0f) {
+        const float factor = 1.0f / cparams.rope_freq_scale;
+
+        if (hparams.rope_yarn_log_mul != 0.0f) {
+                  float mscale          = 1.0f;
+            const float mscale_all_dims = hparams.rope_yarn_log_mul;
+
+            if (model->arch == LLM_ARCH_DEEPSEEK2 && mscale_all_dims != 1.0f) {
+                mscale = mscale_all_dims;
+            }
+
+            cparams.yarn_attn_factor = get_mscale(factor, mscale) / get_mscale(factor, mscale_all_dims);
+
+            LLAMA_LOG_WARN("%s: setting new yarn_attn_factor = %.4f (mscale == %.1f, mscale_all_dim = %.1f)\n",
+                    __func__, cparams.yarn_attn_factor, mscale, mscale_all_dims);
+        } else {
+            cparams.yarn_attn_factor = get_mscale(factor, 1.0f);
+        }
+
+        // ggml_rope_ext applies an attention-scale term for active YaRN; cancel it here
+        // to match the native llama.cpp context path.
+        cparams.yarn_attn_factor *= 1.0f / (1.0f + 0.1f * logf(factor));
+    }
+
+    if (cparams.yarn_ext_factor_swa != 0.0f) {
+        const float factor_swa = 1.0f / cparams.rope_freq_scale;
+
+        cparams.yarn_attn_factor_swa = get_mscale(factor_swa, 1.0f);
+        cparams.yarn_attn_factor_swa *= 1.0f / (1.0f + 0.1f * logf(factor_swa));
+    }
+
     cparams.yarn_attn_factor *= hparams.rope_attn_factor;
     cparams.yarn_attn_factor_swa *= hparams.rope_attn_factor;
 
