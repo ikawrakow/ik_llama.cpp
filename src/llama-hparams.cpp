@@ -474,7 +474,7 @@ void llm_load_hparams(
 
                 if (hparams.n_swa > 0) {
                     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
-                    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+                    hparams.rope_freq_scale_train_swa = 1; //hparams.rope_freq_scale_train;
 
                     if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false)) {
                         for (uint32_t i = 0; i < hparams.n_layer; ++i) {
