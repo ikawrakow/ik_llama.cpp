@@ -65,7 +65,7 @@ Some often used terms.
 | - | - | - | - |
 | `-h, --help, --usage` | Print usage and exit | - | - |
 | `--fit` | Automatically fit to available VRAM | off | Loads as many tensors to the GPU(s) as available VRAM will permit. [PR 1501](https://github.com/ikawrakow/ik_llama.cpp/pull/1501) [PR 1504](https://github.com/ikawrakow/ik_llama.cpp/pull/1504) |
-| `--fit-margin N` | Safety VRAM margin in MiB when using `--fit` | 1024 | Increase this value in case of CUDA OOM when loading the model. Decrease to less than 1024 if the model loads successfully and you feel that too much VRAM has been left unused |  
+| `--fit-margin N` | Safety VRAM margin in MiB when using `--fit` | 1024 | Increase this value in case of CUDA OOM when loading the model. Decrease to less than 1024 if the model loads successfully and you feel that too much VRAM has been left unused |
 | `-wgt, --worst-graph-tokens N` | Number of tokens to use for worst-case graph | - | Control compute buffer sizes for large batches. Provided "as is" for users that understand the limitations, please don't open issues when using this. [PR 1560](https://github.com/ikawrakow/ik_llama.cpp/pull/1560) |
 | `-t, --threads N` | Number of threads to use during generation | 4 | Try to match the number of physical CPU cores. Avoid odd numbers (e.g. 1,3,...). |
 | `-tb, --threads-batch N` | Number of threads to use during batch and prompt processing | Same as `--threads` | Same as `--threads` When doing full GPU offload, use a lower number (e.g. 2) |
@@ -120,21 +120,13 @@ Check the details [here](./speculative.md).
 | `-ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model | - | For draft model, see: `-ctk` |
 | `-ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model | - | For draft model, see: `-ctk` |
 | `-draft, --draft-params` | Comma-separated list of draft model parameters | - |  |
-| `--spec-ngram-size-n N` | ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram| 12 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
-| `--spec-ngram-size-m N` | ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram | 48 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
-| `--spec-ngram-min-hits N` | minimum hits for ngram-map speculative decoding | 1 | [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) |
-| `--spec-type Name` | Comma-separated list of draft model parameters | - | none / ngram - cache / ngram - simple / ngram - map - k / ngram - map - k4v / ngram - mod / suffix [PR 1261](https://github.com/ikawrakow/ik_llama.cpp/pull/1261) [PR 1646](https://github.com/ikawrakow/ik_llama.cpp/pull/1646) |
-| `--spec-stage SPEC[:k=v,...]` | Add an explicit speculative stage; repeat once for a supported two-stage chain | - | Supported two-stage shape: self-spec first, then `mtp` or `draft` fallback. [PR 1789](https://github.com/ikawrakow/ik_llama.cpp/pull/1789) |
-| `-mtp, --multi-token-prediction` |  | - | MTP decoding [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) [1698](https://github.com/ikawrakow/ik_llama.cpp/pull/1698) |
-| `-no-mtp, --no-multi-token-prediction` |  | - | MTP decoding [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) [1698](https://github.com/ikawrakow/ik_llama.cpp/pull/1698) |
-| `--draft-max` |  | - | MTP decoding [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) [1698](https://github.com/ikawrakow/ik_llama.cpp/pull/1698) |
-| `--draft-p-min` |  | - | MTP decoding [PR 1270](https://github.com/ikawrakow/ik_llama.cpp/pull/1270) [1698](https://github.com/ikawrakow/ik_llama.cpp/pull/1698) |
+| `--spec-type SPEC[:k=v,...]` | Canonical speculative stage entry; repeat to configure the supported two-stage chain | - | Types: `none`, `draft`, `mtp`, `ngram-cache`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`, `suffix`. Canonical keys: `n_max`, `n_min`, `p_min`, `ngram_size_n`, `ngram_size_m`, `ngram_min_hits`, `suffix_min_match_len`, `suffix_max_depth`, `suffix_corpus`. String values may escape commas as `\,` or quote the value inside the stage payload. Example: `--spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 --spec-type mtp:n_max=1,p_min=0.0` |
 | `--spec-autotune` | Automatically tune speculative params to maximize tokens/sec | - | Automatically determines the near-optimal arguments for the type of speculation being performed [PR 1595](https://github.com/ikawrakow/ik_llama.cpp/pull/1595) |
 | `--recurrent-ckpt-mode MODE` | Checkpoint strategy for recurrent/hybrid speculative decoding | auto | One of: - `auto` auto-select: per-step if CUDA full-GPU, gpu-fallback otherwise - `per-step` save SSM state per draft step in VRAM; no re-decode on rejection - `gpu-fallback` copy state to GPU buffer; re-decode on rejection - `cpu` serialise state via llama_state_seq; re-decode on rejection [PR 1669](https://github.com/ikawrakow/ik_llama.cpp/pull/1669) [PR 1774](https://github.com/ikawrakow/ik_llama.cpp/pull/1774) |
 
 Notes:
 
-- `--spec-type` cannot be combined with `--spec-stage`.
+- Legacy `--spec-stage`, `--draft-*`, `--spec-ngram-*`, `--suffix-*`, and `-mtp` flags are rejected with replacement guidance.
 - Explicit stage chains currently support at most two stages.
 - Supported self-spec stage names are `ngram-cache`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`, and `suffix`.
 - Composite stage chains disable speculative autotune.
@@ -318,7 +310,7 @@ python3 gguf-py/scripts/gguf_dump.py /models/Qwen_Qwen3-0.6B-IQ4_NL.gguf
 
 - `-ngl`, `-ot`, `--cpu-moe`, `--n-cpu-moe N`
    - For MoE models, use a number greater than the number of model layers with `-ngl`. If unsure, use a large number like `-ngl 999`.
-   - It's good to explicitly put up/down/gate onto the GPU for speedups. 
+   - It's good to explicitly put up/down/gate onto the GPU for speedups.
    - Up/Gate shouldn't be on separate GPU devices because it might cause a bit of a deadlock.
    - For models with shared experts (like GPT-OSS), they should end up on GPU.
    - In some quants the layers aren't uniform so it can be better to skip larger layers if more smaller blocks will fit without empty space where nothing fits.
@@ -328,7 +320,7 @@ python3 gguf-py/scripts/gguf_dump.py /models/Qwen_Qwen3-0.6B-IQ4_NL.gguf
    - In general, in a single GPU + CPU system, you just do something like this:
 
    `-ngl 999` To put all layers in VRAM by default
-   
+
    `-ot "blk.(?:[0-9]|[1-7][0-9]|[8][0-7]).ffn._exps.=CPU"` To create exceptions and put back in ram anything that has "ffn" and "_exps" in its name, and that sits in layers called "blk.n", where "n" (the lawyer number) is any match between 0 and 9, or between 1 to 7 + 0 to 9 (aka a number between 10 and 79), or 8 + 0 to 7 (aka a number between 80 and 87).
    Basically a complicated way of saying put all experts from layer 0 to 87 in ram. Experts from layer 88 to 93 (there's 93 layers in qwen3vl 235b) can sit in VRAM still. (Thats all I can load on a 5090).
 
@@ -342,7 +334,7 @@ C. Other tips
    - If you are not happy with the allocations done by `--fit` across GPUs, use `-ts` to manually tweak.
    - Look for `ReBAR`/`Resizable BAR` support for your Motherboard, CPU, BIOS/UEFI and GPU. Then for the "patched driver" for your GPUs to enable GPU to GPU direct communication.
 
-### Common GPU configurations and popular models 
+### Common GPU configurations and popular models
 
 WIP
 
@@ -378,9 +370,7 @@ WIP
 | `--override-kv KEY=TYPE:VALUE` | Override model metadata by key | - | Advanced option to override model metadata by key. May be specified multiple times. types: int, float, bool, str. Example: `--override-kv tokenizer.ggml.add_bos_token=bool:false` |
 | `-m, --model FNAME` | Model path | models/$filename | Mandatory, the GGUF model file to be served. |
 | `-md, --model-draft FNAME` | Draft model for speculative decoding | unused | Required when an explicit `draft` stage is used. |
-| `--draft-max, --draft, --draft-n N` | Global speculative draft cap, or fallback value for stages without an explicit `n_max` override | 16 | Also used by single-stage MTP and draft-model speculation. |
-| `--draft-min, --draft-n-min N` | Global minimum speculative draft threshold, or fallback value for stages without an explicit `n_min` override | 0 |  |
-| `--draft-p-min P` | Global minimum speculative decoding probability (greedy), or fallback value for stages without an explicit `p_min` override | 0.8 |  |
+| `--spec-type SPEC[:k=v,...]` | Canonical speculative stage entry; repeat for the supported two-stage chain | none | Use stage-local keys like `n_max`, `n_min`, `p_min`, `ngram_size_n`, `ngram_size_m`, `ngram_min_hits`, `suffix_min_match_len`, `suffix_max_depth`, and `suffix_corpus`. |
 
 ### Request-Level Speculative Overrides
 

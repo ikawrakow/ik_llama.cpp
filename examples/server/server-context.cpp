@@ -166,7 +166,8 @@ static void server_reject_dead_speculative_request_overrides(const json & data) 
         json_value_ptr(data, "speculative.ngram_size_m") != nullptr ||
         json_value_ptr(data, "speculative.ngram_min_hits") != nullptr ||
         json_value_ptr(data, "speculative.suffix_min_match_len") != nullptr ||
-        json_value_ptr(data, "speculative.suffix_max_depth") != nullptr) {
+        json_value_ptr(data, "speculative.suffix_max_depth") != nullptr ||
+        json_value_ptr(data, "speculative.suffix_corpus") != nullptr) {
         throw std::runtime_error("Error: structural speculative overrides are startup-only; per-request overrides only support speculative.n_max, speculative.n_min, speculative.p_min, and speculative.stages");
     }
 }
@@ -284,7 +285,6 @@ bool server_context::load_model(const gpt_params& params_) {
         });
 
         params_base.has_mtp = false;
-
         server_remove_speculative_stage(params_base.speculative, COMMON_SPECULATIVE_TYPE_MTP);
 
         if (!server_speculative_needs_draft_model(params_base.speculative)) {
@@ -1251,6 +1251,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     // speculative decoding parameters
     try {
         slot.params.speculative = defaults.speculative;
+        const bool has_flat_n_max = json_value_ptr(data, "speculative.n_max") != nullptr;
+        const bool has_flat_n_min = json_value_ptr(data, "speculative.n_min") != nullptr;
+        const bool has_flat_p_min = json_value_ptr(data, "speculative.p_min") != nullptr;
+
         slot.params.speculative.n_max = json_value(data, "speculative.n_max", params_base.speculative.n_max);
         slot.params.speculative.n_min = json_value(data, "speculative.n_min", params_base.speculative.n_min);
         slot.params.speculative.p_min = json_value(data, "speculative.p_min", params_base.speculative.p_min);
@@ -1258,6 +1262,20 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         server_reject_dead_speculative_request_overrides(data);
 
         const json stages = json_value(data, "speculative.stages", json());
+        if (stages.is_null() && !slot.params.speculative.stages.empty()) {
+            for (auto & stage : slot.params.speculative.stages) {
+                if (has_flat_n_max) {
+                    stage.n_max = -1;
+                }
+                if (has_flat_n_min) {
+                    stage.n_min = -1;
+                }
+                if (has_flat_p_min) {
+                    stage.p_min = -1.0f;
+                }
+            }
+        }
+
         if (!stages.is_null()) {
             if (!stages.is_array()) {
                 throw std::runtime_error("Error: speculative.stages must be an array");
@@ -1296,11 +1314,11 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
         if (slot.can_speculate() &&
             llama_model_has_recurrent(model) &&
-            slot.params.speculative.n_max > params_base.speculative.n_max) {
+            slot.params.speculative.get_max_stage_n_max() > params_base.speculative.get_max_stage_n_max()) {
             send_error(task,
-                    "Error: speculative.n_max=" + std::to_string(slot.params.speculative.n_max) +
-                    " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.n_max) +
-                    "; restart the server with a higher --draft-max to reserve checkpoint capacity",
+                "Error: speculative n_max=" + std::to_string(slot.params.speculative.get_max_stage_n_max()) +
+                " exceeds the recurrent speculative startup limit of " + std::to_string(params_base.speculative.get_max_stage_n_max()) +
+                "; restart the server with a higher n_max inside the configured --spec-type stages to reserve checkpoint capacity",
                     ERROR_TYPE_INVALID_REQUEST);
             return false;
         }
