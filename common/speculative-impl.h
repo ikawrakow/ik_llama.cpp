@@ -321,7 +321,12 @@ struct common_speculative_state_dflash : public common_speculative_state {
         result.reserve((size_t) n_keep);
         const int64_t t_sample_us = ggml_time_us();
         for (int32_t i = 0; i < n_keep; ++i) {
-            result.push_back(common_sampler_sample_speculative(nullptr, ctx_dft, i + 1, nullptr));
+            // Use argmax in GPU when available
+            llama_token id = llama_get_dflash_draft_token_ith(ctx_dft, i);
+            if (id == LLAMA_TOKEN_NULL) {
+                id = common_sampler_sample_speculative(nullptr, ctx_dft, i + 1, nullptr);
+            }
+            result.push_back(id);
         }
         t_draft_sample_us += (uint64_t) (ggml_time_us() - t_sample_us);
 

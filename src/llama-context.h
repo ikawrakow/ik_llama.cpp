@@ -393,6 +393,12 @@ struct llama_context {
     int32_t & dflash_visible_cross_ctx = dflash.visible_cross_ctx;
     std::vector<struct ggml_tensor *> & dflash_k_ctx_cache = dflash.kv.k_ctx_cache;
     std::vector<struct ggml_tensor *> & dflash_v_ctx_cache = dflash.kv.v_ctx_cache;
+
+    // Argmax token IDs from the DFlash draft graph, computed via GPU argmax.
+    // Populated in llama_decode_internal after graph compute.
+    std::vector<llama_token> dflash_draft_tokens;
+    struct ggml_tensor * dflash_draft_tokens_tensor = nullptr;
+
     std::vector<struct ggml_tensor *> & dflash_k_ctx_workspace = dflash.kv.k_ctx_workspace;
     std::vector<struct ggml_tensor *> & dflash_v_ctx_workspace = dflash.kv.v_ctx_workspace;
     struct ggml_context * & dflash_cache_ctx = dflash.kv.cache_ctx;

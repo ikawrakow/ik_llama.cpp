@@ -565,5 +565,11 @@ ggml_cgraph * llm_build_context::build_dflash() {
     cb(result, "result_output", -1);
     ggml_build_forward_expand(gf, result);
 
+    lctx.dflash_draft_tokens_tensor = nullptr;
+    ggml_tensor * draft_tokens = ggml_argmax(ctx0, result);
+    ggml_set_name(draft_tokens, "draft_argmax");
+    ggml_build_forward_expand(gf, draft_tokens);
+    lctx.dflash_draft_tokens_tensor = draft_tokens;
+
     return gf;
 }
