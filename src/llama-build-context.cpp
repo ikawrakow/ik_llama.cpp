@@ -2545,17 +2545,6 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
-    float ext_factor_l  = ext_factor;
-    float attn_factor_l = attn_factor;
-    float beta_fast_l   = beta_fast;
-    float beta_slow_l   = beta_slow;
-    if (model.arch == LLM_ARCH_LAGUNA && n_swa > 0) {
-        // Poolside Laguna uses unscaled RoPE on sliding-window layers.
-        ext_factor_l  = cparams.yarn_ext_factor_swa;
-        attn_factor_l = cparams.yarn_attn_factor_swa;
-        beta_fast_l   = cparams.yarn_beta_fast_swa;
-        beta_slow_l   = cparams.yarn_beta_slow_swa;
-    }
     if (hparams.has_rope_freq_base_per_layer) {
         freq_base_l = hparams.rope_freq_base_per_layer[il];
     }
@@ -2575,7 +2564,6 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                                   || model.arch == LLM_ARCH_COMMAND_R
                                   || model.arch == LLM_ARCH_GLM4
                                //   || model.arch == LLM_ARCH_GLM4_MOE
-                                  || model.arch == LLM_ARCH_LAGUNA
                                   || model.arch == LLM_ARCH_MIMO2;
                                // || (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8);
 
@@ -2661,15 +2649,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
                         Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, rope_factors,
                                 n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                                ext_factor, attn_factor, beta_fast, beta_slow);
                         Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, rope_factors,
                                 n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                                ext_factor, attn_factor, beta_fast, beta_slow);
                     } else {
                         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                                ext_factor, attn_factor, beta_fast, beta_slow);
                         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                                ext_factor, attn_factor, beta_fast, beta_slow);
                     }
                 }
                 cb(Qcur, "Qcur", il_cb);
@@ -2780,14 +2768,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     int nh = split_wo->ne[0]/n_embd_head_v;
                     auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, nh, n_tokens);
                     auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, nh, n_tokens);
-                    if (model.arch == LLM_ARCH_LAGUNA) {
-                        // Laguna's attention gate is softplus-scaled, not sigmoid-gated.
-                        gate_3d = ggml_softplus(ctx0, gate_3d);
-                        cb(gate_3d, "attn_gate_softplus", il_cb);
-                        cur = ggml_mul(ctx0, attn_3d, gate_3d);
-                    } else {
-                        cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
-                    }
+                    cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
                     cb(attn_3d, "attn_gated_3d", il_cb);
                 }
 
@@ -2879,15 +2860,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
             Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, rope_factors_in,
                     n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                    ext_factor, attn_factor, beta_fast, beta_slow);
             Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, rope_factors_in,
                     n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                    ext_factor, attn_factor, beta_fast, beta_slow);
         } else {
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors_in, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                    ext_factor, attn_factor, beta_fast, beta_slow);
             Kcur = ggml_rope_ext( ctx0, Kcur, inp_pos, rope_factors_in, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                    ext_factor, attn_factor, beta_fast, beta_slow);
         }
     }
     cb(Qcur, "Qcur_roped", il);
@@ -2908,14 +2889,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         int n_head_l = hparams.n_head(il);
         auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, n_head_l, n_tokens);
         auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, n_head_l, n_tokens);
-        if (model.arch == LLM_ARCH_LAGUNA) {
-            // Laguna's attention gate is softplus-scaled, not sigmoid-gated.
-            gate_3d = ggml_softplus(ctx0, gate_3d);
-            cb(gate_3d, "attn_gate_softplus", il);
-            cur = ggml_mul(ctx0, attn_3d, gate_3d);
-        } else {
-            cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
-        }
+        cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
         cb(cur, "attn_gated_3d", il);
         cur = ggml_reshape_2d(ctx0, cur, n_embd_head_v * n_head_l, n_tokens);
         cb(cur, "attn_gated", il);
