@@ -2147,7 +2147,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
         return;
     }
 
-    if (Q->ne[1] <= 32/ncols2) {
+    if (Q->ne[1] <= 32/ncols2 || (DKQ == 512 && ncols2 == 16)) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 32/ncols2, ncols2>(ctx, dst);
         return;
     }
@@ -2260,7 +2260,10 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         // (covers 8 and 16) through the ncols2=8 kernel. It iterates over Q-head groups
         // (iter_z = ceil(gqa_ratio/ncols2)), so 16 heads run as two passes of 8. This unblocks
         // head_dim-512 models with a 16:1 GQA ratio such as Gemma 4 12B's global layers.
-        if (gqa_ratio % 8 == 0) {
+        if (gqa_ratio % 16 == 0) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 16>(ctx, dst);
+        }
+        else if (gqa_ratio % 8 == 0) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 8>(ctx, dst);
         }
         else if (gqa_ratio % 4 == 0) {
