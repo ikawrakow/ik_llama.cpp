@@ -2397,6 +2397,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.webui = common_webui_from_name(std::string(argv[i]));
         return true;
     }
+    if (arg == "--webui-mcp-proxy" || arg == "--ui-mcp-proxy") {
+        params.webui_mcp_proxy = true;
+        return true;
+    }
     if (arg == "--api-key") {
         CHECK_ARG
         params.api_keys.push_back(argv[i]);
@@ -3234,6 +3238,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                             "- auto: default webui \n"
                                                             "- llamacpp: llamacpp webui \n"
                                                             "(default: auto)", });
+    options.push_back({ "server",      "       --ui-mcp-proxy, --webui-mcp-proxy",          "experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)" });
     options.push_back({ "server",      "       --api-key KEY",          "API key to use for authentication (default: none)" });
     options.push_back({ "server",      "       --api-key-file FNAME",   "path to file containing API keys (default: none)" });
     options.push_back({ "server",      "       --ssl-key-file FNAME",   "path to file a PEM-encoded SSL private key" });
