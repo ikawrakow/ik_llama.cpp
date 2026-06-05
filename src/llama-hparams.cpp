@@ -1410,12 +1410,6 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast,   false);
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow,   false);
 
-                // Laguna applies YaRN on global-attention layers; SWA layers use plain RoPE.
-                hparams.yarn_ext_factor_swa  = 0.0f;
-                hparams.yarn_attn_factor_swa = 1.0f;
-                hparams.yarn_beta_fast_swa   = 32.0f;
-                hparams.yarn_beta_slow_swa   = 1.0f;
-
                 if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer, false)) {
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                         hparams.rope_dim_per_layer[i] = hparams.swa_layers[i] ? hparams.n_rot_swa : hparams.n_rot;

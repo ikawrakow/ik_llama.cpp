@@ -82,7 +82,7 @@ struct llama_hparams {
     float    yarn_attn_factor =  1.0f;
     float    yarn_beta_fast   = 32.0f;
     float    yarn_beta_slow   =  1.0f;
-    float    yarn_ext_factor_swa  = -1.0f;
+    float    yarn_ext_factor_swa  =  0.0f;
     float    yarn_attn_factor_swa =  1.0f;
     float    yarn_beta_fast_swa   = 32.0f;
     float    yarn_beta_slow_swa   =  1.0f;
