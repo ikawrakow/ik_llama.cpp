@@ -7,6 +7,11 @@
 #define IQK_IMPLEMENT
 
 #include "iqk_cpu_ops.h"
+
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
+#include "ggml-impl.h"
+
 #include "iqk_utils.h"
 #include "iqk_common.h"
 #include "ggml.h"
