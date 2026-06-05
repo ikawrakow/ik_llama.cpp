@@ -7916,6 +7916,54 @@ struct ggml_tensor * ggml_mul_mat_id(
     return result;
 }
 
+#if !GGML_USE_IQK_MULMAT
+// Without IQK the fused MOE_FUSED_UP_GATE op has no compute path, so
+// ggml_moe_up_gate / ggml_moe_up_gate_ext express the same computation with
+// mul_mat_id + add_id + fused_mul_unary instead.
+static struct ggml_tensor * ggml_moe_up_gate_fallback(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * as_up,
+            struct ggml_tensor  * as_gate,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * as_up_b,
+            struct ggml_tensor  * as_gate_b,
+            enum   ggml_unary_op  op) {
+    if (as_gate == NULL) {
+        // Combined weight: as_up has ne[1] = 2*n_ff, gate first / up second
+        // (see the combined-tensor handling in
+        // ggml_compute_forward_mul_mat_id_up_gate, where src0_2_cur = base =
+        // gate and src0_1_cur = base + nb02/2 = up). Split the weight tensor
+        // into two views and do two separate mul_mat_ids. The combined bias
+        // in as_up_b uses the same layout, and as_gate_b must be null.
+        GGML_ASSERT(!as_gate_b);
+        GGML_ASSERT(as_up->ne[1] % 2 == 0);
+        const int64_t n_ff = as_up->ne[1] / 2;
+        struct ggml_tensor * gate_w = ggml_view_3d(ctx, as_up, as_up->ne[0], n_ff, as_up->ne[2], as_up->nb[1], as_up->nb[2], 0);
+        struct ggml_tensor * up_w   = ggml_view_3d(ctx, as_up, as_up->ne[0], n_ff, as_up->ne[2], as_up->nb[1], as_up->nb[2], n_ff * as_up->nb[1]);
+        struct ggml_tensor * result_gate = ggml_mul_mat_id(ctx, gate_w, b, ids);
+        struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, up_w,   b, ids);
+        if (as_up_b) {
+            GGML_ASSERT(as_up_b->ne[0] == 2*n_ff);
+            struct ggml_tensor * gate_bias = ggml_view_2d(ctx, as_up_b, n_ff, as_up_b->ne[1], as_up_b->nb[1], 0);
+            struct ggml_tensor * up_bias   = ggml_view_2d(ctx, as_up_b, n_ff, as_up_b->ne[1], as_up_b->nb[1], n_ff * as_up_b->nb[0]);
+            result_gate = ggml_add_id(ctx, result_gate, gate_bias, ids);
+            result_up   = ggml_add_id(ctx, result_up,   up_bias,   ids);
+        }
+        return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
+    }
+    struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, as_up,   b, ids);
+    if (as_up_b) {
+        result_up = ggml_add_id(ctx, result_up, as_up_b, ids);
+    }
+    struct ggml_tensor * result_gate = ggml_mul_mat_id(ctx, as_gate, b, ids);
+    if (as_gate_b) {
+        result_gate = ggml_add_id(ctx, result_gate, as_gate_b, ids);
+    }
+    return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
+}
+#endif
+
 struct ggml_tensor * ggml_moe_up_gate(
             struct ggml_context * ctx,
             struct ggml_tensor  * as_up,
@@ -7928,6 +7976,9 @@ struct ggml_tensor * ggml_moe_up_gate(
         struct ggml_tensor * result_gate = ggml_mul_mat_id(ctx, as_gate, b, ids);
         return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
     }
+#if !GGML_USE_IQK_MULMAT
+    return ggml_moe_up_gate_fallback(ctx, as_up, as_gate, b, ids, NULL, NULL, op);
+#endif
     GGML_ASSERT(!ggml_is_transposed(as_up));
     GGML_ASSERT(!as_gate || !ggml_is_transposed(as_gate));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
@@ -7987,6 +8038,9 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
         }
         return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
     }
+#if !GGML_USE_IQK_MULMAT
+    return ggml_moe_up_gate_fallback(ctx, as_up, as_gate, b, ids, as_up_b, as_gate_b, op);
+#endif
 
     GGML_ASSERT(!ggml_is_transposed(as_up));
     GGML_ASSERT(!as_gate || !ggml_is_transposed(as_gate));
@@ -8031,6 +8085,14 @@ struct ggml_tensor * ggml_fused_up_gate(
         struct ggml_tensor * result_gate = ggml_mul_mat(ctx, gate, b);
         return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
     }
+#if !GGML_USE_IQK_MULMAT
+    // FUSED_UP_GATE has no compute path without IQK; always use the unfused fallback.
+    {
+        struct ggml_tensor * result_up   = ggml_mul_mat(ctx, up,   b);
+        struct ggml_tensor * result_gate = ggml_mul_mat(ctx, gate, b);
+        return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
+    }
+#endif
     GGML_ASSERT(!ggml_is_transposed(up));
     GGML_ASSERT(!ggml_is_transposed(gate));
 
