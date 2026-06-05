@@ -660,6 +660,9 @@ class Model:
         if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
             # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
             res = "minimax-m2"
+        if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
+            # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
+            res = "mellum2"
         if res is None:
             logger.warning("\n")
             logger.warning("**************************************************************************************")
@@ -2253,6 +2256,144 @@ class Qwen3Model(Qwen2Model):
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("MellumForCausalLM")
+class MellumModel(Model):
+    model_arch = gguf.MODEL_ARCH.MELLUM
+
+    def set_vocab(self):
+        tokenizer_path = self.dir_model / "tokenizer.json"
+        with open(tokenizer_path, "r", encoding="utf-8") as f:
+            tokenizer_json = json.load(f)
+
+        from tokenizers import Tokenizer
+        tokenizer = Tokenizer.from_file(str(tokenizer_path))
+
+        class TokenizerShim:
+            def encode(self, text: str) -> list[int]:
+                return tokenizer.encode(text).ids
+
+        vocab: dict[str, int] = tokenizer_json["model"]["vocab"]
+        vocab_size = self.hparams.get("vocab_size", len(vocab))
+        assert max(vocab.values()) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(TokenizerShim())
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
+        added_vocab = {
+            item["content"]: item
+            for item in tokenizer_json.get("added_tokens", [])
+            if isinstance(item.get("content"), str)
+        }
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+                continue
+
+            token = reverse_vocab[i]
+            added_token = added_vocab.get(token)
+            if added_token is not None:
+                if added_token.get("special", False) or self.does_token_look_special(token):
+                    toktypes.append(gguf.TokenType.CONTROL)
+                else:
+                    token = token.replace("\u2581", " ")
+                    toktypes.append(gguf.TokenType.USER_DEFINED)
+            else:
+                toktypes.append(gguf.TokenType.NORMAL)
+            tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hparams.get("num_local_experts") is None and (n_experts := self.hparams.get("num_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+
+        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+            logger.info(f"gguf: expert feed forward length = {moe_intermediate_size}")
+
+        use_sliding_window = self.hparams.get("use_sliding_window")
+        sliding_window = self.hparams.get("sliding_window")
+        if (use_sliding_window is True or use_sliding_window is None) and sliding_window is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+            logger.info(f"gguf: sliding window = {sliding_window}")
+            self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in self.hparams["layer_types"]])
+            logger.info(f"gguf: sliding window pattern length = {len(self.hparams['layer_types'])}")
+
+        rope_parameters = self.hparams.get("rope_parameters", {})
+        if full_attention_rope := rope_parameters.get("full_attention"):
+            if rope_theta := full_attention_rope.get("rope_theta"):
+                self.gguf_writer.add_rope_freq_base(rope_theta)
+                logger.info(f"gguf: rope freq base = {rope_theta}")
+
+            if full_attention_rope.get("rope_type") == "yarn":
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+
+                if factor := full_attention_rope.get("factor"):
+                    self.gguf_writer.add_rope_scaling_factor(factor)
+                if original_context_length := full_attention_rope.get("original_max_position_embeddings"):
+                    self.gguf_writer.add_rope_scaling_orig_ctx_len(original_context_length)
+                if attention_factor := full_attention_rope.get("attention_factor"):
+                    self.gguf_writer.add_rope_scaling_yarn_attn_factor(attention_factor)
+                if beta_fast := full_attention_rope.get("beta_fast"):
+                    self.gguf_writer.add_rope_scaling_yarn_beta_fast(beta_fast)
+                if beta_slow := full_attention_rope.get("beta_slow"):
+                    self.gguf_writer.add_rope_scaling_yarn_beta_slow(beta_slow)
+
+        if sliding_attention_rope := rope_parameters.get("sliding_attention"):
+            if rope_theta_swa := sliding_attention_rope.get("rope_theta"):
+                self.gguf_writer.add_rope_freq_base_swa(rope_theta_swa)
+                logger.info(f"gguf: rope freq base swa = {rope_theta_swa}")
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "experts" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    tensors.append((self.map_tensor_name(merged_name), data_torch))
+                return tensors
+            return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")

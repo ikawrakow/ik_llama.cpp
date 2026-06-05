@@ -96,7 +96,7 @@ lcov-report/
 !/examples/sycl/*.sh
 
 # Server Web UI temporary files
-
+/examples/server/webui/node_modules
 /examples/server/webui_llamacpp/.svelte-kit
 /examples/server/webui_llamacpp/node_modules
 /examples/server/webui_llamacpp/build

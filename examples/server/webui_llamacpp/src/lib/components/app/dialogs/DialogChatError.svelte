@@ -1,17 +1,19 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { AlertTriangle, TimerOff } from '@lucide/svelte';
+	import { ErrorDialogType } from '$lib/enums';
 
 	interface Props {
 		open: boolean;
-		type: 'timeout' | 'server';
+		type: ErrorDialogType;
 		message: string;
+		contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), type, message, onOpenChange }: Props = $props();
+	let { open = $bindable(), type, message, contextInfo, onOpenChange }: Props = $props();
 
-	const isTimeout = $derived(type === 'timeout');
+	const isTimeout = $derived(type === ErrorDialogType.TIMEOUT);
 	const title = $derived(isTimeout ? 'TCP Timeout' : 'Server Error');
 	const description = $derived(
 		isTimeout
@@ -51,6 +53,24 @@
 
 		<div class={`rounded-lg border px-4 py-3 text-sm ${badgeClass}`}>
 			<p class="font-medium">{message}</p>
+
+			{#if contextInfo}
+				<div class="mt-2 space-y-1 text-xs opacity-80">
+					<p>
+						<span class="font-medium">Prompt tokens:</span>
+
+						{contextInfo.n_prompt_tokens.toLocaleString()}
+					</p>
+
+					{#if contextInfo.n_ctx}
+						<p>
+							<span class="font-medium">Context size:</span>
+
+							{contextInfo.n_ctx.toLocaleString()}
+						</p>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		<AlertDialog.Footer>

@@ -2,6 +2,7 @@
 #include "server-context.h"
 #include "server-common.h"
 #include "server-chat.h"
+#include "server-cors-proxy.h"
 #include "chat.h"
 
 #include "common.h"
@@ -1020,7 +1021,8 @@ int main(int argc, char ** argv) {
                 {"vision", ctx_server.chat_params.allow_image},
                 {"audio",  ctx_server.chat_params.allow_audio},
             } },
-            { "n_ctx",                       ctx_server.n_ctx }
+            { "n_ctx",                       ctx_server.n_ctx },
+            { "cors_proxy_enabled",          ctx_server.params_base.webui_mcp_proxy},
 
         };
 
@@ -2107,6 +2109,16 @@ int main(int argc, char ** argv) {
             svr->Post("/zstd_update_transparent", handle_zstd_config_update);
 	}
 #endif
+    }
+
+    // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    if (params.webui_mcp_proxy) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
+        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
+        SRV_WRN("%s", "-----------------\n");
+        svr->Get("/cors-proxy", proxy_handler_get);
+        svr->Post("/cors-proxy", proxy_handler_post);
     }
     //
     // Start the server

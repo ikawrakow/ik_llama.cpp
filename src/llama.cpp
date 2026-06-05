@@ -3077,6 +3077,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_DEEPSEEK2,
         LLM_ARCH_GLM_DSA,
         LLM_ARCH_MISTRAL4,
+        LLM_ARCH_MELLUM,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -5155,11 +5156,31 @@ static int llama_decode_internal(
             }
         }
 
+
+        // Repack the rope buffer for the ubatch depending on type.
+        // * mrope:  (section-major array of rope fields) [t; n][h; n][w; n][extra; n]
+        // * others: (flat array )                        [t; n]
+        const uint8_t rope_params_per_token = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
+            hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
+        llama_pos * u_batch_pos;
+        if (batch_all.pos && batch_all.embd && rope_params_per_token == 4) {
+            pos.resize((size_t) n_tokens * rope_params_per_token);
+            for (uint32_t i = 0; i < n_tokens; ++i) {
+                pos[0*n_tokens + i] = batch_all.pos[0*n_tokens_all + cur_token + i]; // t
+                pos[1*n_tokens + i] = batch_all.pos[1*n_tokens_all + cur_token + i]; // h
+                pos[2*n_tokens + i] = batch_all.pos[2*n_tokens_all + cur_token + i]; // w
+                pos[3*n_tokens + i] = batch_all.pos[3*n_tokens_all + cur_token + i]; // extra
+            }
+            u_batch_pos = pos.data();
+        } else {
+            u_batch_pos = batch_all.pos ? batch_all.pos + cur_token : nullptr;
+        }
+
         llama_batch u_batch = {
             /* .n_tokens   = */ (int32_t) n_tokens,
             /* .token      = */ batch_all.token     ? batch_all.token    + cur_token        : nullptr,
             /* .embd       = */ batch_all.embd      ? batch_all.embd     + cur_token*n_embd : nullptr,
-            /* .pos        = */ batch_all.pos       ? batch_all.pos      + cur_token        : nullptr,
+            /* .pos        = */ u_batch_pos,
             /* .n_seq_id   = */ batch_all.n_seq_id  ? batch_all.n_seq_id + cur_token        : nullptr,
             /* .seq_id     = */ batch_all.seq_id    ? batch_all.seq_id   + cur_token        : nullptr,
             /* .logits     = */ batch_all.logits    ? batch_all.logits   + cur_token        : nullptr,
@@ -6847,9 +6868,18 @@ struct llama_context * llama_init_from_model(
         if (cparams.reduce_type == GGML_TYPE_F16) {
             LLAMA_LOG_WARN("=====================================================================\n");
             LLAMA_LOG_WARN("GPT-OSS with split mode graph requires f32 precision\n");
-            LLAMA_LOG_WARN("    => changing cparams.split_mode_f16 to 'false'\n");
+            LLAMA_LOG_WARN("    => changing cparams.reduce_type to f32\n");
             LLAMA_LOG_WARN("=====================================================================\n");
             cparams.reduce_type = GGML_TYPE_F32;
+        }
+    }
+    if (model->arch == LLM_ARCH_MELLUM && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        if (cparams.reduce_type == GGML_TYPE_F16) {
+            LLAMA_LOG_WARN("=====================================================================\n");
+            LLAMA_LOG_WARN("Mellum with split mode graph requires bf16 or f32 precision\n");
+            LLAMA_LOG_WARN("    => changing cparams.reduce_type to bf16\n");
+            LLAMA_LOG_WARN("=====================================================================\n");
+            cparams.reduce_type = GGML_TYPE_BF16;
         }
     }
 
@@ -7382,6 +7412,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_MELLUM:
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_PHI2:
         case LLM_ARCH_PHI3:

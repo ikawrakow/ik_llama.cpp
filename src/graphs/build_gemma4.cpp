@@ -213,6 +213,8 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
         auto vl = (ggml_split_tensor_t *)kv_self.v_l[il]->extra;
         GGML_ASSERT(kl && vl);
 
+        int nhave = 0;
+        ggml_tensor * sa_last = nullptr;
         for (int id = 0; id < n_device; ++id) {
             GGML_ASSERT((wq->splits[id] && wk->splits[id] && (!wv || wv->splits[id]) && wo->splits[id]) ||
                     (!wq->splits[id] && !wk->splits[id] && (!wv || !wv->splits[id]) && !wo->splits[id]));
@@ -379,10 +381,12 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             }
             ggml_build_forward_expand(gf, cur);
             sa_out[id] = cur;
+            sa_last = cur;
+            ++nhave;
 
         }
 
-        auto last_ffn_inp = ggml_reduce(ctx0, sa_out.data(), n_device, GGML_OP_ADD);
+        auto last_ffn_inp = nhave > 1 ? ggml_reduce(ctx0, sa_out.data(), n_device, GGML_OP_ADD) : sa_last;
         ggml_build_forward_expand(gf, last_ffn_inp);
         cb(last_ffn_inp, "sa_reduce", il);
 
@@ -403,7 +407,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             }
             int il_cb = 1000*(il + 1) + id;
 
-            GGML_ASSERT(last_ffn_inp && last_ffn_inp->op == GGML_OP_REDUCE);
+            GGML_ASSERT(last_ffn_inp && (nhave == 1 || last_ffn_inp->op == GGML_OP_REDUCE));
             auto cur = llm_build_context::get_input_tensor_sm_graph(ctx0, last_ffn_inp, id);
             cur = llm_build_context::do_split_norm(ctx0, cur, model.layers[il].attn_post_norm, hparams, cb, id, il_cb, false);
             cb(cur, "sa_post", il_cb);

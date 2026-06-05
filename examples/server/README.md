@@ -210,10 +210,10 @@ model:
   -m,    --model FNAME            model path (default: models/$filename with filename from --hf-file
                                   or --model-url if set, otherwise models/7B/ggml-model-f16.gguf)
   -md,   --model-draft FNAME      draft model for speculative decoding (default: unused)
-         --spec-stage SPEC[:k=v,...]
-                                  explicit speculative stage. repeat once for a supported two-stage chain
-                                  examples: --spec-stage ngram-mod:n_max=64,n_min=2 --spec-stage mtp:n_max=1
-                                  supported two-stage shape: self-spec first, then mtp or draft fallback
+      --spec-type SPEC[:k=v,...]
+                canonical speculative stage entry; repeat for a supported two-stage chain
+                examples: --spec-type mtp:n_max=1,p_min=0.0
+                --spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 --spec-type mtp:n_max=1,p_min=0.0
   -mu,   --model-url MODEL_URL    model download url (default: unused)
   -hfr,  --hf-repo REPO           Hugging Face model repository (default: unused)
   -hff,  --hf-file FILE           Hugging Face model file (default: unused)
@@ -966,15 +966,15 @@ To know the `id` of the adapter, use GET `/lora-adapters`
 
 ### Composite speculative decoding
 
-Use `--spec-stage` for explicit stage chains. The currently supported two-stage shape is self-spec first, then `mtp` or `draft` fallback.
+Use repeated `--spec-type SPEC[:k=v,...]` entries for explicit stage chains. The currently supported two-stage shape is self-spec first, then `mtp` or `draft` fallback.
 
 Example with `ngram-mod` plus MTP fallback:
 
 ```bash
 ./build/bin/llama-server \
   --model /models/target-mtp.gguf \
-  --spec-stage ngram-mod:n_max=64,n_min=2,ngram_size_n=8 \
-  --spec-stage mtp:n_max=1,p_min=0.0
+  --spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 \
+  --spec-type mtp:n_max=1,p_min=0.0
 ```
 
 Example with `ngram-mod` plus draft-model fallback:
@@ -983,14 +983,13 @@ Example with `ngram-mod` plus draft-model fallback:
 ./build/bin/llama-server \
   --model /models/target.gguf \
   --model-draft /models/draft.gguf \
-  --spec-stage ngram-mod:n_max=64,n_min=2,ngram_size_n=8 \
-  --spec-stage draft:n_max=4,p_min=0.0
+  --spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 \
+  --spec-type draft:n_max=4,p_min=0.0
 ```
 
 Notes:
 
-- Use `--spec-type` when you want a single self-spec stage only.
-- `--spec-type` cannot be combined with `--spec-stage`.
+- Use `--spec-type` for both single-stage and two-stage startup configuration.
 - Explicit stage chains currently support at most two stages.
 
 ### Change system prompt on runtime

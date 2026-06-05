@@ -1,12 +1,14 @@
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { FileTypeCategory } from '$lib/enums/files';
+import { FileTypeCategory, AttachmentType, SpecialFileType } from '$lib/enums';
+import { SETTINGS_KEYS } from '$lib/constants';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
-import { supportsVision } from '$lib/stores/server.svelte';
-import { getFileTypeCategory } from '$lib/utils/file-type';
+import { modelsStore } from '$lib/stores/models.svelte';
+import { getFileTypeCategory } from '$lib/utils';
 import { readFileAsText, isLikelyTextFile } from './text-files';
 import { toast } from 'svelte-sonner';
+import type { FileProcessingResult, ChatUploadedFile, DatabaseMessageExtra } from '$lib/types';
 
 function readFileAsBase64(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -25,18 +27,28 @@ function readFileAsBase64(file: File): Promise<string> {
 	});
 }
 
-export interface FileProcessingResult {
-	extras: DatabaseMessageExtra[];
-	emptyFiles: string[];
-}
-
 export async function parseFilesToMessageExtras(
-	files: ChatUploadedFile[]
+	files: ChatUploadedFile[],
+	activeModelId?: string
 ): Promise<FileProcessingResult> {
 	const extras: DatabaseMessageExtra[] = [];
 	const emptyFiles: string[] = [];
 
 	for (const file of files) {
+		if (file.type === SpecialFileType.MCP_PROMPT && file.mcpPrompt) {
+			extras.push({
+				type: AttachmentType.MCP_PROMPT,
+				name: file.name,
+				size: file.size,
+				serverName: file.mcpPrompt.serverName,
+				promptName: file.mcpPrompt.promptName,
+				content: file.textContent ?? '',
+				arguments: file.mcpPrompt.arguments
+			});
+
+			continue;
+		}
+
 		if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
 			if (file.preview) {
 				let base64Url = file.preview;
@@ -56,8 +68,9 @@ export async function parseFilesToMessageExtras(
 				}
 
 				extras.push({
-					type: 'imageFile',
+					type: AttachmentType.IMAGE,
 					name: file.name,
+					size: file.size,
 					base64Url
 				});
 			}
@@ -67,20 +80,39 @@ export async function parseFilesToMessageExtras(
 				const base64Data = await readFileAsBase64(file.file);
 
 				extras.push({
-					type: 'audioFile',
+					type: AttachmentType.AUDIO,
 					name: file.name,
+					size: file.size,
 					base64Data: base64Data,
 					mimeType: file.type
 				});
 			} catch (error) {
 				console.error(`Failed to process audio file ${file.name}:`, error);
 			}
+		} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
+			// Process video files (MP4, etc)
+			try {
+				const base64Data = await readFileAsBase64(file.file);
+
+				extras.push({
+					type: AttachmentType.VIDEO,
+					name: file.name,
+					size: file.size,
+					base64Data: base64Data,
+					mimeType: file.type
+				});
+			} catch (error) {
+				console.error(`Failed to process video file ${file.name}:`, error);
+			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
 			try {
 				// Always get base64 data for preview functionality
 				const base64Data = await readFileAsBase64(file.file);
 				const currentConfig = config();
-				const hasVisionSupport = supportsVision();
+				// Use per-model vision check for router mode
+				const hasVisionSupport = activeModelId
+					? modelsStore.modelSupportsVision(activeModelId)
+					: false;
 
 				// Force PDF-to-text for non-vision models
 				let shouldProcessAsImages = Boolean(currentConfig.pdfAsImage) && hasVisionSupport;
@@ -90,7 +122,7 @@ export async function parseFilesToMessageExtras(
 					console.log('Non-vision model detected: forcing PDF-to-text mode and updating settings');
 
 					// Update the setting in localStorage
-					settingsStore.updateConfig('pdfAsImage', false);
+					settingsStore.updateConfig(SETTINGS_KEYS.PDF_AS_IMAGE, false);
 
 					// Show toast notification to user
 					toast.warning(
@@ -117,8 +149,9 @@ export async function parseFilesToMessageExtras(
 						);
 
 						extras.push({
-							type: 'pdfFile',
+							type: AttachmentType.PDF,
 							name: file.name,
+							size: file.size,
 							content: `PDF file with ${images.length} pages`,
 							images: images,
 							processedAsImages: true,
@@ -134,8 +167,9 @@ export async function parseFilesToMessageExtras(
 						const content = await convertPDFToText(file.file);
 
 						extras.push({
-							type: 'pdfFile',
+							type: AttachmentType.PDF,
 							name: file.name,
+							size: file.size,
 							content: content,
 							processedAsImages: false,
 							base64Data: base64Data
@@ -151,8 +185,9 @@ export async function parseFilesToMessageExtras(
 					});
 
 					extras.push({
-						type: 'pdfFile',
+						type: AttachmentType.PDF,
 						name: file.name,
+						size: file.size,
 						content: content,
 						processedAsImages: false,
 						base64Data: base64Data
@@ -171,8 +206,9 @@ export async function parseFilesToMessageExtras(
 					emptyFiles.push(file.name);
 				} else if (isLikelyTextFile(content)) {
 					extras.push({
-						type: 'textFile',
+						type: AttachmentType.TEXT,
 						name: file.name,
+						size: file.size,
 						content: content
 					});
 				} else {

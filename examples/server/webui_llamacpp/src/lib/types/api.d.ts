@@ -1,4 +1,7 @@
-import type { ChatMessagePromptProgress } from './chat';
+import type { ContentPartType, FileTypeAudio, ServerModelStatus, ServerRole } from '$lib/enums';
+import type { ChatMessagePromptProgress, ChatRole } from './chat';
+
+export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
 
 export type ApiSpeculativeStage = {
 	type: string;
@@ -7,15 +10,30 @@ export type ApiSpeculativeStage = {
 	p_min?: number;
 };
 
+export interface ApiChatCompletionToolFunction {
+	name: string;
+	description?: string;
+	parameters: Record<string, unknown>;
+}
+
+export interface ApiChatCompletionTool {
+	type: 'function';
+	function: ApiChatCompletionToolFunction;
+}
+
 export interface ApiChatMessageContentPart {
-	type: 'text' | 'image_url' | 'input_audio';
+	type: ContentPartType;
 	text?: string;
 	image_url?: {
 		url: string;
 	};
 	input_audio?: {
 		data: string;
-		format: 'wav' | 'mp3';
+		format: AudioInputFormat;
+	};
+	input_video?: {
+		data: string;
+		format: 'mp4' | 'ogg' | 'auto';
 	};
 }
 
@@ -40,14 +58,48 @@ export interface ApiErrorResponse {
 export interface ApiChatMessageData {
 	role: ChatRole;
 	content: string | ApiChatMessageContentPart[];
+	reasoning_content?: string;
+	tool_calls?: ApiChatCompletionToolCall[];
+	tool_call_id?: string;
 	timestamp?: number;
 }
 
+/**
+ * Model status object from /models endpoint
+ */
+export interface ApiModelStatus {
+	/** Status value: loaded, unloaded, loading, sleeping, failed */
+	value: ServerModelStatus;
+	/** Command line arguments used when loading (only for loaded models) */
+	args?: string[];
+}
+
+/**
+ * Model entry from /models endpoint (ROUTER mode)
+ * Based on actual API response structure
+ */
 export interface ApiModelDataEntry {
+	/** Model identifier (e.g., "ggml-org/Qwen2.5-Omni-7B-GGUF:latest") */
 	id: string;
+	/** Model name (optional, usually same as id - not always returned by API) */
+	name?: string;
+	/** Object type, always "model" */
 	object: string;
-	created: number;
+	/** Owner, usually "llamacpp" */
 	owned_by: string;
+	/** Creation timestamp */
+	created: number;
+	/** Whether model files are in HuggingFace cache */
+	in_cache: boolean;
+	/** Path to model manifest file */
+	path: string;
+	/** Current status of the model */
+	status: ApiModelStatus;
+	/** Alternative names that resolve to this model */
+	aliases?: string[];
+	/** Informational tags for this model */
+	tags?: string[];
+	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
 }
 
@@ -128,6 +180,7 @@ export interface ApiLlamaCppServerProps {
 			reasoning_in_content: boolean;
 			generation_prompt: string;
 			samplers: string[];
+			backend_sampling: boolean;
 			'speculative.n_max': number;
 			'speculative.n_min': number;
 			'speculative.p_min': number;
@@ -147,23 +200,34 @@ export interface ApiLlamaCppServerProps {
 	};
 	total_slots: number;
 	model_path: string;
+	role: ServerRole;
 	modalities: {
 		vision: boolean;
 		audio: boolean;
+		video: boolean;
 	};
 	chat_template: string;
 	bos_token: string;
 	eos_token: string;
 	build_info: string;
+	/** @deprecated Use {@link ui_settings} instead */
+	webui_settings?: Record<string, string | number | boolean>;
+	ui_settings?: Record<string, string | number | boolean>;
+	cors_proxy_enabled?: boolean;
 }
 
 export interface ApiChatCompletionRequest {
 	messages: Array<{
 		role: ChatRole;
 		content: string | ApiChatMessageContentPart[];
+		reasoning_content?: string;
+		tool_calls?: ApiChatCompletionToolCall[];
+		tool_call_id?: string;
 	}>;
 	stream?: boolean;
 	model?: string;
+	return_progress?: boolean;
+	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
@@ -189,9 +253,13 @@ export interface ApiChatCompletionRequest {
 	dry_penalty_last_n?: number;
 	// Sampler configuration
 	samplers?: string[];
+	backend_sampling?: boolean;
 	// Custom parameters (JSON string)
 	custom?: Record<string, unknown>;
 	timings_per_token?: boolean;
+	// Continuation control (vLLM compat)
+	add_generation_prompt?: boolean;
+	continue_final_message?: boolean;
 }
 
 export interface ApiChatCompletionToolCallFunctionDelta {
@@ -211,6 +279,7 @@ export interface ApiChatCompletionToolCall extends ApiChatCompletionToolCallDelt
 }
 
 export interface ApiChatCompletionStreamChunk {
+	id?: string;
 	object?: string;
 	model?: string;
 	choices: Array<{
@@ -222,6 +291,7 @@ export interface ApiChatCompletionStreamChunk {
 			model?: string;
 			tool_calls?: ApiChatCompletionToolCallDelta[];
 		};
+		finish_reason?: string | null;
 	}>;
 	timings?: {
 		prompt_n?: number;
@@ -242,8 +312,9 @@ export interface ApiChatCompletionResponse {
 			content: string;
 			reasoning_content?: string;
 			model?: string;
-			tool_calls?: ApiChatCompletionToolCallDelta[];
+			tool_calls?: ApiChatCompletionToolCall[];
 		};
+		finish_reason?: string | null;
 	}>;
 }
 
@@ -289,6 +360,7 @@ export interface ApiSlotData {
 		reasoning_in_content: boolean;
 		generation_prompt: string;
 		samplers: string[];
+		backend_sampling: boolean;
 		'speculative.n_max': number;
 		'speculative.n_min': number;
 		'speculative.p_min': number;
@@ -310,7 +382,7 @@ export interface ApiProcessingState {
 	tokensDecoded: number;
 	tokensRemaining: number;
 	contextUsed: number;
-	contextTotal: number;
+	contextTotal: number | null;
 	outputTokensUsed: number; // Total output tokens (thinking + regular content)
 	outputTokensMax: number; // Max output tokens allowed
 	temperature: number;
@@ -320,6 +392,86 @@ export interface ApiProcessingState {
 	tokensPerSecond?: number;
 	// Progress information from prompt_progress
 	progressPercent?: number;
+	promptProgress?: ChatMessagePromptProgress;
 	promptTokens?: number;
+	promptMs?: number;
 	cacheTokens?: number;
+}
+
+/**
+ * Router model metadata - extended from ApiModelDataEntry with additional router-specific fields
+ * @deprecated Use ApiModelDataEntry instead - the /models endpoint returns this structure directly
+ */
+export interface ApiRouterModelMeta {
+	/** Model identifier (e.g., "ggml-org/Qwen2.5-Omni-7B-GGUF:latest") */
+	name: string;
+	/** Path to model file or manifest */
+	path: string;
+	/** Optional path to multimodal projector */
+	path_mmproj?: string;
+	/** Whether model is in HuggingFace cache */
+	in_cache: boolean;
+	/** Port where model instance is running (0 if not loaded) */
+	port?: number;
+	/** Current status of the model */
+	status: ApiModelStatus;
+	/** Error message if status is FAILED */
+	error?: string;
+}
+
+/**
+ * Request to load a model
+ */
+export interface ApiRouterModelsLoadRequest {
+	model: string;
+}
+
+/**
+ * Response from loading a model
+ */
+export interface ApiRouterModelsLoadResponse {
+	success: boolean;
+	error?: string;
+}
+
+/**
+ * Request to check model status
+ */
+export interface ApiRouterModelsStatusRequest {
+	model: string;
+}
+
+/**
+ * Response with model status
+ */
+export interface ApiRouterModelsStatusResponse {
+	model: string;
+	status: ModelStatus;
+	port?: number;
+	error?: string;
+}
+
+/**
+ * Response with list of all models from /models endpoint
+ * Note: This is the same as ApiModelListResponse - the endpoint returns the same structure
+ * regardless of server mode (MODEL or ROUTER)
+ */
+export interface ApiRouterModelsListResponse {
+	object: string;
+	data: ApiModelDataEntry[];
+}
+
+/**
+ * Request to unload a model
+ */
+export interface ApiRouterModelsUnloadRequest {
+	model: string;
+}
+
+/**
+ * Response from unloading a model
+ */
+export interface ApiRouterModelsUnloadResponse {
+	success: boolean;
+	error?: string;
 }

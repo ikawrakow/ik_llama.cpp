@@ -105,6 +105,7 @@ enum e_model {
     MODEL_A13B,
     MODEL_7B_A1B,
     MODEL_8B_A1B,
+    MODEL_12B_A2_5B,
     MODEL_16B_A1B,
     MODEL_21B_A3B, // Ernie MoE small
     MODEL_30B_A3B,
@@ -621,4 +622,3 @@ struct LLM_TN {
 std::string llama_model_ftype_name(llama_ftype ftype);
 
 const char * llama_model_type_name(e_model type);
-

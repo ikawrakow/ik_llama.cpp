@@ -357,20 +357,15 @@ void spec_tuner::print_best() const {
 
     {
         std::ostringstream oss;
-        oss << "Autotune reuse: ";
+        oss << "Autotune reuse: --spec-type " << common_speculative_type_to_str(spec_type);
+        bool first_kv = true;
         for (const auto & coord : coords) {
             bool is_int = (coord.name != "p_min");
-            if      (coord.name == "n_max")             oss << "--draft-max ";
-            else if (coord.name == "p_min")             oss << "--draft-p-min ";
-            else if (coord.name == "n_min")             oss << "--draft-min ";
-            else if (coord.name == "ngram_size_n")      oss << "--spec-ngram-size-n ";
-            else if (coord.name == "ngram_size_m")      oss << "--spec-ngram-size-m ";
-            else if (coord.name == "ngram_min_hits")    oss << "--spec-ngram-min-hits ";
-            else if (coord.name == "suffix_min_match_len") oss << "--suffix-pattern-len ";
-            else                                        oss << "--" << coord.name << " ";
+            oss << (first_kv ? ':' : ',') << coord.name << '=';
+            first_kv = false;
 
-            if (is_int) oss << (int)coord.arms[coord.best_idx].value << " ";
-            else oss << std::fixed << std::setprecision(2) << coord.arms[coord.best_idx].value << " ";
+            if (is_int) oss << (int)coord.arms[coord.best_idx].value;
+            else oss << std::fixed << std::setprecision(2) << coord.arms[coord.best_idx].value;
         }
         LOG_INF("%s\n", oss.str().c_str());
     }
