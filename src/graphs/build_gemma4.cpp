@@ -10,8 +10,21 @@ static int gemma4_mtp_target_kv_layer(const llama_hparams & mtp_hparams, const l
         ? std::min<int>((int) target_hparams.n_layer, target_hparams.n_layer_kv_from_start)
         : (int) target_hparams.n_layer;
 
+    if (target_hparams.n_layer_kv_from_start > 0 &&
+            target_hparams.n_layer_kv_from_start < (int32_t) target_hparams.n_layer) {
+        const int owner_il = is_sliding ? target_n_kv_layer - 2 : target_n_kv_layer - 1;
+        if (owner_il >= 0 &&
+                target_hparams.has_kv(owner_il) &&
+                (target_hparams.swa_layers[owner_il] != 0) == is_sliding) {
+            return owner_il;
+        }
+    }
+
     int target_il = target_n_kv_layer - 1;
     for (; target_il >= 0; --target_il) {
+        if (!target_hparams.has_kv(target_il)) {
+            continue;
+        }
         if ((target_hparams.swa_layers[target_il] != 0) == is_sliding) {
             break;
         }
@@ -40,6 +53,12 @@ static void gemma4_mtp_prepare_frozen_kv_views(
         return;
     }
 
+    const llama_model & target_model = lctx.mtp_target_ctx->model;
+    if (target_model.split_mode != LLAMA_SPLIT_MODE_GRAPH &&
+            target_model.split_mode != LLAMA_SPLIT_MODE_ATTN) {
+        return;
+    }
+
     GGML_ASSERT(target_il >= 0 && target_il < (int) target_kv.k_l.size() && target_il < (int) target_kv.v_l.size());
 
     ggml_tensor * k_cache = target_kv.k_l[target_il];
@@ -55,8 +74,13 @@ static void gemma4_mtp_prepare_frozen_kv_views(
     GGML_ASSERT(split_k->n_device == split_v->n_device);
 
     const llama_hparams & assistant_hparams = lctx.model.hparams;
-    const int64_t n_embd_head_k = assistant_hparams.n_embd_head_k(assistant_il);
-    const int64_t n_embd_head_v = assistant_hparams.n_embd_head_v(assistant_il);
+    const llama_hparams & target_hparams    = lctx.mtp_target_ctx->model.hparams;
+    const int64_t n_embd_head_k = target_hparams.n_embd_head_k(target_il);
+    const int64_t n_embd_head_v = target_hparams.n_embd_head_v(target_il);
+
+    GGML_ASSERT(assistant_hparams.n_embd_head_k(assistant_il) == n_embd_head_k);
+    GGML_ASSERT(assistant_hparams.n_embd_head_v(assistant_il) == n_embd_head_v);
+    GGML_ASSERT(target_n_kv <= (int32_t) target_kv.size);
 
     std::vector<ggml_tensor *> k_parts;
     std::vector<ggml_tensor *> v_parts;
@@ -78,9 +102,14 @@ static void gemma4_mtp_prepare_frozen_kv_views(
         }
 
         GGML_ASSERT(target_kv.size > 0);
+        GGML_ASSERT(split_kl->ne[0] == n_embd_head_k);
         GGML_ASSERT(split_kl->ne[1] % target_kv.size == 0);
+        GGML_ASSERT(split_vl->ne[0] % target_kv.size == 0);
 
         const int64_t split_n_head_kv = split_kl->ne[1] / target_kv.size;
+        const int64_t split_n_head_v  = (split_vl->ne[0] / target_kv.size) / n_embd_head_v;
+        GGML_ASSERT((split_vl->ne[0] / target_kv.size) % n_embd_head_v == 0);
+        GGML_ASSERT(split_n_head_v == split_n_head_kv);
 
         ggml_tensor * k_part = ggml_view_3d(ctx0, split_kl,
                 n_embd_head_k, target_n_kv, split_n_head_kv,
@@ -99,7 +128,7 @@ static void gemma4_mtp_prepare_frozen_kv_views(
 
         ggml_tensor * v_part = ggml_view_3d(ctx0, split_vl,
                 n_embd_head_v, target_n_kv, split_n_head_kv,
-            ggml_row_size(split_vl->type, split_n_head_kv * n_embd_head_v),
+                ggml_row_size(split_vl->type, split_n_head_kv * n_embd_head_v),
                 ggml_row_size(split_vl->type, n_embd_head_v),
                 0);
         if (auto row_size = ggml_row_size(v_part->type, v_part->ne[0]); row_size % sizeof(float) == 0) {
@@ -610,13 +639,17 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
         ggml_tensor * inpL = cur;
 
         const bool is_sliding    = hparams.swa_layers[il] ? true : false;
+        const int   n_embd_head  = hparams.n_embd_head_k(il);
+        const int   n_head       = hparams.n_head(il);
+        const int target_il      = gemma4_mtp_target_kv_layer(hparams, target_hparams, il);
+        const bool target_is_sliding = target_hparams.swa_layers[target_il] != 0;
+        GGML_ASSERT(target_is_sliding == is_sliding);
+
         const float freq_base_l  = is_sliding ? target_hparams.rope_freq_base_train_swa  : target_cparams.rope_freq_base;
         const float freq_scale_l = is_sliding ? target_hparams.rope_freq_scale_train_swa : target_cparams.rope_freq_scale;
         const int   n_rot_l      = is_sliding ? target_hparams.n_rot_swa : target_hparams.n_rot;
-        const int   n_swa        = is_sliding ? target_hparams.n_swa : 0;
-        const int   n_embd_head  = hparams.n_embd_head_k(il);
-        const int   n_head       = hparams.n_head(il);
-        ggml_tensor * KQ_mask_l  = is_sliding ? KQ_mask_swa : KQ_mask;
+        const int   n_swa        = target_is_sliding ? target_hparams.n_swa : 0;
+        ggml_tensor * KQ_mask_l  = target_is_sliding ? KQ_mask_swa : KQ_mask;
 
         cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
@@ -630,13 +663,23 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Qcur, "Qcur_rope", il);
 
-        const int target_il = gemma4_mtp_target_kv_layer(hparams, target_hparams, il);
         ggml_tensor *& frozen_k = is_sliding ? frozen_k_swa : frozen_k_full;
         ggml_tensor *& frozen_v = is_sliding ? frozen_v_swa : frozen_v_full;
-        gemma4_mtp_prepare_frozen_kv_views(ctx0, lctx, target_kv, il, target_il, target_n_kv, &frozen_k, &frozen_v, cb);
+        const bool force_nonflash_attn =
+            target_cparams.flash_attn &&
+            !target_is_sliding &&
+            n_embd_head > 256 &&
+            hparams.n_gqa(il) == 2;
+
+        int32_t target_n_kv_l = target_n_kv;
+        if (force_nonflash_attn && target_n_kv > target_n_kv_l) {
+            target_n_kv_l = target_n_kv;
+        }
+
+        gemma4_mtp_prepare_frozen_kv_views(ctx0, lctx, target_kv, il, target_il, target_n_kv_l, &frozen_k, &frozen_v, cb);
         cur = llm_build_kv(ctx0, lctx, target_kv, gf, model.layers[il].wo, model.layers[il].bo,
-            nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa, target_il,
-            &frozen_k, &frozen_v);
+            nullptr, nullptr, Qcur, KQ_mask_l, n_tokens, target_kv_head, target_n_kv_l, hparams.f_attention_scale, cb, il, nullptr, n_swa, target_il,
+            &frozen_k, &frozen_v, force_nonflash_attn);
 
         cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_post_norm", il);

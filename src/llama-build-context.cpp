@@ -1540,7 +1540,7 @@ static ggml_tensor * llm_build_kqv(
          const llm_build_cb & cb,
                     int       il,
                 ggml_tensor * sinks = nullptr, int n_swa = 0, int kv_il = -1,
-                ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr) {
+                ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr, bool force_nonflash = false) {
     const llama_model   & model   = lctx.model;
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
@@ -1600,7 +1600,7 @@ static ggml_tensor * llm_build_kqv(
 
     struct ggml_tensor * cur;
 
-    if (cparams.flash_attn) {
+    if (cparams.flash_attn && !force_nonflash) {
         GGML_UNUSED(model);
         GGML_UNUSED(n_ctx);
 
@@ -1799,7 +1799,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
                     int32_t   n_kv,
                     float     kq_scale,
          const llm_build_cb & cb, int il, ggml_tensor * sinks, int n_swa, int kv_il,
-         ggml_tensor ** k_cache_view, ggml_tensor ** v_cache_view) {
+                ggml_tensor ** k_cache_view, ggml_tensor ** v_cache_view, bool force_nonflash) {
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
 
@@ -1834,7 +1834,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
     }
 
     auto cur = llm_build_kqv(ctx, lctx, kv, graph, wo, wo_b, q_cur, kq_mask, n_tokens, n_kv, kq_scale, cb, il, sinks, n_swa, kv_il,
-            k_cache_view, v_cache_view);
+            k_cache_view, v_cache_view, force_nonflash);
     cb(cur, "kqv_out", il);
 
     return cur;

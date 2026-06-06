@@ -343,6 +343,12 @@ bool server_context::load_model(const gpt_params& params_) {
         params_dft.main_gpu     = params_base.main_gpu;
         params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
         params_dft.rpc_servers  = params_base.rpc_servers;
+        params_dft.n_threads    = params_base.speculative.n_threads == -1
+            ? params_base.n_threads
+            : params_base.speculative.n_threads;
+        params_dft.n_threads_batch = params_base.speculative.n_threads_batch == -1
+            ? params_dft.n_threads
+            : params_base.speculative.n_threads_batch;
         params_dft.cache_type_k = params_base.speculative.cache_type_k.empty() ? params_base.cache_type_k : params_base.speculative.cache_type_k;
         params_dft.cache_type_v = params_base.speculative.cache_type_v.empty() ? params_base.cache_type_v : params_base.speculative.cache_type_v;
         params_dft.flash_attn   = params_base.flash_attn;
