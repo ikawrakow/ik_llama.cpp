@@ -2125,13 +2125,16 @@ bool create_tensors_helper::create_gemma4_tensors(const LLM_TN & tn) {
         layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         // note: use_alternative_attention (v_proj is optional, if it's not present, use k_proj)
+        // Gemma 4 shared-KV layers omit fresh K/K-norm tensors.
+        const int kv_required = hparams.has_kv(i) ? 0 : llama_model_loader::TENSOR_NOT_REQUIRED;
+
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head * n_head}, 0);
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k}, 0);
+        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k}, kv_required);
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v}, llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head * n_head, n_embd}, 0);
 
         layer.attn_q_norm    = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), {n_embd_head}, 0);
-        layer.attn_k_norm    = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM,    "weight", i), {n_embd_head}, 0);
+        layer.attn_k_norm    = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM,    "weight", i), {n_embd_head}, kv_required);
         layer.attn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
 
         layer.out_scale = create_tensor(ctx_split, tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), {1u}, llama_model_loader::TENSOR_NOT_REQUIRED);
