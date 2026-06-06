@@ -827,16 +827,16 @@ static void elb_sub(common_params_sampling& sparams, const common_params_samplin
 }
 
 void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float* logits) {
-    auto index_first_inactive = [](auto countup, auto& tokens) {
+    const auto& elb = ctx_sampling->elb_states[ctx_sampling->elb_idx];
+
+    auto index_first_inactive = [&elb](auto& tokens) {
         return std::distance(
             tokens.begin(),
-            std::upper_bound(tokens.begin(), tokens.end(), countup, [](const auto& countup, const auto& token) {
-                return countup > token.duration;
+            std::upper_bound(tokens.begin(), tokens.end(), NULL, [&elb](const auto& _, const auto& token) {
+                return elb.countup > token.duration;
             })
         );
     };
-
-    const auto& elb = ctx_sampling->elb_states[ctx_sampling->elb_idx];
 
     std::string combined_text;
     const std::string* search_window = &combined_text;
@@ -850,7 +850,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
     }
 
     if (!search_window->empty() && !elb.other_tokens.empty() && (elb.other_tokens.front().duration > elb.countup)) {
-        const auto ifi = index_first_inactive(elb.countup, elb.other_tokens);
+        const auto ifi = index_first_inactive(elb.other_tokens);
         for (size_t j = 0; j < ifi; ++j) {
             const auto& [id, bias, _, cond] = elb.other_tokens[j];
             if (string_ends_with(*search_window, cond)) {
@@ -860,7 +860,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
     }
 
     if (!elb.first_tokens.empty() && (elb.first_tokens.front().duration > elb.countup)) {
-        const auto ifi = index_first_inactive(elb.countup, elb.first_tokens);
+        const auto ifi = index_first_inactive(elb.first_tokens);
         if (search_window->empty()) {
             // empty case here
             for (size_t j = 0; j < ifi; ++j) {
@@ -908,13 +908,13 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
                 continue;   // next entry
             }
             size_t count = 0;
-            auto pos = ctx_sampling->to_generated_text->find(phrase, entry.posi[j]);
+            auto pos = ctx_sampling->to_generated_text->find(phrase, entry.search_posi[j]);
             while (pos != std::string::npos) {
                 LLAMA_LOG_DEBUG("%s: found %s @ %zu\n", __func__, phrase.c_str(), pos);
                 ++count;
                 pos = ctx_sampling->to_generated_text->find(phrase, pos + phrase.length());
             }
-            entry.posi[j] = std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - int32_t(phrase.length()) + 1);
+            entry.search_posi[j] = std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - int32_t(phrase.length()) + 1);
             if (count % 2 == 1) {
                 // even = no match or cancelled
                 LLAMA_LOG_DEBUG("%s: before\n", __func__);
@@ -982,7 +982,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
     // prepare next sampler bias
     for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
         // no clearance for sampler bias
-        std::fill(entry.posi.begin(), entry.posi.end(), pos);
+        std::fill(entry.search_posi.begin(), entry.search_posi.end(), pos);
     }
 }
 

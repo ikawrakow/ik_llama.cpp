@@ -174,14 +174,13 @@ typedef struct common_params_sampling {
     std::vector<llama_token> penalty_prompt_tokens;
     bool                     use_penalty_prompt_tokens = false;
 
-    // expiring logit bias
+    // expiring logit bias (elb) + expiring sparam bias (epb)
     struct elb_param {
         struct elb_entry {
-            std::vector<size_t>         posi;           // positions of phrases in generated text
-            std::vector<float>          addsubs;        // add/modify then subtract/restore sampling parameters
+            std::vector<size_t>         search_posi;        // epb: starting search positions for phrases
+            std::vector<float>          addsubs;        // epb: bias for sparams
             std::vector<bool>           addflags;       // true if added
-            size_t                      max_phrase_len;
-            std::vector<std::string>    phrases;
+            std::vector<std::string>    phrases;        // elb: exitwords OR epb: keywords
             std::vector<float>          biases;     // for each phrase, nth bias for nth token, extrapolate
             int32_t                     duration;   // bias duration, unless exitword matches
             bool                        is_range;   // has lower and upper biases
@@ -192,7 +191,7 @@ typedef struct common_params_sampling {
                     && (phrases == other.phrases)
                     && (addflags == other.addflags)
                     && (addsubs == other.addsubs)
-                    && (posi == other.posi);
+                    && (search_posi == other.search_posi);
             }
         };
         std::vector<struct elb_entry> entries;
@@ -262,7 +261,7 @@ struct common_sampler {
     };
     std::vector<struct elb_state> elb_states;
     size_t                        elb_idx;          // for elb_states
-    size_t                        elb_search_pos;
+    size_t                        elb_search_pos;       // for exitwords
 };
 
 
