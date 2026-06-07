@@ -175,6 +175,8 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
+    result->n_rewind = 0;
+
     result->elb_idx = 0;
     result->elb_search_pos = 0;
 
@@ -225,6 +227,10 @@ void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bo
     // add stateful samplers here
     if (ctx->adapt_p_ctx != nullptr) {
         llama_review_adaptive_p(ctx->adapt_p_ctx, n_unsent, rewind_status);
+    }
+
+    if (ctx->n_rewind > 0) {
+        common_expiring_logit_bias_rewind(ctx);
     }
 }
 
@@ -717,6 +723,8 @@ void common_sampler_accept(
     }
     ctx_sampling->prev.push_back(token);
 
+    ctx_sampling->decoded_text += common_token_to_piece(ctx_main, token, true);
+
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
     const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
     if (ctx_sampling->rbudget && is_generated) {
@@ -730,7 +738,7 @@ void common_sampler_accept(
         llama_sampler_dry_accept(ctx_sampling->smpl, token);
     }
 
-    if (ctx_sampling->elb_states.size() > ctx_sampling->elb_idx) {
+    if (ctx_sampling->decoded_text.length() > ctx_sampling->elb_search_pos) {
         common_expiring_logit_bias_accept(ctx_sampling, ctx_main);
     }
 }
@@ -779,8 +787,6 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     for (; i < draft.size(); i++) {
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
 
-        gsmpl->drafted_text += common_token_to_piece(ctx, id, true);
-
         common_sampler_accept(gsmpl, ctx, id, true);
 
         result.push_back(id);
@@ -792,8 +798,6 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
     if (i == draft.size()) {
         const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
-
-        gsmpl->drafted_text += common_token_to_piece(ctx, id, true);
 
         common_sampler_accept(gsmpl, ctx, id, true);
 
@@ -827,6 +831,7 @@ static void elb_sub(common_params_sampling& sparams, const common_params_samplin
 }
 
 void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float* logits) {
+    // printf("%s[%d]: \n", __func__, __LINE__);
     const auto& elb = ctx_sampling->elb_states[ctx_sampling->elb_idx];
 
     auto index_first_inactive = [&elb](auto& tokens) {
@@ -838,22 +843,13 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
         );
     };
 
-    std::string combined_text;
-    const std::string* search_window = &combined_text;
-    if (!ctx_sampling->drafted_text.empty()) {
-        // add speculated tokens
-        combined_text = ctx_sampling->to_generated_text != nullptr ? (
-            ctx_sampling->to_generated_text->substr(std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - elb.max_cond_len))
-        ) : "" + ctx_sampling->drafted_text;
-    } else if (ctx_sampling->to_generated_text != nullptr) {
-        search_window = ctx_sampling->to_generated_text;
-    }
+    const std::string window = ctx_sampling->decoded_text.substr(ctx_sampling->elb_search_pos);
 
-    if (!search_window->empty() && !elb.other_tokens.empty() && (elb.other_tokens.front().duration > elb.countup)) {
+    if (!window.empty() && !elb.other_tokens.empty() && (elb.other_tokens.front().duration > elb.countup)) {
         const auto ifi = index_first_inactive(elb.other_tokens);
         for (size_t j = 0; j < ifi; ++j) {
             const auto& [id, bias, _, cond] = elb.other_tokens[j];
-            if (string_ends_with(*search_window, cond)) {
+            if (string_ends_with(window, cond)) {
                 logits[id] += bias;
             }
         }
@@ -861,7 +857,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
 
     if (!elb.first_tokens.empty() && (elb.first_tokens.front().duration > elb.countup)) {
         const auto ifi = index_first_inactive(elb.first_tokens);
-        if (search_window->empty()) {
+        if (window.empty()) {
             // empty case here
             for (size_t j = 0; j < ifi; ++j) {
                 logits[elb.first_tokens[j].id] += elb.first_tokens[j].bias;
@@ -870,7 +866,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             for (size_t j = 0; j < ifi; ++j) {
                 const auto& [id, bias, _, cond] = elb.first_tokens[j];
                 // no bias if seen (probably too late)
-                if (!string_ends_with(*search_window, cond)) {
+                if (!string_ends_with(window, cond)) {
                     logits[id] += bias;
                 }
             }
@@ -908,13 +904,13 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
                 continue;   // next entry
             }
             size_t count = 0;
-            auto pos = ctx_sampling->to_generated_text->find(phrase, entry.search_posi[j]);
+            auto pos = ctx_sampling->decoded_text.find(phrase, entry.search_posi[j]);
             while (pos != std::string::npos) {
                 LLAMA_LOG_DEBUG("%s: found %s @ %zu\n", __func__, phrase.c_str(), pos);
                 ++count;
-                pos = ctx_sampling->to_generated_text->find(phrase, pos + phrase.length());
+                pos = ctx_sampling->decoded_text.find(phrase, pos + phrase.length());
             }
-            entry.search_posi[j] = std::max(0, int32_t(ctx_sampling->to_generated_text->length()) - int32_t(phrase.length()) + 1);
+            entry.search_posi[j] = std::max(0, int32_t(ctx_sampling->decoded_text.length()) - int32_t(phrase.length()) + 1);
             if (count % 2 == 1) {
                 // even = no match or cancelled
                 LLAMA_LOG_DEBUG("%s: before\n", __func__);
@@ -928,41 +924,37 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             }
         }
     }
+    // printf("%s[%d]: \n", __func__, __LINE__);
 }
 
 void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, struct llama_context * ctx_main) {
-    if (ctx_sampling->to_generated_text == nullptr) {
-        // prompt processing
+    // printf("%s[%d]: \n", __func__, __LINE__);
+    const auto idx = ctx_sampling->elb_idx;
+    if (idx >= ctx_sampling->elb_states.size()) {
+        ctx_sampling->elb_idx++;
         return;
     }
 
-    auto idx = ctx_sampling->elb_idx;
     auto& elb = ctx_sampling->elb_states[idx];
-    if ((elb.delay > ++elb.countup) || (elb.search_word_len == 0)) {
+    if ((elb.delay > ++(elb.countup)) || (elb.search_word_len == 0)) {
         return;
     }
 
-    const std::string window = ctx_sampling->to_generated_text->substr(std::min(
-        ctx_sampling->to_generated_text->length(),
-        ctx_sampling->elb_search_pos)) + common_token_to_piece(ctx_main, ctx_sampling->prev.back(), true);
+    auto& search_pos = ctx_sampling->elb_search_pos;
+    const std::string window = ctx_sampling->decoded_text.substr(search_pos);
+
     size_t pos = 0;
     if (string_is_found(window, elb.jumpword, pos)) {
-        LLAMA_LOG_DEBUG("%s: found %s in %s @ %zu\n", __func__, string_unescape(elb.jumpword).c_str(), string_unescape(window).c_str(), pos);
-        pos += ctx_sampling->elb_search_pos + elb.jumpword.length();
+        LLAMA_LOG_DEBUG("%s: found %s in %s @ %zu\n", __func__, string_unescape(elb.jumpword).c_str(), string_unescape(window).c_str(), search_pos + pos);
         ctx_sampling->elb_idx = elb.jump_idx;
     } else if (string_is_found(window, elb.exitword, pos)) {
-        LLAMA_LOG_DEBUG("%s: found %s in %s @ %zu\n", __func__, string_unescape(elb.exitword).c_str(), string_unescape(window).c_str(), pos);
-        pos += ctx_sampling->elb_search_pos + elb.exitword.length();
-        ++ctx_sampling->elb_idx;
+        LLAMA_LOG_DEBUG("%s: found %s in %s @ %zu\n", __func__, string_unescape(elb.exitword).c_str(), string_unescape(window).c_str(), search_pos + pos);
+        ctx_sampling->elb_idx++;
     } else {
-        // not found. move search position to include next token
-        ctx_sampling->elb_search_pos += std::max(0, int32_t(window.length()) - int32_t(elb.search_word_len) + 1);
+        search_pos += std::max(0, int32_t(window.length()) - elb.search_word_len);
         return;
     }
-
-    // single character clearance
-    // e.g. stop \n\n from expiring two \n immediately
-    ctx_sampling->elb_search_pos = pos + 1;
+    search_pos += pos;
 
     // undo current sampler bias
     for (auto& entry: ctx_sampling->params.elb_params[idx].entries) {
@@ -981,9 +973,76 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
 
     // prepare next sampler bias
     for (auto& entry: ctx_sampling->params.elb_params[ctx_sampling->elb_idx].entries) {
-        // no clearance for sampler bias
-        std::fill(entry.search_posi.begin(), entry.search_posi.end(), pos);
+        entry.search_posi.assign(entry.search_posi.size(), search_pos);
     }
+
+    // single character clearance for exitword
+    search_pos++;
+
+    ctx_sampling->elb_states[ctx_sampling->elb_idx].init_pos = search_pos;
+    // printf("%s[%d]: \n", __func__, __LINE__);
+}
+
+void common_expiring_logit_bias_rewind(struct common_sampler* ctx_sampling) {
+    printf("%s[%d]: \n", __func__, __LINE__);
+    auto& idx = ctx_sampling->elb_idx;
+    auto n_rewind = ctx_sampling->n_rewind;
+
+    LLAMA_LOG_DEBUG("%s[%d]: idx = %d, n_rewind = %d\n", __func__, __LINE__, idx, n_rewind);
+
+    if (idx >= ctx_sampling->elb_states.size()) {
+        // entirely expired
+        n_rewind -= 1 + idx - ctx_sampling->elb_states.size();
+        idx = ctx_sampling->elb_states.size() - 1;
+        if (n_rewind <= 0) {
+            // not enough rewind to reanimate
+            idx -= n_rewind;
+            LLAMA_LOG_DEBUG("%s[%d]: idx = %d, n_rewind = %d\n", __func__, __LINE__, idx, n_rewind);
+            return;
+        }
+    }
+
+    LLAMA_LOG_DEBUG("%s[%d]: idx = %d, n_rewind = %d\n", __func__, __LINE__, idx, n_rewind);
+
+    // consume n_rewind
+    while (n_rewind > 0) {
+        while (ctx_sampling->elb_states[idx].countup == 0) {
+            --idx;
+        }
+        auto& countup = ctx_sampling->elb_states[idx].countup;
+        LLAMA_LOG_DEBUG("%s[%d]: idx = %d, countup = %zu, n_rewind = %d\n", __func__, __LINE__, idx, countup, n_rewind);
+        if (countup > n_rewind) {
+            countup -= n_rewind;
+            n_rewind = 0;
+        } else {
+            n_rewind -= countup;
+            countup = 0;
+        }
+        LLAMA_LOG_DEBUG("%s[%d]: idx = %d, countup = %zu, n_rewind = %d\n", __func__, __LINE__, idx, countup, n_rewind);
+    }
+
+    // rewind sparam bias including new current
+    for (int32_t j = idx; j < ctx_sampling->elb_states.size(); ++j) {
+        printf("%s[%d]: \n", __func__, __LINE__);
+        for (auto& entry: ctx_sampling->params.elb_params[j].entries) {
+            printf("%s[%d]: %zu\n", __func__, __LINE__, entry.addflags.size());
+            for (const auto addflag: entry.addflags) {
+                printf("%s[%d]: \n", __func__, __LINE__);
+                if (addflag) {
+                    LLAMA_LOG_DEBUG("%s: before\n", __func__);
+                    elb_print(ctx_sampling->params, entry);
+
+                    elb_sub(ctx_sampling->params, entry);
+
+                    LLAMA_LOG_DEBUG("%s: after\n", __func__);
+                    elb_print(ctx_sampling->params, entry);
+                }
+            }
+        }
+    }
+
+    ctx_sampling->elb_search_pos = ctx_sampling->elb_states[idx].init_pos;
+    LLAMA_LOG_DEBUG("%s[%d]: elb_search_pos = %d\n", __func__, __LINE__, ctx_sampling->elb_search_pos);
 }
 
 

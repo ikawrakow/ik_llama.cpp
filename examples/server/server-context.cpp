@@ -1940,6 +1940,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 common_sampler_free(slot.ctx_sampling);
             }
             slot.ctx_sampling = common_sampler_init(model, slot.sparams);
+            slot.ctx_sampling->decoded_text.reserve(4 * slot.n_ctx);
         }
         catch (std::exception & e) {
             std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
@@ -2009,7 +2010,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
 
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, exitword.length() });
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, int32_t(exitword.length()), 0 });
 
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
@@ -4270,13 +4271,6 @@ void server_context::speculative_decoding_accept() {
         const common_speculative_type spec_type_used = slot.drafted_spec_type;
         size_t n_draft = slot.drafted.size();
 
-        slot.ctx_sampling->to_generated_text = &slot.generated_text;
-        if (n_draft > 0) {
-            (void) populate_vocab_pieces();     // max_piece_len
-            slot.ctx_sampling->drafted_text.reserve(max_piece_len * n_draft);
-            slot.ctx_sampling->drafted_text.clear();
-        }
-
         apply_server_biases(slot);
 
         // the accepted tokens from the speculation
@@ -4374,6 +4368,8 @@ void server_context::speculative_decoding_accept() {
             if (slot.sparams.n_probs > 0) {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, i);
             }
+
+            slot.ctx_sampling->n_rewind = 0;
 
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
                 if (!process_token(result, slot)) {
@@ -4539,6 +4535,9 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     int32_t buffer_start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
     int32_t n_keep_buffer = ban_pos - buffer_start_pos;
     if (n_keep_buffer < 0) n_keep_buffer = 0;
+
+    slot.ctx_sampling->n_rewind = slot.token_buffer.size() - n_keep_buffer;
+    LLAMA_LOG_DEBUG("%s: rewinding %d tokens\n", __func__, slot.ctx_sampling->n_rewind);
 
     if (slot.banned_n != 0) {
         int32_t n = 0;
@@ -4797,8 +4796,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
 
-            slot.ctx_sampling->to_generated_text = &slot.generated_text;
-
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
 
@@ -4850,6 +4847,8 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (slot.sparams.n_probs > 0) {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, tok_idx);
             }
+
+            slot.ctx_sampling->n_rewind = 0;
 
             // no ban string for recurrent/hybrid model
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
