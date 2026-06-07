@@ -4370,6 +4370,7 @@ void server_context::speculative_decoding_accept() {
             }
 
             slot.ctx_sampling->n_rewind = 0;
+            slot.ctx_sampling->rewinded_text.clear();
 
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
                 if (!process_token(result, slot)) {
@@ -4537,24 +4538,23 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     if (n_keep_buffer < 0) n_keep_buffer = 0;
 
     slot.ctx_sampling->n_rewind = slot.token_buffer.size() - n_keep_buffer;
+    slot.ctx_sampling->rewinded_text.reserve(4 * slot.ctx_sampling->n_rewind);
     LLAMA_LOG_DEBUG("%s: rewinding %d tokens\n", __func__, slot.ctx_sampling->n_rewind);
 
-    if (slot.banned_n != 0) {
-        int32_t n = 0;
-        for (auto result = slot.token_buffer.begin() + n_keep_buffer; result != slot.token_buffer.end(); result++) {
-            llama_token banned_tok = result->tok;
+    for (int32_t n = 0; n < slot.ctx_sampling->n_rewind; ++n) {
+        const auto& result = slot.token_buffer.begin() + n_keep_buffer + n;
+        llama_token banned_tok = result->tok;
+
+        if ((slot.banned_n < 0) || (n < slot.banned_n)) {
+            slot.positional_bans[ban_pos].insert(banned_tok);
 
             if (n == 0) {
                 LLAMA_LOG_DEBUG("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n",
                     ban_pos, banned_tok, result->text_to_send.c_str());
             }
-
-            slot.positional_bans[ban_pos].insert(banned_tok);
-            n++;
-            if (slot.banned_n > 0 && n == slot.banned_n) {
-                break;
-            }
         }
+
+        slot.ctx_sampling->rewinded_text.append(result->text_to_send);
     }
 
     int32_t n_rewind_total = (slot.n_past + 1) - ban_pos;
@@ -4849,6 +4849,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             slot.ctx_sampling->n_rewind = 0;
+            slot.ctx_sampling->rewinded_text.clear();
 
             // no ban string for recurrent/hybrid model
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {

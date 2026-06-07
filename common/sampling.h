@@ -232,7 +232,8 @@ struct common_sampler {
 
     size_t n_valid; // Number of correct top tokens with correct probabilities.
 
-    int32_t n_rewind;
+    int32_t     n_rewind;
+    std::string rewinded_text;
 
     llama_token_data_array cur_p; // current candidates
 
