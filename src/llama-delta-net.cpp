@@ -256,12 +256,14 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_beta_gate(llama_context
                 split_sizes_ba[0] * ggml_element_size(mixed_ba_reshaped));
         cb(a, "a", il);
 
-        beta  = ggml_cont_4d(ctx0, b, num_v_heads, 1, n_tok, 1);
-        alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_tok, 1);
+        // PXA_LLAMA_FIX_v4: split the token axis into (n_seq_tokens, n_seqs) so beta/gate carry the per-seq batch dim
+        // that build_fused_delta_net expects (beta [H_v,1,n_seq_tokens,n_seqs], gate [H_v,n_seq_tokens,n_seqs]).
+        beta  = ggml_cont_4d(ctx0, b, num_v_heads, 1, n_seq_tokens, n_seqs);
+        alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_seq_tokens, n_seqs);
     } else {
         beta = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_beta, cur);
         cb(beta, "beta", il);
-        beta = ggml_reshape_4d(ctx0, beta, num_v_heads, 1, n_tok, 1);
+        beta = ggml_reshape_4d(ctx0, beta, num_v_heads, 1, n_seq_tokens, n_seqs);
         cb(beta, "beta_reshaped", il);
         alpha = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_alpha, cur);
         cb(alpha, "alpha", il);
@@ -284,9 +286,9 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_beta_gate(llama_context
 }
 
 ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_storage, ggml_tensor * ssm_conv1d,
-        ggml_tensor * qkv_mixed, ggml_tensor * inp_s_seq_qnext, ggml_tensor * beta, ggml_tensor * gate,
+        ggml_tensor * qkv_mixed, ggml_tensor * state_row_idx, ggml_tensor * conv_seq_map, ggml_tensor * state_mask, ggml_tensor * beta, ggml_tensor * gate,
         int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, int64_t ssm_d_conv,
-        int64_t state_seq_id_local, uint32_t qnext_state_slots, bool reset_state_local,
+        int64_t n_seqs_in, uint32_t qnext_state_slots, bool reset_state_local,
         float eps_norm, int repeat_type, int il, const llm_build_cb & cb, ggml_cgraph * gf,
         ggml_tensor * per_step_ckpt, ggml_tensor * per_step_conv) {
     const int64_t key_dim        = head_k_dim * num_k_heads;
@@ -297,9 +299,15 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     const int64_t state_dim      = conv_state_dim + ssm_state_dim;
     GGML_ASSERT(qnext_state_slots > 0);
 
-    const int64_t n_seq_tokens = qkv_mixed->ne[1];
-    const int64_t n_seqs       = qkv_mixed->ne[2];
-    const int64_t n_tok        = n_seq_tokens * n_seqs;
+    // PXA_LLAMA_FIX_v4: n_seqs is passed explicitly. The mixed (concurrent) path calls this ONCE with
+    // n_seqs = batch.n_tokens, n_seq_tokens = 1 (each token its own seq) -- a single batched delta-net,
+    // NOT a per-token loop of N subgraphs (that interleave was the recurrent-state corruption at np>=3).
+    // qkv_mixed is [conv_dim, n_tok] (or [conv_dim, n_tok, 1]); the conv consumes it token-major as a matrix.
+    const int64_t n_tok        = qkv_mixed->ne[1];
+    const int64_t n_seqs       = n_seqs_in;
+    GGML_ASSERT(n_seqs > 0 && n_tok % n_seqs == 0);
+    const int64_t n_seq_tokens = n_tok / n_seqs;
+    GGML_ASSERT(ggml_is_matrix(qkv_mixed)); // [conv_dim, n_tok] (ne[2]==1) -- consumed token-major by ssm_conv
 
     size_t state_row_size = 0;
     ggml_tensor * state_all = nullptr;
@@ -311,27 +319,49 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
 
     state_all = ggml_view_2d(ctx0, state_storage, state_dim, qnext_state_slots, state_row_size, 0);
 
-    ggml_tensor * state_dst = ggml_view_2d(ctx0, state_all, state_dim, 1, state_row_size, state_seq_id_local * state_row_size);
+    // PXA_LLAMA_FIX_v4: gather ALL participating sequences' recurrent rows ONCE, in token order, via state_row_idx
+    // (absolute seq_id per seq). all_same -> [n_seqs=1]; mixed -> [n_seqs=n_tok]. ONE get_rows -> [state_dim, n_seqs],
+    // ONE set_rows at the end => a SINGLE subgraph (the per-token N-subgraph interleave was the allocator-corruption bug).
+    GGML_ASSERT(state_row_idx != nullptr);
+    GGML_ASSERT(state_row_idx->ne[0] == n_seqs);
+    ggml_tensor * pxa_row_idx = state_row_idx;
+    ggml_tensor * state_dst = ggml_get_rows(ctx0, state_all, pxa_row_idx); // [state_dim, n_seqs]
     ggml_tensor * state_f32 = state_dst;
     if (state_f32->type != GGML_TYPE_F32) {
         state_f32 = ggml_cast(ctx0, state_f32, GGML_TYPE_F32);
     }
-    if (reset_state_local) {
+    // PXA_LLAMA_FIX_v4: per-seq reset via mask multiply ([1,n_seqs] broadcast over state_dim): 0 zeros a fresh seq's
+    // carried state, 1 keeps it. Handles mixed batches where some seqs start (pos 0) and others continue. Falls back to
+    // the scalar reset_state_local only if no mask is supplied (keeps non-qwen3next callers, if any, working).
+    if (state_mask != nullptr) {
+        GGML_ASSERT(state_mask->ne[1] == n_seqs);
+        state_f32 = ggml_mul(ctx0, state_f32, state_mask);
+        cb(state_f32, "state_reset_masked", il);
+    } else if (reset_state_local) {
         state_f32 = ggml_scale(ctx0, state_f32, 0.0f);
         cb(state_f32, "state_reset", il);
     }
 
-    ggml_tensor * conv_state_flat = ggml_view_2d(ctx0, state_f32, conv_state_dim, 1, state_f32->nb[1], 0);
-    ggml_tensor * ssm_state_flat  = ggml_view_2d(ctx0, state_f32, ssm_state_dim, 1, state_f32->nb[1],
+    // [state_dim, n_seqs] -> conv part [conv_state_dim, n_seqs] and ssm part [ssm_state_dim, n_seqs]
+    ggml_tensor * conv_state_flat = ggml_view_2d(ctx0, state_f32, conv_state_dim, n_seqs, state_f32->nb[1], 0);
+    ggml_tensor * ssm_state_flat  = ggml_view_2d(ctx0, state_f32, ssm_state_dim, n_seqs, state_f32->nb[1],
             conv_state_dim * ggml_element_size(state_f32));
+    if (n_seqs > 1) {
+        // ssm_conv requires a contiguous 3d conv_states; the views above are strided across seqs when n_seqs>1.
+        conv_state_flat = ggml_cont(ctx0, conv_state_flat);
+        ssm_state_flat  = ggml_cont(ctx0, ssm_state_flat);
+    }
 
-    ggml_tensor * conv_states = ggml_reshape_3d(ctx0, conv_state_flat, ssm_d_conv - 1, conv_dim, 1);
-    ggml_tensor * state       = ggml_reshape_4d(ctx0, ssm_state_flat, head_v_dim, head_v_dim, num_v_heads, 1);
+    ggml_tensor * conv_states = ggml_reshape_3d(ctx0, conv_state_flat, ssm_d_conv - 1, conv_dim, n_seqs);
+    ggml_tensor * state       = ggml_reshape_4d(ctx0, ssm_state_flat, head_v_dim, head_v_dim, num_v_heads, n_seqs);
     cb(conv_states, "conv_states", il);
     cb(state, "state_predelta", il);
     ggml_build_forward_expand(gf, state);
 
-    ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, ssm_conv1d, inp_s_seq_qnext, per_step_conv);
+    // PXA_LLAMA_FIX_v4: conv_seq_map is the [n_kv=n_seqs, n_tok] seq->state-column map. States are gathered in token
+    // order so it is identity in row 0 (sq[0][t]=t) with rows>=1 out-of-range -> hits ik's multi-seq-UNIQUE conv fast
+    // path. all_same passes a [1,n_tok] view (n_kv=1 -> single-seq fast path, content ignored).
+    ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, ssm_conv1d, conv_seq_map, per_step_conv);
     cb(conv_output_raw, "conv_output_raw", il);
 
     ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
@@ -343,16 +373,20 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
     int64_t nb1_qkv = ggml_row_size(conv_output_silu->type, qkv_dim);
 
+    // PXA_LLAMA_FIX_v4: seq stride is nb1_qkv * n_seq_tokens (tokens of a seq are contiguous in token order).
+    // all_same: n_seq_tokens=n_tok,n_seqs=1 (== old nb1_qkv*n_tok). mixed: n_seq_tokens=1,n_seqs=n_tok -> nb1_qkv.
+    const size_t nb3_qkv = (size_t) nb1_qkv * n_seq_tokens;
+
     // Extract the convolved Q, K, V from conv_output
     ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok, 0);
+            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb3_qkv, 0);
 
     ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb1_qkv * n_tok,
+            ggml_row_size(conv_output_silu->type, head_k_dim), nb1_qkv, nb3_qkv,
             head_k_dim * num_k_heads * ggml_element_size(conv_output_silu));
 
     ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv_output_silu->type, head_v_dim), nb1_qkv, nb1_qkv * n_tok,
+            ggml_row_size(conv_output_silu->type, head_v_dim), nb1_qkv, nb3_qkv,
             ggml_row_size(conv_output_silu->type, 2 * head_k_dim * num_k_heads));
 
     cb(q_conv, "q_conv", il);
@@ -379,14 +413,20 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(output, "attn_output", il);
     cb(new_state, "new_state", il);
 
-    ggml_tensor * new_conv_states = ggml_view_2d(ctx0, conv_output_raw, ssm_d_conv - 1, conv_dim,
+    // PXA_LLAMA_FIX_v4: the new conv state lives in conv_output_raw's state region [d_conv, conv_dim, n_seqs] at flat
+    // offset conv_dim*n_tok; the next-step state is the LAST (d_conv-1) columns of each. View it generalized over n_seqs.
+    ggml_tensor * new_conv_states = ggml_view_3d(ctx0, conv_output_raw, ssm_d_conv - 1, conv_dim, n_seqs,
             ssm_d_conv * ggml_element_size(conv_output_raw),
-            (1 + conv_dim * n_tok) * ggml_element_size(conv_output_raw));
+            ssm_d_conv * conv_dim * ggml_element_size(conv_output_raw),
+            (conv_dim * n_tok + 1) * ggml_element_size(conv_output_raw));
     auto new_conv_states_cont = ggml_cont(ctx0, new_conv_states);
     cb(new_conv_states_cont, "new_conv_states_cont", il);
-    ggml_tensor * new_conv_flat = ggml_reshape_2d(ctx0, new_conv_states_cont, conv_state_dim, 1);
-    ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, new_state, ssm_state_dim, 1);
-    auto state_cpy = ggml_concat_inplace(ctx0, new_conv_flat, new_ssm_flat, state_dst, 0);
+    ggml_tensor * new_conv_flat = ggml_reshape_2d(ctx0, new_conv_states_cont, conv_state_dim, n_seqs);
+    ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, new_state, ssm_state_dim, n_seqs);
+    // PXA_LLAMA_FIX_v4: pack the new rows [state_dim, n_seqs] and SCATTER them back to their absolute seq rows with ONE
+    // ggml_set_rows. Single producer + single scatter => no per-token in-place aliasing => allocator-safe at any np.
+    ggml_tensor * pxa_new_row = ggml_concat(ctx0, new_conv_flat, new_ssm_flat, 0); // [state_dim, n_seqs]
+    auto state_cpy = ggml_set_rows(ctx0, state_storage, pxa_new_row, pxa_row_idx);
     cb(state_cpy, "state_cpy", il);
     ggml_build_forward_expand(gf, state_cpy);
 
@@ -433,12 +473,12 @@ static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor *
 }
 
 ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
-            ggml_tensor * delta_input, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
-            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
+            ggml_tensor * delta_input, ggml_tensor * state_row_idx, ggml_tensor * conv_seq_map, ggml_tensor * state_mask, ggml_tensor * inp_out_ids,
+            int64_t n_seqs, bool reset_state_local, int il, const llm_build_cb & cb) const {
 
     const int64_t n_tok = delta_input->ne[1];
-    const int64_t n_seqs = 1;
-    //const int64_t n_seq_tokens = n_tok;
+    GGML_ASSERT(n_seqs > 0 && n_tok % n_seqs == 0);
+    // PXA_LLAMA_FIX_v4: state routing is now by the runtime state_row_idx tensor (state_seq_id_local removed).
 
     auto & model   = lctx.model;
     auto & hparams = model.hparams;
@@ -526,9 +566,9 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
                                  id < (int)kv_self.ckpt.per_step_conv[il].size()
                                ? kv_self.ckpt.per_step_conv[il][id] : nullptr;
 
-            auto output = build_qkv(ctx0, split_s_l->splits[id], split_ssm_conv1d->splits[id], qkv_mixed, inp_s_seq_qnext, beta, gate,
+            auto output = build_qkv(ctx0, split_s_l->splits[id], split_ssm_conv1d->splits[id], qkv_mixed, state_row_idx, conv_seq_map, state_mask, beta, gate,
                                head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, hparams.ssm_d_conv,
-                               state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
+                               n_seqs, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
                                l.ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt, per_step_conv);
             split_norm = (ggml_split_tensor_t *)l.ssm_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
@@ -589,9 +629,9 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
                        ? kv_self.ckpt.per_step_conv[il].front() : nullptr;
 
     auto output = build_qkv(ctx0, kv_self.s_l[il], model.layers[il].ssm_conv1d,
-        qkv_mixed, inp_s_seq_qnext, beta, gate,
+        qkv_mixed, state_row_idx, conv_seq_map, state_mask, beta, gate,
         head_k_dim, num_k_heads, head_v_dim, num_v_heads, hparams.ssm_d_conv,
-        state_seq_id_local, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
+        n_seqs, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
         model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt, per_step_conv);
 
     auto gated_output = build_gated_output(lctx, ctx0, model.layers[il].ssm_norm, model.layers[il].ssm_out, output, z, head_v_dim, num_v_heads, n_tok, il, cb);
@@ -622,26 +662,40 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
     GGML_ASSERT(model.layers[il].wqkv != nullptr || model.layers[il].ssm_in != nullptr);
     GGML_ASSERT(model.layers[il].wqkv_gate != nullptr || model.layers[il].ssm_in != nullptr);
 
+    GGML_ASSERT(lctx.inp_conv_seq_map != nullptr);
+    GGML_ASSERT(lctx.inp_qnext_state_mask != nullptr);
+    const int64_t n_tok = batch.n_tokens;
+
+    // PXA_LLAMA_FIX_v4: state-reset mask [1, n_seqs] (per-seq), broadcast over state_dim inside build_qkv.
+    auto make_state_mask = [&](int64_t n_seqs) {
+        return ggml_view_2d(ctx0, lctx.inp_qnext_state_mask, 1, n_seqs,
+                lctx.inp_qnext_state_mask->nb[1], 0);
+    };
+
     if (all_same_seq) {
+        // SINGLE sequence: n_seqs = 1. state_row_idx = [1] (this seq's absolute row), conv map = [1, n_tok] view
+        // (n_kv=1 -> conv single-seq fast path). One batched call over all n_tok tokens (unchanged prompt/decode path).
+        ggml_tensor * state_row_idx = ggml_view_1d(ctx0, lctx.inp_s_seq_qnext, 1, 0);
+        ggml_tensor * conv_seq_map  = ggml_view_2d(ctx0, lctx.inp_conv_seq_map, 1, n_tok,
+                lctx.inp_conv_seq_map->nb[1], 0);
+        ggml_tensor * state_mask = make_state_mask(1);
         bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
-        return build_layer_attn_linear_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, inp_out_ids, token_seq_ids.front(), reset_state, il, cb);
+        return build_layer_attn_linear_core(ctx0, gf, cur, state_row_idx, conv_seq_map, state_mask, inp_out_ids, 1, reset_state, il, cb);
     }
 
     GGML_ASSERT(has_unique_seq_ids && "qwen3next mixed-sequence batches require unique sequence IDs per token");
 
-    ggml_tensor * out = nullptr;
-    for (int64_t i = 0; i < batch.n_tokens; ++i) {
-        ggml_tensor * cur_i = ggml_view_2d(ctx0, cur, cur->ne[0], 1, cur->nb[1], (size_t) i * cur->nb[1]);
-        ggml_tensor * inp_s_seq_qnext_i = ggml_view_2d(ctx0, lctx.inp_s_seq_qnext, 1, 1, lctx.inp_s_seq_qnext->nb[1], (size_t) i * lctx.inp_s_seq_qnext->nb[1]);
+    // PXA_LLAMA_FIX_v4: THE FIX. Mixed (concurrent) batch -> ONE batched delta-net with n_seqs = n_tok, n_seq_tokens = 1
+    // (each token is its own sequence). state_row_idx = [n_tok] absolute seq rows in token order; conv_seq_map = the full
+    // [n_kv=n_tok, n_tok] identity map (row 0 = t, rows>=1 = -1) since states are gathered in token order. This replaces
+    // the previous per-token loop of N independent subgraphs, whose interleaved get_rows/conv/delta_net/set_rows scratch
+    // let ggml-alloc reuse a still-live recurrent buffer at np>=3 -> cross-conversation state bleed. A SINGLE subgraph
+    // (one get_rows, one ssm_conv, one ggml_delta_net over n_seqs, one set_rows) is allocator-safe at any concurrency.
+    ggml_tensor * state_row_idx = ggml_view_1d(ctx0, lctx.inp_s_seq_qnext, n_tok, 0);
+    ggml_tensor * conv_seq_map  = lctx.inp_conv_seq_map; // [n_tok, n_tok]
+    GGML_ASSERT(conv_seq_map->ne[0] == n_tok && conv_seq_map->ne[1] == n_tok);
+    ggml_tensor * state_mask = make_state_mask(n_tok);
 
-        const bool reset_state_i = batch.pos != nullptr && batch.pos[i] == 0;
-        const uint32_t state_seq_id_i = (uint32_t) token_seq_ids[i];
-        ggml_tensor * out_i = build_layer_attn_linear_core(ctx0, gf, cur_i, inp_s_seq_qnext_i, inp_out_ids, state_seq_id_i, reset_state_i, il, cb);
-
-        out = out == nullptr ? out_i : ggml_concat(ctx0, out, out_i, 1);
-    }
-
-    return out;
-
+    return build_layer_attn_linear_core(ctx0, gf, cur, state_row_idx, conv_seq_map, state_mask, inp_out_ids, n_tok, /*reset_state_local*/ false, il, cb);
 }
 

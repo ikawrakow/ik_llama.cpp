@@ -557,6 +557,7 @@ struct llama_context::Prev {
     int per_step_max_allocated;
     llama_mtp_op_type mtp_op_type;
     ggml_cgraph * graph;
+    uint64_t seq_sig; // PXA_LLAMA_FIX_v1: signature of the per-token seq_id mapping baked into this graph
 };
 
 void llama_context::reset_scheduler() {
@@ -565,6 +566,23 @@ void llama_context::reset_scheduler() {
     prev_mtp.reset();
 }
 
+// PXA_LLAMA_FIX_v4: with the batched delta-net fix, per-token seq->state-row routing is fully RUNTIME (via the
+// inp_s_seq_qnext / inp_conv_seq_map / inp_qnext_state_mask input tensors), NOT baked into the graph. The ONLY thing
+// that still changes graph STRUCTURE is the all_same(single-seq, n_seqs=1) vs mixed(concurrent, n_seqs=n_tok) branch in
+// build_layer_attn_linear. So the reuse signature need only encode that one bit -> full graph reuse within each regime
+// (no rebuild churn when the concurrent slot set merely changes), correct rebuild on the all_same<->mixed transition.
+static inline uint64_t pxa_seq_sig(const llama_batch & b) {
+    const int n = b.n_tokens;
+    bool all_same = true;
+    if (b.seq_id && n > 0) {
+        const int s0 = b.seq_id[0] ? (int) b.seq_id[0][0] : (int) b.all_seq_id;
+        for (int i = 1; i < n; ++i) {
+            const int sid = b.seq_id[i] ? (int) b.seq_id[i][0] : (int) b.all_seq_id;
+            if (sid != s0) { all_same = false; break; }
+        }
+    }
+    return all_same ? 1ULL : 2ULL;
+}
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
     //if (kv_self.save_per_step_ssm) return false;
@@ -575,6 +593,8 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (u_batch.embd) return false;
     if (the_prev->save_per_step_ssm != kv_self.save_per_step_ssm ||
         the_prev->per_step_max_allocated != kv_self.ckpt.per_step_max_allocated) return false;
+    // PXA_LLAMA_FIX_v1: recurrent/hybrid graphs encode the per-token seq->state-row mapping; reuse only if unchanged.
+    if ((llm_arch_is_recurrent(model.arch) || llm_arch_is_hybrid(model.arch)) && pxa_seq_sig(u_batch) != the_prev->seq_sig) return false;
     return u_batch.all_seq_id == the_prev->all_seq_id &&
            kv_self.head > 0 &&
            kv_self.n == the_prev->n_kv &&
@@ -4770,9 +4790,43 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_s_seq_qnext->buffer));
         int32_t * data = (int32_t *) lctx.inp_s_seq_qnext->data;
 
+        const bool _pxa_has_seq = (batch.seq_id != nullptr);
         for (int64_t j = 0; j < n_tokens; ++j) {
-            // qwen3next linear-attention path uses a single local recurrent state slot.
-            data[j] = 0;
+            // PXA_LLAMA_FIX_v2: the qwen3next/qwen35 recurrent-state pool s_l[il] has one row PER ABSOLUTE seq_id
+            // (qnext_state_slots == n_seq_max). Route each token to its OWN absolute state row at runtime so concurrent
+            // sequences never read/write each other's recurrent state. (Pool is absolute-indexed -> do NOT subtract head.)
+            int32_t _pxa_row = (_pxa_has_seq && batch.seq_id[j]) ? (int32_t) batch.seq_id[j][0] : 0;
+            if (_pxa_row < 0) _pxa_row = 0;
+            data[j] = _pxa_row;
+        }
+    }
+
+    // PXA_LLAMA_FIX_v4: conv seq-map for the ONE-batched mixed-seq delta-net path. Shape [n_kv=n_tokens, n_tokens].
+    // States are gathered into token-order columns, so token t reads conv-state column t -> identity in row 0.
+    // The multi-seq-UNIQUE conv fast path requires row 0 in-range & unique per token, and row >=1 OUT-of-range (-1).
+    if (lctx.inp_conv_seq_map && lctx.inp_conv_seq_map->buffer) {
+        const int64_t n_tokens = batch.n_tokens;
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_conv_seq_map->buffer));
+        const int64_t n_kv_map = lctx.inp_conv_seq_map->ne[0];
+        int32_t * data = (int32_t *) lctx.inp_conv_seq_map->data;
+        for (int64_t t = 0; t < n_tokens; ++t) {
+            data[t*n_kv_map + 0] = (int32_t) t;
+            for (int64_t i = 1; i < n_kv_map; ++i) {
+                data[t*n_kv_map + i] = -1;
+            }
+        }
+    }
+
+    // PXA_LLAMA_FIX_v4: per-seq recurrent-state reset mask. The batched delta-net gathers each seq's state and
+    // multiplies by this mask (0 => fresh sequence at pos 0 => zero the carried state; 1 => keep). One col per token;
+    // the mixed path is one-token-per-seq, the all_same path uses col 0 for its single seq (token order => seq start).
+    if (lctx.inp_qnext_state_mask && lctx.inp_qnext_state_mask->buffer) {
+        const int64_t n_tokens = batch.n_tokens;
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_qnext_state_mask->buffer));
+        float * data = (float *) lctx.inp_qnext_state_mask->data;
+        for (int64_t j = 0; j < n_tokens; ++j) {
+            const bool reset = (batch.pos != nullptr && batch.pos[j] == 0);
+            data[j] = reset ? 0.0f : 1.0f;
         }
     }
 
@@ -5288,7 +5342,7 @@ static int llama_decode_internal(
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
                         (int)u_batch.n_tokens,
                         lctx.kv_self.save_per_step_ssm, lctx.kv_self.ckpt.per_step_max_allocated,
-                        cparams.mtp_op_type, gf});
+                        cparams.mtp_op_type, gf, pxa_seq_sig(u_batch)});
             }
         } else {
             //printf("Reusing graph with n_kv = %d, n_tokens = %d\n", (int)prev->n_kv, (int)prev->n_tokens);
