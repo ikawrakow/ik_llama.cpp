@@ -19,6 +19,7 @@
 #include "llama-context.h"
 #include "llama-spec-features.h"
 #include "llama-quantize.h"
+#include "pxa-seq-decomp.h" // PXA_LLAMA_MTP_FIX: shared distinct-seq decomposition (must match delta_net)
 
 #include "unicode.h"
 
@@ -566,22 +567,22 @@ void llama_context::reset_scheduler() {
     prev_mtp.reset();
 }
 
-// PXA_LLAMA_FIX_v4: with the batched delta-net fix, per-token seq->state-row routing is fully RUNTIME (via the
-// inp_s_seq_qnext / inp_conv_seq_map / inp_qnext_state_mask input tensors), NOT baked into the graph. The ONLY thing
-// that still changes graph STRUCTURE is the all_same(single-seq, n_seqs=1) vs mixed(concurrent, n_seqs=n_tok) branch in
-// build_layer_attn_linear. So the reuse signature need only encode that one bit -> full graph reuse within each regime
-// (no rebuild churn when the concurrent slot set merely changes), correct rebuild on the all_same<->mixed transition.
+// PXA_LLAMA_FIX_v4 / PXA_LLAMA_MTP_FIX: per-token seq->state-row routing is fully RUNTIME (via the
+// inp_s_seq_qnext / inp_conv_seq_map / inp_qnext_state_mask input tensors), NOT baked into the graph. What
+// changes graph STRUCTURE is the (all_same vs mixed) branch AND, in the mixed/MTP path, n_seqs (n_kv view
+// widths) and n_seq_tokens (q/k/v view strides + the n_seq_tokens>1 permute branch). The reuse signature
+// encodes (regime, n_seqs, n_seq_tokens) so a plain decode (n_seq_tokens=1) and an MTP verify batch
+// (n_seq_tokens=n_max+1) over the same #seqs never share a graph; reuse still holds within each regime.
 static inline uint64_t pxa_seq_sig(const llama_batch & b) {
-    const int n = b.n_tokens;
-    bool all_same = true;
-    if (b.seq_id && n > 0) {
-        const int s0 = b.seq_id[0] ? (int) b.seq_id[0][0] : (int) b.all_seq_id;
-        for (int i = 1; i < n; ++i) {
-            const int sid = b.seq_id[i] ? (int) b.seq_id[i][0] : (int) b.all_seq_id;
-            if (sid != s0) { all_same = false; break; }
-        }
+    const pxa_seq_decomp d = pxa_decompose_seqs(b);
+    if (!d.ok) {
+        // undecomposable -> treat as a unique "mixed" structure keyed by n_tokens (forces a rebuild)
+        return 0x9E3779B97F4A7C15ULL ^ (uint64_t) (uint32_t) b.n_tokens;
     }
-    return all_same ? 1ULL : 2ULL;
+    if (d.all_same) return 1ULL;
+    const uint64_t ns  = (uint64_t) d.n_seqs;
+    const uint64_t nst = (uint64_t) (d.uniform_tok ? d.n_seq_tokens : 0);
+    return (2ULL) | (ns << 8) | (nst << 40);
 }
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
@@ -4784,49 +4785,67 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
-    if (lctx.inp_s_seq_qnext) {
+    // PXA_LLAMA_MTP_FIX: fill the three qnext input tensors from ONE shared decomposition so the host fill
+    // and the delta_net graph builder agree on n_seqs / seq_slot / reset (generalizes v4's n_seqs==n_tok
+    // to MTP verify batches where each seq carries n_seq_tokens>1 tokens with the same seq_id).
+    if (lctx.inp_s_seq_qnext || (lctx.inp_conv_seq_map && lctx.inp_conv_seq_map->buffer)
+                             || (lctx.inp_qnext_state_mask && lctx.inp_qnext_state_mask->buffer)) {
         const int64_t n_tokens = batch.n_tokens;
+        const pxa_seq_decomp d = pxa_decompose_seqs(batch);
 
-        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_s_seq_qnext->buffer));
-        int32_t * data = (int32_t *) lctx.inp_s_seq_qnext->data;
-
-        const bool _pxa_has_seq = (batch.seq_id != nullptr);
-        for (int64_t j = 0; j < n_tokens; ++j) {
-            // PXA_LLAMA_FIX_v2: the qwen3next/qwen35 recurrent-state pool s_l[il] has one row PER ABSOLUTE seq_id
-            // (qnext_state_slots == n_seq_max). Route each token to its OWN absolute state row at runtime so concurrent
-            // sequences never read/write each other's recurrent state. (Pool is absolute-indexed -> do NOT subtract head.)
-            int32_t _pxa_row = (_pxa_has_seq && batch.seq_id[j]) ? (int32_t) batch.seq_id[j][0] : 0;
-            if (_pxa_row < 0) _pxa_row = 0;
-            data[j] = _pxa_row;
-        }
-    }
-
-    // PXA_LLAMA_FIX_v4: conv seq-map for the ONE-batched mixed-seq delta-net path. Shape [n_kv=n_tokens, n_tokens].
-    // States are gathered into token-order columns, so token t reads conv-state column t -> identity in row 0.
-    // The multi-seq-UNIQUE conv fast path requires row 0 in-range & unique per token, and row >=1 OUT-of-range (-1).
-    if (lctx.inp_conv_seq_map && lctx.inp_conv_seq_map->buffer) {
-        const int64_t n_tokens = batch.n_tokens;
-        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_conv_seq_map->buffer));
-        const int64_t n_kv_map = lctx.inp_conv_seq_map->ne[0];
-        int32_t * data = (int32_t *) lctx.inp_conv_seq_map->data;
-        for (int64_t t = 0; t < n_tokens; ++t) {
-            data[t*n_kv_map + 0] = (int32_t) t;
-            for (int64_t i = 1; i < n_kv_map; ++i) {
-                data[t*n_kv_map + i] = -1;
+        if (lctx.inp_s_seq_qnext) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_s_seq_qnext->buffer));
+            int32_t * data = (int32_t *) lctx.inp_s_seq_qnext->data;
+            if (d.ok && !d.all_same) {
+                // state_row_idx reads the FIRST n_seqs entries: distinct absolute seq rows (first-seen order).
+                for (int64_t s = 0; s < d.n_seqs; ++s) {
+                    int32_t row = (int32_t) d.seqs[s];
+                    data[s] = row < 0 ? 0 : row;
+                }
+                // remaining entries unused by the builder; keep them benign.
+                for (int64_t s = d.n_seqs; s < n_tokens; ++s) data[s] = 0;
+            } else {
+                // all_same / undecomposable: the builder reads entry 0 (single seq). Fill per-token for safety.
+                const bool _pxa_has_seq = (batch.seq_id != nullptr);
+                for (int64_t j = 0; j < n_tokens; ++j) {
+                    int32_t row = (_pxa_has_seq && batch.seq_id[j]) ? (int32_t) batch.seq_id[j][0] : 0;
+                    data[j] = row < 0 ? 0 : row;
+                }
             }
         }
-    }
 
-    // PXA_LLAMA_FIX_v4: per-seq recurrent-state reset mask. The batched delta-net gathers each seq's state and
-    // multiplies by this mask (0 => fresh sequence at pos 0 => zero the carried state; 1 => keep). One col per token;
-    // the mixed path is one-token-per-seq, the all_same path uses col 0 for its single seq (token order => seq start).
-    if (lctx.inp_qnext_state_mask && lctx.inp_qnext_state_mask->buffer) {
-        const int64_t n_tokens = batch.n_tokens;
-        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_qnext_state_mask->buffer));
-        float * data = (float *) lctx.inp_qnext_state_mask->data;
-        for (int64_t j = 0; j < n_tokens; ++j) {
-            const bool reset = (batch.pos != nullptr && batch.pos[j] == 0);
-            data[j] = reset ? 0.0f : 1.0f;
+        // conv seq-map [n_kv, n_tokens]: column t row0 = seq_slot(t) (which gathered state column this token
+        // uses), rows>=1 = -1. all_same -> seq_slot==0 for all (n_kv view is 1 in the builder). The general
+        // ssm_conv kernel scans tokens in order, accumulating each seq's conv window across its n_seq_tokens.
+        if (lctx.inp_conv_seq_map && lctx.inp_conv_seq_map->buffer) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_conv_seq_map->buffer));
+            const int64_t n_kv_map = lctx.inp_conv_seq_map->ne[0];
+            int32_t * data = (int32_t *) lctx.inp_conv_seq_map->data;
+            for (int64_t t = 0; t < n_tokens; ++t) {
+                int32_t slot = (d.ok && t < (int64_t) d.seq_slot.size()) ? d.seq_slot[t] : (int32_t) t;
+                data[t*n_kv_map + 0] = slot;
+                for (int64_t i = 1; i < n_kv_map; ++i) {
+                    data[t*n_kv_map + i] = -1;
+                }
+            }
+        }
+
+        // per-seq recurrent-state reset mask [1, n_seqs]: col s = 0 iff seq s's FIRST token has pos 0 (fresh seq).
+        if (lctx.inp_qnext_state_mask && lctx.inp_qnext_state_mask->buffer) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_qnext_state_mask->buffer));
+            float * data = (float *) lctx.inp_qnext_state_mask->data;
+            if (d.ok && !d.all_same) {
+                for (int64_t s = 0; s < d.n_seqs; ++s) data[s] = d.seq_reset[s] ? 0.0f : 1.0f;
+                for (int64_t s = d.n_seqs; s < n_tokens; ++s) data[s] = 1.0f;
+            } else {
+                // all_same: the builder reads col 0 (single seq); reset iff this seq starts at pos 0.
+                const bool reset0 = (batch.pos != nullptr && batch.pos[0] == 0);
+                data[0] = reset0 ? 0.0f : 1.0f;
+                for (int64_t j = 1; j < n_tokens; ++j) {
+                    const bool reset = (batch.pos != nullptr && batch.pos[j] == 0);
+                    data[j] = reset ? 0.0f : 1.0f;
+                }
+            }
         }
     }
 
@@ -5202,10 +5221,42 @@ static int llama_decode_internal(
             }
 
             if (can_check && any_diff && has_dup) {
-                n_tokens = 1;
-                if (!warned_qnext_mixed_repeat) {
-                    LLAMA_LOG_WARN("%s: qwen3next mixed-sequence batch contains repeated seq_id values; falling back to single-token chunking\n", __func__);
-                    warned_qnext_mixed_repeat = true;
+                // PXA_LLAMA_MTP_FIX: a "repeated seq_id" mixed batch is the MTP *verify* shape
+                // (np>1 slots, each carrying n_max+1 tokens with the same seq_id on consecutive
+                // positions). The generalized batched delta-net handles this directly IFF the slice
+                // is cleanly decomposable (per-seq contiguous + position-monotonic + uniform token
+                // count). Only fall back to the slow single-token chunking for genuinely
+                // interleaved / ragged batches that the batched path cannot represent.
+                llama_batch _pxa_slice = {
+                    /* .n_tokens   = */ (int32_t) n_tokens,
+                    /* .token      = */ batch_all.token     ? batch_all.token    + cur_token        : nullptr,
+                    /* .embd       = */ batch_all.embd      ? batch_all.embd     + cur_token*n_embd : nullptr,
+                    /* .pos        = */ batch_all.pos       ? batch_all.pos      + cur_token        : nullptr,
+                    /* .n_seq_id   = */ batch_all.n_seq_id  ? batch_all.n_seq_id + cur_token        : nullptr,
+                    /* .seq_id     = */ batch_all.seq_id    ? batch_all.seq_id   + cur_token        : nullptr,
+                    /* .logits     = */ batch_all.logits    ? batch_all.logits   + cur_token        : nullptr,
+                    /* .all_pos_0  = */ batch_all.all_pos_0 + (llama_pos) cur_token*batch_all.all_pos_1,
+                    /* .all_pos_1  = */ batch_all.all_pos_1,
+                    /* .all_seq_id = */ batch_all.all_seq_id,
+                };
+                const pxa_seq_decomp _pxa_d = pxa_decompose_seqs(_pxa_slice);
+                const bool _pxa_batched_ok = _pxa_d.ok && _pxa_d.uniform_tok && _pxa_d.n_seqs >= 1;
+                if (!_pxa_batched_ok) {
+                    // PXA_LLAMA_MTP_FIX: non-uniform multi-seq (e.g. concurrent prompts of different
+                    // length, or ragged verify) can't go through the uniform batched delta-net. Instead
+                    // of per-TOKEN chunking (slow + breaks the verify logits layout), split off ONE FULL
+                    // sequence at a time so each sub-ubatch is single-seq (all_same path = correct
+                    // recurrent state, full speed). The first run in the slice is seqs[0]'s contiguous
+                    // tokens; processing it advances cur_token to the next sequence.
+                    if (_pxa_d.ok && _pxa_d.n_seqs >= 1 && !_pxa_d.seq_count.empty()) {
+                        n_tokens = (uint32_t) _pxa_d.seq_count[0];
+                    } else {
+                        n_tokens = 1; // truly undecomposable -> last-resort per-token
+                    }
+                    if (!warned_qnext_mixed_repeat) {
+                        LLAMA_LOG_WARN("%s: qwen3next non-uniform multi-seq batch; splitting per-sequence (n_seqs=%lld)\n", __func__, (long long)_pxa_d.n_seqs);
+                        warned_qnext_mixed_repeat = true;
+                    }
                 }
             }
         }

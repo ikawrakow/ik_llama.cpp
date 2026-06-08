@@ -574,10 +574,15 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
         // Fast path for multi-sequence decode-like batches:
         // one token per unique sequence, no copy-to-multiple-sequences routing.
-        ggml_cuda_pool_alloc<int32_t> seq_ids(ctx.pool(), n_t);
-        ggml_cuda_pool_alloc<int32_t> seq_seen(ctx.pool(), n_kv);
+        // PXA_LLAMA_FIX_v4: the VMM cuda pool requires deallocations in REVERSE order of allocation. fast_path_ok_d is
+        // declared at function scope (freed LAST), so it must also be ALLOCATED FIRST among these three, otherwise when
+        // seq_ids/seq_seen (block-scoped) are freed at the end of this block while fast_path_ok_d is still live, the free
+        // order violates LIFO -> GGML_ASSERT(ptr == pool_addr + pool_used). Previously latent: the n_kv>1 path was never
+        // hit (decode batches were single-token-chunked); the batched mixed-seq delta-net now exercises it.
         int32_t fast_path_ok = 1;
         fast_path_ok_d.alloc(1);
+        ggml_cuda_pool_alloc<int32_t> seq_ids(ctx.pool(), n_t);
+        ggml_cuda_pool_alloc<int32_t> seq_seen(ctx.pool(), n_kv);
 
         CUDA_CHECK(cudaMemsetAsync(seq_seen.get(), 0, n_kv * sizeof(int32_t), ctx.stream()));
         CUDA_CHECK(cudaMemcpyAsync(fast_path_ok_d.get(), &fast_path_ok, sizeof(int32_t), cudaMemcpyHostToDevice, ctx.stream()));

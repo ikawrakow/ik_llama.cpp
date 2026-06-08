@@ -60,6 +60,14 @@ delta_net::delta_net(llama_context & _lctx, const llama_batch & _batch) : lctx(_
         }
     }
 
+    // PXA_LLAMA_MTP_FIX: distinct-sequence decomposition. Generalizes the v4 "n_seqs == n_tok"
+    // (one token per seq) assumption. For an MTP verify batch each seq carries (n_max+1) tokens
+    // with the SAME seq_id on consecutive positions; this routes one recurrent row per *sequence*
+    // (gathered/scattered once) while the conv/delta-net scan iterates n_seq_tokens per seq.
+    // pxa_decompose_seqs requires per-seq contiguity + position-monotonicity (true for plain
+    // decode AND slot-major MTP verify) and rejects genuinely interleaved batches.
+    seq_decomp = pxa_decompose_seqs(batch);
+
     const uint32_t qnext_state_slots = llm_build_context::llama_kv_qnext_state_slots(lctx.kv_self);
     GGML_ASSERT(qnext_state_slots > 0);
 
@@ -683,19 +691,28 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
         return build_layer_attn_linear_core(ctx0, gf, cur, state_row_idx, conv_seq_map, state_mask, inp_out_ids, 1, reset_state, il, cb);
     }
 
-    GGML_ASSERT(has_unique_seq_ids && "qwen3next mixed-sequence batches require unique sequence IDs per token");
+    // PXA_LLAMA_MTP_FIX: generalized mixed/MTP path. The batch is decomposed into n_seqs DISTINCT
+    // sequences (first-seen order), each with n_seq_tokens contiguous, position-monotonic tokens.
+    //   - plain concurrent decode: n_seqs == n_tok, n_seq_tokens == 1 (the old v4 behavior).
+    //   - MTP verify (np>1): n_seqs == #slots, n_seq_tokens == n_max+1 (same seq_id repeated).
+    // ONE recurrent row is gathered/scattered PER SEQUENCE (no duplicate get_rows/set_rows on the
+    // same row -> no racing writes). conv_seq_map is the [n_kv=n_seqs, n_tok] map (row 0 = seq_slot(t),
+    // rest -1); the general ssm_conv kernel scans tokens in order, carrying each seq's conv window.
+    GGML_ASSERT(seq_decomp.ok && "qwen3next mixed batch is not decomposable (interleaved sequences)");
+    GGML_ASSERT(seq_decomp.uniform_tok &&
+        "qwen3next batched delta-net requires a uniform tokens-per-sequence count (decode or MTP verify)");
+    const int64_t n_seqs = seq_decomp.n_seqs;
+    GGML_ASSERT(n_seqs >= 1 && n_tok % n_seqs == 0);
 
-    // PXA_LLAMA_FIX_v4: THE FIX. Mixed (concurrent) batch -> ONE batched delta-net with n_seqs = n_tok, n_seq_tokens = 1
-    // (each token is its own sequence). state_row_idx = [n_tok] absolute seq rows in token order; conv_seq_map = the full
-    // [n_kv=n_tok, n_tok] identity map (row 0 = t, rows>=1 = -1) since states are gathered in token order. This replaces
-    // the previous per-token loop of N independent subgraphs, whose interleaved get_rows/conv/delta_net/set_rows scratch
-    // let ggml-alloc reuse a still-live recurrent buffer at np>=3 -> cross-conversation state bleed. A SINGLE subgraph
-    // (one get_rows, one ssm_conv, one ggml_delta_net over n_seqs, one set_rows) is allocator-safe at any concurrency.
-    ggml_tensor * state_row_idx = ggml_view_1d(ctx0, lctx.inp_s_seq_qnext, n_tok, 0);
-    ggml_tensor * conv_seq_map  = lctx.inp_conv_seq_map; // [n_tok, n_tok]
-    GGML_ASSERT(conv_seq_map->ne[0] == n_tok && conv_seq_map->ne[1] == n_tok);
-    ggml_tensor * state_mask = make_state_mask(n_tok);
+    // state_row_idx: first n_seqs entries of inp_s_seq_qnext hold the DISTINCT absolute seq rows.
+    ggml_tensor * state_row_idx = ggml_view_1d(ctx0, lctx.inp_s_seq_qnext, n_seqs, 0);
+    // conv_seq_map: view the first n_seqs rows (n_kv) of the full [n_tok, n_tok] map, keeping the
+    // full per-token row stride (nb[1]) so the host-filled rows line up. -> [n_kv=n_seqs, n_tok].
+    ggml_tensor * conv_seq_map  = ggml_view_2d(ctx0, lctx.inp_conv_seq_map, n_seqs, n_tok,
+            lctx.inp_conv_seq_map->nb[1], 0);
+    GGML_ASSERT(conv_seq_map->ne[0] == n_seqs && conv_seq_map->ne[1] == n_tok);
+    ggml_tensor * state_mask = make_state_mask(n_seqs);
 
-    return build_layer_attn_linear_core(ctx0, gf, cur, state_row_idx, conv_seq_map, state_mask, inp_out_ids, n_tok, /*reset_state_local*/ false, il, cb);
+    return build_layer_attn_linear_core(ctx0, gf, cur, state_row_idx, conv_seq_map, state_mask, inp_out_ids, n_seqs, /*reset_state_local*/ false, il, cb);
 }
 

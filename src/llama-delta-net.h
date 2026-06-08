@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-build-context.h"
+#include "pxa-seq-decomp.h" // PXA_LLAMA_MTP_FIX: shared distinct-seq decomposition
 
 #include <utility>
 
@@ -33,6 +34,10 @@ private:
     std::vector<llama_seq_id> token_seq_ids;
     bool all_same_seq;
     bool has_unique_seq_ids;
+    // PXA_LLAMA_MTP_FIX: distinct-sequence decomposition (n_seqs, seq_slot[], n_seq_tokens, ...)
+    // computed once in the constructor and shared with the builder. Generalizes the v4
+    // "n_seqs == n_tok" assumption so an MTP verify batch (n_seq_tokens>1 per seq) is handled.
+    pxa_seq_decomp seq_decomp;
 
     static std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * wqkv, ggml_tensor * wqkv_gate, ggml_tensor * input, int il, const llm_build_cb & cb,
