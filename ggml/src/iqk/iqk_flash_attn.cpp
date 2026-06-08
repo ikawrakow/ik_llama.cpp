@@ -216,6 +216,10 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
         for (; first_k < last_k; ++first_k) {
             if (umask[first_k] == 0) break;
         }
+        if (first_k == last_k) {
+            fprintf(stderr, "============================== %s: found empty attention mask: nek1 = %d, first_k = %d\n", __func__, nek1, first_k);
+            GGML_ABORT("Fatal error");
+        }
         for (; last_k > first_k; --last_k) {
             if (umask[last_k-1] == 0) break;
         }
