@@ -214,6 +214,10 @@ class TensorNameMap:
             "model.layers.{bid}.post_attention_layernorm",     # gemma2
         ),
 
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.self_attn.g_proj",              # laguna
+        ),
+
         # Rotary embeddings
         MODEL_TENSOR.ATTN_ROT_EMBD: (
             "model.layers.{bid}.self_attn.rotary_emb.inv_freq",        # llama-hf
@@ -280,6 +284,8 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",    # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                  # bailingmoe2
             "model.layers.{bid}.block_sparse_moe.e_score_correction",   # minimax-m2
+            "model.layers.{bid}.mlp.experts.e_score_correction_bias",   # laguna
+            "model.layers.{bid}.mlp.experts.e_score_correction",        # laguna
         ),
 
         # Feed-forward up

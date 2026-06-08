@@ -116,11 +116,17 @@ class Keys:
         REL_BUCKETS_COUNT = "{arch}.attention.relative_buckets_count"
         SLIDING_WINDOW    = "{arch}.attention.sliding_window"
         SLIDING_WINDOW_PATTERN = "{arch}.attention.sliding_window_pattern"
+        SHARED_KV_LAYERS       = "{arch}.attention.shared_kv_layers"
+        KEY_LENGTH_SWA         = "{arch}.attention.key_length_swa"
+        VALUE_LENGTH_SWA       = "{arch}.attention.value_length_swa"
         OUTPUT_SCALE                 = "{arch}.attention.output_scale"
         TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
 
     class Rope:
         DIMENSION_COUNT          = "{arch}.rope.dimension_count"
+        DIMENSION_COUNT_SWA      = "{arch}.rope.dimension_count_swa"
+        DIMENSION_COUNT_PER_LAYER = "{arch}.rope.dimension_count_per_layer"
+        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
         FREQ_BASE                = "{arch}.rope.freq_base"
         FREQ_BASE_SWA            = "{arch}.rope.freq_base_swa"
         SCALING_TYPE             = "{arch}.rope.scaling.type"
@@ -162,6 +168,7 @@ class Keys:
         MASK_ID              = "tokenizer.ggml.mask_token_id"
         ADD_BOS              = "tokenizer.ggml.add_bos_token"
         ADD_EOS              = "tokenizer.ggml.add_eos_token"
+        ADD_SEP              = "tokenizer.ggml.add_sep_token"
         ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
         REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"
@@ -262,6 +269,7 @@ class MODEL_ARCH(IntEnum):
     MINIMAXM2    = auto()
     SMOLLM3      = auto()
     SEED_OSS     = auto()
+    LAGUNA       = auto()
 
 class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD           = auto()
@@ -282,6 +290,7 @@ class MODEL_TENSOR(IntEnum):
     ATTN_NORM_2          = auto()
     ATTN_OUT_NORM        = auto()
     ATTN_POST_NORM       = auto()
+    ATTN_GATE            = auto()
     ATTN_ROT_EMBD        = auto()
     FFN_GATE_INP         = auto()
     FFN_GATE_INP_SHEXP   = auto()
@@ -429,6 +438,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MINIMAXM2:      "minimax-m2",
     MODEL_ARCH.SMOLLM3:        "smollm3",
     MODEL_ARCH.SEED_OSS:       "seed_oss",
+    MODEL_ARCH.LAGUNA:         "laguna",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -453,6 +463,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_K_NORM:          "blk.{bid}.attn_k_norm",
     MODEL_TENSOR.ATTN_OUT_NORM:        "blk.{bid}.attn_output_norm",
     MODEL_TENSOR.ATTN_POST_NORM:       "blk.{bid}.post_attention_norm",
+    MODEL_TENSOR.ATTN_GATE:            "blk.{bid}.attn_gate",
     MODEL_TENSOR.FFN_GATE_INP:         "blk.{bid}.ffn_gate_inp",
     MODEL_TENSOR.FFN_GATE_INP_SHEXP:   "blk.{bid}.ffn_gate_inp_shexp",
     MODEL_TENSOR.FFN_NORM:             "blk.{bid}.ffn_norm",
@@ -1488,6 +1499,32 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
+    ],
+    MODEL_ARCH.LAGUNA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
     # TODO
 }

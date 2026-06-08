@@ -1110,7 +1110,10 @@ llm_expert_gating_func_type   gating_op,
         ggml_tensor * weights_sum = ggml_sum_rows(ctx, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
 
-        if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_STEP35) {
+        if (lctx.model.arch == LLM_ARCH_LAGUNA) {
+            weights_sum = ggml_clamp(ctx, weights_sum, 6.103515625e-5f, INFINITY);
+            cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
+        } else if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_STEP35) {
             weights_sum = ggml_scale_bias(ctx, weights_sum, 1.0, 1e-20);
             cb(weights_sum, "ffn_moe_weights_sum_biased", il);
         }
@@ -1595,6 +1598,7 @@ static ggml_tensor * llm_build_kqv(
                                   || model.arch == LLM_ARCH_COMMAND_R
                                   || model.arch == LLM_ARCH_GLM4
                                   || model.arch == LLM_ARCH_GLM4_MOE
+                                  || model.arch == LLM_ARCH_LAGUNA
                                   || model.arch == LLM_ARCH_MIMO2;
                                // || (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8);
 
@@ -2506,6 +2510,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_STEP35:
             {
                 result = llm.build_step35();
+            } break;
+        case LLM_ARCH_LAGUNA:
+            {
+                result = llm.build_laguna();
             } break;
         default:
             GGML_ABORT("fatal error");

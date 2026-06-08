@@ -4370,6 +4370,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_seedoss_tensors(tn); break;
         case LLM_ARCH_STEP35:
             use_mmap_buffer = create_step35_tensors(tn); break;
+        case LLM_ARCH_LAGUNA:
+            use_mmap_buffer = create_step35_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
     }
