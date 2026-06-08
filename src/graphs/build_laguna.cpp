@@ -52,10 +52,10 @@ ggml_cgraph * llm_build_context::build_laguna() {
 
         const float freq_base_l  = is_swa ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
         const float freq_scale_l = is_swa ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
-        const float ext_factor_l  = is_swa ? cparams.yarn_ext_factor_swa  : ext_factor;
-        const float attn_factor_l = is_swa ? cparams.yarn_attn_factor_swa : attn_factor;
-        const float beta_fast_l   = is_swa ? cparams.yarn_beta_fast_swa   : beta_fast;
-        const float beta_slow_l   = is_swa ? cparams.yarn_beta_slow_swa   : beta_slow;
+        const float ext_factor_l  = is_swa ? 0.0f  : ext_factor;
+        const float attn_factor_l = is_swa ? 1.0f  : attn_factor;
+        const float beta_fast_l   = is_swa ? 32.0f : beta_fast;
+        const float beta_slow_l   = is_swa ? 1.0f  : beta_slow;
         ggml_tensor * rope_factors = is_swa ? nullptr : build_rope_factors(il);
         const int n_rot_l = hparams.rope_n_rot(il);
 

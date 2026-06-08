@@ -82,11 +82,6 @@ struct llama_hparams {
     float    yarn_attn_factor =  1.0f;
     float    yarn_beta_fast   = 32.0f;
     float    yarn_beta_slow   =  1.0f;
-    float    yarn_ext_factor_swa  =  0.0f;
-    float    yarn_attn_factor_swa =  1.0f;
-    float    yarn_beta_fast_swa   = 32.0f;
-    float    yarn_beta_slow_swa   =  1.0f;
-
     std::array<int, 4> rope_sections;
     std::array<float,    LLAMA_MAX_LAYERS> rope_freq_base_per_layer;
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_dim_per_layer;
@@ -205,10 +200,6 @@ struct llama_hparams {
         if (!is_float_close(this->rope_freq_scale_train, other.rope_freq_scale_train, EPSILON)) return true;
         if (!is_float_close(this->expert_weights_scale,  other.expert_weights_scale,  EPSILON)) return true;
         if (!is_float_close(this->rope_yarn_log_mul,     other.rope_yarn_log_mul,     EPSILON)) return true;
-        if (!is_float_close(this->yarn_ext_factor_swa,   other.yarn_ext_factor_swa,   EPSILON)) return true;
-        if (!is_float_close(this->yarn_attn_factor_swa,  other.yarn_attn_factor_swa,  EPSILON)) return true;
-        if (!is_float_close(this->yarn_beta_fast_swa,    other.yarn_beta_fast_swa,    EPSILON)) return true;
-        if (!is_float_close(this->yarn_beta_slow_swa,    other.yarn_beta_slow_swa,    EPSILON)) return true;
         if (!is_float_close(this->f_residual_scale,      other.f_residual_scale,      EPSILON)) return true;
         if (!is_float_close(this->f_embedding_scale,     other.f_embedding_scale,     EPSILON)) return true;
         if (!is_float_close(this->f_attention_scale,     other.f_attention_scale,     EPSILON)) return true;
