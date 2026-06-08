@@ -80,10 +80,14 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
+    { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4_assistant"   },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
 llm_arch llm_arch_from_string(const std::string & name) {
+    //if (name == "gemma4_assistant") {
+    //    return llm_arch_from_string("gemma4_mtp");
+    //}
     for (const auto & kv : LLM_ARCH_NAMES) { // NOLINT
         if (kv.second == name) {
             return kv.first;
