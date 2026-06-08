@@ -2122,7 +2122,10 @@ template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
 
-    if constexpr ((DKQ == 576 || DKQ == 512) && ncols2 <= 4) {
+    if constexpr (DKQ == 512 && ncols2 == 2) {
+        ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 8, ncols2>(ctx, dst);
+    }
+    else if constexpr ((DKQ == 576 || DKQ == 512) && ncols2 <= 4) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 4, ncols2>(ctx, dst);
     } else {
 
@@ -2268,6 +2271,10 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         }
         else if (gqa_ratio % 4 == 0) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 4>(ctx, dst);
+        }
+        else if (gqa_ratio % 2 == 0) {
+            // Gemma4-4B assistant
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 2>(ctx, dst);
         }
         else {
             GGML_ABORT("Fatal error");

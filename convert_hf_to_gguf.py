@@ -3474,7 +3474,7 @@ class Gemma4Model(Gemma4BaseModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
-@Model.register("Gemma4AssistantForCausalLM")
+@Model.register("Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM")
 class Gemma4AssistantModel(Gemma4BaseModel):
     model_arch = gguf.MODEL_ARCH.GEMMA4_MTP
 
