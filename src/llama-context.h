@@ -292,6 +292,8 @@ struct llama_context {
     struct ggml_tensor * inp_s_mask;      // F32 [1, n_kv]
     struct ggml_tensor * inp_s_seq;       // I32 [n_kv, n_batch]
     struct ggml_tensor * inp_s_seq_qnext; // I32 [1, n_batch]
+    struct ggml_tensor * inp_conv_seq_map;  // PXA_LLAMA_FIX_v4: I32 [n_batch, n_batch] conv seq-map for batched mixed-seq delta-net
+    struct ggml_tensor * inp_qnext_state_mask; // PXA_LLAMA_FIX_v4: F32 [1, n_batch] per-seq recurrent-state reset mask (0=reset)
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
