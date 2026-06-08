@@ -4540,21 +4540,26 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.ctx_sampling->n_rewind = slot.token_buffer.size() - n_keep_buffer;
     slot.ctx_sampling->rewinded_text.reserve(4 * slot.ctx_sampling->n_rewind);
     LLAMA_LOG_DEBUG("%s: rewinding %d tokens\n", __func__, slot.ctx_sampling->n_rewind);
+    for (int32_t j = n_keep_buffer; j < slot.token_buffer.size(); ++j) {
+        slot.ctx_sampling->rewinded_text.append(slot.token_buffer[j].text_to_send);
+    }
 
-    for (int32_t n = 0; n < slot.ctx_sampling->n_rewind; ++n) {
-        const auto& result = slot.token_buffer.begin() + n_keep_buffer + n;
-        llama_token banned_tok = result->tok;
-
-        if ((slot.banned_n < 0) || (n < slot.banned_n)) {
-            slot.positional_bans[ban_pos].insert(banned_tok);
+    if (slot.banned_n != 0) {
+        int32_t n = 0;
+        for (auto result = slot.token_buffer.begin() + n_keep_buffer; result != slot.token_buffer.end(); result++) {
+            llama_token banned_tok = result->tok;
 
             if (n == 0) {
                 LLAMA_LOG_DEBUG("Banned pattern detected at pos %d. Banning token %d ('%s') and rewinding.\n",
                     ban_pos, banned_tok, result->text_to_send.c_str());
             }
-        }
 
-        slot.ctx_sampling->rewinded_text.append(result->text_to_send);
+            slot.positional_bans[ban_pos].insert(banned_tok);
+            n++;
+            if (slot.banned_n > 0 && n == slot.banned_n) {
+                break;
+            }
+        }
     }
 
     int32_t n_rewind_total = (slot.n_past + 1) - ban_pos;
