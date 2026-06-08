@@ -82,7 +82,6 @@ struct llama_hparams {
     float    yarn_attn_factor =  1.0f;
     float    yarn_beta_fast   = 32.0f;
     float    yarn_beta_slow   =  1.0f;
-
     std::array<int, 4> rope_sections;
     std::array<float,    LLAMA_MAX_LAYERS> rope_freq_base_per_layer;
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_dim_per_layer;
