@@ -579,7 +579,14 @@ static inline uint64_t pxa_seq_sig(const llama_batch & b) {
         // undecomposable -> treat as a unique "mixed" structure keyed by n_tokens (forces a rebuild)
         return 0x9E3779B97F4A7C15ULL ^ (uint64_t) (uint32_t) b.n_tokens;
     }
-    if (d.all_same) return 1ULL;
+    // PXA_PERF_NP1_FASTPATH: the single-sequence builder accesses its recurrent row via a STATIC-offset view
+    // (build-time slot = d.seqs[0]) for speed, so the slot is baked into the graph. Encode it here so a reused
+    // graph is invalidated when the active slot changes (different conversation/slot) -> rebuilt with the new
+    // offset. Single-stream decode keeps a constant slot -> sig constant -> full reuse (no extra rebuilds).
+    if (d.all_same) {
+        const int32_t slot0 = d.seqs.empty() ? 0 : (int32_t) d.seqs[0];
+        return 1ULL | (((uint64_t) (uint32_t) (slot0 < 0 ? 0 : slot0)) << 8);
+    }
     const uint64_t ns  = (uint64_t) d.n_seqs;
     const uint64_t nst = (uint64_t) (d.uniform_tok ? d.n_seq_tokens : 0);
     return (2ULL) | (ns << 8) | (nst << 40);
@@ -4793,7 +4800,10 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         const int64_t n_tokens = batch.n_tokens;
         const pxa_seq_decomp d = pxa_decompose_seqs(batch);
 
-        if (lctx.inp_s_seq_qnext) {
+        // PXA_PERF_NP1_FASTPATH: the all_same fast path accesses the recurrent row via a static-offset view and
+        // does NOT consume inp_s_seq_qnext, so the graph allocator leaves it bufferless; skip the fill then
+        // (matches the guard already used for inp_conv_seq_map / inp_qnext_state_mask below).
+        if (lctx.inp_s_seq_qnext && lctx.inp_s_seq_qnext->buffer) {
             GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_s_seq_qnext->buffer));
             int32_t * data = (int32_t *) lctx.inp_s_seq_qnext->data;
             if (d.ok && !d.all_same) {

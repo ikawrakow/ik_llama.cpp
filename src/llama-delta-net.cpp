@@ -298,7 +298,7 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
         int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, int64_t ssm_d_conv,
         int64_t n_seqs_in, uint32_t qnext_state_slots, bool reset_state_local,
         float eps_norm, int repeat_type, int il, const llm_build_cb & cb, ggml_cgraph * gf,
-        ggml_tensor * per_step_ckpt, ggml_tensor * per_step_conv) {
+        ggml_tensor * per_step_ckpt, ggml_tensor * per_step_conv, int64_t pxa_static_slot) {
     const int64_t key_dim        = head_k_dim * num_k_heads;
     const int64_t value_dim      = head_v_dim * num_v_heads;
     const int64_t conv_dim       = key_dim * 2 + value_dim;
@@ -333,21 +333,44 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     GGML_ASSERT(state_row_idx != nullptr);
     GGML_ASSERT(state_row_idx->ne[0] == n_seqs);
     ggml_tensor * pxa_row_idx = state_row_idx;
-    ggml_tensor * state_dst = ggml_get_rows(ctx0, state_all, pxa_row_idx); // [state_dim, n_seqs]
-    ggml_tensor * state_f32 = state_dst;
-    if (state_f32->type != GGML_TYPE_F32) {
-        state_f32 = ggml_cast(ctx0, state_f32, GGML_TYPE_F32);
-    }
-    // PXA_LLAMA_FIX_v4: per-seq reset via mask multiply ([1,n_seqs] broadcast over state_dim): 0 zeros a fresh seq's
-    // carried state, 1 keeps it. Handles mixed batches where some seqs start (pos 0) and others continue. Falls back to
-    // the scalar reset_state_local only if no mask is supplied (keeps non-qwen3next callers, if any, working).
-    if (state_mask != nullptr) {
-        GGML_ASSERT(state_mask->ne[1] == n_seqs);
-        state_f32 = ggml_mul(ctx0, state_f32, state_mask);
-        cb(state_f32, "state_reset_masked", il);
-    } else if (reset_state_local) {
-        state_f32 = ggml_scale(ctx0, state_f32, 0.0f);
-        cb(state_f32, "state_reset", il);
+
+    // PXA_PERF_NP1_FASTPATH: for a single sequence (n_seqs==1) whose state row is known at graph-build time
+    // (pxa_static_slot>=0), access the recurrent row IN PLACE via a static-offset view -- the pre-PR (main)
+    // path -- instead of get_rows/set_rows. The state row is ~state_dim floats (MBs) per layer; the
+    // gather+mask+scatter copies it ~3x/layer/token and cost ~10% TG / ~4% PP. Graph reuse stays correct
+    // because pxa_seq_sig() encodes the slot for the all_same case, so any slot change rebuilds the graph
+    // (a reused graph never keeps a stale static offset). The batched n_seqs>1 path is unchanged.
+    const bool pxa_fast = (pxa_static_slot >= 0);
+    GGML_ASSERT(!pxa_fast || n_seqs == 1);
+    ggml_tensor * state_dst = nullptr;
+    ggml_tensor * state_f32 = nullptr;
+    if (pxa_fast) {
+        state_dst = ggml_view_2d(ctx0, state_all, state_dim, 1, state_row_size, (size_t) pxa_static_slot * state_row_size);
+        state_f32 = state_dst;
+        if (state_f32->type != GGML_TYPE_F32) {
+            state_f32 = ggml_cast(ctx0, state_f32, GGML_TYPE_F32);
+        }
+        if (reset_state_local) {
+            state_f32 = ggml_scale(ctx0, state_f32, 0.0f);
+            cb(state_f32, "state_reset", il);
+        }
+    } else {
+        state_dst = ggml_get_rows(ctx0, state_all, pxa_row_idx); // [state_dim, n_seqs]
+        state_f32 = state_dst;
+        if (state_f32->type != GGML_TYPE_F32) {
+            state_f32 = ggml_cast(ctx0, state_f32, GGML_TYPE_F32);
+        }
+        // PXA_LLAMA_FIX_v4: per-seq reset via mask multiply ([1,n_seqs] broadcast over state_dim): 0 zeros a fresh seq's
+        // carried state, 1 keeps it. Handles mixed batches where some seqs start (pos 0) and others continue. Falls back to
+        // the scalar reset_state_local only if no mask is supplied (keeps non-qwen3next callers, if any, working).
+        if (state_mask != nullptr) {
+            GGML_ASSERT(state_mask->ne[1] == n_seqs);
+            state_f32 = ggml_mul(ctx0, state_f32, state_mask);
+            cb(state_f32, "state_reset_masked", il);
+        } else if (reset_state_local) {
+            state_f32 = ggml_scale(ctx0, state_f32, 0.0f);
+            cb(state_f32, "state_reset", il);
+        }
     }
 
     // [state_dim, n_seqs] -> conv part [conv_state_dim, n_seqs] and ssm part [ssm_state_dim, n_seqs]
@@ -431,10 +454,17 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(new_conv_states_cont, "new_conv_states_cont", il);
     ggml_tensor * new_conv_flat = ggml_reshape_2d(ctx0, new_conv_states_cont, conv_state_dim, n_seqs);
     ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, new_state, ssm_state_dim, n_seqs);
-    // PXA_LLAMA_FIX_v4: pack the new rows [state_dim, n_seqs] and SCATTER them back to their absolute seq rows with ONE
-    // ggml_set_rows. Single producer + single scatter => no per-token in-place aliasing => allocator-safe at any np.
-    ggml_tensor * pxa_new_row = ggml_concat(ctx0, new_conv_flat, new_ssm_flat, 0); // [state_dim, n_seqs]
-    auto state_cpy = ggml_set_rows(ctx0, state_storage, pxa_new_row, pxa_row_idx);
+    ggml_tensor * state_cpy;
+    if (pxa_fast) {
+        // PXA_PERF_NP1_FASTPATH: write the new [state_dim,1] row straight back into the static-offset view,
+        // in place -- no scatter copy (mirrors the pre-PR path).
+        state_cpy = ggml_concat_inplace(ctx0, new_conv_flat, new_ssm_flat, state_dst, 0);
+    } else {
+        // PXA_LLAMA_FIX_v4: pack the new rows [state_dim, n_seqs] and SCATTER them back to their absolute seq rows with ONE
+        // ggml_set_rows. Single producer + single scatter => no per-token in-place aliasing => allocator-safe at any np.
+        ggml_tensor * pxa_new_row = ggml_concat(ctx0, new_conv_flat, new_ssm_flat, 0); // [state_dim, n_seqs]
+        state_cpy = ggml_set_rows(ctx0, state_storage, pxa_new_row, pxa_row_idx);
+    }
     cb(state_cpy, "state_cpy", il);
     ggml_build_forward_expand(gf, state_cpy);
 
@@ -482,7 +512,7 @@ static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor *
 
 ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * delta_input, ggml_tensor * state_row_idx, ggml_tensor * conv_seq_map, ggml_tensor * state_mask, ggml_tensor * inp_out_ids,
-            int64_t n_seqs, bool reset_state_local, int il, const llm_build_cb & cb) const {
+            int64_t n_seqs, bool reset_state_local, int il, const llm_build_cb & cb, int64_t pxa_static_slot) const {
 
     const int64_t n_tok = delta_input->ne[1];
     GGML_ASSERT(n_seqs > 0 && n_tok % n_seqs == 0);
@@ -577,7 +607,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
             auto output = build_qkv(ctx0, split_s_l->splits[id], split_ssm_conv1d->splits[id], qkv_mixed, state_row_idx, conv_seq_map, state_mask, beta, gate,
                                head_k_dim, num_k_heads_id, head_v_dim, num_v_heads_id, hparams.ssm_d_conv,
                                n_seqs, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
-                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt, per_step_conv);
+                               l.ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt, per_step_conv, pxa_static_slot);
             split_norm = (ggml_split_tensor_t *)l.ssm_norm->extra;
             GGML_ASSERT(split_norm && split_norm->splits[id]);
             auto split_ssm_out = (ggml_split_tensor_t *)l.ssm_out->extra;
@@ -640,7 +670,7 @@ ggml_tensor * delta_net::build_layer_attn_linear_core(ggml_context * ctx0, ggml_
         qkv_mixed, state_row_idx, conv_seq_map, state_mask, beta, gate,
         head_k_dim, num_k_heads, head_v_dim, num_v_heads, hparams.ssm_d_conv,
         n_seqs, qnext_state_slots, reset_state_local, hparams.f_norm_rms_eps,
-        model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt, per_step_conv);
+        model.layers[il].ssm_beta_alpha ? 0 : 1, il, cb, gf, per_step_ckpt, per_step_conv, pxa_static_slot);
 
     auto gated_output = build_gated_output(lctx, ctx0, model.layers[il].ssm_norm, model.layers[il].ssm_out, output, z, head_v_dim, num_v_heads, n_tok, il, cb);
     if (inp_out_ids) {
@@ -688,7 +718,13 @@ ggml_tensor * delta_net::build_layer_attn_linear(ggml_context * ctx0, ggml_cgrap
                 lctx.inp_conv_seq_map->nb[1], 0);
         ggml_tensor * state_mask = make_state_mask(1);
         bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
-        return build_layer_attn_linear_core(ctx0, gf, cur, state_row_idx, conv_seq_map, state_mask, inp_out_ids, 1, reset_state, il, cb);
+        // PXA_PERF_NP1_FASTPATH: the single sequence's absolute state row is known at build time -- it is exactly
+        // what llama_set_inputs writes to inp_s_seq_qnext[0] (batch.seq_id[0][0], clamped >=0). Pass it so build_qkv
+        // accesses the row in place (static-offset view) instead of get_rows/set_rows. pxa_seq_sig() encodes this
+        // slot for the all_same case, so graph reuse is invalidated if the active slot changes.
+        int64_t pxa_static_slot = token_seq_ids.empty() ? 0 : (int64_t) token_seq_ids.front();
+        if (pxa_static_slot < 0) pxa_static_slot = 0;
+        return build_layer_attn_linear_core(ctx0, gf, cur, state_row_idx, conv_seq_map, state_mask, inp_out_ids, 1, reset_state, il, cb, pxa_static_slot);
     }
 
     // PXA_LLAMA_MTP_FIX: generalized mixed/MTP path. The batch is decomposed into n_seqs DISTINCT
