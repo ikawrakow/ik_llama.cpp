@@ -1141,8 +1141,8 @@ int main(int argc, char ** argv) {
                         arr.push_back(res->to_json());
                     }
                     // if single request, return single object instead of array
-                    res_ok(res, arr.size() == 1 ? arr[0] : arr);              
-                }                       
+                    res_ok(res, arr.size() == 1 ? arr[0] : arr);
+                }
             }
             else {
                 // in streaming mode, the first error must be treated as non-stream response

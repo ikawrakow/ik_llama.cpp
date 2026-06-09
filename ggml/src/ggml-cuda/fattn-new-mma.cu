@@ -332,35 +332,81 @@ struct fattn_mma_f16_config<192, 192> {
     }
 };
 
+//template <>
+//struct fattn_mma_f16_config<512, 512> {
+//    static constexpr int  nbatch_fa      = 64;
+//    static constexpr int  nwarps_max     = 4;
+//    static constexpr bool Q_in_reg       = false;
+//    static constexpr int  nstages_target = 1;
+//
+//    static int get_nbatch_K2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+//        return 256;
+//    }
+//
+//    static constexpr __device__ int get_nbatch_K2_device([[maybe_unused]] int ncols) {
+//        return 256;
+//    }
+//
+//    static int get_nbatch_V2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+//        return 256;
+//    }
+//
+//    static constexpr __device__ int get_nbatch_V2_device([[maybe_unused]] int ncols) {
+//        return 256;
+//    }
+//
+//    static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
+//        return 256;
+//    }
+//
+//    static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
+//        return 256;
+//    }
+//};
+
 template <>
 struct fattn_mma_f16_config<512, 512> {
-    static constexpr int  nbatch_fa      = 64;
-    static constexpr int  nwarps_max     = 4;
+    static constexpr int  nbatch_fa      = 32;
+    static constexpr int  nwarps_max     = 8;
     static constexpr bool Q_in_reg       = false;
     static constexpr int  nstages_target = 1;
 
-    static int get_nbatch_K2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
-        return 256;
+    static int get_nbatch_K2_host(const int cc, const int ncols) {
+        if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING) {
+            return ncols <= 16 ? 96 : 128;
+        }
+        return ncols <= 16 ? 256 : 128;
     }
 
-    static constexpr __device__ int get_nbatch_K2_device([[maybe_unused]] int ncols) {
-        return 256;
+    static constexpr __device__ int get_nbatch_K2_device(int ncols) {
+#if __CUDA_ARCH__ == CC_TURING
+        return ncols <= 16 ? 96 : 128;
+#else
+        return ncols <= 16 ? 256 : 128;
+#endif // __CUDA_ARCH__ == CC_TURING
     }
 
-    static int get_nbatch_V2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
-        return 256;
+    static int get_nbatch_V2_host(const int cc, const int ncols) {
+        if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING) {
+            return ncols <= 16 ? 64 : 128;
+        }
+        return ncols <= 16 ? 256 : 128;
     }
 
-    static constexpr __device__ int get_nbatch_V2_device([[maybe_unused]] int ncols) {
-        return 256;
+    static constexpr __device__ int get_nbatch_V2_device(int ncols) {
+#if __CUDA_ARCH__ == CC_TURING
+        return ncols <= 16 ? 64 : 128;
+#else
+        return ncols <= 16 ? 256 : 128;
+#endif // __CUDA_ARCH__ == CC_TURING
     }
 
     static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
-        return 256;
+        return 128;
     }
 
     static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
-        return 256;
+        return 128;
     }
 };
 
