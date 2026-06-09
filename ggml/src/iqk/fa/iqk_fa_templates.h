@@ -39,6 +39,7 @@ namespace {
 // lengths and therefore different mask patterns.
 // Returns the number of K elements to process (multiple of k_step).
 inline int mask_effective_nk1(const char * mask, int n_rows, int stride_m, int nk1, int k_step) {
+    return nk1;
     int ik_max = 0;
     for (int j = 0; j < n_rows; ++j) {
         auto Mc = (const uint16_t *)(mask + j * stride_m);
