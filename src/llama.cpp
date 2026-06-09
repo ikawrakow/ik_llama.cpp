@@ -3616,7 +3616,7 @@ static bool llm_load_tensors(
                     LLAMA_LOG_ERROR("Not enough memory in device %d to offload the output layer\n", id);
                     throw std::runtime_error("Unable to auto-fit model");
                 }
-                device_mem[id] -= layer_sizes[id];
+                device_mem[id] -= layer_sizes[n_layer];
                 if (!tensor_split) {
                     float sum = 0;
                     for (int id = 0; id < int(model.splits.size()); ++id) {
