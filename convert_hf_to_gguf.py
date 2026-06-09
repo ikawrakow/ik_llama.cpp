@@ -3778,7 +3778,8 @@ class Cohere2MoeModel(Model):
 
                 merged_name = f"model.layers.{bid}.mlp.experts.{dst}.weight"
                 tensors.append((self.map_tensor_name(merged_name), torch.stack(datas, dim=0)))
-            return tensors
+            yield from tensors
+            return
 
         if name == "model.embed_tokens.weight":
             yield self.map_tensor_name(name), data_torch
