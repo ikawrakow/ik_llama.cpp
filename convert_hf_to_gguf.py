@@ -594,6 +594,9 @@ class Model:
         if chkhsh == "9c2227e4dd922002fb81bde4fc02b0483ca4f12911410dee2255e4987644e3f8":
             # ref: https://huggingface.co/CohereForAI/c4ai-command-r-v01
             res = "command-r"
+        if chkhsh == "52df12b4c8d4176e7481aab4b6e8454d1fd0a210a04a574f6d4e067d10e23c3e":
+            # ref: https://huggingface.co/CohereLabs/North-Mini-Code-1.0
+            res = "cohere2_moe"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
@@ -1561,7 +1564,12 @@ class LlamaModel(Model):
             special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
+        saved_intermediate_size = self.hparams.get("intermediate_size")
+        saved_num_experts_per_tok = self.hparams.pop("num_experts_per_tok")
+        self.hparams["intermediate_size"] = self.hparams["prefix_dense_intermediate_size"]
         super().set_gguf_parameters()
+        self.hparams["intermediate_size"] = saved_intermediate_size
+        self.hparams["num_experts_per_tok"] = saved_num_experts_per_tok
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
@@ -3690,6 +3698,95 @@ class CommandR2Model(Model):
         super().set_gguf_parameters()
         self.gguf_writer.add_logit_scale(self.hparams["logit_scale"])
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+
+@Model.register("Cohere2MoeForCausalLM")
+class Cohere2MoeModel(Model):
+    model_arch = gguf.MODEL_ARCH.COHERE2_MOE
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def set_gguf_parameters(self):
+        saved_intermediate_size = self.hparams["intermediate_size"]
+        saved_num_experts_per_tok = self.hparams.pop("num_experts_per_tok")
+        self.hparams["intermediate_size"] = self.hparams["prefix_dense_intermediate_size"]
+        super().set_gguf_parameters()
+        self.hparams["intermediate_size"] = saved_intermediate_size
+        self.hparams["num_experts_per_tok"] = saved_num_experts_per_tok
+        hparams = self.hparams
+
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_logit_scale(hparams.get("logit_scale", 1.0))
+        self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+        self.gguf_writer.add_sliding_window_pattern([
+            layer_type == "sliding_attention"
+            for layer_type in hparams["layer_types"]
+        ])
+        self.gguf_writer.add_rope_dimension_count(hparams.get("head_dim", hparams["hidden_size"] // hparams["num_attention_heads"]))
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+        self.gguf_writer.add_expert_feed_forward_length(hparams["intermediate_size"])
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_expert_count(hparams["num_experts"])
+        self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
+        self.gguf_writer.add_expert_weights_norm(bool(hparams.get("norm_topk_prob", False)))
+
+        expert_selection_fn = hparams.get("expert_selection_fn", "softmax")
+        if expert_selection_fn != "sigmoid":
+            raise ValueError(f"Unsupported Cohere2-MoE expert_selection_fn={expert_selection_fn!r}")
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        if hparams.get("num_shared_experts", 0) != 0:
+            raise ValueError("Cohere2-MoE shared experts are not supported in this GGUF converter yet")
+
+    @staticmethod
+    def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
+        return LlamaModel.permute(weights, n_head, n_head_kv)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        n_head = self.hparams["num_attention_heads"]
+        n_kv_head = self.hparams.get("num_key_value_heads")
+
+        if name.endswith(("q_proj.weight", "q_proj.bias")):
+            data_torch = self.permute(data_torch, n_head, n_head)
+        if name.endswith(("k_proj.weight", "k_proj.bias")):
+            data_torch = self.permute(data_torch, n_head, n_kv_head)
+
+        if ".mlp.experts." in name:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) < n_experts * 3:
+                return []
+
+            tensors: list[tuple[str, Tensor]] = []
+            for src, dst in [
+                ("gate_proj", "gate_proj"),
+                ("down_proj", "down_proj"),
+                ("up_proj", "up_proj"),
+            ]:
+                datas: list[Tensor] = []
+                for xid in range(n_experts):
+                    ename = f"model.layers.{bid}.mlp.experts.{xid}.{src}.weight"
+                    datas.append(self._experts[bid][ename])
+                    del self._experts[bid][ename]
+
+                merged_name = f"model.layers.{bid}.mlp.experts.{dst}.weight"
+                tensors.append((self.map_tensor_name(merged_name), torch.stack(datas, dim=0)))
+            return tensors
+
+        if name == "model.embed_tokens.weight":
+            yield self.map_tensor_name(name), data_torch
+            if self.tensor_names is None or "lm_head.weight" not in self.tensor_names:
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT, suffix=".weight"), data_torch
+            return
+
+        yield self.map_tensor_name(name), data_torch
 
 
 @Model.register("OlmoForCausalLM")

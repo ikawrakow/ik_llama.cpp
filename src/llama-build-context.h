@@ -287,6 +287,7 @@ struct llm_build_context {
     ggml_cgraph * build_bitnet_158();
 
     ggml_cgraph * build_cohere2();
+    ggml_cgraph * build_cohere2_moe();
 
     ggml_cgraph * build_t5_encoder();
 
