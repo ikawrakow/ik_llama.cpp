@@ -3079,6 +3079,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_GLM_DSA,
         LLM_ARCH_MISTRAL4,
         LLM_ARCH_MELLUM,
+        LLM_ARCH_LAGUNA,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -6877,10 +6878,11 @@ struct llama_context * llama_init_from_model(
             cparams.reduce_type = GGML_TYPE_F32;
         }
     }
-    if (model->arch == LLM_ARCH_MELLUM && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if ((model->arch == LLM_ARCH_MELLUM || model->arch == LLM_ARCH_LAGUNA) && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         if (cparams.reduce_type == GGML_TYPE_F16) {
+            const char * mname = model->arch == LLM_ARCH_MELLUM ? "Mellum" : "Laguna";
             LLAMA_LOG_WARN("=====================================================================\n");
-            LLAMA_LOG_WARN("Mellum with split mode graph requires bf16 or f32 precision\n");
+            LLAMA_LOG_WARN("%s with split mode graph requires bf16 or f32 precision\n", mname);
             LLAMA_LOG_WARN("    => changing cparams.reduce_type to bf16\n");
             LLAMA_LOG_WARN("=====================================================================\n");
             cparams.reduce_type = GGML_TYPE_BF16;
