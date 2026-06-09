@@ -2548,7 +2548,17 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     if (hparams.has_rope_freq_base_per_layer) {
         freq_base_l = hparams.rope_freq_base_per_layer[il];
     }
-    int n_rot_l = lctx.model.hparams.rope_n_rot(il);
+    int n_rot_l         = lctx.model.hparams.rope_n_rot(il);
+    float ext_factor_l  = ext_factor;
+    float attn_factor_l = attn_factor;
+    float beta_fast_l   = beta_fast;
+    float beta_slow_l   = beta_slow;
+    if (model.arch == LLM_ARCH_LAGUNA && n_swa > 0) {
+        ext_factor_l  = 0.0f;
+        attn_factor_l = 1.0f;
+        beta_fast_l   = 32.0f;
+        beta_slow_l   = 1.0f;
+    }
 #ifdef GGML_USE_VULKAN
     constexpr bool use_f32_precision = true;
 #else
@@ -2649,15 +2659,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
                         Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, rope_factors,
                                 n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor, attn_factor, beta_fast, beta_slow);
+                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
                         Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, rope_factors,
                                 n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor, attn_factor, beta_fast, beta_slow);
+                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
                     } else {
                         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor, attn_factor, beta_fast, beta_slow);
+                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
                         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                ext_factor, attn_factor, beta_fast, beta_slow);
+                                ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
                     }
                 }
                 cb(Qcur, "Qcur", il_cb);
@@ -2764,11 +2774,18 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     auto wqkv_gate = (ggml_split_tensor_t *)model.layers[il].wqkv_gate->extra;
                     GGML_ASSERT(wqkv_gate && wqkv_gate->splits[id]);
                     auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate->splits[id], input_normed);
+                    if (model.arch == LLM_ARCH_LAGUNA) {
+                        gate = ggml_softplus(ctx0, gate);
+                    }
                     cb(gate, "attn_gate", il_cb);
                     int nh = split_wo->ne[0]/n_embd_head_v;
                     auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, nh, n_tokens);
                     auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, nh, n_tokens);
-                    cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
+                    if (model.arch == LLM_ARCH_LAGUNA) {
+                        cur = ggml_mul(ctx0, attn_3d, gate_3d);
+                    } else {
+                        cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
+                    }
                     cb(attn_3d, "attn_gated_3d", il_cb);
                 }
 
@@ -2860,15 +2877,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
             Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, rope_factors_in,
                     n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
             Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, rope_factors_in,
                     n_rot_l, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         } else {
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors_in, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
             Kcur = ggml_rope_ext( ctx0, Kcur, inp_pos, rope_factors_in, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+                    ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         }
     }
     cb(Qcur, "Qcur_roped", il);
@@ -2885,11 +2902,18 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa);
         cb(cur, "wqkv", il);
         auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed); // [n_head_l, n_tokens]
+        if (model.arch == LLM_ARCH_LAGUNA) {
+            gate = ggml_softplus(ctx0, gate);
+        }
         cb(gate, "attn_gate", il);
         int n_head_l = hparams.n_head(il);
         auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, n_head_l, n_tokens);
         auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, n_head_l, n_tokens);
-        cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
+        if (model.arch == LLM_ARCH_LAGUNA) {
+            cur = ggml_mul(ctx0, attn_3d, gate_3d);
+        } else {
+            cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
+        }
         cb(cur, "attn_gated_3d", il);
         cur = ggml_reshape_2d(ctx0, cur, n_embd_head_v * n_head_l, n_tokens);
         cb(cur, "attn_gated", il);
