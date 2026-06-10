@@ -843,16 +843,15 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         }
         if (down) {
             cur = llm_build_lora_mm(lctx, ctx, down, cur);
+            cb(cur, "ffn_down", il);
             if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
                 // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
                 ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
             }
         }
         if (down_b) {
-            cb(cur, "ffn_down", il);
-        }
-        if (down_b) {
             cur = ggml_add(ctx, cur, down_b);
+            cb(cur, "ffn_down_b", il);
         }
         if (down_s) {
             cur = ggml_mul(ctx, cur, down_s);
