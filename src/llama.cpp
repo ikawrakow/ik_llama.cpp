@@ -5147,9 +5147,9 @@ static int llama_decode_internal(
 
 
         // Repack the rope buffer for the ubatch depending on whether the model uses mrope.
-        // * standard rope:  (flat array )                        [t; n]
+        // * standard rope:  (flat array)                         [t; n]
         // * mrope (token):  (section-major array of rope fields) [t; n][t; n][t; n][0;     n]
-        // * mrope (embd):   (section-major array of rope fields) [t; n][h; n][w; n][extra; n] 
+        // * mrope (embd):   (section-major array of rope fields) [t; n][h; n][w; n][extra; n]
         const uint8_t rope_params_per_token = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
             hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
             
@@ -5163,15 +5163,15 @@ static int llama_decode_internal(
             u_batch_pos = pos.data();
             for (uint32_t i = 0; i < n_tokens; ++i) {
                 if (batch_all.token) {
-                    pos[0*n_tokens + i] = batch_all.pos[cur_token + i + n_tokens_all*0]; // t
-                    pos[1*n_tokens + i] = batch_all.pos[cur_token + i + n_tokens_all*0]; // t
-                    pos[2*n_tokens + i] = batch_all.pos[cur_token + i + n_tokens_all*0]; // t
-                    pos[3*n_tokens + i] = 0;
+                    pos[               i] = batch_all.pos[cur_token + i]; // t
+                    pos[    n_tokens + i] = batch_all.pos[cur_token + i]; // t
+                    pos[2 * n_tokens + i] = batch_all.pos[cur_token + i]; // t
+                    pos[3 * n_tokens + i] = 0;
                 } else { //embd
-                    pos[0*n_tokens + i] = batch_all.pos[cur_token + i + n_tokens_all*0]; // t
-                    pos[1*n_tokens + i] = batch_all.pos[cur_token + i + n_tokens_all*1]; // h
-                    pos[2*n_tokens + i] = batch_all.pos[cur_token + i + n_tokens_all*2]; // w
-                    pos[3*n_tokens + i] = batch_all.pos[cur_token + i + n_tokens_all*3]; // extra (this field is supplied but unused)
+                    pos[               i] = batch_all.pos[                   cur_token + i]; // t
+                    pos[    n_tokens + i] = batch_all.pos[    n_tokens_all + cur_token + i]; // h
+                    pos[2 * n_tokens + i] = batch_all.pos[2 * n_tokens_all + cur_token + i]; // w
+                    pos[3 * n_tokens + i] = batch_all.pos[3 * n_tokens_all + cur_token + i]; // extra (this field is supplied but unused)
                 }
             }
         }
