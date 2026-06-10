@@ -3739,18 +3739,8 @@ class Cohere2MoeModel(Model):
         if hparams.get("num_shared_experts", 0) != 0:
             raise ValueError("Cohere2-MoE shared experts are not supported in this GGUF converter yet")
 
-    @staticmethod
-    def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
-        return LlamaModel.permute(weights, n_head, n_head_kv)
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        n_head = self.hparams["num_attention_heads"]
-        n_kv_head = self.hparams.get("num_key_value_heads")
-
-        if name.endswith(("q_proj.weight", "q_proj.bias")):
-            data_torch = self.permute(data_torch, n_head, n_head)
-        if name.endswith(("k_proj.weight", "k_proj.bias")):
-            data_torch = self.permute(data_torch, n_head, n_kv_head)
+        # Cohere2-MoE HF tensors already use the interleaved RoPE layout expected here.
 
         if ".mlp.experts." in name:
             n_experts = self.hparams["num_experts"]

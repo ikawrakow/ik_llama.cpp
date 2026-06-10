@@ -16,14 +16,12 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
 
     for (int il = 0; il < n_layer; ++il) {
         const bool is_sliding = hparams.swa_layers[il];
-        ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
-
-        // Cohere2-MoE uses RoPE on SWA layers plus the dense prefix layer.
         const bool force_rope = il < (int) hparams.n_layer_dense_lead;
+        ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
         ggml_tensor * attn_out = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, nullptr,
                 KQ_mask_l, nullptr, nullptr, kq_scale, 0.f,
-                is_sliding ? hparams.n_swa : 0, il, is_sliding || force_rope, false, true, true);
+                is_sliding ? hparams.n_swa : 0, il, is_sliding || force_rope, false, true, false);
         cb(attn_out, "attn_out", il);
 
         if (il == n_layer - 1 && n_tokens > 1) {
@@ -41,7 +39,7 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
                     model.layers[il].ffn_gate, nullptr, nullptr,
                     model.layers[il].ffn_down, nullptr, nullptr,
                     nullptr, LLM_FFN_SILU, LLM_FFN_PAR,
-                    cb, il, gf, false, true, attn_out);
+                    cb, il, gf, false, false, attn_out);
         } else {
             cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].attn_norm, inpL,
                     model.layers[il].ffn_gate_inp,  nullptr,
@@ -57,7 +55,6 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
                     (llm_expert_gating_func_type) hparams.expert_gating_func,
                     LLM_FFN_SILU, cb, il, gf, false, model.layers[il].ffn_up_gate_exps, nullptr, nullptr);
             cur = ggml_add(ctx0, cur, attn_out);
-            cur = ggml_add(ctx0, cur, inpL);
         }
         cb(cur, "ffn_out", il);
 
@@ -69,7 +66,7 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
 
     ggml_tensor * cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, nullptr, LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     if (hparams.f_logit_scale) {

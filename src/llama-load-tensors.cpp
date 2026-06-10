@@ -3230,7 +3230,15 @@ bool create_tensors_helper::create_cohere2_moe_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
-        create_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
+        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
+        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa});
+        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa});
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd});
+
+        layer.bq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd_head_k * n_head}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_k_gqa},          llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_v_gqa},          llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},                llama_model_loader::TENSOR_NOT_REQUIRED);
 
         if (i < (int) hparams.n_layer_dense_lead) {
             create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
