@@ -30,10 +30,9 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
 
-        attn_out->op_params[3] = 1;
-
         ggml_tensor * cur;
         if (model.layers[il].ffn_gate_inp == nullptr) {
+            attn_out->op_params[3] = 1;
             cur = llm_build_ffn(ctx0, lctx, model.layers[il].attn_norm, inpL,
                     model.layers[il].ffn_up,   nullptr, nullptr,
                     model.layers[il].ffn_gate, nullptr, nullptr,
