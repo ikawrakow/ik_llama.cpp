@@ -690,10 +690,11 @@ static ggml_tensor * gemma4_project_per_layer_inputs(ggml_context * ctx0, const 
     const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
 
     ggml_tensor * per_layer_proj = ggml_mul_mat(ctx0, model.per_layer_model_proj, inputs_embeds);
+    cb(per_layer_proj, "per_layer_proj", -1);
     per_layer_proj               = ggml_reshape_3d(ctx0, per_layer_proj, n_embd_per_layer, n_layer, n_tokens);
     per_layer_proj               = llm_build_context::llm_build_norm(ctx0, per_layer_proj, model.hparams,
             model.per_layer_proj_norm, nullptr, LLM_NORM_RMS, cb, -1, 1.0f*n_embd);  // [n_embd_per_layer, n_layer, n_tokens]
-    cb(per_layer_proj, "per_layer_proj", -1);
+    cb(per_layer_proj, "per_layer_proj_normed", -1);
 
     inp_per_layer = ggml_add(ctx0, per_layer_proj, inp_per_layer);
     inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
@@ -948,6 +949,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
 
     if (hparams.f_final_logit_softcapping > 0) {
+        cb(cur, "result_pre_softcap", -1);
         cur = ggml_softcap(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping, hparams.f_final_logit_softcapping);
     }
 
