@@ -278,7 +278,13 @@ class SpecialVocab:
         elif chat_template_json.is_file():
             with open(chat_template_json, encoding = 'utf-8') as f:
                 chat_template_alt = json.load(f).get('chat_template')
-        chat_template = tokenizer_config.get('chat_template', chat_template_alt)
+        prefer_chat_template_alt = False
+        if chat_template_alt is not None:
+            config_file = path / 'config.json'
+            if config_file.is_file():
+                with open(config_file, encoding = 'utf-8') as f:
+                    prefer_chat_template_alt = json.load(f).get('model_type') == 'cohere2_moe'
+        chat_template = chat_template_alt if prefer_chat_template_alt else tokenizer_config.get('chat_template', chat_template_alt)
         if chat_template is None or isinstance(chat_template, (str, list)):
             self.chat_template = chat_template
         else:
