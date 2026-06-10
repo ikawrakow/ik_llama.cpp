@@ -2661,7 +2661,7 @@ void server_context::apply_server_biases(server_slot& slot) {
     }
 }
 
-void server_context::request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens&& inputs) {
+void server_context::request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens & inputs) {
     server_task task;
     task.id = id_task;
     task.id_multi = id_multi;
@@ -2670,7 +2670,7 @@ void server_context::request_completion(int id_task, int id_multi, json data, bo
     task.infill = infill;
     task.embedding = embedding;
     task.type = SERVER_TASK_TYPE_COMPLETION;
-    task.tokens = std::move(inputs);
+    task.tokens = inputs.clone();
     // when a completion task's prompt array is not a singleton, we split it into multiple requests
     // otherwise, it's a single-prompt task, we actually queue it
     // if there's numbers in the prompt array it will be treated as an array of tokens
@@ -2709,7 +2709,8 @@ void server_context::request_cancel(int id_task) {
 }
 
 void server_context::split_multiprompt_task(int id_multi, server_task& multiprompt_task) {
-    const int prompt_count = multiprompt_task.data.at("prompt").size();
+    auto prompts = multiprompt_task.data.at("prompt");
+    const int prompt_count = prompts.size();
     if (prompt_count <= 1) {
         send_error(multiprompt_task, "error while handling multiple prompts");
         return;
@@ -2727,11 +2728,11 @@ void server_context::split_multiprompt_task(int id_multi, server_task& multiprom
     // add subtasks
     for (int i = 0; i < prompt_count; i++) {
         json subtask_data = multiprompt_task.data;
-        subtask_data["prompt"] = subtask_data.at("prompt")[i];
+        subtask_data["prompt"] = prompts[i];
 
         // subtasks inherit everything else (infill mode, embedding mode, etc.)
         request_completion(subtask_ids[i], id_multi, subtask_data, multiprompt_task.infill, multiprompt_task.embedding,
-            std::move(multiprompt_task.tokens));
+            multiprompt_task.tokens);
     }
 }
 

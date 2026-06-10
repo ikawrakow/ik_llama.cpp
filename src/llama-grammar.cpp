@@ -1416,7 +1416,7 @@ void llama_grammar_sample_impl(const struct llama_grammar * grammar, const struc
     for (const auto & reject : rejects) {
         candidates->data[reject.index].logit = -INFINITY;
     }
-    if (!smpl) {
+    if (smpl) {
         smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     }
 }

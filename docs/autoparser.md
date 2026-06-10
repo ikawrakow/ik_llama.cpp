@@ -69,6 +69,7 @@ Three outcomes for reasoning-prefill handling (in `generate_parser()`):
 | `PLAIN`                  | No content markers                                             |
 | `ALWAYS_WRAPPED`         | Content always wrapped: `<response>...</response>`             |
 | `WRAPPED_WITH_REASONING` | Content wrapped only when reasoning is present                 |
+| `END_DELIMITED`          | Content has no start marker but ends at a marker               |
 
 **`tool_format`**: Classification of tool call structure.
 
@@ -357,6 +358,7 @@ A workaround array in `common/chat-diff-analyzer.cpp` applies post-hoc patches a
 3. **Cohere Command R+** — source contains `<|CHATBOT_TOKEN|>`: sets `ALWAYS_WRAPPED` content mode if no content start is already set
 4. **Functionary 3.1** — source contains `set has_code_interpreter`: forces `PLAIN` content, specific `per_call_start/end`, clears preserved tokens to only keep Functionary-specific markers
 5. **DeepSeek-R1-Distill-Qwen** — source contains `tool▁calls▁begin` markers: overrides tool section/per-call markers with the correct Unicode block characters
+6. **Poolside Laguna** — source contains `laguna_glm_thinking` and the Laguna generation prompt pattern: sets delimiter-style reasoning ending at `</think>` and `END_DELIMITED` content ending at `</assistant>`
 
 ### Parser Building
 
@@ -380,6 +382,7 @@ Note: The start marker may be empty either because the analyzer detected delimit
 | Tools present                          | Dispatches to `analyze_tools::build_parser()`                                   |
 | `ALWAYS_WRAPPED` with reasoning        | `reasoning + start + content(until(end)) + end + end()`                         |
 | `ALWAYS_WRAPPED` without reasoning     | `content(until(start)) + start + content(until(end)) + end + end()`             |
+| `END_DELIMITED`                        | `reasoning + content(until(end) or rest()) + optional end marker + end()`       |
 | Default (PLAIN)                        | `reasoning + content(rest()) + end()`                                           |
 
 #### Tool Parsers (`analyze_tools::build_parser`)
@@ -392,7 +395,7 @@ Dispatches by `format.mode`:
 - `build_json_tools_nested_keys()` — nested: `{"function": {"name": "X", "arguments": {...}}}`
 - `build_json_tools_flat_keys()` — flat: `{"name": "X", "arguments": {...}}`
 
-Handles content wrappers, array wrapping (`tools_array_wrapped`), parallel calls, and `parameter_order`.
+Handles content wrappers, array wrapping (`tools_array_wrapped`), parallel calls, and `parameter_order`. If content is `END_DELIMITED`, the content end marker is also accepted after parsed tool calls.
 
 **`build_tool_parser_tag_json()`**: For each tool function:
 
@@ -417,7 +420,7 @@ For closing: uses `function.close` if present; otherwise uses `peek(per_call_end
 All three tool parsers return:
 
 ```text
-reasoning + optional(content(until(trigger_marker))) + tool_calls + end()
+reasoning + optional(content(until(trigger_marker))) + tool_calls + optional(content_end) + end()
 ```
 
 Each returned parser is wrapped by `wrap_for_generation_prompt()`, which prepends a literal for any boilerplate prefix of the generation prompt (the portion before the reasoning start marker).

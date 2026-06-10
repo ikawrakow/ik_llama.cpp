@@ -277,6 +277,7 @@ void llama_sample_tail_free_impl(struct llama_sampling * smpl, llama_token_data_
         }
     }
 
+    if (min_keep < 1) min_keep = 1;
     float cum_sum = 0.0f;
     size_t last_idx = candidates->size;
     for (size_t i = 0; i < second_derivatives.size(); ++i) {
@@ -337,7 +338,7 @@ void llama_sample_typical_impl(struct llama_sampling * smpl, llama_token_data_ar
         cum_sum += candidates->data[idx].p;
 
         // Check if the running sum is greater than typical or if we have kept at least min_keep tokens
-        if (cum_sum > p && i >= min_keep - 1) {
+        if (cum_sum > p && i + 1 >= min_keep) {
             last_idx = i + 1;
             break;
         }

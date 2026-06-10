@@ -1141,8 +1141,8 @@ int main(int argc, char ** argv) {
                         arr.push_back(res->to_json());
                     }
                     // if single request, return single object instead of array
-                    res_ok(res, arr.size() == 1 ? arr[0] : arr);              
-                }                       
+                    res_ok(res, arr.size() == 1 ? arr[0] : arr);
+                }
             }
             else {
                 // in streaming mode, the first error must be treated as non-stream response
@@ -1358,10 +1358,11 @@ int main(int argc, char ** argv) {
     const auto handle_infill = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         log_prompt(ctx_server.params_base, json::parse(req.body));
         json data = json::parse(req.body);
-        const int id_task = ctx_server.queue_tasks.get_new_id();
-        server_tokens token; // dummy tokens
-        ctx_server.queue_results.add_waiting_task_id(id_task);
-        ctx_server.request_completion(id_task, -1, data, true, false, std::move(token));
+        //avoid double submits
+        //const int id_task = ctx_server.queue_tasks.get_new_id();
+        //server_tokens token; // dummy tokens
+        //ctx_server.queue_results.add_waiting_task_id(id_task);
+        //ctx_server.request_completion(id_task, -1, data, true, false, token);
         std::vector<raw_buffer> files; // dummy
         handle_completions_impl(
             SERVER_TASK_TYPE_INFILL,

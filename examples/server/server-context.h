@@ -350,7 +350,7 @@ struct server_context {
 
     void apply_server_biases(server_slot& slot);
 
-    void request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens&& inputs);
+    void request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens & inputs);
 
     void request_cancel(int id_task);
 

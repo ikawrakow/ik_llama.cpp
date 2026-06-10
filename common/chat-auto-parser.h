@@ -101,6 +101,7 @@ enum class content_mode {
     PLAIN,                   // No content markers
     ALWAYS_WRAPPED,          // Content always wrapped with markers
     WRAPPED_WITH_REASONING,  // Content wrapped only when reasoning present
+    END_DELIMITED,           // Content is terminated by a marker but has no start marker
 };
 
 inline std::ostream & operator<<(std::ostream & os, const content_mode & mode) {
@@ -111,6 +112,8 @@ inline std::ostream & operator<<(std::ostream & os, const content_mode & mode) {
             return os << "ALWAYS_WRAPPED";
         case content_mode::WRAPPED_WITH_REASONING:
             return os << "WRAPPED_WITH_REASONING";
+        case content_mode::END_DELIMITED:
+            return os << "END_DELIMITED";
         default:
             return os << "UNKNOWN";
     }
@@ -286,6 +289,7 @@ struct analyze_content : analyze_base {
     common_peg_parser build_parser(parser_build_context & ctx) const override;
 
     bool is_always_wrapped() const;
+    bool is_end_delimited() const;
     common_peg_parser build_optional_wrapped(parser_build_context & ctx) const;
 };
 

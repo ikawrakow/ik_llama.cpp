@@ -6426,7 +6426,7 @@ void vec_dot_q3_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
 //
 
 void quantize_row_q2_k_r4_ref(const float * x, block_q2_k_r4 * y, int64_t k) {
-    quantize_q3_k_r4(x, (void *)y, 4, k/4, nullptr, nullptr);
+    quantize_q2_k_r4(x, (void *)y, 4, k/4, nullptr, nullptr);
 }
 
 void quantize_row_q2_k_r4(const float * x, void * y, int64_t k) {
