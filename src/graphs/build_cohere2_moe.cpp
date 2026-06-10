@@ -55,7 +55,6 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
                     (llm_expert_gating_func_type) hparams.expert_gating_func,
                     LLM_FFN_SILU, cb, il, gf, false, model.layers[il].ffn_up_gate_exps, nullptr, nullptr,
                     attn_out);
-            //cur = ggml_add(ctx0, cur, attn_out);
         }
         cb(cur, "ffn_out", il);
 
