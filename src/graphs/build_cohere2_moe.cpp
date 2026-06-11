@@ -30,9 +30,10 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
 
+        attn_out->op_params[3] = 1;
+
         ggml_tensor * cur;
         if (model.layers[il].ffn_gate_inp == nullptr) {
-            attn_out->op_params[3] = 1;
             cur = llm_build_ffn(ctx0, lctx, model.layers[il].attn_norm, inpL,
                     model.layers[il].ffn_up,   nullptr, nullptr,
                     model.layers[il].ffn_gate, nullptr, nullptr,
@@ -52,8 +53,8 @@ ggml_cgraph * llm_build_context::build_cohere2_moe() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, hparams.expert_weights_norm, false, 0.0f,
                     (llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, false, model.layers[il].ffn_up_gate_exps, nullptr, nullptr);
-            cur = ggml_add(ctx0, cur, attn_out);
+                    LLM_FFN_SILU, cb, il, gf, false, model.layers[il].ffn_up_gate_exps, nullptr, nullptr,
+                    attn_out);
         }
         cb(cur, "ffn_out", il);
 
