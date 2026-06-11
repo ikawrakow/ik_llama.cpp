@@ -245,6 +245,8 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+       printf("================= Device %d: cc = %d, nsm = %d, smpb = %zu, smpbo = %zu\n", id, info.devices[id].cc, info.devices[id].nsm,
+               info.devices[id].smpb, info.devices[id].smpbo);
     }
 
     for (int id = 0; id < info.device_count; ++id) {
