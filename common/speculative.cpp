@@ -2653,25 +2653,29 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     const int n_embd = llama_mtp_state_n_embd(ctx);
 
     auto & last = mtp_get_last_embd(state, seq_id);
-    int i0 = 0;
+    bool use_cached_hidden = false;
     if (last.last_id >= 0) {
-        if (last.prob < p_min) {
+        if (last.last_id != id_last) {
+            LOG_DBG("%s: seq_id=%d dropping stale cached MTP token: cached=%d current=%d\n",
+                    __func__, (int) seq_id, last.last_id, id_last);
+            last.last_id = -1;
+            last.prob = 0.0f;
+        } else if (last.prob < p_min) {
             n_draft = 1;
+            use_cached_hidden = true;
+        } else {
+            use_cached_hidden = true;
         }
-        current_input_id = last.last_id;
         last.last_id = -1;
-        drafts.push_back(current_input_id);
-        current_n_past++;
-        if (!llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
+    }
+    if (use_cached_hidden && !llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
             llama_batch_free(mtp_batch);
             llama_set_mtp_op_type(ctx, MTP_OP_NONE);
             return drafts;
-        }
-        i0 = 1;
     }
 
     int n_decode = 0;
-    for (int i = i0; i < n_draft; ++i) {
+    for (int i = 0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
         const llama_pos draft_pos = constant_draft_positions ? n_past : current_n_past;
         common_batch_add(mtp_batch, current_input_id, draft_pos, {seq_id}, true);
@@ -2710,17 +2714,10 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_batch_free(mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
-    // Purge the metadata for the draft tokens.
-    // This prevents cache state corruption where two cells map to the same logical position.
-    // If the state contained in `last` had a valid token id and probability, it means that we
-    // have previously run an "accept" batch, where the token sampled from the main model was included.
-    // In that case, we need to discard all tokens that we ran here to get the KV cache to the correct state.
-    //   => for i0 = 1 we discard from n_past
-    // But if we did not have a valid last token_id, it means the first token we run was sampled from the
-    // main model. Hence we want to keep this token in the KV cache and discard all other tokens.
-    //   => for i0 = 0 we discard from n_past + 1
+    // Keep `id_last` in the draft KV cache and discard any speculative tail beyond it so the
+    // next accept/update pass always starts from the same committed sequence prefix.
     if (n_decode > 0) {
-        llama_kv_cache_seq_rm(ctx, seq_id, n_past + 1 - i0, n_past + n_decode + 2);
+        llama_kv_cache_seq_rm(ctx, seq_id, n_past + 1, -1);
     }
 
     return drafts;
