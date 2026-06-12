@@ -785,7 +785,24 @@ common_peg_parser common_chat_peg_builder::prefix(const std::string & s, const s
     if (delimiter.empty()) {
         return literal(s);
     }
-    return literal(s.substr(0, s.rfind(delimiter)));
+    auto pos = s.find(delimiter);
+    if (pos == std::string::npos) {
+        // The generation prompt may force-open the reasoning block without the
+        // whitespace that surrounds the detected tag (e.g. a prompt ending in
+        // '<think>' while history renders '<think>\n'). Only strip when the
+        // prompt ends exactly with the trimmed tag, so prompts with trailing
+        // whitespace after the tag (e.g. '<think>\n') keep their behavior.
+        size_t b = delimiter.find_first_not_of(" \t\n\r");
+        size_t e = delimiter.find_last_not_of(" \t\n\r");
+        if (b != std::string::npos) {
+            const std::string trimmed = delimiter.substr(b, e - b + 1);
+            if (s.size() >= trimmed.size() &&
+                s.compare(s.size() - trimmed.size(), trimmed.size(), trimmed) == 0) {
+                pos = s.size() - trimmed.size();
+            }
+        }
+    }
+    return literal(s.substr(0, pos));
 }
 
 common_peg_parser common_chat_peg_builder::optspace(const std::string & tag) {
