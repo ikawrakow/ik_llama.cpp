@@ -2714,10 +2714,13 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_batch_free(mtp_batch);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
-    // Keep `id_last` in the draft KV cache and discard any speculative tail beyond it so the
-    // next accept/update pass always starts from the same committed sequence prefix.
+    // Discard the KV metadata for the speculative tail without touching the committed token at
+    // `n_past`. Even when `last.last_id` is cached, we only reuse its hidden state and return the
+    // token in `drafts`; we do not decode that token again here. The cells produced by this pass
+    // therefore always start after `n_past`, and trimming from `n_past + 1` avoids the off-by-one
+    // gap in the next accepted-batch update.
     if (n_decode > 0) {
-        llama_kv_cache_seq_rm(ctx, seq_id, n_past + 1, -1);
+        llama_kv_cache_seq_rm(ctx, seq_id, n_past + 1, n_past + n_decode + 2);
     }
 
     return drafts;
