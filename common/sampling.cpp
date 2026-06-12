@@ -1017,58 +1017,45 @@ void common_expiring_logit_bias_rewind(struct common_sampler* ctx_sampling) {
     }
     LLAMA_LOG_DEBUG("%s[%d]: idx = %d, n_rewind = %d\n", __func__, __LINE__, idx, n_rewind);
 
-    if (idx == 0) {
-        // trivial case
-        const auto& decoded_text = ctx_sampling->decoded_text;
-        auto& elb = ctx_sampling->elb_states[idx];
-        std::string window;
-        for (auto& entry: ctx_sampling->params.elb_params[idx].entries) {
-            if (!entry.biases.empty()) {
-                // no need to rewind elb
+    const auto& rewinded_text = ctx_sampling->rewinded_text;
+    const auto& decoded_text = ctx_sampling->decoded_text;
+    auto& elb = ctx_sampling->elb_states[idx];
+    for (auto& entry: ctx_sampling->params.elb_params[idx].entries) {
+        if (!entry.biases.empty()) {
+            // no need to rewind elb
+            continue;
+        }
+
+        for (size_t j = 0; j < entry.phrases.size(); ++j) {
+            const auto& phrase = entry.phrases[j];
+            if (phrase.empty() && (elb.countup < entry.duration) && !entry.addflags[j]) {
+                elb_add(ctx_sampling->params, entry);
+                entry.addflags[j] = true;
                 continue;
             }
 
-            for (size_t j = 0; j < entry.phrases.size(); ++j) {
-                const auto& phrase = entry.phrases[j];
-                if (phrase.empty() && (elb.countup < entry.duration) && !entry.addflags[j]) {
-                    elb_add(ctx_sampling->params, entry);
-                    entry.addflags[j] = true;
-                    continue;
-                }
-
-                std::string_view decoded_tail;
-                if (phrase.length() > decoded_text.length()) {
-                    decoded_tail = decoded_text;
-                    entry.search_posi[j] = 0;
-                } else {
-                    decoded_tail = decoded_text.substr(decoded_text.length() - phrase.length() + 1);
-                    entry.search_posi[j] = decoded_text.length() - phrase.length() + 1;
-                }
-                window.clear();
-                window.append(decoded_tail);
-                window.append(ctx_sampling->rewinded_text);
-
-                // triggered within rewinded window?
-                size_t count = 0;
-                auto pos = window.find(phrase, entry.search_posi[j]);
-                while (pos != std::string::npos) {
-                    ++count;
-                    pos = window.find(phrase, pos + phrase.length());
-                }
-                if (count % 2 == 1) {
-                    (entry.addflags[j] ? elb_sub : elb_add)(ctx_sampling->params, entry);
-                    entry.addflags[j] = !entry.addflags[j];
-                }
+            // triggered within rewinded text?
+            size_t count = 0;
+            auto pos = decoded_text.find(phrase, std::max(elb.init_pos, SSIZE(decoded_text) - SSIZE(rewinded_text) - SSIZE(phrase) + 1));
+            while (pos != std::string::npos) {
+                ++count;
+                pos = decoded_text.find(phrase, pos + 1);
+            }
+            if (count % 2 == 1) {
+                (entry.addflags[j] ? elb_sub : elb_add)(ctx_sampling->params, entry);
+                entry.addflags[j] = !entry.addflags[j];
             }
         }
-        ctx_sampling->elb_search_pos = std::max(0, int32_t(decoded_text.length()) - elb.search_word_len + 1);
-    } else {
-        ctx_sampling->elb_search_pos = ctx_sampling->elb_states[idx].init_pos;
     }
-    LLAMA_LOG_DEBUG("%s[%d]: elb_search_pos = %d\n", __func__, __LINE__, ctx_sampling->elb_search_pos);
+    ctx_sampling->elb_search_pos = std::max(elb.init_pos, SSIZE(decoded_text) - SSIZE(rewinded_text) - elb.search_word_len + 1);
+
+    LLAMA_LOG_DEBUG("%s[%d]:\elb_search_pos = %d, initpos %d, dtlen %d, rtlen %d, swlen %d\n", __func__, __LINE__,
+        ctx_sampling->elb_search_pos, elb.init_pos, SSIZE(decoded_text), SSIZE(rewinded_text), elb.search_word_len);
+
+    LLAMA_LOG_DEBUG("%s[%d]: %s\n", __func__, __LINE__, decoded_text.c_str());
 
     // rewind sparam bias
-    for (int32_t j = std::max(1, idx); j < ctx_sampling->elb_states.size(); ++j) {
+    for (int32_t j = idx + 1; j < ctx_sampling->elb_states.size(); ++j) {
         for (auto& entry: ctx_sampling->params.elb_params[j].entries) {
             for (const auto addflag: entry.addflags) {
                 if (addflag) {

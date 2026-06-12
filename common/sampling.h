@@ -11,6 +11,8 @@
 
 #define A_DOT_B(a, b) a.b
 
+#define SSIZE(container) int32_t(container.size())
+
 // sampler types
 enum class llama_sampler_type : char {
     DRY         = 'd',
@@ -234,14 +236,13 @@ struct common_sampler {
 
     int32_t     n_rewind;
     std::string rewinded_text;
+    std::string decoded_text;
 
     llama_token_data_array cur_p; // current candidates
 
     std::mt19937 rng;
 
     std::vector<float>* server_biases;
-
-    std::string decoded_text;
 
     // expiring logit bias
     struct elb_state {
