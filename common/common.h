@@ -252,7 +252,10 @@ struct common_params_speculative {
     common_params_speculative with_stage_overrides(const common_speculative_stage_params & stage) const;
     bool has_stage_chain() const;
     bool has_stage_type(common_speculative_type stage_type) const;
+    void remove_stage_type(common_speculative_type stage_type);
     bool has_composite_stage_chain() const;
+    bool needs_dft_model() const;
+    void clear_dft();
     int32_t get_max_stage_n_max() const;
     int32_t get_min_usable_stage_n_min() const;
 
