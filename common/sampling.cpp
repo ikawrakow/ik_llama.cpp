@@ -175,6 +175,8 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
+    result->is_decoding = false;
+
     result->n_rewind = 0;
 
     result->elb_idx = 0;
@@ -219,6 +221,7 @@ static void llama_grammar_reset(common_sampler * ctx) {
 
 void common_sampler_reset(common_sampler * ctx) {
     // llama_grammar_reset(ctx);
+    ctx->is_decoding = false;
     ctx->prev.clear();
     llama_sampler_dry_reset(ctx->smpl);
 }
@@ -723,8 +726,6 @@ void common_sampler_accept(
     }
     ctx_sampling->prev.push_back(token);
 
-    ctx_sampling->decoded_text += common_token_to_piece(ctx_main, token, true);
-
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
     const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
     if (ctx_sampling->rbudget && is_generated) {
@@ -738,8 +739,12 @@ void common_sampler_accept(
         llama_sampler_dry_accept(ctx_sampling->smpl, token);
     }
 
-    if (ctx_sampling->decoded_text.length() > ctx_sampling->elb_search_pos) {
-        common_expiring_logit_bias_accept(ctx_sampling, ctx_main);
+    if (ctx_sampling->is_decoding) {
+        ctx_sampling->decoded_text += common_token_to_piece(ctx_main, token, true);
+
+        if (ctx_sampling->decoded_text.length() > ctx_sampling->elb_search_pos) {
+            common_expiring_logit_bias_accept(ctx_sampling, ctx_main);
+        }
     }
 }
 

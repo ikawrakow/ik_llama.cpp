@@ -215,6 +215,8 @@ struct common_sampler {
     // parameters that will be used for sampling
     common_params_sampling params;
 
+    bool is_decoding;   // set true near the end of pp
+
     // mirostat sampler state
     float mirostat_mu;
 
