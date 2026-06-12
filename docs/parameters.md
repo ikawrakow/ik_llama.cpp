@@ -1,6 +1,6 @@
 # Parameters Documentation
 
-Overview of the most common command-line parameters in `ik_llama.cpp` and some info how to use them.
+Overview of the most common command-line parameters in `ik_llama.cpp` and some info how to use them. It is not exhaustive and may omit some available options.
 
 ## Table of Contents
 
@@ -58,6 +58,10 @@ Some often used terms.
 | t/s | Token/second, measures PP and TG. |
 | full gpu | All processes offloaded to the GPU. |
 | hybrid cpu/gpu | Partial offload to the GPU. |
+| RAG | Retrieval Augmented Generation. Provide external documents to the LLM for information lookup. |
+| MCP | Model Context Protocol ), an [open standard](https://en.wikipedia.org/wiki/Model_Context_Protocol) for the way artificial intelligence (AI) systems like large language models (LLMs) integrate and share data with external tools, systems, and data sources |
+| AI agent | Tool/program that uses LLM to achieve a goal/task via a series of planning/steps/actions/tool-calling/etc. `Coding agents` are specialized in software goals. |
+| Agent harness | The tools and the infrastructure around the LLM in an AI Agent. `AI Agent = LLM+ Agent harness` |
 
 ## General Parameters
 
@@ -66,6 +70,7 @@ Some often used terms.
 | `-h, --help, --usage` | Print usage and exit | - | - |
 | `--fit` | Automatically fit to available VRAM | off | Loads as many tensors to the GPU(s) as available VRAM will permit. [PR 1501](https://github.com/ikawrakow/ik_llama.cpp/pull/1501) [PR 1504](https://github.com/ikawrakow/ik_llama.cpp/pull/1504) |
 | `--fit-margin N` | Safety VRAM margin in MiB when using `--fit` | 1024 | Increase this value in case of CUDA OOM when loading the model. Decrease to less than 1024 if the model loads successfully and you feel that too much VRAM has been left unused |
+| `--gpu-fit-margin GPU1,M1,...` | Per GPU fit margin | - |  Set the fit margin per GPU when auto-fitting the model. [PR 1872](https://github.com/ikawrakow/ik_llama.cpp/pull/1872) |
 | `-wgt, --worst-graph-tokens N` | Number of tokens to use for worst-case graph | - | Control compute buffer sizes for large batches. Provided "as is" for users that understand the limitations, please don't open issues when using this. [PR 1560](https://github.com/ikawrakow/ik_llama.cpp/pull/1560) |
 | `-t, --threads N` | Number of threads to use during generation | 4 | Try to match the number of physical CPU cores. Avoid odd numbers (e.g. 1,3,...). |
 | `-tb, --threads-batch N` | Number of threads to use during batch and prompt processing | Same as `--threads` | Same as `--threads` When doing full GPU offload, use a lower number (e.g. 2) |
@@ -80,7 +85,7 @@ Some often used terms.
 | `--minilog` | Print important information | - | For `llama-server`, log request message for completions/response/anthropic and response. The prompt in the json format and the text response are saved in the log file and printed to the console. [PR 1477](https://github.com/ikawrakow/ik_llama.cpp/pull/1477) |
 | `-fa, --flash-attn` | Enables Flash Attention | on | auto / on / off Improves t/s and reduces memory usage. |
 | `--no-fa, --no-flash-attn` | Disable Flash Attention |  | Alternative parameter to turn of FA. See `--flash-attn` |
-| `-mla, --mla-use` | Enable MLA | 3 | 0 / 1 / 2 / 3 For DeepSeek models, and other recent models that are using MLA. [PR 188](https://github.com/ikawrakow/ik_llama.cpp/pull/188) [PR 205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) [PR 235](https://github.com/ikawrakow/ik_llama.cpp/pull/235) [PR 243](https://github.com/ikawrakow/ik_llama.cpp/pull/243) [PR 252](https://github.com/ikawrakow/ik_llama.cpp/pull/252) [PR 253](https://github.com/ikawrakow/ik_llama.cpp/pull/253) [PR 273](https://github.com/ikawrakow/ik_llama.cpp/pull/273) [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) [PR 497](https://github.com/ikawrakow/ik_llama.cpp/pull/497) [PR 943](https://github.com/ikawrakow/ik_llama.cpp/pull/943)|
+| `-mla, --mla-use` | Enable MLA | 3 | 0 / 1 / 2 / 3 For DeepSeek models, and other recent models that are using MLA. [PR 188](https://github.com/ikawrakow/ik_llama.cpp/pull/188) [PR 205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) [PR 235](https://github.com/ikawrakow/ik_llama.cpp/pull/235) [PR 243](https://github.com/ikawrakow/ik_llama.cpp/pull/243) [PR 252](https://github.com/ikawrakow/ik_llama.cpp/pull/252) [PR 253](https://github.com/ikawrakow/ik_llama.cpp/pull/253) [PR 273](https://github.com/ikawrakow/ik_llama.cpp/pull/273) [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) [PR 497](https://github.com/ikawrakow/ik_llama.cpp/pull/497) [PR 943](https://github.com/ikawrakow/ik_llama.cpp/pull/943) [PR 1821](https://github.com/ikawrakow/ik_llama.cpp/pull/1821) |
 | `-amb, --attention-max-batch` | Max batch size for attention computations | 0 | Specifies the maximum K*Q size in MB we want to tolerate. [PR 237](https://github.com/ikawrakow/ik_llama.cpp/pull/237) |
 | `-fmoe or --fused-moe` | Fused MoE ffn_up and ffn_gate | - | Speedup for MoE models. [PR 229](https://github.com/ikawrakow/ik_llama.cpp/pull/229) |
 | `--no-fmoe, --no-fused-moe` | Disable fused MoE | Enabled | See `--fused-moe` |
@@ -100,6 +105,7 @@ Some often used terms.
 | `--no-warmup` | Skip warming up the model with an empty run | - |  |
 | `--mlock` | Force system to keep model in RAM rather than swapping or compressing | - |  |
 | `--no-mmap` | Do not memory-map model (slower load but may reduce pageouts) | - |  |
+| `--ui-mcp-proxy, --webui-mcp-proxy` | Experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments | disabled | Support CORS Proxy on llama-server backend side. It is required to make external mcp server work on llamacpp webui. [PR 1904](https://github.com/ikawrakow/ik_llama.cpp/pull/1904) |
 | `--defer-experts` | Defer expert mmap residency on Linux to reduce model load time | false | Using this flag, expert tensor pages are faulted in on demand rather than being eagerly loaded during initialization. This allows us to reduce cold-start latency, thus improving the load time of MoE models, particularly on systems where users are running models off of storage. [PR 1634](https://github.com/ikawrakow/ik_llama.cpp/pull/1634) |
 | `-rtr, --run-time-repack` | Repack tensors if interleaved variant is available | - | May improve performance on some systems. [PR 147](https://github.com/ikawrakow/ik_llama.cpp/pull/147) |
 | `--ctx-checkpoints` | set the number of checkpoints per slot | - | enable checkpoint for recurrent models Qwen3-Next and Qwen3.5-MoE. [PR 1310](https://github.com/ikawrakow/ik_llama.cpp/pull/1310) |
@@ -155,7 +161,7 @@ Good overview on [kalomaze/llm_samplers_explained.md](https://gist.github.com/ka
 | `--sampling-seq SEQUENCE` | Simplified sequence for samplers | dkfypmxntw | Same as `--samplers`, just shorter format. |
 | `--banned-string-file` | File path of the list of banned strings on each line |  |  |
 | `--banned-n` | Number of tokens banned in the phrase during rewind. | -1 | -1 means all tokens [PR 1185](https://github.com/ikawrakow/ik_llama.cpp/pull/1185) |
-| `--expiring-logit-bias-file FILENAME` | Load bias states from a custom file format | - | [PR 1731](https://github.com/ikawrakow/ik_llama.cpp/pull/1731) |
+| `--expiring-logit-bias-file FILENAME` | Load bias states from a custom file format | - | [PR 1731](https://github.com/ikawrakow/ik_llama.cpp/pull/1731) [PR 1770](https://github.com/ikawrakow/ik_llama.cpp/pull/1770) |
 
 ## Prompt Template
 
@@ -193,7 +199,8 @@ MLA models already have the cache compressed, it doesn't really makes sense to c
 | `-nkvo, --no-kv-offload` | Disable KV offload | - | Keep KV on CPU. |
 | `-ctk, --cache-type-k TYPE` | KV cache data type for K | f16 | Reduces K size in KV which improves speed and reduces memory requirements, but may reduce output quality. |
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V | f16 | See: `-ctk` |
-| `--mtmd-kq-type type` | Define the type used for the `K*Q` matrix multiplication | - | Use une of `f16`/`bf16` instead of `f32` to improve speed up multimodal |
+| `-mtprot, --mtp-requantize-output-tensor type` | Use output requantized to type for MTP | - |  Improves TG performance for when using MTP. It requantize the tensor on-the-fly while loading the model, see [PR 1809](https://github.com/ikawrakow/ik_llama.cpp/pull/1809) for details and [PR 1810](https://github.com/ikawrakow/ik_llama.cpp/pull/1810) `--extra-output-tensor` as offline requantize alternative. |
+| `--mtmd-kq-type type` | Define the type used for the `K*Q` matrix multiplication | - | Use one of `f16`/`bf16` instead of `f32` to improve speed up multimodal |
 | `--no-context-shift` | Disable context-shift | - |  |
 | `--context-shift` | Set context-shift | on | auto / on / off / 0 / 1 [PR 973](https://github.com/ikawrakow/ik_llama.cpp/pull/973) |
 
@@ -360,7 +367,7 @@ WIP
 | `-grt, --graph-reduce-type` | Type for data exchange between GPUs | f32 | q8_0 / bf16 / f16 / f32 Reduce the data transferred between GPUs [PR 1154](https://github.com/ikawrakow/ik_llama.cpp/pull/1154) |
 | `-smgs, --split-mode-graph-scheduling` | Force Split Mode Graph Scheduling | 0 | [PR 1068](https://github.com/ikawrakow/ik_llama.cpp/pull/1068) |
 | `--max-gpu N` | Define (and use) a maximum number of GPUs per layer with split mode "graph" |  | This is of interest when there are more than 2 GPUs available, but using all of them leads to a lower performance than using just 2 (or using the default split mode "layer") [PR 1051](https://github.com/ikawrakow/ik_llama.cpp/pull/1051) |
-| `-cuda, --cuda-params` | Comma-separated list of cuda parameters | - | Powerful way to tweak Fusion, GPU offload threshold, and MMQ-ID threshold. [PR 910](https://github.com/ikawrakow/ik_llama.cpp/pull/910) |
+| `-cuda, --cuda-params` | Comma-separated list of cuda parameters | - | Powerful way to tweak Fusion, GPU offload threshold, and MMQ-ID threshold. [PR 910](https://github.com/ikawrakow/ik_llama.cpp/pull/910) [PR 1813](https://github.com/ikawrakow/ik_llama.cpp/pull/1813) |
 
 ## Model Options
 
@@ -443,6 +450,7 @@ llama-imatrix -m /models/model-bf16.gguf -f /models/calibration_data_v5_rc.txt -
 | - | - | - | - |
 | `--layer-similarity or -lsim` | Collect statistics about activations change caused by a layer using cosine similarity | - | [PR 328](https://github.com/ikawrakow/ik_llama.cpp/pull/328) |
 | `--hide-imatrix` | Store "top_secret" in the imatrix data file name | - | And in calibration dataset fields, and zeros in the batch size and number of chunks used to compute the imatrix. [PR 329](https://github.com/ikawrakow/ik_llama.cpp/pull/329) |
+| `--output-draft FNAME ` | Paired draft output file |  derived from `--output` | [PR 1803](https://github.com/ikawrakow/ik_llama.cpp/pull/1803) |
 
 Notes:
 - Use `convert_imatrix_gguf_to_dat.py` to convert the "new" GGUF imatrix files to the format supported here. [PR 1405](https://github.com/ikawrakow/ik_llama.cpp/pull/1405)
@@ -469,6 +477,7 @@ llama-gguf-split --split --split-max-size 1G --no-tensor-first-split /models/mod
 | `--partial-requant` | quantize only missing split files in the split quantized .gguf destination directory | - | - |
 | `--symmetric-q40` | Use [-7:7] range for Q4_0 quantization (turns off imatrix) | - | This is useful for some models that have been trained to int4 using this specific quantization range (e.g., Kimi-2.6) [PR 1677](https://github.com/ikawrakow/ik_llama.cpp/pull/1677) |
 | `--slow-iq2ks` | Use the original very slow IQ2_KS quantization method | - | Alternative to the compile-time option [PR 1677](https://github.com/ikawrakow/ik_llama.cpp/pull/1677) |
+| `--extra-output-tensor ggml_type` | Requantize and add output tensor of that type. | - | [PR 1810](https://github.com/ikawrakow/ik_llama.cpp/pull/1810) see `--mtp-requantize-output-tensor type` as on-the-fly alternative. |
 
 ### Build Arguments
 
@@ -521,7 +530,7 @@ WIP
 
 ## Graph parallel models
 
-Models architectures [supported](https://github.com/ikawrakow/ik_llama.cpp/blob/90de8e31db79fb3503da5e20db0d3e46726a2117/src/llama.cpp#L1986) by `--split-mode graph`
+Models architectures [supported](https://github.com/ikawrakow/ik_llama.cpp/blob/022bd00aab9ec8428c4811275de89796c677d278/src/llama.cpp#L3056) by `--split-mode graph`
 
 ```
 LLM_ARCH_LLAMA,
@@ -542,4 +551,9 @@ LLM_ARCH_STEP35,
 LLM_ARCH_QWEN35,
 LLM_ARCH_QWEN35MOE,
 LLM_ARCH_GEMMA4,
+LLM_ARCH_DEEPSEEK2,
+LLM_ARCH_GLM_DSA,
+LLM_ARCH_MISTRAL4,
+LLM_ARCH_MELLUM,
+LLM_ARCH_LAGUNA,
 ```
