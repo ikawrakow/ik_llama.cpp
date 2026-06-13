@@ -81,10 +81,12 @@ add_library(llama
             graphs/build_mpt.cpp
             graphs/build_stablelm.cpp
             graphs/build_seedoss.cpp
+            graphs/build_laguna.cpp
             graphs/build_step35.cpp
             graphs/build_qwen.cpp
             graphs/build_qwen2.cpp
             graphs/build_qwen3.cpp
+            graphs/build_mellum.cpp
             graphs/build_qwen3next.cpp
             graphs/build_qwen35.cpp
             graphs/build_phi2.cpp
@@ -110,6 +112,7 @@ add_library(llama
             graphs/build_glm4.cpp
             graphs/build_bitnet.cpp
             graphs/build_cohere2.cpp
+            graphs/build_cohere2_moe.cpp
             graphs/build_t5.cpp
             graphs/build_jais.cpp
             graphs/build_chatglm.cpp

@@ -1250,7 +1250,7 @@ const mtmd::input_chunk_ptr& server_tokens::find_chunk(size_t idx) const {
     if (it != map_idx_to_media.end()) {
         return it->second;
     }
-    throw std::runtime_error("Chunk not found");
+    throw std::runtime_error("Chunk not found, or idx is not the first token of a chunk");
 }
 
 void server_tokens::push_back(llama_token tok) {
@@ -1295,7 +1295,7 @@ void server_tokens::push_back(server_tokens& tokens) {
         // Assert if we are copying MTMD chunks to a server_tokens that does not have mtmd.
         // We could also just check, but this will prevent silently dropping MTMD data.
         GGML_ASSERT(has_mtmd);
-        for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ) {
+        for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); it++) {
             auto* chunk = tokens.map_idx_to_media[it->first].get();
             mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
             map_idx_to_media[start_idx + it->first] = std::move(new_chunk);
@@ -1369,18 +1369,10 @@ void server_tokens::keep_first(size_t n) {
         if (n == tokens.size()) {
             return; // nothing to do
         }
-        // we throw an error if we try to remove a token in the middle of an image
-        // for ex. with input of 5 text tokens and 2 images:
-        //    [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1]
-        // n  1   2   3   4   5   6      7      8      9      10
-        // allowed to resize      ^                    ^
-        // disallowed to resize          ^      ^             ^
-        if (n > 0) {
-            llama_token last_token = tokens[n - 1];
-            // make sure we never remove tokens in the middle of an image
-            if (last_token == LLAMA_TOKEN_NULL) {
-                find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
-            }
+        // It is an internal error if the longest common prefix ends in the middle of an image
+        llama_token first_removed_token = tokens[n];
+        if (first_removed_token == LLAMA_TOKEN_NULL) {
+            find_chunk(n); // will throw an error if the token is not begin-of-chunk
         }
         // remove all image chunks that are not used anymore
         for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ) {

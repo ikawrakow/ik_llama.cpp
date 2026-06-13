@@ -485,4 +485,6 @@ struct llama_context {
         struct llama_context & lctx);
     void set_mtp_op_type(llama_mtp_op_type value);
 
+    int max_nodes(int n_tokens, int n_kv) const;
+
 };

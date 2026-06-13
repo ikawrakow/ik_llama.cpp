@@ -914,7 +914,7 @@ void llama_context::reset_scheduler() {
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
     //if (kv_self.save_per_step_ssm) return false;
-    if (model.arch == LLM_ARCH_GEMMA4_MTP && mtp_target_ctx != nullptr) return false;
+    if ((model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && mtp_target_ctx != nullptr) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     //if (u_batch.n_tokens > 1) return false;
@@ -1044,6 +1044,37 @@ llama_context::~llama_context() {
     }
 
     ggml_backend_buffer_free(buf_output);
+}
+
+int llama_context::max_nodes(int n_tokens, int n_kv) const {
+    int max_nodes = model.max_nodes(n_tokens);
+    if (model.is_mla_model() &&
+        cparams.mla_attn > 1 &&
+        n_tokens >= 128 &&
+        cparams.attn_max_batch > 0 &&
+        model.split_mode != LLAMA_SPLIT_MODE_GRAPH &&
+        model.layers[0].wkv_b) {
+        // In this case we perform the attention computation iteratively, and this adds
+        // 10 nodes per layer per iteration. Although in many cases the 65536 nodes we
+        // estimate by default are enough to accomodate, to be safe we add the additional
+        // number of nodes required for the iterative MLA evaluation.
+        int n_head = model.hparams.n_head();
+        auto wkv_b = model.layers[0].wkv_b;
+        auto kv_f32_size = wkv_b->ne[1] * n_kv * sizeof(float) / (1024*1024);
+        if (cparams.attn_max_batch < kv_f32_size) {
+            int n_max_head = 1;
+            for (int niter = 2; niter < n_head; ++niter) {
+                if (n_head % niter == 0 && kv_f32_size/niter <= cparams.attn_max_batch) {
+                    n_max_head = n_head/niter;
+                    break;
+                }
+            }
+            GGML_ASSERT(n_head % n_max_head == 0);
+            int n_iter = n_head / n_max_head;
+            max_nodes += (n_iter - 1) * 10 * model.hparams.n_layer;
+        }
+    }
+    return max_nodes;
 }
 
 //
@@ -3380,6 +3411,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MISTRAL3,
         LLM_ARCH_COMMAND_R,
         LLM_ARCH_COHERE2,
+        LLM_ARCH_COHERE2_MOE,
         LLM_ARCH_MIMO2,
         LLM_ARCH_QWEN3,
         LLM_ARCH_QWEN3VL,
@@ -3389,6 +3421,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MINIMAX_M2,
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
+        LLM_ARCH_LAGUNA,
         //LLM_ARCH_QWEN3NEXT,
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,
@@ -3396,6 +3429,8 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_DEEPSEEK2,
         LLM_ARCH_GLM_DSA,
         LLM_ARCH_MISTRAL4,
+        LLM_ARCH_MELLUM,
+        LLM_ARCH_LAGUNA,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -3670,12 +3705,13 @@ static bool llm_load_tensors(
     if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const bool unsupported_gemma_split =
             model.arch == LLM_ARCH_GEMMA4_MTP ||
+            model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
             (model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0);
 
         if (unsupported_gemma_split) {
             LLAMA_LOG_WARN("\n=========================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for %s\n",
-                    model.arch == LLM_ARCH_GEMMA4_MTP ? "Gemma 4 MTP assistant"
+                    (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) ? "Gemma 4 MTP assistant"
                                                       : "this Gemma4 variant");
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("===========================================================\n\n");
@@ -3935,7 +3971,7 @@ static bool llm_load_tensors(
                     LLAMA_LOG_ERROR("Not enough memory in device %d to offload the output layer\n", id);
                     throw std::runtime_error("Unable to auto-fit model");
                 }
-                device_mem[id] -= layer_sizes[id];
+                device_mem[id] -= layer_sizes[n_layer];
                 if (!tensor_split) {
                     float sum = 0;
                     for (int id = 0; id < int(model.splits.size()); ++id) {
@@ -4031,7 +4067,7 @@ static bool llm_load_tensors(
             }
         }
     }
-    if (model.arch == LLM_ARCH_GEMMA4_MTP && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count > 0 && n_gpu_layers > 0) {
+    if ((model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count > 0 && n_gpu_layers > 0) {
         const int mtp_device = std::clamp(main_gpu, 0, device_count - 1);
 
         LLAMA_LOG_INFO("%s: Gemma 4 MTP assistant forcing layer placement to GPU %d under layer split\n",
@@ -4557,18 +4593,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
         const int64_t n_tokens = batch.n_tokens;
         const int n_pos_per_embd =  hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
-        if (batch.token && n_pos_per_embd == 4) {
-            std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
-            for (int i = 0; i < n_tokens; ++i) {
-                pos_data[               i] = batch.pos[i];
-                pos_data[    n_tokens + i] = batch.pos[i];
-                pos_data[2 * n_tokens + i] = batch.pos[i];
-                pos_data[3 * n_tokens + i] = 0; // 4th dim is 0
-            }
-            ggml_backend_tensor_set(lctx.inp_pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(lctx.inp_pos));
-        } else {
-            ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(lctx.inp_pos));
-        }
+        ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(lctx.inp_pos));
 #if IK_PRINT_TIMING == 2
         auto tim2 = ggml_time_us();
         printf("set_inputs(pos): %d us\n", int(tim2-tim1));
@@ -4646,7 +4671,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // NOTE: hparams.causal_attn indicates the model is capable of generation and uses the kv cache.
         if (cparams.causal_attn && !lctx.is_encoding) {
             const llama_kv_cache & mask_kv_self =
-                (lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)
+                ((lctx.model.arch == LLM_ARCH_GEMMA4_MTP || lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && lctx.mtp_target_ctx != nullptr)
                     ? lctx.mtp_target_ctx->kv_self
                     : kv_self;
             const int64_t n_kv     = mask_kv_self.n;
@@ -5173,7 +5198,8 @@ static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
     return lctx.cparams.mtp && (
         lctx.model.hparams.nextn_predict_layers > 0 ||
         lctx.model.arch == LLM_ARCH_GEMMA4 ||
-        lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
+        lctx.model.arch == LLM_ARCH_GEMMA4_MTP ||
+        lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT);
 }
 
 static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
@@ -5538,11 +5564,42 @@ static int llama_decode_internal(
             }
         }
 
+
+        // Repack the rope buffer for the ubatch depending on whether the model uses mrope.
+        // * standard rope:  (flat array)                         [t; n]
+        // * mrope (token):  (section-major array of rope fields) [t; n][t; n][t; n][0;     n]
+        // * mrope (embd):   (section-major array of rope fields) [t; n][h; n][w; n][extra; n]
+        const uint8_t rope_params_per_token = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
+            hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
+
+        llama_pos * u_batch_pos;
+        if (!batch_all.pos) {
+            u_batch_pos = nullptr;
+        } else if (rope_params_per_token == 1) {
+            u_batch_pos = batch_all.pos + cur_token;
+        } else {
+            pos.resize((size_t) n_tokens * rope_params_per_token);
+            u_batch_pos = pos.data();
+            for (uint32_t i = 0; i < n_tokens; ++i) {
+                if (batch_all.token) {
+                    pos[               i] = batch_all.pos[cur_token + i]; // t
+                    pos[    n_tokens + i] = batch_all.pos[cur_token + i]; // t
+                    pos[2 * n_tokens + i] = batch_all.pos[cur_token + i]; // t
+                    pos[3 * n_tokens + i] = 0;
+                } else { //embd
+                    pos[               i] = batch_all.pos[                   cur_token + i]; // t
+                    pos[    n_tokens + i] = batch_all.pos[    n_tokens_all + cur_token + i]; // h
+                    pos[2 * n_tokens + i] = batch_all.pos[2 * n_tokens_all + cur_token + i]; // w
+                    pos[3 * n_tokens + i] = batch_all.pos[3 * n_tokens_all + cur_token + i]; // extra (this field is supplied but unused)
+                }
+            }
+        }
+
         llama_batch u_batch = {
             /* .n_tokens   = */ (int32_t) n_tokens,
             /* .token      = */ batch_all.token     ? batch_all.token    + cur_token        : nullptr,
             /* .embd       = */ batch_all.embd      ? batch_all.embd     + cur_token*n_embd : nullptr,
-            /* .pos        = */ batch_all.pos       ? batch_all.pos      + cur_token        : nullptr,
+            /* .pos        = */ u_batch_pos,
             /* .n_seq_id   = */ batch_all.n_seq_id  ? batch_all.n_seq_id + cur_token        : nullptr,
             /* .seq_id     = */ batch_all.seq_id    ? batch_all.seq_id   + cur_token        : nullptr,
             /* .logits     = */ batch_all.logits    ? batch_all.logits   + cur_token        : nullptr,
@@ -5683,7 +5740,7 @@ static int llama_decode_internal(
             }
             //if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
             if (u_batch.embd == nullptr && lctx.cparams.graph_reuse &&
-                    !(lctx.model.arch == LLM_ARCH_GEMMA4_MTP && lctx.mtp_target_ctx != nullptr)) {
+                    !((lctx.model.arch == LLM_ARCH_GEMMA4_MTP || lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && lctx.mtp_target_ctx != nullptr)) {
                 prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
                         (int)u_batch.n_tokens,
@@ -5733,10 +5790,9 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
-            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_QWEN35    ||
-                                                      lctx.model.arch == LLM_ARCH_QWEN35MOE ||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4    ||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_MTP);
+            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_GEMMA4    ||
+                                                      lctx.model.arch == LLM_ARCH_GEMMA4_MTP||
+                                                      lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT);
             if (cparams.embeddings || has_mtp) {
                 for (int i = gf->n_nodes - 1; i >= 0; --i) {
                     if (use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
@@ -5748,6 +5804,9 @@ static int llama_decode_internal(
                         embd = gf->nodes[i];
                         break;
                     }
+                    // Strictly speaking we should use if (!use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_norm") == 0)
+                    // as Gemma4 MTP is supposed to be using embeddings before rms_norm.
+                    // I don't see any significant difference between this and what we had before, so not making the change (yet).
                     if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
                         embd = gf->nodes[i];
                         break;
@@ -7294,7 +7353,6 @@ struct llama_context * llama_init_from_model(
     if (cparams.yarn_ext_factor < 0.0f) { // negative indicates 'not set'
         cparams.yarn_ext_factor = rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN ? 1.0f : 0.0f;
     }
-
     cparams.yarn_attn_factor *= hparams.rope_attn_factor;
 
     if (cparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
@@ -7330,15 +7388,26 @@ struct llama_context * llama_init_from_model(
         if (cparams.reduce_type == GGML_TYPE_F16) {
             LLAMA_LOG_WARN("=====================================================================\n");
             LLAMA_LOG_WARN("GPT-OSS with split mode graph requires f32 precision\n");
-            LLAMA_LOG_WARN("    => changing cparams.split_mode_f16 to 'false'\n");
+            LLAMA_LOG_WARN("    => changing cparams.reduce_type to f32\n");
             LLAMA_LOG_WARN("=====================================================================\n");
             cparams.reduce_type = GGML_TYPE_F32;
+        }
+    }
+    if ((model->arch == LLM_ARCH_MELLUM || model->arch == LLM_ARCH_LAGUNA) && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        if (cparams.reduce_type == GGML_TYPE_F16) {
+            const char * mname = model->arch == LLM_ARCH_MELLUM ? "Mellum" : "Laguna";
+            LLAMA_LOG_WARN("=====================================================================\n");
+            LLAMA_LOG_WARN("%s with split mode graph requires bf16 or f32 precision\n", mname);
+            LLAMA_LOG_WARN("    => changing cparams.reduce_type to bf16\n");
+            LLAMA_LOG_WARN("=====================================================================\n");
+            cparams.reduce_type = GGML_TYPE_BF16;
         }
     }
 
     if (model->arch != LLM_ARCH_GLM4_MOE && model->arch != LLM_ARCH_QWEN35 &&
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
         model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
+        model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
         cparams.mtp != 0) {
         cparams.mtp = 0;
     }
@@ -7642,7 +7711,7 @@ struct llama_context * llama_init_from_model(
             }
 
             int n_tokens = (int)std::min(cparams.n_ctx, cparams.n_ubatch);
-            const size_t max_nodes = model->max_nodes(n_tokens);
+            const size_t max_nodes = ctx->max_nodes(n_tokens, cparams.n_ctx);
 
             // buffer used to store the computation graph and the tensor meta data
             ctx->buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
@@ -7841,6 +7910,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_COHERE2:
+        case LLM_ARCH_COHERE2_MOE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_SMOLLM3:
@@ -7865,6 +7935,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_MELLUM:
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_PHI2:
         case LLM_ARCH_PHI3:
@@ -7883,9 +7954,11 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_LAGUNA:
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
         case LLM_ARCH_DFLASH_DRAFT:
+        case LLM_ARCH_GEMMA4_ASSISTANT:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

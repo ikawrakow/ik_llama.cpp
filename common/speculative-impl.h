@@ -1128,6 +1128,7 @@ struct common_speculative_state_suffix : public common_speculative_state {
 struct common_speculative {
     std::vector<common_speculative_config> configs; // resolved stage config for each implementation
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
+    common_speculative_checkpoint checkpoint;
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
     std::unique_ptr<spec_tuner> tuner;
     int last_n_drafted = 0;
@@ -1522,6 +1523,7 @@ void common_speculative_free(common_speculative * spec) {
         return;
     }
 
+    spec->checkpoint.clear();
     delete spec;
 }
 

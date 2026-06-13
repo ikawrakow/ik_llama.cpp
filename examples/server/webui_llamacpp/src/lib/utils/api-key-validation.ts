@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
 import { config } from '$lib/stores/settings.svelte';
@@ -11,18 +12,22 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 		return;
 	}
 
-	try {
-		const apiKey = config().apiKey;
+	const apiKey = config().apiKey;
 
+	// No API key configured — server doesn't require auth, skip the request entirely.
+	// The /props endpoint is only protected when the server has API keys configured,
+	// and in that case the client always has one set (from settings).
+	if (!apiKey) {
+		return;
+	}
+
+	try {
 		const headers: Record<string, string> = {
-			'Content-Type': 'application/json'
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${apiKey}`
 		};
 
-		if (apiKey) {
-			headers.Authorization = `Bearer ${apiKey}`;
-		}
-
-		const response = await fetch(`./props`, { headers });
+		const response = await fetch(`${base}/props`, { headers });
 
 		if (!response.ok) {
 			if (response.status === 401 || response.status === 403) {

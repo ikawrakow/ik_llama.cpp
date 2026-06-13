@@ -71,6 +71,7 @@ add_library(${TARGET} STATIC
     train.cpp
     log.cpp
     log.h    
+    http.h
     ngram-cache.cpp
     ngram-cache.h
     ngram-map.cpp

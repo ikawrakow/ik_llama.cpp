@@ -5,7 +5,7 @@
 
 ggml_cgraph * llm_build_context::build_qwen35moe() {
 
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
@@ -88,7 +88,7 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
 
 ggml_cgraph * llm_build_context::build_qwen35() {
 
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));

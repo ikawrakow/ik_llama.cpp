@@ -307,6 +307,11 @@ struct mtmd_context {
             img_end = "<image|>";
             //image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
         }
+        else if (proj == PROJECTOR_TYPE_KIMIK25) {
+            // template renders: <|media_begin|>image<|media_content|> <pad/embeddings> <|media_end|>
+            img_beg = "<|media_begin|>image<|media_content|>";
+            img_end = "<|media_end|>";
+        }
     }
 
     void init_audio() {

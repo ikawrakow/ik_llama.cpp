@@ -1,64 +1,56 @@
 <script lang="ts">
+	import { Trash2 } from '@lucide/svelte';
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
-		ChatForm,
-		ChatScreenHeader,
-		ChatScreenWarning,
+		ChatScreenForm,
 		ChatMessages,
+		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
+		ChatScreenActionScrollDown,
 		DialogEmptyFileAlert,
+		DialogFileUploadError,
 		DialogChatError,
-		ServerErrorSplash,
-		ServerInfo,
 		ServerLoadingSplash,
-		DialogConfirmation
+		DialogConfirmation,
+		ChatScreenServerError
 	} from '$lib/components/app';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { setProcessingInfoContext } from '$lib/contexts';
+	import { ErrorDialogType } from '$lib/enums';
+	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
-		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
-		AUTO_SCROLL_INTERVAL,
-		INITIAL_SCROLL_DELAY
-	} from '$lib/constants/auto-scroll';
-	import {
-		activeMessages,
-		activeConversation,
-		deleteConversation,
-		dismissErrorDialog,
+		chatStore,
 		errorDialog,
 		isLoading,
-		sendMessage,
-		stopGeneration
+		isChatStreaming,
+		isEditing,
+		getAddFilesHandler,
+		activeProcessingState
 	} from '$lib/stores/chat.svelte';
-	import { config } from '$lib/stores/settings.svelte';
 	import {
-		supportsVision,
-		supportsAudio,
-		serverLoading,
-		serverWarning,
-		serverStore
-	} from '$lib/stores/server.svelte';
-	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
-	import { isFileTypeSupported } from '$lib/utils/file-type';
-	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
-	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
+		conversationsStore,
+		activeMessages,
+		activeConversation
+	} from '$lib/stores/conversations.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { serverLoading, serverError, isRouterMode } from '$lib/stores/server.svelte';
+	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
+	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
 	import { onMount } from 'svelte';
-	import { fade, fly, slide } from 'svelte/transition';
-	import { Trash2 } from '@lucide/svelte';
-	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
+	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
+	const autoScroll = createAutoScrollController();
+
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
-	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
-	let lastScrollTop = $state(0);
-	let scrollInterval: ReturnType<typeof setInterval> | undefined;
-	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	let showFileErrorDialog = $state(false);
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
-	let userScrolledUp = $state(false);
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -76,7 +68,11 @@
 
 	let showEmptyFileDialog = $state(false);
 
+	let processingInfoVisible = $state(false);
+
 	let emptyFileNames = $state<string[]>([]);
+
+	let initialMessage = $state('');
 
 	let isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
@@ -84,20 +80,112 @@
 
 	let activeErrorDialog = $derived(errorDialog());
 	let isServerLoading = $derived(serverLoading());
+	let hasPropsError = $derived(!!serverError());
 
-	let isCurrentConversationLoading = $derived(isLoading());
+	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+
+	let showProcessingInfo = $derived(
+		isCurrentConversationLoading ||
+			(config().keepStatsVisible && !!page.params.id) ||
+			activeProcessingState() !== null
+	);
+
+	let isRouter = $derived(isRouterMode());
+
+	let conversationModel = $derived(
+		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+	);
+
+	let activeModelId = $derived.by(() => {
+		const options = modelOptions();
+
+		if (!isRouter) {
+			return options.length > 0 ? options[0].model : null;
+		}
+
+		const selectedId = selectedModelId();
+		if (selectedId) {
+			const model = options.find((m) => m.id === selectedId);
+			if (model) return model.model;
+		}
+
+		if (conversationModel) {
+			const model = options.find((m) => m.model === conversationModel);
+			if (model) return model.model;
+		}
+
+		return null;
+	});
+
+	let modelPropsVersion = $state(0);
+
+	setProcessingInfoContext({
+		get showProcessingInfo() {
+			return showProcessingInfo;
+		}
+	});
+
+	$effect(() => {
+		if (activeModelId) {
+			const cached = modelsStore.getModelProps(activeModelId);
+
+			if (!cached) {
+				modelsStore.fetchModelProps(activeModelId).then(() => {
+					modelPropsVersion++;
+				});
+			}
+		}
+	});
+
+	let hasAudioModality = $derived.by(() => {
+		if (activeModelId) {
+			void modelPropsVersion;
+
+			return modelsStore.modelSupportsAudio(activeModelId);
+		}
+
+		return false;
+	});
+
+	let hasVideoModality = $derived.by(() => {
+		if (activeModelId) {
+			void modelPropsVersion;
+
+			return modelsStore.modelSupportsVideo(activeModelId);
+		}
+
+		return false;
+	});
+
+	let hasVisionModality = $derived.by(() => {
+		if (activeModelId) {
+			void modelPropsVersion;
+
+			return modelsStore.modelSupportsVision(activeModelId);
+		}
+
+		return false;
+	});
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
+
 		if (conversation) {
-			await deleteConversation(conversation.id);
+			await conversationsStore.deleteConversation(conversation.id);
 		}
+
 		showDeleteDialog = false;
+	}
+
+	function handleProcessingInfoVisibility(visible: boolean) {
+		processingInfoVisible = visible;
 	}
 
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
+
 		dragCounter++;
+
 		if (event.dataTransfer?.types.includes('Files')) {
 			isDragOver = true;
 		}
@@ -105,7 +193,9 @@
 
 	function handleDragLeave(event: DragEvent) {
 		event.preventDefault();
+
 		dragCounter--;
+
 		if (dragCounter === 0) {
 			isDragOver = false;
 		}
@@ -113,7 +203,7 @@
 
 	function handleErrorDialogOpenChange(open: boolean) {
 		if (!open) {
-			dismissErrorDialog();
+			chatStore.dismissErrorDialog();
 		}
 	}
 
@@ -123,11 +213,23 @@
 
 	function handleDrop(event: DragEvent) {
 		event.preventDefault();
+
 		isDragOver = false;
 		dragCounter = 0;
 
 		if (event.dataTransfer?.files) {
-			processFiles(Array.from(event.dataTransfer.files));
+			const files = Array.from(event.dataTransfer.files);
+
+			if (isEditing()) {
+				const handler = getAddFilesHandler();
+
+				if (handler) {
+					handler(files);
+					return;
+				}
+			}
+
+			processFiles(files);
 		}
 	}
 
@@ -139,48 +241,31 @@
 		processFiles(files);
 	}
 
-	function handleKeydown(event: KeyboardEvent) {
-		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
-
-		if (isCtrlOrCmd && event.shiftKey && (event.key === 'd' || event.key === 'D')) {
-			event.preventDefault();
+	const { handleKeydown } = useKeyboardShortcuts({
+		deleteActiveConversation: () => {
 			if (activeConversation()) {
 				showDeleteDialog = true;
 			}
 		}
+	});
+
+	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
+		if (draft.message || draft.files.length > 0) {
+			chatStore.savePendingDraft(draft.message, draft.files);
+		}
+
+		await chatStore.addSystemPrompt();
 	}
 
 	function handleScroll() {
-		if (disableAutoScroll || !chatScrollContainer) return;
-
-		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
-		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
-
-		if (scrollTop < lastScrollTop && !isAtBottom) {
-			userScrolledUp = true;
-			autoScrollEnabled = false;
-		} else if (isAtBottom && userScrolledUp) {
-			userScrolledUp = false;
-			autoScrollEnabled = true;
-		}
-
-		if (scrollTimeout) {
-			clearTimeout(scrollTimeout);
-		}
-
-		scrollTimeout = setTimeout(() => {
-			if (isAtBottom) {
-				userScrolledUp = false;
-				autoScrollEnabled = true;
-			}
-		}, AUTO_SCROLL_INTERVAL);
-
-		lastScrollTop = scrollTop;
+		autoScroll.handleScroll();
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const result = files ? await parseFilesToMessageExtras(files) : undefined;
+		const plainFiles = files ? $state.snapshot(files) : undefined;
+		const result = plainFiles
+			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
+			: undefined;
 
 		if (result?.emptyFiles && result.emptyFiles.length > 0) {
 			emptyFileNames = result.emptyFiles;
@@ -196,12 +281,9 @@
 		const extras = result?.extras;
 
 		// Enable autoscroll for user-initiated message sending
-		if (!disableAutoScroll) {
-			userScrolledUp = false;
-			autoScrollEnabled = true;
-		}
-		await sendMessage(message, extras);
-		scrollChatToBottom();
+		autoScroll.enable();
+		await chatStore.sendMessage(message, extras);
+		autoScroll.scrollToBottom();
 
 		return true;
 	}
@@ -218,16 +300,25 @@
 			}
 		}
 
-		const { supportedFiles, unsupportedFiles, modalityReasons } =
-			filterFilesByModalities(generallySupported);
+		// Use model-specific capabilities for file validation
+		const capabilities = {
+			hasVision: hasVisionModality,
+			hasAudio: hasAudioModality,
+			hasVideo: hasVideoModality
+		};
+		const { supportedFiles, unsupportedFiles, modalityReasons } = filterFilesByModalities(
+			generallySupported,
+			capabilities
+		);
 
 		const allUnsupportedFiles = [...generallyUnsupported, ...unsupportedFiles];
 
 		if (allUnsupportedFiles.length > 0) {
 			const supportedTypes: string[] = ['text files', 'PDFs'];
 
-			if (supportsVision()) supportedTypes.push('images');
-			if (supportsAudio()) supportedTypes.push('audio files');
+			if (hasVisionModality) supportedTypes.push('images');
+			if (hasAudioModality) supportedTypes.push('audio files');
+			if (hasVideoModality) supportedTypes.push('video files');
 
 			fileErrorData = {
 				generallyUnsupported,
@@ -239,48 +330,50 @@
 		}
 
 		if (supportedFiles.length > 0) {
-			const processed = await processFilesToChatUploaded(supportedFiles);
+			const processed = await processFilesToChatUploaded(
+				supportedFiles,
+				activeModelId ?? undefined
+			);
 			uploadedFiles = [...uploadedFiles, ...processed];
 		}
 	}
 
-	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
-		if (disableAutoScroll) return;
-
-		chatScrollContainer?.scrollTo({
-			top: chatScrollContainer?.scrollHeight,
-			behavior
-		});
-	}
-
 	afterNavigate(() => {
 		if (!disableAutoScroll) {
-			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+			autoScroll.enable();
 		}
 	});
 
+	function handleMessagesReady() {
+		if (disableAutoScroll) return;
+
+		if (!autoScroll.userScrolledUp) {
+			requestAnimationFrame(() => {
+				autoScroll.scrollToBottom('instant');
+			});
+		}
+	}
+
 	onMount(() => {
+		autoScroll.startObserving();
+
 		if (!disableAutoScroll) {
-			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+			autoScroll.enable();
+		}
+
+		const pendingDraft = chatStore.consumePendingDraft();
+		if (pendingDraft) {
+			initialMessage = pendingDraft.message;
+			uploadedFiles = pendingDraft.files;
 		}
 	});
 
 	$effect(() => {
-		if (disableAutoScroll) {
-			autoScrollEnabled = false;
-			if (scrollInterval) {
-				clearInterval(scrollInterval);
-				scrollInterval = undefined;
-			}
-			return;
-		}
+		autoScroll.setContainer(chatScrollContainer);
+	});
 
-		if (isCurrentConversationLoading && autoScrollEnabled) {
-			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
-		} else if (scrollInterval) {
-			clearInterval(scrollInterval);
-			scrollInterval = undefined;
-		}
+	$effect(() => {
+		autoScroll.setDisabled(disableAutoScroll);
 	});
 </script>
 
@@ -290,9 +383,9 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<ChatScreenHeader />
-
-{#if !isEmpty}
+{#if isServerLoading}
+	<ServerLoadingSplash />
+{:else}
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
@@ -304,154 +397,56 @@
 		onscroll={handleScroll}
 		role="main"
 	>
-		<ChatMessages
-			class="mb-16 md:mb-24"
-			messages={activeMessages()}
-			onUserAction={() => {
-				if (!disableAutoScroll) {
-					userScrolledUp = false;
-					autoScrollEnabled = true;
-					scrollChatToBottom();
-				}
-			}}
-		/>
-
-		<div
-			class="pointer-events-none sticky right-0 bottom-0 left-0 mt-auto"
-			in:slide={{ duration: 150, axis: 'y' }}
-		>
-			<ChatScreenProcessingInfo />
-
-			{#if serverWarning()}
-				<ChatScreenWarning class="pointer-events-auto mx-auto max-w-[48rem] px-4" />
+		<div class="flex grow flex-col pt-14">
+			{#if !isEmpty}
+				<ChatMessages
+					messages={activeMessages()}
+					onMessagesReady={handleMessagesReady}
+					onUserAction={() => {
+						autoScroll.enable();
+						if (!autoScroll.userScrolledUp) {
+							autoScroll.scrollToBottom();
+						}
+					}}
+				/>
 			{/if}
 
-			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
-				<ChatForm
-					isLoading={isCurrentConversationLoading}
-					onFileRemove={handleFileRemove}
-					onFileUpload={handleFileUpload}
-					onSend={handleSendMessage}
-					onStop={() => stopGeneration()}
-					showHelperText={false}
-					bind:uploadedFiles
+			<div
+				class={[
+					'pointer-events-none sticky right-4 left-4 mt-auto transition-all duration-200',
+					isEmpty ? 'bottom-[calc(50dvh-7rem)]' : 'bottom-4 pt-24 md:pt-32'
+				]}
+			>
+				<ChatScreenGreeting {isEmpty} />
+
+				<ChatScreenActionScrollDown
+					container={chatScrollContainer}
+					hasProcessingInfoVisible={processingInfoVisible}
 				/>
-			</div>
-		</div>
-	</div>
-{:else if isServerLoading}
-	<!-- Server Loading State -->
-	<ServerLoadingSplash />
-{:else if serverStore.error && !serverStore.modelName}
-	<ServerErrorSplash error={serverStore.error} />
-{:else if serverStore.modelName}
-	<div
-		aria-label="Welcome screen with file drop zone"
-		class="flex h-full items-center justify-center"
-		ondragenter={handleDragEnter}
-		ondragleave={handleDragLeave}
-		ondragover={handleDragOver}
-		ondrop={handleDrop}
-		role="main"
-	>
-		<div class="w-full max-w-[48rem] px-4">
-			<div class="mb-8 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 
-				<p class="text-lg text-muted-foreground">How can I help you today?</p>
-			</div>
+				<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
 
-			<div class="mb-6 flex justify-center" in:fly={{ y: 10, duration: 300, delay: 200 }}>
-				<ServerInfo />
-			</div>
+				<ChatScreenServerError />
 
-			{#if serverWarning()}
-				<ChatScreenWarning />
-			{/if}
-
-			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
-				<ChatForm
-					isLoading={isCurrentConversationLoading}
-					onFileRemove={handleFileRemove}
-					onFileUpload={handleFileUpload}
-					onSend={handleSendMessage}
-					onStop={() => stopGeneration()}
-					showHelperText={true}
-					bind:uploadedFiles
-				/>
+				<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
+					<ChatScreenForm
+						disabled={hasPropsError || isEditing()}
+						{initialMessage}
+						isLoading={isCurrentConversationLoading}
+						onFileRemove={handleFileRemove}
+						onFileUpload={handleFileUpload}
+						onSend={handleSendMessage}
+						onStop={() => chatStore.stopGeneration()}
+						onSystemPromptAdd={handleSystemPromptAdd}
+						bind:uploadedFiles
+					/>
+				</div>
 			</div>
 		</div>
 	</div>
 {/if}
 
-<!-- File Upload Error Alert Dialog -->
-<AlertDialog.Root bind:open={showFileErrorDialog}>
-	<AlertDialog.Portal>
-		<AlertDialog.Overlay />
-
-		<AlertDialog.Content class="flex max-w-md flex-col">
-			<AlertDialog.Header>
-				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
-
-				<AlertDialog.Description class="text-sm text-muted-foreground">
-					Some files cannot be uploaded with the current model.
-				</AlertDialog.Description>
-			</AlertDialog.Header>
-
-			<div class="!max-h-[50vh] min-h-0 flex-1 space-y-4 overflow-y-auto">
-				{#if fileErrorData.generallyUnsupported.length > 0}
-					<div class="space-y-2">
-						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
-
-						<div class="space-y-1">
-							{#each fileErrorData.generallyUnsupported as file (file.name)}
-								<div class="rounded-md bg-destructive/10 px-3 py-2">
-									<p class="font-mono text-sm break-all text-destructive">
-										{file.name}
-									</p>
-
-									<p class="mt-1 text-xs text-muted-foreground">File type not supported</p>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-
-				{#if fileErrorData.modalityUnsupported.length > 0}
-					<div class="space-y-2">
-						<div class="space-y-1">
-							{#each fileErrorData.modalityUnsupported as file (file.name)}
-								<div class="rounded-md bg-destructive/10 px-3 py-2">
-									<p class="font-mono text-sm break-all text-destructive">
-										{file.name}
-									</p>
-
-									<p class="mt-1 text-xs text-muted-foreground">
-										{fileErrorData.modalityReasons[file.name] || 'Not supported by current model'}
-									</p>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-			</div>
-
-			<div class="rounded-md bg-muted/50 p-3">
-				<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
-
-				<p class="text-sm text-muted-foreground">
-					{fileErrorData.supportedTypes.join(', ')}
-				</p>
-			</div>
-
-			<AlertDialog.Footer>
-				<AlertDialog.Action onclick={() => (showFileErrorDialog = false)}>
-					Got it
-				</AlertDialog.Action>
-			</AlertDialog.Footer>
-		</AlertDialog.Content>
-	</AlertDialog.Portal>
-</AlertDialog.Root>
+<DialogFileUploadError bind:open={showFileErrorDialog} {fileErrorData} />
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
@@ -477,25 +472,8 @@
 
 <DialogChatError
 	message={activeErrorDialog?.message ?? ''}
+	contextInfo={activeErrorDialog?.contextInfo}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? 'server'}
+	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
-
-<style>
-	.conversation-chat-form {
-		position: relative;
-
-		&::after {
-			content: '';
-			position: fixed;
-			bottom: 0;
-			z-index: -1;
-			left: 0;
-			right: 0;
-			width: 100%;
-			height: 2.375rem;
-			background-color: var(--background);
-		}
-	}
-</style>
