@@ -421,6 +421,7 @@ struct gpt_params {
     bool batch_warmup      = false; // batch warmup run
     bool check_tensors     = false; // validate tensor data
     bool repack_tensors    = false; // repack tensors if interleaved variant is available
+    bool repack_tensors_auto = false; // if true, may auto-disable run-time repack on swap-bound MoE
     bool use_thp           = false; // use transparent huge pages (linux only)
     bool validate_quants   = false; // if true, check for NaNs while loading the model
     bool only_active_exps  = true;  // if true, offload only active experts (relevant only for hybrid CPU/GPU)
