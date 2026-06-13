@@ -266,7 +266,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return;
         }
 
-        const bool use_kv_cache = dflash_use_kv_cache_experiment();
         const float * target_features = nullptr;
         size_t target_feature_floats = 0;
         llama_dflash_window_update window_update = {
@@ -277,16 +276,13 @@ struct common_speculative_state_dflash : public common_speculative_state {
             target_window_append_features.empty() ? nullptr : target_window_append_features.data(),
             target_window_append_features.size(),
         };
-        const llama_dflash_kv_cache_transition cache_plan = use_kv_cache
-                ? llama_plan_dflash_kv_cache_transition_for_ctx(ctx_dft, window_update, target_window_rows)
-                : llama_dflash_kv_cache_transition{};
+        const llama_dflash_kv_cache_transition cache_plan =
+                llama_plan_dflash_kv_cache_transition_for_ctx(ctx_dft, window_update, target_window_rows);
 
-        if (!use_kv_cache || cache_plan.rebuild_cache) {
+        if (cache_plan.rebuild_cache) {
             dflash_materialize_target_window_features(*this);
             target_features = target_window.data();
             target_feature_floats = target_window.size();
-        }
-        if (use_kv_cache && cache_plan.rebuild_cache) {
             window_update.append_features = target_window.data();
             window_update.append_floats = target_window.size();
             window_update.append_rows = target_window_rows;

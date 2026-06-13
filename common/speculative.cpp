@@ -309,8 +309,8 @@ static bool dflash_contract_log_enabled() {
            std::strcmp(env, "off") != 0;
 }
 
-static bool dflash_use_kv_cache_experiment() {
-    const char * env = std::getenv("IK_DFLASH_KV_CACHE");
+static bool dflash_stats_log_enabled() {
+    const char * env = std::getenv("IK_DFLASH_STATS_LOG");
     if (env == nullptr || *env == '\0') {
         return false;
     }
@@ -1318,7 +1318,7 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
 
         if (impl->type == COMMON_SPECULATIVE_TYPE_DFLASH) {
             const auto * dflash_state = dynamic_cast<const common_speculative_state_dflash *>(impl.get());
-            if (dflash_state != nullptr) {
+            if (dflash_state != nullptr && dflash_stats_log_enabled()) {
                 llama_dflash_profile_stats capture_stats;
                 llama_dflash_profile_stats graph_stats;
                 const bool have_capture = llama_dflash_profile_get_stats(dflash_state->ctx_tgt, &capture_stats);

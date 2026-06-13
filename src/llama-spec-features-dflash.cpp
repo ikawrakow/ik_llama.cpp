@@ -10,6 +10,14 @@
 #include "llama-model.h"
 #include "llama-context.h"
 
+static bool llama_dflash_stats_log_enabled() {
+    const char * env = std::getenv("IK_DFLASH_STATS_LOG");
+    return env != nullptr && *env != '\0' &&
+            std::strcmp(env, "0") != 0 &&
+            std::strcmp(env, "false") != 0 &&
+            std::strcmp(env, "off") != 0;
+}
+
 static bool llama_dflash_positions_strictly_increasing(
         const llama_pos * positions,
         int32_t n_rows,
@@ -295,12 +303,16 @@ bool llama_model_share_dflash_io_tensors(
 
     const struct ggml_tensor * output = llama_model_dflash_output_tensor(draft_model);
     if (draft_model->tok_embd != nullptr && output != nullptr) {
-        LLAMA_LOG_INFO("%s: DFlash IO mode=%s output_head=%s tensor=%s type=%s\n",
+        LLAMA_LOG_INFO("%s: DFlash ready io=%s output_head=%s\n",
                 __func__,
                 llama_dflash_io_mode_name(llama_model_dflash_io_mode(draft_model, target_model)),
-                llama_dflash_output_head_kind(draft_model, target_model),
-                output->name[0] != '\0' ? output->name : "(unnamed)",
-                ggml_type_name(output->type));
+                llama_dflash_output_head_kind(draft_model, target_model));
+        if (llama_dflash_stats_log_enabled()) {
+            LLAMA_LOG_INFO("%s: DFlash IO tensor=%s type=%s\n",
+                    __func__,
+                    output->name[0] != '\0' ? output->name : "(unnamed)",
+                    ggml_type_name(output->type));
+        }
     }
 
     return draft_model->tok_embd != nullptr && output != nullptr;
