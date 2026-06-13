@@ -195,8 +195,36 @@ bool common_params_speculative::has_stage_type(common_speculative_type stage_typ
     });
 }
 
+void common_params_speculative::remove_stage_type(common_speculative_type stage_type) {
+    stages.erase(std::remove_if(stages.begin(), stages.end(), [stage_type](const common_speculative_stage_params & stage) {
+        return stage.type == stage_type;
+    }), stages.end());
+
+    if (type == stage_type) {
+        const auto resolved = get_resolved_stages();
+        type = resolved.empty() ? COMMON_SPECULATIVE_TYPE_NONE : resolved.front().type;
+    }
+}
+
 bool common_params_speculative::has_composite_stage_chain() const {
     return get_resolved_stages().size() > 1;
+}
+
+bool common_params_speculative::needs_dft_model() const {
+    return has_stage_type(COMMON_SPECULATIVE_TYPE_DRAFT) ||
+        (has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && has_dft());
+}
+
+void common_params_speculative::clear_dft() {
+    if (model_dft != nullptr) {
+        llama_free_model(model_dft);
+        model_dft = nullptr;
+    }
+
+    model.clear();
+    params.clear();
+    mparams_dft.path.clear();
+    cparams_dft = llama_context_default_params();
 }
 
 int32_t common_params_speculative::get_max_stage_n_max() const {
@@ -5145,7 +5173,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
 
     yaml_dump_string_multiline(stream, "in_prefix", params.input_prefix.c_str());
     fprintf(stream, "in_prefix_bos: %s # default: false\n", params.input_prefix_bos ? "true" : "false");
-    yaml_dump_string_multiline(stream, "in_suffix", params.input_prefix.c_str());
+    yaml_dump_string_multiline(stream, "in_suffix", params.input_suffix.c_str());
     fprintf(stream, "interactive: %s # default: false\n", params.interactive ? "true" : "false");
     fprintf(stream, "interactive_first: %s # default: false\n", params.interactive_first ? "true" : "false");
     fprintf(stream, "keep: %d # default: 0\n", params.n_keep);

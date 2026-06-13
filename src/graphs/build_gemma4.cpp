@@ -687,15 +687,14 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
 static ggml_tensor * gemma4_project_per_layer_inputs(ggml_context * ctx0, const llama_model & model, const llm_build_cb & cb,
         int n_embd, int n_embd_per_layer, int n_layer, int n_tokens,
         ggml_tensor * inputs_embeds, ggml_tensor * inp_per_layer) {
-    const float per_layer_projection_scale = 1.0f / sqrtf((float) n_embd);
     const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
 
     ggml_tensor * per_layer_proj = ggml_mul_mat(ctx0, model.per_layer_model_proj, inputs_embeds);
-    per_layer_proj               = ggml_scale(ctx0, per_layer_proj, per_layer_projection_scale);
+    cb(per_layer_proj, "per_layer_proj", -1);
     per_layer_proj               = ggml_reshape_3d(ctx0, per_layer_proj, n_embd_per_layer, n_layer, n_tokens);
     per_layer_proj               = llm_build_context::llm_build_norm(ctx0, per_layer_proj, model.hparams,
-            model.per_layer_proj_norm, nullptr, LLM_NORM_RMS, cb, -1);  // [n_embd_per_layer, n_layer, n_tokens]
-    cb(per_layer_proj, "per_layer_proj", -1);
+            model.per_layer_proj_norm, nullptr, LLM_NORM_RMS, cb, -1, 1.0f*n_embd);  // [n_embd_per_layer, n_layer, n_tokens]
+    cb(per_layer_proj, "per_layer_proj_normed", -1);
 
     inp_per_layer = ggml_add(ctx0, per_layer_proj, inp_per_layer);
     inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
@@ -902,19 +901,19 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             ggml_tensor * pe_in = cur;
             cb(cur, "pe_in", il);
 
-            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
-            cur = ggml_gelu(ctx0, cur);
             ggml_tensor * inp_this_layer = ggml_view_2d(ctx0, inp_per_layer, inp_per_layer->ne[0], inp_per_layer->ne[1],
                     ggml_row_size(inp_per_layer->type, inp_per_layer->ne[0]),
                     il*inp_per_layer->ne[0]*inp_per_layer->ne[1]*ggml_element_size(inp_per_layer)); // [n_embd_per_layer, n_tokens]
-
-            // TODO @ngxson : improve this
             if (il == n_layer - 1 && inp_out_ids) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
-            cur = ggml_mul(ctx0, cur, inp_this_layer);
+            cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
+            cb(cur, "cur_gated", il);
+            cur = ggml_fused_mul_unary(ctx0, cur, inp_this_layer, GGML_UNARY_OP_GELU);
+            cb(cur, "cur_gelu", il);
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].per_layer_proj, cur); // [n_embd, n_tokens]
+            cb(cur, "cur_proj", il);
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].per_layer_post_norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "per_layer_embd_out", il);
 
@@ -950,6 +949,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
 
     if (hparams.f_final_logit_softcapping > 0) {
+        cb(cur, "result_pre_softcap", -1);
         cur = ggml_softcap(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping, hparams.f_final_logit_softcapping);
     }
 

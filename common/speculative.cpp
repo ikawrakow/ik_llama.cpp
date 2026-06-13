@@ -47,6 +47,18 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"suffix",        COMMON_SPECULATIVE_TYPE_SUFFIX}
 };
 
+void common_speculative_checkpoint::clear() {
+    valid = false;
+    per_step_enabled = false;
+    n_past = 0;
+    sampled = LLAMA_TOKEN_NULL;
+
+    if (sampler != nullptr) {
+        common_sampler_free(sampler);
+        sampler = nullptr;
+    }
+}
+
 struct common_speculative_config {
     common_speculative_stage_params stage;
     common_speculative_type type;
@@ -64,10 +76,10 @@ static bool common_speculative_are_compatible(
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
-    const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
+    const auto vocab_type_tgt = llama_vocab_type(vocab_tgt);
     LOG_DBG("%s: vocab_type tgt: %d\n", __func__, vocab_type_tgt);
 
-    const bool vocab_type_dft = llama_vocab_type(vocab_dft);
+    const auto vocab_type_dft = llama_vocab_type(vocab_dft);
     LOG_DBG("%s: vocab_type dft: %d\n", __func__, vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
@@ -172,6 +184,17 @@ struct common_speculative_state_mtp;
 static common_speculative_state_mtp * common_speculative_get_mtp_state(common_speculative * spec);
 static const common_speculative_state_mtp * common_speculative_get_mtp_state(const common_speculative * spec);
 static void mtp_invalidate_cached_drafts(common_speculative_state_mtp & state);
+static bool common_speculative_checkpoint_save(
+    common_speculative_checkpoint & ckpt,
+    llama_model * model,
+    llama_context * ctx,
+    common_sampler * sampler_src,
+    const common_params_sampling & sparams,
+    llama_seq_id seq_id,
+    llama_pos n_past,
+    llama_token sampled,
+    int max_tokens,
+    int ckpt_mode);
 
 static std::vector<llama_token> mtp_speculative_gen_draft(
     common_speculative_state_mtp & state,
@@ -1002,12 +1025,17 @@ struct common_speculative_state_suffix : public common_speculative_state {
 };
 
 struct common_speculative {
+    common_speculative_checkpoint checkpoint;
     std::vector<common_speculative_config> configs; // resolved stage config for each implementation
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
     std::unique_ptr<spec_tuner> tuner;
     int last_n_drafted = 0;
     int64_t t_step_start_us = 0;
+
+    ~common_speculative() {
+        checkpoint.clear();
+    }
 };
 
 static bool common_speculative_stage_chain_matches(
@@ -1315,6 +1343,7 @@ common_speculative * common_speculative_init(
     }
 
     auto * result = new common_speculative {
+        /* .checkpoint = */ {},
         /* .configs = */ std::move(configs),
         /* .impls = */ std::move(impls)
     };
@@ -1340,6 +1369,170 @@ common_speculative * common_speculative_init(
     return result;
 }
 
+common_speculative_init_status common_speculative_try_init(
+        common_params_speculative & params,
+        llama_context             * ctx_tgt,
+        common_speculative      ** out_spec) {
+    if (out_spec != nullptr) {
+        *out_spec = nullptr;
+    }
+
+    if (!params.has_stage_chain()) {
+        return COMMON_SPECULATIVE_INIT_SKIPPED;
+    }
+
+    common_speculative * spec = common_speculative_init(params, ctx_tgt);
+    if (spec != nullptr) {
+        if (out_spec != nullptr) {
+            *out_spec = spec;
+        }
+        return COMMON_SPECULATIVE_INIT_READY;
+    }
+
+    const llama_model * model = ctx_tgt != nullptr ? llama_get_model(ctx_tgt) : nullptr;
+    if (model != nullptr && llama_model_has_recurrent(model)) {
+        return COMMON_SPECULATIVE_INIT_ERR_RECURRENT;
+    }
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+        return COMMON_SPECULATIVE_INIT_ERR_MTP;
+    }
+    return COMMON_SPECULATIVE_INIT_ERR_GENERIC;
+}
+
+void common_speculative_prepare_startup(
+        gpt_params & params_base,
+        bool         allow_parallel_mtp) {
+    auto & params = params_base.speculative;
+
+    if (!allow_parallel_mtp && params_base.n_parallel > 1 && params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+        LOG_WRN("%s: MTP is not supported with parallel slots yet, removing the MTP stage to avoid cross-slot corruption. n_parallel=%d, stage_chain=%s\n",
+                __func__, params_base.n_parallel, common_speculative_stage_chain_to_str(params).c_str());
+        params.remove_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+    }
+
+    if (!params.needs_dft_model()) {
+        params.clear_dft();
+    }
+
+    params_base.has_mtp = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+}
+
+bool common_speculative_finalize_startup(
+        gpt_params        & params_base,
+        const llama_model * model) {
+    auto & params = params_base.speculative;
+
+    if (!params.needs_dft_model()) {
+        params.clear_dft();
+    }
+
+    if (params.has_dft()) {
+        LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n");
+        if (!common_speculative_load_draft_model(params, params_base)) {
+            return false;
+        }
+    }
+
+    params_base.has_mtp = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+    const bool has_external_mtp = params_base.has_mtp &&
+        llama_model_is_gemma4_mtp_assistant(params.model_dft);
+
+    params_base.has_mtp = common_speculative_prepare_mtp_runtime(
+        params,
+        params_base,
+        model,
+        has_external_mtp);
+    if (params_base.has_mtp) {
+        params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
+    }
+
+    return true;
+}
+
+bool common_speculative_load_draft_model(
+        common_params_speculative & params,
+        const gpt_params         & params_base) {
+    if (!params.has_dft()) {
+        return true;
+    }
+
+    gpt_params params_dft;
+    params_dft.devices          = params.devices;
+    params_dft.model            = params.model;
+    params_dft.main_gpu         = params_base.main_gpu;
+    params_dft.n_gpu_layers     = params.n_gpu_layers;
+    params_dft.rpc_servers      = params_base.rpc_servers;
+    params_dft.cache_type_k     = params.cache_type_k.empty() ? params_base.cache_type_k : params.cache_type_k;
+    params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
+    params_dft.flash_attn       = params_base.flash_attn;
+    params_dft.k_cache_hadamard = params_base.k_cache_hadamard;
+    params_dft.v_cache_hadamard = params_base.v_cache_hadamard;
+
+    if (!params.params.empty()) {
+        auto [argc, argv] = parse_command_line("llama-server " + params.params);
+        if (!gpt_params_parse(argc, argv, params_dft)) {
+            gpt_params_print_usage(argc, argv, params_dft);
+            free_command_line(argc, argv);
+            return false;
+        }
+        free_command_line(argc, argv);
+    }
+
+    LOG_INF("%s: loading draft model '%s'\n", __func__, params_dft.model.c_str());
+
+    if (params_dft.n_ctx == 0) {
+        params_dft.n_ctx = params.n_ctx;
+    }
+    params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
+    params_dft.n_parallel = 1;
+    params_dft.n_batch = params_dft.n_ctx;
+
+    params.mparams_dft.path = params_dft.model;
+
+    llama_model_params mparams_dft = common_model_params_to_llama(params_dft);
+    llama_model * loaded_model = llama_model_load_from_file(params_dft.model.c_str(), mparams_dft);
+    if (loaded_model == nullptr) {
+        LOG_ERR("%s: failed to load draft model '%s'\n", __func__, params.model.c_str());
+        return false;
+    }
+
+    params.model_dft = loaded_model;
+    params.cparams_dft = common_context_params_to_llama(params_dft);
+    return true;
+}
+
+bool common_speculative_prepare_mtp_runtime(
+        common_params_speculative & params,
+        const gpt_params         & params_base,
+        const llama_model        * model,
+        bool                       has_external_mtp) {
+    if (!params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+        return false;
+    }
+
+    if (llama_model_n_nextn_layer(model) == 0 && !has_external_mtp) {
+        LOG_WRN("%s: MTP speculative stage requested, but model has 0 NextN layers. Removing MTP from the configured stage chain.\n",
+                __func__);
+        params.remove_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+        if (!params.needs_dft_model()) {
+            params.clear_dft();
+        }
+        return false;
+    }
+
+    if (!has_external_mtp) {
+        gpt_params params_mtp = params_base;
+        params_mtp.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        params.cparams_dft = common_context_params_to_llama(params_mtp);
+    }
+
+    params.cparams_dft.mtp         = true;
+    params.cparams_dft.mtp_op_type = MTP_OP_WARMUP;
+    params.cparams_dft.embeddings  = true;
+
+    return true;
+}
+
 void common_speculative_free(common_speculative * spec) {
     if (spec == nullptr) {
         return;
@@ -1352,6 +1545,11 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
     if (spec == nullptr) {
         return;
     }
+
+    spec->checkpoint.clear();
+    spec->curr_impl = nullptr;
+    spec->last_n_drafted = 0;
+    spec->t_step_start_us = 0;
 
     for (auto & impl : spec->impls) {
         common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
@@ -1454,6 +1652,34 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
             mtp_invalidate_cached_drafts(*mtp_state);
         }
     }
+}
+
+bool common_speculative_before_draft(
+        common_speculative * spec,
+        llama_model * model,
+        llama_context * ctx,
+        common_sampler * sampler_src,
+        const common_params_sampling & sparams,
+        llama_seq_id seq_id,
+        llama_pos n_past,
+        llama_token sampled,
+        int max_tokens,
+        int ckpt_mode) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    return common_speculative_checkpoint_save(
+        spec->checkpoint,
+        model,
+        ctx,
+        sampler_src,
+        sparams,
+        seq_id,
+        n_past,
+        sampled,
+        max_tokens,
+        ckpt_mode);
 }
 
 static bool common_speculative_has_type(const common_speculative * spec, common_speculative_type type) {
@@ -1663,6 +1889,38 @@ bool common_speculative_ensure_sequence_hidden(
     return common_speculative_capture_output_hidden(spec, ctx, -1, seq_id, pos);
 }
 
+common_speculative_draft_result common_speculative_draft_ex(
+        common_speculative * spec,
+        llama_context * ctx,
+        common_params_speculative & params,
+        const llama_tokens & prompt_tgt,
+        llama_token id_last,
+        llama_pos draft_base_pos,
+        llama_seq_id draft_seq_id) {
+    common_speculative_draft_result result = {};
+
+    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+        if (!common_speculative_ensure_sequence_hidden(spec, ctx, draft_seq_id, draft_base_pos - 1)) {
+            LOG_ERR("%s: seq_id=%d MTP hidden state is empty during speculation\n",
+                    __func__, (int) draft_seq_id);
+            return result;
+        }
+    }
+
+    result.tokens = common_speculative_draft(
+        spec,
+        params,
+        prompt_tgt,
+        id_last,
+        draft_base_pos,
+        draft_seq_id);
+    result.type = spec != nullptr && spec->curr_impl != nullptr
+        ? spec->curr_impl->type
+        : COMMON_SPECULATIVE_TYPE_NONE;
+
+    return result;
+}
+
 int32_t common_speculative_on_target_seq_batch(
         common_speculative * spec,
         llama_context * ctx_tgt,
@@ -1834,6 +2092,234 @@ bool common_speculative_commit_accepted_output(
         hidden_rows);
 }
 
+static bool common_speculative_checkpoint_save(
+        common_speculative_checkpoint & ckpt,
+        llama_model * model,
+        llama_context * ctx,
+        common_sampler * sampler_src,
+        const common_params_sampling & sparams,
+        llama_seq_id seq_id,
+        llama_pos n_past,
+        llama_token sampled,
+        int max_tokens,
+        int ckpt_mode) {
+    ckpt.clear();
+    ckpt.n_past = n_past;
+    ckpt.sampled = sampled;
+
+    const int actual_mode = llama_spec_ckpt_init(ctx, ckpt_mode, max_tokens);
+    if (actual_mode == LLAMA_SPEC_CKPT_NONE) {
+        return false;
+    }
+    ckpt.per_step_enabled = (actual_mode == LLAMA_SPEC_CKPT_PER_STEP);
+
+    ckpt.valid = llama_spec_ckpt_save(ctx, seq_id);
+    if (!ckpt.valid) {
+        llama_spec_ckpt_discard(ctx);
+        return false;
+    }
+
+    ckpt.sampler = common_sampler_init(model, sparams);
+    if (ckpt.sampler == nullptr) {
+        common_speculative_checkpoint_discard(ckpt, ctx);
+        return false;
+    }
+
+    if (sampler_src != nullptr) {
+        common_sampler_clone(sampler_src, ckpt.sampler);
+    }
+
+    return true;
+}
+
+const common_speculative_checkpoint * common_speculative_get_checkpoint(const common_speculative * spec) {
+    return spec != nullptr ? &spec->checkpoint : nullptr;
+}
+
+void common_speculative_checkpoint_discard(
+        common_speculative_checkpoint & ckpt,
+        llama_context * ctx) {
+    ckpt.clear();
+    llama_spec_ckpt_discard(ctx);
+}
+
+void common_speculative_checkpoint_restore(
+        common_speculative_checkpoint & ckpt,
+        common_speculative * spec,
+        llama_context * ctx,
+        common_sampler * sampler_dst,
+        llama_seq_id seq_id,
+        common_speculative_type spec_type_used,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        int n_draft,
+        const std::vector<float> & mtp_hidden_state_pre,
+        int32_t mtp_n_past_base) {
+    if (!ckpt.valid) {
+        return;
+    }
+
+    if (ckpt.per_step_enabled) {
+        const int step = (int) ids.size() - 1;
+        llama_spec_ckpt_restore(ctx, seq_id, ckpt.n_past, step);
+
+        if (ckpt.sampler != nullptr && sampler_dst != nullptr) {
+            common_sampler_clone(ckpt.sampler, sampler_dst);
+        }
+        if (sampler_dst != nullptr) {
+            for (llama_token id : ids) {
+                common_sampler_accept(sampler_dst, ctx, id, true);
+            }
+        }
+
+        if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) && !mtp_hidden_state_pre.empty()) {
+            if (!common_speculative_commit_accepted_hidden_rows(
+                    spec,
+                    spec_type_used,
+                    seq_id,
+                    mtp_n_past_base,
+                    sampled_before,
+                    ids,
+                    mtp_hidden_state_pre)) {
+                common_speculative_clear_sequence_hidden(spec, seq_id);
+            } else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
+                LOG_DBG("%s: seq_id=%d synced MTP target hidden state from accepted-prefix rows after per-step restore\n",
+                        __func__, (int) seq_id);
+            }
+        }
+
+        LOG_DBG("%s: seq_id=%d per-step restore: step=%d (rejected %d drafts)\n",
+                __func__, (int) seq_id, step, (int) (n_draft - (ids.size() - 1)));
+    } else {
+        llama_spec_ckpt_restore(ctx, seq_id, ckpt.n_past, 0);
+
+        if (ckpt.sampler != nullptr && sampler_dst != nullptr) {
+            common_sampler_clone(ckpt.sampler, sampler_dst);
+        }
+
+        if (!ids.empty()) {
+            const int n_re = (int) ids.size();
+            llama_batch re_batch = llama_batch_init(n_re, 0, 1);
+            common_batch_add(re_batch, ckpt.sampled, ckpt.n_past, { seq_id }, n_re == 1);
+            for (int j = 0; j < n_re - 1; ++j) {
+                common_batch_add(re_batch, ids[j], ckpt.n_past + 1 + j, { seq_id }, j == n_re - 2);
+            }
+
+            if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+                for (int j = 0; j < re_batch.n_tokens; ++j) {
+                    re_batch.logits[j] = true;
+                }
+                llama_set_embeddings(ctx, true);
+            }
+
+            const int ret = llama_decode(ctx, re_batch);
+            if (ret != 0) {
+                LOG_ERR("%s: seq_id=%d failed to re-decode accepted tokens after checkpoint restore: %d\n",
+                        __func__, (int) seq_id, ret);
+            }
+
+            if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
+                std::vector<int32_t> redecoded_indices(n_re);
+                for (int j = 0; j < n_re; ++j) {
+                    redecoded_indices[j] = j;
+                }
+
+                if (!common_speculative_commit_accepted_output(
+                        spec,
+                        ctx,
+                        spec_type_used,
+                        seq_id,
+                        ckpt.n_past,
+                        sampled_before,
+                        ids,
+                        redecoded_indices)) {
+                    common_speculative_clear_sequence_hidden(spec, seq_id);
+                }
+            }
+
+            if (sampler_dst != nullptr) {
+                for (llama_token id : ids) {
+                    common_sampler_accept(sampler_dst, ctx, id, true);
+                }
+            }
+
+            llama_batch_free(re_batch);
+            LOG_DBG("%s: seq_id=%d spec checkpoint restored: re-decoded %d tokens (rejected %d drafts)\n",
+                    __func__, (int) seq_id, n_re, (int) (n_draft - (ids.size() - 1)));
+        }
+    }
+
+    common_speculative_checkpoint_discard(ckpt, ctx);
+}
+
+void common_speculative_commit(
+        common_speculative * spec,
+        llama_context * ctx,
+        common_sampler * sampler_dst,
+        llama_seq_id seq_id,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        int n_draft,
+        llama_pos pos_base,
+        const std::vector<int32_t> & accepted_output_indices) {
+    GGML_ASSERT(spec != nullptr);
+    GGML_ASSERT(!ids.empty());
+
+    common_speculative_checkpoint & ckpt = spec->checkpoint;
+    const common_speculative_type spec_type_used = spec->curr_impl != nullptr
+        ? spec->curr_impl->type
+        : COMMON_SPECULATIVE_TYPE_NONE;
+    const bool any_rejected = (int) ids.size() - 1 < n_draft;
+    std::vector<float> mtp_hidden_state_pre;
+
+    common_speculative_accept(spec, ids.size() - 1);
+
+    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) &&
+            any_rejected &&
+            ckpt.valid &&
+            !accepted_output_indices.empty()) {
+        if (!common_speculative_copy_output_hidden_rows(spec, ctx, accepted_output_indices, mtp_hidden_state_pre)) {
+            mtp_hidden_state_pre.clear();
+        }
+    }
+
+    if (any_rejected && ckpt.valid) {
+        common_speculative_checkpoint_restore(
+            ckpt,
+            spec,
+            ctx,
+            sampler_dst,
+            seq_id,
+            spec_type_used,
+            sampled_before,
+            ids,
+            n_draft,
+            mtp_hidden_state_pre,
+            pos_base);
+        return;
+    }
+
+    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) && !accepted_output_indices.empty()) {
+        if (!common_speculative_commit_accepted_output(
+                spec,
+                ctx,
+                spec_type_used,
+                seq_id,
+                pos_base,
+                sampled_before,
+                ids,
+                accepted_output_indices)) {
+            common_speculative_clear_sequence_hidden(spec, seq_id);
+        } else if (spec_type_used != COMMON_SPECULATIVE_TYPE_MTP) {
+            LOG_DBG("%s: seq_id=%d synced MTP target hidden state from accepted-prefix rows\n",
+                    __func__, (int) seq_id);
+        }
+    }
+
+    llama_kv_cache_seq_rm(ctx, seq_id, pos_base + (llama_pos) (ids.size() - 1), -1);
+    common_speculative_checkpoint_discard(ckpt, ctx);
+}
+
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded, int n_past, common_params_speculative * active_params) {
     if (spec == nullptr) {
         return;
@@ -1978,6 +2464,50 @@ void common_speculative_clear_sequence_hidden(common_speculative * spec, llama_s
     }
 
     mtp_clear_target_hidden(*mtp_state, seq_id);
+}
+
+void common_speculative_clear_sequence(
+        common_speculative * spec,
+        llama_seq_id seq_id,
+        bool clear_companion_ctx) {
+    if (spec != nullptr) {
+        spec->checkpoint.clear();
+        spec->curr_impl = nullptr;
+        spec->last_n_drafted = 0;
+        spec->t_step_start_us = 0;
+    }
+
+    common_speculative_clear_sequence_hidden(spec, seq_id);
+
+    if (clear_companion_ctx) {
+        if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
+            llama_kv_cache_clear(ctx_mtp);
+        }
+    }
+}
+
+bool common_speculative_trim_sequence(
+        common_speculative * spec,
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_pos pos_begin) {
+    const bool target_trimmed = llama_kv_cache_seq_rm(ctx, seq_id, pos_begin, -1);
+    if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
+        return target_trimmed && llama_kv_cache_seq_rm(ctx_mtp, seq_id, pos_begin, -1);
+    }
+
+    return target_trimmed;
+}
+
+void common_speculative_clear_sequence_kv(
+        common_speculative * spec,
+        llama_context * ctx,
+        llama_seq_id seq_id) {
+    common_speculative_clear_sequence(spec, seq_id);
+    llama_kv_cache_seq_rm(ctx, seq_id, -1, -1);
+    if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
+        llama_kv_cache_seq_rm(ctx_mtp, seq_id, -1, -1);
+    }
 }
 
 llama_context * common_speculative_get_companion_ctx(common_speculative * spec) {
@@ -2184,13 +2714,10 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     // This prevents cache state corruption where two cells map to the same logical position.
     // If the state contained in `last` had a valid token id and probability, it means that we
     // have previously run an "accept" batch, where the token sampled from the main model was included.
-    // In that case, we need to discard all tokens that we ran here to get the KV cache to the correct state.
-    //   => for i0 = 1 we discard from n_past
-    // But if we did not have a valid last token_id, it means the first token we run was sampled from the
-    // main model. Hence we want to keep this token in the KV cache and discard all other tokens.
-    //   => for i0 = 0 we discard from n_past + 1
+    // Even in that case, the token at `n_past` is already committed and must remain in the KV cache,
+    // so we only discard the speculative tail starting at `n_past + 1`.
     if (n_decode > 0) {
-        llama_kv_cache_seq_rm(ctx, seq_id, n_past + 1 - i0, n_past + n_decode + 2);
+        llama_kv_cache_seq_rm(ctx, seq_id, n_past + 1, n_past + n_decode + 2);
     }
 
     return drafts;

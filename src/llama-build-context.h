@@ -287,6 +287,7 @@ struct llm_build_context {
     ggml_cgraph * build_bitnet_158();
 
     ggml_cgraph * build_cohere2();
+    ggml_cgraph * build_cohere2_moe();
 
     ggml_cgraph * build_t5_encoder();
 
@@ -453,7 +454,7 @@ llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input = false,
          ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr,
-         ggml_tensor * shexp_gate = nullptr);
+         ggml_tensor * shexp_gate = nullptr, ggml_tensor * add_extra = nullptr);
 
     static ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids);
 

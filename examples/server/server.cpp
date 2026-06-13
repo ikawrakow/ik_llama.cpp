@@ -330,6 +330,18 @@ struct server_response_reader {
         return !cancelled && received_count < id_tasks.size();
     }
 
+    // cancel-cascade fix: true only if one of THIS reader's tasks is on a
+    // slot (the active decode). Used to gate llama_decode_stop() so a queued/
+    // deferred task's disconnect cannot abort another task's active decode via
+    // the process-global stop_internal_decode flag. Best-effort cross-thread
+    // read (slots are not resized at runtime; same race class as the global).
+    bool any_task_on_slot() const {
+        for (const auto & slot : ctx_server.slots) {
+            if (slot.is_processing() && id_tasks.count(slot.id_task)) return true;
+        }
+        return false;
+    }
+
     // return nullptr if should_stop() is true before receiving a result
     // note: if one error is received, it will stop further processing and return error result
     server_task_result_ptr next(const std::function<bool()>& should_stop) {
@@ -1127,7 +1139,7 @@ int main(int argc, char ** argv) {
                 // non-stream, wait for the results
                 auto all_results = rd->wait_for_all(is_connection_closed);
                 if (all_results.is_terminated) {
-                    llama_decode_stop(); // send a signal to stop decode process
+                    if (rd->any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
                     return; // connection is closed
                 }
                 else if (all_results.error) {
@@ -1141,8 +1153,8 @@ int main(int argc, char ** argv) {
                         arr.push_back(res->to_json());
                     }
                     // if single request, return single object instead of array
-                    res_ok(res, arr.size() == 1 ? arr[0] : arr);              
-                }                       
+                    res_ok(res, arr.size() == 1 ? arr[0] : arr);
+                }
             }
             else {
                 // in streaming mode, the first error must be treated as non-stream response
@@ -1150,7 +1162,7 @@ int main(int argc, char ** argv) {
                 // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
                 server_task_result_ptr first_result = rd->next(is_connection_closed);
                 if (first_result == nullptr) {
-                    llama_decode_stop(); // send a signal to stop decode process
+                    if (rd->any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
                     return; // connection is closed
                 }
                 else if (first_result->is_error()) {
@@ -1358,10 +1370,11 @@ int main(int argc, char ** argv) {
     const auto handle_infill = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         log_prompt(ctx_server.params_base, json::parse(req.body));
         json data = json::parse(req.body);
-        const int id_task = ctx_server.queue_tasks.get_new_id();
-        server_tokens token; // dummy tokens
-        ctx_server.queue_results.add_waiting_task_id(id_task);
-        ctx_server.request_completion(id_task, -1, data, true, false, std::move(token));
+        //avoid double submits
+        //const int id_task = ctx_server.queue_tasks.get_new_id();
+        //server_tokens token; // dummy tokens
+        //ctx_server.queue_results.add_waiting_task_id(id_task);
+        //ctx_server.request_completion(id_task, -1, data, true, false, token);
         std::vector<raw_buffer> files; // dummy
         handle_completions_impl(
             SERVER_TASK_TYPE_INFILL,
@@ -1479,7 +1492,7 @@ int main(int argc, char ** argv) {
 
         // collect results
         if (all_results.is_terminated) {
-            llama_decode_stop();
+            if (rd.any_task_on_slot()) llama_decode_stop(); // cancel-cascade fix: stop only if OUR task is the active decode
             return; // connection is closed
         }
         else if (all_results.error) {

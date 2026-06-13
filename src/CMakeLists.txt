@@ -109,6 +109,7 @@ add_library(llama
             graphs/build_glm4.cpp
             graphs/build_bitnet.cpp
             graphs/build_cohere2.cpp
+            graphs/build_cohere2_moe.cpp
             graphs/build_t5.cpp
             graphs/build_jais.cpp
             graphs/build_chatglm.cpp

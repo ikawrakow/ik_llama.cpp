@@ -843,16 +843,15 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         }
         if (down) {
             cur = llm_build_lora_mm(lctx, ctx, down, cur);
+            cb(cur, "ffn_down", il);
             if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
                 // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
                 ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
             }
         }
         if (down_b) {
-            cb(cur, "ffn_down", il);
-        }
-        if (down_b) {
             cur = ggml_add(ctx, cur, down_b);
+            cb(cur, "ffn_down_b", il);
         }
         if (down_s) {
             cur = ggml_mul(ctx, cur, down_s);
@@ -1294,7 +1293,8 @@ llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
          ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b,
-         ggml_tensor * shexp_gate) {
+         ggml_tensor * shexp_gate,
+         ggml_tensor * add_extra) {
 
     auto split_up_exps    = up_exps ? (ggml_split_tensor_t *)up_exps->extra : nullptr;
     auto split_gate_exps  = gate_exps ? (ggml_split_tensor_t *)gate_exps->extra : nullptr;
@@ -1337,6 +1337,7 @@ llm_expert_gating_func_type   gating_op,
         }
         ggml_build_forward_expand(graph, routed_out);
 
+        bool handled_add_extra = false;
         if (up_shexp && gate_shexp && down_shexp) {
             if (split_up_shexp) {
                 std::vector<ggml_tensor *> results(split_up_shexp->n_device, nullptr);
@@ -1388,6 +1389,12 @@ llm_expert_gating_func_type   gating_op,
                         shared_out = ggml_add(ctx, shared_out, routed_out);
                         cb(shared_out, "ffn_shared_routed_added", il);
                     }
+                    if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
+                        GGML_ASSERT(add_extra->src[id]); // TODO: fix this! It can be null if the splits of the attention and ffn tensors are different
+                        shared_out = ggml_add(ctx, shared_out, add_extra->src[id]);
+                        cb(shared_out, "ffn_shared_with_extra", il_cb);
+                        handled_add_extra = true;
+                    }
                     if (shared_out->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
                         shared_out = ggml_cast(ctx, shared_out, lctx.cparams.reduce_type);
                     }
@@ -1422,6 +1429,13 @@ llm_expert_gating_func_type   gating_op,
             }
         } else {
             cur = routed_out;
+        }
+        if (add_extra && !handled_add_extra) {
+            if (add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
+                add_extra->op_params[3] = 0;
+            }
+            cur = ggml_add(ctx, cur, add_extra);
+            cb(cur, "ffn_with_extra", il);
         }
         if (cur != routed_out) {
             ggml_build_forward_expand(graph, cur);
@@ -1506,6 +1520,11 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
+        if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
+            GGML_ASSERT(add_extra->src[id]); // TODO: fix this! It can be null if the splits of the attention and ffn tensors are different
+            cur = ggml_add(ctx, cur, add_extra->src[id]);
+            cb(cur, "ffn_with_extra", il_cb);
+        }
         if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
             cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
             cb(cur, "ffn_out_f16", il_cb);
@@ -1519,6 +1538,10 @@ llm_expert_gating_func_type   gating_op,
     if (add_input) {
         results[last_id] = ggml_add(ctx, results[last_id], input);
         cb(results[last_id], "ffn_inp_added", il);
+    }
+    if (add_extra && !(add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1)) {
+        results[last_id] = ggml_add(ctx, results[last_id], add_extra);
+        cb(results[last_id], "ffn_with_inp", il);
     }
 
     auto cur = ggml_reduce(ctx, results.data(), n_device, GGML_OP_ADD);
@@ -1595,6 +1618,7 @@ static ggml_tensor * llm_build_kqv(
                                   || model.arch == LLM_ARCH_GPTNEOX
                                   || model.arch == LLM_ARCH_QWEN2
                                   || model.arch == LLM_ARCH_COHERE2
+                                  || model.arch == LLM_ARCH_COHERE2_MOE
                                   || model.arch == LLM_ARCH_COMMAND_R
                                   || model.arch == LLM_ARCH_GLM4
                                   || model.arch == LLM_ARCH_GLM4_MOE
@@ -1738,7 +1762,7 @@ static ggml_tensor * llm_build_kqv(
                 auto q_i = ggml_view_3d(ctx, q, q->ne[0], q->ne[1], this_ne12, q->nb[1], q->nb[2], q->nb[2]*i12);
                 auto kq_i = ggml_mul_mat(ctx, k_i, q_i);
                 if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2 ||
-                    model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_COMMAND_R || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
+                    model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_COHERE2_MOE || model.arch == LLM_ARCH_COMMAND_R || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
                     ggml_mul_mat_set_prec(kq_i, GGML_PREC_F32);
                 }
                 if (model.arch == LLM_ARCH_GROK) {
@@ -2448,6 +2472,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_cohere2();
             } break;
+        case LLM_ARCH_COHERE2_MOE:
+            {
+                result = llm.build_cohere2_moe();
+            } break;
         case LLM_ARCH_T5:
             {
                 if (lctx.is_encoding) {
@@ -2572,6 +2600,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                                   || model.arch == LLM_ARCH_GPTNEOX
                                   || model.arch == LLM_ARCH_QWEN2
                                   || model.arch == LLM_ARCH_COHERE2
+                                  || model.arch == LLM_ARCH_COHERE2_MOE
                                   || model.arch == LLM_ARCH_COMMAND_R
                                   || model.arch == LLM_ARCH_GLM4
                                //   || model.arch == LLM_ARCH_GLM4_MOE

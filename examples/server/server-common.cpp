@@ -1295,7 +1295,7 @@ void server_tokens::push_back(server_tokens& tokens) {
         // Assert if we are copying MTMD chunks to a server_tokens that does not have mtmd.
         // We could also just check, but this will prevent silently dropping MTMD data.
         GGML_ASSERT(has_mtmd);
-        for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ) {
+        for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); it++) {
             auto* chunk = tokens.map_idx_to_media[it->first].get();
             mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
             map_idx_to_media[start_idx + it->first] = std::move(new_chunk);

@@ -22,25 +22,12 @@ enum slot_command {
     SLOT_COMMAND_RELEASE,
 };
 
-struct server_speculative_checkpoint {
-    bool valid = false;
-    bool per_step_enabled = false; // per-step SSM checkpoints active
-    llama_pos n_past = 0;
-    llama_token sampled = LLAMA_TOKEN_NULL;
-    common_sampler * sampler = nullptr; // saved sampler state
-
-    void clear();
-};
-
 struct server_slot {
     int id;
     int id_task = -1;
     int id_multi = -1;
 
     struct slot_params params;
-
-    llama_batch batch_spec = {};
-    llama_context * ctx_dft = nullptr;
 
     bool released = false;
     slot_state state = SLOT_STATE_IDLE;
@@ -136,7 +123,6 @@ struct server_slot {
     // sampling
     llama_token sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
-    common_speculative_type drafted_spec_type = COMMON_SPECULATIVE_TYPE_NONE;
 
     json json_schema;
 
@@ -171,11 +157,6 @@ struct server_slot {
     // expiring logit bias
     std::vector<common_sampler::elb_state> prev_elb_states;
 
-    bool has_mtp = false;
-
-    // saves recurrent state before a speculative batch so it can be restored on rejection
-    server_speculative_checkpoint spec_ckpt;
-
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
@@ -195,6 +176,7 @@ struct server_slot {
     void reset();
 
     bool need_embd() const;
+    bool uses_mtp() const;
 
     bool has_budget(gpt_params& global_params);
 
@@ -265,11 +247,6 @@ struct server_context {
 
     // multimodal
     mtmd_context* mctx = nullptr;
-
-    // For speculative decoding
-    llama_model* model_draft = nullptr;
-    llama_context* ctx_draft = nullptr;
-    llama_context_params cparams_dft;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -350,7 +327,7 @@ struct server_context {
 
     void apply_server_biases(server_slot& slot);
 
-    void request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens&& inputs);
+    void request_completion(int id_task, int id_multi, json data, bool infill, bool embedding, server_tokens & inputs);
 
     void request_cancel(int id_task);
 
