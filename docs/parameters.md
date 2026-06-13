@@ -148,6 +148,11 @@ Note: When the available memory is very limited, turn this option off (`-cram 0`
 | `-cram, --cache-ram N` | Set the maximum cache size in MiB | 8192 | -1 = no limit, 0 = disable Very useful when the variations of the same prompt are re-sent to the model (coding agents, etc.). [PR 954](https://github.com/ikawrakow/ik_llama.cpp/pull/954) |
 | `-crs, --cache-ram-similarity N` | Max similarity of prompt tokens to cache tokens that triggers prompt cache | 0.50 |  |
 | `-cram-n-min, --cache-ram-n-min N` | Minimum number of cached tokens that triggers prompt cache | 0 |  |
+| `--cache-ram-reuse-n-min N` | Minimum reusable common-prefix tokens required to restore from prompt cache | 0 |  |
+
+When restoring a prompt from RAM cache, the server ranks candidates by reusable common prefix first and uses similarity as a tie-breaker. A candidate is skipped if its reusable prefix is below `--cache-ram-reuse-n-min`, if the reusable fraction is below `--cache-ram-similarity`, or if the cached KV range cannot be rewound safely for SWA/sliding-window attention.
+
+For SWA models, cached prompt entries track the KV position range saved with the state. If the active KV window starts after the reusable prefix, restore is only allowed when an earlier context checkpoint can rewind to that prefix. Otherwise the candidate is rejected before loading state, so a bad RAM-cache hit does not mutate the slot and then force full prompt re-processing. When context checkpoints are capped, the server keeps the earliest checkpoint as a rewind anchor when possible.
 
 ## Sampling
 

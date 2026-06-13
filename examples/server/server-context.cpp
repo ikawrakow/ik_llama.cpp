@@ -425,8 +425,8 @@ void server_slot::prompt_save(server_prompt_cache& prompt_cache) const {
     llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0);
 }
 
-void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens) {
-    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id);
+void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, size_t min_reusable_prefix, float min_reusable_fraction) {
+    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id, min_reusable_prefix, min_reusable_fraction);
     if (!res) {
         LLAMA_LOG_INFO("failed to load prompt from cache\n");
     }
@@ -868,6 +868,8 @@ void server_context::copy_data_to_cached_prompt(const server_tokens & tokens, se
     slot.server_cached_prompt.n_discarded_prompt = slot.n_discarded_prompt;
     slot.server_cached_prompt.n_kept_prompt = slot.n_kept_prompt;
     slot.server_cached_prompt.think_tokens = slot.params.think_tokens;
+    slot.server_cached_prompt.pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
+    slot.server_cached_prompt.pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
 }
 
 server_slot* server_context::get_available_slot(const server_task& task) {
@@ -983,7 +985,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
-            ret->prompt_load(*prompt_cache, task.tokens);
+            ret->prompt_load(*prompt_cache, task.tokens, (size_t) std::max(0, cache_ram_reuse_n_min), cache_ram_similarity);
             prompt_cache->update();
 
             ret->cache_tokens = ret->server_cached_prompt.tokens.clone(); // recover cache tokens
@@ -3564,13 +3566,17 @@ bool server_context::create_checkpoint(server_slot & slot) {
     if (do_checkpoint) {
         const int64_t t_start = ggml_time_us();
         while (slot.server_cached_prompt.checkpoints.size() >= (size_t)params_base.ctx_checkpoints_n) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.server_cached_prompt.checkpoints.front();
+            // Preserve the earliest checkpoint as an SWA rewind anchor when the cap allows it.
+            auto erase_it = slot.server_cached_prompt.checkpoints.begin();
+            if (params_base.ctx_checkpoints_n > 1 && slot.server_cached_prompt.checkpoints.size() > 1) {
+                ++erase_it;
+            }
+            const auto & cur = *erase_it;
 
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024);
 
-            slot.server_cached_prompt.checkpoints.erase(slot.server_cached_prompt.checkpoints.begin());
+            slot.server_cached_prompt.checkpoints.erase(erase_it);
         }
 
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();

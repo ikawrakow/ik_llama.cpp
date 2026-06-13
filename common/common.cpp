@@ -2772,6 +2772,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cache_ram_n_min = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "--cache-ram-reuse-n-min") {
+        CHECK_ARG
+        params.cache_ram_reuse_n_min = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--pos") {
         CHECK_ARG
         params.i_pos = std::stoi(argv[i]);
@@ -2970,6 +2975,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-cram, --cache-ram N",          "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
     options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "max of similarity of prompt tokens to cache tokens that triggers prompt cache (default: %.2f).",params.cache_ram_similarity });
     options.push_back({ "*",           "-cram-n-min --cache-ram-n-min N",           "minimum number of the cached tokens that triggers prompt cache (default: %d).", params.cache_ram_n_min });
+    options.push_back({ "*",           "--cache-ram-reuse-n-min N",     "minimum reusable common-prefix tokens required to restore from prompt cache (default: %d).", params.cache_ram_reuse_n_min });
     options.push_back({ "*",           "-n,    --predict N",            "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict });
     options.push_back({ "*",           "-b,    --batch-size N",         "logical maximum batch size (default: %d)", params.n_batch });
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });

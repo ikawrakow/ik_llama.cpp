@@ -386,6 +386,8 @@ struct server_prompt {
     int n_kept_prompt;
     int n_discarded_prompt;
     thinking_tokens think_tokens;
+    llama_pos pos_min = -1;
+    llama_pos pos_max = -1;
 
     std::vector<uint8_t> data;
 
@@ -397,12 +399,26 @@ struct server_prompt {
         return tokens.size();
     }
 
+    bool has_rewind_checkpoint(size_t lcp) const {
+        if (pos_min < 0 || pos_min <= (llama_pos) lcp) {
+            return true;
+        }
+        for (const auto & checkpoint : checkpoints) {
+            if (checkpoint.pos_max <= (llama_pos) lcp) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     server_prompt clone() const {
         return server_prompt{
             tokens.clone(),
             n_kept_prompt,
             n_discarded_prompt,
             think_tokens,
+            pos_min,
+            pos_max,
             data,
             checkpoints
         };
@@ -414,6 +430,8 @@ struct server_prompt {
         j["tokens"] = tokens.to_json();
         j["n_kept_prompt"] = n_kept_prompt;
         j["n_discarded_prompt"] = n_discarded_prompt;
+        j["pos_min"] = pos_min;
+        j["pos_max"] = pos_max;
         return j;
     }
 
@@ -422,6 +440,8 @@ struct server_prompt {
         n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
         n_discarded_prompt = j.value<llama_pos>("n_discarded_prompt", 0);
         n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
+        pos_min = j.value<llama_pos>("pos_min", -1);
+        pos_max = j.value<llama_pos>("pos_max", -1);
     }
 };
 
@@ -446,7 +466,7 @@ struct server_prompt_cache {
 
     server_prompt* alloc(const server_prompt& prompt, size_t state_size);
 
-    bool load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot);
+    bool load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot, size_t min_reusable_prefix, float min_reusable_fraction);
 
     void update();
 };
