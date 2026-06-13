@@ -4255,6 +4255,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             break;
         default:
             fprintf(stderr, "mmq_x_best=%d\n", mmq_x_best);
+            fprintf(stderr, "id = %d, cc = %d, nsm = %d, smpbo = %d, mmq_x_max = %d, mmq_y = %d\n", id, cc, nsm, smpbo, mmq_x_max, mmq_y);
             GGML_ABORT("fatal error");
             break;
     }
