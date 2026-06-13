@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-build-context.h"
+#include "pxa-seq-decomp.h" // PXA_LLAMA_MTP_FIX: shared distinct-seq decomposition
 
 #include <utility>
 
@@ -17,9 +18,11 @@ struct delta_net {
                       int il, const llm_build_cb & cb, int repeat_type,
                       ggml_tensor * per_step_ckpt = nullptr);
 
+    // PXA_LLAMA_FIX_v4: takes n_seqs + per-request runtime tensors (state_row_idx, conv_seq_map, state_mask) so the
+    // mixed (concurrent) path runs ONE batched delta-net (n_seqs=n_tok) instead of a per-token subgraph loop.
     ggml_tensor * build_layer_attn_linear_core(ggml_context * ctx0, ggml_cgraph * gf,
-            ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
-            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const;
+            ggml_tensor * cur, ggml_tensor * state_row_idx, ggml_tensor * conv_seq_map, ggml_tensor * state_mask, ggml_tensor * inp_out_ids,
+            int64_t n_seqs, bool reset_state_local, int il, const llm_build_cb & cb, int64_t pxa_static_slot = -1) const;
 
     ggml_tensor * build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb) const;
@@ -31,6 +34,10 @@ private:
     std::vector<llama_seq_id> token_seq_ids;
     bool all_same_seq;
     bool has_unique_seq_ids;
+    // PXA_LLAMA_MTP_FIX: distinct-sequence decomposition (n_seqs, seq_slot[], n_seq_tokens, ...)
+    // computed once in the constructor and shared with the builder. Generalizes the v4
+    // "n_seqs == n_tok" assumption so an MTP verify batch (n_seq_tokens>1 per seq) is handled.
+    pxa_seq_decomp seq_decomp;
 
     static std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * wqkv, ggml_tensor * wqkv_gate, ggml_tensor * input, int il, const llm_build_cb & cb,
@@ -51,11 +58,11 @@ private:
             ggml_tensor * cur, int il, const llm_build_cb & cb, ggml_cgraph * gf);
 
     static ggml_tensor * build_qkv(ggml_context * ctx0, ggml_tensor * state_storage, ggml_tensor * ssm_conv1d,
-            ggml_tensor * qkv_mixed, ggml_tensor * inp_s_seq_qnext, ggml_tensor * beta, ggml_tensor * gate,
+            ggml_tensor * qkv_mixed, ggml_tensor * state_row_idx, ggml_tensor * conv_seq_map, ggml_tensor * state_mask, ggml_tensor * beta, ggml_tensor * gate,
             int64_t head_k_dim, int64_t num_k_heads, int64_t head_v_dim, int64_t num_v_heads, int64_t ssm_d_conv,
-            int64_t state_seq_id_local, uint32_t qnext_state_slots, bool reset_state_local,
+            int64_t n_seqs_in, uint32_t qnext_state_slots, bool reset_state_local,
             float eps_norm, int repeat_type, int il, const llm_build_cb & cb, ggml_cgraph * gf,
-            ggml_tensor * per_step_ssm = nullptr, ggml_tensor * per_step_conv = nullptr);
+            ggml_tensor * per_step_ssm = nullptr, ggml_tensor * per_step_conv = nullptr, int64_t pxa_static_slot = -1);
 
     static ggml_tensor * build_gated_output(llama_context & lctx, ggml_context * ctx0, ggml_tensor * ssm_norm, ggml_tensor * ssm_out,
             ggml_tensor * output, ggml_tensor * z, int64_t head_v_dim, int64_t num_v_heads, int64_t n_tok, int il, const llm_build_cb & cb);
