@@ -847,13 +847,13 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
         );
     };
 
-    const std::string window = ctx_sampling->decoded_text.substr(ctx_sampling->elb_search_pos);
+    const std::string search_window = ctx_sampling->decoded_text.substr(ctx_sampling->elb_search_pos);
 
-    if (!window.empty() && !elb.other_tokens.empty() && (elb.other_tokens.front().duration > elb.countup)) {
+    if (!search_window.empty() && !elb.other_tokens.empty() && (elb.other_tokens.front().duration > elb.countup)) {
         const auto ifi = index_first_inactive(elb.other_tokens);
         for (size_t j = 0; j < ifi; ++j) {
             const auto& [id, bias, _, cond] = elb.other_tokens[j];
-            if (string_ends_with(window, cond)) {
+            if (string_ends_with(search_window, cond)) {
                 // LLAMA_LOG_DEBUG("%s[%d]: %d\n", __func__, __LINE__, id);
                 logits[id] += bias;
             }
@@ -862,7 +862,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
 
     if (!elb.first_tokens.empty() && (elb.first_tokens.front().duration > elb.countup)) {
         const auto ifi = index_first_inactive(elb.first_tokens);
-        if (window.empty()) {
+        if (search_window.empty()) {
             // empty case here
             for (size_t j = 0; j < ifi; ++j) {
                 // LLAMA_LOG_DEBUG("%s[%d]: %d\n", __func__, __LINE__, elb.first_tokens[j].id);
@@ -872,7 +872,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             for (size_t j = 0; j < ifi; ++j) {
                 const auto& [id, bias, _, cond] = elb.first_tokens[j];
                 // no bias if seen (probably too late)
-                if (!string_ends_with(window, cond)) {
+                if (!string_ends_with(search_window, cond)) {
                     // LLAMA_LOG_DEBUG("%s[%d]: %d\n", __func__, __LINE__, id);
                     logits[id] += bias;
                 }
