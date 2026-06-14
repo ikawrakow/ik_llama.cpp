@@ -1149,7 +1149,7 @@ llm_expert_gating_func_type   gating_op,
 
     ggml_tensor * par;
     if (can_use_fmoe && up_gate_exps) {
-        if (up_gate_exps_b) {
+        if (up_gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI_MOE) {
             par = ggml_moe_up_gate_ext(ctx, up_gate_exps, nullptr, cur, selected_experts, up_gate_exps_b, nullptr,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                     type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
@@ -1165,7 +1165,7 @@ llm_expert_gating_func_type   gating_op,
     GGML_ASSERT(!up_gate_exps && !up_gate_exps_b);
 
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
-        if (up_exps_b || gate_exps_b) {
+        if (up_exps_b || gate_exps_b || type_op == LLM_FFN_SWIGLU_OAI_MOE) {
             par = ggml_moe_up_gate_ext(ctx, up_exps, gate_exps, cur, selected_experts, up_exps_b, gate_exps_b,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                     type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
@@ -2519,6 +2519,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_MINIMAX_M2:
             {
                 result = llm.build_minimaxm2();
+            } break;
+        case LLM_ARCH_MINIMAX_M3:
+            {
+                result = llm.build_minimaxm3();
             } break;
         case LLM_ARCH_SMOLLM3:
             {
