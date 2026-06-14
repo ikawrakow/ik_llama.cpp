@@ -176,6 +176,8 @@ static std::vector<rpc_device>  extract_device_from_rpc_device(std::vector<std::
     std::vector<rpc_device> rpc_servers;
     for (auto & device : devices) {
         rpc_device rpc;
+        rpc.device = 0;
+        rpc.endpoint = device;
         auto value = string_split(device, "|");
         if (value.size() == 2) {
             rpc.device = std::stoi(value[1]);
