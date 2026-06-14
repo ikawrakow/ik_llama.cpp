@@ -22,6 +22,10 @@ Feature: Codex CLI Responses API Compatibility
     And   an OAI compatible responses request with mixed Codex tool types
     Then  the mixed Codex tools response succeeds
 
+  Scenario: Models endpoint includes Codex model catalog metadata
+    Given the Codex model catalog is requested
+    Then  the Codex model catalog is compatible
+
   Scenario: Probe request with empty input and max_output_tokens=1 is accepted
     Given a model test
     And   a probe responses request with empty input and max_output_tokens=1

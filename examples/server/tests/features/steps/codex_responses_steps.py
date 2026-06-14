@@ -102,6 +102,21 @@ async def step_oai_responses_mixed_tools(context):
             context.responses_text = await response.text()
 
 
+@step("the Codex model catalog is requested")
+@async_run_until_complete
+async def step_codex_model_catalog_requested(context):
+    """Fetch /v1/models and keep the raw response for Codex catalog assertions."""
+    async with aiohttp.ClientSession() as session:
+        url = f"{context.base_url}/v1/models"
+        headers = {
+            "Authorization": f"Bearer {context.user_api_key if hasattr(context, 'user_api_key') else 'test'}",
+        }
+
+        async with session.get(url, headers=headers) as response:
+            context.codex_models_status = response.status
+            context.codex_models_text = await response.text()
+
+
 @step("a probe responses request with empty input and max_output_tokens=1")
 @async_run_until_complete
 async def step_probe_empty_input(context):
@@ -164,6 +179,47 @@ def step_mixed_tools_response_succeeds(context):
 
     assert "id" in data, "Expected 'id' in Responses response"
     assert "output" in data, "Expected 'output' in Responses response"
+
+
+@step("the Codex model catalog is compatible")
+def step_codex_model_catalog_compatible(context):
+    """Assert /v1/models preserves OpenAI shape and includes Codex ModelInfo."""
+    status = getattr(context, "codex_models_status", None)
+    text = getattr(context, "codex_models_text", None)
+
+    assert status == 200, f"Models request failed with status {status}. Response: {text[:200] if text else '(empty)'}"
+    assert text is not None, "No models response body"
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise AssertionError(f"Invalid JSON models response: {e}") from e
+
+    assert data.get("object") == "list", "Expected OpenAI-compatible object=list"
+    assert isinstance(data.get("data"), list), "Expected OpenAI-compatible data list"
+    assert isinstance(data.get("models"), list), "Expected Codex-compatible models list"
+    assert data["models"], "Expected at least one Codex model entry"
+
+    model = data["models"][0]
+    for field in [
+        "slug",
+        "display_name",
+        "supported_reasoning_levels",
+        "shell_type",
+        "visibility",
+        "supported_in_api",
+        "base_instructions",
+        "truncation_policy",
+        "context_window",
+        "input_modalities",
+    ]:
+        assert field in model, f"Expected Codex model field '{field}'"
+
+    assert model["slug"] == "tinyllama-2"
+    assert model["visibility"] == "list"
+    assert model["supported_in_api"] is True
+    assert model["truncation_policy"]["mode"] == "tokens"
+    assert model["context_window"] == 256
 
 
 @step("the probe response is accepted")
