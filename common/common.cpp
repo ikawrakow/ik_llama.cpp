@@ -5449,18 +5449,10 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 }
             }
 
-            size_t max_phrase_len = 0;
-            for (const auto& phrase: phrases) {
-                LLAMA_LOG_DEBUG("%s: line %zu: phrase = \"%s\"\n", __func__, i, phrase.c_str());
-                max_phrase_len = std::max(phrase.length(), max_phrase_len);
-            }
-            LLAMA_LOG_DEBUG("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
-
             common_params_sampling::elb_param::elb_entry entry = {
                 std::vector<size_t>(n_phrase, 0),
                 std::move(addsubs),
                 std::vector<bool>(n_phrase, false),
-                max_phrase_len,
                 std::move(phrases),
                 std::move(biases),
                 duration,

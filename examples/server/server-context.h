@@ -62,7 +62,7 @@ struct server_slot {
     server_tokens prompt_tokens;
     server_tokens cache_tokens;
 
-    int32_t last_gentxt_size = 0;
+    int32_t last_gentxt_len = 0;
     std::string generated_text;
 
     // idx of draft tokens in the main batch

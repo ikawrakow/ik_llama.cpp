@@ -434,7 +434,7 @@ void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_to
 
 void server_slot::reset() {
     n_prompt_tokens = 0;
-    last_gentxt_size = 0;
+    last_gentxt_len = 0;
     generated_text = "";
     truncated = false;
     stopped_eos = false;
@@ -1769,6 +1769,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 common_sampler_free(slot.ctx_sampling);
             }
             slot.ctx_sampling = common_sampler_init(model, slot.sparams);
+            slot.ctx_sampling->decoded_text.reserve(4 * slot.n_ctx);
         }
         catch (std::exception & e) {
             std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
@@ -1838,7 +1839,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
 
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, exitword.length() });
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, int32_t(exitword.length()), 0 });
 
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
@@ -2040,7 +2041,7 @@ bool server_context::process_token(completion_token_output& result, server_slot&
     slot.sampled = result.tok;
 
     // search stop word and delete it
-    slot.last_gentxt_size = slot.generated_text.size();
+    slot.last_gentxt_len = slot.generated_text.size();
     slot.generated_text += token_str;
     slot.has_next_token = true;
 
@@ -3917,6 +3918,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     GGML_ASSERT(batch.n_tokens > 0);
                     GGML_ASSERT((size_t)slot.n_prompt_tokens == slot.prompt_tokens.size());
                     common_sampler_reset(slot.ctx_sampling);
+                    slot.ctx_sampling->is_decoding = true;
                     for (int i = 0; i < slot.n_prompt_tokens; ++i) {
                         llama_token id = slot.prompt_tokens[i];
                         if (id != LLAMA_TOKEN_NULL) {
@@ -3985,13 +3987,6 @@ void server_context::speculative_decoding_accept() {
 
         const llama_token sampled_before = slot.sampled;
         size_t n_draft = slot.drafted.size();
-
-        slot.ctx_sampling->to_generated_text = &slot.generated_text;
-        if (n_draft > 0) {
-            (void) populate_vocab_pieces();     // max_piece_len
-            slot.ctx_sampling->drafted_text.reserve(max_piece_len * n_draft);
-            slot.ctx_sampling->drafted_text.clear();
-        }
 
         apply_server_biases(slot);
 
@@ -4063,6 +4058,9 @@ void server_context::speculative_decoding_accept() {
             if (slot.sparams.n_probs > 0) {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, i);
             }
+
+            slot.ctx_sampling->n_rewind = 0;
+            slot.ctx_sampling->rewinded_text.clear();
 
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
                 if (!process_token(result, slot)) {
@@ -4229,6 +4227,13 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     int32_t n_keep_buffer = ban_pos - buffer_start_pos;
     if (n_keep_buffer < 0) n_keep_buffer = 0;
 
+    slot.ctx_sampling->n_rewind = slot.token_buffer.size() - n_keep_buffer;
+    slot.ctx_sampling->rewinded_text.reserve(4 * slot.ctx_sampling->n_rewind);
+    LLAMA_LOG_DEBUG("%s: rewinding %d tokens\n", __func__, slot.ctx_sampling->n_rewind);
+    for (int32_t j = n_keep_buffer; j < slot.token_buffer.size(); ++j) {
+        slot.ctx_sampling->rewinded_text.append(slot.token_buffer[j].text_to_send);
+    }
+
     if (slot.banned_n != 0) {
         int32_t n = 0;
         for (auto result = slot.token_buffer.begin() + n_keep_buffer; result != slot.token_buffer.end(); result++) {
@@ -4353,7 +4358,7 @@ void server_context::update_allowlist_state(server_slot& slot) {
 
     // search for keyword
     auto kw = kws[idx];
-    auto pos = slot.generated_text.find(kw, std::max(0, slot.last_gentxt_size - (int32_t)kw.length() + 1));
+    auto pos = slot.generated_text.find(kw, std::max(0, slot.last_gentxt_len - (int32_t)kw.length() + 1));
     while (pos != std::string::npos) {
         if (++idx >= kws.size()) {
             break;
@@ -4486,8 +4491,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
 
-            slot.ctx_sampling->to_generated_text = &slot.generated_text;
-
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
 
@@ -4539,6 +4542,9 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (slot.sparams.n_probs > 0) {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, tok_idx);
             }
+
+            slot.ctx_sampling->n_rewind = 0;
+            slot.ctx_sampling->rewinded_text.clear();
 
             // no ban string for recurrent/hybrid model
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
