@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "llama.h"
+#include "llama-spec-features.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -13,12 +14,8 @@
 #include "mtmd-helper.h"
 
 #include <fstream>
-#include <atomic>
-#include <cstring>
-#include <cstdlib>
 #include <iostream>
 #include <regex>
-#include <sstream>
 #include <exception>
 
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1, int32_t offset = 0) {
@@ -47,83 +44,6 @@ static void log_text(const gpt_params & params_base, const std::string & text) {
     if (params_base.minilog) {
         LOG_TEE("%s\n", text.c_str());
     }
-}
-
-static bool server_dflash_contract_log_enabled() {
-    const char * env = std::getenv("IK_DFLASH_CONTRACT_LOG");
-    if (env == nullptr || *env == '\0') {
-        return false;
-    }
-
-    return std::strcmp(env, "0") != 0 &&
-           std::strcmp(env, "false") != 0 &&
-           std::strcmp(env, "off") != 0;
-}
-
-static std::string server_dflash_contract_format_indices(
-        const std::vector<int32_t> & values,
-        size_t edge_count = 4) {
-    std::ostringstream oss;
-    oss << '[';
-    if (values.empty()) {
-        oss << ']';
-        return oss.str();
-    }
-
-    const size_t head = std::min(edge_count, values.size());
-    for (size_t i = 0; i < head; ++i) {
-        if (i > 0) {
-            oss << ',';
-        }
-        oss << values[i];
-    }
-
-    if (values.size() > edge_count * 2) {
-        oss << ",...,";
-        for (size_t i = values.size() - edge_count; i < values.size(); ++i) {
-            if (i > values.size() - edge_count) {
-                oss << ',';
-            }
-            oss << values[i];
-        }
-    } else {
-        for (size_t i = head; i < values.size(); ++i) {
-            oss << ',' << values[i];
-        }
-    }
-
-    oss << ']';
-    return oss.str();
-}
-
-static void server_dflash_contract_log_accept(
-        const server_slot & slot,
-        common_speculative_type spec_type_used,
-        const char * path,
-        bool any_rejected,
-        size_t n_draft,
-        const std::vector<llama_token> & ids,
-        llama_pos pos_base,
-        const std::vector<int32_t> & output_indices) {
-    if (!server_dflash_contract_log_enabled() || spec_type_used != COMMON_SPECULATIVE_TYPE_DFLASH) {
-        return;
-    }
-
-    static std::atomic<uint64_t> counter = 0;
-    const uint64_t ordinal = counter.fetch_add(1, std::memory_order_relaxed);
-    if (ordinal >= 8) {
-        return;
-    }
-
-    LLAMA_LOG_INFO("dflash contract accept[%llu]: slot=%d path=%s rejected=%s drafted=%zu accepted=%zu pos_base=%d output_indices=%s\n",
-            (unsigned long long) (ordinal + 1),
-            slot.id,
-            path,
-            any_rejected ? "true" : "false",
-            n_draft,
-            ids.size(),
-            (int) pos_base,
-            server_dflash_contract_format_indices(output_indices).c_str());
 }
 
 static bool server_slot_prompt_batch_overlaps(
@@ -158,12 +78,13 @@ static bool server_response_needs_chat_parse(oaicompat_type oaicompat) {
         oaicompat == OAICOMPAT_TYPE_RESP;
 }
 
-static bool server_speculative_has_dflash(const common_params_speculative & spec) {
-    return spec.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH);
+static bool server_speculative_uses_target_features(const common_params_speculative & spec) {
+    return spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) ||
+           spec.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH);
 }
 
-static bool server_speculative_has_target_features(const common_params_speculative & spec) {
-    return spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) || server_speculative_has_dflash(spec);
+static bool server_speculative_requires_single_slot(const common_params_speculative & spec) {
+    return spec.has_stage_chain();
 }
 
 static bool server_speculative_same_stage_types(
@@ -295,8 +216,8 @@ bool server_context::load_model(const gpt_params& params_) {
 
     common_speculative_prepare_startup(params_base, false);
 
-    if (server_speculative_has_dflash(params_base.speculative) && params_base.n_parallel > 1) {
-        LOG_ERROR("DFlash is currently limited to a single server slot (-np 1).\n", {
+    if (server_speculative_requires_single_slot(params_base.speculative) && params_base.n_parallel > 1) {
+        LOG_ERROR("Speculative decoding is currently limited to a single server slot (-np 1).\n", {
             {"n_parallel", params_base.n_parallel},
         });
         return false;
@@ -4127,7 +4048,7 @@ void server_context::speculative_decoding_accept() {
         }
 
         std::vector<int32_t> accepted_output_indices;
-        if (server_speculative_has_target_features(slot.params.speculative)) {
+        if (server_speculative_uses_target_features(slot.params.speculative)) {
             if (!ids.empty()) {
                 accepted_output_indices.assign(slot.i_batch_dft.begin(), slot.i_batch_dft.begin() + ids.size());
             }
@@ -4160,14 +4081,14 @@ void server_context::speculative_decoding_accept() {
         const common_speculative_checkpoint * ckpt = common_speculative_get_checkpoint(slot.spec);
         const bool will_restore = any_rejected && ckpt != nullptr && ckpt->valid;
 
-        if (server_speculative_has_target_features(slot.params.speculative) && !accepted_output_indices.empty()) {
-            server_dflash_contract_log_accept(
-                    slot,
-                    spec_type_used,
+        if (server_speculative_uses_target_features(slot.params.speculative) && !accepted_output_indices.empty()) {
+            llama_dflash_contract_log_accept(
+                    slot.id,
+                    spec_type_used == COMMON_SPECULATIVE_TYPE_DFLASH,
                     will_restore ? "restore" : "direct",
                     any_rejected,
                     n_draft,
-                    ids,
+                    ids.size(),
                     spec_pos_base,
                     accepted_output_indices);
         }
@@ -4556,9 +4477,9 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             continue; // continue loop of n_batch
         }
 
-    if (server_speculative_has_target_features(params_base.speculative)) {
+    if (server_speculative_uses_target_features(params_base.speculative)) {
         for (auto & slot : slots) {
-            if (!slot.spec || !server_speculative_has_target_features(slot.params.speculative)) {
+            if (!slot.spec || !server_speculative_uses_target_features(slot.params.speculative)) {
                 continue;
             }
 

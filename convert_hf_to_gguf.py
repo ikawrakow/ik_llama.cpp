@@ -570,6 +570,9 @@ class Model:
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
+        if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
+            # ref: https://huggingface.co/poolside/Laguna-XS.2
+            res = "laguna"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -603,6 +606,9 @@ class Model:
         if chkhsh == "9c2227e4dd922002fb81bde4fc02b0483ca4f12911410dee2255e4987644e3f8":
             # ref: https://huggingface.co/CohereForAI/c4ai-command-r-v01
             res = "command-r"
+        if chkhsh == "52df12b4c8d4176e7481aab4b6e8454d1fd0a210a04a574f6d4e067d10e23c3e":
+            # ref: https://huggingface.co/CohereLabs/North-Mini-Code-1.0
+            res = "cohere2_moe"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
@@ -684,6 +690,9 @@ class Model:
         if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
             # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
             res = "minimax-m2"
+        if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
+            # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
+            res = "mellum2"
         if res is None:
             logger.warning("\n")
             logger.warning("**************************************************************************************")
@@ -1580,7 +1589,12 @@ class LlamaModel(Model):
             special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
+        saved_intermediate_size = self.hparams.get("intermediate_size")
+        saved_num_experts_per_tok = self.hparams.pop("num_experts_per_tok")
+        self.hparams["intermediate_size"] = self.hparams["prefix_dense_intermediate_size"]
         super().set_gguf_parameters()
+        self.hparams["intermediate_size"] = saved_intermediate_size
+        self.hparams["num_experts_per_tok"] = saved_num_experts_per_tok
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
@@ -3735,7 +3749,7 @@ class Gemma4Model(Gemma4BaseModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
-@Model.register("Gemma4AssistantForCausalLM")
+@Model.register("Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM")
 class Gemma4AssistantModel(Gemma4BaseModel):
     model_arch = gguf.MODEL_ARCH.GEMMA4_MTP
 
@@ -3948,6 +3962,86 @@ class CommandR2Model(Model):
         super().set_gguf_parameters()
         self.gguf_writer.add_logit_scale(self.hparams["logit_scale"])
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+
+@Model.register("Cohere2MoeForCausalLM")
+class Cohere2MoeModel(Model):
+    model_arch = gguf.MODEL_ARCH.COHERE2_MOE
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def set_gguf_parameters(self):
+        saved_intermediate_size = self.hparams["intermediate_size"]
+        saved_num_experts_per_tok = self.hparams.pop("num_experts_per_tok")
+        self.hparams["intermediate_size"] = self.hparams["prefix_dense_intermediate_size"]
+        super().set_gguf_parameters()
+        self.hparams["intermediate_size"] = saved_intermediate_size
+        self.hparams["num_experts_per_tok"] = saved_num_experts_per_tok
+        hparams = self.hparams
+
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_logit_scale(hparams.get("logit_scale", 1.0))
+        self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+        self.gguf_writer.add_sliding_window_pattern([
+            layer_type == "sliding_attention"
+            for layer_type in hparams["layer_types"]
+        ])
+        self.gguf_writer.add_rope_dimension_count(hparams.get("head_dim", hparams["hidden_size"] // hparams["num_attention_heads"]))
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+        self.gguf_writer.add_expert_feed_forward_length(hparams["intermediate_size"])
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_expert_count(hparams["num_experts"])
+        self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
+        self.gguf_writer.add_expert_weights_norm(bool(hparams.get("norm_topk_prob", False)))
+
+        expert_selection_fn = hparams.get("expert_selection_fn", "softmax")
+        if expert_selection_fn != "sigmoid":
+            raise ValueError(f"Unsupported Cohere2-MoE expert_selection_fn={expert_selection_fn!r}")
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        if hparams.get("num_shared_experts", 0) != 0:
+            raise ValueError("Cohere2-MoE shared experts are not supported in this GGUF converter yet")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Cohere2-MoE HF tensors already use the interleaved RoPE layout expected here.
+
+        if ".mlp.experts." in name:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) < n_experts * 3:
+                return []
+
+            tensors: list[tuple[str, Tensor]] = []
+            for src, dst in [
+                ("gate_proj", "gate_proj"),
+                ("down_proj", "down_proj"),
+                ("up_proj", "up_proj"),
+            ]:
+                datas: list[Tensor] = []
+                for xid in range(n_experts):
+                    ename = f"model.layers.{bid}.mlp.experts.{xid}.{src}.weight"
+                    datas.append(self._experts[bid][ename])
+                    del self._experts[bid][ename]
+
+                merged_name = f"model.layers.{bid}.mlp.experts.{dst}.weight"
+                tensors.append((self.map_tensor_name(merged_name), torch.stack(datas, dim=0)))
+            yield from tensors
+            return
+
+        if name == "model.embed_tokens.weight":
+            yield self.map_tensor_name(name), data_torch
+            if self.tensor_names is None or "lm_head.weight" not in self.tensor_names:
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT, suffix=".weight"), data_torch
+            return
+
+        yield self.map_tensor_name(name), data_torch
 
 
 @Model.register("OlmoForCausalLM")
@@ -5304,6 +5398,138 @@ class BailingMoeV2Model(Model):
             # flatten `list[dict[str, Tensor]]` into `list[str]`
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("LagunaForCausalLM")
+class LagunaModel(Model):
+    model_arch = gguf.MODEL_ARCH.LAGUNA
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def set_gguf_parameters(self):
+        hparams = self.hparams
+        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+        n_layers = int(hparams["num_hidden_layers"])
+        n_head_base = int(hparams["num_attention_heads"])
+        n_kv_base = int(hparams.get("num_key_value_heads", n_head_base))
+        head_dim = int(hparams.get("head_dim", hparams["hidden_size"] // n_head_base))
+
+        heads_per_layer = hparams.get("num_attention_heads_per_layer")
+        kv_per_layer = hparams.get("num_key_value_heads_per_layer")
+
+        head_arr: list[int] = []
+        kv_arr: list[int] = []
+        for i in range(n_layers):
+            head_arr.append(int(heads_per_layer[i]) if heads_per_layer is not None else n_head_base)
+            kv_arr.append(int(kv_per_layer[i]) if kv_per_layer is not None else n_kv_base)
+
+        rope_params = hparams.get("rope_parameters", {})
+        full_rope = rope_params.get("full_attention", rope_params)
+        swa_rope = rope_params.get("sliding_attention", {})
+
+        self.gguf_writer.add_context_length(int(hparams["max_position_embeddings"]))
+        self.gguf_writer.add_embedding_length(int(hparams["hidden_size"]))
+        self.gguf_writer.add_block_count(n_layers)
+        self.gguf_writer.add_feed_forward_length(int(hparams["intermediate_size"]))
+        self.gguf_writer.add_head_count(head_arr)
+        if all(n_kv == kv_arr[0] for n_kv in kv_arr):
+            self.gguf_writer.add_head_count_kv(kv_arr[0])
+        else:
+            self.gguf_writer.add_head_count_kv(kv_arr)
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
+        self.gguf_writer.add_layer_norm_rms_eps(float(hparams["rms_norm_eps"]))
+        self.gguf_writer.add_file_type(self.ftype)
+
+        self.gguf_writer.add_sliding_window(int(hparams["sliding_window"]))
+        self.gguf_writer.add_rope_dimension_count(head_dim // 2)
+        self.gguf_writer.add_uint32(f"{arch}.rope.dimension_count_swa", head_dim)
+        self.gguf_writer.add_rope_freq_base(float(full_rope.get("rope_theta", 500000.0)))
+        self.gguf_writer.add_float32(f"{arch}.rope.freq_base_swa", float(swa_rope.get("rope_theta", 10000.0)))
+        if full_rope.get("rope_type") == "yarn":
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(float(full_rope.get("factor", 1.0)))
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(int(full_rope.get(
+                "original_max_position_embeddings",
+                rope_params.get("original_max_position_embeddings", hparams["max_position_embeddings"]),
+            )))
+            self.gguf_writer.add_rope_scaling_yarn_ext_factor(float(full_rope.get("factor", 1.0)))
+            self.gguf_writer.add_rope_scaling_yarn_attn_factor(float(full_rope.get("attention_factor", 1.0)))
+            self.gguf_writer.add_rope_scaling_yarn_beta_fast(float(full_rope.get("beta_fast", 32.0)))
+            self.gguf_writer.add_rope_scaling_yarn_beta_slow(float(full_rope.get("beta_slow", 1.0)))
+
+        self.gguf_writer.add_expert_count(int(hparams["num_experts"]))
+        self.gguf_writer.add_expert_used_count(int(hparams["num_experts_per_tok"]))
+        self.gguf_writer.add_expert_feed_forward_length(int(hparams["moe_intermediate_size"]))
+        if (shared_dim := hparams.get("shared_expert_intermediate_size")) is not None and int(shared_dim) > 0:
+            self.gguf_writer.add_expert_shared_feed_forward_length(int(shared_dim))
+        if (routing_scale := hparams.get("moe_routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(float(routing_scale))
+        self.gguf_writer.add_expert_weights_norm(True)
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        leading_dense = 0
+        for mlp_type in hparams.get("mlp_layer_types", []):
+            if mlp_type != "dense":
+                break
+            leading_dense += 1
+        self.gguf_writer.add_uint32(f"{arch}.leading_dense_block_count", leading_dense)
+
+        if hparams.get("moe_apply_router_weight_on_input", False):
+            raise ValueError("moe_apply_router_weight_on_input=True is not supported for Laguna")
+
+    def set_vocab(self) -> None:
+        super().set_vocab()
+        if isinstance(eos_token_id := self.hparams.get("eos_token_id"), list) and len(eos_token_id) > 1:
+            # Poolside uses token 24 (</assistant>) as a turn boundary.
+            self.gguf_writer.add_eot_token_id(int(eos_token_id[1]))
+        template_file = self.dir_model / "chat_template.jinja"
+        if template_file.is_file():
+            self.gguf_writer.add_chat_template(template_file.read_text(encoding="utf-8"))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if bid is not None and name in (
+            f"model.layers.{bid}.mlp.experts.e_score_correction_bias",
+            f"model.layers.{bid}.mlp.experts.e_score_correction",
+        ):
+            # The C++ loader asks for this tensor through the ".bias" suffix.
+            # Keep the Laguna converter aligned with existing community GGUFs.
+            yield f"blk.{bid}.exp_probs_b.bias", data_torch
+            return
+
+        if name.endswith(".self_attn.g_proj.weight"):
+            # HF stores the head-wise attention gate with a singleton dimension.
+            data_torch = data_torch.squeeze().contiguous()
+
+        if bid is not None and re.match(r"model\.layers\.\d+\.mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj)\.weight$", name):
+            n_experts = int(self.find_hparam(["num_experts"]))
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+            if len(self._experts[bid]) < n_experts * 3:
+                return
+
+            for w_name in ("down_proj", "gate_proj", "up_proj"):
+                datas: list[Tensor] = []
+                for xid in range(n_experts):
+                    ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                    datas.append(self._experts[bid][ename])
+                    del self._experts[bid][ename]
+
+                merged = torch.stack(datas, dim=0)
+                merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                yield from super().modify_tensors(merged, merged_name, bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if experts:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 

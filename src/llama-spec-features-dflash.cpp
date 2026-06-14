@@ -880,6 +880,36 @@ static void llama_dflash_contract_log_output_indices(
             have_capture ? "true" : "false");
 }
 
+void llama_dflash_contract_log_accept(
+        int slot_id,
+        bool is_dflash,
+        const char * path,
+        bool any_rejected,
+        size_t n_draft,
+        size_t n_accepted,
+        llama_pos pos_base,
+        const std::vector<int32_t> & output_indices) {
+    if (!llama_dflash_contract_log_enabled() || !is_dflash) {
+        return;
+    }
+
+    static std::atomic<uint64_t> counter = 0;
+    const uint64_t ordinal = counter.fetch_add(1, std::memory_order_relaxed);
+    if (ordinal >= 8) {
+        return;
+    }
+
+    LLAMA_LOG_INFO("dflash contract accept[%llu]: slot=%d path=%s rejected=%s drafted=%zu accepted=%zu pos_base=%d output_indices=%s\n",
+            (unsigned long long) (ordinal + 1),
+            slot_id,
+            path,
+            any_rejected ? "true" : "false",
+            n_draft,
+            n_accepted,
+            (int) pos_base,
+            llama_dflash_contract_format_values(output_indices).c_str());
+}
+
         static bool llama_spec_materialize_dflash_rows_prepared(
             struct llama_context * ctx,
             int32_t row_count,

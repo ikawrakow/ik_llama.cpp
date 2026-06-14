@@ -1,11 +1,6 @@
 #include "llama-spec-features.h"
 
-#include <algorithm>
-#include <atomic>
-#include <cstdlib>
-#include <cstring>
 #include <random>
-#include <sstream>
 
 #include "llama-model.h"
 #include "llama-context.h"

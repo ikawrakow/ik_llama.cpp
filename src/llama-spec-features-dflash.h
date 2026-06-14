@@ -277,3 +277,13 @@ bool llama_spec_copy_dflash_rows_from_output_indices(
         struct llama_context * ctx,
         const std::vector<int32_t> & output_indices,
         std::vector<float> & hidden_rows);
+
+void llama_dflash_contract_log_accept(
+        int slot_id,
+        bool is_dflash,
+        const char * path,
+        bool any_rejected,
+        size_t n_draft,
+        size_t n_accepted,
+        llama_pos pos_base,
+        const std::vector<int32_t> & output_indices);
