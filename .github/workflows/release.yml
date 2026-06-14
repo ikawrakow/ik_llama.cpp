@@ -838,16 +838,16 @@ jobs:
           if "%CMAKE_COMPILER_TYPE%"=="clang-cl" (
             set "CC=%LLVM_DIR%\bin\clang-cl.exe"
             set "CXX=%LLVM_DIR%\bin\clang-cl.exe"
-            set "CFLAGS=/clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
-            set "CXXFLAGS=/EHsc /clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+            set "CFLAGS=/clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=precise /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=/EHsc /clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=precise /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
           ) else (
             rem fallback to clang/clang++
             set "CC=%LLVM_DIR%\bin\clang.exe"
             set "CXX=%LLVM_DIR%\bin\clang++.exe"
             set "MTUNE_FLAG_UNIX="
             if not "%MTUNE%"=="" set "MTUNE_FLAG_UNIX=-mtune=%MTUNE%"
-            set "CFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
-            set "CXXFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+            set "CFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=precise -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=precise -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
           )
 
           cmake -S . -B build -G "Ninja Multi-Config" ^
@@ -1482,16 +1482,16 @@ jobs:
           if "%CMAKE_COMPILER_TYPE%"=="clang-cl" (
             set "CC=%LLVM_DIR%\bin\clang-cl.exe"
             set "CXX=%LLVM_DIR%\bin\clang-cl.exe"
-            set "CFLAGS=/clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
-            set "CXXFLAGS=/EHsc /clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+            set "CFLAGS=/clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=precise /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=/EHsc /clang:-march=%MARCH% %MTUNE_FLAG% /clang:-fvectorize /clang:-ffp-model=precise /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments"
           ) else (
             rem fallback to clang/clang++
             set "CC=%LLVM_DIR%\bin\clang.exe"
             set "CXX=%LLVM_DIR%\bin\clang++.exe"
             set "MTUNE_FLAG_UNIX="
             if not "%MTUNE%"=="" set "MTUNE_FLAG_UNIX=-mtune=%MTUNE%"
-            set "CFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
-            set "CXXFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=fast -fno-finite-math-only -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+            set "CFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=precise -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
+            set "CXXFLAGS=-march=%MARCH% %MTUNE_FLAG_UNIX% -fvectorize -ffp-model=precise -Wno-format -Wno-unused-variable -Wno-unused-function -Wno-gnu-zero-variadic-macro-arguments"
           )
 
           cmake -S . -B build -G "Ninja Multi-Config" ^
