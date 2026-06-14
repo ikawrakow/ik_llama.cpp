@@ -1276,13 +1276,13 @@ struct clip_graph {
             cb(cur, "std_scaled", -1);
         }
 
+        // embedding_post_projection_norm
+        cur = ggml_rms_norm(ctx0, cur, hparams.eps);
+        cb(cur, "normed", -1);
+
         // Gemma4MultimodalEmbedder
         cur = build_mm_gemma4(model.mm_input_proj_w, cur);
         cb(cur, "projected", -1);
-
-        // embedding_post_projection_norm
-        cur = ggml_rms_norm(ctx0, cur, hparams.eps);
-        cb(cur, "projected_normed", -1);
 
         ggml_build_forward_expand(gf, cur);
         return gf;
