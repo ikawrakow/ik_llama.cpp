@@ -385,6 +385,24 @@ static __global__ void k_add_same_q8_0(int nelem, const block_q8_0 * x, const fl
     }
 }
 
+template <int block_size>
+static __global__ void k_add_q8_0_f32(int nelem, const block_q8_0 * x, const float * y, float * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_0;
+    int iq = i % QK8_0;
+    z[i] = (float)x[ib].d * x[ib].qs[iq] + y[i];
+}
+
+template <int block_size>
+static __global__ void k_add_q8_0_q8_0_f32(int nelem, const block_q8_0 * x, const block_q8_0 * y, float * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_0;
+    int iq = i % QK8_0;
+    z[i] = (float)x[ib].d * x[ib].qs[iq] + (float)y[ib].d * y[ib].qs[iq];
+}
+
 void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type, size_t nelem,
         const void * x, const void * y, void * z) {
     constexpr int kBlockSize = 256;
@@ -461,9 +479,16 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                         (const float *)dst->src[0]->data, (const nv_bfloat16 *)dst->src[1]->data, (nv_bfloat16 *)dst->data);
             }
         } else if (dst->type == GGML_TYPE_Q8_0) {
-            GGML_ASSERT(dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_F32);
-            k_add_same_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+            if (dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_add_same_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
                         (const block_q8_0 *)dst->src[0]->data, (const float *)dst->src[1]->data, (block_q8_0 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_Q8_0) {
+                k_add_same_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[1]->data, (const float *)dst->src[0]->data, (block_q8_0 *)dst->data);
+            } else {
+                GGML_ABORT("Unsupported Q8_0 add combination");
+            }
         } else {
             if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_F16) {
                 k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
@@ -488,6 +513,18 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_BF16) {
                 k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
                         (const float *)dst->src[0]->data, (const nv_bfloat16 *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_Q8_0) {
+                k_add_q8_0_q8_0_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[0]->data, (const block_q8_0 *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_add_q8_0_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_Q8_0) {
+                k_add_q8_0_f32<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[1]->data, (const float *)dst->src[0]->data, (float *)dst->data);
             } else {
                 k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
                         (const float *)dst->src[0]->data, (const half *)dst->src[1]->data, (float *)dst->data);
