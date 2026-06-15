@@ -242,6 +242,13 @@ static __device__ void k_fused_mul_mat_vec_q(
             float u = tmp_u[j][threadIdx.x];
             float g = tmp_g[j][threadIdx.x];
             float r;
+            if (unary_op == GGML_UNARY_OP_SWIGLU_OAI && !bias_u) {
+                constexpr float alpha = 1.702f;
+                constexpr float limit = 7.0f;
+                g = fminf(g, limit);
+                u = fmaxf(fminf(u, limit), -limit);
+                r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
+            } else {
             switch (unary_op) {
                 case GGML_UNARY_OP_SILU:
                     {
@@ -265,6 +272,7 @@ static __device__ void k_fused_mul_mat_vec_q(
                   u = fmaxf(fminf(u, limit), -limit);
                   r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
                 } break;
+            }
             }
             dst[j*nrows_dst + row0 + threadIdx.x] = r;
         }

@@ -47,7 +47,7 @@ ggml_cgraph* llm_build_context::build_minimaxm3() {
                     model.layers[il].ffn_down_shexp,
                     nullptr,
                     n_expert, n_expert_used,
-                    LLM_FFN_SWIGLU_OAI_MOE,
+                    LLM_FFN_SWIGLU_OAI,
                     hparams.expert_weights_norm,
                     hparams.expert_weights_scale != 0.0f, hparams.expert_weights_scale,
                     (llm_expert_gating_func_type) hparams.expert_gating_func,

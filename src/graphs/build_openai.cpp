@@ -43,9 +43,9 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
                 nullptr,
                 nullptr,  nullptr, nullptr,  nullptr, nullptr,  nullptr, // no shared experts
                 n_expert, n_expert_used,
-                LLM_FFN_SWIGLU_OAI_MOE, false, false, 0.0f,
+                LLM_FFN_SWIGLU_OAI, false, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
-                LLM_FFN_SWIGLU_OAI_MOE, cb, il, gf, true,
+                LLM_FFN_SWIGLU_OAI, cb, il, gf, true,
                 model.layers[il].ffn_up_gate_exps, model.layers[il].ffn_up_gate_exps_b);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
