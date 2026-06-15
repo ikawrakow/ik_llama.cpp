@@ -4076,23 +4076,6 @@ void server_context::speculative_decoding_accept() {
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
 
-        const common_speculative_type spec_type_used = common_speculative_current_type(slot.spec);
-        const bool any_rejected = (ids.size() - 1) < n_draft;
-        const common_speculative_checkpoint * ckpt = common_speculative_get_checkpoint(slot.spec);
-        const bool will_restore = any_rejected && ckpt != nullptr && ckpt->valid;
-
-        if (server_speculative_uses_target_features(slot.params.speculative) && !accepted_output_indices.empty()) {
-            llama_dflash_contract_log_accept(
-                    slot.id,
-                    spec_type_used == COMMON_SPECULATIVE_TYPE_DFLASH,
-                    will_restore ? "restore" : "direct",
-                    any_rejected,
-                    n_draft,
-                    ids.size(),
-                    spec_pos_base,
-                    accepted_output_indices);
-        }
-
         common_speculative_commit(
             slot.spec,
             ctx,

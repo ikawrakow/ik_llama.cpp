@@ -365,81 +365,14 @@ struct llama_context {
         std::vector<float> feature_view_buffer;
         input_state inputs;
         int32_t visible_cross_ctx = 0;
-        llama_dflash_profile_stats profile;
+
+        // Argmax token IDs from the DFlash draft graph, computed via GPU argmax.
+        // Populated in llama_decode_internal after graph compute.
+        std::vector<llama_token> draft_tokens;
+        struct ggml_tensor * draft_tokens_tensor = nullptr;
     };
     dflash_runtime dflash;
     using dflash_capture_state = dflash_runtime::capture_state;
-
-    const float * & dflash_target_features = dflash.target.features;
-    size_t & dflash_target_features_n_floats = dflash.target.features_n_floats;
-    int32_t & dflash_target_features_n_rows = dflash.target.features_n_rows;
-    const float * & dflash_target_append_features = dflash.target.append_features;
-    size_t & dflash_target_append_features_n_floats = dflash.target.append_features_n_floats;
-    int32_t & dflash_target_append_features_n_rows = dflash.target.append_features_n_rows;
-    const llama_pos * & dflash_target_positions = dflash.target.positions;
-    size_t & dflash_target_positions_n = dflash.target.positions_n;
-    uint64_t & dflash_target_window_version = dflash.target.version;
-    int32_t & dflash_target_window_keep_rows = dflash.target.keep_rows;
-    int32_t & dflash_target_window_append_rows = dflash.target.append_rows;
-    bool & dflash_target_window_replace = dflash.target.replace;
-    std::vector<float> & dflash_target_features_owned = dflash.target.features_owned;
-    std::vector<float> & dflash_target_append_features_owned = dflash.target.append_features_owned;
-    std::vector<llama_pos> & dflash_target_positions_owned = dflash.target.positions_owned;
-    std::vector<float> & dflash_target_features_padded = dflash.target.features_padded;
-    std::vector<float> & dflash_feature_view_buffer = dflash.feature_view_buffer;
-    std::vector<llama_pos> & dflash_pos_ctx_data = dflash.target.pos_ctx_data;
-    std::vector<float> & dflash_kq_mask_data = dflash.target.kq_mask_data;
-    std::vector<float> & dflash_kq_mask_swa_data = dflash.target.kq_mask_swa_data;
-    int32_t & dflash_visible_cross_ctx = dflash.visible_cross_ctx;
-    std::vector<struct ggml_tensor *> & dflash_k_ctx_cache = dflash.kv.k_ctx_cache;
-    std::vector<struct ggml_tensor *> & dflash_v_ctx_cache = dflash.kv.v_ctx_cache;
-
-    // Argmax token IDs from the DFlash draft graph, computed via GPU argmax.
-    // Populated in llama_decode_internal after graph compute.
-    std::vector<llama_token> dflash_draft_tokens;
-    struct ggml_tensor * dflash_draft_tokens_tensor = nullptr;
-
-    std::vector<struct ggml_tensor *> & dflash_k_ctx_workspace = dflash.kv.k_ctx_workspace;
-    std::vector<struct ggml_tensor *> & dflash_v_ctx_workspace = dflash.kv.v_ctx_workspace;
-    struct ggml_context * & dflash_cache_ctx = dflash.kv.cache_ctx;
-    std::vector<ggml_backend_buffer_t> & dflash_cache_bufs = dflash.kv.cache_bufs;
-    int32_t & dflash_kv_cache_write_pos = dflash.kv.cache_write_pos;
-    int32_t & dflash_kv_cache_n_filled = dflash.kv.cache_n_filled;
-    int32_t & dflash_kv_cache_update_rows = dflash.kv.cache_update_rows;
-    int32_t & dflash_kv_cache_reserved_rows = dflash.kv.cache_reserved_rows;
-    int32_t & dflash_kv_cache_view_write_pos = dflash.kv.cache_view_write_pos;
-    int32_t & dflash_kv_cache_view_n_filled = dflash.kv.cache_view_n_filled;
-    uint64_t & dflash_kv_cache_applied_window_version = dflash.kv.cache_applied_window_version;
-    bool & dflash_kv_cache_valid = dflash.kv.cache_valid;
-    bool & dflash_kv_cache_view_valid = dflash.kv.cache_view_valid;
-    int32_t & dflash_kv_workspace_write_pos = dflash.kv.workspace_write_pos;
-    int32_t & dflash_kv_workspace_n_filled = dflash.kv.workspace_n_filled;
-    int32_t & dflash_kv_workspace_reserved_rows = dflash.kv.workspace_reserved_rows;
-    int32_t & dflash_kv_workspace_token_capacity = dflash.kv.workspace_token_capacity;
-    int32_t & dflash_kv_workspace_n_kv_total = dflash.kv.workspace_n_kv_total;
-    uint64_t & dflash_kv_workspace_applied_window_version = dflash.kv.workspace_applied_window_version;
-    bool & dflash_kv_workspace_valid = dflash.kv.workspace_valid;
-    bool & dflash_kv_workspace_sync_pending = dflash.kv.workspace_sync_pending;
-    std::vector<uint8_t> & dflash_buf_compute_meta = dflash.kv.cache_compute_meta;
-    std::vector<uint8_t> & dflash_workspace_buf_compute_meta = dflash.kv.workspace_compute_meta;
-    ggml_backend_sched_t & dflash_sched = dflash.kv.cache_sched;
-    ggml_backend_sched_t & dflash_workspace_sched = dflash.kv.workspace_sched;
-    ggml_cgraph * & dflash_kv_graph = dflash.kv.cache_graph;
-    ggml_cgraph * & dflash_kv_workspace_graph = dflash.kv.workspace_graph;
-    int32_t & dflash_kv_graph_rows = dflash.kv.cache_graph_rows;
-    int32_t & dflash_kv_graph_write_pos = dflash.kv.cache_graph_write_pos;
-    int32_t & dflash_kv_workspace_graph_rows = dflash.kv.workspace_graph_rows;
-    int32_t & dflash_kv_workspace_graph_write_pos = dflash.kv.workspace_graph_write_pos;
-    struct ggml_tensor * & dflash_kv_input_target_features = dflash.kv.cache_input_target_features;
-    struct ggml_tensor * & dflash_kv_input_pos_ctx = dflash.kv.cache_input_pos_ctx;
-    struct ggml_tensor * & dflash_kq_mask_tensor = dflash.kv.kq_mask_tensor;
-    struct ggml_tensor * & dflash_kq_mask_swa_tensor = dflash.kv.kq_mask_swa_tensor;
-    std::unique_ptr<dflash_capture_state> & dflash_capture = dflash.capture;
-    llama_dflash_profile_stats & dflash_profile = dflash.profile;
-    struct ggml_tensor * & inp_dflash_target_features = dflash.inputs.target_features;
-    struct ggml_tensor * & inp_dflash_pos_ctx = dflash.inputs.pos_ctx;
-    struct ggml_tensor * & inp_dflash_kq_mask = dflash.inputs.kq_mask;
-    struct ggml_tensor * & inp_dflash_kq_mask_swa = dflash.inputs.kq_mask_swa;
 
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]

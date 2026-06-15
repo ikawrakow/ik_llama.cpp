@@ -2039,8 +2039,6 @@ int32_t common_speculative_on_target_seq_batch(
     const llama_batch * batch_for_spec = &batch;
     llama_batch seq_batch = {};
     const bool needs_seq_split = is_prompt_warmup && !common_speculative_batch_is_exact_single_seq(batch, seq_id);
-    auto * dflash_state = common_speculative_get_dflash_state(spec);
-    const bool measure_dflash_warmup_collect = dflash_state != nullptr && is_prompt_warmup;
 
     if (needs_seq_split) {
         const int n_seq_tokens = common_speculative_copy_seq_batch(batch, seq_id, seq_batch);
@@ -2048,27 +2046,15 @@ int32_t common_speculative_on_target_seq_batch(
             return n_seq_tokens < 0 ? -1 : 0;
         }
 
-        const int64_t t_collect_us = measure_dflash_warmup_collect ? ggml_time_us() : 0;
         if (!common_speculative_collect_target_seq_batch_features(spec, ctx_tgt, batch, seq_id, feature_view)) {
             llama_batch_free(seq_batch);
             return -1;
         }
-        if (measure_dflash_warmup_collect) {
-            dflash_state->t_warmup_collect_us += (uint64_t) (ggml_time_us() - t_collect_us);
-            dflash_state->n_warmup_collect_calls++;
-            dflash_state->n_warmup_collect_rows += (size_t) n_seq_tokens;
-        }
 
         batch_for_spec = &seq_batch;
     } else {
-        const int64_t t_collect_us = measure_dflash_warmup_collect ? ggml_time_us() : 0;
         if (!common_speculative_collect_target_batch_features(spec, ctx_tgt, batch, feature_view)) {
             return -1;
-        }
-        if (measure_dflash_warmup_collect) {
-            dflash_state->t_warmup_collect_us += (uint64_t) (ggml_time_us() - t_collect_us);
-            dflash_state->n_warmup_collect_calls++;
-            dflash_state->n_warmup_collect_rows += (size_t) batch.n_tokens;
         }
     }
 
@@ -2170,16 +2156,7 @@ bool common_speculative_commit_accepted_hidden_rows(
         return false;
     }
 
-    auto * dflash_state = common_speculative_get_dflash_state(spec);
-    const int64_t t_commit_us = dflash_state != nullptr ? ggml_time_us() : 0;
-    const bool ok = common_speculative_apply_hidden_rows(spec, seq_id, pos_base, commit_tokens, hidden_rows);
-    if (dflash_state != nullptr) {
-        dflash_state->t_accept_commit_us += (uint64_t) (ggml_time_us() - t_commit_us);
-        dflash_state->n_accept_commit_calls++;
-        dflash_state->n_accept_commit_rows += commit_tokens.size();
-    }
-
-    return ok;
+    return common_speculative_apply_hidden_rows(spec, seq_id, pos_base, commit_tokens, hidden_rows);
 }
 
 bool common_speculative_commit_accepted_output(
@@ -2196,15 +2173,8 @@ bool common_speculative_commit_accepted_output(
     }
 
     std::vector<float> hidden_rows;
-    auto * dflash_state = common_speculative_get_dflash_state(spec);
-    const int64_t t_copy_us = dflash_state != nullptr ? ggml_time_us() : 0;
     if (!common_speculative_copy_output_hidden_rows(spec, ctx, output_indices, hidden_rows)) {
         return false;
-    }
-    if (dflash_state != nullptr) {
-        dflash_state->t_accept_output_copy_us += (uint64_t) (ggml_time_us() - t_copy_us);
-        dflash_state->n_accept_output_copy_calls++;
-        dflash_state->n_accept_output_copy_rows += output_indices.size();
     }
 
     return common_speculative_commit_accepted_hidden_rows(
@@ -2471,341 +2441,6 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
                 impl->n_acc_tokens,
                 str_perf.c_str());
 
-        if (impl->type == COMMON_SPECULATIVE_TYPE_DFLASH) {
-            const auto * dflash_state = dynamic_cast<const common_speculative_state_dflash *>(impl.get());
-            if (dflash_state != nullptr && dflash_stats_log_enabled()) {
-                llama_dflash_profile_stats capture_stats;
-                llama_dflash_profile_stats graph_stats;
-                const bool have_capture = llama_dflash_profile_get_stats(dflash_state->ctx_tgt, &capture_stats);
-                const bool have_graph = llama_dflash_profile_get_stats(dflash_state->ctx_dft, &graph_stats);
-
-                LOG_INF("statistics dflash detail: cross_ctx=%d, window_rows=%d, pos=[%d..%d], window_updates=%zu, rows_seen=%zu, rows_dropped=%zu, shifts=%zu, draft_fail(empty/set/decode)=%zu/%zu/%zu, next_draft_pos=%d\n",
-                        dflash_state->cross_ctx,
-                        dflash_state->target_window_rows,
-                        dflash_state->target_window_pos.empty() ? -1 : (int) dflash_state->target_window_pos.front(),
-                        dflash_state->target_window_pos.empty() ? -1 : (int) dflash_state->target_window_pos.back(),
-                        dflash_state->n_window_updates,
-                        dflash_state->n_rows_seen,
-                        dflash_state->n_rows_dropped,
-                        dflash_state->n_context_shifts,
-                        dflash_state->n_draft_empty,
-                        dflash_state->n_set_target_fail,
-                        dflash_state->n_decode_fail,
-                        (int) dflash_state->last_draft_pos_base);
-
-                if (have_capture || have_graph) {
-                    const double kv_cache_total_ms = (double) (
-                        graph_stats.graph_kv_cache_build_us +
-                        graph_stats.graph_kv_cache_reserve_us +
-                        graph_stats.graph_kv_cache_reset_us +
-                        graph_stats.graph_kv_cache_alloc_us +
-                        graph_stats.graph_kv_cache_feature_upload_us +
-                        graph_stats.graph_kv_cache_pos_upload_us +
-                        graph_stats.graph_kv_cache_compute_us +
-                        graph_stats.graph_kv_cache_sync_us +
-                        graph_stats.graph_kv_cache_read_concat_pad_us) / 1000.0;
-                    const double kv_upload_feature_ms = (double) graph_stats.graph_kv_cache_feature_upload_us / 1000.0;
-                    const double kv_upload_pos_ms = (double) graph_stats.graph_kv_cache_pos_upload_us / 1000.0;
-                    const double kv_upload_total_ms = kv_upload_feature_ms + kv_upload_pos_ms;
-                    const double kv_compute_ms = (double) graph_stats.graph_kv_cache_compute_us / 1000.0;
-                    const double kv_sync_ms = (double) graph_stats.graph_kv_cache_sync_us / 1000.0;
-                    const double kv_workspace_total_ms = (double) (
-                        graph_stats.graph_kv_workspace_build_us +
-                        graph_stats.graph_kv_workspace_reserve_us +
-                        graph_stats.graph_kv_workspace_reset_us +
-                        graph_stats.graph_kv_workspace_alloc_us +
-                        graph_stats.graph_kv_workspace_compute_us +
-                        graph_stats.graph_kv_workspace_sync_us) / 1000.0;
-                    const double draft_kv_traffic_ms = (double) (
-                        graph_stats.graph_main_node_k_ctx_view_us +
-                        graph_stats.graph_main_node_v_ctx_view_us +
-                        graph_stats.graph_main_node_k_concat_us +
-                        graph_stats.graph_main_node_v_concat_us +
-                        graph_stats.graph_main_node_k_pad_us +
-                        graph_stats.graph_main_node_v_pad_us +
-                        graph_stats.graph_main_node_k_perm_cont_us +
-                        graph_stats.graph_main_node_v_perm_cont_us) / 1000.0;
-                    const double draft_main_profiled_ms = (double) (
-                        graph_stats.graph_main_node_qcur_us +
-                        graph_stats.graph_main_node_k_draft_us +
-                        graph_stats.graph_main_node_v_draft_us +
-                        graph_stats.graph_main_node_flash_attn_us +
-                        graph_stats.graph_main_node_attn_out_us +
-                        graph_stats.graph_main_node_ffn_us +
-                        graph_stats.graph_main_node_result_rows_us +
-                        graph_stats.graph_main_node_result_norm_us +
-                        graph_stats.graph_main_node_result_us) / 1000.0;
-                    const double replay_append_ms = (double) dflash_state->t_accept_append_us / 1000.0;
-                    const double feature_path_ms = (double) (
-                        capture_stats.capture_prepare_sync_us +
-                        capture_stats.capture_materialize_us +
-                        graph_stats.set_target_copy_us +
-                        graph_stats.graph_feature_copy_us +
-                        graph_stats.graph_pos_copy_us +
-                        graph_stats.graph_mask_build_us) / 1000.0;
-                    const double decode_internal_ms = (double) (
-                        graph_stats.decode_prelude_us +
-                        graph_stats.decode_sched_reset_us +
-                        graph_stats.decode_build_graph_us +
-                        graph_stats.decode_sched_alloc_graph_us +
-                        graph_stats.decode_prepare_us +
-                        graph_stats.decode_set_inputs_us +
-                        graph_stats.decode_graph_compute_us +
-                        graph_stats.decode_result_us +
-                        graph_stats.decode_embedding_us +
-                        graph_stats.decode_final_sched_reset_us) / 1000.0;
-
-                        LOG_INF("statistics dflash profile: capture(sync/materialize)=%.3f/%.3f ms calls=%llu/%llu bytes=%llu phase(prompt/verify batches changes)=%llu/%llu %llu/%llu, set_target=%.3f ms rows=%llu bytes=%llu, decode(llama_output_reserve/prepare)=%.3f/%.3f ms calls=%llu/%llu realloc(bytes)=%llu/%llu, prep(total/features/pos/mask)=%.3f/%.3f/%.3f/%.3f ms kv_cache(total/build/reserve/reset/alloc/up_f/up_p/compute/sync/read)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls(prepare/cache/read)=%llu/%llu/%llu bytes(feature/pos/mask/read)=%llu/%llu/%llu/%llu host_layers=%d, fallback_pos(copy/graph)=%llu/%llu, nonmono(copy/graph)=%llu/%llu, capture_fail=%llu/%llu decode_prepare_fail=%llu, visible_kv_max=%llu, last(rows=%d width=%d left_pad=%d n_tokens=%d n_kv=%d pos=[%d..%d])\n",
-                            (double) capture_stats.capture_prepare_sync_us / 1000.0,
-                            (double) capture_stats.capture_materialize_us / 1000.0,
-                            (unsigned long long) capture_stats.capture_prepare_calls,
-                            (unsigned long long) capture_stats.capture_materialize_calls,
-                            (unsigned long long) capture_stats.capture_materialize_bytes,
-                            (unsigned long long) capture_stats.capture_prompt_batches,
-                            (unsigned long long) capture_stats.capture_prompt_shape_changes,
-                            (unsigned long long) capture_stats.capture_verify_batches,
-                            (unsigned long long) capture_stats.capture_verify_shape_changes,
-                            (double) graph_stats.set_target_copy_us / 1000.0,
-                            (unsigned long long) graph_stats.set_target_rows,
-                            (unsigned long long) graph_stats.set_target_copy_bytes,
-                            (double) graph_stats.decode_output_reserve_us / 1000.0,
-                            (double) graph_stats.decode_prepare_us / 1000.0,
-                            (unsigned long long) graph_stats.decode_output_reserve_calls,
-                            (unsigned long long) graph_stats.decode_prepare_calls,
-                            (unsigned long long) graph_stats.decode_output_reserve_reallocs,
-                            (unsigned long long) graph_stats.decode_output_reserve_realloc_bytes,
-                            (double) graph_stats.graph_prepare_total_us / 1000.0,
-                            (double) graph_stats.graph_feature_copy_us / 1000.0,
-                            (double) graph_stats.graph_pos_copy_us / 1000.0,
-                            (double) graph_stats.graph_mask_build_us / 1000.0,
-                            kv_cache_total_ms,
-                            (double) graph_stats.graph_kv_cache_build_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_reserve_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_reset_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_alloc_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_feature_upload_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_pos_upload_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_compute_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_sync_us / 1000.0,
-                            (double) graph_stats.graph_kv_cache_read_concat_pad_us / 1000.0,
-                            (unsigned long long) graph_stats.graph_prepare_calls,
-                            (unsigned long long) graph_stats.graph_kv_cache_calls,
-                            (unsigned long long) graph_stats.graph_kv_cache_read_concat_pad_calls,
-                            (unsigned long long) graph_stats.graph_feature_bytes,
-                            (unsigned long long) graph_stats.graph_pos_bytes,
-                            (unsigned long long) graph_stats.graph_mask_bytes,
-                            (unsigned long long) graph_stats.graph_kv_cache_cached_bytes,
-                            graph_stats.last_kv_cache_host_layers,
-                            (unsigned long long) graph_stats.set_target_missing_positions,
-                            (unsigned long long) graph_stats.graph_pos_fallbacks,
-                            (unsigned long long) graph_stats.set_target_non_monotonic_positions,
-                            (unsigned long long) graph_stats.graph_pos_non_monotonic,
-                            (unsigned long long) capture_stats.capture_prepare_failures,
-                            (unsigned long long) capture_stats.capture_materialize_failures,
-                            (unsigned long long) graph_stats.decode_prepare_failures,
-                            (unsigned long long) graph_stats.graph_visible_kv_max,
-                            graph_stats.last_n_rows,
-                            graph_stats.last_width,
-                            graph_stats.last_left_pad,
-                            graph_stats.last_n_tokens,
-                            graph_stats.last_n_kv_total,
-                            (int) graph_stats.last_pos_first,
-                            (int) graph_stats.last_pos_last);
-
-                            LOG_INF("statistics dflash features: total=%.3f ms capture(sync/materialize)=%.3f/%.3f ms set_target=%.3f ms prep(feature/pos/mask)=%.3f/%.3f/%.3f ms rows(materialize/set_target)=%llu/%llu bytes(materialize/set_target/feature/pos/mask)=%llu/%llu/%llu/%llu/%llu\n",
-                                feature_path_ms,
-                                (double) capture_stats.capture_prepare_sync_us / 1000.0,
-                                (double) capture_stats.capture_materialize_us / 1000.0,
-                                (double) graph_stats.set_target_copy_us / 1000.0,
-                                (double) graph_stats.graph_feature_copy_us / 1000.0,
-                                (double) graph_stats.graph_pos_copy_us / 1000.0,
-                                (double) graph_stats.graph_mask_build_us / 1000.0,
-                                (unsigned long long) capture_stats.capture_materialize_rows,
-                                (unsigned long long) graph_stats.set_target_rows,
-                                (unsigned long long) capture_stats.capture_materialize_bytes,
-                                (unsigned long long) graph_stats.set_target_copy_bytes,
-                                (unsigned long long) graph_stats.graph_feature_bytes,
-                                (unsigned long long) graph_stats.graph_pos_bytes,
-                                (unsigned long long) graph_stats.graph_mask_bytes);
-
-                            LOG_INF("statistics dflash kv: total=%.3f ms build/reserve/reset/alloc/upload_f/upload_p/compute/sync/read=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu cached_bytes=%llu host_layers=%d\n",
-                                kv_cache_total_ms,
-                                (double) graph_stats.graph_kv_cache_build_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_reserve_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_reset_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_alloc_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_feature_upload_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_pos_upload_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_compute_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_sync_us / 1000.0,
-                                (double) graph_stats.graph_kv_cache_read_concat_pad_us / 1000.0,
-                                (unsigned long long) graph_stats.graph_kv_cache_calls,
-                                (unsigned long long) graph_stats.graph_kv_cache_cached_bytes,
-                                graph_stats.last_kv_cache_host_layers);
-
-                            if (graph_stats.graph_kv_workspace_calls > 0) {
-                                LOG_INF("statistics dflash kv workspace: total=%.3f ms build/reserve/reset/alloc/compute/sync=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu\n",
-                                        kv_workspace_total_ms,
-                                        (double) graph_stats.graph_kv_workspace_build_us / 1000.0,
-                                        (double) graph_stats.graph_kv_workspace_reserve_us / 1000.0,
-                                        (double) graph_stats.graph_kv_workspace_reset_us / 1000.0,
-                                        (double) graph_stats.graph_kv_workspace_alloc_us / 1000.0,
-                                        (double) graph_stats.graph_kv_workspace_compute_us / 1000.0,
-                                        (double) graph_stats.graph_kv_workspace_sync_us / 1000.0,
-                                        (unsigned long long) graph_stats.graph_kv_workspace_calls);
-                            }
-
-                            if (graph_stats.decode_internal_chunks > 0) {
-                            LOG_INF("statistics dflash decode: llama_decode(total)=%.3f ms calls=%zu chunks=%llu rebuilds=%llu sync_points=%llu internal(total/prelude/sched_reset/build/alloc/prepare/set_inputs/compute/get_result/get_embedding/final_reset)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms\n",
-                                (double) dflash_state->t_draft_decode_us / 1000.0,
-                                dflash_state->n_call_draft,
-                                (unsigned long long) graph_stats.decode_internal_chunks,
-                                (unsigned long long) graph_stats.decode_graph_rebuilds,
-                                (unsigned long long) graph_stats.decode_sync_profile_points,
-                                decode_internal_ms,
-                                (double) graph_stats.decode_prelude_us / 1000.0,
-                                (double) graph_stats.decode_sched_reset_us / 1000.0,
-                                (double) graph_stats.decode_build_graph_us / 1000.0,
-                                (double) graph_stats.decode_sched_alloc_graph_us / 1000.0,
-                                (double) graph_stats.decode_prepare_us / 1000.0,
-                                (double) graph_stats.decode_set_inputs_us / 1000.0,
-                                (double) graph_stats.decode_graph_compute_us / 1000.0,
-                                (double) graph_stats.decode_result_us / 1000.0,
-                                (double) graph_stats.decode_embedding_us / 1000.0,
-                                (double) graph_stats.decode_final_sched_reset_us / 1000.0);
-                            }
-
-                            if (graph_stats.graph_kv_node_fused_target_calls > 0 ||
-                                    graph_stats.graph_kv_node_k_proj_calls > 0 ||
-                                    graph_stats.graph_kv_node_k_norm_calls > 0 ||
-                                    graph_stats.graph_kv_node_k_rope_calls > 0 ||
-                                    graph_stats.graph_kv_node_v_proj_calls > 0 ||
-                                    graph_stats.graph_kv_node_k_store_calls > 0 ||
-                                    graph_stats.graph_kv_node_v_store_calls > 0) {
-                                LOG_INF("statistics dflash kv nodes: fused_target/k_proj/k_norm/k_rope/v_proj/k_store/v_store=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu/%llu/%llu/%llu/%llu/%llu/%llu\n",
-                                        (double) graph_stats.graph_kv_node_fused_target_us / 1000.0,
-                                        (double) graph_stats.graph_kv_node_k_proj_us / 1000.0,
-                                        (double) graph_stats.graph_kv_node_k_norm_us / 1000.0,
-                                        (double) graph_stats.graph_kv_node_k_rope_us / 1000.0,
-                                        (double) graph_stats.graph_kv_node_v_proj_us / 1000.0,
-                                        (double) graph_stats.graph_kv_node_k_store_us / 1000.0,
-                                        (double) graph_stats.graph_kv_node_v_store_us / 1000.0,
-                                        (unsigned long long) graph_stats.graph_kv_node_fused_target_calls,
-                                        (unsigned long long) graph_stats.graph_kv_node_k_proj_calls,
-                                        (unsigned long long) graph_stats.graph_kv_node_k_norm_calls,
-                                        (unsigned long long) graph_stats.graph_kv_node_k_rope_calls,
-                                        (unsigned long long) graph_stats.graph_kv_node_v_proj_calls,
-                                        (unsigned long long) graph_stats.graph_kv_node_k_store_calls,
-                                        (unsigned long long) graph_stats.graph_kv_node_v_store_calls);
-                            }
-
-                                            if (graph_stats.graph_main_node_qcur_calls > 0 ||
-                                                graph_stats.graph_main_node_k_draft_calls > 0 ||
-                                                graph_stats.graph_main_node_v_draft_calls > 0 ||
-                                                graph_stats.graph_main_node_flash_attn_calls > 0 ||
-                                                graph_stats.graph_main_node_attn_out_calls > 0 ||
-                                                graph_stats.graph_main_node_ffn_calls > 0 ||
-                                                graph_stats.graph_main_node_result_rows_calls > 0 ||
-                                                graph_stats.graph_main_node_result_norm_calls > 0 ||
-                                                graph_stats.graph_main_node_result_calls > 0) {
-                                            LOG_INF("statistics dflash draft nodes: profiled=%.3f ms graph_compute=%.3f ms qcur/k_draft/v_draft/flash_attn/attn_out/ffn/result_rows/result_norm/result=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu\n",
-                                                draft_main_profiled_ms,
-                                                (double) graph_stats.decode_graph_compute_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_qcur_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_k_draft_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_v_draft_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_flash_attn_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_attn_out_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_ffn_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_result_rows_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_result_norm_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_result_us / 1000.0,
-                                                (unsigned long long) graph_stats.graph_main_node_qcur_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_k_draft_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_v_draft_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_flash_attn_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_attn_out_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_ffn_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_result_rows_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_result_norm_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_result_calls);
-                                            }
-
-                                            if (graph_stats.graph_main_node_k_ctx_view_calls > 0 ||
-                                                graph_stats.graph_main_node_v_ctx_view_calls > 0 ||
-                                                graph_stats.graph_main_node_k_concat_calls > 0 ||
-                                                graph_stats.graph_main_node_v_concat_calls > 0 ||
-                                                graph_stats.graph_main_node_k_pad_calls > 0 ||
-                                                graph_stats.graph_main_node_v_pad_calls > 0 ||
-                                                graph_stats.graph_main_node_k_perm_cont_calls > 0 ||
-                                                graph_stats.graph_main_node_v_perm_cont_calls > 0) {
-                                            LOG_INF("statistics dflash draft kv traffic: total=%.3f ms graph_compute=%.3f ms k_ctx_view/v_ctx_view/k_concat/v_concat/k_pad/v_pad/k_perm_cont/v_perm_cont=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu\n",
-                                                draft_kv_traffic_ms,
-                                                (double) graph_stats.decode_graph_compute_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_k_ctx_view_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_v_ctx_view_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_k_concat_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_v_concat_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_k_pad_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_v_pad_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_k_perm_cont_us / 1000.0,
-                                                (double) graph_stats.graph_main_node_v_perm_cont_us / 1000.0,
-                                                (unsigned long long) graph_stats.graph_main_node_k_ctx_view_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_v_ctx_view_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_k_concat_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_v_concat_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_k_pad_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_v_pad_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_k_perm_cont_calls,
-                                                (unsigned long long) graph_stats.graph_main_node_v_perm_cont_calls);
-                                            }
-
-                            LOG_INF("statistics dflash hot: kv(upload_f/upload_p/upload/compute/sync)=%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%llu replay(accepted_prefix_append)=%.3f ms calls=%zu rows=%zu\n",
-                                kv_upload_feature_ms,
-                                kv_upload_pos_ms,
-                                kv_upload_total_ms,
-                                kv_compute_ms,
-                                kv_sync_ms,
-                                (unsigned long long) graph_stats.graph_kv_cache_calls,
-                                replay_append_ms,
-                                dflash_state->n_accept_append_calls,
-                                dflash_state->n_accept_append_rows);
-
-                    LOG_INF("statistics dflash stages: draft(decode/sample)=%.3f/%.3f ms warmup(collect/append)=%.3f/%.3f ms calls=%zu/%zu rows=%zu/%zu accept(total/output_copy/append)=%.3f/%.3f/%.3f ms calls=%zu/%zu/%zu rows=%zu/%zu/%zu\n",
-                            (double) dflash_state->t_draft_decode_us / 1000.0,
-                            (double) dflash_state->t_draft_sample_us / 1000.0,
-                            (double) dflash_state->t_warmup_collect_us / 1000.0,
-                            (double) dflash_state->t_warmup_append_us / 1000.0,
-                            dflash_state->n_warmup_collect_calls,
-                            dflash_state->n_warmup_append_calls,
-                            dflash_state->n_warmup_collect_rows,
-                            dflash_state->n_warmup_append_rows,
-                            (double) dflash_state->t_accept_commit_us / 1000.0,
-                            (double) dflash_state->t_accept_output_copy_us / 1000.0,
-                            (double) dflash_state->t_accept_append_us / 1000.0,
-                            dflash_state->n_accept_commit_calls,
-                            dflash_state->n_accept_output_copy_calls,
-                            dflash_state->n_accept_append_calls,
-                            dflash_state->n_accept_commit_rows,
-                            dflash_state->n_accept_output_copy_rows,
-                            dflash_state->n_accept_append_rows);
-
-                    if (dflash_state->n_accept_append_calls > 0) {
-                        LOG_INF("statistics dflash replay: append(filter/window_alloc/replace/keep_old/new_rows/commit/log)=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f/%.3f ms calls=%zu replace/slide=%zu/%zu\n",
-                                (double) dflash_state->t_accept_append_filter_us / 1000.0,
-                            (double) dflash_state->t_accept_append_window_alloc_us / 1000.0,
-                                (double) dflash_state->t_accept_append_replace_us / 1000.0,
-                                (double) dflash_state->t_accept_append_keep_old_us / 1000.0,
-                                (double) dflash_state->t_accept_append_new_rows_us / 1000.0,
-                                (double) dflash_state->t_accept_append_commit_detail_us / 1000.0,
-                                (double) dflash_state->t_accept_append_log_us / 1000.0,
-                                dflash_state->n_accept_append_calls,
-                                dflash_state->n_accept_append_replace_calls,
-                                dflash_state->n_accept_append_slide_calls);
-                    }
-                }
-            }
-        }
     }
 
     if (spec->tuner && spec->tuner->enabled && slot_tps > 0.0 && n_decoded > 0) {
@@ -3076,35 +2711,9 @@ int32_t common_speculative_on_target_batch(
             }
         }
 
-        dflash_append_breakdown append_breakdown;
-        const int64_t t_append_us = ggml_time_us();
-        if (!dflash_append_target_features(*dflash_state, features, batch, seq_id, &append_breakdown)) {
+        if (!dflash_append_target_features(*dflash_state, features, seq_id)) {
             return -1;
         }
-
-        const uint64_t append_us = (uint64_t) (ggml_time_us() - t_append_us);
-        if (is_prompt_warmup) {
-            dflash_state->t_warmup_append_us += append_us;
-            dflash_state->n_warmup_append_calls++;
-            dflash_state->n_warmup_append_rows += (size_t) batch.n_tokens;
-        } else {
-            dflash_state->t_accept_append_us += append_us;
-            dflash_state->t_accept_append_filter_us += append_breakdown.filter_us;
-            dflash_state->t_accept_append_window_alloc_us += append_breakdown.window_alloc_us;
-            dflash_state->t_accept_append_replace_us += append_breakdown.replace_us;
-            dflash_state->t_accept_append_keep_old_us += append_breakdown.keep_old_us;
-            dflash_state->t_accept_append_new_rows_us += append_breakdown.new_rows_us;
-            dflash_state->t_accept_append_commit_detail_us += append_breakdown.commit_us;
-            dflash_state->t_accept_append_log_us += append_breakdown.log_us;
-            dflash_state->n_accept_append_calls++;
-            dflash_state->n_accept_append_rows += (size_t) batch.n_tokens;
-            if (append_breakdown.replace_call) {
-                dflash_state->n_accept_append_replace_calls++;
-            } else {
-                dflash_state->n_accept_append_slide_calls++;
-            }
-        }
-
         return 0;
     }
 

@@ -19,7 +19,6 @@
 #include "llama-context.h"
 #include "llama-spec-features.h"
 #include "llama-dflash.h"
-#include "llama-dflash-profile.h"
 #include "llama-quantize.h"
 
 #include "unicode.h"
@@ -697,8 +696,8 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
 }
 
 llama_context::~llama_context() {
-    if (dflash_sched != nullptr) {
-        ggml_backend_sched_free(dflash_sched);
+    if (dflash.kv.cache_sched != nullptr) {
+        ggml_backend_sched_free(dflash.kv.cache_sched);
     }
     free_dflash_kv_cache_tensors();
     ggml_backend_sched_free(sched);
@@ -5096,10 +5095,6 @@ static int llama_decode_internal(
     }
     lctx.n_queued_tokens += n_tokens_all;
 
-    auto * dflash_profile = lctx.model.arch == LLM_ARCH_DFLASH_DRAFT ? &lctx.dflash_profile : nullptr;
-    const bool dflash_decode_timing = dflash_profile != nullptr && llama_env_flag_enabled("IK_DFLASH_DECODE_TIMING");
-    const bool dflash_draft_node_timing = dflash_profile != nullptr && llama_env_flag_enabled("IK_DFLASH_DRAFT_NODE_TIMING");
-
     auto & kv_self = lctx.kv_self;
 
     const int64_t n_embd  = hparams.n_embd;
@@ -5139,20 +5134,7 @@ static int llama_decode_internal(
     n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
     const size_t required_outputs = std::max<size_t>(n_outputs, n_outputs_embd);
     const bool is_dflash_decode = lctx.model.arch == LLM_ARCH_DFLASH_DRAFT;
-    const size_t output_buf_size_before = lctx.buf_output ? ggml_backend_buffer_get_size(lctx.buf_output) : 0;
-    const int64_t t_output_reserve_us = is_dflash_decode ? ggml_time_us() : 0;
     const size_t reserved_outputs = llama_output_reserve(lctx, required_outputs);
-    if (is_dflash_decode) {
-        auto & profile = lctx.dflash_profile;
-        profile.decode_output_reserve_calls++;
-        profile.decode_output_reserve_us += (uint64_t) (ggml_time_us() - t_output_reserve_us);
-
-        const size_t output_buf_size_after = lctx.buf_output ? ggml_backend_buffer_get_size(lctx.buf_output) : 0;
-        if (output_buf_size_after > output_buf_size_before) {
-            profile.decode_output_reserve_reallocs++;
-            profile.decode_output_reserve_realloc_bytes += (uint64_t) output_buf_size_after;
-        }
-    }
     if (reserved_outputs < required_outputs) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, required_outputs);
         return -2;
@@ -5184,10 +5166,6 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         auto tim1 = ggml_time_us();
 #endif
-        const int64_t t_dflash_prelude_us = dflash_decode_timing ? ggml_time_us() : 0;
-        if (dflash_decode_timing) {
-            dflash_profile->decode_internal_chunks++;
-        }
         uint32_t n_tokens = std::min(n_ubatch, n_tokens_all - cur_token);
         if (llm_arch_is_hybrid(model.arch) &&
                 n_tokens > 1 &&
@@ -5353,55 +5331,36 @@ static int llama_decode_internal(
         auto tim2 = ggml_time_us();
         printf("prelude(...): %d us\n", int(tim2-tim1));
 #endif
-        if (dflash_decode_timing) {
-            dflash_profile->decode_prelude_us += (uint64_t) (ggml_time_us() - t_dflash_prelude_us);
-        }
-
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         if (!lctx.can_reuse_graph(u_batch)) {
-            if (dflash_decode_timing) {
-                dflash_profile->decode_graph_rebuilds++;
-            }
-            const int64_t t_dflash_sched_reset_us = dflash_decode_timing ? ggml_time_us() : 0;
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("sched_reset(...): %d us\n", int(tim2-tim1));
 #endif
-            if (dflash_decode_timing) {
-                dflash_profile->decode_sched_reset_us += (uint64_t) (ggml_time_us() - t_dflash_sched_reset_us);
-            }
 
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            const int64_t t_dflash_build_graph_us = dflash_decode_timing ? ggml_time_us() : 0;
             gf = llm_build_context::llama_build_graph(lctx, u_batch, false);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("build_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            if (dflash_decode_timing) {
-                dflash_profile->decode_build_graph_us += (uint64_t) (ggml_time_us() - t_dflash_build_graph_us);
-            }
 
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            const int64_t t_dflash_sched_alloc_us = dflash_decode_timing ? ggml_time_us() : 0;
             ggml_backend_sched_alloc_graph(lctx.sched, gf);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            if (dflash_decode_timing) {
-                dflash_profile->decode_sched_alloc_graph_us += (uint64_t) (ggml_time_us() - t_dflash_sched_alloc_us);
-            }
             //if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
             if (u_batch.embd == nullptr && lctx.cparams.graph_reuse &&
                     !((lctx.model.arch == LLM_ARCH_GEMMA4_MTP || lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && lctx.mtp_target_ctx != nullptr)) {
@@ -5422,15 +5381,8 @@ static int llama_decode_internal(
             }
         }
 
-        if (dflash_profile != nullptr) {
-            dflash_profile->decode_prepare_calls++;
-            const int64_t t_prepare_dflash_us = ggml_time_us();
-            if (!llama_prepare_dflash_graph_inputs(lctx, n_tokens)) {
-                dflash_profile->decode_prepare_failures++;
-                dflash_profile->decode_prepare_us += (uint64_t) (ggml_time_us() - t_prepare_dflash_us);
-                return GGML_STATUS_FAILED;
-            }
-            dflash_profile->decode_prepare_us += (uint64_t) (ggml_time_us() - t_prepare_dflash_us);
+        if (is_dflash_decode && !llama_prepare_dflash_graph_inputs(lctx, n_tokens)) {
+            return GGML_STATUS_FAILED;
         }
 
         // the output is always the last tensor in the graph
@@ -5438,7 +5390,7 @@ static int llama_decode_internal(
         struct ggml_tensor * embd = nullptr;
 
         // DFlash GPU argmax draft_argmax node
-        if (lctx.dflash_draft_tokens_tensor != nullptr &&
+        if (lctx.dflash.draft_tokens_tensor != nullptr &&
             strcmp(res->name, "result_output") != 0) {
             for (int i = gf->n_nodes - 2; i >= 0; --i) {
                 if (strcmp(gf->nodes[i]->name, "result_output") == 0) {
@@ -5489,39 +5441,18 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
-    const int64_t t_dflash_set_inputs_us = dflash_decode_timing ? ggml_time_us() : 0;
         llama_set_inputs(lctx, u_batch);
 #if IK_PRINT_TIMING == 1
         tim2 = ggml_time_us();
         printf("set_inputs(...): %d us\n", int(tim2-tim1));
 #endif
-    if (dflash_decode_timing) {
-        dflash_profile->decode_set_inputs_us += (uint64_t) (ggml_time_us() - t_dflash_set_inputs_us);
-    }
-
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
-    if (lctx.dflash_kv_workspace_sync_pending) {
+    if (lctx.dflash.kv.workspace_sync_pending) {
         llama_sync_dflash_workspace_if_pending(lctx);
     }
-    const int64_t t_dflash_graph_compute_us = dflash_decode_timing ? ggml_time_us() : 0;
-        llama_dflash_main_node_profiler draft_node_profiler;
-        if (dflash_draft_node_timing) {
-            draft_node_profiler.profile = dflash_profile;
-            draft_node_profiler.prev_callback = lctx.cparams.cb_eval;
-            draft_node_profiler.prev_user_data = lctx.cparams.cb_eval_user_data;
-            ggml_backend_sched_set_eval_callback(lctx.sched, llama_dflash_main_node_eval_callback, &draft_node_profiler);
-        }
         llama_graph_compute(lctx, gf, n_threads);
-        if (dflash_draft_node_timing) {
-            ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
-        }
-    if (dflash_decode_timing) {
-        llama_synchronize(&lctx);
-        dflash_profile->decode_sync_profile_points++;
-        dflash_profile->decode_graph_compute_us += (uint64_t) (ggml_time_us() - t_dflash_graph_compute_us);
-    }
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
         tim2 = ggml_time_us();
@@ -5547,16 +5478,16 @@ static int llama_decode_internal(
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        lctx.dflash_draft_tokens.clear();
-        if (lctx.dflash_draft_tokens_tensor != nullptr) {
+        lctx.dflash.draft_tokens.clear();
+        if (lctx.dflash.draft_tokens_tensor != nullptr) {
             ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(
-                lctx.sched, lctx.dflash_draft_tokens_tensor);
+                lctx.sched, lctx.dflash.draft_tokens_tensor);
             if (backend_argmax != nullptr) {
-                const int64_t n_tokens_argmax = lctx.dflash_draft_tokens_tensor->ne[0];
-                lctx.dflash_draft_tokens.resize((size_t) n_tokens_argmax);
+                const int64_t n_tokens_argmax = lctx.dflash.draft_tokens_tensor->ne[0];
+                lctx.dflash.draft_tokens.resize((size_t) n_tokens_argmax);
                 ggml_backend_tensor_get_async(backend_argmax,
-                    lctx.dflash_draft_tokens_tensor,
-                    lctx.dflash_draft_tokens.data(), 0,
+                    lctx.dflash.draft_tokens_tensor,
+                    lctx.dflash.draft_tokens.data(), 0,
                     (size_t) n_tokens_argmax * sizeof(int32_t));
             }
         }
@@ -5564,7 +5495,7 @@ static int llama_decode_internal(
         // extract logits
         {
             const bool dflash_skip_logits = (lctx.model.arch == LLM_ARCH_DFLASH_DRAFT
-                && !lctx.dflash_draft_tokens.empty());
+                && !lctx.dflash.draft_tokens.empty());
             if (dflash_skip_logits) {
                 res = nullptr;
             }
@@ -5573,7 +5504,6 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            const int64_t t_dflash_get_result_us = dflash_decode_timing ? ggml_time_us() : 0;
             // Do not process logits if MTP is only updating the KV cache.
             if (cparams.mtp_op_type != MTP_OP_WARMUP) { // && cparams.mtp_op_type != MTP_OP_UPDATE_ACCEPTED) {
                 ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(lctx.sched, res);
@@ -5604,11 +5534,6 @@ static int llama_decode_internal(
                     }
                 }
             }
-            if (dflash_decode_timing) {
-                llama_synchronize(&lctx);
-                dflash_profile->decode_sync_profile_points++;
-                dflash_profile->decode_result_us += (uint64_t) (ggml_time_us() - t_dflash_get_result_us);
-            }
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("get_result(...): %d us\n", int(tim2-tim1));
@@ -5621,7 +5546,6 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            const int64_t t_dflash_get_embedding_us = dflash_decode_timing ? ggml_time_us() : 0;
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(lctx.sched, embd);
             GGML_ASSERT(backend_embd != nullptr);
 
@@ -5660,11 +5584,6 @@ static int llama_decode_internal(
                     {
                         GGML_ABORT("unknown pooling type");
                     }
-            }
-            if (dflash_decode_timing) {
-                llama_synchronize(&lctx);
-                dflash_profile->decode_sync_profile_points++;
-                dflash_profile->decode_embedding_us += (uint64_t) (ggml_time_us() - t_dflash_get_embedding_us);
             }
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
@@ -5709,12 +5628,8 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    const int64_t t_dflash_final_sched_reset_us = dflash_decode_timing ? ggml_time_us() : 0;
     if (!lctx.prev) {
         lctx.reset_scheduler();
-    }
-    if (dflash_decode_timing) {
-        dflash_profile->decode_final_sched_reset_us += (uint64_t) (ggml_time_us() - t_dflash_final_sched_reset_us);
     }
 #if IK_PRINT_TIMING
         auto tim2 = ggml_time_us();
@@ -9838,10 +9753,10 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
 }
 
 llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i) {
-    if ((size_t) i >= ctx->dflash_draft_tokens.size()) {
+    if ((size_t) i >= ctx->dflash.draft_tokens.size()) {
         return LLAMA_TOKEN_NULL;
     }
-    return ctx->dflash_draft_tokens[(size_t) i];
+    return ctx->dflash.draft_tokens[(size_t) i];
 }
 
 float * llama_get_embeddings(struct llama_context * ctx) {
