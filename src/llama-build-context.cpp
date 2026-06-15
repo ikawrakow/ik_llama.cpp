@@ -962,6 +962,14 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 cur = ggml_swiglu(ctx, cur);
                 cb(cur, "ffn_swiglu", il);
             } break;
+        case LLM_FFN_SWIGLU_OAI:
+            {
+                constexpr float alpha = 1.702f;
+                constexpr float limit = 7.0f;
+                cur = ggml_swiglu_oai(ctx, cur, tmp, alpha, limit);
+                cb(cur, "ffn_swiglu_oai", il);
+                type_gate = LLM_FFN_SEQ;
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
