@@ -19012,8 +19012,16 @@ static void ggml_compute_forward_set_rows_f32(
 
                     GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
-                    from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    if (dst->type == GGML_TYPE_F32) {
+                        // PXA: CPU set_rows into an F32 dst -- type_traits[F32].from_float is NULL,
+                        // so copy floats directly (mirrors the CUDA set_rows F32 path). This is what
+                        // the batched delta-net recurrent-state scatter needs on the CPU backend.
+                        memcpy(((char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3),
+                               ((const char *) src0->data + i*nb01 + i02*nb02 + i03*nb03), nc*sizeof(float));
+                    } else {
+                        from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
+                                ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    }
                 }
             }
         }
@@ -19030,8 +19038,16 @@ static void ggml_compute_forward_set_rows_f32(
 
                     GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
-                    from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    if (dst->type == GGML_TYPE_F32) {
+                        // PXA: CPU set_rows into an F32 dst -- type_traits[F32].from_float is NULL,
+                        // so copy floats directly (mirrors the CUDA set_rows F32 path). This is what
+                        // the batched delta-net recurrent-state scatter needs on the CPU backend.
+                        memcpy(((char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3),
+                               ((const char *) src0->data + i*nb01 + i02*nb02 + i03*nb03), nc*sizeof(float));
+                    } else {
+                        from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
+                                ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    }
                 }
             }
         }

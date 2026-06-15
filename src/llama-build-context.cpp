@@ -109,6 +109,8 @@ void llm_build_context::init() {
     lctx.inp_s_mask      = nullptr;
     lctx.inp_s_seq       = nullptr;
     lctx.inp_s_seq_qnext = nullptr;
+    lctx.inp_conv_seq_map  = nullptr; // PXA_LLAMA_FIX_v4
+    lctx.inp_qnext_state_mask = nullptr; // PXA_LLAMA_FIX_v4
     lctx.inp_pos_bucket    = nullptr;
     lctx.inp_embd_enc      = nullptr;
     lctx.inp_KQ_mask_cross = nullptr;

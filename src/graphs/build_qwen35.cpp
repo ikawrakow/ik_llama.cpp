@@ -40,6 +40,16 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
         ggml_set_input(lctx.inp_s_seq_qnext);
 
+        // PXA_LLAMA_FIX_v4: conv seq-map [n_kv=n_tokens, n_tokens] for the ONE-batched mixed-seq delta-net path.
+        lctx.inp_conv_seq_map = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_tokens, n_tokens);
+        cb(lctx.inp_conv_seq_map, "inp_conv_seq_map", -1);
+        ggml_set_input(lctx.inp_conv_seq_map);
+
+        // PXA_LLAMA_FIX_v4: per-seq recurrent-state reset mask (0=reset to zero, 1=keep).
+        lctx.inp_qnext_state_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
+        cb(lctx.inp_qnext_state_mask, "inp_qnext_state_mask", -1);
+        ggml_set_input(lctx.inp_qnext_state_mask);
+
         float KQ_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
         const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
@@ -123,6 +133,16 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
         cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
         ggml_set_input(lctx.inp_s_seq_qnext);
+
+        // PXA_LLAMA_FIX_v4: conv seq-map [n_kv=n_tokens, n_tokens] for the ONE-batched mixed-seq delta-net path.
+        lctx.inp_conv_seq_map = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_tokens, n_tokens);
+        cb(lctx.inp_conv_seq_map, "inp_conv_seq_map", -1);
+        ggml_set_input(lctx.inp_conv_seq_map);
+
+        // PXA_LLAMA_FIX_v4: per-seq recurrent-state reset mask (0=reset to zero, 1=keep).
+        lctx.inp_qnext_state_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
+        cb(lctx.inp_qnext_state_mask, "inp_qnext_state_mask", -1);
+        ggml_set_input(lctx.inp_qnext_state_mask);
 
         float KQ_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
