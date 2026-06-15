@@ -150,6 +150,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     bool create_bailingmoe2_tensors(const LLM_TN & tn);
 
     bool create_minimaxm2_tensors(const LLM_TN & tn);
+    bool create_minimaxm3_tensors(const LLM_TN & tn);
 
     bool create_smollm3_tensors(const LLM_TN & tn);
 
@@ -3601,6 +3602,46 @@ bool create_tensors_helper::create_minimaxm2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
+bool create_tensors_helper::create_minimaxm3_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    const int64_t n_expert_shared = hparams.n_expert_shared;
+    const int64_t n_ff_exp        = hparams.n_ff_exp;
+
+    create_embd_output(tn, n_embd, n_vocab);
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context* ctx_split = ctx_for_layer_split(i);
+        auto& layer = model.layers[i];
+
+        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
+        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_gqa }, 0);
+        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_gqa }, 0);
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
+
+        layer.attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+
+        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+
+        if (i < (int) hparams.n_layer_dense_lead) {
+            layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
+            layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
+            layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, 0);
+        } else {
+            layer.ffn_gate_inp    = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
+            layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, 0);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff_exp);
+
+            layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, n_ff_exp * n_expert_shared }, 0);
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_exp * n_expert_shared, n_embd }, 0);
+            layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_exp * n_expert_shared }, 0);
+        }
+    }
+    return use_mmap_buffer;
+}
+
 bool create_tensors_helper::create_smollm3_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
@@ -4412,6 +4453,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_bailingmoe2_tensors(tn); break;
         case LLM_ARCH_MINIMAX_M2:
             use_mmap_buffer = create_minimaxm2_tensors(tn); break;
+        case LLM_ARCH_MINIMAX_M3:
+            use_mmap_buffer = create_minimaxm3_tensors(tn); break;
         case LLM_ARCH_SMOLLM3:
             use_mmap_buffer = create_smollm3_tensors(tn); break;
         case LLM_ARCH_MIMO2:
