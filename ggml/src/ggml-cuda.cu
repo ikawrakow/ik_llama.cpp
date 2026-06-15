@@ -3488,9 +3488,16 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         }
     }
 
-    //printf("%s: using limit = %g\n", __func__, limit);
-    ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
-                    (const float *)dst->data, dst_up.get(), (float *)dst->data, limit);
+    auto unary_op = (ggml_unary_op)dst->op_params[0];
+    if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+        ggml_swiglu_oai_cuda_f32((const float *)dst->data, (const float *)dst_up.get(),
+                (float *)dst->data, ggml_nelements(dst), dst->ne[0],  dst->ne[0],  dst->ne[0],
+                1.702f, 7.0f, stream);
+    } else {
+        //printf("%s: using limit = %g\n", __func__, limit);
+        ggml_fused_mul_unary(ctx, unary_op, ggml_nelements(dst),
+                (const float *)dst->data, dst_up.get(), (float *)dst->data, limit);
+    }
     CUDA_CHECK(cudaGetLastError());
 
 }
