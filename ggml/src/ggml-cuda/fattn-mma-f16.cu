@@ -223,6 +223,19 @@ void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, ggml_tens
         return;
     }
 
+    if (use_gqa_opt && gqa_ratio % 16 == 0 && Q->ne[0] == 128 && Q->ne[0] <= 8) {
+        if (Q->ne[1] <= 1) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<128, 1, 16>(ctx, dst);
+        }
+        else if (Q->ne[1] <= 2) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<128, 2, 16>(ctx, dst);
+        }
+        else {
+            ggml_cuda_flash_attn_ext_mma_f16_case<128, 4, 16>(ctx, dst);
+        }
+        return;
+    }
+
     if (use_gqa_opt && gqa_ratio % 8 == 0) {
         ggml_cuda_flash_attn_ext_mma_f16_switch_hs<8>(ctx, dst);
         return;

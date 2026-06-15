@@ -3071,6 +3071,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_OPENAI_MOE,
         LLM_ARCH_ERNIE4_5_MOE,
         LLM_ARCH_MINIMAX_M2,
+        LLM_ARCH_MINIMAX_M3,
         LLM_ARCH_SEED_OSS,
         LLM_ARCH_STEP35,
         LLM_ARCH_LAGUNA,
@@ -7439,6 +7440,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_STEP35:
