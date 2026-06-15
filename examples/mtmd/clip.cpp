@@ -4626,7 +4626,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     params.patch_size * cur_merge,
                     params.image_min_pixels,
                     params.image_max_pixels);
-                img_tool::resize(*img, resized, new_size, img_tool::RESIZE_ALGO_BILINEAR, false);
+                img_tool::resize(*img, resized, new_size, img_tool::RESIZE_ALGO_BICUBIC, false);
                 // clip_image_save_to_bmp(resized, "preproc.bmp");
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
                 // clip_image_f32_ptr res(clip_image_f32_init());
