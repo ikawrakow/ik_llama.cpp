@@ -24,7 +24,7 @@ enum llm_ffn_op_type {
     LLM_FFN_RELU,
     LLM_FFN_RELU_SQR,
     LLM_FFN_SWIGLU,
-    LLM_FFN_SWIGLU_OAI_MOE,
+    LLM_FFN_SWIGLU_OAI,
 };
 
 enum llm_ffn_gate_type {
@@ -312,6 +312,7 @@ struct llm_build_context {
     ggml_cgraph * build_bailingmoe2();
 
     ggml_cgraph * build_minimaxm2();
+    ggml_cgraph * build_minimaxm3();
 
     ggml_cgraph * build_smollm3();
 

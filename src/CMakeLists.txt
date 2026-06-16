@@ -120,6 +120,7 @@ add_library(llama
             graphs/build_openai.cpp
             graphs/build_bailingmoe2.cpp
             graphs/build_minimaxm2.cpp
+            graphs/build_minimaxm3.cpp
             graphs/build_smollm3.cpp
             )
 

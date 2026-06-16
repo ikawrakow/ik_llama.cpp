@@ -262,7 +262,8 @@ void ggml_cuda_op_fused_mul_mat_vec_q_id(ggml_backend_cuda_context & ctx,
     if (!bias_u && !bias_g) {
         GGML_ASSERT(unary_op == GGML_UNARY_OP_SILU ||
                     unary_op == GGML_UNARY_OP_RELU ||
-                    unary_op == GGML_UNARY_OP_GELU);
+                    unary_op == GGML_UNARY_OP_GELU ||
+                    unary_op == GGML_UNARY_OP_SWIGLU_OAI);
     } else {
         GGML_ASSERT(unary_op == GGML_UNARY_OP_SWIGLU_OAI);
         GGML_ASSERT(bias_u && bias_g);
