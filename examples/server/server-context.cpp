@@ -979,7 +979,10 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             LLAMA_LOG_INFO("prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
         }
         // has prompts saved earlier to load
-        if (prompt_cache && !prompt_cache->states.empty()) {
+        // Skip loading if the slot already has a good match with the new request
+        // the hot KV/SSM state is more valuable than any cached state, especially
+        // for recurrent/hybrid models where loading destroys the slot's live state.
+        if (prompt_cache && !prompt_cache->states.empty() && f_keep < cache_ram_similarity) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
@@ -3484,17 +3487,36 @@ void  server_context::create_checkpoint_at_interval(server_slot & slot, const gp
 void server_context::apply_checkpoint(server_slot & slot) {
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
     const auto pos_min_thold = std::max(0, pos_next - 1);
-    if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
-        int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
+    const bool has_recurrent = llama_model_has_recurrent(llama_get_model(slot.ctx));
+    int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
+    const bool kv_empty = pos_min < 0;
 
-        if (pos_min >= pos_min_thold) {
+    // For recurrent/hybrid models: also enter checkpoint search when KV is empty
+    // (slot went idle and KV was cleared) but cache_tokens still reflects a prior
+    // decode and the new prompt fully covers that cached prefix.
+    const bool full_match_kv_lost = has_recurrent && kv_empty &&
+        slot.n_past > 0 &&
+        slot.n_past == slot.cache_tokens.n_tokens() &&
+        !slot.server_cached_prompt.checkpoints.empty();
+
+    if ((slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) || full_match_kv_lost) {
+        if (!kv_empty) {
+            pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
+        }
+
+        if (kv_empty || pos_min >= pos_min_thold) {
             SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", slot.n_past, (int)slot.cache_tokens.size(), slot.id, pos_min);
 
             // search for a context checkpoint
+            // For recurrent/hybrid models, use pos_max-based matching since pos_min
+            // semantics differ (tracks full sequence, not SWA window boundary).
             const auto it = std::find_if(
                 slot.server_cached_prompt.checkpoints.rbegin(),
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
+                    if (has_recurrent) {
+                        return cur.pos_max <= pos_next;
+                    }
                     return cur.pos_min < pos_min_thold || cur.pos_min == 0;
                 }
             );
@@ -3556,7 +3578,11 @@ bool server_context::create_checkpoint(server_slot & slot) {
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
 
     // no need for empty or small checkpoints
-    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.cache_tokens.n_tokens() >= 64);
+    // Recurrent/hybrid models need checkpoints much sooner to avoid gaps that force
+    // full reprocessing - 4 tokens vs 64 for transformer-only.
+    const bool has_recurrent = llama_model_has_recurrent(llama_get_model(slot.ctx));
+    const int checkpoint_min_tokens = has_recurrent ? 4 : 64;
+    do_checkpoint = do_checkpoint && pos_min >= 0 && slot.cache_tokens.n_tokens() >= checkpoint_min_tokens;
 
     // no need to create checkpoints that are too close together
     do_checkpoint = do_checkpoint && (slot.server_cached_prompt.checkpoints.empty() || slot.cache_tokens.n_tokens() > slot.server_cached_prompt.checkpoints.back().n_tokens);
@@ -3800,23 +3826,36 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     // could not partially delete (likely using a non-Transformer model)
                     common_speculative_clear_sequence_kv(slot.spec, ctx, slot.id);
 
-                    p0 = (int)system_tokens.size();
-                    if (p0 != 0) {
-                        // copy over the system prompt when there is one
-                        llama_kv_cache_seq_cp(ctx, 0, slot.id, -1, -1);
-                    }
+                    // For recurrent/hybrid models: if checkpoints exist, preserve
+                    // cache_tokens and n_past so apply_checkpoint() can restore state.
+                    // The KV is empty but a checkpoint can warm-restore the SSM state.
+                    const bool has_recurrent_ckpt = llama_model_has_recurrent(llama_get_model(ctx)) &&
+                        !slot.server_cached_prompt.checkpoints.empty() &&
+                        slot.n_past > 0;
 
-                    // there is no common part left (except for the system prompt)
-                    slot.cache_tokens.clear();
-                    slot.n_past = 0;
-                    slot.n_past_prompt = 0;
-                    slot.n_past_offset = 0;
-                    slot.n_discarded_prompt = 0;
-                    slot.n_kept_prompt = 0;
-                    slot.n_past_se = 0;
-                    slot.n_prompt_tokens_cache = 0;
-                    slot.ga_i = 0;
-                    slot.server_cached_prompt.checkpoints.clear();
+                    if (has_recurrent_ckpt) {
+                        // KV is cleared but keep token tracking for checkpoint restore.
+                        // apply_checkpoint() will find a checkpoint at or before n_past
+                        // and restore the recurrent state from it.
+                    } else {
+                        p0 = (int)system_tokens.size();
+                        if (p0 != 0) {
+                            // copy over the system prompt when there is one
+                            llama_kv_cache_seq_cp(ctx, 0, slot.id, -1, -1);
+                        }
+
+                        // there is no common part left (except for the system prompt)
+                        slot.cache_tokens.clear();
+                        slot.n_past = 0;
+                        slot.n_past_prompt = 0;
+                        slot.n_past_offset = 0;
+                        slot.n_discarded_prompt = 0;
+                        slot.n_kept_prompt = 0;
+                        slot.n_past_se = 0;
+                        slot.n_prompt_tokens_cache = 0;
+                        slot.ga_i = 0;
+                        slot.server_cached_prompt.checkpoints.clear();
+                    }
                     // TODO: is the system prompt ever in the sampling context?
                     common_sampler_reset(slot.ctx_sampling);
                 }
