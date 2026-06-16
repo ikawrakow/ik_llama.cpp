@@ -35,7 +35,9 @@ llm_build_context::llm_build_context(
     const llm_build_cb & cb,
     bool   worst_case,
     bool   warmup,
-    int    n_outputs_) :
+    int    n_outputs_,
+    bool   clear_lctx_inputs,
+    std::vector<uint8_t> * buf_compute_meta_override) :
         model            (lctx.model),
         lctx             (lctx),
         hparams          (model.hparams),
@@ -82,8 +84,9 @@ llm_build_context::llm_build_context(
         thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
         rope_type        (hparams.rope_type),
+        clear_lctx_inputs(clear_lctx_inputs),
         cb               (cb),
-        buf_compute_meta (lctx.buf_compute_meta) {
+        buf_compute_meta (buf_compute_meta_override ? *buf_compute_meta_override : lctx.buf_compute_meta) {
             // all initializations should be done in init()
 }
 
@@ -96,22 +99,27 @@ void llm_build_context::init() {
 
     ctx0 = ggml_init(params);
 
-    lctx.inp_tokens      = nullptr;
-    lctx.inp_embd        = nullptr;
-    lctx.inp_pos         = nullptr;
-    lctx.inp_out_ids     = nullptr;
-    lctx.inp_KQ_mask     = nullptr;
-    lctx.inp_KQ_mask_swa = nullptr;
-    lctx.inp_K_shift     = nullptr;
-    lctx.inp_mean        = nullptr;
-    lctx.inp_cls         = nullptr;
-    lctx.inp_s_copy      = nullptr;
-    lctx.inp_s_mask      = nullptr;
-    lctx.inp_s_seq       = nullptr;
-    lctx.inp_s_seq_qnext = nullptr;
-    lctx.inp_pos_bucket    = nullptr;
-    lctx.inp_embd_enc      = nullptr;
-    lctx.inp_KQ_mask_cross = nullptr;
+    if (clear_lctx_inputs) {
+        lctx.inp_tokens      = nullptr;
+        lctx.inp_embd        = nullptr;
+        lctx.inp_pos         = nullptr;
+        lctx.inp_out_ids     = nullptr;
+        lctx.inp_KQ_mask     = nullptr;
+        lctx.inp_KQ_mask_swa = nullptr;
+        lctx.inp_K_shift     = nullptr;
+        lctx.inp_mean        = nullptr;
+        lctx.inp_cls         = nullptr;
+        lctx.inp_s_copy      = nullptr;
+        lctx.inp_s_mask      = nullptr;
+        lctx.inp_s_seq       = nullptr;
+        lctx.inp_s_seq_qnext = nullptr;
+        lctx.inp_pos_bucket    = nullptr;
+        lctx.inp_embd_enc      = nullptr;
+        lctx.inp_KQ_mask_cross = nullptr;
+        lctx.dflash.inputs.target_features = nullptr;
+        lctx.dflash.inputs.pos_ctx = nullptr;
+        lctx.dflash.inputs.kq_mask = nullptr;
+    }
 }
 
 void llm_build_context::free() {
@@ -2199,6 +2207,80 @@ struct ggml_cgraph * llm_build_context::llama_build_graph_s_copy(llama_context &
     return result;
 }
 
+struct ggml_cgraph * llm_build_context::llama_build_graph_dflash_kv_cache(llama_context & lctx) {
+    llama_batch dummy;
+    dummy.n_tokens = 0;
+
+    llm_build_cb cb = [&](struct ggml_tensor * cur, const char * name, int il) {
+        if (il >= 0) {
+            int j = 0;
+            for (; j < GGML_MAX_NAME - 1; ++j) {
+                cur->name[j] = name[j];
+                if (!name[j]) {
+                    break;
+                }
+            }
+            if (j < GGML_MAX_NAME - 3) {
+                cur->name[j++] = '-';
+                auto sil = std::to_string(il);
+                for (int k = 0; k < (int) sil.size() && j < GGML_MAX_NAME - 1; ++k) {
+                    cur->name[j++] = sil[k];
+                }
+            }
+            cur->name[j] = 0;
+        } else {
+            ggml_set_name(cur, name);
+        }
+    };
+
+    struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash.kv.cache_compute_meta);
+
+    llm.init();
+
+    struct ggml_cgraph * result = llm.build_dflash_kv_cache();
+
+    llm.free();
+
+    return result;
+}
+
+struct ggml_cgraph * llm_build_context::llama_build_graph_dflash_kv_workspace(llama_context & lctx) {
+    llama_batch dummy;
+    dummy.n_tokens = 0;
+
+    llm_build_cb cb = [&](struct ggml_tensor * cur, const char * name, int il) {
+        if (il >= 0) {
+            int j = 0;
+            for (; j < GGML_MAX_NAME - 1; ++j) {
+                cur->name[j] = name[j];
+                if (!name[j]) {
+                    break;
+                }
+            }
+            if (j < GGML_MAX_NAME - 3) {
+                cur->name[j++] = '-';
+                auto sil = std::to_string(il);
+                for (int k = 0; k < (int) sil.size() && j < GGML_MAX_NAME - 1; ++k) {
+                    cur->name[j++] = sil[k];
+                }
+            }
+            cur->name[j] = 0;
+        } else {
+            ggml_set_name(cur, name);
+        }
+    };
+
+    struct llm_build_context llm(lctx, dummy, cb, false, false, 0, false, &lctx.dflash.kv.workspace_compute_meta);
+
+    llm.init();
+
+    struct ggml_cgraph * result = llm.build_dflash_kv_workspace();
+
+    llm.free();
+
+    return result;
+}
+
 ggml_cgraph * llm_build_context::llama_build_graph(
          llama_context & lctx,
      const llama_batch & batch,
@@ -2414,6 +2496,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_GEMMA4_ASSISTANT:
             {
                 result = llm.build_gemma4_mtp();
+            } break;
+        case LLM_ARCH_DFLASH_DRAFT:
+            {
+                result = llm.build_dflash();
             } break;
         case LLM_ARCH_STARCODER2:
             {

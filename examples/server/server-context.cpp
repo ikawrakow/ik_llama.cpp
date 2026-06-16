@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "llama.h"
+#include "llama-spec-features.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -45,6 +46,16 @@ static void log_text(const gpt_params & params_base, const std::string & text) {
     }
 }
 
+static bool server_slot_prompt_batch_overlaps(
+        const server_slot & slot,
+        int32_t batch_i0,
+        int32_t batch_i1) {
+    if (slot.prompt_batch_i0 < 0 || slot.prompt_batch_i1 <= slot.prompt_batch_i0) {
+        return false;
+    }
+
+    return slot.prompt_batch_i0 < batch_i1 && batch_i0 < slot.prompt_batch_i1;
+}
 struct server_mtp_warmup {
     llama_context * ctx_tgt;
     server_slot   * slot;
@@ -65,6 +76,15 @@ static bool server_response_needs_chat_parse(oaicompat_type oaicompat) {
     return oaicompat == OAICOMPAT_TYPE_CHAT ||
         oaicompat == OAICOMPAT_TYPE_ANTHROPIC ||
         oaicompat == OAICOMPAT_TYPE_RESP;
+}
+
+static bool server_speculative_uses_target_features(const common_params_speculative & spec) {
+    return spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) ||
+           spec.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH);
+}
+
+static bool server_speculative_requires_single_slot(const common_params_speculative & spec) {
+    return spec.has_stage_chain();
 }
 
 static bool server_speculative_same_stage_types(
@@ -151,6 +171,15 @@ static common_speculative_stage_params server_parse_speculative_stage_json(const
 }
 
 server_context::~server_context() {
+    // Speculative state may reference the live target context during teardown.
+    for (server_slot& slot : slots) {
+        if (slot.ctx_sampling != nullptr) {
+            common_sampler_free(slot.ctx_sampling);
+        }
+        common_speculative_free(slot.spec);
+        slot.spec = nullptr;
+    }
+
     if (ctx) {
         llama_free(ctx);
         ctx = nullptr;
@@ -162,17 +191,7 @@ server_context::~server_context() {
     }
     // Free multimodal
     mtmd_free(mctx);
-
-    // Clear any sampling context
-    for (server_slot& slot : slots) {
-        if (slot.ctx_sampling != nullptr) {
-            common_sampler_free(slot.ctx_sampling);
-        }
-        common_speculative_free(slot.spec);
-    }
-
     params_base.speculative.clear_dft();
-
     llama_batch_free(batch);
 }
 
@@ -197,6 +216,12 @@ bool server_context::load_model(const gpt_params& params_) {
 
     common_speculative_prepare_startup(params_base, false);
 
+    if (server_speculative_requires_single_slot(params_base.speculative) && params_base.n_parallel > 1) {
+        LOG_ERROR("Speculative decoding is currently limited to a single server slot (-np 1).\n", {
+            {"n_parallel", params_base.n_parallel},
+        });
+        return false;
+    }
     const bool has_draft_model = params_base.speculative.has_dft();
     std::string & mmproj_path = params_base.mmproj.path;
     if (!mmproj_path.empty()) {
@@ -307,7 +332,6 @@ void server_context::init() {
 
         slot.params.speculative = params_base.speculative;
         slot.sparams = params_base.sparams;
-
         // try speculative decoding
         if (can_spec && requested_spec) {
             switch (common_speculative_try_init(params_base.speculative, slot.ctx, &slot.spec)) {
@@ -445,9 +469,12 @@ void server_slot::reset() {
     n_past_prompt = 0;
     n_discarded_prompt = 0;
     n_kept_prompt = 0;
+    prompt_batch_i0 = -1;
+    prompt_batch_i1 = -1;
     n_sent_text = 0;
     drafted.clear();
     i_batch_dft.clear();
+    spec_prompt_warmup_failed = false;
     n_sent_token_probs = 0;
     infill = false;
     ga_i = 0;
@@ -540,7 +567,7 @@ void server_slot::add_token_string(const completion_token_output& token) {
 }
 
 bool server_slot::can_speculate() const {
-    return (!!spec || uses_mtp());
+    return !spec_prompt_warmup_failed && (!!spec || uses_mtp());
 }
 
 int server_slot::get_n_draft_max() const {
@@ -3186,7 +3213,7 @@ void server_context::discard_n_kv_and_cache_tokens(llama_context* ctx, server_sl
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     llama_kv_cache_seq_rm(ctx, slot.id, slot.cache_tokens.pos_next(kv_keep), slot.cache_tokens.pos_next(kv_keep + kv_discard));
     llama_kv_cache_seq_add(ctx, slot.id, kv_keep + kv_discard, kv_past, -kv_discard);
-    if (slot.uses_mtp() && slot.spec) {
+    if (slot.spec) {
         common_speculative_context_shift(slot.spec, slot.id, kv_keep, kv_discard, kv_past);
     }
     if (slot.params.cache_prompt) {
@@ -3586,6 +3613,9 @@ bool server_context::create_checkpoint(server_slot & slot) {
 void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type) {
     if (params_base.cont_batching || batch.n_tokens == 0) {
         for (auto& slot : slots) {
+            slot.prompt_batch_i0 = -1;
+            slot.prompt_batch_i1 = -1;
+
             // this slot still has a prompt to be processed
             if (slot.state == SLOT_STATE_IDLE && slot.command == SLOT_COMMAND_LOAD_PROMPT) {
                 auto& prompt_tokens = slot.prompt_tokens;
@@ -3868,6 +3898,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 int32_t ga_i = slot.ga_i;
                 int32_t ga_n = slot.ga_n;
                 int32_t ga_w = slot.ga_w;
+                const int32_t prompt_batch_i0 = batch.n_tokens;
 
                 // add prompt tokens for processing in the current batch
                 // TODO: the self-extend stuff here is a mess - simplify and/or abstract it somehow
@@ -3902,6 +3933,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                 }
+                slot.prompt_batch_i0 = prompt_batch_i0;
+                slot.prompt_batch_i1 = batch.n_tokens;
+
                 LOG_VERBOSE("prompt processing progress", {
                     {"id_slot",  slot.id},
                     {"n_past",   slot.n_past},
@@ -4014,7 +4048,7 @@ void server_context::speculative_decoding_accept() {
         }
 
         std::vector<int32_t> accepted_output_indices;
-        if (slot.uses_mtp()) {
+        if (server_speculative_uses_target_features(slot.params.speculative)) {
             if (!ids.empty()) {
                 accepted_output_indices.assign(slot.i_batch_dft.begin(), slot.i_batch_dft.begin() + ids.size());
             }
@@ -4366,6 +4400,7 @@ void server_context::update_allowlist_state(server_slot& slot) {
 void server_context::process_batch_tokens(int32_t & n_batch) {
     for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
         const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
+        bool finish_prompt_warmup_batch = false;
         extend_context(n_tokens);
 
         llama_batch batch_view = {
@@ -4425,19 +4460,26 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             continue; // continue loop of n_batch
         }
 
-    if (params_base.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+    if (server_speculative_uses_target_features(params_base.speculative)) {
         for (auto & slot : slots) {
-            if (!slot.spec || !slot.uses_mtp()) {
+            if (!slot.spec || !server_speculative_uses_target_features(slot.params.speculative)) {
                 continue;
             }
 
-            if ((slot.state != SLOT_STATE_PROCESSING || slot.n_decoded != 0) &&
-                (slot.state != SLOT_STATE_IDLE || slot.command != SLOT_COMMAND_LOAD_PROMPT)) {
+            if (slot.spec_prompt_warmup_failed) {
+                continue;
+            }
+
+            if (!server_slot_prompt_batch_overlaps(slot, i, i + n_tokens)) {
                 continue;
             }
 
             if (common_speculative_on_target_seq_batch(slot.spec, ctx, batch_view, slot.id, true) != 0) {
-                LOG_ERROR("failed to warm up MTP state from prompt batch for slot %d\n", slot.id);
+                common_speculative_clear_sequence_hidden(slot.spec, slot.id);
+                slot.spec_prompt_warmup_failed = true;
+                LOG_ERROR("failed to warm up speculative target-feature state from prompt batch for slot %d\n", slot.id);
+            } else {
+                finish_prompt_warmup_batch = true;
             }
         }
     }
@@ -4558,6 +4600,10 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         }
         // speculative decoding - main model sample and accept
         speculative_decoding_accept();
+
+        if (finish_prompt_warmup_batch) {
+            llama_finish_dflash_capture_batch(ctx, true);
+        }
     }
 }
 
@@ -4588,6 +4634,11 @@ void server_context::update_slots() {
 
     // start populating the batch for this iteration
     common_batch_clear(batch);
+
+    for (auto & slot : slots) {
+        slot.prompt_batch_i0 = -1;
+        slot.prompt_batch_i1 = -1;
+    }
 
     // first, add sampled tokens from any ongoing sequences
     add_sampled_tokens(); // Prepare batch for inference

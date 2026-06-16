@@ -64,6 +64,7 @@ class Model:
     model_name: str | None
     metadata_override: Path | None
     dir_model_card: Path
+    target_model_dir: Path | None
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
@@ -71,7 +72,8 @@ class Model:
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
-                 split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False):
+                 split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+                 target_model_dir: Path | None = None):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
@@ -93,6 +95,7 @@ class Model:
         self.metadata_override = metadata_override
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
+        self.target_model_dir = target_model_dir
 
         # Apply heuristics to figure out typical tensor encoding based on first layer tensor encoding type
         if self.ftype == gguf.LlamaFileType.GUESSED:
@@ -459,6 +462,14 @@ class Model:
         with open(dir_model / "config.json", "r", encoding="utf-8") as f:
             return json.load(f)
 
+    @staticmethod
+    def load_text_hparams(dir_model: Path) -> dict[str, Any]:
+        hparams = Model.load_hparams(dir_model)
+        text_config = hparams.get("text_config")
+        if isinstance(text_config, dict):
+            return {**hparams, **text_config}
+        return hparams
+
     @classmethod
     def register(cls, *names: str) -> Callable[[AnyModel], AnyModel]:
         assert names
@@ -500,13 +511,14 @@ class Model:
         return seems_special
 
     # used for GPT-2 BPE and WordPiece vocabs
-    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+    def get_vocab_base(self, dir_model: Path | None = None, vocab_size: int | None = None) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+        dir_model = dir_model or self.dir_model
+        tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
+        vocab_size = vocab_size or self.hparams.get("vocab_size", len(tokenizer.vocab))
         assert max(tokenizer.vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
@@ -558,12 +570,12 @@ class Model:
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
-        if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
-            # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
-            res = "llama-bpe"
         if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
+        if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
+            # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
+            res = "llama-bpe"
         if chkhsh == "049ecf7629871e3041641907f3de7c733e4dbfdc736f57d882ba0b0845599754":
             # ref: https://huggingface.co/deepseek-ai/deepseek-llm-7b-base
             res = "deepseek-llm"
@@ -600,6 +612,18 @@ class Model:
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
+        if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
+            # ref: https://huggingface.co/Qwen/Qwen3.5-9B-Instruct
+            res = "qwen35"
+        if chkhsh == "99cc61242f7106804ce24fdf3a6451e4a55251078dffd5453c806e11b2310db3":
+            # ref: https://huggingface.co/Qwen/Qwen3.5-27B
+            res = "qwen35"
+        if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
+            # ref: https://huggingface.co/z-lab/Qwen3.5-27B-DFlash (uses Qwen3.5 tokenizer)
+            res = "qwen35"
+        if chkhsh == "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945":
+            # ref: https://huggingface.co/Qwen/Qwen3.6-35B-A3B (identical pre-tokenizer regex to qwen35)
+            res = "qwen35"
         if chkhsh == "b6dc8df998e1cfbdc4eac8243701a65afe638679230920b50d6f17d81c098166":
             # ref: https://huggingface.co/allenai/OLMo-1.7-7B-hf
             res = "olmo"
@@ -690,19 +714,20 @@ class Model:
         return res
         # Marker: End get_vocab_base_pre
 
-    def _set_vocab_gpt2(self) -> None:
-        tokens, toktypes, tokpre = self.get_vocab_base()
+    def _set_vocab_gpt2(self, dir_model: Path | None = None, vocab_size: int | None = None) -> None:
+        dir_model = dir_model or self.dir_model
+        tokens, toktypes, tokpre = self.get_vocab_base(dir_model=dir_model, vocab_size=vocab_size)
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab = gguf.SpecialVocab(dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
-    def _set_vocab_qwen(self):
-        dir_model = self.dir_model
-        hparams = self.hparams
+    def _set_vocab_qwen(self, dir_model: Path | None = None, hparams: dict[str, Any] | None = None):
+        dir_model = dir_model or self.dir_model
+        hparams = hparams or self.hparams
         tokens: list[str] = []
         toktypes: list[int] = []
 
@@ -2260,13 +2285,252 @@ class Qwen2MoeModel(Model):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+
 @Model.register("Qwen3ForCausalLM")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
+
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("DFlashDraftModel")
+class DFlashDraftModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.DFLASH_DRAFT
+
+    _target_hparams: dict[str, Any] | None = None
+    _target_raw_hparams: dict[str, Any] | None = None
+    _saw_token_embd = False
+    _saw_output = False
+
+    def _require_target_model_dir(self) -> Path:
+        if self.target_model_dir is None:
+            raise ValueError("DFlashDraftModel conversion requires --target-model-dir <matching target model directory>")
+        return self.target_model_dir
+
+    def _get_target_hparams(self) -> dict[str, Any]:
+        if self._target_hparams is None:
+            self._target_hparams = Model.load_text_hparams(self._require_target_model_dir())
+        return self._target_hparams
+
+    def _get_target_raw_hparams(self) -> dict[str, Any]:
+        if self._target_raw_hparams is None:
+            self._target_raw_hparams = Model.load_hparams(self._require_target_model_dir())
+        return self._target_raw_hparams
+
+    def _target_uses_gemma4_vocab(self) -> bool:
+        raw_hparams = self._get_target_raw_hparams()
+        model_type = str(raw_hparams.get("model_type", ""))
+        if model_type.startswith("gemma4"):
+            return True
+        architectures = raw_hparams.get("architectures")
+        if isinstance(architectures, list):
+            return any(str(arch).startswith("Gemma4") for arch in architectures)
+        return False
+
+    def _get_target_hidden_size(self) -> int | None:
+        raw_hparams = self._get_target_raw_hparams()
+        if (hidden_size := raw_hparams.get("hidden_size")) is not None:
+            return int(hidden_size)
+        if (hidden_size := raw_hparams.get("backbone_hidden_size")) is not None:
+            return int(hidden_size)
+        text_hparams = raw_hparams.get("text_config")
+        if isinstance(text_hparams, dict) and (hidden_size := text_hparams.get("hidden_size")) is not None:
+            return int(hidden_size)
+        return None
+
+    def _set_vocab_gemma4(self, dir_model: Path, vocab_size: int | None = None) -> None:
+        vocab = gguf.LlamaHfVocab(dir_model)
+        tokens = []
+        scores = []
+        toktypes = []
+        visible_tokens = {
+            "<|channel>",
+            "<channel|>",
+            "<|tool_call>",
+            "<tool_call|>",
+            "<|tool_response>",
+            "<tool_response|>",
+            "<|\"|>",
+        }
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            text_str = text.decode()
+            if text_str in visible_tokens:
+                toktypes.append(gguf.TokenType.USER_DEFINED)
+                logger.info(f"Token {text_str!r} is set to USER_DEFINED")
+            else:
+                toktypes.append(toktype)
+
+        if vocab_size is not None and len(tokens) != int(vocab_size):
+            raise ValueError(
+                f"DFlashDraftModel: Gemma4 tokenizer size {len(tokens)} does not match expected vocab_size={int(vocab_size)}"
+            )
+
+        self.gguf_writer.add_tokenizer_model("gemma4")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+        self.gguf_writer.add_add_space_prefix(False)
+        self.gguf_writer.add_add_bos_token(True)
+
+    def set_vocab(self):
+        target_hparams = self._get_target_hparams()
+        target_model_dir = self._require_target_model_dir()
+        if self._target_uses_gemma4_vocab():
+            self._set_vocab_gemma4(
+                dir_model=target_model_dir,
+                vocab_size=target_hparams.get("vocab_size"),
+            )
+            return
+        self._set_vocab_gpt2(
+            dir_model=target_model_dir,
+            vocab_size=target_hparams.get("vocab_size"),
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_causal_attention(False)
+        self.gguf_writer.add_rope_dimension_count(self.hparams.get("head_dim", 128))
+
+        rope_scaling = self.hparams.get("rope_scaling")
+        if isinstance(rope_scaling, dict):
+            rope_type = rope_scaling.get("rope_type", rope_scaling.get("type"))
+            rope_factor = rope_scaling.get("factor")
+
+            if rope_type == "linear" and rope_factor is not None:
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+                self.gguf_writer.add_rope_scaling_factor(rope_factor)
+            elif rope_type == "yarn" and rope_factor is not None:
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+                self.gguf_writer.add_rope_scaling_factor(rope_factor)
+
+                if (orig_ctx_len := rope_scaling.get("original_max_position_embeddings")) is not None:
+                    self.gguf_writer.add_rope_scaling_orig_ctx_len(orig_ctx_len)
+                if (yarn_ext_factor := rope_scaling.get("extrapolation_factor")) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_ext_factor(yarn_ext_factor)
+                if (yarn_attn_factor := rope_scaling.get("attention_factor", rope_scaling.get("attn_factor"))) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_attn_factor(yarn_attn_factor)
+                if (yarn_beta_fast := rope_scaling.get("beta_fast")) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_beta_fast)
+                if (yarn_beta_slow := rope_scaling.get("beta_slow")) is not None:
+                    self.gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_beta_slow)
+
+        arch = self.gguf_writer.arch
+        dflash_cfg = self.hparams.get("dflash_config")
+        dflash_cfg = dflash_cfg if isinstance(dflash_cfg, dict) else {}
+
+        def dflash_required_value(name: str) -> Any:
+            if name in dflash_cfg:
+                return dflash_cfg[name]
+            if name in self.hparams:
+                return self.hparams[name]
+            raise ValueError(f"DFlashDraftModel conversion requires explicit {name} metadata")
+
+        block_size = int(dflash_required_value("block_size"))
+        self.gguf_writer.add_uint32(f"{arch}.dflash.block_size", block_size)
+
+        mask_token_id = int(dflash_required_value("mask_token_id"))
+        self.gguf_writer.add_uint32(f"{arch}.dflash.mask_token_id", mask_token_id)
+
+        target_layer_ids = [int(layer_id) for layer_id in dflash_required_value("target_layer_ids")]
+        if len(target_layer_ids) == 0:
+            raise ValueError("DFlashDraftModel conversion requires at least one target_layer_id")
+        self.gguf_writer.add_array(f"{arch}.dflash.target_layer_ids", target_layer_ids)
+
+        if "n_target_features" in dflash_cfg:
+            n_target_features = int(dflash_cfg["n_target_features"])
+        elif "n_target_features" in self.hparams:
+            n_target_features = int(self.hparams["n_target_features"])
+        else:
+            target_hidden_size = self._get_target_hidden_size()
+            if target_hidden_size is None:
+                raise ValueError("DFlashDraftModel: target config is missing hidden_size")
+
+            draft_hidden_size = self.hparams.get("hidden_size")
+            if draft_hidden_size is None:
+                raise ValueError("DFlashDraftModel: draft config is missing hidden_size")
+
+            n_target_features = int(target_hidden_size) * len(target_layer_ids)
+
+            if target_hidden_size is not None and int(target_hidden_size) != int(draft_hidden_size):
+                logger.warning(
+                    "DFlashDraftModel: target hidden_size=%d differs from draft hidden_size=%d; using target hidden width for n_target_features",
+                    int(target_hidden_size),
+                    int(draft_hidden_size),
+                )
+
+            logger.info(
+                "DFlashDraftModel: inferred n_target_features=%d from target hidden_size=%d and n_target_layers=%d",
+                n_target_features,
+                int(target_hidden_size),
+                len(target_layer_ids),
+            )
+
+        self.gguf_writer.add_uint32(f"{arch}.dflash.n_target_features", n_target_features)
+
+        logger.info(
+            "DFlashDraftModel metadata: block_size=%s mask_token_id=%s target_layer_ids=%s n_target_features=%s",
+            block_size,
+            mask_token_id,
+            target_layer_ids,
+            n_target_features,
+        )
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._saw_output and not self._saw_token_embd:
+            raise ValueError(
+                "DFlashDraftModel conversion requires token_embd.weight when output.weight is present"
+            )
+
+        if self._saw_token_embd and self._saw_output:
+            io_mode = "self-contained"
+        elif self._saw_token_embd:
+            io_mode = "self-contained-tied"
+        else:
+            io_mode = "shared-target"
+
+        logger.info(
+            "DFlashDraftModel IO contract: io=%s token_embd=%s output=%s target_model_dir=%s",
+            io_mode,
+            self._saw_token_embd,
+            self._saw_output,
+            self._require_target_model_dir(),
+        )
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        top_level_name = name[6:] if name.startswith("model.") else name
+
+        if top_level_name == "fc.weight":
+            return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_FC]}.weight", data_torch)]
+        if top_level_name == "hidden_norm.weight":
+            return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_HIDDEN_NORM]}.weight", data_torch)]
+        if name == "norm.weight":
+            name = "model.norm.weight"
+        elif name.startswith("layers."):
+            name = f"model.{name}"
+
+        tensors = list(super().modify_tensors(data_torch, name, bid))
+        token_embd_name = f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.TOKEN_EMBD]}.weight"
+        output_name = f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.OUTPUT]}.weight"
+
+        for tensor_name, _ in tensors:
+            if tensor_name == token_embd_name:
+                self._saw_token_embd = True
+            elif tensor_name == output_name:
+                self._saw_output = True
+
+        return tensors
 
 
 @Model.register("MellumForCausalLM")
@@ -4617,6 +4881,7 @@ class JaisModel(Model):
         super().prepare_tensors()
         self.gguf_writer.add_max_alibi_bias(self.max_alibi_bias)
 
+
 @Model.register("MiniMaxM2ForCausalLM")
 class MiniMaxM2Model(Model):
     model_arch = gguf.MODEL_ARCH.MINIMAXM2
@@ -4689,9 +4954,11 @@ class SmolLM3Model(LlamaModel):
             chat_template = tokenizer.chat_template.replace("[:]", "")
             self.gguf_writer.add_chat_template(chat_template)
 
+
 @Model.register("SeedOssForCausalLM")
 class SeedOssModel(Model):
     model_arch = gguf.MODEL_ARCH.SEED_OSS
+
 
 @Model.register("Dots1ForCausalLM")
 class Dots1Model(Qwen2MoeModel):
@@ -4852,6 +5119,7 @@ class Glm4MoeModel(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
 
 @Model.register("ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(Model):
@@ -5034,6 +5302,7 @@ class ChatGLMModel(Model):
 
         name = name.removeprefix("transformer.")
         return [(self.map_tensor_name(name), data_torch)]
+
 
 @Model.register("BailingMoeV2ForCausalLM")
 class BailingMoeV2Model(Model):
@@ -5392,6 +5661,10 @@ def parse_args() -> argparse.Namespace:
         "--metadata", type=Path,
         help="Specify the path for an authorship metadata override file"
     )
+    parser.add_argument(
+        "--target-model-dir", type=Path,
+        help="matching target model directory; required for DFlash conversion to reuse tokenizer and infer target feature width",
+    )
 
     return parser.parse_args()
 
@@ -5471,7 +5744,8 @@ def main() -> None:
                                      metadata_override=args.metadata, model_name=args.model_name,
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
-                                     small_first_shard=args.no_tensor_first_split)
+                                     small_first_shard=args.no_tensor_first_split,
+                                     target_model_dir=args.target_model_dir)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")

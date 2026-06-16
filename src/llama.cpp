@@ -18,6 +18,7 @@
 #include "llama-hparams.h"
 #include "llama-context.h"
 #include "llama-spec-features.h"
+#include "llama-dflash.h"
 #include "llama-quantize.h"
 
 #include "unicode.h"
@@ -169,6 +170,14 @@ static std::vector<std::string> string_split(const std::string& str, const std::
     }
     parts.push_back(str.substr(start));
     return parts;
+}
+
+static bool llama_env_flag_enabled(const char * name) {
+    const char * env = std::getenv(name);
+    return env != nullptr && *env != '\0' &&
+            std::strcmp(env, "0") != 0 &&
+            std::strcmp(env, "false") != 0 &&
+            std::strcmp(env, "off") != 0;
 }
 
 // extract ip and port from RPC[ip:port] for rpc and keep other device names
@@ -689,6 +698,10 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
 }
 
 llama_context::~llama_context() {
+    if (dflash.kv.cache_sched != nullptr) {
+        ggml_backend_sched_free(dflash.kv.cache_sched);
+    }
+    free_dflash_kv_cache_tensors();
     ggml_backend_sched_free(sched);
 
     for (ggml_backend_t backend : backends) {
@@ -3163,6 +3176,10 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight") {
             continue;
         }
+        if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight") {
+            output_misc_size += size;
+            continue;
+        }
         auto pos = name.find("blk.");
         if (pos != 0) {
             LLAMA_LOG_WARN("Oops: tensor with strange name %s\n", name.c_str());
@@ -3972,7 +3989,7 @@ static bool llm_load_tensors(
     if (model.arch == LLM_ARCH_GEMMA4) {
         llm_scale_gate_inp_s(model, use_mmap_buffer);
     }
-    if ((model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) && extra_output_type != GGML_TYPE_COUNT) {
+    if ((model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_DFLASH_DRAFT) && extra_output_type != GGML_TYPE_COUNT) {
         llm_requantize_output_tensor(model, extra_output_type);
     }
 
@@ -4959,6 +4976,30 @@ static void llama_graph_compute(
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
+static void llama_graph_compute_sched(
+        llama_context & lctx,
+        ggml_backend_sched_t sched,
+          ggml_cgraph * gf,
+                  int   n_threads) {
+#ifdef GGML_USE_METAL
+    if (ggml_backend_is_metal(lctx.backend_metal)) {
+        ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
+    }
+#endif
+
+    if (lctx.backend_cpu != nullptr) {
+        ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+        ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+    }
+#ifdef GGML_USE_BLAS
+    if (lctx.backend_blas != nullptr) {
+        ggml_backend_blas_set_n_threads(lctx.backend_blas, n_threads);
+    }
+#endif
+
+    ggml_backend_sched_graph_compute_async(sched, gf);
+}
+
 static bool prepare_mtp_graph_inputs(
         struct llama_context & lctx,
         uint32_t cur_token,
@@ -5006,6 +5047,16 @@ static bool prepare_mtp_graph_inputs(
     return true;
 }
 
+static bool dflash_layer_has_attention_bias(const llama_layer & layer) {
+    return layer.bq != nullptr ||
+           layer.bk != nullptr ||
+           layer.bv != nullptr ||
+           layer.bo != nullptr ||
+           layer.bqkv != nullptr ||
+           layer.bqk != nullptr ||
+           layer.bkv != nullptr;
+}
+
 // decode a batch of tokens by evaluating the transformer
 //
 //   - lctx:      llama context
@@ -5033,6 +5084,8 @@ static int llama_decode_internal(
     const auto & model   = lctx.model;
     const auto & hparams = model.hparams;
     const auto & cparams = lctx.cparams;
+
+    llama_begin_dflash_capture_batch(&lctx);
 
     GGML_ASSERT((!batch_all.token && batch_all.embd) || (batch_all.token && !batch_all.embd)); // NOLINT
 
@@ -5082,8 +5135,11 @@ static int llama_decode_internal(
 
     // reserve output buffer
     n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
-    if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
-        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, std::max<size_t>(n_outputs, n_outputs_embd));
+    const size_t required_outputs = std::max<size_t>(n_outputs, n_outputs_embd);
+    const bool is_dflash_decode = lctx.model.arch == LLM_ARCH_DFLASH_DRAFT;
+    const size_t reserved_outputs = llama_output_reserve(lctx, required_outputs);
+    if (reserved_outputs < required_outputs) {
+        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, required_outputs);
         return -2;
     };
 
@@ -5160,7 +5216,7 @@ static int llama_decode_internal(
         // * mrope (embd):   (section-major array of rope fields) [t; n][h; n][w; n][extra; n]
         const uint8_t rope_params_per_token = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
             hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
-            
+
         llama_pos * u_batch_pos;
         if (!batch_all.pos) {
             u_batch_pos = nullptr;
@@ -5278,7 +5334,6 @@ static int llama_decode_internal(
         auto tim2 = ggml_time_us();
         printf("prelude(...): %d us\n", int(tim2-tim1));
 #endif
-
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
@@ -5329,9 +5384,24 @@ static int llama_decode_internal(
             }
         }
 
+        if (is_dflash_decode && !llama_prepare_dflash_graph_inputs(lctx, n_tokens)) {
+            return GGML_STATUS_FAILED;
+        }
+
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
         struct ggml_tensor * embd = nullptr;
+
+        // DFlash GPU argmax draft_argmax node
+        if (lctx.dflash.draft_tokens_tensor != nullptr &&
+            strcmp(res->name, "result_output") != 0) {
+            for (int i = gf->n_nodes - 2; i >= 0; --i) {
+                if (strcmp(gf->nodes[i]->name, "result_output") == 0) {
+                    res = gf->nodes[i];
+                    break;
+                }
+            }
+        }
 
         if (lctx.n_outputs == 0) {
             // no output
@@ -5379,10 +5449,12 @@ static int llama_decode_internal(
         tim2 = ggml_time_us();
         printf("set_inputs(...): %d us\n", int(tim2-tim1));
 #endif
-
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
+    if (lctx.dflash.kv.workspace_sync_pending) {
+        llama_sync_dflash_workspace_if_pending(lctx);
+    }
         llama_graph_compute(lctx, gf, n_threads);
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
@@ -5409,7 +5481,28 @@ static int llama_decode_internal(
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
+        lctx.dflash.draft_tokens.clear();
+        if (lctx.dflash.draft_tokens_tensor != nullptr) {
+            ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(
+                lctx.sched, lctx.dflash.draft_tokens_tensor);
+            if (backend_argmax != nullptr) {
+                const int64_t n_tokens_argmax = lctx.dflash.draft_tokens_tensor->ne[0];
+                lctx.dflash.draft_tokens.resize((size_t) n_tokens_argmax);
+                ggml_backend_tensor_get_async(backend_argmax,
+                    lctx.dflash.draft_tokens_tensor,
+                    lctx.dflash.draft_tokens.data(), 0,
+                    (size_t) n_tokens_argmax * sizeof(int32_t));
+            }
+        }
+
         // extract logits
+        {
+            const bool dflash_skip_logits = (lctx.model.arch == LLM_ARCH_DFLASH_DRAFT
+                && !lctx.dflash.draft_tokens.empty());
+            if (dflash_skip_logits) {
+                res = nullptr;
+            }
+        }
         if (res) {
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
@@ -7447,6 +7540,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_LAGUNA:
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
+        case LLM_ARCH_DFLASH_DRAFT:
         case LLM_ARCH_GEMMA4_ASSISTANT:
             return LLAMA_ROPE_TYPE_NEOX;
 
@@ -9660,6 +9754,13 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
 #endif
         return nullptr;
     }
+}
+
+llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i) {
+    if ((size_t) i >= ctx->dflash.draft_tokens.size()) {
+        return LLAMA_TOKEN_NULL;
+    }
+    return ctx->dflash.draft_tokens[(size_t) i];
 }
 
 float * llama_get_embeddings(struct llama_context * ctx) {
