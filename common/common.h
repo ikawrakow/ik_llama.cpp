@@ -659,6 +659,8 @@ std::vector<std::string> string_extract(const std::string& str, const char c, st
 
 bool string_is_found(const std::string& window, const std::string& str, size_t& pos);
 
+void string_assign_append(std::string& dst, const std::string_view& sv, const std::string& str, const int32_t pos);
+
 //
 // Filesystem utils
 //

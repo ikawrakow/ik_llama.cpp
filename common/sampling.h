@@ -179,21 +179,23 @@ typedef struct common_params_sampling {
     // expiring logit bias (elb) + expiring sparam bias (epb)
     struct elb_param {
         struct elb_entry {
-            std::vector<size_t>         search_posi;    // epb: starting search positions for phrases
-            std::vector<float>          addsubs;        // epb: bias for sparams
-            std::vector<bool>           addflags;       // epb: true if added
-            std::vector<std::string>    phrases;        // elb: exitwords OR epb: keywords
-            std::vector<float>          biases;         // for each phrase, nth bias for nth token, extrapolate
-            int32_t                     duration;       // bias duration, unless exitword matches
-            bool                        is_range;       // has lower and upper biases
+            int32_t                     max_keyword_len;
+            std::vector<size_t>         search_posi;        // epb: starting search positions for phrases
+            std::vector<float>          addsubs;            // epb: bias for sparams
+            std::vector<bool>           addflags;           // epb: true if added
+            std::vector<std::string>    phrases;            // exitwords for elb (below) OR keywords for epb (above)
+            std::vector<float>          biases;             // elb: for each phrase, nth bias for nth token, extrapolate
+            int32_t                     duration;           // elb: bias duration, unless exitword matches
+            bool                        is_range;           // elb: has lower and upper biases
             bool operator == (const struct elb_entry& other) const {
                 return (is_range == other.is_range)
                     && (duration == other.duration)
-                    && (biases == other.biases)
-                    && (phrases == other.phrases)
+                    && (max_keyword_len == other.max_keyword_len)
                     && (addflags == other.addflags)
+                    && (biases == other.biases)
                     && (addsubs == other.addsubs)
-                    && (search_posi == other.search_posi);
+                    && (search_posi == other.search_posi)
+                    && (phrases == other.phrases);
             }
         };
         std::vector<struct elb_entry> entries;
@@ -217,6 +219,8 @@ struct common_sampler {
 
     bool is_decoding;   // set true near the end of pp
 
+    std::string scratch;
+
     // mirostat sampler state
     float mirostat_mu;
 
@@ -238,7 +242,9 @@ struct common_sampler {
 
     int32_t     n_rewind;
     std::string rewinded_text;
-    std::string decoded_text;
+
+    std::string_view generated_text;
+    std::string      playing_text;      // token_buffer + draft
 
     llama_token_data_array cur_p; // current candidates
 
@@ -266,7 +272,7 @@ struct common_sampler {
         int32_t                       init_pos;
     };
     std::vector<struct elb_state> elb_states;
-    int32_t                       elb_idx;          // for elb_states
+    int32_t                       elb_idx;          // for elb_states and elb_params
     int32_t                       elb_search_pos;   // for exitwords
 };
 

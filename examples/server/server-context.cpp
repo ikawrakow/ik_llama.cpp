@@ -1769,7 +1769,6 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 common_sampler_free(slot.ctx_sampling);
             }
             slot.ctx_sampling = common_sampler_init(model, slot.sparams);
-            slot.ctx_sampling->decoded_text.reserve(4 * slot.n_ctx);
         }
         catch (std::exception & e) {
             std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
@@ -3990,6 +3989,12 @@ void server_context::speculative_decoding_accept() {
 
         apply_server_biases(slot);
 
+        slot.ctx_sampling->generated_text = slot.generated_text;
+        slot.ctx_sampling->playing_text.clear();
+        for (const auto& token: slot.token_buffer) {
+            slot.ctx_sampling->playing_text.append(token.text_to_send);
+        }
+
         // the accepted tokens from the speculation
         std::vector<llama_token> ids;
         try {
@@ -4499,6 +4504,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             apply_server_biases(slot);
+
+            slot.ctx_sampling->generated_text = slot.generated_text;
+            slot.ctx_sampling->playing_text.clear();
+            for (const auto& token: slot.token_buffer) {
+                slot.ctx_sampling->playing_text.append(token.text_to_send);
+            }
 
             llama_token id;
             try {
