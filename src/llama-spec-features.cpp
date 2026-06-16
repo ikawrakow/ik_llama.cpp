@@ -88,6 +88,7 @@ bool llama_spec_get_hidden_feature_view(
     return true;
 }
 
+
 bool llama_spec_get_hidden_feature_view_for_seq(
         struct llama_context   * ctx,
         const llama_batch      & batch,

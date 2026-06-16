@@ -2,6 +2,7 @@
 
 #include "llama.h"
 
+#include <cstdint>
 #include <vector>
 
 struct llama_context;
@@ -22,6 +23,8 @@ struct llama_spec_feature_view {
     int32_t width = 0;
     std::vector<llama_spec_feature_row_view> rows;
 };
+
+#include "llama-spec-features-dflash.h"
 
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 

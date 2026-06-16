@@ -72,6 +72,7 @@ def step_server_config(context, server_fqdn: str, server_port: str):
     context.response_format = None
     context.temperature = None
     context.lora_file = None
+    context.jinja_enabled = False
 
     context.tasks_result = []
     context.concurrent_tasks = []
@@ -174,6 +175,11 @@ def step_server_embeddings(context):
 @step('prometheus compatible metrics exposed')
 def step_server_metrics(context):
     context.server_metrics = True
+
+
+@step('Jinja templating enabled')
+def step_enable_jinja(context):
+    context.jinja_enabled = True
 
 
 @step("the server is starting")
@@ -1347,6 +1353,8 @@ def start_server_background(context):
         server_args.append('--verbose')
     if context.lora_file:
         server_args.extend(['--lora', context.lora_file])
+    if context.jinja_enabled:
+        server_args.append('--jinja')
     if 'SERVER_LOG_FORMAT_JSON' not in os.environ:
         server_args.extend(['--log-format', "text"])
 

@@ -1275,6 +1275,48 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_models = [&params, &model_meta](const httplib::Request & req, httplib::Response & res) {
+        json codex_model = {
+            {"slug", params.model_alias},
+            {"display_name", params.model_alias},
+            {"description", nullptr},
+            {"default_reasoning_level", nullptr},
+            {"supported_reasoning_levels", json::array()},
+            {"shell_type", "default"},
+            {"visibility", "list"},
+            {"supported_in_api", true},
+            {"priority", 0},
+            {"additional_speed_tiers", json::array()},
+            {"service_tiers", json::array()},
+            {"default_service_tier", nullptr},
+            {"availability_nux", nullptr},
+            {"upgrade", nullptr},
+            {"base_instructions", ""},
+            {"model_messages", nullptr},
+            {"supports_reasoning_summaries", false},
+            {"default_reasoning_summary", "auto"},
+            {"support_verbosity", false},
+            {"default_verbosity", nullptr},
+            {"apply_patch_tool_type", nullptr},
+            {"web_search_tool_type", "text"},
+            {"truncation_policy", {
+                {"mode", "tokens"},
+                {"limit", params.n_ctx},
+            }},
+            {"supports_parallel_tool_calls", false},
+            {"supports_image_detail_original", false},
+            {"context_window", params.n_ctx},
+            {"max_context_window", params.n_ctx},
+            {"auto_compact_token_limit", (params.n_ctx * 9) / 10},
+            {"effective_context_window_percent", 95},
+            {"experimental_supported_tools", json::array()},
+            {"input_modalities", json::array({"text"})},
+            {"supports_search_tool", false},
+            {"use_responses_lite", false},
+            {"auto_review_model_override", nullptr},
+            {"tool_mode", nullptr},
+            {"multi_agent_version", nullptr},
+        };
+
         json models = {
             {"object", "list"},
             {"data", {
@@ -1286,7 +1328,8 @@ int main(int argc, char ** argv) {
                      {"meta",     model_meta},
                      {"max_model_len", params.n_ctx}, //vllm specs
                  },
-             }}
+             }},
+            {"models", json::array({codex_model})},
         };
 
         res.set_content(models.dump(), "application/json; charset=utf-8");

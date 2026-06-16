@@ -278,6 +278,102 @@ struct llama_context {
     size_t draft_input_hidden_state_n_floats = 0;
     std::vector<float> draft_input_hidden_state_owned;
 
+    struct dflash_runtime {
+        struct target_window_state {
+            const float * features = nullptr;
+            size_t features_n_floats = 0;
+            int32_t features_n_rows = 0;
+            const float * append_features = nullptr;
+            size_t append_features_n_floats = 0;
+            int32_t append_features_n_rows = 0;
+            const llama_pos * positions = nullptr;
+            size_t positions_n = 0;
+            uint64_t version = 0;
+            int32_t keep_rows = 0;
+            int32_t append_rows = 0;
+            bool replace = false;
+            std::vector<float> features_owned;
+            std::vector<float> append_features_owned;
+            std::vector<llama_pos> positions_owned;
+            std::vector<float> features_padded;
+            std::vector<llama_pos> pos_ctx_data;
+            std::vector<float> kq_mask_data;
+            std::vector<float> kq_mask_swa_data;
+        };
+
+        struct kv_runtime_state {
+            std::vector<struct ggml_tensor *> k_ctx_cache;
+            std::vector<struct ggml_tensor *> v_ctx_cache;
+            std::vector<struct ggml_tensor *> k_ctx_workspace;
+            std::vector<struct ggml_tensor *> v_ctx_workspace;
+            struct ggml_context * cache_ctx = nullptr;
+            std::vector<ggml_backend_buffer_t> cache_bufs;
+            int32_t cache_write_pos = 0;
+            int32_t cache_n_filled = 0;
+            int32_t cache_update_rows = 0;
+            int32_t cache_reserved_rows = 0;
+            int32_t cache_view_write_pos = 0;
+            int32_t cache_view_n_filled = 0;
+            uint64_t cache_applied_window_version = 0;
+            bool cache_valid = false;
+            bool cache_view_valid = false;
+            int32_t workspace_write_pos = 0;
+            int32_t workspace_n_filled = 0;
+            int32_t workspace_reserved_rows = 0;
+            int32_t workspace_token_capacity = 0;
+            int32_t workspace_n_kv_total = 0;
+            uint64_t workspace_applied_window_version = 0;
+            bool workspace_valid = false;
+            bool workspace_sync_pending = false;
+            std::vector<uint8_t> cache_compute_meta;
+            std::vector<uint8_t> workspace_compute_meta;
+            ggml_backend_sched_t cache_sched = nullptr;
+            ggml_backend_sched_t workspace_sched = nullptr;
+            ggml_cgraph * cache_graph = nullptr;
+            ggml_cgraph * workspace_graph = nullptr;
+            int32_t cache_graph_rows = 0;
+            int32_t cache_graph_write_pos = 0;
+            int32_t workspace_graph_rows = 0;
+            int32_t workspace_graph_write_pos = 0;
+            struct ggml_tensor * cache_input_target_features = nullptr;
+            struct ggml_tensor * cache_input_pos_ctx = nullptr;
+            struct ggml_tensor * kq_mask_tensor = nullptr;
+            struct ggml_tensor * kq_mask_swa_tensor = nullptr;
+        };
+
+        struct capture_state {
+            std::vector<int32_t> layer_ids;
+            std::vector<std::vector<float>> layer_rows;
+            int32_t row_count = 0;
+            int32_t row_width = 0;
+            uint64_t capture_batch_id = 0;
+            std::vector<uint64_t> layer_seen_batch_id;
+            ggml_backend_sched_eval_callback prev_cb_eval = nullptr;
+            void * prev_cb_eval_user_data = nullptr;
+        };
+
+        struct input_state {
+            struct ggml_tensor * target_features = nullptr; // F32 [n_target_features, cross_ctx]
+            struct ggml_tensor * pos_ctx = nullptr;         // I32 [cross_ctx]
+            struct ggml_tensor * kq_mask = nullptr;         // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
+            struct ggml_tensor * kq_mask_swa = nullptr;     // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
+        };
+
+        target_window_state target;
+        kv_runtime_state kv;
+        std::unique_ptr<capture_state> capture;
+        std::vector<float> feature_view_buffer;
+        input_state inputs;
+        int32_t visible_cross_ctx = 0;
+
+        // Argmax token IDs from the DFlash draft graph, computed via GPU argmax.
+        // Populated in llama_decode_internal after graph compute.
+        std::vector<llama_token> draft_tokens;
+        struct ggml_tensor * draft_tokens_tensor = nullptr;
+    };
+    dflash_runtime dflash;
+    using dflash_capture_state = dflash_runtime::capture_state;
+
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
@@ -315,6 +411,9 @@ struct llama_context {
 
     bool update_cache_copies();
 
+    bool ensure_dflash_kv_cache_tensors(int32_t cross_ctx);
+    void free_dflash_kv_cache_tensors();
+
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);
     void set_mtp_op_type(llama_mtp_op_type value);
@@ -322,4 +421,3 @@ struct llama_context {
     int max_nodes(int n_tokens, int n_kv) const;
 
 };
-

@@ -51,6 +51,8 @@ struct server_slot {
 
     int32_t i_batch = -1;
     int32_t n_predict = -1; // TODO: disambiguate from params.n_predict
+    int32_t prompt_batch_i0 = -1;
+    int32_t prompt_batch_i1 = -1;
 
     int32_t n_prompt_tokens = 0;
     int32_t n_prompt_tokens_cache = 0;
@@ -157,6 +159,7 @@ struct server_slot {
     // expiring logit bias
     std::vector<common_sampler::elb_state> prev_elb_states;
 
+    bool spec_prompt_warmup_failed = false;
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted

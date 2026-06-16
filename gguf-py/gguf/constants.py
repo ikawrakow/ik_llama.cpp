@@ -246,6 +246,8 @@ class MODEL_ARCH(IntEnum):
     GEMMA3       = auto()
     GEMMA4       = auto()
     GEMMA4_MTP   = auto()
+    DFLASH       = auto()
+    DFLASH_DRAFT = auto()
     STARCODER2   = auto()
     MAMBA        = auto()
     XVERSE       = auto()
@@ -271,6 +273,7 @@ class MODEL_ARCH(IntEnum):
     SMOLLM3      = auto()
     SEED_OSS     = auto()
     LAGUNA       = auto()
+
 
 class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD           = auto()
@@ -379,6 +382,8 @@ class MODEL_TENSOR(IntEnum):
     MTP_POST_PROJ        = auto()
     MTP_TOKEN_ORDERING   = auto()
     MTP_CENTROIDS        = auto()
+    DFLASH_FC            = auto()
+    DFLASH_HIDDEN_NORM   = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -416,6 +421,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GEMMA3:         "gemma3",
     MODEL_ARCH.GEMMA4:         "gemma4",
     MODEL_ARCH.GEMMA4_MTP:     "gemma4_mtp",
+    MODEL_ARCH.DFLASH:         "dflash",
+    MODEL_ARCH.DFLASH_DRAFT:   "dflash-draft",
     MODEL_ARCH.STARCODER2:     "starcoder2",
     MODEL_ARCH.MAMBA:          "mamba",
     MODEL_ARCH.XVERSE:         "xverse",
@@ -551,6 +558,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MTP_POST_PROJ:             "mtp_post_proj",
     MODEL_TENSOR.MTP_TOKEN_ORDERING:        "mtp_token_ordering",
     MODEL_TENSOR.MTP_CENTROIDS:             "mtp_centroids",
+    MODEL_TENSOR.DFLASH_FC:                 "dflash_fc",
+    MODEL_TENSOR.DFLASH_HIDDEN_NORM:        "dflash_hidden_norm",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -1285,6 +1294,40 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.DFLASH: [
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.DFLASH_FC,
+        MODEL_TENSOR.DFLASH_HIDDEN_NORM,
+    ],
+    MODEL_ARCH.DFLASH_DRAFT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.DFLASH_FC,
+        MODEL_TENSOR.DFLASH_HIDDEN_NORM,
     ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,

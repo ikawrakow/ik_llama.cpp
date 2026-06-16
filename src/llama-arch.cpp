@@ -83,6 +83,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
+    { LLM_ARCH_DFLASH_DRAFT,    "dflash-draft" },
     { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4_assistant"   },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
@@ -153,6 +154,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_MTP_USE_ORDERED_EMBEDDINGS,        "%s.use_ordered_embeddings"            },
     { LLM_KV_MTP_CENTROID_COUNT,                "%s.centroid_count"                    },
     { LLM_KV_MTP_CENTROID_TOP_K,                "%s.centroid_top_k"                    },
+    { LLM_KV_DFLASH_BLOCK_SIZE,                 "%s.dflash.block_size"                 },
+    { LLM_KV_DFLASH_MASK_TOKEN_ID,              "%s.dflash.mask_token_id"              },
+    { LLM_KV_DFLASH_TARGET_LAYER_IDS,           "%s.dflash.target_layer_ids"           },
+    { LLM_KV_DFLASH_N_TARGET_FEATURES,          "%s.dflash.n_target_features"          },
 
     { LLM_KV_ATTENTION_HEAD_COUNT,             "%s.attention.head_count"             },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,          "%s.attention.head_count_kv"          },
