@@ -1,5 +1,6 @@
 #include "llama-arch.h"
 #include "llama-impl.h"
+#include "llama-model.h"
 
 #include <map>
 
@@ -99,6 +100,15 @@ llm_arch llm_arch_from_string(const std::string & name) {
     }
 
     return LLM_ARCH_UNKNOWN;
+}
+
+const char * llama_model_arch_string(const struct llama_model * model) {
+    static const char * unknown = "unknown";
+    if (!model) return unknown;
+    if (auto it = LLM_ARCH_NAMES.find(model->arch); it != LLM_ARCH_NAMES.end()) {
+        return it->second;
+    }
+    return unknown;
 }
 
 static const std::map<llm_kv, const char *> LLM_KV_NAMES = {

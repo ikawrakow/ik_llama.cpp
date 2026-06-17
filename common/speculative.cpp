@@ -2565,14 +2565,8 @@ static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state
         return false;
     }
 
-    char arch[64] = {};
-    const int32_t arch_len = llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch));
-    if (arch_len <= 0) {
-        return false;
-    }
-
-    const std::string arch_str(arch, std::min<size_t>((size_t) arch_len, sizeof(arch) - 1));
-    return arch_str == "qwen35" || arch_str == "qwen35moe";
+    std::string arch{llama_model_arch_string(model)};
+    return arch == "qwen35" || arch == "qwen35moe";
 }
 
 static void mtp_clear_target_hidden(common_speculative_state_mtp & state, llama_seq_id seq_id) {
