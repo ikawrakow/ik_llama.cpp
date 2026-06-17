@@ -2347,6 +2347,8 @@ void common_speculative_checkpoint_restore(
     common_speculative_checkpoint_discard(ckpt, ctx);
 }
 
+static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state_mtp & state);
+
 void common_speculative_commit(
         common_speculative * spec,
         llama_context * ctx,
@@ -2360,10 +2362,20 @@ void common_speculative_commit(
     GGML_ASSERT(spec != nullptr);
     GGML_ASSERT(!ids.empty());
 
-    common_speculative_checkpoint & ckpt = spec->checkpoint;
     const common_speculative_type spec_type_used = spec->curr_impl != nullptr
         ? spec->curr_impl->type
         : COMMON_SPECULATIVE_TYPE_NONE;
+
+    if (auto * mtp_state = common_speculative_get_mtp_state(spec);
+            spec_type_used == COMMON_SPECULATIVE_TYPE_MTP &&
+            mtp_state != nullptr &&
+            mtp_model_uses_recurrent_conditioning(*mtp_state)) {
+        // Recurrent MTP commit tokens are aligned to [sampled_before, accepted_prefix], so
+        // their hidden-state rows must be replayed one target position earlier.
+        pos_base -= 1;
+    }
+
+    common_speculative_checkpoint & ckpt = spec->checkpoint;
     const bool any_rejected = (int) ids.size() - 1 < n_draft;
     std::vector<float> mtp_hidden_state_pre;
 
@@ -2552,6 +2564,10 @@ static void mtp_store_target_hidden(
     stored.assign(hidden, hidden + width);
 }
 
+static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state_mtp & state) {
+    return state.ctx_mtp != nullptr && llama_model_has_recurrent(llama_get_model(state.ctx_mtp));
+}
+
 static void mtp_clear_target_hidden(common_speculative_state_mtp & state, llama_seq_id seq_id) {
     state.target_hidden_by_seq.erase(seq_id);
     state.draft_cache_by_seq.erase(seq_id);
@@ -2675,10 +2691,17 @@ static int32_t mtp_accept_batch(
     const float * embd = llama_get_embeddings_ith(state.ctx_mtp, accepted_batch.n_tokens - 1);
     if (embd != nullptr) {
         std::memcpy(last.embd.data(), embd, last.embd.size() * sizeof(float));
-        if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, last.embd.data(), last.embd.size())) {
-            return -1;
+        if (mtp_model_uses_recurrent_conditioning(state)) {
+            // Qwen's shifted hidden conditioning must regenerate the next draft step from the
+            // carried target hidden row instead of reusing a same-step sampled draft token.
+            last.last_id = -1;
+            last.prob = 0.0f;
+        } else {
+            if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, last.embd.data(), last.embd.size())) {
+                return -1;
+            }
+            last.last_id = common_sampler_sample_speculative(nullptr, state.ctx_mtp, accepted_batch.n_tokens - 1, &last.prob);
         }
-        last.last_id = common_sampler_sample_speculative(nullptr, state.ctx_mtp, accepted_batch.n_tokens - 1, &last.prob);
     }
 
     return 0;
@@ -2726,6 +2749,12 @@ int32_t common_speculative_on_target_batch(
         return 0;
     }
 
+    if (features.width != mtp_state->n_embd) {
+        LOG_ERR("%s: MTP feature width mismatch: got %d expected %d\n",
+                __func__, features.width, mtp_state->n_embd);
+        return -1;
+    }
+
     if (batch.n_seq_id == nullptr || batch.seq_id == nullptr || batch.n_seq_id[0] <= 0 || batch.seq_id[0] == nullptr) {
         return -1;
     }
@@ -2742,7 +2771,17 @@ int32_t common_speculative_on_target_batch(
         return -1;
     }
 
-    const float * first_hidden = hidden_rows_storage.data();
+    const bool uses_shifted_hidden_rows = mtp_model_uses_recurrent_conditioning(*mtp_state);
+    std::vector<float> previous_hidden_storage;
+    if (uses_shifted_hidden_rows) {
+        const auto hidden_it = mtp_state->target_hidden_by_seq.find(seq_id);
+        if (hidden_it != mtp_state->target_hidden_by_seq.end() && (int32_t) hidden_it->second.size() == features.width) {
+            previous_hidden_storage = hidden_it->second;
+        } else {
+            previous_hidden_storage.assign(features.width, 0.0f);
+        }
+    }
+
     const float * last_hidden = hidden_rows_storage.data() + (size_t) (batch.n_tokens - 1) * features.width;
     mtp_store_target_hidden(*mtp_state, seq_id, last_hidden, features.width);
 
@@ -2751,8 +2790,22 @@ int32_t common_speculative_on_target_batch(
         return 0;
     }
 
+    const float * conditioned_hidden_rows = hidden_rows_storage.data();
+    std::vector<float> conditioned_hidden_storage;
+    if (uses_shifted_hidden_rows) {
+        conditioned_hidden_storage.resize(hidden_rows_storage.size());
+        std::copy(previous_hidden_storage.begin(), previous_hidden_storage.end(), conditioned_hidden_storage.begin());
+        if (batch.n_tokens > 1) {
+            std::copy(
+                hidden_rows_storage.begin(),
+                hidden_rows_storage.begin() + (size_t) (batch.n_tokens - 1) * features.width,
+                conditioned_hidden_storage.begin() + features.width);
+        }
+        conditioned_hidden_rows = conditioned_hidden_storage.data();
+    }
+
     if (is_prompt_warmup) {
-        if (!llama_set_draft_input_hidden_state_copy(mtp_state->ctx_mtp, hidden_rows_storage.data(), hidden_rows_storage.size())) {
+        if (!llama_set_draft_input_hidden_state_copy(mtp_state->ctx_mtp, conditioned_hidden_rows, hidden_rows_storage.size())) {
             return -1;
         }
         const int32_t ret = mtp_update_kv_cache(mtp_state->ctx_mtp, batch, true);
@@ -2760,7 +2813,7 @@ int32_t common_speculative_on_target_batch(
         return ret;
     }
 
-    return mtp_accept_batch(*mtp_state, batch, seq_id, first_hidden);
+    return mtp_accept_batch(*mtp_state, batch, seq_id, conditioned_hidden_rows);
 }
 
 common_speculative_type common_speculative_current_type(const common_speculative * spec) {
