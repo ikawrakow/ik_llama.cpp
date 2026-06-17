@@ -2127,7 +2127,7 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
             struct ggml_tensor * t = split->graph.nodes[j0];
 
             // check if the user needs data from this node
-            bool need = sched->callback_eval(t, true, sched->callback_eval_user_data);
+            int need = sched->callback_eval(t, true, sched->callback_eval_user_data);
 
             int j1 = j0;
 
@@ -2150,7 +2150,9 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
             }
 
             // TODO: pass backend to the callback, then the user can decide if they want to synchronize
-            ggml_backend_synchronize(split_backend);
+            if (need == 1) {
+                ggml_backend_synchronize(split_backend);
+            }
 
             if (need && !sched->callback_eval(t, false, sched->callback_eval_user_data)) {
                 break;
