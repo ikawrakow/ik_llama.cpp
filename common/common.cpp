@@ -5462,7 +5462,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     LLAMA_LOG_DEBUG("%s: line %zu: keyword = \"%s\"\n", __func__, i, keyword.c_str());
                     max_keyword_len = std::max(SSIZE(keyword), max_keyword_len);
                 }
-                LLAMA_LOG_DEBUG("%s: line %zu: max_keyword_len = %zu\n", __func__, i, max_keyword_len);
+                LLAMA_LOG_DEBUG("%s: line %zu: max_keyword_len = %d\n", __func__, i, max_keyword_len);
             }
 
             common_params_sampling::elb_param::elb_entry entry = {

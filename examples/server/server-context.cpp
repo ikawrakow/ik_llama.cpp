@@ -3917,13 +3917,13 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     GGML_ASSERT(batch.n_tokens > 0);
                     GGML_ASSERT((size_t)slot.n_prompt_tokens == slot.prompt_tokens.size());
                     common_sampler_reset(slot.ctx_sampling);
-                    slot.ctx_sampling->is_decoding = true;
                     for (int i = 0; i < slot.n_prompt_tokens; ++i) {
                         llama_token id = slot.prompt_tokens[i];
                         if (id != LLAMA_TOKEN_NULL) {
                             common_sampler_accept(slot.ctx_sampling, ctx, id, false);
                         }
                     }
+                    slot.ctx_sampling->is_decoding = true;
 
                     // extract the logits only for the last token
                     batch.logits[batch.n_tokens - 1] = true;
