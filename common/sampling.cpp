@@ -957,9 +957,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
 
     auto& search_pos = ctx_sampling->elb_search_pos;
     auto& search_window = ctx_sampling->scratch;
-    // printf("%s[%d]: %s, %s, %d\n", __func__, __LINE__, std::string(ctx_sampling->generated_text).c_str(), ctx_sampling->playing_text.c_str(), search_pos);
     string_assign_append(search_window, ctx_sampling->generated_text, ctx_sampling->playing_text, search_pos);
-    // printf("%s[%d]\n", __func__, __LINE__);
 
     size_t pos = 0;
     if (string_is_found(search_window, elb.jumpword, pos)) {
@@ -1063,19 +1061,18 @@ void common_expiring_logit_bias_rewind(struct common_sampler* ctx_sampling) {
         const auto& keywords = entry.phrases;
 
         const int32_t min_window_pos = net_text_len - entry.max_keyword_len + 1;
-        // printf("%s[%d]\n", __func__, __LINE__);
         string_assign_append(window, ctx_sampling->generated_text, ctx_sampling->playing_text, min_window_pos);
-        // printf("%s[%d]\n", __func__, __LINE__);
 
         for (size_t j = 0; j < keywords.size(); ++j) {
             const auto& keyword = keywords[j];
             if (keyword.empty() && (elb.countup < entry.duration) && !entry.addflags[j]) {
+                // redo duration-based bias
                 elb_add(ctx_sampling->params, entry);
                 entry.addflags[j] = true;
                 continue;
             }
 
-            // triggered within rewinded text?
+            // keyword match within rewinded text?
             size_t count = 0;
             auto pos = window.find(keyword, entry.max_keyword_len - SSIZE(keyword) + std::max(0, elb.init_pos - min_window_pos));
             while (pos != std::string::npos) {
@@ -1088,28 +1085,12 @@ void common_expiring_logit_bias_rewind(struct common_sampler* ctx_sampling) {
             }
         }
     }
+
+    // reinitialize
     ctx_sampling->elb_search_pos = std::max(elb.init_pos, net_text_len - elb.search_word_len + 1);
-
     for (auto& entry: ctx_sampling->params.elb_params[idx].entries) {
-        entry.search_posi.assign(entry.search_posi.size(), elb.init_pos );
+        entry.search_posi.assign(entry.search_posi.size(), elb.init_pos);
     }
-
-    // // rewind sparam bias
-    // for (int32_t j = idx + 1; j < ctx_sampling->elb_states.size(); ++j) {
-    //     for (auto& entry: ctx_sampling->params.elb_params[j].entries) {
-    //         for (const auto addflag: entry.addflags) {
-    //             if (addflag) {
-    //                 LLAMA_LOG_DEBUG("%s: before\n", __func__);
-    //                 elb_print(ctx_sampling->params, entry);
-
-    //                 elb_sub(ctx_sampling->params, entry);
-
-    //                 LLAMA_LOG_DEBUG("%s: after\n", __func__);
-    //                 elb_print(ctx_sampling->params, entry);
-    //             }
-    //         }
-    //     }
-    // }
 }
 
 
