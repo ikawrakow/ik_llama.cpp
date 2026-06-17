@@ -1968,6 +1968,23 @@ void server_context::kv_cache_clear() {
     clean_kv_cache = false;
 }
 
+static inline int server_decode(llama_context * ctx, const llama_batch & batch) {
+#if 0
+    static int64_t tot_time = 0;
+    static int64_t ncalls   = 0;
+    auto tim1 = ggml_time_us();
+    int ret = llama_decode(ctx, batch);
+    llama_synchronize(ctx);
+    auto tim2 = ggml_time_us();
+    tot_time += tim2 - tim1;
+    ++ncalls;
+    LOG_INF("%s: %ld calls, %g ms, %g us/call\n", __func__, ncalls, 1e-3*tot_time, 1.*tot_time/ncalls);
+    return ret;
+#else
+    return llama_decode(ctx, batch);
+#endif
+}
+
 void server_context::system_prompt_update() {
     LOG_VERBOSE("system prompt update", {
         {"system_prompt", system_prompt},
@@ -1991,7 +2008,7 @@ void server_context::system_prompt_update() {
                 common_batch_add(batch, system_tokens[i + j], i + j, { 0 }, false);
             }
 
-            if (llama_decode(ctx, batch) != 0) {
+            if (server_decode(ctx, batch) != 0) {
                 LOG_ERROR("llama_decode() failed", {});
                 return;
             }
@@ -4414,7 +4431,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             0, 0, 0, // unused
         };
 
-        const int ret = llama_decode(ctx, batch_view);
+        const int ret = server_decode(ctx, batch_view);
         if (ret != 0) {
             if (n_batch == 1 || ret < 0) {
                 int user_cancel = -3;
