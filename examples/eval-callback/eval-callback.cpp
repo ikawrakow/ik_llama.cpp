@@ -87,14 +87,14 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
  * @param user_data user data to pass at each call back
  * @return true to receive data or continue the graph, false otherwise
  */
-static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
+static int ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * cb_data = (callback_data *) user_data;
 
     const struct ggml_tensor * src0 = t->src[0];
     const struct ggml_tensor * src1 = t->src[1];
 
     if (ask) {
-        return true; // Always retrieve data
+        return 1; // Always retrieve data
     }
 
     char src1_str[128] = {0};
@@ -123,7 +123,7 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
         ggml_print_tensor(data, t->type, t->ne, t->nb, 3);
     }
 
-    return true;
+    return 1;
 }
 
 static bool run(llama_context * ctx, const gpt_params & params) {

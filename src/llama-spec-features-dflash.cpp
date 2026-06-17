@@ -365,7 +365,7 @@ static int32_t llama_dflash_find_layer_index(const struct llama_context * ctx, i
     return it == layer_ids.end() ? -1 : (int32_t) std::distance(layer_ids.begin(), it);
 }
 
-static bool llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool ask, void * user_data) {
+static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool ask, void * user_data) {
     auto * ctx = static_cast<llama_context *>(user_data);
     if (ctx == nullptr || !ctx->dflash.capture) {
         return false;
@@ -373,22 +373,24 @@ static bool llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool
 
     int32_t layer_id = -1;
     if (!llama_dflash_parse_layer_id(tensor, layer_id)) {
-        return false;
+        return 0;
     }
 
     const int32_t layer_idx = llama_dflash_find_layer_index(ctx, layer_id);
     if (layer_idx < 0) {
-        return false;
+        return 0;
     }
 
+    //printf("%s -> %d, %d\n", tensor->name, layer_id, layer_idx);
+
     if (ask) {
-        return true;
+        return 2;
     }
 
     const int32_t row_width = (int32_t) tensor->ne[0];
     const int32_t row_count = row_width > 0 ? (int32_t) (ggml_nelements(tensor) / (int64_t) row_width) : 0;
     if (row_width <= 0 || row_count <= 0) {
-        return false;
+        return 0;
     }
 
     auto & capture = *ctx->dflash.capture;
@@ -401,11 +403,13 @@ static bool llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool
 
     auto & rows = capture.layer_rows[(size_t) layer_idx];
     rows.resize((size_t) row_count * (size_t) row_width);
-    ggml_backend_tensor_get(tensor, rows.data(), 0, ggml_nbytes(tensor));
+    auto backend = ggml_backend_sched_get_tensor_backend(ctx->sched, tensor);
+    GGML_ASSERT(backend);
+    ggml_backend_tensor_get_async(backend, tensor, rows.data(), 0, ggml_nbytes(tensor));
     capture.row_width = row_width;
     capture.row_count = row_count;
     capture.layer_seen_batch_id[(size_t) layer_idx] = capture.capture_batch_id;
-    return true;
+    return 2;
 }
 
 bool llama_set_dflash_capture_layers(
