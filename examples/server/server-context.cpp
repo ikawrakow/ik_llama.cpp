@@ -3608,13 +3608,59 @@ bool server_context::create_checkpoint(server_slot & slot) {
     if (do_checkpoint) {
         const int64_t t_start = ggml_time_us();
         while (slot.server_cached_prompt.checkpoints.size() >= (size_t)params_base.ctx_checkpoints_n) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.server_cached_prompt.checkpoints.front();
+            // Collect n_tokens into a vector for random access (checkpoints is a std::list).
+            std::vector<int64_t> tokens;
+            tokens.reserve(slot.server_cached_prompt.checkpoints.size());
+            for (const auto & ckpt : slot.server_cached_prompt.checkpoints) {
+                tokens.push_back(ckpt.n_tokens);
+            }
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024);
+            // Remove the checkpoint that makes the distribution most even after removal.
+            // For each interior checkpoint, compute the variance of gaps that would result
+            // if it were removed. Pick the one with the lowest variance (most uniform spacing).
+            size_t best_idx = 1;
+            double best_variance = 1e30;
 
-            slot.server_cached_prompt.checkpoints.erase(slot.server_cached_prompt.checkpoints.begin());
+            const size_t n = tokens.size();
+            const size_t start = 1; // never remove the first
+            const size_t end   = n - 1; // never remove the last
+
+            for (size_t i = start; i < end; i++) {
+                // Compute the gaps that would exist if checkpoint i were removed.
+                // The merged gap at position i-1 would be: tokens[i+1] - tokens[i-1]
+                // All other gaps remain the same.
+                double sum_sq = 0;
+                size_t gap_count = 0;
+                for (size_t j = 0; j < n - 1; j++) {
+                    int64_t gap;
+                    if (j == i - 1) {
+                        // This gap merges tokens[i-1..i] and tokens[i..i+1]
+                        gap = tokens[i + 1] - tokens[i - 1];
+                    } else if (j == i) {
+                        // Skip: this gap is consumed by the merge above
+                        continue;
+                    } else {
+                        gap = tokens[j + 1] - tokens[j];
+                    }
+                    sum_sq += (double)gap * (double)gap;
+                    gap_count++;
+                }
+                double mean = (double)(tokens.back() - tokens.front()) / gap_count;
+                double variance = (sum_sq / gap_count) - mean * mean;
+                if (variance < best_variance) {
+                    best_variance = variance;
+                    best_idx = i;
+                }
+            }
+
+            auto it = slot.server_cached_prompt.checkpoints.begin();
+            std::advance(it, best_idx);
+            const auto & cur = *it;
+
+            SLT_WRN(slot, "erasing checkpoint at index %zu (n_tokens = %" PRId64 "), variance after removal = %.1f\n",
+                best_idx, cur.n_tokens, best_variance);
+
+            slot.server_cached_prompt.checkpoints.erase(it);
         }
 
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
