@@ -25,12 +25,12 @@ void llama_sync_dflash_workspace_if_pending(struct llama_context & lctx) {
 }
 
 static ggml_backend_buffer_type_t llama_dflash_kv_cache_layer_buft(const llama_context & lctx, int32_t il) {
-    if (il >= 0 && (size_t) il < lctx.model.buft_layer.size() && lctx.model.buft_layer[(size_t) il].buft != nullptr) {
-        return lctx.model.buft_layer[(size_t) il].buft;
+    if (il >= 0 && il < (int32_t) lctx.model.buft_layer.size() && lctx.model.buft_layer[il].buft != nullptr) {
+        return lctx.model.buft_layer[il].buft;
     }
 
-    if (il >= 0 && (size_t) il < lctx.model.layers.size()) {
-        const ggml_tensor * wk = lctx.model.layers[(size_t) il].wk;
+    if (il >= 0 && il < (int32_t) lctx.model.layers.size()) {
+        const ggml_tensor * wk = lctx.model.layers[il].wk;
         if (wk != nullptr && wk->buffer != nullptr) {
             return ggml_backend_buffer_get_type(wk->buffer);
         }
@@ -123,6 +123,11 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
     dflash.kv.cache_bufs.reserve((size_t) std::max(1, n_layer) * 4);
     for (int32_t il = 0; il < n_layer; ++il) {
         ggml_backend_buffer_type_t layer_buft = llama_dflash_kv_cache_layer_buft(*this, il);
+        ggml_tensor *& k_ctx_cache = dflash.kv.k_ctx_cache[il];
+        ggml_tensor *& v_ctx_cache = dflash.kv.v_ctx_cache[il];
+        ggml_tensor *& k_ctx_workspace = dflash.kv.k_ctx_workspace[il];
+        ggml_tensor *& v_ctx_workspace = dflash.kv.v_ctx_workspace[il];
+
         auto alloc_kv_input = [&](ggml_tensor *& tensor, const char * tensor_tag, const char * tensor_name,
                                   int64_t ne0, int64_t ne1, int64_t ne2) -> bool {
             tensor = ggml_new_tensor_3d(dflash.kv.cache_ctx, GGML_TYPE_F32, ne0, ne1, ne2);
@@ -150,13 +155,13 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
             return true;
         };
 
-        if (!alloc_kv_input(dflash.kv.k_ctx_cache[(size_t) il], "dflash_k_ctx_cache", "dflash_k_ctx_cache_%d",
+        if (!alloc_kv_input(k_ctx_cache, "dflash_k_ctx_cache", "dflash_k_ctx_cache_%d",
                     n_embd_head_k, n_head_kv, target_cross_ctx) ||
-            !alloc_kv_input(dflash.kv.v_ctx_cache[(size_t) il], "dflash_v_ctx_cache", "dflash_v_ctx_cache_%d",
+            !alloc_kv_input(v_ctx_cache, "dflash_v_ctx_cache", "dflash_v_ctx_cache_%d",
                     n_embd_head_v, n_head_kv, target_cross_ctx) ||
-            !alloc_kv_input(dflash.kv.k_ctx_workspace[(size_t) il], "dflash_k_ctx_workspace", "dflash_k_ctx_workspace_%d",
+            !alloc_kv_input(k_ctx_workspace, "dflash_k_ctx_workspace", "dflash_k_ctx_workspace_%d",
                     n_embd_head_k, target_workspace_n_kv_total, n_head_kv) ||
-            !alloc_kv_input(dflash.kv.v_ctx_workspace[(size_t) il], "dflash_v_ctx_workspace", "dflash_v_ctx_workspace_%d",
+            !alloc_kv_input(v_ctx_workspace, "dflash_v_ctx_workspace", "dflash_v_ctx_workspace_%d",
                     n_embd_head_v, target_workspace_n_kv_total, n_head_kv)) {
             free_dflash_kv_cache_tensors();
             return false;
@@ -267,23 +272,23 @@ static bool validate_dflash_graph_contract(const llama_context & lctx) {
     const auto & hparams = model.hparams;
 
     auto rope_dim_for_layer = [&hparams](int32_t il) -> uint32_t {
-        if (hparams.rope_dim_per_layer[(size_t) il] != 0) {
-            return hparams.rope_dim_per_layer[(size_t) il];
+        if (hparams.rope_dim_per_layer[il] != 0) {
+            return hparams.rope_dim_per_layer[il];
         }
 
-        return hparams.swa_layers[(size_t) il] ? hparams.n_rot_swa : hparams.n_rot;
+        return hparams.swa_layers[il] ? hparams.n_rot_swa : hparams.n_rot;
     };
 
     auto rope_base_for_layer = [&hparams](int32_t il) -> float {
         if (hparams.has_rope_freq_base_per_layer) {
-            return hparams.rope_freq_base_per_layer[(size_t) il];
+            return hparams.rope_freq_base_per_layer[il];
         }
 
-        return hparams.swa_layers[(size_t) il] ? hparams.rope_freq_base_train_swa : hparams.rope_freq_base_train;
+        return hparams.swa_layers[il] ? hparams.rope_freq_base_train_swa : hparams.rope_freq_base_train;
     };
 
     auto rope_scale_for_layer = [&hparams](int32_t il) -> float {
-        return hparams.swa_layers[(size_t) il] ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
+        return hparams.swa_layers[il] ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
     };
 
     const uint32_t ref_n_head = hparams.n_head(0);
@@ -322,31 +327,31 @@ static bool validate_dflash_graph_contract(const llama_context & lctx) {
             return false;
         }
 
-            if (model.layers[(size_t) il].attn_norm == nullptr ||
-                model.layers[(size_t) il].attn_q_norm == nullptr ||
-                model.layers[(size_t) il].attn_k_norm == nullptr) {
+            if (model.layers[il].attn_norm == nullptr ||
+                model.layers[il].attn_q_norm == nullptr ||
+                model.layers[il].attn_k_norm == nullptr) {
                 LLAMA_LOG_ERROR("%s: DFlash graph requires attn_norm, attn_q_norm, and attn_k_norm weights, but layer %d is missing one or more of them\n",
                     __func__, il);
                 return false;
             }
 
-        const bool has_q_norm = model.layers[(size_t) il].attn_q_norm != nullptr;
-        const bool has_k_norm = model.layers[(size_t) il].attn_k_norm != nullptr;
+        const bool has_q_norm = model.layers[il].attn_q_norm != nullptr;
+        const bool has_k_norm = model.layers[il].attn_k_norm != nullptr;
         if (has_q_norm != has_k_norm) {
             LLAMA_LOG_ERROR("%s: DFlash graph requires symmetric Q/K norm presence, but layer %d has q_norm=%d k_norm=%d\n",
                     __func__, il, (int) has_q_norm, (int) has_k_norm);
             return false;
         }
 
-            if (model.layers[(size_t) il].attn_norm_b != nullptr ||
-                model.layers[(size_t) il].attn_q_norm_b != nullptr ||
-                model.layers[(size_t) il].attn_k_norm_b != nullptr) {
+            if (model.layers[il].attn_norm_b != nullptr ||
+                model.layers[il].attn_q_norm_b != nullptr ||
+                model.layers[il].attn_k_norm_b != nullptr) {
                 LLAMA_LOG_ERROR("%s: DFlash graph does not implement norm-bias tensors, but layer %d requires attn_norm_b/q_norm_b/k_norm_b\n",
                     __func__, il);
                 return false;
             }
 
-        if (dflash_layer_has_attention_bias(model.layers[(size_t) il])) {
+        if (dflash_layer_has_attention_bias(model.layers[il])) {
             LLAMA_LOG_ERROR("%s: DFlash graph does not implement attention bias tensors, but layer %d requires them\n",
                     __func__, il);
             return false;
@@ -655,39 +660,76 @@ bool llama_prepare_dflash_graph_inputs(
 
     const int32_t full_visible_first = left_pad;
     const int32_t full_visible_last = cross_ctx + (int32_t) n_tokens - 1;
-    lctx.dflash.target.kq_mask_data.assign((size_t) n_kv_total * (size_t) n_mask_tokens, -INFINITY);
-    for (uint32_t j = 0; j < n_tokens; ++j) {
-        float * row = lctx.dflash.target.kq_mask_data.data() + (size_t) j * (size_t) n_kv_total;
-        for (int32_t i = full_visible_first; i <= full_visible_last; ++i) {
-            row[i] = 0.0f;
+    const size_t mask_elems = (size_t) n_kv_total * (size_t) n_mask_tokens;
+    if (kq_mask->type == GGML_TYPE_F16) {
+        const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
+        const ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
+        std::vector<ggml_fp16_t> mask_f16(mask_elems, h_inf);
+        std::vector<ggml_fp16_t> row_f16((size_t) n_kv_total, h_inf);
+        std::fill(row_f16.begin() + full_visible_first, row_f16.begin() + full_visible_last + 1, h_zero);
+        for (uint32_t j = 0; j < n_tokens; ++j) {
+            std::memcpy(mask_f16.data() + (size_t) j * (size_t) n_kv_total, row_f16.data(), (size_t) n_kv_total * sizeof(ggml_fp16_t));
         }
+        ggml_backend_tensor_set(kq_mask, mask_f16.data(), 0, ggml_nbytes(kq_mask));
+    } else {
+        lctx.dflash.target.kq_mask_data.assign(mask_elems, -INFINITY);
+        std::vector<float> row_f32((size_t) n_kv_total, -INFINITY);
+        std::fill(row_f32.begin() + full_visible_first, row_f32.begin() + full_visible_last + 1, 0.0f);
+        for (uint32_t j = 0; j < n_tokens; ++j) {
+            std::memcpy(lctx.dflash.target.kq_mask_data.data() + (size_t) j * (size_t) n_kv_total, row_f32.data(), (size_t) n_kv_total * sizeof(float));
+        }
+        ggml_backend_tensor_set(kq_mask, lctx.dflash.target.kq_mask_data.data(), 0, ggml_nbytes(kq_mask));
     }
-    ggml_backend_tensor_set(kq_mask, lctx.dflash.target.kq_mask_data.data(), 0, ggml_nbytes(kq_mask));
 
     if (kq_mask_swa != nullptr) {
-        lctx.dflash.target.kq_mask_swa_data.assign((size_t) n_kv_total * (size_t) n_mask_tokens, -INFINITY);
         const int32_t swa_window = (int32_t) lctx.model.hparams.n_swa;
         const int32_t draft_pos_base = (int32_t) last_target_pos;
-        for (uint32_t j = 0; j < n_tokens; ++j) {
-            float * row = lctx.dflash.target.kq_mask_swa_data.data() + (size_t) j * (size_t) n_kv_total;
-            const int32_t q_pos = draft_pos_base + (int32_t) j;
 
-            for (int32_t k = left_pad; k < cross_ctx; ++k) {
-                const int32_t k_pos = (int32_t) lctx.dflash.target.pos_ctx_data[(size_t) k];
-                if (q_pos - k_pos < swa_window) {
-                    row[k] = 0.0f;
+        if (kq_mask_swa->type == GGML_TYPE_F16) {
+            const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
+            const ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
+            std::vector<ggml_fp16_t> mask_swa_f16(mask_elems, h_inf);
+            for (uint32_t j = 0; j < n_tokens; ++j) {
+                ggml_fp16_t * row = mask_swa_f16.data() + (size_t) j * (size_t) n_kv_total;
+                const int32_t q_pos = draft_pos_base + (int32_t) j;
+
+                for (int32_t k = left_pad; k < cross_ctx; ++k) {
+                    const int32_t k_pos = (int32_t) lctx.dflash.target.pos_ctx_data[(size_t) k];
+                    if (q_pos - k_pos < swa_window) {
+                        row[k] = h_zero;
+                    }
+                }
+
+                for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
+                    const int32_t block_k = k - cross_ctx;
+                    if (block_k <= (int32_t) j) {
+                        row[k] = h_zero;
+                    }
                 }
             }
+            ggml_backend_tensor_set(kq_mask_swa, mask_swa_f16.data(), 0, ggml_nbytes(kq_mask_swa));
+        } else {
+            lctx.dflash.target.kq_mask_swa_data.assign(mask_elems, -INFINITY);
+            for (uint32_t j = 0; j < n_tokens; ++j) {
+                float * row = lctx.dflash.target.kq_mask_swa_data.data() + (size_t) j * (size_t) n_kv_total;
+                const int32_t q_pos = draft_pos_base + (int32_t) j;
 
-            for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
-                const int32_t block_k = k - cross_ctx;
-                if (block_k <= (int32_t) j) {
-                    row[k] = 0.0f;
+                for (int32_t k = left_pad; k < cross_ctx; ++k) {
+                    const int32_t k_pos = (int32_t) lctx.dflash.target.pos_ctx_data[(size_t) k];
+                    if (q_pos - k_pos < swa_window) {
+                        row[k] = 0.0f;
+                    }
+                }
+
+                for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
+                    const int32_t block_k = k - cross_ctx;
+                    if (block_k <= (int32_t) j) {
+                        row[k] = 0.0f;
+                    }
                 }
             }
+            ggml_backend_tensor_set(kq_mask_swa, lctx.dflash.target.kq_mask_swa_data.data(), 0, ggml_nbytes(kq_mask_swa));
         }
-
-        ggml_backend_tensor_set(kq_mask_swa, lctx.dflash.target.kq_mask_swa_data.data(), 0, ggml_nbytes(kq_mask_swa));
     }
 
     return true;

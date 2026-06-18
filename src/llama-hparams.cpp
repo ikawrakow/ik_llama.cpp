@@ -55,33 +55,39 @@ static bool load_dflash_target_layer_ids(
         throw std::runtime_error(format("dflash: %s must be a uint32/int32 array", key.c_str()));
     }
 
-    const size_t n = gguf_get_arr_n(ml.meta, kid);
+    uint32_t n = 0;
+    ml.get_arr_n(key, n, true);
     if (n == 0) {
         throw std::runtime_error(format("dflash: %s must not be empty", key.c_str()));
     }
     if (n > 8) {
-        throw std::runtime_error(format("dflash: %s has %zu entries, max is 8", key.c_str(), n));
+        throw std::runtime_error(format("dflash: %s has %u entries, max is 8", key.c_str(), n));
     }
 
-    hparams.dflash_n_target_layers = (uint32_t) n;
+    hparams.dflash_n_target_layers = n;
     for (uint32_t & id : hparams.dflash_target_layer_ids) {
         id = 0;
     }
 
-    const void * data = gguf_get_arr_data(ml.meta, kid);
-    for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
-        if (type == GGUF_TYPE_INT32) {
-            const int32_t id = ((const int32_t *) data)[i];
-            if (id < 0) {
-                throw std::runtime_error(format("dflash: %s contains negative layer id %d", key.c_str(), id));
+    if (type == GGUF_TYPE_INT32) {
+        std::array<int32_t, 8> layer_ids = {};
+        ml.get_arr(key, layer_ids, true);
+        for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+            if (layer_ids[i] < 0) {
+                throw std::runtime_error(format("dflash: %s contains negative layer id %d", key.c_str(), layer_ids[i]));
             }
-            hparams.dflash_target_layer_ids[i] = (uint32_t) id;
-        } else {
-            hparams.dflash_target_layer_ids[i] = ((const uint32_t *) data)[i];
+            hparams.dflash_target_layer_ids[i] = (uint32_t) layer_ids[i];
         }
+    } else {
+        std::array<uint32_t, 8> layer_ids = {};
+        ml.get_arr(key, layer_ids, true);
+        for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+            hparams.dflash_target_layer_ids[i] = layer_ids[i];
+        }
+    }
 
+    for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
         const uint32_t id = hparams.dflash_target_layer_ids[i];
-
         for (uint32_t j = 0; j < i; ++j) {
             if (hparams.dflash_target_layer_ids[j] == id) {
                 throw std::runtime_error(format(
