@@ -20,7 +20,7 @@ namespace {
 
 struct DotHelper {
     const __m256i m1 = _mm256_set1_epi16(1);
-#if defined(__AVX512VNNI__) && defined(__AVX512VL__) || defined(HAVE_VNNI256)
+#ifdef HAVE_VNNI256
     inline __m256i dot(__m256i x, __m256i y) const {
         return ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), x, y);
     }
