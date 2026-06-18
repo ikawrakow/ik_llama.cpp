@@ -11,7 +11,7 @@
 
 #define A_DOT_B(a, b) a.b
 
-#define SSIZE(container) int32_t(container.size())
+#define SSIZE(container) static_cast<int32_t>(container.size())
 
 // sampler types
 enum class llama_sampler_type : char {

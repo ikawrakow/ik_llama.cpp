@@ -846,12 +846,10 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
     };
 
     auto& search_window = ctx_sampling->scratch;
-    // printf("%s[%d]\n", __func__, __LINE__);
     string_assign_append(search_window,
         ctx_sampling->generated_text,
         ctx_sampling->playing_text,
         std::max(0, SSIZE(ctx_sampling->generated_text) + SSIZE(ctx_sampling->playing_text) - elb.max_cond_len));
-    // printf("%s[%d]\n", __func__, __LINE__);
 
     if (!search_window.empty() && !elb.other_tokens.empty() && (elb.other_tokens.front().duration > elb.countup)) {
         const auto ifi = index_first_inactive(elb.other_tokens);
@@ -916,9 +914,8 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
                 }
                 continue;   // next entry
             }
-            // printf("%s[%d]\n", __func__, __LINE__);
+
             string_assign_append(search_window, ctx_sampling->generated_text, ctx_sampling->playing_text, entry.search_posi[j]);
-            // printf("%s[%d]\n", __func__, __LINE__);
 
             size_t count = 0;
             auto pos = search_window.find(phrase, entry.search_posi[j]);

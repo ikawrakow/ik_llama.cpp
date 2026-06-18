@@ -1838,7 +1838,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
 
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, int32_t(exitword.length()), 0 });
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, SSIZE(exitword), 0 });
 
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
@@ -4081,6 +4081,20 @@ void server_context::speculative_decoding_accept() {
                 }
             }
 
+            if (slot.ctx_sampling->n_rewind > 0) {
+                // consume out-of-context tokens
+                auto banned_n = slot.banned_n;
+                slot.banned_n = 0;
+                result.prob = 0.0f;
+                for (++i; i < ids.size(); ++i) {
+                    result.tok = ids[i];
+                    result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
+                    slot.token_buffer.push_back(result);
+                    rewind_context(slot, slot.n_past);
+                }
+                slot.banned_n = banned_n;
+            }
+
             common_sampler_review(slot.ctx_sampling, slot.token_buffer.size(), slot.rewind_status);
 
             update_allowlist_state(slot);
@@ -4225,15 +4239,14 @@ inline int32_t check_ban_phrase(server_slot& slot) {
     return -1;
 }
 
-inline void rewind_context(server_slot& slot, int32_t ban_pos) {
+void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.rewind_count++;
 
     int32_t buffer_start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
     int32_t n_keep_buffer = ban_pos - buffer_start_pos;
     if (n_keep_buffer < 0) n_keep_buffer = 0;
 
-    slot.ctx_sampling->n_rewind = slot.token_buffer.size() - n_keep_buffer;
-    slot.ctx_sampling->rewinded_text.reserve(4 * slot.ctx_sampling->n_rewind);
+    slot.ctx_sampling->n_rewind += slot.token_buffer.size() - n_keep_buffer;
     LLAMA_LOG_DEBUG("%s: rewinding %d tokens\n", __func__, slot.ctx_sampling->n_rewind);
     for (int32_t j = n_keep_buffer; j < slot.token_buffer.size(); ++j) {
         slot.ctx_sampling->rewinded_text.append(slot.token_buffer[j].text_to_send);
