@@ -519,8 +519,8 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
     }
 
     cur = llm_build_context::build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
-    cb(cur, "almost_result", -1);
     if (hparams.f_final_logit_softcapping > 0) {
+        cb(cur, "almost_result", -1);
         cur = ggml_softcap(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping, hparams.f_final_logit_softcapping);
     }
     cb(cur, "result_output", -1);
@@ -666,6 +666,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
 
     ggml_tensor * mtp_embd = llm_build_lora_mm(lctx, ctx0, model.mtp_post_proj, cur);
     cb(mtp_embd, "result_mtp_embd", -1);
+    ggml_set_output(mtp_embd);
     ggml_build_forward_expand(gf, mtp_embd);
 
     ggml_tensor * logits;
