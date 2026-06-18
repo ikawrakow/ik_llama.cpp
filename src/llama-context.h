@@ -420,4 +420,6 @@ struct llama_context {
 
     int max_nodes(int n_tokens, int n_kv) const;
 
+    int  graph_generation    = -1;   // last model generation we built for
+    bool force_graph_rebuild = false; // set true after any reload
 };

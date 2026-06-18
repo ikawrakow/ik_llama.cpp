@@ -580,6 +580,22 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
     //if (kv_self.save_per_step_ssm) return false;
     if ((model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && mtp_target_ctx != nullptr) return false;
+
+    /* Hot-swap invalidation */
+    int current_gen = model.graph_generation.load();
+    if (graph_generation != current_gen) {
+        LLAMA_LOG_DEBUG("%s: hotswap stale gen ctx=%d model=%d, forcing rebuild\n",
+                __func__, graph_generation, current_gen);
+        graph_generation = current_gen;
+        return false;
+    }
+
+    if (force_graph_rebuild) {
+        LLAMA_LOG_DEBUG("%s: force_graph_rebuild=true, forcing rebuild\n", __func__);
+        force_graph_rebuild = false;
+        return false;
+    }
+
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     //if (u_batch.n_tokens > 1) return false;
@@ -4156,6 +4172,26 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
+        }
+
+        // ---- populate reload registry ONLY when hot-swap is requested ----
+        if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
+            for (const auto & w : ml.weights) {
+                if (!w.tensor || w.idx >= (int)ml.files.size()) continue;
+
+                struct stat st;
+                if (stat(ml.files[w.idx]->get_path().c_str(), &st) != 0) continue;
+
+                llama_model::tensor_reload_source src;
+                src.path        = ml.files[w.idx]->get_path();
+                src.data_offset = w.offs;
+                src.nbytes      = ggml_nbytes(w.tensor);
+                src.last_mtime  = st.st_mtime;
+#ifdef __linux__
+                src.last_mtime_ns = st.st_mtim.tv_nsec;
+#endif
+                model.tensor_reload_sources[ggml_get_name(w.tensor)] = std::move(src);
+            }
         }
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
@@ -11096,4 +11132,26 @@ void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_conte
 
 size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts) {
     return unicode_fill_from_utf8((std::string*)utf8, (std::vector<uint32_t>*)cpts, (std::vector<std::string>*)scripts);
+}
+
+bool llama_reload_changed_tensors(struct llama_model * model, struct llama_context * ctx) {
+    bool result = model->reload_changed_tensors();
+    if (result && ctx != nullptr && ctx->sched != nullptr) {
+        /* If any tensor lives on CPU, prevent the scheduler from trying to
+           copy it back to GPU (which causes multi-GB allocations). */
+        bool has_cpu = false;
+        for (auto & p : model->tensors_by_name) {
+            if (p.second->buffer) {
+                auto buft = ggml_backend_buffer_get_type(p.second->buffer);
+                if (buft == ggml_backend_cpu_buffer_type()) {
+                    has_cpu = true;
+                    break;
+                }
+            }
+        }
+        if (has_cpu) {
+            ggml_backend_sched_set_op_offload(ctx->sched, (ggml_op)-1, false);
+        }
+    }
+    return result;
 }

@@ -11,6 +11,9 @@
 #include <vector>
 #include <unordered_map>
 #include <set>
+#include <sys/stat.h>
+#include <fstream>
+#include <atomic>
 
 // available llama models
 enum e_model {
@@ -552,6 +555,50 @@ struct llama_model {
 
     std::vector<float> splits;
     ggml_backend_buffer_type_t split_buft = nullptr;
+
+    enum class reload_state {
+        UNINITIALIZED,
+        ON_ORIGINAL,
+        DETACHED,
+        FALLBACK_CPU
+    };
+
+    struct tensor_reload_source {
+        std::string   path;
+        size_t        data_offset   = 0;
+        size_t        nbytes        = 0;
+        int64_t       last_mtime    = 0;
+        int64_t       last_mtime_ns = 0;
+
+        ggml_backend_buffer_t original_buffer = nullptr;
+        void                * original_data   = nullptr;
+        ggml_type             original_type     = GGML_TYPE_COUNT;
+        size_t                original_nbytes   = 0;
+        int64_t               original_ne[GGML_MAX_DIMS];
+        size_t                original_nb[GGML_MAX_DIMS];
+
+        struct split_info {
+            int64_t ne[GGML_MAX_DIMS];
+            size_t  nb[GGML_MAX_DIMS];
+            void  * data;
+            ggml_backend_buffer_t buffer;
+            struct ggml_tensor * tensor = nullptr;
+        };
+        std::vector<split_info> original_splits;
+
+        std::vector<std::string> sibling_names;
+        ggml_split_tensor_t    * original_extra = nullptr;
+        reload_state state = reload_state::UNINITIALIZED;
+    };
+
+    std::unordered_map<std::string, tensor_reload_source> tensor_reload_sources;
+
+    bool reload_tensor(const char * name);
+    bool reload_changed_tensors();
+    void snapshot_all_reload_tensors();
+
+    std::atomic<bool> reload_snapshots_done{false};
+    std::atomic<int>  graph_generation{0};
 };
 
 struct llama_lora_weight {

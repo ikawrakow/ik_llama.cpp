@@ -76,7 +76,7 @@ struct llama_file::impl {
         return ret;
     }
 
-    impl(const char * fname, const char * mode) {
+    impl(const char * fname, const char * mode) : path(fname) {
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
@@ -155,13 +155,15 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
+    std::string path;
+
     ~impl() {
         if (fp) {
             std::fclose(fp);
         }
     }
 #else
-    impl(const char * fname, const char * mode) {
+    impl(const char * fname, const char * mode) : path(fname) {
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
@@ -231,6 +233,7 @@ struct llama_file::impl {
     void write_u32(uint32_t val) const {
         write_raw(&val, sizeof(val));
     }
+    std::string path;
 
     ~impl() {
         if (fp) {
@@ -681,3 +684,5 @@ const bool llama_mlock::SUPPORTED = false;
 size_t llama_path_max() {
     return PATH_MAX;
 }
+
+const std::string & llama_file::get_path() const { return pimpl->path; }
