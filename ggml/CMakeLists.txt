@@ -86,6 +86,7 @@ option(GGML_CPU_HBM     "ggml: use memkind for CPU HBM" OFF)
 
 option(GGML_AVX         "ggml: enable AVX"              ${INS_ENB})
 option(GGML_AVX2        "ggml: enable AVX2"             ${INS_ENB})
+option(GGML_AVXVNNI     "ggml: enable AVX-VNNI"         ${INS_ENB})
 option(GGML_AVX512      "ggml: enable AVX512"           OFF)
 option(GGML_AVX512_VBMI "ggml: enable AVX512-VBMI"      OFF)
 option(GGML_AVX512_VNNI "ggml: enable AVX512-VNNI"      OFF)
