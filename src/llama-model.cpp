@@ -2201,139 +2201,41 @@ static void log_split_state(const char * ctx, struct ggml_tensor * t) {
 }
 
 // ------------------------------------------------------------------
-// Portable GGUF header parser
+// GGUF header parser (reuses llama.cpp / ggml GGUF loader)
 // ------------------------------------------------------------------
 static bool gguf_find_tensor_meta(const char * path, const char * target_name,
                                   size_t & out_offset, size_t & out_nbytes,
                                   ggml_type & out_type)
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return false;
-
-    auto read_u32 = [&](uint32_t & out) -> bool {
-        char b[4]; file.read(b, 4);
-        out = static_cast<uint8_t>(b[0])
-            | (static_cast<uint32_t>(static_cast<uint8_t>(b[1])) << 8)
-            | (static_cast<uint32_t>(static_cast<uint8_t>(b[2])) << 16)
-            | (static_cast<uint32_t>(static_cast<uint8_t>(b[3])) << 24);
-        return file.good();
+    struct ggml_context * ctx = nullptr;
+    struct gguf_init_params params = {
+        /*.no_alloc = */ true,
+        /*.ctx      = */ &ctx,
     };
-    auto read_u64 = [&](uint64_t & out) -> bool {
-        char b[8]; file.read(b, 8);
-        out = 0;
-        for (int i = 0; i < 8; ++i)
-            out |= static_cast<uint64_t>(static_cast<uint8_t>(b[i])) << (8*i);
-        return file.good();
-    };
-    auto skip = [&](size_t n) -> bool {
-        file.seekg(static_cast<std::streamoff>(n), std::ios::cur);
-        return file.good();
-    };
-
-    char magic[4];
-    file.read(magic, 4);
-    if (!file || magic[0] != 'G' || magic[1] != 'G' || magic[2] != 'U' || magic[3] != 'F')
+    struct gguf_context * gguf = gguf_init_from_file(path, params);
+    if (!gguf) {
         return false;
-
-    uint32_t version;
-    if (!read_u32(version) || version != 3) return false;
-
-    uint64_t n_tensors, n_kv;
-    if (!read_u64(n_tensors) || !read_u64(n_kv)) return false;
-
-    for (uint64_t i = 0; i < n_kv; ++i) {
-        uint64_t klen; if (!read_u64(klen)) return false;
-        if (klen == 0 || klen > 4096) return false;
-        if (!skip(klen)) return false;
-        uint32_t vtype; if (!read_u32(vtype)) return false;
-
-        if (vtype == GGUF_TYPE_ARRAY) {
-            uint32_t itype; uint64_t alen;
-            if (!read_u32(itype) || !read_u64(alen)) return false;
-            int esize = 0;
-            switch (itype) {
-                case GGUF_TYPE_UINT8: case GGUF_TYPE_INT8: case GGUF_TYPE_BOOL: esize = 1; break;
-                case GGUF_TYPE_UINT16: case GGUF_TYPE_INT16: esize = 2; break;
-                case GGUF_TYPE_UINT32: case GGUF_TYPE_INT32: case GGUF_TYPE_FLOAT32: esize = 4; break;
-                case GGUF_TYPE_UINT64: case GGUF_TYPE_INT64: case GGUF_TYPE_FLOAT64: esize = 8; break;
-                case GGUF_TYPE_STRING: {
-                    for (uint64_t j = 0; j < alen; ++j) {
-                        uint64_t slen; if (!read_u64(slen)) return false;
-                        if (!skip(slen)) return false;
-                    }
-                    continue;
-                }
-                default: return false;
-            }
-            if (!skip(alen * esize)) return false;
-        } else {
-            switch (vtype) {
-                case GGUF_TYPE_UINT8:  case GGUF_TYPE_INT8:  case GGUF_TYPE_BOOL:  if (!skip(1)) return false; break;
-                case GGUF_TYPE_UINT16: case GGUF_TYPE_INT16: if (!skip(2)) return false; break;
-                case GGUF_TYPE_UINT32: case GGUF_TYPE_INT32: case GGUF_TYPE_FLOAT32: if (!skip(4)) return false; break;
-                case GGUF_TYPE_UINT64: case GGUF_TYPE_INT64: case GGUF_TYPE_FLOAT64: if (!skip(8)) return false; break;
-                case GGUF_TYPE_STRING: {
-                    uint64_t slen; if (!read_u64(slen)) return false;
-                    if (!skip(slen)) return false;
-                    break;
-                }
-                default: return false;
-            }
-        }
+    }
+    const int idx = gguf_find_tensor(gguf, target_name);
+    if (idx < 0) {
+        ggml_free(ctx);
+        gguf_free(gguf);
+        return false;
+    }
+    struct ggml_tensor * tensor = ggml_get_tensor(ctx, target_name);
+    if (!tensor) {
+        ggml_free(ctx);
+        gguf_free(gguf);
+        return false;
     }
 
-    struct TInfo { char name[256]; uint64_t offset; ggml_type type; };
-    std::vector<TInfo> tinfos;
-    tinfos.reserve(n_tensors);
+    out_offset = gguf_get_data_offset(gguf) + gguf_get_tensor_offset(gguf, idx);
+    out_nbytes = ggml_nbytes(tensor);
+    out_type   = tensor->type;
 
-    for (uint64_t ti = 0; ti < n_tensors; ++ti) {
-        uint64_t nlen; if (!read_u64(nlen)) return false;
-        if (nlen == 0 || nlen > 255) return false;
-        char tname[256];
-        file.read(tname, static_cast<std::streamsize>(nlen));
-        if (!file) return false;
-        tname[nlen] = '\0';
-
-        uint32_t ndims; if (!read_u32(ndims)) return false;
-        for (uint32_t d = 0; d < ndims; ++d) {
-            uint64_t dim; if (!read_u64(dim)) return false;
-            (void)dim;
-        }
-
-        uint32_t ty; if (!read_u32(ty)) return false;
-        uint64_t toffs; if (!read_u64(toffs)) return false;
-
-        TInfo info = {};
-        info.offset = toffs;
-        info.type   = static_cast<ggml_type>(ty);
-        memcpy(info.name, tname, nlen);
-        info.name[nlen] = '\0';
-        tinfos.push_back(info);
-    }
-
-    if (tinfos.empty()) return false;
-
-    std::sort(tinfos.begin(), tinfos.end(),
-              [](const TInfo & a, const TInfo & b) { return a.offset < b.offset; });
-
-    uint64_t raw_header_size = static_cast<uint64_t>(file.tellg());
-    uint64_t header_size     = (raw_header_size + 31) / 32 * 32;
-    for (auto & t : tinfos) t.offset += header_size;
-
-    file.seekg(0, std::ios::end);
-    uint64_t file_size = static_cast<uint64_t>(file.tellg());
-
-    for (size_t i = 0; i < tinfos.size(); ++i) {
-        if (strcmp(tinfos[i].name, target_name) != 0) continue;
-        uint64_t tsize = (i + 1 < tinfos.size())
-                         ? (tinfos[i+1].offset - tinfos[i].offset)
-                         : (file_size - tinfos[i].offset);
-        out_offset = static_cast<size_t>(tinfos[i].offset);
-        out_nbytes = static_cast<size_t>(tsize);
-        out_type   = tinfos[i].type;
-        return true;
-    }
-    return false;
+    ggml_free(ctx);
+    gguf_free(gguf);
+    return true;
 }
 
 // ------------------------------------------------------------------
