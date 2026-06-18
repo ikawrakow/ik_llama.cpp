@@ -297,6 +297,16 @@ const ggml_cuda_device_info & ggml_cuda_info() {
     return info;
 }
 
+/* ---------- hot-swap: invalidate all cached CUDA graphs ---------- */
+extern "C" void ggml_backend_cuda_invalidate_graphs(void) {
+    auto & info = const_cast<ggml_cuda_device_info &>(ggml_cuda_info());
+    for (int i = 0; i < info.device_count; ++i) {
+        if (info.all_ctx[i]) {
+            info.all_ctx[i]->cuda_graphs.clear();
+        }
+    }
+}
+
 // #define DEBUG_CUDA_MALLOC
 
 // buffer pool for cuda (legacy)
@@ -843,6 +853,9 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
         }
         //printf("    allocated %zu bytes for tensor %s of type %s, dim = %ld x %ld x %ld. padding: %zu\n", padded_size, split->name, ggml_type_name(split->type),
         //        split->ne[0], split->ne[1], split->ne[2], padded_size - size);
+        //printf("DEBUG init_tensor: dev=%d split_ne0=%ld type=%s ggml_nbytes=%zu padded=%zu data_ptr=%p\n",
+        //       i, (long)ne0, ggml_type_name(split->type), size, padded_size, (void*)buf);
+        //fflush(stdout);
         split->data = buf;
         auto ctx = new ggml_backend_cuda_buffer_context(i, buf);
         auto buft = ggml_backend_cuda_buffer_type(i);
@@ -1050,6 +1063,12 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                         memcpy(dst + tt.row_meta_size*n_interleave, src + source_offset, n_interleave*(split_row_size - tt.row_meta_size));
                     }
                 }
+                //printf("DEBUG set_tensor: dev=%d split_ne0=%ld nrows=%d split_row_size=%zu total=%zu "
+                //       "split_data=%p host_data=%p host_capacity=%zu source_offset=%zu\n",
+                //       i, (long)split->ne[0], nrows, split_row_size, nrows*split_row_size,
+                //       (void*)split->data, (void*)host_buffer.data(), host_buffer.size(),
+                //       (size_t)source_offset);
+                //fflush(stdout);
                 CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
                 ne += split->ne[0];
             }
