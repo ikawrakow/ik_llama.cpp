@@ -768,7 +768,7 @@ int main(int argc, char ** argv) {
                     if (hotswap_env) {
                         // WARNING: llama_reload_changed_tensors is NOT thread-safe with active inference.
                         // Only enable this when you can guarantee the server is idle during health checks.
-                        llama_reload_changed_tensors(ctx_server.model, ctx_server.ctx);
+                        llama_reload_changed_tensors(ctx_server.ctx);
                     }
 
                     break;
