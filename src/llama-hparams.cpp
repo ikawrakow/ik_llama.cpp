@@ -877,9 +877,9 @@ void llm_load_hparams(
                     ml.get_key(LLM_KV_MTP_CENTROID_COUNT,            hparams.mtp_num_centroids, false);
                     ml.get_key(LLM_KV_MTP_CENTROID_TOP_K,            hparams.mtp_centroid_top_k, false);
                 } else {
-                    ml.get_key("gemma4_assistant.n_embd_backbone", hparams.mtp_backbone_n_embd);
-                    ml.get_key("gemma4_assistant.n_centroids",     hparams.mtp_num_centroids, false);
-                    ml.get_key("gemma4_assistant.centroid_top_k",  hparams.mtp_centroid_top_k, false);
+                    ml.get_key("gemma4-assistant.embedding_length_out", hparams.mtp_backbone_n_embd);
+                    ml.get_key("gemma4-assistant.n_centroids",     hparams.mtp_num_centroids, false);
+                    ml.get_key("gemma4-assistant.centroid_top_k",  hparams.mtp_centroid_top_k, false);
                 }
                 ml.get_key(LLM_KV_MTP_USE_ORDERED_EMBEDDINGS,    hparams.mtp_use_ordered_embeddings, false);
 
