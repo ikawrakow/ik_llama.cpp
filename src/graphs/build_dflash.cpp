@@ -256,7 +256,6 @@ ggml_cgraph * llm_build_context::build_dflash() {
             ? (int64_t) lctx.dflash.visible_cross_ctx
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
     const int64_t n_kv_total = GGML_PAD(ctx_len + n_tokens, flash_attn ? 256 : 32);
-    const int64_t n_kv_pad = n_kv_total - (ctx_len + n_tokens);
 
     GGML_ASSERT(n_embd_head_k == n_embd_head_v);
     GGML_ASSERT(n_target_features > 0);
@@ -278,6 +277,10 @@ ggml_cgraph * llm_build_context::build_dflash() {
     lctx.dflash.kv.kq_mask_tensor = lctx.dflash.inputs.kq_mask;
     ggml_set_input(lctx.dflash.inputs.kq_mask);
     cb(lctx.dflash.inputs.kq_mask, "dflash_kq_mask", -1);
+
+    lctx.dflash.kv.draft_tail_rows_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(lctx.dflash.kv.draft_tail_rows_tensor);
+    cb(lctx.dflash.kv.draft_tail_rows_tensor, "dflash_draft_tail_rows", -1);
 
     ggml_tensor * dflash_kq_mask_full = lctx.dflash.inputs.kq_mask;
     ggml_tensor * dflash_kq_mask_swa = nullptr;
@@ -330,39 +333,39 @@ ggml_cgraph * llm_build_context::build_dflash() {
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.v_ctx_cache.size());
         GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il] != nullptr);
         GGML_ASSERT(lctx.dflash.kv.v_ctx_cache[il] != nullptr);
-
-        ggml_tensor * Kcur_ctx = ggml_view_3d(ctx0, lctx.dflash.kv.k_ctx_cache[il],
-            lctx.dflash.kv.k_ctx_cache[il]->ne[0],
-            ctx_len,
-            lctx.dflash.kv.k_ctx_cache[il]->ne[2],
-            lctx.dflash.kv.k_ctx_cache[il]->nb[1],
-            lctx.dflash.kv.k_ctx_cache[il]->nb[2],
-            0);
-        ggml_tensor * Vcur_ctx = ggml_view_3d(ctx0, lctx.dflash.kv.v_ctx_cache[il],
-            lctx.dflash.kv.v_ctx_cache[il]->ne[0],
-            ctx_len,
-            lctx.dflash.kv.v_ctx_cache[il]->ne[2],
-            lctx.dflash.kv.v_ctx_cache[il]->nb[1],
-            lctx.dflash.kv.v_ctx_cache[il]->nb[2],
-            0);
-        cb(Kcur_ctx, "Kcur_ctx_cache_physical", il);
-        cb(Vcur_ctx, "Vcur_ctx_cache_physical", il);
+        GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il]->type == lctx.dflash.kv.v_ctx_cache[il]->type);
+        GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il]->ne[1] >= n_kv_total);
+        GGML_ASSERT(lctx.dflash.kv.v_ctx_cache[il]->ne[1] >= n_kv_total);
 
         ggml_tensor * Kcur_draft = ggml_cont(ctx0, ggml_permute(ctx0, Kcur_noise, 0, 2, 1, 3));
         ggml_tensor * Vcur_draft = ggml_cont(ctx0, ggml_permute(ctx0, Vcur_noise, 0, 2, 1, 3));
         cb(Kcur_draft, "dflash_main_k_perm_cont", il);
         cb(Vcur_draft, "dflash_main_v_perm_cont", il);
 
-        ggml_tensor * Kcur = ggml_concat(ctx0, Kcur_ctx, Kcur_draft, 1);
-        ggml_tensor * Vcur = ggml_concat(ctx0, Vcur_ctx, Vcur_draft, 1);
-        cb(Kcur, "dflash_main_k_concat", il);
-        cb(Vcur, "dflash_main_v_concat", il);
+        ggml_tensor * Kcur = ggml_set_rows(ctx0, lctx.dflash.kv.k_ctx_cache[il], Kcur_draft, lctx.dflash.kv.draft_tail_rows_tensor);
+        ggml_tensor * Vcur = ggml_set_rows(ctx0, lctx.dflash.kv.v_ctx_cache[il], Vcur_draft, lctx.dflash.kv.draft_tail_rows_tensor);
+        cb(Kcur, "dflash_main_k_set_tail", il);
+        cb(Vcur, "dflash_main_v_set_tail", il);
 
-        if (n_kv_pad > 0) {
-            Kcur = ggml_pad(ctx0, Kcur, 0, (int) n_kv_pad, 0, 0);
-            Vcur = ggml_pad(ctx0, Vcur, 0, (int) n_kv_pad, 0, 0);
-            cb(Kcur, "dflash_main_k_pad", il);
-            cb(Vcur, "dflash_main_v_pad", il);
+        if (Kcur->ne[1] != n_kv_total) {
+            Kcur = ggml_view_3d(ctx0, Kcur,
+                Kcur->ne[0],
+                n_kv_total,
+                Kcur->ne[2],
+                Kcur->nb[1],
+                Kcur->nb[2],
+                0);
+            cb(Kcur, "dflash_main_k_active_view", il);
+        }
+        if (Vcur->ne[1] != n_kv_total) {
+            Vcur = ggml_view_3d(ctx0, Vcur,
+                Vcur->ne[0],
+                n_kv_total,
+                Vcur->ne[2],
+                Vcur->nb[1],
+                Vcur->nb[2],
+                0);
+            cb(Vcur, "dflash_main_v_active_view", il);
         }
 
         if (Kcur->type == GGML_TYPE_F32) {
