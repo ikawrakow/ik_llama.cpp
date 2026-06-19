@@ -1,9 +1,5 @@
 #include "llama-spec-features.h"
 
-#if defined(GGML_USE_CUDA)
-#include "ggml-cuda.h"
-#endif
-
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -375,68 +371,48 @@ static int32_t llama_dflash_find_layer_index(const struct llama_context * ctx, i
     return it == layer_ids.end() ? -1 : (int32_t) std::distance(layer_ids.begin(), it);
 }
 
-static void llama_dflash_unregister_capture_rows(llama_context::dflash_runtime::capture_state & capture) {
-#if defined(GGML_USE_CUDA)
-    for (size_t i = 0; i < capture.layer_row_registered_ptrs.size(); ++i) {
-        if (capture.layer_row_registered_ptrs[i] != nullptr) {
-            ggml_backend_cuda_unregister_host_buffer(capture.layer_row_registered_ptrs[i]);
-            capture.layer_row_registered_ptrs[i] = nullptr;
-            capture.layer_row_registered_bytes[i] = 0;
-        }
-    }
-#else
-    GGML_UNUSED(capture);
-#endif
-}
-
-static void llama_dflash_prepare_capture_rows(
+static bool llama_dflash_prepare_capture_rows(
+        struct llama_context * ctx,
         llama_context::dflash_runtime::capture_state & capture,
         int32_t row_count,
         int32_t row_width) {
     if (row_count <= 0 || row_width <= 0) {
-        return;
+        return false;
     }
 
     const size_t n_layers = capture.layer_ids.size();
-    const size_t row_elems = (size_t) row_count * (size_t) row_width;
-    const size_t row_bytes = row_elems * sizeof(float);
+    const int32_t row_storage_count = std::max<int32_t>(row_count, std::max<int32_t>(ctx->cparams.n_ubatch, 1));
+    const size_t layer_elems = (size_t) row_storage_count * (size_t) row_width;
+    const size_t total_bytes = n_layers * layer_elems * sizeof(float);
 
-    if (capture.layer_rows.size() != n_layers) {
-        capture.layer_rows.resize(n_layers);
-    }
-    if (capture.layer_row_registered_ptrs.size() != n_layers) {
-        capture.layer_row_registered_ptrs.assign(n_layers, nullptr);
-    }
-    if (capture.layer_row_registered_bytes.size() != n_layers) {
-        capture.layer_row_registered_bytes.assign(n_layers, 0);
-    }
-
-    for (size_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
-        auto & rows = capture.layer_rows[layer_idx];
-
-        if (capture.layer_row_registered_ptrs[layer_idx] != nullptr &&
-                (rows.data() != capture.layer_row_registered_ptrs[layer_idx] ||
-                 capture.layer_row_registered_bytes[layer_idx] != row_bytes)) {
-#if defined(GGML_USE_CUDA)
-            ggml_backend_cuda_unregister_host_buffer(capture.layer_row_registered_ptrs[layer_idx]);
-#endif
-            capture.layer_row_registered_ptrs[layer_idx] = nullptr;
-            capture.layer_row_registered_bytes[layer_idx] = 0;
+    if (capture.host_buf != nullptr) {
+        if (capture.row_storage_width != row_width || capture.row_storage_count < row_count) {
+            LLAMA_LOG_ERROR("%s: DFlash capture storage mismatch (%d x %d allocated, need at least %d x %d)\n",
+                    __func__,
+                    capture.row_storage_count,
+                    capture.row_storage_width,
+                    row_count,
+                    row_width);
+            return false;
         }
 
-        if (rows.size() != row_elems) {
-            rows.resize(row_elems);
-        }
-
-#if defined(GGML_USE_CUDA)
-        if (!rows.empty() && capture.layer_row_registered_ptrs[layer_idx] == nullptr) {
-            if (ggml_backend_cuda_register_host_buffer(rows.data(), row_bytes)) {
-                capture.layer_row_registered_ptrs[layer_idx] = rows.data();
-                capture.layer_row_registered_bytes[layer_idx] = row_bytes;
-            }
-        }
-#endif
+        return true;
     }
+
+    capture.host_buf = ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), total_bytes);
+    if (capture.host_buf == nullptr) {
+        LLAMA_LOG_ERROR("%s: failed to allocate DFlash capture host buffer (%.2f MiB)\n",
+                __func__,
+                total_bytes / 1024.0 / 1024.0);
+        return false;
+    }
+
+    ggml_backend_buffer_clear(capture.host_buf, 0);
+    capture.host_data = static_cast<float *>(ggml_backend_buffer_get_base(capture.host_buf));
+    capture.layer_stride_elems = layer_elems;
+    capture.row_storage_count = row_storage_count;
+    capture.row_storage_width = row_width;
+    return true;
 }
 
 static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool ask, void * user_data) {
@@ -475,30 +451,24 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
         capture.layer_seen_batch_id.assign(capture.layer_ids.size(), 0);
     }
 
-    if (capture.row_width != row_width || capture.row_count != row_count ||
-            capture.layer_rows.size() != capture.layer_ids.size()) {
-        if (capture.row_width != 0 && capture.row_count != 0 &&
-                (capture.row_width != row_width || capture.row_count != row_count)) {
-            LLAMA_LOG_WARN("%s: DFlash capture shape changed within batch %llu (%d x %d -> %d x %d); invalidating earlier layer rows\n",
-                    __func__,
-                    (unsigned long long) capture.capture_batch_id,
-                    capture.row_count,
-                    capture.row_width,
-                    row_count,
-                    row_width);
-            std::fill(capture.layer_seen_batch_id.begin(), capture.layer_seen_batch_id.end(), 0);
+    if (capture.row_storage_width == 0 || capture.host_buf == nullptr || capture.host_data == nullptr) {
+        if (!llama_dflash_prepare_capture_rows(ctx, capture, row_count, row_width)) {
+            return 0;
         }
-        llama_dflash_prepare_capture_rows(capture, row_count, row_width);
-    }
-
-    auto & rows = capture.layer_rows[(size_t) layer_idx];
-    if (rows.size() != (size_t) row_count * (size_t) row_width) {
+    } else if (capture.row_storage_width != row_width || capture.row_storage_count < row_count) {
+        LLAMA_LOG_ERROR("%s: DFlash capture row shape exceeds prepared storage (%d x %d -> %d x %d)\n",
+                __func__,
+                capture.row_storage_count,
+                capture.row_storage_width,
+                row_count,
+                row_width);
         return 0;
     }
 
+    float * dst = capture.host_data + (size_t) layer_idx * capture.layer_stride_elems;
     auto backend = ggml_backend_sched_get_tensor_backend(ctx->sched, tensor);
     GGML_ASSERT(backend);
-    ggml_backend_tensor_get_async(backend, tensor, rows.data(), 0, ggml_nbytes(tensor));
+    ggml_backend_tensor_get_async(backend, tensor, dst, 0, ggml_nbytes(tensor));
 
     capture.row_width = row_width;
     capture.row_count = row_count;
@@ -520,9 +490,6 @@ bool llama_set_dflash_capture_layers(
 
     auto capture = std::make_unique<llama_context::dflash_runtime::capture_state>();
     capture->layer_ids.assign(layer_ids, layer_ids + n_layers);
-    capture->layer_rows.resize((size_t) n_layers);
-    capture->layer_row_registered_ptrs.assign((size_t) n_layers, nullptr);
-    capture->layer_row_registered_bytes.assign((size_t) n_layers, 0);
     capture->layer_seen_batch_id.assign((size_t) n_layers, 0);
     capture->prev_cb_eval = ctx->cparams.cb_eval;
     capture->prev_cb_eval_user_data = ctx->cparams.cb_eval_user_data;
@@ -543,12 +510,23 @@ void llama_clear_dflash_capture(struct llama_context * ctx) {
         return;
     }
 
+    if (ctx->dflash.capture) {
+        llama_synchronize(ctx);
+    }
+
     ggml_backend_sched_eval_callback prev_cb_eval = nullptr;
     void * prev_cb_eval_user_data = nullptr;
     if (ctx->dflash.capture) {
         prev_cb_eval = ctx->dflash.capture->prev_cb_eval;
         prev_cb_eval_user_data = ctx->dflash.capture->prev_cb_eval_user_data;
-        llama_dflash_unregister_capture_rows(*ctx->dflash.capture);
+        if (ctx->dflash.capture->host_buf != nullptr) {
+            ggml_backend_buffer_free(ctx->dflash.capture->host_buf);
+            ctx->dflash.capture->host_buf = nullptr;
+            ctx->dflash.capture->host_data = nullptr;
+            ctx->dflash.capture->layer_stride_elems = 0;
+            ctx->dflash.capture->row_storage_count = 0;
+            ctx->dflash.capture->row_storage_width = 0;
+        }
     }
 
     ctx->dflash.capture.reset();
@@ -600,7 +578,7 @@ static bool llama_spec_prepare_dflash_capture(
     row_count = capture.row_count;
     row_width = capture.row_width;
     n_layers = (int32_t) capture.layer_ids.size();
-    if (row_count <= 0 || row_width <= 0 || n_layers <= 0 || capture.layer_rows.size() != (size_t) n_layers) {
+    if (row_count <= 0 || row_width <= 0 || n_layers <= 0 || capture.host_buf == nullptr || capture.host_data == nullptr) {
         return false;
     }
 
@@ -625,10 +603,9 @@ static bool llama_spec_prepare_dflash_capture(
             return false;
         }
 
-        const auto & rows = capture.layer_rows[(size_t) layer_idx];
-        if (rows.size() != (size_t) row_count * (size_t) row_width) {
-            LLAMA_LOG_WARN("%s: DFlash capture rows mismatch for layer %d: got=%zu expected=%zu (rows=%d width=%d)\n",
-                    __func__, capture.layer_ids[(size_t) layer_idx], rows.size(),
+        if (capture.layer_stride_elems < (size_t) row_count * (size_t) row_width) {
+            LLAMA_LOG_WARN("%s: DFlash capture stride mismatch for layer %d: got=%zu need-at-least=%zu (rows=%d width=%d)\n",
+                    __func__, capture.layer_ids[(size_t) layer_idx], capture.layer_stride_elems,
                     (size_t) row_count * (size_t) row_width, row_count, row_width);
             return false;
         }
@@ -682,7 +659,7 @@ static bool llama_spec_materialize_dflash_rows_prepared(
     combined_width = row_width * n_layers;
     rows_out.resize((size_t) row_indices.size() * (size_t) combined_width);
 
-    const auto & layer_rows = ctx->dflash.capture->layer_rows;
+    const auto & capture = *ctx->dflash.capture;
     for (size_t out_row = 0; out_row < row_indices.size(); ++out_row) {
         int32_t row_index = row_indices[out_row];
         if (row_index < 0) {
@@ -696,7 +673,9 @@ static bool llama_spec_materialize_dflash_rows_prepared(
 
         float * dst = rows_out.data() + out_row * (size_t) combined_width;
         for (int32_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
-            const float * src = layer_rows[(size_t) layer_idx].data() + (size_t) row_index * (size_t) row_width;
+            const float * src = capture.host_data
+                    + (size_t) layer_idx * capture.layer_stride_elems
+                    + (size_t) row_index * (size_t) row_width;
             std::memcpy(dst + (size_t) layer_idx * (size_t) row_width, src, (size_t) row_width * sizeof(float));
         }
     }
