@@ -4,7 +4,7 @@ graph TD
     ENV -->|Yes| LOAD[Registration Phase<br/>llama_model_load]
 
     subgraph Load_Time [Load Time]
-        LOAD --> REG[Populate tensor_reload_sources<br/>path / offset / mtime / nbytes]
+        LOAD --> REG[Populate model.reload->tensor_reload_sources<br/>path / offset / mtime / nbytes]
     end
 
     REG --> CALL([User calls<br/>llama_reload_changed_tensors])
@@ -17,8 +17,10 @@ graph TD
         DET[reload_changed_tensors] --> STAT[For each registered tensor:<br/>stat source file]
         STAT --> CHG{mtime / mtime_ns<br/>changed?}
         CHG -->|No| SKIP[Skip]
-        CHG -->|Yes| META[gguf_find_tensor_meta<br/>Parse GGUF header only<br/>Get new offset / type / size]
-        META --> JOB[Add to job list<br/>Mark returning = <br/>new_type == original_type]
+        CHG -->|Yes| META[gguf_find_tensor_meta<br/>Parse GGUF header only<br/>Get new offset / type / size / ne]
+        META --> DIM{"model ne[i] == file ne[i]?"}
+        DIM -->|No| SKIP2[Skip: dimension mismatch]
+        DIM -->|Yes| JOB[Add to job list<br/>Mark returning = <br/>new_type == original_type]
     end
 
     JOB --> SORT[Sort jobs<br/>Returning to original FIRST]
@@ -81,6 +83,6 @@ graph TD
 
     RELOADED -->|No| ENDD
     RELOADED -->|Yes| INV[ggml_backend_cuda_invalidate_graphs<br/>Clear cuda_graphs on ALL devices]
-    INV --> GEN[++model.graph_generation]
-    GEN --> REUSE[can_reuse_graph sees stale generation<br/>Forces full graph rebuild<br/>on next eval]
+    INV --> CTX["Reset cached compute graphs<br/>ctx->prev.reset()<br/>ctx->prev_mtp.reset()"]
+    CTX --> REUSE[can_reuse_graph sees no cached graph<br/>Forces full graph rebuild<br/>on next eval]
     REUSE --> ENDD

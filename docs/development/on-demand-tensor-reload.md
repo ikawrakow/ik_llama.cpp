@@ -20,16 +20,16 @@ Standard `ik_llama.cpp` workflows require restarting the entire executable to pi
 1. **Tracking provenance**: At load time, every tensor is mapped back to its source GGUF shard, byte offset, and modification time.
 2. **Detecting changes**: At runtime, it cheaply `stat()`s the source files to see if a tensor’s backing data has changed.
 3. **Surgical replacement**: Only the changed tensors are re-mapped/re-allocated. The rest of the model stays resident in GPU/CPU memory.
-4. **Graph safety**: CUDA graphs are invalidated so that the compute graph is rebuilt with the new buffer pointers, sizes, or types.
+4. **Graph safety**: Cached CUDA graphs are invalidated and the context’s cached compute graphs (`ctx->prev` / `ctx->prev_mtp`) are reset so that the next evaluation rebuilds the graph with the new buffer pointers, sizes, or types.
 
 ---
 
 ## High-Level Architecture
 
-The patch adds a reload registry to `llama_model`. The lifecycle has five phases:
+The patch adds a `reload_info` registry to `llama_model` (defined in `src/llama-reload-info.h`). The lifecycle has five phases:
 
 ### 1. Registration Phase (`llama_model_load`)
-During model loading, every weight that is successfully mapped gets an entry in `model.tensor_reload_sources` **only when the environment variable `LLAMA_HOTSWAP_ENABLED` is set**:
+During model loading, every weight that is successfully mapped gets an entry in `model.reload->tensor_reload_sources` **only when the environment variable `LLAMA_HOTSWAP_ENABLED` is set**:
 
 ```cpp
 struct tensor_reload_source {
@@ -62,11 +62,15 @@ The first time a reload is requested, an **eager snapshot** is taken of every re
 When the user (or the server health-check loop) calls `llama_reload_changed_tensors()`:
 
 1. It iterates over the registry and `stat()`s each source file.
-2. If `mtime` (or `mtime_ns`) differs, it re-parses **only the GGUF header** (`gguf_find_tensor_meta`) to get the new `offset`, `nbytes`, and `ggml_type`.
-3. It builds a **sorted job list**: tensors that are **returning to their original snapshot** are processed first. This maximizes the chance of freeing private buffers before allocating new ones, reducing memory pressure.
+2. If `mtime` (or `mtime_ns`) differs, it re-parses the GGUF header (`gguf_find_tensor_meta`) to get the new `offset`, `nbytes`, `ggml_type`, and on-disk shape (`ne`).
+3. **Shape verification**: If the on-disk dimensions differ from the model tensor (`file_ne[i] != tensor->ne[i]`), the tensor is skipped entirely; the reload logic refuses to change logical shapes.
+4. It builds a **sorted job list**: tensors that are **returning to their original snapshot** are processed first. This maximizes the chance of freeing private buffers before allocating new ones, reducing memory pressure.
 
 ### 4. Reload Phase (`reload_tensor`)
 For each changed tensor, the patch performs a careful in-place update.
+
+#### 0. Shape Verification
+Before any metadata or buffer changes, the code verifies that the on-disk `ne[0..3]` exactly match the current model tensor. If any dimension differs, the reload is aborted with a log message and the tensor is left untouched.
 
 #### A. Returning Check
 The first decision is whether the tensor's new on-disk type matches its **original** snapshot type (`curr_type == src.original_type`).
@@ -75,14 +79,14 @@ The first decision is whether the tensor's new on-disk type matches its **origin
 * **Changed**: Proceed to metadata update and buffer reallocation.
 
 #### B. Metadata Update & Block-Size Alignment
-If the tensor’s `ggml_type` changed (e.g., Q4_X → IQ1_KT), the main tensor descriptor and all its split descriptors are updated with new `type`, `ne`, and `nb` values.
+If the tensor’s `ggml_type` changed (e.g., Q4_X → IQ1_KT), the main tensor descriptor and all its split descriptors are updated with new `type` and `nb` values. The logical shape (`ne`) is guaranteed unchanged by the preceding shape verification. However, for fused/multi-GPU splits the per-device boundaries must be recalculated.
 
 **Critical constraint for fused/multi-GPU splits:**  
 Different quants use different block sizes:
 * **Q4_X / Q4_0**: block size **32**
 * **IQ1_KT**: block size **256**
 
-When a tensor changes between these types, its per-device split boundaries must be recalculated as multiples of the new block size. If the split dimension is `0` and `blck_size > 1`, `apply_tensor_type_change()` re-rounds every GPU slice’s `ne[0]` to the nearest block multiple. If this redistribution is not propagated to all siblings in the same MoE layer, the CUDA split backend dispatches rows to the wrong devices and **matmul fails**.
+When a tensor changes between these types, `apply_tensor_type_change()` re-rounds every GPU slice’s `ne[0]` to the nearest multiple of the new block size. If this redistribution is not propagated to all siblings in the same MoE layer, the CUDA split backend dispatches rows to the wrong devices and **matmul fails**.
 
 #### C. Buffer Lifecycle
 The patch tracks each tensor with a `reload_state` enum (`UNINITIALIZED`, `ON_ORIGINAL`, `DETACHED`, `FALLBACK_CPU`). Buffers are only freed if the state is not `ON_ORIGINAL`, ensuring shared original buffers are never corrupted.
@@ -103,16 +107,6 @@ For split tensors, the patch:
 #### E. Data Copy
 Finally, the tensor bytes are read from the updated file and copied into the (possibly new) backend buffer via `ggml_backend_tensor_set`.
 
-### 5. Graph Invalidation
-After all tensors are reloaded:
-
-```cpp
-ggml_backend_cuda_invalidate_graphs(); // clears cuda_graphs[] on every device
-++model.graph_generation;
-```
-
-Each `llama_context` tracks the last generation it built a graph for (`graph_generation`), and also carries a `force_graph_rebuild` flag. In `can_reuse_graph()`, if the context’s generation lags behind the model’s, or if `force_graph_rebuild` is set, the graph is forced to rebuild, picking up the new buffer pointers, sizes, and types.
-
 ---
 
 ## Hybrid CPU/GPU Inference
@@ -131,10 +125,10 @@ This allows you to keep, for example, 90 % of an MoE model on 13 GPUs while a fe
 ### Public C API
 ```cpp
 // include/llama.h
-LLAMA_API bool llama_reload_changed_tensors(struct llama_model * model, struct llama_context * ctx);
+LLAMA_API bool llama_reload_changed_tensors(struct llama_context * ctx);
 ```
 
-Returns `true` if at least one tensor was reloaded.
+Returns `true` if at least one tensor was reloaded. When this happens, the function also resets the context’s cached compute graphs (`ctx->prev` and `ctx->prev_mtp`) so that the next evaluation performs a full graph rebuild with the new tensor pointers.
 
 ### Environment Variables
 
@@ -154,7 +148,7 @@ When `LLAMA_HOTSWAP_ENABLED` is set, the tool runs in a loop:
 2. Compute perplexity (or Hellaswag, etc.).
 3. Print timings and write logs.
 4. Execute the optional pre-reload script.
-5. Call `llama_reload_changed_tensors(model, ctx)`. If no tensors changed, exit; otherwise repeat from step 2.
+5. Call `llama_reload_changed_tensors(ctx)`. If no tensors changed, exit; otherwise repeat from step 2.
 
 ### `examples/server/server.cpp`
 On every health-check (`/health`) request, if `LLAMA_HOTSWAP_ENABLED` is set, the server calls `llama_reload_changed_tensors()`. This provides a convenient, external trigger: simply `touch` or overwrite a tensor’s source GGUF file and poll `/health` to apply the change.
@@ -333,16 +327,17 @@ Notice that when the script restores a tensor to its original Q4_X shard, the re
 
 | File | Change |
 |------|--------|
-| `examples/perplexity/CMakeLists.txt` | Add `${CMAKE_SOURCE_DIR}` to includes for the new API. |
 | `examples/perplexity/perplexity.cpp` | Hot-swap loop + pre-reload script execution. |
 | `examples/server/server.cpp` | Trigger reload on `/health` when env var is set. |
-| `ggml/include/ggml-cuda.h` | Increase `GGML_CUDA_MAX_DEVICES` to 20; add `ggml_backend_cuda_invalidate_graphs()`. |
-| `ggml/include/ggml.h` | Increase `GGML_MAX_SRC` to 16. |
+| `ggml/include/ggml-cuda.h` | Add `ggml_backend_cuda_invalidate_graphs()`. |
+| `ggml/include/ggml.h` | Conditional `GGML_MAX_SRC` override. |
+| `ggml/src/CMakeLists.txt` | Propagate `GGML_MAX_SRC` compile definition. |
 | `ggml/src/ggml-cuda.cu` | Implement graph invalidation; debug prints for split tensors. |
 | `ggml/src/ggml.c` | Debug print in `ggml_mul_mat_id` for shape mismatches. |
 | `include/llama.h` | Declare `llama_reload_changed_tensors()`. |
-| `src/llama-context.h` | Add `graph_generation` and `force_graph_rebuild` flags. |
 | `src/llama-mmap.cpp/h` | Expose `llama_file::get_path()` so reload registry knows the source file path. |
-| `src/llama-model.cpp` | Core implementation: GGUF header parser, snapshot, reload, MoE resync, buffer management, CPU fallback. |
-| `src/llama-model.h` | Add `tensor_reload_source`, `reload_state`, registry maps, and reload methods. |
-| `src/llama.cpp` | Wire reload registry into `llama_model_load`; add generation check and `force_graph_rebuild` check in `can_reuse_graph()`; export C API. |
+| `src/llama-model.h` | Add `std::unique_ptr<reload_info> reload` to `llama_model`. |
+| `src/llama-reload-info.h` | **New.** Defines `tensor_reload_source`, `reload_state`, and `reload_info` registry. |
+| `src/llama-reload.cpp` | **New.** Core implementation: GGUF header parser, snapshot, reload, MoE resync, buffer management, CPU fallback, shape verification. |
+| `src/llama.cpp` | Wire reload registry into `llama_model_load`; reset cached compute graphs (`ctx->prev` / `ctx->prev_mtp`) on reload; export C API. |
+| `src/CMakeLists.txt` | Propagate `GGML_MAX_SRC` compile definition. |
