@@ -3735,7 +3735,7 @@ static bool llm_load_tensors(
         }
     }
     if ((model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count > 0 && n_gpu_layers > 0) {
-        const int mtp_device = std::clamp(main_gpu, 0, device_count - 1);
+        const int mtp_device = device_count - 1; //std::clamp(main_gpu, 0, device_count - 1);
 
         LLAMA_LOG_INFO("%s: Gemma 4 MTP assistant forcing layer placement to GPU %d under layer split\n",
                 __func__, mtp_device);
