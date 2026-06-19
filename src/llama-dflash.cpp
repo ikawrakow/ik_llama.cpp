@@ -15,15 +15,6 @@
 #include <type_traits>
 #include <vector>
 
-void llama_sync_dflash_workspace_if_pending(struct llama_context & lctx) {
-    if (!lctx.dflash.kv.workspace_sync_pending || lctx.dflash.kv.workspace_sched == nullptr) {
-        return;
-    }
-
-    ggml_backend_sched_synchronize(lctx.dflash.kv.workspace_sched);
-    lctx.dflash.kv.workspace_sync_pending = false;
-}
-
 static ggml_backend_buffer_type_t llama_dflash_kv_cache_layer_buft(const llama_context & lctx, int32_t il) {
     if (il >= 0 && il < (int32_t) lctx.model.buft_layer.size() && lctx.model.buft_layer[il].buft != nullptr) {
         return lctx.model.buft_layer[il].buft;
@@ -67,8 +58,7 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
     const int32_t target_token_capacity = std::max<int32_t>(
             1,
             std::max<int32_t>((int32_t) model.hparams.dflash_block_size, (int32_t) cparams.n_ubatch));
-    const int32_t target_workspace_n_kv_total = GGML_PAD(target_cross_ctx + target_token_capacity, cparams.flash_attn ? 256 : 32);
-    const int32_t target_cache_n_kv_total = target_workspace_n_kv_total;
+    const int32_t target_cache_n_kv_total = GGML_PAD(target_cross_ctx + target_token_capacity, cparams.flash_attn ? 256 : 32);
     const ggml_type target_cache_type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
     const int32_t n_layer = model.hparams.n_layer;
     const int64_t n_embd_head_k = model.hparams.n_embd_head_k(0);
@@ -86,10 +76,7 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
                 dflash.kv.v_ctx_cache.front()->type == target_cache_type &&
                 (int32_t) dflash.kv.k_ctx_cache.front()->ne[1] == target_cache_n_kv_total &&
                 (int32_t) dflash.kv.v_ctx_cache.front()->ne[1] == target_cache_n_kv_total;
-        const bool workspace_matches =
-                dflash.kv.workspace_n_kv_total == target_workspace_n_kv_total;
-
-        if (cache_matches && workspace_matches) {
+        if (cache_matches) {
             return true;
         }
 
@@ -98,17 +85,9 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
             ggml_backend_sched_free(dflash.kv.cache_sched);
             dflash.kv.cache_sched = nullptr;
         }
-        if (dflash.kv.workspace_sched != nullptr) {
-            ggml_backend_sched_free(dflash.kv.workspace_sched);
-            dflash.kv.workspace_sched = nullptr;
-        }
         dflash.kv.cache_graph = nullptr;
-        dflash.kv.workspace_graph = nullptr;
         dflash.kv.cache_graph_rows = 0;
         dflash.kv.cache_graph_write_pos = 0;
-        dflash.kv.workspace_graph_rows = 0;
-        dflash.kv.workspace_graph_write_pos = 0;
-        dflash.kv.workspace_reserved_rows = 0;
     }
 
     ggml_init_params params = {
@@ -125,8 +104,6 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
 
     dflash.kv.k_ctx_cache.resize((size_t) n_layer);
     dflash.kv.v_ctx_cache.resize((size_t) n_layer);
-    dflash.kv.k_ctx_workspace.clear();
-    dflash.kv.v_ctx_workspace.clear();
     dflash.kv.cache_pos.assign((size_t) target_cross_ctx, 0);
     dflash.kv.cache_slot_valid.assign((size_t) target_cross_ctx, 0);
     dflash.kv.cache_bufs.clear();
@@ -172,8 +149,6 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
         }
     }
 
-    dflash.kv.workspace_token_capacity = target_token_capacity;
-    dflash.kv.workspace_n_kv_total = target_workspace_n_kv_total;
     llama_reset_dflash_kv_cache_state(this);
 
     return true;
@@ -187,8 +162,6 @@ void llama_context::free_dflash_kv_cache_tensors() {
 
     release_vector(dflash.kv.k_ctx_cache);
     release_vector(dflash.kv.v_ctx_cache);
-    release_vector(dflash.kv.k_ctx_workspace);
-    release_vector(dflash.kv.v_ctx_workspace);
     release_vector(dflash.kv.cache_pos);
     release_vector(dflash.kv.cache_slot_valid);
     dflash.kv.cache_write_pos = 0;
@@ -200,31 +173,14 @@ void llama_context::free_dflash_kv_cache_tensors() {
     dflash.kv.cache_applied_window_version = 0;
     dflash.kv.cache_valid = false;
     dflash.kv.cache_view_valid = false;
-    dflash.kv.workspace_write_pos = 0;
-    dflash.kv.workspace_n_filled = 0;
-    dflash.kv.workspace_reserved_rows = 0;
-    dflash.kv.workspace_token_capacity = 0;
-    dflash.kv.workspace_n_kv_total = 0;
-    dflash.kv.workspace_applied_window_version = 0;
-    dflash.kv.workspace_valid = false;
-    dflash.kv.workspace_sync_pending = false;
     dflash.kv.cache_graph = nullptr;
-    dflash.kv.workspace_graph = nullptr;
     dflash.kv.cache_graph_rows = 0;
     dflash.kv.cache_graph_write_pos = 0;
-    dflash.kv.workspace_graph_rows = 0;
-    dflash.kv.workspace_graph_write_pos = 0;
     dflash.kv.cache_input_target_features = nullptr;
     dflash.kv.cache_input_pos_ctx = nullptr;
     dflash.kv.kq_mask_tensor = nullptr;
     dflash.kv.kq_mask_swa_tensor = nullptr;
     dflash.kv.draft_tail_rows_tensor = nullptr;
-
-    if (dflash.kv.workspace_sched != nullptr) {
-        ggml_backend_sched_synchronize(dflash.kv.workspace_sched);
-        ggml_backend_sched_free(dflash.kv.workspace_sched);
-        dflash.kv.workspace_sched = nullptr;
-    }
 
     for (ggml_backend_buffer_t buf : dflash.kv.cache_bufs) {
         if (buf != nullptr) {
@@ -233,7 +189,6 @@ void llama_context::free_dflash_kv_cache_tensors() {
     }
     release_vector(dflash.kv.cache_bufs);
     release_vector(dflash.kv.cache_compute_meta);
-    release_vector(dflash.kv.workspace_compute_meta);
     if (dflash.kv.cache_ctx != nullptr) {
         ggml_free(dflash.kv.cache_ctx);
         dflash.kv.cache_ctx = nullptr;
@@ -399,8 +354,6 @@ bool llama_prepare_dflash_graph_inputs(
     const int32_t n_mask_tokens = (int32_t) kq_mask->ne[1];
     const int32_t n_kv_total = (int32_t) kq_mask->ne[0];
     ggml_tensor * draft_tail_rows = lctx.dflash.kv.draft_tail_rows_tensor;
-
-    llama_sync_dflash_workspace_if_pending(lctx);
 
     if (graph_cross_ctx != cross_ctx) {
         LLAMA_LOG_ERROR("%s: DFlash graph cross_ctx drift (graph=%d configured=%d)\n",
@@ -603,12 +556,7 @@ bool llama_prepare_dflash_graph_inputs(
     for (uint32_t i = 0; i < n_tokens; ++i) {
         draft_tail_rows_data[(size_t) i] = cross_ctx + (int32_t) i;
     }
-    ggml_backend_t draft_tail_rows_backend = llama_backend_for_tensor(lctx, draft_tail_rows);
-    if (draft_tail_rows_backend != nullptr) {
-        ggml_backend_tensor_set_async(draft_tail_rows_backend, draft_tail_rows, draft_tail_rows_data.data(), 0, ggml_nbytes(draft_tail_rows));
-    } else {
-        ggml_backend_tensor_set(draft_tail_rows, draft_tail_rows_data.data(), 0, ggml_nbytes(draft_tail_rows));
-    }
+    ggml_backend_tensor_set(draft_tail_rows, draft_tail_rows_data.data(), 0, ggml_nbytes(draft_tail_rows));
 
     const size_t mask_elems = (size_t) n_kv_total * (size_t) n_mask_tokens;
     if (kq_mask->type == GGML_TYPE_F16) {
