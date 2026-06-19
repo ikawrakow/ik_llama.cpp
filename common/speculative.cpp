@@ -2347,8 +2347,6 @@ void common_speculative_checkpoint_restore(
     common_speculative_checkpoint_discard(ckpt, ctx);
 }
 
-static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state_mtp & state);
-
 void common_speculative_commit(
         common_speculative * spec,
         llama_context * ctx,
@@ -2559,6 +2557,7 @@ static bool mtp_model_uses_recurrent_conditioning(const common_speculative_state
     if (state.ctx_mtp == nullptr) {
         return false;
     }
+    return true;
 
     const llama_model * model = llama_get_model(state.ctx_mtp);
     if (!llama_model_has_recurrent(model)) {
