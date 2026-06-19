@@ -51,10 +51,6 @@ void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_conte
 #   include "ggml-cann.h"
 #endif
 
-#ifdef GGML_USE_BLAS
-#  include "ggml-blas.h"
-#endif
-
 #ifdef GGML_USE_METAL
 #  include "ggml-metal.h"
 #endif
@@ -5016,11 +5012,6 @@ static void llama_graph_compute(
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
     }
-#ifdef GGML_USE_BLAS
-    if (lctx.backend_blas != nullptr) {
-        ggml_backend_blas_set_n_threads(lctx.backend_blas, n_threads);
-    }
-#endif
 
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
 
@@ -5042,11 +5033,6 @@ static void llama_graph_compute_sched(
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
     }
-#ifdef GGML_USE_BLAS
-    if (lctx.backend_blas != nullptr) {
-        ggml_backend_blas_set_n_threads(lctx.backend_blas, n_threads);
-    }
-#endif
 
     ggml_backend_sched_graph_compute_async(sched, gf);
 }
@@ -7227,15 +7213,6 @@ struct llama_context * llama_init_from_model(
             ggml_backend_add_from_device(ctx, backend);
         }
     }
-#endif
-
-#ifdef GGML_USE_BLAS
-        ctx->backend_blas = ggml_backend_blas_init();
-        if (ctx->backend_blas == nullptr) {
-            LLAMA_LOG_WARN("%s: failed to initialize BLAS backend\n", __func__);
-        } else {
-            ggml_backend_add_from_device(ctx, ctx->backend_blas);
-        }
 #endif
 
 #if defined(GGML_USE_RPC)
@@ -10994,7 +10971,6 @@ const char * llama_print_system_info(void) {
     s += "F16C = "        + std::to_string(ggml_cpu_has_f16c())        + " | ";
     s += "FP16_VA = "     + std::to_string(ggml_cpu_has_fp16_va())     + " | ";
     s += "WASM_SIMD = "   + std::to_string(ggml_cpu_has_wasm_simd())   + " | ";
-    s += "BLAS = "        + std::to_string(ggml_cpu_has_blas())        + " | ";
     s += "SSE3 = "        + std::to_string(ggml_cpu_has_sse3())        + " | ";
     s += "SSSE3 = "       + std::to_string(ggml_cpu_has_ssse3())       + " | ";
     s += "VSX = "         + std::to_string(ggml_cpu_has_vsx())         + " | ";
