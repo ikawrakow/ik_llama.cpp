@@ -8,6 +8,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-blas.h"
 
 #include <algorithm>
 #include <cmath>
