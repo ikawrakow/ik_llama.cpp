@@ -77,6 +77,10 @@
 #include <vector>
 #include <sstream>
 
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
+
 #define IK_PRINT_TIMING 0
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -1378,10 +1382,76 @@ GGML_CALL static const char * ggml_backend_cuda_host_buffer_name(ggml_backend_bu
     GGML_UNUSED(buffer);
 }
 
+#ifdef __linux__
 GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    CUDA_CHECK(cudaFreeHost(buffer->context));
+    CUDA_CHECK(cudaHostUnregister(buffer->context));
+    munmap(buffer->context, buffer->size);
 }
 
+static void * ggml_cuda_host_malloc(size_t size) {
+    if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+        return nullptr;
+    }
+
+    constexpr double k_warn_limit = 8.0;
+    double size_GiB = size/(1024.*1024.*1024.);
+    auto tim1 = ggml_time_us();
+    if (size_GiB > k_warn_limit) {
+        GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory, this may take a while.\n", size_GiB);
+        GGML_CUDA_LOG_INFO("Using pinned host memory improves PP performance by a significant margin.\n");
+        GGML_CUDA_LOG_INFO("But if it takes too long for your model and amount of patience, kill the process and run using\n\n");
+        GGML_CUDA_LOG_INFO("GGML_CUDA_NO_PINNED=1 your_command_goes_here\n");
+    }
+
+    void * ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ptr == MAP_FAILED) {
+        GGML_CUDA_LOG_WARN("%s: mmap of %.2f MiB failed\n", __func__, size/1024.0/1024.0);
+        return nullptr;
+    }
+
+// Whether to request the kernel to attempt to defragment memory to back the region with 2M hugepages.
+// Otherwise dependent on kernel settings:
+//   * enabled="always":  Hand over whatever 2M pages it has on hand and the rest will be 4k 
+//   * enabled="madvise": 4k pages
+//   * enabled="never":   4k pages
+// Potluck on performance. If there's not much defragmentation to do, then you win. Otherwise come back in an hour.
+#if 0
+#ifdef MADV_HUGEPAGE
+    madvise(ptr, size, MADV_HUGEPAGE);
+#endif
+#endif
+
+    // prefault the whole region. If the kernel knows how to do this then let it do so.
+    // Might be worth spawning threads to speed up this process on huge allocations.
+    int needs_manual_prefault = 1;
+#ifdef MADV_POPULATE_WRITE
+    needs_manual_prefault = madvise(ptr, size, MADV_POPULATE_WRITE);
+#endif
+    if (needs_manual_prefault)
+    {
+        char * p = (char *) ptr;
+        for (size_t off = 0; off < size; off += 4096) {
+            p[off] = 0;
+        }
+    }
+
+    cudaError_t err = cudaHostRegister(ptr, size, cudaHostRegisterPortable);
+    if (err != cudaSuccess) {
+        cudaGetLastError(); // clear the error
+        GGML_CUDA_LOG_WARN("%s: cudaHostRegister of %.2f MiB failed: %s\n", __func__,
+                           size/1024.0/1024.0, cudaGetErrorString(err));
+        munmap(ptr, size);
+        return nullptr;
+    }
+
+    if (size_GiB > k_warn_limit) {
+        auto tim2 = ggml_time_us();
+        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+    }
+    return ptr;
+}
+
+#else // !__linux__
 static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
@@ -1412,6 +1482,12 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     return ptr;
 }
+
+GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    CUDA_CHECK(cudaFreeHost(buffer->context));
+}
+
+#endif // __linux__
 
 GGML_CALL static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     void * ptr = ggml_cuda_host_malloc(size);

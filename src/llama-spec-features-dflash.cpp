@@ -118,7 +118,7 @@ int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model
     return (int32_t) model->vocab.token_mask();
 }
 
-const struct ggml_tensor * llama_model_dflash_output_tensor(
+static const ggml_tensor * llama_dflash_output_tensor(
         const struct llama_model * model) {
     if (model == nullptr) {
         return nullptr;
@@ -142,8 +142,8 @@ int32_t llama_model_dflash_io_mode(
         return LLAMA_DFLASH_IO_MODE_INVALID;
     }
 
-    const ggml_tensor * draft_output = llama_model_dflash_output_tensor(draft_model);
-    const ggml_tensor * target_output = llama_model_dflash_output_tensor(target_model);
+    const ggml_tensor * draft_output = llama_dflash_output_tensor(draft_model);
+    const ggml_tensor * target_output = llama_dflash_output_tensor(target_model);
     if (draft_model->tok_embd == nullptr || draft_output == nullptr || target_model->tok_embd == nullptr || target_output == nullptr) {
         return LLAMA_DFLASH_IO_MODE_INVALID;
     }
@@ -165,7 +165,7 @@ bool llama_model_dflash_io_tensors_match(
         const struct llama_model * draft_model,
         int32_t n_embd,
         int32_t n_vocab) {
-    const ggml_tensor * output = llama_model_dflash_output_tensor(draft_model);
+    const ggml_tensor * output = llama_dflash_output_tensor(draft_model);
     if (draft_model == nullptr || draft_model->tok_embd == nullptr || output == nullptr || n_embd <= 0 || n_vocab <= 0) {
         return false;
     }
@@ -202,11 +202,17 @@ bool llama_model_share_dflash_io_tensors(
     const bool uses_shared_output = draft_model->output == target_model->output ||
             draft_model->output == target_model->tok_embd;
 
-    if (draft_model->output_mtp == nullptr && target_model->output_mtp != nullptr && uses_shared_tok && uses_shared_output) {
-        draft_model->output_mtp = target_model->output_mtp;
+    if (draft_model->output_mtp == nullptr) {
+        if (target_model->output_mtp != nullptr && uses_shared_tok && uses_shared_output) {
+            draft_model->output_mtp = target_model->output_mtp;
+        } else if (draft_model->output != nullptr) {
+            draft_model->output_mtp = draft_model->output;
+        } else {
+            draft_model->output_mtp = draft_model->tok_embd;
+        }
     }
 
-    const struct ggml_tensor * output = llama_model_dflash_output_tensor(draft_model);
+    const struct ggml_tensor * output = llama_dflash_output_tensor(draft_model);
     return draft_model->tok_embd != nullptr && output != nullptr;
 }
 

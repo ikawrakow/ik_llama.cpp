@@ -219,9 +219,6 @@ struct llama_context {
 #ifdef GGML_USE_METAL
     ggml_backend_t backend_metal = nullptr;
 #endif
-#ifdef GGML_USE_BLAS
-    ggml_backend_t backend_blas = nullptr;
-#endif
     ggml_backend_t backend_cpu = nullptr;
 
     bool has_evaluated_once = false;
