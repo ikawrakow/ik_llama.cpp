@@ -1,5 +1,9 @@
 #include "llama-spec-features.h"
 
+#if defined(GGML_USE_CUDA)
+#include "ggml-cuda.h"
+#endif
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -371,6 +375,70 @@ static int32_t llama_dflash_find_layer_index(const struct llama_context * ctx, i
     return it == layer_ids.end() ? -1 : (int32_t) std::distance(layer_ids.begin(), it);
 }
 
+static void llama_dflash_unregister_capture_rows(llama_context::dflash_runtime::capture_state & capture) {
+#if defined(GGML_USE_CUDA)
+    for (size_t i = 0; i < capture.layer_row_registered_ptrs.size(); ++i) {
+        if (capture.layer_row_registered_ptrs[i] != nullptr) {
+            ggml_backend_cuda_unregister_host_buffer(capture.layer_row_registered_ptrs[i]);
+            capture.layer_row_registered_ptrs[i] = nullptr;
+            capture.layer_row_registered_bytes[i] = 0;
+        }
+    }
+#else
+    GGML_UNUSED(capture);
+#endif
+}
+
+static void llama_dflash_prepare_capture_rows(
+        llama_context::dflash_runtime::capture_state & capture,
+        int32_t row_count,
+        int32_t row_width) {
+    if (row_count <= 0 || row_width <= 0) {
+        return;
+    }
+
+    const size_t n_layers = capture.layer_ids.size();
+    const size_t row_elems = (size_t) row_count * (size_t) row_width;
+    const size_t row_bytes = row_elems * sizeof(float);
+
+    if (capture.layer_rows.size() != n_layers) {
+        capture.layer_rows.resize(n_layers);
+    }
+    if (capture.layer_row_registered_ptrs.size() != n_layers) {
+        capture.layer_row_registered_ptrs.assign(n_layers, nullptr);
+    }
+    if (capture.layer_row_registered_bytes.size() != n_layers) {
+        capture.layer_row_registered_bytes.assign(n_layers, 0);
+    }
+
+    for (size_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
+        auto & rows = capture.layer_rows[layer_idx];
+
+        if (capture.layer_row_registered_ptrs[layer_idx] != nullptr &&
+                (rows.data() != capture.layer_row_registered_ptrs[layer_idx] ||
+                 capture.layer_row_registered_bytes[layer_idx] != row_bytes)) {
+#if defined(GGML_USE_CUDA)
+            ggml_backend_cuda_unregister_host_buffer(capture.layer_row_registered_ptrs[layer_idx]);
+#endif
+            capture.layer_row_registered_ptrs[layer_idx] = nullptr;
+            capture.layer_row_registered_bytes[layer_idx] = 0;
+        }
+
+        if (rows.size() != row_elems) {
+            rows.resize(row_elems);
+        }
+
+#if defined(GGML_USE_CUDA)
+        if (!rows.empty() && capture.layer_row_registered_ptrs[layer_idx] == nullptr) {
+            if (ggml_backend_cuda_register_host_buffer(rows.data(), row_bytes)) {
+                capture.layer_row_registered_ptrs[layer_idx] = rows.data();
+                capture.layer_row_registered_bytes[layer_idx] = row_bytes;
+            }
+        }
+#endif
+    }
+}
+
 static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool ask, void * user_data) {
     auto * ctx = static_cast<llama_context *>(user_data);
     if (ctx == nullptr || !ctx->dflash.capture) {
@@ -407,11 +475,31 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
         capture.layer_seen_batch_id.assign(capture.layer_ids.size(), 0);
     }
 
+    if (capture.row_width != row_width || capture.row_count != row_count ||
+            capture.layer_rows.size() != capture.layer_ids.size()) {
+        if (capture.row_width != 0 && capture.row_count != 0 &&
+                (capture.row_width != row_width || capture.row_count != row_count)) {
+            LLAMA_LOG_WARN("%s: DFlash capture shape changed within batch %llu (%d x %d -> %d x %d); invalidating earlier layer rows\n",
+                    __func__,
+                    (unsigned long long) capture.capture_batch_id,
+                    capture.row_count,
+                    capture.row_width,
+                    row_count,
+                    row_width);
+            std::fill(capture.layer_seen_batch_id.begin(), capture.layer_seen_batch_id.end(), 0);
+        }
+        llama_dflash_prepare_capture_rows(capture, row_count, row_width);
+    }
+
     auto & rows = capture.layer_rows[(size_t) layer_idx];
-    rows.resize((size_t) row_count * (size_t) row_width);
+    if (rows.size() != (size_t) row_count * (size_t) row_width) {
+        return 0;
+    }
+
     auto backend = ggml_backend_sched_get_tensor_backend(ctx->sched, tensor);
     GGML_ASSERT(backend);
     ggml_backend_tensor_get_async(backend, tensor, rows.data(), 0, ggml_nbytes(tensor));
+
     capture.row_width = row_width;
     capture.row_count = row_count;
     capture.layer_seen_batch_id[(size_t) layer_idx] = capture.capture_batch_id;
@@ -426,9 +514,15 @@ bool llama_set_dflash_capture_layers(
         return false;
     }
 
+    if (ctx->dflash.capture) {
+        llama_clear_dflash_capture(ctx);
+    }
+
     auto capture = std::make_unique<llama_context::dflash_runtime::capture_state>();
     capture->layer_ids.assign(layer_ids, layer_ids + n_layers);
     capture->layer_rows.resize((size_t) n_layers);
+    capture->layer_row_registered_ptrs.assign((size_t) n_layers, nullptr);
+    capture->layer_row_registered_bytes.assign((size_t) n_layers, 0);
     capture->layer_seen_batch_id.assign((size_t) n_layers, 0);
     capture->prev_cb_eval = ctx->cparams.cb_eval;
     capture->prev_cb_eval_user_data = ctx->cparams.cb_eval_user_data;
@@ -454,6 +548,7 @@ void llama_clear_dflash_capture(struct llama_context * ctx) {
     if (ctx->dflash.capture) {
         prev_cb_eval = ctx->dflash.capture->prev_cb_eval;
         prev_cb_eval_user_data = ctx->dflash.capture->prev_cb_eval_user_data;
+        llama_dflash_unregister_capture_rows(*ctx->dflash.capture);
     }
 
     ctx->dflash.capture.reset();
@@ -488,11 +583,6 @@ void llama_finish_dflash_capture_batch(
     }
 
     GGML_UNUSED(is_prompt_warmup);
-    auto & capture = *ctx->dflash.capture;
-    // Reset the batch-local reference shape so the next decode only compares layers within
-    // the same batch, not against the previous prompt/verify batch.
-    capture.row_count = 0;
-    capture.row_width = 0;
 }
 
 static bool llama_spec_prepare_dflash_capture(

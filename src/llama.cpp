@@ -698,6 +698,7 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
 }
 
 llama_context::~llama_context() {
+    llama_clear_dflash_capture(this);
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }

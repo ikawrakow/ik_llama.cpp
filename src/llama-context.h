@@ -344,6 +344,8 @@ struct llama_context {
         struct capture_state {
             std::vector<int32_t> layer_ids;
             std::vector<std::vector<float>> layer_rows;
+            std::vector<void *> layer_row_registered_ptrs;
+            std::vector<size_t> layer_row_registered_bytes;
             int32_t row_count = 0;
             int32_t row_width = 0;
             uint64_t capture_batch_id = 0;
