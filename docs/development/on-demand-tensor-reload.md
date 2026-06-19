@@ -1,4 +1,4 @@
-# On-Demand Tensor Reload & Hybrid CPU/GPU Inference
+# On-Demand Tensor Reload
 
 ## Overview
 
@@ -10,7 +10,6 @@ This is primarily intended for:
 * Iterative experimentation and LoRA-like surgical updates.
 * Dynamic MoE (Mixture-of-Experts) expert swapping.
 * **Mixed-quantization perplexity benchmarks**, where the bulk of a model lives in one quant (e.g., Q4_X) on GPU while individual experts are hot-swapped one-by-one into a different quant (e.g., IQ1_KT) to measure isolated quality impact.
-* Running oversized models in **hybrid CPU/GPU mode**, where some layers permanently reside in system RAM and others on GPU.
 
 ---
 
@@ -21,8 +20,7 @@ Standard `ik_llama.cpp` workflows require restarting the entire executable to pi
 1. **Tracking provenance**: At load time, every tensor is mapped back to its source GGUF shard, byte offset, and modification time.
 2. **Detecting changes**: At runtime, it cheaply `stat()`s the source files to see if a tensor’s backing data has changed.
 3. **Surgical replacement**: Only the changed tensors are re-mapped/re-allocated. The rest of the model stays resident in GPU/CPU memory.
-4. **Hybrid safety**: If any tensor lives on the CPU backend, the scheduler is automatically told **not** to force-offload its operations to GPU, preventing multi-gigabyte accidental allocations.
-5. **Graph safety**: CUDA graphs are invalidated so that the compute graph is rebuilt with the new buffer pointers, sizes, or types.
+4. **Graph safety**: CUDA graphs are invalidated so that the compute graph is rebuilt with the new buffer pointers, sizes, or types.
 
 ---
 
@@ -105,7 +103,7 @@ For split tensors, the patch:
 #### E. Data Copy
 Finally, the tensor bytes are read from the updated file and copied into the (possibly new) backend buffer via `ggml_backend_tensor_set`.
 
-### 5. Graph Invalidation & Hybrid Scheduler Fix
+### 5. Graph Invalidation
 After all tensors are reloaded:
 
 ```cpp
@@ -115,14 +113,6 @@ ggml_backend_cuda_invalidate_graphs(); // clears cuda_graphs[] on every device
 
 Each `llama_context` tracks the last generation it built a graph for (`graph_generation`), and also carries a `force_graph_rebuild` flag. In `can_reuse_graph()`, if the context’s generation lags behind the model’s, or if `force_graph_rebuild` is set, the graph is forced to rebuild, picking up the new buffer pointers, sizes, and types.
 
-Additionally, if **any** reloaded tensor lives on the CPU backend, the patch calls:
-
-```cpp
-ggml_backend_sched_set_op_offload(ctx->sched, (ggml_op)-1, false);
-```
-
-This disables automatic offloading for all operations, ensuring that CPU-resident tensors are not pulled into GPU memory during graph execution. This makes true hybrid CPU/GPU inference safe and stable.
-
 ---
 
 ## Hybrid CPU/GPU Inference
@@ -130,7 +120,6 @@ This disables automatic offloading for all operations, ensuring that CPU-residen
 When running with `--split-mode layer --fit --gpu-layers 99` (or any configuration where the model does not fully fit in VRAM), some tensors naturally land in CPU memory. The hot-swap system fully supports this:
 
 * **CPU tensors are reloadable**: The reload logic reads the new data from disk and copies it into the CPU backend buffer exactly as it would for CUDA buffers.
-* **No forced GPU migration**: The scheduler is explicitly told not to offload CPU tensors, preventing OOM errors that would otherwise occur when the scheduler tries to copy a multi-gigabyte expert tensor into GPU RAM.
 * **Fallback allocator**: If a GPU buffer allocation fails during a reload (e.g., because an IQ1_KT expert is larger than the original Q4_X expert), the system automatically falls back to a CPU buffer for that tensor.
 
 This allows you to keep, for example, 90 % of an MoE model on 13 GPUs while a few large expert tensors cycle through CPU RAM, or to benchmark quants that vary in size per-expert without worrying about exact VRAM fitting.
@@ -258,6 +247,8 @@ export LLAMA_HOTSWAP_ENABLED=1
 export LLAMA_PERPLEXITY_PRE_RELOAD_SCRIPT=./tensor-swap.sh
 export LLAMA_DEBUG=1
 
+# --offload-policy -1,off \
+
 GGML_CUDA_NO_PINNED=1 \
 /opt/ik_llama.cpp/ik_llama.cpp/build/bin/llama-perplexity \
     --chunks 8 \
@@ -356,4 +347,5 @@ Notice that when the script restores a tensor to its original Q4_X shard, the re
 | `src/llama-mmap.cpp/h` | Expose `llama_file::get_path()` so reload registry knows the source file path. |
 | `src/llama-model.cpp` | Core implementation: GGUF header parser, snapshot, reload, MoE resync, buffer management, CPU fallback. |
 | `src/llama-model.h` | Add `tensor_reload_source`, `reload_state`, registry maps, and reload methods. |
-| `src/llama.cpp` | Wire reload registry into `llama_model_load`; add generation check and `force_graph_rebuild` check in `can_reuse_graph()`; export C API; disable scheduler offload when CPU tensors are present. |
+| `src/llama.cpp` | Wire reload registry into `llama_model_load`; add generation check and `force_graph_rebuild` check in `can_reuse_graph()`; export C API. |
+

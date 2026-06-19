@@ -82,10 +82,5 @@ graph TD
     RELOADED -->|No| ENDD
     RELOADED -->|Yes| INV[ggml_backend_cuda_invalidate_graphs<br/>Clear cuda_graphs on ALL devices]
     INV --> GEN[++model.graph_generation]
-    GEN --> CPU_CHK{Any reloaded tensor<br/>on CPU backend?}
-    CPU_CHK -->|Yes| OFF[ggml_backend_sched_set_op_offload<br/>sched, op=-1, false<br/>Prevent forced GPU migration]
-    CPU_CHK -->|No| DEF[Keep scheduler defaults]
-    OFF --> REUSE[can_reuse_graph sees stale generation<br/>Forces full graph rebuild<br/>on next eval]
-    DEF --> REUSE
+    GEN --> REUSE[can_reuse_graph sees stale generation<br/>Forces full graph rebuild<br/>on next eval]
     REUSE --> ENDD
-
