@@ -613,7 +613,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpL = cur;
 
-        const bool is_sliding    = hparams.swa_layers[il] ? true : false;
+        const bool  is_sliding   = hparams.swa_layers[il] ? true : false;
         const float freq_base_l  = is_sliding ? target_hparams.rope_freq_base_train_swa  : target_cparams.rope_freq_base;
         const float freq_scale_l = is_sliding ? target_hparams.rope_freq_scale_train_swa : target_cparams.rope_freq_scale;
         const int   n_rot_l      = is_sliding ? target_hparams.n_rot_swa : target_hparams.n_rot;
