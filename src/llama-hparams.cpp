@@ -3,6 +3,7 @@
 #include "llama-model-loader.h"
 #include "llama-model.h"
 
+#include <limits>
 #include <map>
 
 #define LLAMA_MAX_EXPERTS 512  // Qwen3 Next
@@ -33,6 +34,95 @@ static inline const char * llm_expert_gating_func_name(llm_expert_gating_func_ty
         case LLM_EXPERT_GATING_FUNC_SIGMOID: return "sigmoid";
         case LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT: return "weight";
         default: return "none";
+    }
+}
+
+static bool load_dflash_target_layer_ids(
+        llama_model_loader & ml,
+        const std::string & key,
+        llama_hparams & hparams,
+        bool required) {
+    const int kid = gguf_find_key(ml.meta, key.c_str());
+    if (kid < 0 || gguf_get_kv_type(ml.meta, kid) != GGUF_TYPE_ARRAY) {
+        if (required) {
+            throw std::runtime_error(format("array key not found in model: %s", key.c_str()));
+        }
+        return false;
+    }
+
+    const enum gguf_type type = gguf_get_arr_type(ml.meta, kid);
+    if (type != GGUF_TYPE_UINT32 && type != GGUF_TYPE_INT32) {
+        throw std::runtime_error(format("dflash: %s must be a uint32/int32 array", key.c_str()));
+    }
+
+    uint32_t n = 0;
+    ml.get_arr_n(key, n, true);
+    if (n == 0) {
+        throw std::runtime_error(format("dflash: %s must not be empty", key.c_str()));
+    }
+    if (n > 8) {
+        throw std::runtime_error(format("dflash: %s has %u entries, max is 8", key.c_str(), n));
+    }
+
+    hparams.dflash_n_target_layers = n;
+    for (uint32_t & id : hparams.dflash_target_layer_ids) {
+        id = 0;
+    }
+
+    if (type == GGUF_TYPE_INT32) {
+        std::array<int32_t, 8> layer_ids = {};
+        ml.get_arr(key, layer_ids, true);
+        for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+            if (layer_ids[i] < 0) {
+                throw std::runtime_error(format("dflash: %s contains negative layer id %d", key.c_str(), layer_ids[i]));
+            }
+            hparams.dflash_target_layer_ids[i] = (uint32_t) layer_ids[i];
+        }
+    } else {
+        std::array<uint32_t, 8> layer_ids = {};
+        ml.get_arr(key, layer_ids, true);
+        for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+            hparams.dflash_target_layer_ids[i] = layer_ids[i];
+        }
+    }
+
+    for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+        const uint32_t id = hparams.dflash_target_layer_ids[i];
+        for (uint32_t j = 0; j < i; ++j) {
+            if (hparams.dflash_target_layer_ids[j] == id) {
+                throw std::runtime_error(format(
+                    "dflash: %s contains duplicate layer id %u",
+                    key.c_str(),
+                    id));
+            }
+        }
+    }
+
+    return true;
+}
+
+static void validate_dflash_hparams(llama_hparams & hparams, llm_arch arch) {
+    if (hparams.dflash_block_size <= 1) {
+        throw std::runtime_error(format("%s: dflash block_size must be > 1", llama_model_arch_name(arch)));
+    }
+    if (hparams.dflash_n_target_layers == 0) {
+        throw std::runtime_error(format("%s: dflash target_layer_ids are required", llama_model_arch_name(arch)));
+    }
+
+    // DFlash feature width is target-model specific. Keep the serialized metadata intact here
+    // and validate it against the live target model during DFlash init.
+
+    if (hparams.dflash_n_target_features == 0) {
+        throw std::runtime_error(format(
+            "%s: dflash n_target_features must be > 0",
+            llama_model_arch_name(arch)));
+    }
+    if (hparams.dflash_n_target_features % hparams.dflash_n_target_layers != 0) {
+        throw std::runtime_error(format(
+            "%s: dflash n_target_features=%u must be divisible by n_target_layers=%u",
+            llama_model_arch_name(arch),
+            hparams.dflash_n_target_features,
+            hparams.dflash_n_target_layers));
     }
 }
 
@@ -787,9 +877,9 @@ void llm_load_hparams(
                     ml.get_key(LLM_KV_MTP_CENTROID_COUNT,            hparams.mtp_num_centroids, false);
                     ml.get_key(LLM_KV_MTP_CENTROID_TOP_K,            hparams.mtp_centroid_top_k, false);
                 } else {
-                    ml.get_key("gemma4_assistant.n_embd_backbone", hparams.mtp_backbone_n_embd);
-                    ml.get_key("gemma4_assistant.n_centroids",     hparams.mtp_num_centroids, false);
-                    ml.get_key("gemma4_assistant.centroid_top_k",  hparams.mtp_centroid_top_k, false);
+                    ml.get_key("gemma4-assistant.embedding_length_out", hparams.mtp_backbone_n_embd);
+                    ml.get_key("gemma4-assistant.n_centroids",     hparams.mtp_num_centroids, false);
+                    ml.get_key("gemma4-assistant.centroid_top_k",  hparams.mtp_centroid_top_k, false);
                 }
                 ml.get_key(LLM_KV_MTP_USE_ORDERED_EMBEDDINGS,    hparams.mtp_use_ordered_embeddings, false);
 
@@ -805,6 +895,18 @@ void llm_load_hparams(
                     case 5376: model.type = e_model::MODEL_32B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
+            } break;
+        case LLM_ARCH_DFLASH_DRAFT:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_DFLASH_BLOCK_SIZE,        hparams.dflash_block_size, false);
+                ml.get_key(LLM_KV_DFLASH_MASK_TOKEN_ID,     hparams.dflash_mask_token_id, false);
+                ml.get_key(LLM_KV_DFLASH_N_TARGET_FEATURES, hparams.dflash_n_target_features, false);
+                load_dflash_target_layer_ids(ml, LLM_KV(model.arch)(LLM_KV_DFLASH_TARGET_LAYER_IDS), hparams, false);
+                validate_dflash_hparams(hparams, model.arch);
+
+                hparams.n_layer_kv_from_start = hparams.n_layer;
+                model.type = e_model::MODEL_UNKNOWN;
             } break;
 
         case LLM_ARCH_STARCODER2:

@@ -2326,6 +2326,114 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // Cohere2 MoE (North Code) - dedicated parser.
+        // The generation prompt forces <|START_THINKING|>, so model output starts inside
+        // the thinking block.
+        auto tst = peg_tester("models/templates/Cohere2MoE.jinja", detailed_debug);
+
+        tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .expect(message_assist_thoughts_unparsed_r7b)
+            .run();
+
+        tst.test("<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts_call_idx)
+            .run();
+
+        tst.test(
+               "<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_idx)
+            .run();
+
+        // Matches server --reasoning off behavior: reasoning_format stays DEEPSEEK, while
+        // enable_thinking is disabled. Tool markup should still become native tool_calls.
+        tst.test(
+               "<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_idx)
+            .run();
+
+        tst.test(
+               "<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect(message_assist_call_idx)
+            .run();
+
+        tst.test(
+               "<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"todo_list\", \"parameters\": {\"todos\": [\"buy milk\", \"walk dog\"]}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ todo_list })
+            .expect(simple_assist_msg("", "", "todo_list", "{\"todos\": [\"buy milk\", \"walk dog\"]}", "0"))
+            .run();
+
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}},\n"
+               "    {\"tool_call_id\": \"1\", \"tool_name\": \"python\", \"parameters\": {\"code\": \"print('hey')\"}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, python_tool })
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "0" },
+                { "python", "{\"code\": \"print('hey')\"}", "1" },
+            })
+            .run();
+
+        tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", ")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(message_assist_thoughts_partial_call)
+            .run();
+    }
+
+    {
         // Google Gemma 2 2B - does not support tool calling
         auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
 

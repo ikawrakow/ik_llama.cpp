@@ -1933,6 +1933,112 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     return data;
 }
 
+// Cohere2 MoE (a.k.a. "North Code") parser.
+//
+// The assistant turn is fully marker-wrapped:
+//   <|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>
+//     <|START_THINKING|>{reasoning}<|END_THINKING|>
+//     then EITHER content:    <|START_TEXT|>{content}<|END_TEXT|>
+//          OR     tool calls: <|START_ACTION|>[
+//                                 {"tool_call_id": "0", "tool_name": "f", "parameters": {...}}, ...
+//                             ]<|END_ACTION|>
+//   <|END_OF_TURN_TOKEN|>
+//
+// The generation prompt forces a leading <|START_THINKING|> (when reasoning is enabled, which is
+// the template default), so the model's output continues from inside the thinking block.
+static common_chat_params common_chat_params_init_cohere2moe(const common_chat_template &          tmpl,
+                                                              const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    const std::string TURN_START   = "<|START_OF_TURN_TOKEN|>";
+    const std::string TURN_END     = "<|END_OF_TURN_TOKEN|>";
+    const std::string CHATBOT      = "<|CHATBOT_TOKEN|>";
+    const std::string USER         = "<|USER_TOKEN|>";
+    const std::string SYSTEM       = "<|SYSTEM_TOKEN|>";
+    const std::string THINK_START  = "<|START_THINKING|>";
+    const std::string THINK_END    = "<|END_THINKING|>";
+    const std::string TEXT_START   = "<|START_TEXT|>";
+    const std::string TEXT_END     = "<|END_TEXT|>";
+    const std::string ACTION_START = "<|START_ACTION|>";
+    const std::string ACTION_END   = "<|END_ACTION|>";
+    const std::string RESULT_START = "<|START_TOOL_RESULT|>";
+    const std::string RESULT_END   = "<|END_TOOL_RESULT|>";
+
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+    data.preserved_tokens   = {
+        TURN_START, TURN_END, CHATBOT, USER, SYSTEM,
+        THINK_START, THINK_END,
+        TEXT_START, TEXT_END,
+        ACTION_START, ACTION_END,
+        RESULT_START, RESULT_END,
+    };
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto end               = p.optional(p.literal(TURN_END)) + p.end();
+
+        common_peg_parser reasoning = p.eps();
+        if (extract_reasoning) {
+            reasoning = p.optional(p.literal(THINK_START) +
+                                   p.reasoning(p.until_one_of({ THINK_END, TEXT_START, ACTION_START })) +
+                                   p.optional(p.literal(THINK_END)));
+        } else {
+            reasoning = p.optional(p.content(p.literal(THINK_START) +
+                                             p.until_one_of({ THINK_END, TEXT_START, ACTION_START }) +
+                                             p.optional(p.literal(THINK_END))));
+        }
+
+        auto text_content = p.literal(TEXT_START) + p.content(p.until(TEXT_END)) + p.optional(p.literal(TEXT_END));
+
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return generation_prompt + reasoning + text_content + end;
+        }
+
+        auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        auto tool_calls    = p.standard_json_tools(ACTION_START, ACTION_END, inputs.tools, inputs.parallel_tool_calls,
+                                                   /* force_tool_calls = */ true,
+                                                   /* name_key         = */ "tool_name",
+                                                   /* args_key         = */ "parameters",
+                                                   /* array_wrapped    = */ true,
+                                                   /* function_is_key  = */ false,
+                                                   /* call_id_key      = */ "",
+                                                   /* gen_call_id_key  = */ "tool_call_id",
+                                                   /* parameters_order = */ { "tool_call_id", "tool_name", "parameters" });
+
+        common_peg_parser body = require_tools ? tool_calls : p.choice({ tool_calls, text_content });
+
+        return generation_prompt + reasoning + body + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, ACTION_START }
+        };
+    }
+
+    return data;
+}
+
 namespace workaround {
 
 static void map_developer_role_to_system(json & messages) {
@@ -2179,6 +2285,15 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("<|tool_call_begin|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Kimi K2 Thinking\n");
         return common_chat_params_init_kimi_k2(tmpl, params);
+    }
+
+    // Cohere2 MoE / North Code - marker-wrapped format with <|START_TEXT|> content and
+    // <|START_ACTION|> JSON tool calls. <|START_TEXT|> is unique to this template; older
+    // Command-R templates use <|START_RESPONSE|>.
+    if (src.find("<|START_TEXT|>") != std::string::npos &&
+        src.find("<|START_ACTION|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Cohere2 MoE\n");
+        return common_chat_params_init_cohere2moe(tmpl, params);
     }
 
     // MiroThinker - uses MCP style toolcalling <use_mcp_tool> ... </use_mcp_tool>

@@ -18,6 +18,7 @@
 #include "llama-hparams.h"
 #include "llama-context.h"
 #include "llama-spec-features.h"
+#include "llama-dflash.h"
 #include "llama-quantize.h"
 
 #include "unicode.h"
@@ -48,10 +49,6 @@ void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_conte
 #   include "ggml-kompute.h"
 #elif defined(GGML_USE_CANN)
 #   include "ggml-cann.h"
-#endif
-
-#ifdef GGML_USE_BLAS
-#  include "ggml-blas.h"
 #endif
 
 #ifdef GGML_USE_METAL
@@ -169,6 +166,14 @@ static std::vector<std::string> string_split(const std::string& str, const std::
     }
     parts.push_back(str.substr(start));
     return parts;
+}
+
+static bool llama_env_flag_enabled(const char * name) {
+    const char * env = std::getenv(name);
+    return env != nullptr && *env != '\0' &&
+            std::strcmp(env, "0") != 0 &&
+            std::strcmp(env, "false") != 0 &&
+            std::strcmp(env, "off") != 0;
 }
 
 // extract ip and port from RPC[ip:port] for rpc and keep other device names
@@ -567,42 +572,47 @@ void llama_context::reset_scheduler() {
     prev_mtp.reset();
 }
 
-bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
-    if (!cparams.graph_reuse) return false;
-    //if (kv_self.save_per_step_ssm) return false;
-    if ((model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && mtp_target_ctx != nullptr) return false;
-    auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
-    if (!the_prev || !the_prev->graph) return false;
-    //if (u_batch.n_tokens > 1) return false;
-    if (u_batch.embd) return false;
-    if (the_prev->save_per_step_ssm != kv_self.save_per_step_ssm ||
-        the_prev->per_step_max_allocated != kv_self.ckpt.per_step_max_allocated) return false;
-    return u_batch.all_seq_id == the_prev->all_seq_id &&
-           kv_self.head > 0 &&
-           kv_self.n == the_prev->n_kv &&
-           n_outputs == the_prev->n_outputs &&
-           u_batch.n_tokens == the_prev->n_tokens &&
-           cparams.mtp_op_type == the_prev->mtp_op_type &&
-           update_cache_copies();
-}
-
-/*
 static void why_not_reuse_previous(const llama_batch & u_batch, const llama_context & ctx, const llama_context::Prev * the_prev) {
     if (!the_prev) { printf("    previous is null\n"); return; }
     if (!the_prev->graph) { printf("    previous graph is null\n"); return; }
     if (!ctx.cparams.graph_reuse) { printf("    graph_reuse is false\n"); return; }
     if (u_batch.embd) { printf("    ubatch.embd is not null\n"); return; }
     if (u_batch.all_seq_id != the_prev->all_seq_id) { printf("    all_seq_id is not the same\n"); return; }
-    if (ctx.kv_self.head == 0) { printf("    kv_self.head = 0\n"); return; }
-    if (ctx.kv_self.n != the_prev->n_kv) { printf("    kv_self.n is not the same\n"); return; }
+    auto & kv_self_used = (ctx.model.arch == LLM_ARCH_GEMMA4_MTP || ctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
+        ctx.mtp_target_ctx != nullptr ? ctx.mtp_target_ctx->kv_self : ctx.kv_self;
+    if (kv_self_used.head == 0) { printf("    kv_self.head = 0\n"); return; }
+    if (kv_self_used.n != the_prev->n_kv) { printf("    kv_self.n is not the same\n"); return; }
     if (ctx.n_outputs != the_prev->n_outputs) { printf("    n_outputs is not the same\n"); return; }
     if (u_batch.n_tokens != the_prev->n_tokens) { printf("    n_tokens is not the same\n"); return; }
     if (ctx.cparams.mtp_op_type != the_prev->mtp_op_type) { printf("    mtp_op_type is not the same\n"); return; }
     printf("    update_cache_copies() must have failed\n");
 }
-*/
+
+bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
+    if (!cparams.graph_reuse) return false;
+    auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
+    if (!the_prev || !the_prev->graph) return false;
+    if (u_batch.embd) return false;
+    auto & kv_self_used = (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
+                          mtp_target_ctx != nullptr ? mtp_target_ctx->kv_self : kv_self;
+    if (the_prev->save_per_step_ssm != kv_self_used.save_per_step_ssm ||
+        the_prev->per_step_max_allocated != kv_self_used.ckpt.per_step_max_allocated) return false;
+    bool result = u_batch.all_seq_id == the_prev->all_seq_id &&
+           kv_self_used.head > 0 &&
+           kv_self_used.n == the_prev->n_kv &&
+           n_outputs == the_prev->n_outputs &&
+           u_batch.n_tokens == the_prev->n_tokens &&
+           cparams.mtp_op_type == the_prev->mtp_op_type &&
+           update_cache_copies();
+    if (false && !result) {
+        printf("%s(%d):", __func__, cparams.mtp_op_type);
+        why_not_reuse_previous(u_batch, *this, the_prev);
+    }
+    return result;
+}
 
 bool llama_context::update_cache_copies() {
+    if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) return true;
     const int n_layer = model.mtp && cparams.mtp_op_type != MTP_OP_NONE ?
         model.hparams.n_layer : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     auto layer_has_attention_kv = [&](int il) {
@@ -689,6 +699,10 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
 }
 
 llama_context::~llama_context() {
+    if (dflash.kv.cache_sched != nullptr) {
+        ggml_backend_sched_free(dflash.kv.cache_sched);
+    }
+    free_dflash_kv_cache_tensors();
     ggml_backend_sched_free(sched);
 
     for (ggml_backend_t backend : backends) {
@@ -3163,6 +3177,10 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight") {
             continue;
         }
+        if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight") {
+            output_misc_size += size;
+            continue;
+        }
         auto pos = name.find("blk.");
         if (pos != 0) {
             LLAMA_LOG_WARN("Oops: tensor with strange name %s\n", name.c_str());
@@ -3717,7 +3735,7 @@ static bool llm_load_tensors(
         }
     }
     if ((model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count > 0 && n_gpu_layers > 0) {
-        const int mtp_device = std::clamp(main_gpu, 0, device_count - 1);
+        const int mtp_device = device_count - 1; //std::clamp(main_gpu, 0, device_count - 1);
 
         LLAMA_LOG_INFO("%s: Gemma 4 MTP assistant forcing layer placement to GPU %d under layer split\n",
                 __func__, mtp_device);
@@ -3972,7 +3990,7 @@ static bool llm_load_tensors(
     if (model.arch == LLM_ARCH_GEMMA4) {
         llm_scale_gate_inp_s(model, use_mmap_buffer);
     }
-    if ((model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) && extra_output_type != GGML_TYPE_COUNT) {
+    if ((model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_DFLASH_DRAFT) && extra_output_type != GGML_TYPE_COUNT) {
         llm_requantize_output_tensor(model, extra_output_type);
     }
 
@@ -4318,12 +4336,13 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         auto tim1 = ggml_time_us();
 #endif
         // NOTE: hparams.causal_attn indicates the model is capable of generation and uses the kv cache.
+        // mask_kv_self/n_kv are needed in both the causal branch and the non-causal flash-attn branch below.
+        const llama_kv_cache & mask_kv_self =
+            ((lctx.model.arch == LLM_ARCH_GEMMA4_MTP || lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && lctx.mtp_target_ctx != nullptr)
+                ? lctx.mtp_target_ctx->kv_self
+                : kv_self;
+        const int64_t n_kv = mask_kv_self.n;
         if (cparams.causal_attn && !lctx.is_encoding) {
-            const llama_kv_cache & mask_kv_self =
-                ((lctx.model.arch == LLM_ARCH_GEMMA4_MTP || lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && lctx.mtp_target_ctx != nullptr)
-                    ? lctx.mtp_target_ctx->kv_self
-                    : kv_self;
-            const int64_t n_kv     = mask_kv_self.n;
             const int64_t n_tokens = batch.n_tokens;
 
 
@@ -4565,6 +4584,48 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
+            // For causal models running in non-causal mode (e.g., Gemma-4 image decode),
+            // the flash-attn mask is allocated as [n_kv, n_tokens_pad] and must be filled
+            // using KV cache cell metadata — not batch-token indices — because image tokens
+            // occupy cells starting at n_past, not at cell 0.
+            if (cparams.flash_attn && hparams.causal_attn && !lctx.is_encoding) {
+                const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
+                const ggml_half h_zero = ggml_fp32_to_fp16(0.f);
+                for (int j = 0; j < n_tokens; ++j) {
+                    const llama_seq_id seq_id = batch.seq_id[j][0];
+                    const llama_pos    pos    = batch.pos[j];
+                    for (int i = 0; i < n_kv; ++i) {
+                        const bool valid = mask_kv_self.cells[i].has_seq_id(seq_id);
+                        if (data_f16) {
+                            data_f16[j*n_kv + i] = valid ? h_zero : h_inf;
+                        }
+                        if (data_swa_f16) {
+                            ggml_half h = valid ? h_zero : h_inf;
+                            if (h == h_zero) {
+                                if (hparams.n_attn_chunk) {
+                                    const llama_pos pos_chunk_start = (pos / hparams.n_attn_chunk) * hparams.n_attn_chunk;
+                                    if (mask_kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
+                                        h = h_inf;
+                                    }
+                                } else if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                    h = h_inf;
+                                }
+                            }
+                            data_swa_f16[j*n_kv + i] = h;
+                        }
+                    }
+                }
+                const int64_t n_tokens_padded = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_tokens_padded > n_tokens) {
+                    if (data_f16) {
+                        std::fill(data_f16 + n_tokens*n_kv, data_f16 + n_tokens_padded*n_kv, h_inf);
+                    }
+                    if (data_swa_f16) {
+                        std::fill(data_swa_f16 + n_tokens*n_kv, data_swa_f16 + n_tokens_padded*n_kv, h_inf);
+                    }
+                }
+            } else {
+
             for (int h = 0; h < 1; ++h) {
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_seq_id seq_id = batch.seq_id[j][0];
@@ -4622,6 +4683,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     }
                 }
             }
+
+            } // end else (non-flash or non-causal-model path)
 #if IK_PRINT_TIMING == 2
             auto tim2 = ggml_time_us();
             printf("set_inputs(mask2): %d us\n", int(tim2-tim1));
@@ -4948,15 +5011,29 @@ static void llama_graph_compute(
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
     }
-#ifdef GGML_USE_BLAS
-    if (lctx.backend_blas != nullptr) {
-        ggml_backend_blas_set_n_threads(lctx.backend_blas, n_threads);
-    }
-#endif
 
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
+}
+
+static void llama_graph_compute_sched(
+        llama_context & lctx,
+        ggml_backend_sched_t sched,
+          ggml_cgraph * gf,
+                  int   n_threads) {
+#ifdef GGML_USE_METAL
+    if (ggml_backend_is_metal(lctx.backend_metal)) {
+        ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
+    }
+#endif
+
+    if (lctx.backend_cpu != nullptr) {
+        ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+        ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+    }
+
+    ggml_backend_sched_graph_compute_async(sched, gf);
 }
 
 static bool prepare_mtp_graph_inputs(
@@ -5006,6 +5083,16 @@ static bool prepare_mtp_graph_inputs(
     return true;
 }
 
+static bool dflash_layer_has_attention_bias(const llama_layer & layer) {
+    return layer.bq != nullptr ||
+           layer.bk != nullptr ||
+           layer.bv != nullptr ||
+           layer.bo != nullptr ||
+           layer.bqkv != nullptr ||
+           layer.bqk != nullptr ||
+           layer.bkv != nullptr;
+}
+
 // decode a batch of tokens by evaluating the transformer
 //
 //   - lctx:      llama context
@@ -5033,6 +5120,8 @@ static int llama_decode_internal(
     const auto & model   = lctx.model;
     const auto & hparams = model.hparams;
     const auto & cparams = lctx.cparams;
+
+    llama_begin_dflash_capture_batch(&lctx);
 
     GGML_ASSERT((!batch_all.token && batch_all.embd) || (batch_all.token && !batch_all.embd)); // NOLINT
 
@@ -5082,8 +5171,11 @@ static int llama_decode_internal(
 
     // reserve output buffer
     n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
-    if (llama_output_reserve(lctx, std::max<size_t>(n_outputs, n_outputs_embd)) < std::max<size_t>(n_outputs, n_outputs_embd)) {
-        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, std::max<size_t>(n_outputs, n_outputs_embd));
+    const size_t required_outputs = std::max<size_t>(n_outputs, n_outputs_embd);
+    const bool is_dflash_decode = lctx.model.arch == LLM_ARCH_DFLASH_DRAFT;
+    const size_t reserved_outputs = llama_output_reserve(lctx, required_outputs);
+    if (reserved_outputs < required_outputs) {
+        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %zu outputs\n", __func__, required_outputs);
         return -2;
     };
 
@@ -5160,7 +5252,7 @@ static int llama_decode_internal(
         // * mrope (embd):   (section-major array of rope fields) [t; n][h; n][w; n][extra; n]
         const uint8_t rope_params_per_token = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
             hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
-            
+
         llama_pos * u_batch_pos;
         if (!batch_all.pos) {
             u_batch_pos = nullptr;
@@ -5278,7 +5370,6 @@ static int llama_decode_internal(
         auto tim2 = ggml_time_us();
         printf("prelude(...): %d us\n", int(tim2-tim1));
 #endif
-
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
@@ -5309,17 +5400,17 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
-            //if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
-            if (u_batch.embd == nullptr && lctx.cparams.graph_reuse &&
-                    !((lctx.model.arch == LLM_ARCH_GEMMA4_MTP || lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && lctx.mtp_target_ctx != nullptr)) {
+            if (u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
+                auto & kv_self_used = (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
+                                      lctx.mtp_target_ctx != nullptr ? lctx.mtp_target_ctx->kv_self : lctx.kv_self;
                 prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
-                        (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n,
+                        (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)kv_self_used.n,
                         (int)u_batch.n_tokens,
-                        lctx.kv_self.save_per_step_ssm, lctx.kv_self.ckpt.per_step_max_allocated,
+                        kv_self_used.save_per_step_ssm, kv_self_used.ckpt.per_step_max_allocated,
                         cparams.mtp_op_type, gf});
             }
         } else {
-            //printf("Reusing graph with n_kv = %d, n_tokens = %d\n", (int)prev->n_kv, (int)prev->n_tokens);
+            //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
             gf = prev->graph;
         }
 
@@ -5329,9 +5420,24 @@ static int llama_decode_internal(
             }
         }
 
+        if (is_dflash_decode && !llama_prepare_dflash_graph_inputs(lctx, n_tokens)) {
+            return GGML_STATUS_FAILED;
+        }
+
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
         struct ggml_tensor * embd = nullptr;
+
+        // DFlash GPU argmax draft_argmax node
+        if (lctx.dflash.draft_tokens_tensor != nullptr &&
+            strcmp(res->name, "result_output") != 0) {
+            for (int i = gf->n_nodes - 2; i >= 0; --i) {
+                if (strcmp(gf->nodes[i]->name, "result_output") == 0) {
+                    res = gf->nodes[i];
+                    break;
+                }
+            }
+        }
 
         if (lctx.n_outputs == 0) {
             // no output
@@ -5379,10 +5485,12 @@ static int llama_decode_internal(
         tim2 = ggml_time_us();
         printf("set_inputs(...): %d us\n", int(tim2-tim1));
 #endif
-
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
+        if (lctx.dflash.kv.workspace_sync_pending) {
+            llama_sync_dflash_workspace_if_pending(lctx);
+        }
         llama_graph_compute(lctx, gf, n_threads);
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
@@ -5409,7 +5517,28 @@ static int llama_decode_internal(
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
+        lctx.dflash.draft_tokens.clear();
+        if (lctx.dflash.draft_tokens_tensor != nullptr) {
+            ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(
+                lctx.sched, lctx.dflash.draft_tokens_tensor);
+            if (backend_argmax != nullptr) {
+                const int64_t n_tokens_argmax = lctx.dflash.draft_tokens_tensor->ne[0];
+                lctx.dflash.draft_tokens.resize((size_t) n_tokens_argmax);
+                ggml_backend_tensor_get_async(backend_argmax,
+                    lctx.dflash.draft_tokens_tensor,
+                    lctx.dflash.draft_tokens.data(), 0,
+                    (size_t) n_tokens_argmax * sizeof(int32_t));
+            }
+        }
+
         // extract logits
+        {
+            const bool dflash_skip_logits = (lctx.model.arch == LLM_ARCH_DFLASH_DRAFT
+                && !lctx.dflash.draft_tokens.empty());
+            if (dflash_skip_logits) {
+                res = nullptr;
+            }
+        }
         if (res) {
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
@@ -5538,12 +5667,15 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    if (!lctx.prev) {
-        lctx.reset_scheduler();
+    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && !lctx.prev) {
+        ggml_backend_sched_reset(lctx.sched);
+    }
+    else if (lctx.cparams.mtp_op_type != MTP_OP_NONE && !lctx.prev_mtp) {
+        ggml_backend_sched_reset(lctx.sched);
     }
 #if IK_PRINT_TIMING
-        auto tim2 = ggml_time_us();
-        printf("sched_reset(...): %d us\n", int(tim2-tim1));
+    auto tim2 = ggml_time_us();
+    printf("sched_reset(...): %d us\n", int(tim2-tim1));
 #endif
 
     return 0;
@@ -7085,15 +7217,6 @@ struct llama_context * llama_init_from_model(
     }
 #endif
 
-#ifdef GGML_USE_BLAS
-        ctx->backend_blas = ggml_backend_blas_init();
-        if (ctx->backend_blas == nullptr) {
-            LLAMA_LOG_WARN("%s: failed to initialize BLAS backend\n", __func__);
-        } else {
-            ggml_backend_add_from_device(ctx, ctx->backend_blas);
-        }
-#endif
-
 #if defined(GGML_USE_RPC)
         if (model->n_gpu_layers > 0) {
             for (const auto & device : model->rpc_servers) {
@@ -7447,6 +7570,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_LAGUNA:
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
+        case LLM_ARCH_DFLASH_DRAFT:
         case LLM_ARCH_GEMMA4_ASSISTANT:
             return LLAMA_ROPE_TYPE_NEOX;
 
@@ -9662,6 +9786,13 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
     }
 }
 
+llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i) {
+    if ((size_t) i >= ctx->dflash.draft_tokens.size()) {
+        return LLAMA_TOKEN_NULL;
+    }
+    return ctx->dflash.draft_tokens[(size_t) i];
+}
+
 float * llama_get_embeddings(struct llama_context * ctx) {
     llama_synchronize(ctx);
 
@@ -10842,7 +10973,6 @@ const char * llama_print_system_info(void) {
     s += "F16C = "        + std::to_string(ggml_cpu_has_f16c())        + " | ";
     s += "FP16_VA = "     + std::to_string(ggml_cpu_has_fp16_va())     + " | ";
     s += "WASM_SIMD = "   + std::to_string(ggml_cpu_has_wasm_simd())   + " | ";
-    s += "BLAS = "        + std::to_string(ggml_cpu_has_blas())        + " | ";
     s += "SSE3 = "        + std::to_string(ggml_cpu_has_sse3())        + " | ";
     s += "SSSE3 = "       + std::to_string(ggml_cpu_has_ssse3())       + " | ";
     s += "VSX = "         + std::to_string(ggml_cpu_has_vsx())         + " | ";

@@ -223,8 +223,12 @@ json server_chat_convert_responses_to_chatcmpl(const json& response_body) {
         for (json resp_tool : response_body.at("tools")) {
             json chatcmpl_tool;
 
-            if (json_value(resp_tool, "type", std::string()) != "function") {
-                throw std::runtime_error("'type' of tool must be 'function'");
+            const std::string tool_type = json_value(resp_tool, "type", std::string());
+
+            // Chat Completions only supports function tools. Responses built-ins
+            // such as web_search, image_generation, and namespace are ignored.
+            if (tool_type != "function") {
+                continue;
             }
             resp_tool.erase("type");
             chatcmpl_tool["type"] = "function";
@@ -236,13 +240,24 @@ json server_chat_convert_responses_to_chatcmpl(const json& response_body) {
             chatcmpl_tools.push_back(chatcmpl_tool);
         }
         chatcmpl_body.erase("tools");
-        chatcmpl_body["tools"] = chatcmpl_tools;
+        if (!chatcmpl_tools.empty()) {
+            chatcmpl_body["tools"] = chatcmpl_tools;
+        }
     }
 
     if (response_body.contains("max_output_tokens")) {
         chatcmpl_body.erase("max_output_tokens");
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
     }
+
+    chatcmpl_body.erase("reasoning");
+    chatcmpl_body.erase("store");
+    chatcmpl_body.erase("include");
+    chatcmpl_body.erase("prompt_cache_key");
+    chatcmpl_body.erase("client_metadata");
+    chatcmpl_body.erase("background");
+    chatcmpl_body.erase("max_tool_calls");
+    chatcmpl_body.erase("metadata");
 
     return chatcmpl_body;
 }

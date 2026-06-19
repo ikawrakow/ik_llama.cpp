@@ -791,8 +791,8 @@ static IMatrixCollector * ik_get_imatrix_collector(void * user_data) {
     return user_data != nullptr ? static_cast<IMatrixCollector *>(user_data) : &g_target_collector;
 }
 
-static bool ik_collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
-    return ik_get_imatrix_collector(user_data)->collect_imatrix(t, ask, user_data);
+static int ik_collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
+    return ik_get_imatrix_collector(user_data)->collect_imatrix(t, ask, user_data) ? 1 : 0;
 }
 
 

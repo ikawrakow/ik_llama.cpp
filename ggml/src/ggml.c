@@ -30051,11 +30051,7 @@ int ggml_cpu_has_wasm_simd(void) {
 }
 
 int ggml_cpu_has_blas(void) {
-#if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
-    return 1;
-#else
     return 0;
-#endif
 }
 
 int ggml_cpu_has_cuda(void) {
