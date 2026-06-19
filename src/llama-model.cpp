@@ -2205,7 +2205,8 @@ static void log_split_state(const char * ctx, struct ggml_tensor * t) {
 // ------------------------------------------------------------------
 static bool gguf_find_tensor_meta(const char * path, const char * target_name,
                                   size_t & out_offset, size_t & out_nbytes,
-                                  ggml_type & out_type)
+                                  ggml_type & out_type,
+                                  int64_t out_ne[GGML_MAX_DIMS])
 {
     struct ggml_context * ctx = nullptr;
     struct gguf_init_params params = {
@@ -2232,6 +2233,9 @@ static bool gguf_find_tensor_meta(const char * path, const char * target_name,
     out_offset = gguf_get_data_offset(gguf) + gguf_get_tensor_offset(gguf, idx);
     out_nbytes = ggml_nbytes(tensor);
     out_type   = tensor->type;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        out_ne[i] = tensor->ne[i];
+    }
 
     ggml_free(ctx);
     gguf_free(gguf);
@@ -2935,7 +2939,8 @@ bool llama_model::reload_tensor(const char * name) {
 
     size_t off = 0, file_nbytes = 0;
     ggml_type curr_type = GGML_TYPE_COUNT;
-    if (!gguf_find_tensor_meta(src.path.c_str(), name, off, file_nbytes, curr_type)) return false;
+    int64_t file_ne[GGML_MAX_DIMS];
+    if (!gguf_find_tensor_meta(src.path.c_str(), name, off, file_nbytes, curr_type, file_ne)) return false;
 
     std::ifstream file(src.path, std::ios::binary);
     if (!file) return false;
@@ -2947,6 +2952,15 @@ bool llama_model::reload_tensor(const char * name) {
         if (p.first == name) { tensor = p.second; break; }
     }
     if (!tensor || !src.original_buffer) return false;
+
+    // Refuse to swap if the on-disk shape differs from the model tensor
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (tensor->ne[i] != file_ne[i]) {
+            LLAMA_LOG_INFO("reload_tensor: dimension mismatch for '%s': model ne[%d]=%ld, file ne[%d]=%ld — refusing swap\n",
+                           name, i, (long)tensor->ne[i], i, (long)file_ne[i]);
+            return false;
+        }
+    }
 
     ggml_backend_buffer_t old_buf = tensor->buffer;
     bool returning = (curr_type == src.original_type);
@@ -3001,13 +3015,25 @@ bool llama_model::reload_changed_tensors() {
 
         size_t off = 0, nbytes = 0;
         ggml_type t = GGML_TYPE_COUNT;
-        if (!gguf_find_tensor_meta(src.path.c_str(), kv.first.c_str(), off, nbytes, t)) continue;
+        int64_t file_ne[GGML_MAX_DIMS];
+        if (!gguf_find_tensor_meta(src.path.c_str(), kv.first.c_str(), off, nbytes, t, file_ne)) continue;
 
         struct ggml_tensor * tensor = nullptr;
         for (auto & p : tensors_by_name) {
             if (p.first == kv.first) { tensor = p.second; break; }
         }
         if (!tensor) continue;
+
+        bool dims_ok = true;
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (tensor->ne[i] != file_ne[i]) {
+                LLAMA_LOG_INFO("reload_changed_tensors: dimension mismatch for '%s': model ne[%d]=%ld, file ne[%d]=%ld — skipping\n",
+                               kv.first.c_str(), i, (long)tensor->ne[i], i, (long)file_ne[i]);
+                dims_ok = false;
+                break;
+            }
+        }
+        if (!dims_ok) continue;
 
         bool returning = (t == src.original_type);
         jobs.push_back({kv.first.c_str(), returning});
