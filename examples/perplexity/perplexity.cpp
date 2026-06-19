@@ -27,7 +27,7 @@
 #endif
 
 // Public C API for hot-swap (defined in src/llama.cpp)
-extern "C" bool llama_reload_changed_tensors(struct llama_model * model, struct llama_context * ctx);
+extern "C" bool llama_reload_changed_tensors(struct llama_context * ctx);
 
 struct results_perplexity {
     std::vector<llama_token> tokens;
@@ -2064,7 +2064,7 @@ int main(int argc, char ** argv) {
     const char * pre_script  = std::getenv("LLAMA_PERPLEXITY_PRE_RELOAD_SCRIPT");
 
     if (hotswap_env) {
-        llama_reload_changed_tensors(model, ctx);
+        llama_reload_changed_tensors(ctx);
     }
 
     while (true) {
@@ -2109,7 +2109,7 @@ int main(int argc, char ** argv) {
         }
 
         if (hotswap_env) {
-            if (!llama_reload_changed_tensors(model, ctx)) {
+            if (!llama_reload_changed_tensors(ctx)) {
                 break;
             }
         } else {
