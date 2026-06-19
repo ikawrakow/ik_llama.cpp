@@ -538,6 +538,7 @@ static void resync_moe_sibling_splits(
 
     // Phase C: Allocate GPU split buffers
     bool gpu_failed = false;
+#ifdef GGML_USE_CUDA
     for (auto & job : jobs) {
         if (!job.needs_resync) continue;
         auto sib_extra = job.extra;
@@ -553,6 +554,12 @@ static void resync_moe_sibling_splits(
         }
         if (gpu_failed) break;
     }
+#else
+    // Without CUDA support, force CPU fallback for any resync jobs
+    for (auto & job : jobs) {
+        if (job.needs_resync) { gpu_failed = true; break; }
+    }
+#endif
 
     // Phase D: If any GPU alloc failed, move entire layer to CPU
     if (gpu_failed) {
