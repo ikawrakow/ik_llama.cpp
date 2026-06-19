@@ -11135,23 +11135,5 @@ size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts) {
 }
 
 bool llama_reload_changed_tensors(struct llama_model * model, struct llama_context * ctx) {
-    bool result = model->reload_changed_tensors();
-    if (result && ctx != nullptr && ctx->sched != nullptr) {
-        /* If any tensor lives on CPU, prevent the scheduler from trying to
-           copy it back to GPU (which causes multi-GB allocations). */
-        bool has_cpu = false;
-        for (auto & p : model->tensors_by_name) {
-            if (p.second->buffer) {
-                auto buft = ggml_backend_buffer_get_type(p.second->buffer);
-                if (buft == ggml_backend_cpu_buffer_type()) {
-                    has_cpu = true;
-                    break;
-                }
-            }
-        }
-        if (has_cpu) {
-            ggml_backend_sched_set_op_offload(ctx->sched, (ggml_op)-1, false);
-        }
-    }
-    return result;
+    return model->reload_changed_tensors();
 }
