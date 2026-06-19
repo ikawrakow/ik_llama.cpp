@@ -305,6 +305,8 @@ struct llama_context {
             std::vector<struct ggml_tensor *> v_ctx_workspace;
             struct ggml_context * cache_ctx = nullptr;
             std::vector<ggml_backend_buffer_t> cache_bufs;
+            std::vector<llama_pos> cache_pos;
+            std::vector<uint8_t> cache_slot_valid;
             int32_t cache_write_pos = 0;
             int32_t cache_n_filled = 0;
             int32_t cache_update_rows = 0;
