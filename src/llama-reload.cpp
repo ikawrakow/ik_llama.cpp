@@ -1,5 +1,6 @@
 #include "llama-reload-info.h"
 #include "llama-model.h"
+#include "llama-model-loader.h"
 
 #ifdef GGML_USE_CUDA
 #include "ggml-cuda.h"
@@ -265,6 +266,28 @@ static void snapshot_tensor_source(struct ggml_tensor * tensor,
     populate_moe_siblings(ggml_get_name(tensor), src);
     src.state = tensor_reload_source::reload_state::ON_ORIGINAL;
     log_tensor_state("snapshot_tensor_source", tensor);
+}
+
+// ------------------------------------------------------------------
+// Constructor
+// ------------------------------------------------------------------
+reload_info::reload_info(const llama_model_loader & ml) {
+    for (const auto & w : ml.weights) {
+        if (!w.tensor || w.idx >= (int)ml.files.size()) continue;
+
+        struct stat st;
+        if (stat(ml.files[w.idx]->get_path().c_str(), &st) != 0) continue;
+
+        tensor_reload_source src;
+        src.path        = ml.files[w.idx]->get_path();
+        src.data_offset = w.offs;
+        src.nbytes      = ggml_nbytes(w.tensor);
+        src.last_mtime  = st.st_mtime;
+#ifdef __linux__
+        src.last_mtime_ns = st.st_mtim.tv_nsec;
+#endif
+        tensor_reload_sources[ggml_get_name(w.tensor)] = std::move(src);
+    }
 }
 
 // ------------------------------------------------------------------

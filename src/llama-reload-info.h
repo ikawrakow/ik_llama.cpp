@@ -11,6 +11,7 @@
 #include <fstream>
 
 struct llama_model;
+struct llama_model_loader;
 
 struct tensor_reload_source {
     std::string   path;
@@ -50,6 +51,8 @@ struct tensor_reload_source {
 struct reload_info {
     std::unordered_map<std::string, tensor_reload_source> tensor_reload_sources;
     std::atomic<bool> reload_snapshots_done{false};
+
+    reload_info(const llama_model_loader & ml);
 
     bool reload_tensor(const char * name, llama_model & model);
     bool reload_changed_tensors(llama_model & model);

@@ -4161,24 +4161,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         // ---- populate reload registry ONLY when hot-swap is requested ----
         if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
-            model.reload = std::make_unique<reload_info>();
-            for (const auto & w : ml.weights) {
-                if (!w.tensor || w.idx >= (int)ml.files.size()) continue;
-
-                struct stat st;
-                if (stat(ml.files[w.idx]->get_path().c_str(), &st) != 0) continue;
-
-                tensor_reload_source src;
-                src.path        = ml.files[w.idx]->get_path();
-                src.data_offset = w.offs;
-                src.nbytes      = ggml_nbytes(w.tensor);
-                src.last_mtime  = st.st_mtime;
-#ifdef __linux__
-                src.last_mtime_ns = st.st_mtim.tv_nsec;
-#endif
-                model.reload->tensor_reload_sources[ggml_get_name(w.tensor)] = std::move(src);
-            }
-        }
+            model.reload = std::make_unique<reload_info>(ml);
+				}
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return -1;
