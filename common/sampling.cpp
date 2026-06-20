@@ -918,7 +918,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
             string_assign_append(search_window, ctx_sampling->generated_text, ctx_sampling->playing_text, entry.search_posi[j]);
 
             size_t count = 0;
-            auto pos = search_window.find(phrase, entry.search_posi[j]);
+            auto pos = search_window.find(phrase);
             while (pos != std::string::npos) {
                 LLAMA_LOG_DEBUG("%s: found %s @ %zu\n", __func__, phrase.c_str(), pos);
                 ++count;
