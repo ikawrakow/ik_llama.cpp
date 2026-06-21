@@ -95,7 +95,7 @@ export { default as ChatAttachmentsPreview } from './Attachments/Preview.svelte'
 export { default as ChatAttachmentsPreviewNavButtons } from './Attachments/Preview/NavButtons.svelte';
 export { default as ChatAttachmentsPreviewFileInfo } from './Attachments/Preview/FileInfo.svelte';
 export { default as ChatAttachmentsPreviewThumbnailStrip } from './Attachments/Preview/ThumbnailStrip.svelte';
-export { default as ChatAttachmentsPreviewCurrentItem } from './Attachments/Preview/CurrentItem/CurrentItem.svelte';
+export { default as ChatAttachmentsPreviewCurrentItem } from './Attachments/Preview/Current/Item/Item.svelte';
 
 /**
  *
