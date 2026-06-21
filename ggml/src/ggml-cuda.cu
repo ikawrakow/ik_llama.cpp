@@ -1415,10 +1415,11 @@ static void * ggml_cuda_host_malloc(size_t size) {
 //   * enabled="madvise": 4k pages
 //   * enabled="never":   4k pages
 // Potluck on performance. If there's not much defragmentation to do, then you win. Otherwise come back in an hour.
-#if 0
+// Defaults to disabled unless GGML_CUDA_HOST_MALLOC_THP is set.
 #ifdef MADV_HUGEPAGE
-    madvise(ptr, size, MADV_HUGEPAGE);
-#endif
+    if (getenv("GGML_CUDA_HOST_MALLOC_THP") != nullptr) {
+        madvise(ptr, size, MADV_HUGEPAGE);
+    }
 #endif
 
     // prefault the whole region. If the kernel knows how to do this then let it do so.
@@ -1427,8 +1428,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
 #ifdef MADV_POPULATE_WRITE
     needs_manual_prefault = madvise(ptr, size, MADV_POPULATE_WRITE);
 #endif
-    if (needs_manual_prefault)
-    {
+    if (needs_manual_prefault) {
         char * p = (char *) ptr;
         for (size_t off = 0; off < size; off += 4096) {
             p[off] = 0;
