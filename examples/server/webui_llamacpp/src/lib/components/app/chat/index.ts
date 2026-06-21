@@ -49,53 +49,53 @@
  * />
  * ```
  */
-export { default as ChatAttachmentsList } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsList.svelte';
+export { default as ChatAttachmentsList } from './Attachments/List/List.svelte';
 
 /**
  * Renders a single attachment item based on its type (image, file, MCP prompt, or MCP resource).
  * Delegates to specialized sub-components: ChatAttachmentsListItemThumbnailImage, ChatAttachmentsListItemThumbnailFile,
  * ChatAttachmentsListItemMcpPrompt, or ChatAttachmentsListItemMcpResource.
  */
-export { default as ChatAttachmentsListItem } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItem.svelte';
+export { default as ChatAttachmentsListItem } from './Attachments/List/Item/Item.svelte';
 
 /**
  * Displays MCP Prompt attachment with expandable content preview.
  * Shows server name, prompt name, and allows expanding to view full prompt arguments
  * and content. Used when user selects a prompt from ChatFormPickerMcpPrompts.
  */
-export { default as ChatAttachmentsListItemMcpPrompt } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemMcpPrompt.svelte';
+export { default as ChatAttachmentsListItemMcpPrompt } from './Attachments/List/Item/McpPrompt.svelte';
 
 /**
  * Displays a single MCP Resource attachment with icon, name, and server info.
  * Shows loading/error states and supports remove action.
  * Used within ChatAttachmentMcpResources for individual resource display.
  */
-export { default as ChatAttachmentsListItemMcpResource } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemMcpResource.svelte';
+export { default as ChatAttachmentsListItemMcpResource } from './Attachments/List/Item/McpResource.svelte';
 
 /**
  * Thumbnail for non-image file attachments. Displays file type icon based on extension,
  * file name (truncated), and file size.
  * Handles text files, PDFs, audio, and other document types.
  */
-export { default as ChatAttachmentsListItemThumbnailFile } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailFile.svelte';
+export { default as ChatAttachmentsListItemThumbnailFile } from './Attachments/List/Item/ThumbnailFile.svelte';
 
 /**
  * Thumbnail for image attachments with lazy loading and error fallback.
  * Displays image preview with configurable dimensions. Falls back to placeholder
  * on load error.
  */
-export { default as ChatAttachmentsListItemThumbnailImage } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailImage.svelte';
+export { default as ChatAttachmentsListItemThumbnailImage } from './Attachments/List/Item/ThumbnailImage.svelte';
 
 /**
  * Unified attachment preview component for dialog display. Shows a single file
  * preview without carousel, or a gallery/carousel view when multiple items exist.
  * Uses ChatAttachmentPreviewSingle internally for each item's content.
  */
-export { default as ChatAttachmentsPreview } from './ChatAttachments/ChatAttachmentsPreview.svelte';
-export { default as ChatAttachmentsPreviewNavButtons } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewNavButtons.svelte';
-export { default as ChatAttachmentsPreviewFileInfo } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewFileInfo.svelte';
-export { default as ChatAttachmentsPreviewThumbnailStrip } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewThumbnailStrip.svelte';
-export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewCurrentItem/ChatAttachmentsPreviewCurrentItem.svelte';
+export { default as ChatAttachmentsPreview } from './Attachments/Preview.svelte';
+export { default as ChatAttachmentsPreviewNavButtons } from './Attachments/Preview/NavButtons.svelte';
+export { default as ChatAttachmentsPreviewFileInfo } from './Attachments/Preview/FileInfo.svelte';
+export { default as ChatAttachmentsPreviewThumbnailStrip } from './Attachments/Preview/ThumbnailStrip.svelte';
+export { default as ChatAttachmentsPreviewCurrentItem } from './Attachments/Preview/CurrentItem/CurrentItem.svelte';
 
 /**
  *

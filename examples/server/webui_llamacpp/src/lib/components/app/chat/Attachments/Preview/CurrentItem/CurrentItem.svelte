@@ -1,12 +1,12 @@
 <script lang="ts">
 	import type { ChatAttachmentDisplayItem } from '$lib/types';
 	import { Image, Music, Video, FileText, FileIcon } from '@lucide/svelte';
-	import ChatAttachmentsPreviewCurrentItemPdf from './ChatAttachmentsPreviewCurrentItemPdf.svelte';
-	import ChatAttachmentsPreviewCurrentItemImage from './ChatAttachmentsPreviewCurrentItemImage.svelte';
-	import ChatAttachmentsPreviewCurrentItemAudio from './ChatAttachmentsPreviewCurrentItemAudio.svelte';
-	import ChatAttachmentsPreviewCurrentItemVideo from './ChatAttachmentsPreviewCurrentItemVideo.svelte';
-	import ChatAttachmentsPreviewCurrentItemText from './ChatAttachmentsPreviewCurrentItemText.svelte';
-	import ChatAttachmentsPreviewCurrentItemUnavailable from './ChatAttachmentsPreviewCurrentItemUnavailable.svelte';
+	import PdfPreview from './Pdf.svelte';
+	import ImagePreview from './Image.svelte';
+	import AudioPreview from './Audio.svelte';
+	import VideoPreview from './Video.svelte';
+	import TextPreview from './Text.svelte';
+	import UnavailablePreview from './Unavailable.svelte';
 
 	interface Props {
 		currentItem: ChatAttachmentDisplayItem | null;
@@ -52,7 +52,7 @@
 {#if currentItem}
 	{#key currentItem.id}
 		{#if isPdf}
-			<ChatAttachmentsPreviewCurrentItemPdf
+			<PdfPreview
 				{currentItem}
 				displayName={currentItem.name}
 				{displayTextContent}
@@ -60,15 +60,15 @@
 				{activeModelId}
 			/>
 		{:else if isImage}
-			<ChatAttachmentsPreviewCurrentItemImage {currentItem} {displayPreview} />
+			<ImagePreview {currentItem} {displayPreview} />
 		{:else if isText && displayTextContent}
-			<ChatAttachmentsPreviewCurrentItemText {displayTextContent} {language} />
+			<TextPreview {displayTextContent} {language} />
 		{:else if isAudio}
-			<ChatAttachmentsPreviewCurrentItemAudio {currentItem} {audioSrc} />
+			<AudioPreview {currentItem} {audioSrc} />
 		{:else if isVideo}
-			<ChatAttachmentsPreviewCurrentItemVideo {currentItem} {videoSrc} />
+			<VideoPreview {currentItem} {videoSrc} />
 		{:else if isUnavailable}
-			<ChatAttachmentsPreviewCurrentItemUnavailable {IconComponent} />
+			<UnavailablePreview {IconComponent} />
 		{/if}
 	{/key}
 {/if}
