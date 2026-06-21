@@ -1013,6 +1013,93 @@ int main(int argc, char ** argv) {
         }
     };
 
+    //
+    // Perplexity handlers
+    //
+
+    const auto handle_perplexity = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
+        json body = json::parse(req.body);
+        server_task task;
+        task.type = SERVER_TASK_TYPE_PERPLEXITY;
+        task.data = body;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        if (result.error) {
+            res_err(res, result.data);
+        } else {
+            res.set_content(result.data.dump(), "application/json");
+        }
+    };
+
+    const auto handle_perplexity_state = [&ctx_server](const httplib::Request &, httplib::Response & res) {
+        server_task task;
+        task.type = SERVER_TASK_TYPE_PERPLEXITY_STATE;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        res.set_content(result.data.dump(), "application/json");
+    };
+
+    const auto handle_perplexity_save = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
+        json body = json::parse(req.body);
+        server_task task;
+        task.type = SERVER_TASK_TYPE_PERPLEXITY_SAVE;
+        task.data = body;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        if (result.error) {
+            res_err(res, result.data);
+        } else {
+            res.set_content(result.data.dump(), "application/json");
+        }
+    };
+
+    const auto handle_perplexity_load = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
+        json body = json::parse(req.body);
+        server_task task;
+        task.type = SERVER_TASK_TYPE_PERPLEXITY_LOAD;
+        task.data = body;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        if (result.error) {
+            res_err(res, result.data);
+        } else {
+            res.set_content(result.data.dump(), "application/json");
+        }
+    };
+
+    const auto handle_perplexity_reset = [&ctx_server](const httplib::Request &, httplib::Response & res) {
+        server_task task;
+        task.type = SERVER_TASK_TYPE_PERPLEXITY_RESET;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        res.set_content(result.data.dump(), "application/json");
+    };
+
     const auto handle_props = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         std::string template_key = "tokenizer.chat_template", curr_tmpl;
         int32_t tlen = llama_model_meta_val_str(ctx_server.model, template_key.c_str(), nullptr, 0);
@@ -2152,6 +2239,12 @@ int main(int argc, char ** argv) {
         svr->Post("/rename_prompt",   rename_saved_prompt);
 
     }
+    // Perplexity routes
+    svr->Post("/perplexity",       handle_perplexity);
+    svr->Get ("/perplexity/state", handle_perplexity_state);
+    svr->Post("/perplexity/save",  handle_perplexity_save);
+    svr->Post("/perplexity/load",  handle_perplexity_load);
+    svr->Post("/perplexity/reset", handle_perplexity_reset);
 
     svr->Get ("/version", handle_version);
     if (!params.sql_save_file.empty()) {
