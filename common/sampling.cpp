@@ -966,7 +966,7 @@ void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, stru
         ctx_sampling->elb_idx++;
         search_pos += pos + elb.exitword.length();
     } else {
-        search_pos += std::max(0, SSIZE(search_window) - elb.search_word_len);
+        search_pos += std::max(0, SSIZE(search_window) - elb.search_word_len + 1);
         return;
     }
 
