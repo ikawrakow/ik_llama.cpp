@@ -20,10 +20,14 @@
 #include <array>
 #include <fstream>
 #include <sstream>
+#include <cstdlib>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
+
+// Public C API for hot-swap (defined in src/llama.cpp)
+extern "C" bool llama_reload_changed_tensors(struct llama_context * ctx);
 
 struct results_perplexity {
     std::vector<llama_token> tokens;
@@ -2056,21 +2060,62 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
     }
 
-    struct results_perplexity results;
-    if (params.hellaswag) {
-        hellaswag_score(ctx, params);
-    } else if (params.winogrande) {
-        winogrande_score(ctx, params);
-    } else if (params.multiple_choice) {
-        multiple_choice_score(ctx, params);
-    } else if (params.kl_divergence) {
-        kl_divergence(ctx, params);
-    } else {
-        results = perplexity(ctx, params, n_ctx);
+    const char * hotswap_env = std::getenv("LLAMA_HOTSWAP_ENABLED");
+    const char * pre_script  = std::getenv("LLAMA_PERPLEXITY_PRE_RELOAD_SCRIPT");
+
+    if (hotswap_env) {
+        llama_reload_changed_tensors(ctx);
     }
 
-    llama_print_timings(ctx);
-    write_logfile(ctx, params, model, results);
+    while (true) {
+        struct results_perplexity results;
+        if (params.hellaswag) {
+            hellaswag_score(ctx, params);
+        } else if (params.winogrande) {
+            winogrande_score(ctx, params);
+        } else if (params.multiple_choice) {
+            multiple_choice_score(ctx, params);
+        } else if (params.kl_divergence) {
+            kl_divergence(ctx, params);
+        } else {
+            results = perplexity(ctx, params, n_ctx);
+        }
+
+        llama_print_timings(ctx);
+        write_logfile(ctx, params, model, results);
+
+        if (pre_script) {
+            fprintf(stderr, "%s: executing pre-reload script: %s\n", __func__, pre_script);
+#ifdef _WIN32
+            FILE * fp = _popen(pre_script, "r");
+#else
+            FILE * fp = popen(pre_script, "r");
+#endif
+            if (fp) {
+                char buf[256];
+                while (fgets(buf, sizeof(buf), fp)) {
+                    size_t len = strlen(buf);
+                    if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
+                    fprintf(stderr, "%s: [pre-reload] %s\n", __func__, buf);
+                }
+#ifdef _WIN32
+                _pclose(fp);
+#else
+                pclose(fp);
+#endif
+            } else {
+                fprintf(stderr, "%s: failed to execute pre-reload script: %s\n", __func__, pre_script);
+            }
+        }
+
+        if (hotswap_env) {
+            if (!llama_reload_changed_tensors(ctx)) {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
 
     llama_free(ctx);
     llama_free_model(model);

@@ -42,6 +42,8 @@ GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, si
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
 GGML_API GGML_CALL void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data);
+
+GGML_API GGML_CALL void ggml_backend_cuda_invalidate_graphs(void);
 #ifdef  __cplusplus
 }
 #endif

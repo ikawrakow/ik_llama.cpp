@@ -21,11 +21,8 @@ void llama_reset_dflash_kv_cache_state(struct llama_context * ctx) {
     ctx->dflash.kv.cache_applied_window_version = 0;
     ctx->dflash.kv.cache_valid = false;
     ctx->dflash.kv.cache_view_valid = false;
-    ctx->dflash.kv.workspace_write_pos = 0;
-    ctx->dflash.kv.workspace_n_filled = 0;
-    ctx->dflash.kv.workspace_applied_window_version = 0;
-    ctx->dflash.kv.workspace_valid = false;
-    ctx->dflash.kv.workspace_sync_pending = false;
+    std::fill(ctx->dflash.kv.cache_pos.begin(), ctx->dflash.kv.cache_pos.end(), 0);
+    std::fill(ctx->dflash.kv.cache_slot_valid.begin(), ctx->dflash.kv.cache_slot_valid.end(), 0);
 
     for (ggml_backend_buffer_t buf : ctx->dflash.kv.cache_bufs) {
         if (buf != nullptr) {
