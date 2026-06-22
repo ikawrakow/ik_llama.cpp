@@ -231,6 +231,22 @@ struct server_metrics {
     void reset_bucket();
 };
 
+struct server_perplexity_state {
+    std::vector<llama_token> tokens;      // buffered, not yet evaluated
+    std::vector<llama_token> all_tokens;  // complete history for reference
+
+    double    nll         = 0.0;
+    double    nll2        = 0.0;
+    int64_t   count       = 0;
+    int32_t   n_ctx       = 512;
+    int32_t   n_batch     = 512;
+    int32_t   ppl_stride  = 0;             // 0 = non-strided (standard)
+    int64_t   chunk_index = 0;
+
+    bool save(const std::string & filename) const;
+    bool load(const std::string & filename);
+};
+
 struct server_context {
     llama_model* model = nullptr;
     llama_context* ctx = nullptr;
@@ -278,6 +294,8 @@ struct server_context {
     float slot_prompt_similarity = 0.0f;
     int32_t cache_ram_n_min = 0;
     float cache_ram_similarity = 0.5f;
+
+    std::unique_ptr<server_perplexity_state> perplexity_state;
 
     ~server_context();
 
@@ -392,4 +410,9 @@ struct server_context {
     void create_checkpoint_at_interval(server_slot & slot, const gpt_params & params_base);
 
     void release_slot_after_final_response(server_slot & slot);
+
+    void process_perplexity_chunk(const std::vector<llama_token>& tokens, server_task_result_perplexity& result);
+    bool perplexity_save(const std::string& filename);
+    bool perplexity_load(const std::string& filename);
+    void perplexity_reset();
 };

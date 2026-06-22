@@ -34,6 +34,11 @@ enum server_task_type {
     SERVER_TASK_TYPE_LOAD_CONTROL_VECTOR,
     SERVER_TASK_TYPE_UNLOAD_CONTROL_VECTOR,
     SERVER_TASK_TYPE_SET_CONTROL_VECTOR,
+    SERVER_TASK_TYPE_PERPLEXITY,
+    SERVER_TASK_TYPE_PERPLEXITY_STATE,
+    SERVER_TASK_TYPE_PERPLEXITY_SAVE,
+    SERVER_TASK_TYPE_PERPLEXITY_LOAD,
+    SERVER_TASK_TYPE_PERPLEXITY_RESET,
 };
 
 enum oaicompat_type {
@@ -339,6 +344,28 @@ struct server_task_result_embd : server_task_result {
             {"index",            index},
             {"embedding",        embedding[0]},
             {"tokens_evaluated", n_tokens},
+        };
+    }
+};
+
+struct server_task_result_perplexity : server_task_result {
+    double    nll              = 0.0;
+    double    nll2             = 0.0;
+    int64_t   count            = 0;
+    double    perplexity       = 0.0;
+    int64_t   tokens_processed = 0;
+    int64_t   tokens_total     = 0;
+    int64_t   chunk_index      = 0;
+
+    virtual json to_json() override {
+        return {
+            {"nll",              nll},
+            {"nll2",             nll2},
+            {"count",            count},
+            {"perplexity",       perplexity},
+            {"tokens_processed", tokens_processed},
+            {"tokens_total",     tokens_total},
+            {"chunk_index",      chunk_index},
         };
     }
 };
