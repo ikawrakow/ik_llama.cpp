@@ -1538,11 +1538,22 @@ void llm_load_hparams(
                     }
                 }
 
-                // GGUF stores the Poolside partial-rotary setting; the graph RoPE
-                // argument for full-attention Laguna layers follows the upstream
-                // Laguna loader and uses half of that count. SWA layers remain
-                // full-head rotary via n_rot_swa.
-                hparams.n_rot /= 2;
+                const bool found_rope_dim     = ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT,     hparams.n_rot,     false);
+                const bool found_rope_dim_swa = ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT_SWA, hparams.n_rot_swa, false);
+
+                // Laguna GGUFs store the number of scalar Q/K dimensions that ggml_rope_ext
+                // rotates. Correct files carry those values explicitly. Some early public
+                // XS.2 GGUFs omitted both keys, so fall back to the HF XS.2 layout only for
+                // missing metadata: full-attention layers rotate half the head, SWA layers
+                // rotate the full head. Explicit but wrong halved metadata still needs repair.
+                if (hparams.n_swa > 0) {
+                    if (!found_rope_dim) {
+                        hparams.n_rot = hparams.n_embd_head_k_full / 2;
+                    }
+                    if (!found_rope_dim_swa) {
+                        hparams.n_rot_swa = hparams.n_embd_head_k_swa;
+                    }
+                }
 
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR, hparams.yarn_ext_factor, false);
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor, false);
@@ -1552,12 +1563,6 @@ void llm_load_hparams(
                 if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer, false)) {
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                         hparams.rope_dim_per_layer[i] = hparams.swa_layers[i] ? hparams.n_rot_swa : hparams.n_rot;
-                    }
-                } else {
-                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                        if (!hparams.swa_layers[i]) {
-                            hparams.rope_dim_per_layer[i] /= 2;
-                        }
                     }
                 }
 

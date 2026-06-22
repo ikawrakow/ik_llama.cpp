@@ -4158,6 +4158,11 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         )) {
             return -2;
         }
+
+        // ---- populate reload registry ONLY when hot-swap is requested ----
+        if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
+            model.reload = std::make_unique<reload_info>(ml);
+				}
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return -1;
@@ -5488,9 +5493,6 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
-        if (lctx.dflash.kv.workspace_sync_pending) {
-            llama_sync_dflash_workspace_if_pending(lctx);
-        }
         llama_graph_compute(lctx, gf, n_threads);
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
@@ -11080,4 +11082,18 @@ void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_conte
 
 size_t llama_fill_from_utf8(void* utf8, void* cpts, void* scripts) {
     return unicode_fill_from_utf8((std::string*)utf8, (std::vector<uint32_t>*)cpts, (std::vector<std::string>*)scripts);
+}
+
+
+bool llama_reload_changed_tensors(struct llama_context * ctx) {
+    if (!ctx) return false;
+    llama_model & model = const_cast<llama_model &>(ctx->model);
+    if (!model.reload) return false;
+    bool result = model.reload->reload_changed_tensors(model);
+    if (result) {
+        // Reset cached compute graphs so they are rebuilt with new tensor pointers/sizes
+        ctx->prev.reset();
+        ctx->prev_mtp.reset();
+    }
+    return result;
 }

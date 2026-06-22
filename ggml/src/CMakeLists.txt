@@ -6,6 +6,9 @@ add_compile_definitions(GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
 if (GGML_MAX_CONTEXTS)
     add_compile_definitions(GGML_MAX_CONTEXTS=${GGML_MAX_CONTEXTS})
 endif()
+if (GGML_MAX_SRC)
+  add_compile_definitions(GGML_MAX_SRC=${GGML_MAX_SRC})
+endif()
 
 # enable libstdc++ assertions for debug builds
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")

@@ -763,6 +763,14 @@ int main(int argc, char ** argv) {
                     }
 
                     res.set_content(health.dump(), "application/json");
+
+                    const char * hotswap_env = std::getenv("LLAMA_HOTSWAP_ENABLED");
+                    if (hotswap_env) {
+                        // WARNING: llama_reload_changed_tensors is NOT thread-safe with active inference.
+                        // Only enable this when you can guarantee the server is idle during health checks.
+                        llama_reload_changed_tensors(ctx_server.ctx);
+                    }
+
                     break;
                 }
             case SERVER_STATE_LOADING_MODEL:

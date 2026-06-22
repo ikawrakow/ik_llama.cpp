@@ -1579,6 +1579,8 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
+    LLAMA_API bool llama_reload_changed_tensors(struct llama_context * ctx);
+
 #ifdef __cplusplus
 }
 #endif

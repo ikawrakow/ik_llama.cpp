@@ -7868,6 +7868,14 @@ struct ggml_tensor * ggml_mul_mat_id(
     GGML_ASSERT(b->ne[3] == 1); // b is 3d
     GGML_ASSERT(ids->ne[2] == 1 && ids->ne[3] == 1); // ids is 2d
     GGML_ASSERT(ids->ne[1] == b->ne[2]); // must have an expert list per b row
+    //// can_mul_mat
+    //if (as->ne[0] != b->ne[0]) {
+    //    fprintf(stderr, "MUL_MAT_ID_FAIL: as='%s' ne[0]=%ld type=%s | b='%s' ne[0]=%ld type=%s | ids->ne[1]=%ld b->ne[2]=%ld as->ne[1]=%ld as->ne[2]=%ld\n",
+    //            as->name, (long)as->ne[0], ggml_type_name(as->type),
+    //            b->name, (long)b->ne[0], ggml_type_name(b->type),
+    //            (long)ids->ne[1], (long)b->ne[2], (long)as->ne[1], (long)as->ne[2]);
+    //    fflush(stderr);
+    //}
     GGML_ASSERT(as->ne[0] == b->ne[0]); // can_mul_mat
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0); // can broadcast
 
