@@ -5427,6 +5427,12 @@ class LagunaModel(Model):
         rope_params = hparams.get("rope_parameters", {})
         full_rope = rope_params.get("full_attention", rope_params)
         swa_rope = rope_params.get("sliding_attention", {})
+        # Laguna can specify different rotary widths for full-attention and SWA layers.
+        # M.1 uses the full-attention value from rope_parameters; XS.2 SWA omits the key
+        # because those layers rotate the whole head.
+        partial_rotary_factor = float(hparams.get("partial_rotary_factor", 1.0))
+        partial_rotary_factor_full = float(full_rope.get("partial_rotary_factor", partial_rotary_factor))
+        partial_rotary_factor_swa = float(swa_rope.get("partial_rotary_factor", 1.0))
 
         self.gguf_writer.add_context_length(int(hparams["max_position_embeddings"]))
         self.gguf_writer.add_embedding_length(int(hparams["hidden_size"]))
@@ -5443,8 +5449,11 @@ class LagunaModel(Model):
         self.gguf_writer.add_file_type(self.ftype)
 
         self.gguf_writer.add_sliding_window(int(hparams["sliding_window"]))
-        self.gguf_writer.add_rope_dimension_count(head_dim // 2)
-        self.gguf_writer.add_uint32(f"{arch}.rope.dimension_count_swa", head_dim)
+        # GGUF's rope.dimension_count is the number of scalar Q/K dimensions
+        # that ggml_rope_ext should rotate. It is not the number of RoPE pairs;
+        # the frequency table uses dimension_count / 2 entries later.
+        self.gguf_writer.add_rope_dimension_count(int(head_dim * partial_rotary_factor_full))
+        self.gguf_writer.add_uint32(f"{arch}.rope.dimension_count_swa", int(head_dim * partial_rotary_factor_swa))
         self.gguf_writer.add_rope_freq_base(float(full_rope.get("rope_theta", 500000.0)))
         self.gguf_writer.add_float32(f"{arch}.rope.freq_base_swa", float(swa_rope.get("rope_theta", 10000.0)))
         if full_rope.get("rope_type") == "yarn":
@@ -5454,7 +5463,9 @@ class LagunaModel(Model):
                 "original_max_position_embeddings",
                 rope_params.get("original_max_position_embeddings", hparams["max_position_embeddings"]),
             )))
-            self.gguf_writer.add_rope_scaling_yarn_ext_factor(float(full_rope.get("factor", 1.0)))
+            # GGUF's YaRN ext_factor is the config's extrapolation_factor. The main
+            # factor above is the context-extension scale and should not be mirrored here.
+            self.gguf_writer.add_rope_scaling_yarn_ext_factor(float(full_rope.get("extrapolation_factor", 1.0)))
             self.gguf_writer.add_rope_scaling_yarn_attn_factor(float(full_rope.get("attention_factor", 1.0)))
             self.gguf_writer.add_rope_scaling_yarn_beta_fast(float(full_rope.get("beta_fast", 32.0)))
             self.gguf_writer.add_rope_scaling_yarn_beta_slow(float(full_rope.get("beta_slow", 1.0)))

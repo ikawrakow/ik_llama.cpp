@@ -2873,10 +2873,19 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cb(gate, "attn_gate", il_cb);
                     int nh = split_wo->ne[0]/n_embd_head_v;
                     auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, nh, n_tokens);
-                    auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, nh, n_tokens);
                     if (model.arch == LLM_ARCH_LAGUNA) {
-                        cur = ggml_mul(ctx0, attn_3d, gate_3d);
+                        // Laguna uses a softplus gate. XS.2 stores one gate per head,
+                        // while M.1 stores one gate per attention output element.
+                        if (gate->ne[0] == nh) {
+                            auto gate_3d = ggml_reshape_3d(ctx0, gate, 1, nh, n_tokens);
+                            cur = ggml_mul(ctx0, attn_3d, gate_3d);
+                        } else {
+                            GGML_ASSERT(gate->ne[0] == split_wo->ne[0]);
+                            cur = ggml_reshape_2d(ctx0, cur, split_wo->ne[0], n_tokens);
+                            cur = ggml_mul(ctx0, cur, gate);
+                        }
                     } else {
+                        auto gate_3d = ggml_reshape_3d(ctx0, gate, 1, nh, n_tokens);
                         cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
                     }
                     cb(attn_3d, "attn_gated_3d", il_cb);
@@ -2994,17 +3003,25 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 nullptr, nullptr,
                 Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa);
         cb(cur, "wqkv", il);
-        auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed); // [n_head_l, n_tokens]
+        auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed);
         if (model.arch == LLM_ARCH_LAGUNA) {
             gate = ggml_softplus(ctx0, gate);
         }
         cb(gate, "attn_gate", il);
         int n_head_l = hparams.n_head(il);
         auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, n_head_l, n_tokens);
-        auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, n_head_l, n_tokens);
         if (model.arch == LLM_ARCH_LAGUNA) {
-            cur = ggml_mul(ctx0, attn_3d, gate_3d);
+            // Laguna uses a softplus gate. XS.2 stores one gate per head,
+            // while M.1 stores one gate per attention output element.
+            if (gate->ne[0] == n_head_l) {
+                auto gate_3d = ggml_reshape_3d(ctx0, gate, 1, n_head_l, n_tokens);
+                cur = ggml_mul(ctx0, attn_3d, gate_3d);
+            } else {
+                GGML_ASSERT(gate->ne[0] == n_embd_head_v * n_head_l);
+                cur = ggml_mul(ctx0, cur, gate);
+            }
         } else {
+            auto gate_3d = ggml_reshape_3d(ctx0, gate, 1, n_head_l, n_tokens);
             cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
         }
         cb(cur, "attn_gated_3d", il);
