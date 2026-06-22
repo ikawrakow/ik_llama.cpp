@@ -301,10 +301,10 @@ struct llama_context {
         struct kv_runtime_state {
             std::vector<struct ggml_tensor *> k_ctx_cache;
             std::vector<struct ggml_tensor *> v_ctx_cache;
-            std::vector<struct ggml_tensor *> k_ctx_workspace;
-            std::vector<struct ggml_tensor *> v_ctx_workspace;
             struct ggml_context * cache_ctx = nullptr;
             std::vector<ggml_backend_buffer_t> cache_bufs;
+            std::vector<llama_pos> cache_pos;
+            std::vector<uint8_t> cache_slot_valid;
             int32_t cache_write_pos = 0;
             int32_t cache_n_filled = 0;
             int32_t cache_update_rows = 0;
@@ -314,28 +314,16 @@ struct llama_context {
             uint64_t cache_applied_window_version = 0;
             bool cache_valid = false;
             bool cache_view_valid = false;
-            int32_t workspace_write_pos = 0;
-            int32_t workspace_n_filled = 0;
-            int32_t workspace_reserved_rows = 0;
-            int32_t workspace_token_capacity = 0;
-            int32_t workspace_n_kv_total = 0;
-            uint64_t workspace_applied_window_version = 0;
-            bool workspace_valid = false;
-            bool workspace_sync_pending = false;
             std::vector<uint8_t> cache_compute_meta;
-            std::vector<uint8_t> workspace_compute_meta;
             ggml_backend_sched_t cache_sched = nullptr;
-            ggml_backend_sched_t workspace_sched = nullptr;
             ggml_cgraph * cache_graph = nullptr;
-            ggml_cgraph * workspace_graph = nullptr;
             int32_t cache_graph_rows = 0;
             int32_t cache_graph_write_pos = 0;
-            int32_t workspace_graph_rows = 0;
-            int32_t workspace_graph_write_pos = 0;
             struct ggml_tensor * cache_input_target_features = nullptr;
             struct ggml_tensor * cache_input_pos_ctx = nullptr;
             struct ggml_tensor * kq_mask_tensor = nullptr;
             struct ggml_tensor * kq_mask_swa_tensor = nullptr;
+            struct ggml_tensor * draft_tail_rows_tensor = nullptr;
         };
 
         struct capture_state {

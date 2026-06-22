@@ -5493,9 +5493,6 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
-        if (lctx.dflash.kv.workspace_sync_pending) {
-            llama_sync_dflash_workspace_if_pending(lctx);
-        }
         llama_graph_compute(lctx, gf, n_threads);
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
