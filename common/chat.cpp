@@ -1978,22 +1978,36 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
     };
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && inputs.enable_thinking;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
         auto end               = p.optional(p.literal(TURN_END)) + p.end();
 
+        auto thinking_body = [&]() {
+            return p.until_one_of({ THINK_END, TEXT_START, ACTION_START });
+        };
+
         common_peg_parser reasoning = p.eps();
         if (extract_reasoning) {
-            reasoning = p.optional(p.literal(THINK_START) +
-                                   p.reasoning(p.until_one_of({ THINK_END, TEXT_START, ACTION_START })) +
-                                   p.optional(p.literal(THINK_END)));
+            auto opened = p.literal(THINK_START) +
+                          p.reasoning(thinking_body()) +
+                          p.optional(p.literal(THINK_END));
+            auto unopened = p.reasoning(thinking_body()) + p.literal(THINK_END);
+            reasoning = p.optional(p.choice({ opened, unopened }));
+        } else if (inputs.enable_thinking) {
+            auto opened = p.content(p.literal(THINK_START) +
+                                    thinking_body() +
+                                    p.optional(p.literal(THINK_END)));
+            auto unopened = p.content(thinking_body() + p.literal(THINK_END));
+            reasoning = p.optional(p.choice({ opened, unopened }));
         } else {
-            reasoning = p.optional(p.content(p.literal(THINK_START) +
-                                             p.until_one_of({ THINK_END, TEXT_START, ACTION_START }) +
-                                             p.optional(p.literal(THINK_END))));
+            auto opened = p.literal(THINK_START) +
+                          p.content(thinking_body()) +
+                          p.optional(p.literal(THINK_END));
+            auto unopened = p.content(thinking_body()) + p.literal(THINK_END);
+            reasoning = p.optional(p.choice({ opened, unopened }));
         }
 
         auto text_content = p.literal(TEXT_START) + p.content(p.until(TEXT_END)) + p.optional(p.literal(TEXT_END));
@@ -2629,4 +2643,3 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
-

@@ -7,7 +7,7 @@
 //
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
-#include "../example/server/server-chat.h"
+#include "../examples/server/server-chat.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -95,7 +95,8 @@ template <class T> static void assert_equals(const T & expected, const T & actua
         oss_actual << actual;
         LOG_ERR("Expected: %s\n", oss_expected.str().c_str());
         LOG_ERR("Actual: %s\n", oss_actual.str().c_str());
-        common_log_flush(common_log_main());
+        fflush(stderr);
+        fflush(stdout);
         throw std::runtime_error("Test failed");
     }
 }
@@ -2330,6 +2331,38 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // The generation prompt forces <|START_THINKING|>, so model output starts inside
         // the thinking block.
         auto tst = peg_tester("models/templates/Cohere2MoE.jinja", detailed_debug);
+        auto cohere2moe_tmpls = read_templates("models/templates/Cohere2MoE.jinja");
+        auto tst_without_forced_thinking = [&](common_reasoning_format reasoning_format) {
+            common_chat_templates_inputs inputs;
+            inputs.messages          = { message_user };
+            inputs.tools             = { special_function_tool };
+            inputs.reasoning_format  = reasoning_format;
+            inputs.enable_thinking   = false;
+
+            auto params = common_chat_templates_apply(cohere2moe_tmpls.get(), inputs);
+            auto pos    = params.generation_prompt.rfind("<|START_THINKING|>");
+            GGML_ASSERT(pos != std::string::npos);
+
+            common_peg_arena arena;
+            arena.load(params.parser);
+
+            common_chat_parser_params parser_params(params);
+            parser_params.generation_prompt = params.generation_prompt.substr(0, pos);
+
+            auto msg = common_chat_peg_parse(
+                arena,
+                "I'm\nthinking<|END_THINKING|>"
+                "<|START_ACTION|>[\n"
+                "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+                "]<|END_ACTION|>",
+                /* is_partial = */ false,
+                parser_params);
+
+            assert_msg_equals(
+                simple_assist_msg("I'm\nthinking", "", "special_function", "{\"arg1\": 1}", /* id = */ "0"),
+                msg,
+                true);
+        };
 
         tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
@@ -2387,6 +2420,52 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .enable_thinking(false)
             .tools({ special_function_tool })
             .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect(message_assist_call_idx)
+            .run();
+
+        tst_without_forced_thinking(COMMON_REASONING_FORMAT_DEEPSEEK);
+        tst_without_forced_thinking(COMMON_REASONING_FORMAT_NONE);
+
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("I'm\nthinking", "", "special_function", "{\"arg1\": 1}", /* id = */ "0"))
+            .run();
+
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("I'm\nthinking", "", "special_function", "{\"arg1\": 1}", /* id = */ "0"))
+            .run();
+
+        tst.test(
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_idx)
+            .run();
+
+        tst.test(
+               "<|START_THINKING|><|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .tools({ special_function_tool })
             .expect(message_assist_call_idx)
             .run();
 
