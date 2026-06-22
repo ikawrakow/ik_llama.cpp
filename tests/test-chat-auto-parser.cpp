@@ -1992,6 +1992,11 @@ static void test_cohere2moe_parser(testing & t) {
         /* .description = */ "I'm special",
         /* .parameters  = */ R"({"type":"object","properties":{"arg1":{"type":"integer"}},"required":["arg1"]})",
     };
+    common_chat_tool python{
+        /* .name        = */ "python",
+        /* .description = */ "Run Python code",
+        /* .parameters  = */ R"({"type":"object","properties":{"code":{"type":"string"}},"required":["code"]})",
+    };
 
     common_chat_msg user;
     user.role    = "user";
@@ -2001,6 +2006,11 @@ static void test_cohere2moe_parser(testing & t) {
         "<|START_ACTION|>[\n"
         "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
         "]<|END_ACTION|>";
+    const std::string act_numeric_id =
+        "<|START_ACTION|>[\n"
+        "    {\"tool_call_id\": 0, \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+        "]<|END_ACTION|>";
+    const std::string text_resp = "<|START_TEXT|>Hello, world!<|END_TEXT|>";
 
     struct cohere_case {
         const char *             name;
@@ -2021,11 +2031,22 @@ static void test_cohere2moe_parser(testing & t) {
           COMMON_REASONING_FORMAT_NONE, false, COMMON_CHAT_TOOL_CHOICE_AUTO, "I'm\nthinking", "", 1 },
         { "unopened/DEEPSEEK/required -> reasoning_content", "I'm\nthinking<|END_THINKING|>" + act,
           COMMON_REASONING_FORMAT_DEEPSEEK, false, COMMON_CHAT_TOOL_CHOICE_REQUIRED, "", "I'm\nthinking", 1 },
+        { "unopened text/DEEPSEEK -> reasoning_content + content", "I'm\nthinking<|END_THINKING|>" + text_resp,
+          COMMON_REASONING_FORMAT_DEEPSEEK, false, COMMON_CHAT_TOOL_CHOICE_AUTO, "Hello, world!", "I'm\nthinking", 0 },
+        { "tool-choice-none text/DEEPSEEK -> reasoning_content + content", "I'm\nthinking<|END_THINKING|>" + text_resp,
+          COMMON_REASONING_FORMAT_DEEPSEEK, false, COMMON_CHAT_TOOL_CHOICE_NONE, "Hello, world!", "I'm\nthinking", 0 },
         // Regression: reasoning enabled still routes thinking to reasoning_content.
         { "thinking-on/DEEPSEEK -> reasoning_content", "I'm\nthinking<|END_THINKING|>" + act,
           COMMON_REASONING_FORMAT_DEEPSEEK, true, COMMON_CHAT_TOOL_CHOICE_AUTO, "", "I'm\nthinking", 1 },
+        { "thinking-on/NONE -> tagged content", "<|START_THINKING|>I'm\nthinking<|END_THINKING|>" + act,
+          COMMON_REASONING_FORMAT_NONE, true, COMMON_CHAT_TOOL_CHOICE_AUTO,
+          "<|START_THINKING|>I'm\nthinking<|END_THINKING|>", "", 1 },
         // Regression: existing #1968 shapes still parse to clean native tool calls.
         { "bare-end/DEEPSEEK -> clean call", "<|END_THINKING|>" + act,
+          COMMON_REASONING_FORMAT_DEEPSEEK, false, COMMON_CHAT_TOOL_CHOICE_AUTO, "", "", 1 },
+        { "bare-end/trailing-end-text/DEEPSEEK -> clean call", "<|END_THINKING|>" + act + "<|END_TEXT|>",
+          COMMON_REASONING_FORMAT_DEEPSEEK, false, COMMON_CHAT_TOOL_CHOICE_AUTO, "", "", 1 },
+        { "bare-end/numeric-id/DEEPSEEK -> clean call", "<|END_THINKING|>" + act_numeric_id,
           COMMON_REASONING_FORMAT_DEEPSEEK, false, COMMON_CHAT_TOOL_CHOICE_AUTO, "", "", 1 },
         { "empty-block/DEEPSEEK -> clean call", "<|START_THINKING|><|END_THINKING|>" + act,
           COMMON_REASONING_FORMAT_DEEPSEEK, false, COMMON_CHAT_TOOL_CHOICE_AUTO, "", "", 1 },
@@ -2059,7 +2080,48 @@ static void test_cohere2moe_parser(testing & t) {
         t.assert_equal(std::string(c.name) + " : tool calls", c.exp_tool_calls, msg.tool_calls.size());
         if (c.exp_tool_calls == 1 && msg.tool_calls.size() == 1) {
             t.assert_equal(std::string(c.name) + " : tool name", std::string("special_function"), msg.tool_calls[0].name);
+            t.assert_equal(std::string(c.name) + " : tool id",   std::string("0"),                msg.tool_calls[0].id);
         }
     }
-}
 
+    const std::string parallel_act =
+        "<|START_ACTION|>[\n"
+        "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}},\n"
+        "    {\"tool_call_id\": \"1\", \"tool_name\": \"python\", \"parameters\": {\"code\": \"print('hey')\"}}\n"
+        "]<|END_ACTION|>";
+
+    common_chat_templates_inputs parallel_inputs;
+    parallel_inputs.messages            = { user };
+    parallel_inputs.tools               = { special_function, python };
+    parallel_inputs.tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    parallel_inputs.reasoning_format    = COMMON_REASONING_FORMAT_DEEPSEEK;
+    parallel_inputs.enable_thinking     = false;
+    parallel_inputs.parallel_tool_calls = true;
+
+    auto parallel_params = common_chat_templates_apply(tmpls.get(), parallel_inputs);
+    auto parallel_pos    = parallel_params.generation_prompt.rfind("<|START_THINKING|>");
+
+    common_peg_arena parallel_arena;
+    parallel_arena.load(parallel_params.parser);
+
+    common_chat_parser_params parallel_pp(parallel_params);
+    if (parallel_pos != std::string::npos) {
+        parallel_pp.generation_prompt = parallel_params.generation_prompt.substr(0, parallel_pos);
+    }
+
+    auto parallel_msg = common_chat_peg_parse(
+        parallel_arena,
+        "I'm\nthinking<|END_THINKING|>" + parallel_act,
+        /* is_partial = */ false,
+        parallel_pp);
+
+    t.assert_equal("parallel : content", std::string(""), parallel_msg.content);
+    t.assert_equal("parallel : reasoning", std::string("I'm\nthinking"), parallel_msg.reasoning_content);
+    t.assert_equal("parallel : tool calls", 2u, parallel_msg.tool_calls.size());
+    if (parallel_msg.tool_calls.size() == 2) {
+        t.assert_equal("parallel : tool 0 name", std::string("special_function"), parallel_msg.tool_calls[0].name);
+        t.assert_equal("parallel : tool 0 id",   std::string("0"),                parallel_msg.tool_calls[0].id);
+        t.assert_equal("parallel : tool 1 name", std::string("python"),           parallel_msg.tool_calls[1].name);
+        t.assert_equal("parallel : tool 1 id",   std::string("1"),                parallel_msg.tool_calls[1].id);
+    }
+}

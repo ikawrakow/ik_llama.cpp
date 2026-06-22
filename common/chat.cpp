@@ -1988,7 +1988,8 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
-        auto end               = p.optional(p.literal(TURN_END)) + p.end();
+        // Cohere2MoE can emit a stray text terminator after an action envelope.
+        auto end               = p.optional(p.literal(TEXT_END)) + p.optional(p.literal(TURN_END)) + p.end();
 
         auto thinking_body = [&]() {
             return p.until_one_of({ THINK_END, TEXT_START, ACTION_START });
