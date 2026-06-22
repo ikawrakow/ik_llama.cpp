@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <set>
 
+#include "llama-reload-info.h"
+
 // available llama models
 enum e_model {
     MODEL_UNKNOWN,
@@ -552,6 +554,8 @@ struct llama_model {
 
     std::vector<float> splits;
     ggml_backend_buffer_type_t split_buft = nullptr;
+
+    std::unique_ptr<reload_info> reload;
 };
 
 struct llama_lora_weight {
