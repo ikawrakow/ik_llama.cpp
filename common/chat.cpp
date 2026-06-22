@@ -1978,7 +1978,12 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
     };
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && inputs.enable_thinking;
+    // Surface reasoning as reasoning_content whenever the output format requests it
+    // (Cohere2MoE has a non-empty THINK_START, so this matches the narrow condition
+    // from the reasoning-delimiter work). Under --reasoning off the model may still
+    // emit an (un)opened thinking block; keeping it in reasoning_content quarantines
+    // it from the user-facing content rather than leaking it into the answer.
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
