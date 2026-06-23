@@ -4016,7 +4016,7 @@ static bool llm_load_tensors(
         for (auto & it : ctx_bufs) {
             ggml_context * ctx = it.first;
             auto & bufs = it.second;
-            if (!ml.load_all_data(ctx, bufs, use_mlock ? &model.mlock_mmaps : NULL, progress_callback, progress_callback_user_data)) {
+            if (!ml.load_all_data(ctx, &model, bufs, use_mlock ? &model.mlock_mmaps : NULL, progress_callback, progress_callback_user_data)) {
                 return false;
             }
         }
@@ -7164,7 +7164,7 @@ struct llama_context * llama_init_from_model(
 #elif defined(GGML_USE_CUDA)
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
             // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
-            ggml_backend_t backend = ggml_backend_cuda_init(main_gpu_id, cparams.cuda_params);
+            ggml_backend_t backend = ggml_backend_cuda_init(main_gpu_id, cparams.cuda_params, model);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, main_gpu_id);
                 llama_free(ctx);
@@ -7183,7 +7183,7 @@ struct llama_context * llama_init_from_model(
                 params = new_params.data();
             }
             for (int device = 0; device < ggml_backend_cuda_get_device_count(); ++device) {
-                ggml_backend_t backend = ggml_backend_cuda_init(device, params);
+                ggml_backend_t backend = ggml_backend_cuda_init(device, params, model);
                 if (backend == nullptr) {
                     LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, device);
                     llama_free(ctx);

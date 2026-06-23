@@ -626,6 +626,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
             ggml_tensor * KQ_mask_l  = is_sliding ? KQ_mask_swa : KQ_mask;
 
             const int target_il = gemma4_mtp_target_kv_layer(hparams, target_hparams, il);
+            printf("--- Layer %d: is_sliding = %d, freq_base_l = %g, freq_scale_l = %g, n_rot_l = %d, n_swa = %d, n_embd_head = %d\n", il, is_sliding, freq_base_l, freq_scale_l, n_rot_l, n_swa, n_embd_head);
 
             auto split_kl = (const ggml_split_tensor_t *)target_kv.k_l[target_il]->extra;
             auto split_vl = (const ggml_split_tensor_t *)target_kv.v_l[target_il]->extra;
@@ -690,10 +691,13 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                 auto v = ggml_view_3d(ctx0, split_vl->splits[id], n_embd_head, target_n_kv, n_head_kv,
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head)*n_head_kv,
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head), 0);
+                printf("id = %d: q = %ld x %ld x %ld, k = %ld x %ld x %ld, v = %ld x %ld x %ld\n", id, q->ne[0], q->ne[1], q->ne[2], k->ne[0], k->ne[1], k->ne[2], v->ne[0], v->ne[1], v->ne[2]);
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, 0.0f, 0.0f);
                 cur->op_params[4] = n_swa;
                 cb(cur, "fa", il_cb);
+                printf("  -> %ld x %ld x %ld", cur->ne[0], cur->ne[1], cur->ne[2]);
                 cur = ggml_reshape_2d(ctx0, cur, split_ol->splits[id]->ne[0], ggml_nelements(cur)/split_ol->splits[id]->ne[0]);
+                printf("  -> %ld x %ld x %ld\n", cur->ne[0], cur->ne[1], cur->ne[2]);
                 cur = llm_build_lora_mm(lctx, ctx0, split_ol->splits[id], cur);
                 cb(cur, "qkv", il_cb);
                 ggml_build_forward_expand(gf, cur);
