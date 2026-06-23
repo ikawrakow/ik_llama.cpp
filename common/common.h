@@ -529,6 +529,7 @@ struct gpt_params {
     int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
+    int32_t cache_ram_reuse_n_min = 0; // min reusable common-prefix tokens required to restore from ram cache
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens
 
     // batched-bench params
