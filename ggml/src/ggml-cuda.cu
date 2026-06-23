@@ -1159,7 +1159,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         }
     }
     else {
-        fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim == 0);
+        fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim);
         GGML_ABORT("fatal error");
     }
 
@@ -3223,7 +3223,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         if (dst->src[5]) {
             ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[5]->data, (const int32_t *)ids->data,
                     (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
-                    dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
+                    dst_row.nb[1], dst_row.nb[2], dst->src[5]->nb[1], ids->nb[1], stream);
             CUDA_CHECK(cudaGetLastError());
         }
 
@@ -3569,7 +3569,7 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             CUDA_CHECK(cudaGetLastError());
 
             ggml_cuda_op_mul_mat_q(ctx, src0_2, src1, dst, (const char *)src0_2->data, nullptr, src1_quantized.get(), (float *)dst->data,
-                    0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
+                    0, src0_2->ne[1], src1->ne[1], ne10_padded, stream);
             CUDA_CHECK(cudaGetLastError());
         } else {
             auto local_dst = *dst;
