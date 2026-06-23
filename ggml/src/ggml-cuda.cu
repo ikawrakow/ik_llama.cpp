@@ -94,7 +94,7 @@ static void ggml_cuda_default_log_callback(enum ggml_log_level level, const char
 ggml_log_callback ggml_cuda_log_callback = ggml_cuda_default_log_callback;
 void * ggml_cuda_log_user_data = NULL;
 
-GGML_API void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data) {
+GGML_CALL void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data) {
     ggml_cuda_log_callback = log_callback;
     ggml_cuda_log_user_data = user_data;
 }
@@ -204,14 +204,10 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     int64_t total_vram = 0;
 #ifdef GGML_CUDA_FORCE_MMQ
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ:    yes\n", __func__);
-#else
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ:    no\n", __func__);
+    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ (instead of CUBLAS):    yes\n", __func__);
 #endif // GGML_CUDA_FORCE_MMQ
 #ifdef GGML_CUDA_FORCE_CUBLAS
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS: yes\n", __func__);
-#else
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS: no\n", __func__);
+    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS (Instead of MMQ):    yes\n", __func__);
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_CUDA_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
     for (int id = 0; id < info.device_count; ++id) {
