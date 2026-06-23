@@ -682,6 +682,11 @@ bool llama_context::update_cache_copies() {
     return true;
 }
 
+static std::vector<llama_context *> & llama_all_contexts() {
+    static std::vector<llama_context *> contexts;
+    return contexts;
+}
+
 llama_context::llama_context(const llama_model & model)
     : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
     const auto & hparams = model.hparams;
@@ -690,6 +695,7 @@ llama_context::llama_context(const llama_model & model)
     } else {
         cache_copies.resize(2*hparams.n_layer);
     }
+    llama_all_contexts().push_back(this);
 }
 
 void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
@@ -710,6 +716,14 @@ llama_context::~llama_context() {
     }
 
     ggml_backend_buffer_free(buf_output);
+
+    auto & all_contexts = llama_all_contexts();
+    for (auto it = all_contexts.begin(); it != all_contexts.end(); ++it) {
+        if (*it == this) {
+            all_contexts.erase(it);
+            break;
+        }
+    }
 }
 
 int llama_context::max_nodes(int n_tokens, int n_kv) const {
@@ -3093,6 +3107,8 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_QWEN35,
         LLM_ARCH_QWEN35MOE,
         LLM_ARCH_GEMMA4,
+        LLM_ARCH_GEMMA4_MTP,
+        LLM_ARCH_GEMMA4_ASSISTANT,
         LLM_ARCH_DEEPSEEK2,
         LLM_ARCH_GLM_DSA,
         LLM_ARCH_MISTRAL4,
@@ -3369,11 +3385,23 @@ static bool llm_load_tensors(
 
     auto & hparams = model.hparams;
 
+    if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        auto & all_models = llama_all_loaded_models();
+        llama_model * tgt_model = nullptr;
+        for (auto model : all_models) {
+            if (model->arch == LLM_ARCH_GEMMA4) {
+                tgt_model = model;
+            }
+        }
+        if (tgt_model) {
+            split_mode = tgt_model->split_mode;
+        }
+    }
+
+    printf("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ %s: split_mode = %d\n", __func__, split_mode);
+
     if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
-        const bool unsupported_gemma_split =
-            model.arch == LLM_ARCH_GEMMA4_MTP ||
-            model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
-            (model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0);
+        const bool unsupported_gemma_split = model.arch == LLM_ARCH_GEMMA4 && hparams.n_embd_per_layer > 0;
 
         if (unsupported_gemma_split) {
             LLAMA_LOG_WARN("\n=========================================================\n");
@@ -3397,6 +3425,25 @@ static bool llm_load_tensors(
                 LLAMA_LOG_WARN("================================================================\n\n");
                 max_gpu = 4;
             }
+        }
+    }
+    if ((split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) &&
+        (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT)) {
+        auto & all_models = llama_all_loaded_models();
+        bool has_target_gemma = false;
+        for (auto model : all_models) {
+            if (model->arch == LLM_ARCH_GEMMA4) {
+                has_target_gemma = true;
+                break;
+            }
+        }
+        if (!has_target_gemma) {
+            LLAMA_LOG_WARN("\n=======================================================\n");
+            LLAMA_LOG_WARN("Split mode 'graph' requested for Gemma4-assistant model\n");
+            LLAMA_LOG_WARN("but no loaded Gemma4 model found.\n");
+            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
+            LLAMA_LOG_WARN("=======================================================\n\n");
+            split_mode = LLAMA_SPLIT_MODE_LAYER;
         }
     }
 
@@ -6720,10 +6767,19 @@ struct llama_model * llama_model_load_from_file(
         return nullptr;
     }
 
+    llama_all_loaded_models().push_back(model);
+
     return model;
 }
 
 void llama_free_model(struct llama_model * model) {
+    auto & all_models = llama_all_loaded_models();
+    for (auto it = all_models.begin(); it != all_models.end(); ++it) {
+        if (*it == model) {
+            all_models.erase(it);
+            break;
+        }
+    }
     delete model;
 }
 
@@ -11096,4 +11152,9 @@ bool llama_reload_changed_tensors(struct llama_context * ctx) {
         ctx->prev_mtp.reset();
     }
     return result;
+}
+
+std::vector<llama_model *> & llama_all_loaded_models() {
+    static std::vector<llama_model *> models;
+    return models;
 }

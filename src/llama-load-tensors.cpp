@@ -194,6 +194,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_context * ctx_output;
     ggml_context * ctx_output_split;
 
+    llama_model  * tgt_model = nullptr;
+
     ggml_backend_buffer_type_t default_cpu_buft;
     bool has_buft_overrides = false;
 
@@ -220,6 +222,21 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 };
 
 create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_model & _model) : ml(_ml), model(_model) {
+
+    if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        auto & all_models = llama_all_loaded_models();
+        for (auto model : all_models) {
+            if (model->arch == LLM_ARCH_GEMMA4) {
+                tgt_model = model;
+            }
+        }
+        if (tgt_model) {
+            LLAMA_LOG_INFO("==================== Found target model for Gemma4-Assistant. split mode graph: %d\n", model.split_mode == LLAMA_SPLIT_MODE_GRAPH);
+        } else {
+            LLAMA_LOG_INFO("==================== Did not find target model for Gemma4-Assistant\n");
+            model.split_mode = LLAMA_SPLIT_MODE_LAYER;
+        }
+    }
 
     const int n_layer = model.hparams.n_layer;
     buft_layer_count[model.buft_input.buft]++;
@@ -2242,7 +2259,7 @@ bool create_tensors_helper::create_gemma4_mtp_tensors(const LLM_TN & tn) {
         const int64_t n_ff_cur    = hparams.n_ff(i);
 
         if (!hparams.swa_layers[i]) {
-            layer.rope_freqs = create_tensor(ctx_layer, tn(LLM_TENSOR_ROPE_FREQS, "weight"), { n_rot/2 },
+            layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight"), { n_rot/2 },
                     llama_model_loader::TENSOR_NOT_REQUIRED | rope_flag);
             rope_flag = llama_model_loader::TENSOR_DUPLICATED;
         }
@@ -4540,7 +4557,7 @@ bool create_tensors_helper::create_tensors() {
 
     {
         const bool unsupported =
-            (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) ||
+            //(model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) ||
             (model.arch == LLM_ARCH_GEMMA4 && model.tok_embd_per_layer);
         if (unsupported && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
             LLAMA_LOG_WARN("\n=========================================================\n");
@@ -4583,6 +4600,12 @@ bool create_tensors_helper::create_tensors() {
         if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size())) {
             gpu_split_count.resize(model.splits.size(), 0.0f);
         }
+        auto is_gemma4_model = [this] () {
+            return model.arch == LLM_ARCH_GEMMA4 || model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT;
+        };
+        auto is_gemma4_assistant = [this] () {
+            return model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT;
+        };
         for (int il = 0; il < n_layer; ++il) {
             // For now only run MTP into the per-layer
             if (model.mtp && hparams.nextn_predict_layers > 0 &&
@@ -4620,7 +4643,7 @@ bool create_tensors_helper::create_tensors() {
             if (layer.attn_norm) {
                 prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, mirror, mem_used);
             }
-            if (model.arch == LLM_ARCH_GEMMA4 && layer.attn_post_norm) {
+            if (is_gemma4_model() && layer.attn_post_norm) {
                 prepare_split_tensors(-1, ctx_split, layer.attn_post_norm, layer.split_attn_post_norm, mirror, mem_used);
             }
             if (layer.rope_freqs) {
@@ -4629,6 +4652,49 @@ bool create_tensors_helper::create_tensors() {
             }
             if (hparams.is_recurrent(il)) {
                 split_recurrent_tensors(hparams, layer, cur_splits, mem_used, ctx_split, il); //, model.arch == LLM_ARCH_QWEN3NEXT ? 0 : 1);
+            }
+            else if (is_gemma4_assistant()) {
+                GGML_ASSERT(layer.wo && layer.wq);
+                GGML_ASSERT(tgt_model);
+                int n_embd_head = hparams.n_embd_head_k(il);
+                int n_head      = hparams.n_head(il);
+                bool is_sliding = hparams.swa_layers[il] != 0;
+                int target_n_kv_layer = tgt_model->hparams.n_layer_kv_from_start > 0
+                                      ? std::min<int>((int) tgt_model->hparams.n_layer, tgt_model->hparams.n_layer_kv_from_start)
+                                      : (int) tgt_model->hparams.n_layer;
+                int target_il = target_n_kv_layer - 1;
+                for (; target_il >= 0; --target_il) {
+                    if ((tgt_model->hparams.swa_layers[target_il] != 0) == is_sliding) break;
+                }
+                GGML_ASSERT(target_il >= 0 && "Gemma4 MTP could not find a matching target KV layer");
+                int n_head_tgt  = tgt_model->hparams.n_head(target_il);
+                GGML_ASSERT(tgt_model->hparams.n_embd_head_k(target_il) == n_embd_head);
+                auto & target_layer = tgt_model->layers[target_il];
+                auto split_wq = (const ggml_split_tensor_t *)target_layer.wq->extra;
+                auto split_wo = (const ggml_split_tensor_t *)target_layer.wo->extra;
+                GGML_ASSERT(split_wq && split_wo);
+                std::vector<int> q_split(split_wq->n_device, 0);
+                std::vector<int> o_split(split_wo->n_device, 0);
+                for (int id = 0; id < split_wq->n_device; ++id) {
+                    if (split_wq->splits[id]) {
+                        int nh = split_wq->splits[id]->ne[1] / n_embd_head;
+                        GGML_ASSERT((nh*n_head) % n_head_tgt == 0);
+                        q_split[id] = ((nh*n_head)/n_head_tgt)*n_embd_head;
+                    }
+                }
+                for (int id = 0; id < split_wo->n_device; ++id) {
+                    if (split_wo->splits[id]) {
+                        int64_t no = split_wo->splits[id]->ne[0] * layer.wo->ne[0];
+                        printf("Layer %d, id = %d: split_wo->splits[id]->ne[0] = %ld, layer.wo->ne[0] = %ld, target_layer.wo->ne[0] = %ld\n", il, id, split_wo->splits[id]->ne[0], layer.wo->ne[0], target_layer.wo->ne[0]);
+                        GGML_ASSERT(no % target_layer.wo->ne[0] == 0);
+                        o_split[id] = no / target_layer.wo->ne[0];
+                    }
+                }
+                prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, q_split, mem_used);
+                prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, o_split, mem_used);
+                if (layer.attn_q_norm) {
+                    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, o_split, mem_used);
+                }
             }
             else if (layer.wo && layer.wq && layer.wk && (layer.wv || model.arch == LLM_ARCH_GEMMA4)) {
                 auto granularity_kq = hparams.n_embd_head_k(il) * gqa_ratio;
