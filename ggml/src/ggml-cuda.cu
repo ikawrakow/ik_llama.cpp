@@ -1159,7 +1159,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         }
     }
     else {
-        fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim == 0);
+        fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim);
         GGML_ABORT("fatal error");
     }
 
