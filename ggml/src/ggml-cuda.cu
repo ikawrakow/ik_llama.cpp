@@ -1424,17 +1424,16 @@ static void * ggml_cuda_host_malloc(size_t size) {
         return nullptr;
     }
 
-// Whether to request the kernel to attempt to defragment memory to back the region with 2M hugepages.
-// Otherwise dependent on kernel settings:
-//   * enabled="always":  Hand over whatever 2M pages it has on hand and the rest will be 4k 
-//   * enabled="madvise": 4k pages
-//   * enabled="never":   4k pages
-// Potluck on performance. If there's not much defragmentation to do, then you win. Otherwise come back in an hour.
-#if 0
-#ifdef MADV_HUGEPAGE
-    madvise(ptr, size, MADV_HUGEPAGE);
-#endif
-#endif
+    // Whether to request the kernel to attempt to defragment memory to back the region with 2M hugepages.
+    // Otherwise dependent on kernel settings:
+    //   * enabled="always":  Hand over whatever 2M pages it has on hand and the rest will be 4k 
+    //   * enabled="madvise": 4k pages
+    //   * enabled="never":   4k pages
+    // Potluck on performance. If there's not much defragmentation to do, then you win. Otherwise come back in an hour.
+    // Defaults to disabled unless GGML_CUDA_HOST_MALLOC_THP is set.
+    if (getenv("GGML_CUDA_HOST_MALLOC_THP") != nullptr) {
+        madvise(ptr, size, MADV_HUGEPAGE);
+    }
 
     // prefault the whole region. If the kernel knows how to do this then let it do so.
     // Might be worth spawning threads to speed up this process on huge allocations.
@@ -1442,8 +1441,7 @@ static void * ggml_cuda_host_malloc(size_t size) {
 #ifdef MADV_POPULATE_WRITE
     needs_manual_prefault = madvise(ptr, size, MADV_POPULATE_WRITE);
 #endif
-    if (needs_manual_prefault)
-    {
+    if (needs_manual_prefault) {
         char * p = (char *) ptr;
         for (size_t off = 0; off < size; off += 4096) {
             p[off] = 0;
