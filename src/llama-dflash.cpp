@@ -613,7 +613,10 @@ bool llama_prepare_dflash_graph_inputs(
 
                 for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
                     const int32_t block_k = k - cross_ctx;
-                    if (block_k <= (int32_t) j) {
+                    // intra-block draft tokens are contiguous from draft_pos_base, so the
+                    // SWA distance is (j - block_k); apply the same window bound as the
+                    // cross-context section above (causal AND within n_swa).
+                    if (block_k <= (int32_t) j && ((int32_t) j - block_k) < swa_window) {
                         row[k] = h_zero;
                     }
                 }
@@ -637,7 +640,10 @@ bool llama_prepare_dflash_graph_inputs(
 
                 for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
                     const int32_t block_k = k - cross_ctx;
-                    if (block_k <= (int32_t) j) {
+                    // intra-block draft tokens are contiguous from draft_pos_base, so the
+                    // SWA distance is (j - block_k); apply the same window bound as the
+                    // cross-context section above (causal AND within n_swa).
+                    if (block_k <= (int32_t) j && ((int32_t) j - block_k) < swa_window) {
                         row[k] = 0.0f;
                     }
                 }
