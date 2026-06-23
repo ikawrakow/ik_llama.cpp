@@ -14401,7 +14401,7 @@ static void ggml_compute_forward_sum_rows_f32(
     for (int ir = first_row; ir < last_row; ++ir) {
         int i3 = ir / (ne01*ne02);
         int i2 = (ir - i3*ne01*ne02)/ne01;
-        int i1 = ir - i3*ne01*ne0 - i2*ne01;
+        int i1 = ir - i3*ne01*ne02 - i2*ne01;
         const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
               float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
         float row_sum = 0;
