@@ -3223,7 +3223,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         if (dst->src[5]) {
             ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[5]->data, (const int32_t *)ids->data,
                     (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
-                    dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
+                    dst_row.nb[1], dst_row.nb[2], dst->src[5]->nb[1], ids->nb[1], stream);
             CUDA_CHECK(cudaGetLastError());
         }
 
