@@ -607,7 +607,6 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     }
 
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        printf("Using split mode graph for Gemma4 assistant model\n");
         int n_device = model.splits.size();
         std::vector<ggml_tensor *> sa_inp(n_device, nullptr);
         std::vector<ggml_tensor *> sa_out(n_device, nullptr);
@@ -626,7 +625,6 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
             ggml_tensor * KQ_mask_l  = is_sliding ? KQ_mask_swa : KQ_mask;
 
             const int target_il = gemma4_mtp_target_kv_layer(hparams, target_hparams, il);
-            printf("--- Layer %d: is_sliding = %d, freq_base_l = %g, freq_scale_l = %g, n_rot_l = %d, n_swa = %d, n_embd_head = %d\n", il, is_sliding, freq_base_l, freq_scale_l, n_rot_l, n_swa, n_embd_head);
 
             auto split_kl = (const ggml_split_tensor_t *)target_kv.k_l[target_il]->extra;
             auto split_vl = (const ggml_split_tensor_t *)target_kv.v_l[target_il]->extra;
@@ -652,6 +650,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                 } else {
                     GGML_ASSERT(inpL->op == GGML_OP_REDUCE);
                     cur = get_input_tensor_sm_graph(ctx0, inpL, id);
+                    GGML_ASSERT(model.layers[il-1].ffn_post_norm && model.layers[il-1].ffn_post_norm->extra);
                     cur = do_split_norm(ctx0, cur, model.layers[il-1].ffn_post_norm, hparams, cb, id, il_cb, false);
                     cb(cur, "ffn_normed", il_cb);
                     auto add = ffn_inp[id];
@@ -671,19 +670,21 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                         cb(sa_inp[id], "sa_inp_scaled", il_cb);
                     }
                 }
+                GGML_ASSERT(model.layers[il].attn_norm && model.layers[il].attn_norm->extra);
                 cur = do_split_norm(ctx0, sa_inp[id], model.layers[il].attn_norm, hparams, cb, id, il_cb, false);
                 cb(cur, "sa_inp_normed", il_cb);
                 auto Qcur = llm_build_lora_mm(lctx, ctx0, split_ql->splits[id], cur);
                 cb(Qcur, "Qcur", il_cb);
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, Qcur->ne[0]/n_embd_head, n_tokens);
+                GGML_ASSERT(model.layers[il].attn_q_norm && model.layers[il].attn_q_norm->extra);
                 Qcur = do_split_norm(ctx0, Qcur, model.layers[il].attn_q_norm, hparams, cb, id, il_cb, false);
                 cb(Qcur, "Qcur_normed", il_cb);
                 auto freq_factors = is_sliding ? nullptr : ((const ggml_split_tensor_t *)model.layers[il].rope_freqs->extra)->splits[id];
                 Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(Qcur, "Qcur_rope", il_cb);
-                GGML_ASSERT(split_kl->splits[id]->ne[0] % n_embd_head == 0);
-                int n_head_kv = split_kl->splits[id]->ne[0] / n_embd_head;
+                GGML_ASSERT(split_kl->splits[id]->ne[1] % target_kv.size == 0);
+                int n_head_kv = split_kl->splits[id]->ne[1] / target_kv.size;
                 auto q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
                 auto k = ggml_view_3d(ctx0, split_kl->splits[id], n_embd_head, target_n_kv, n_head_kv,
                     ggml_row_size(split_kl->splits[id]->type, n_embd_head)*n_head_kv,
@@ -691,13 +692,10 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                 auto v = ggml_view_3d(ctx0, split_vl->splits[id], n_embd_head, target_n_kv, n_head_kv,
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head)*n_head_kv,
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head), 0);
-                printf("id = %d: q = %ld x %ld x %ld, k = %ld x %ld x %ld, v = %ld x %ld x %ld\n", id, q->ne[0], q->ne[1], q->ne[2], k->ne[0], k->ne[1], k->ne[2], v->ne[0], v->ne[1], v->ne[2]);
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, 0.0f, 0.0f);
                 cur->op_params[4] = n_swa;
                 cb(cur, "fa", il_cb);
-                printf("  -> %ld x %ld x %ld", cur->ne[0], cur->ne[1], cur->ne[2]);
                 cur = ggml_reshape_2d(ctx0, cur, split_ol->splits[id]->ne[0], ggml_nelements(cur)/split_ol->splits[id]->ne[0]);
-                printf("  -> %ld x %ld x %ld\n", cur->ne[0], cur->ne[1], cur->ne[2]);
                 cur = llm_build_lora_mm(lctx, ctx0, split_ol->splits[id], cur);
                 cb(cur, "qkv", il_cb);
                 ggml_build_forward_expand(gf, cur);

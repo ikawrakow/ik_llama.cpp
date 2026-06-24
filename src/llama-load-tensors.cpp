@@ -4685,7 +4685,6 @@ bool create_tensors_helper::create_tensors() {
                 for (int id = 0; id < split_wo->n_device; ++id) {
                     if (split_wo->splits[id]) {
                         int64_t no = split_wo->splits[id]->ne[0] * layer.wo->ne[0];
-                        printf("Layer %d, id = %d: split_wo->splits[id]->ne[0] = %ld, layer.wo->ne[0] = %ld, target_layer.wo->ne[0] = %ld\n", il, id, split_wo->splits[id]->ne[0], layer.wo->ne[0], target_layer.wo->ne[0]);
                         GGML_ASSERT(no % target_layer.wo->ne[0] == 0);
                         o_split[id] = no / target_layer.wo->ne[0];
                     }
