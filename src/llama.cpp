@@ -3190,7 +3190,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             }
         }
         if (name == "mtp_pre_proj.weight"  || name == "mtp_post_proj.weight" ||
-            name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight") {
+            name == "mtp_centroids.weight" || name == "mtp_token_ordering.weight" ||
+            name == "nextn.post_projection.weight" || name == "nextn.pre_projection.weight" ||
+            name == "rope_freqs.weight") {
             continue;
         }
         if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight") {
