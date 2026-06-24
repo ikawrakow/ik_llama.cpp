@@ -287,6 +287,20 @@ struct llm_build_context {
             bool is_lite,
             bool pp_opt);
 
+    // DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). Batch-local (no indexer KV-cache).
+    // Returns top_k indices [n_top_k, n_tokens] (I32) of selected key positions per query.
+    ggml_tensor * build_deepseek2_dsa_indexer(
+            int il,
+            ggml_tensor * qr,       // q_lora latent [q_lora_rank, n_tokens] (after attn_q_a_norm)
+            ggml_tensor * cur,      // attn_norm output [n_embd, n_tokens]
+            ggml_tensor * KQ_mask,  // F32 causal mask [n_kv, n_tokens_pad]
+            ggml_tensor * inp_pos);
+
+    // Build the additive sparse causal mask from top_k indices + the base causal KQ_mask.
+    ggml_tensor * build_deepseek2_dsa_sparse_mask(
+            ggml_tensor * top_k,    // [n_top_k, n_tokens] (I32)
+            ggml_tensor * KQ_mask); // F32 causal mask [n_kv, n_tokens_pad]
+
     ggml_cgraph * build_glm4_moe();
 
     ggml_cgraph * build_bitnet();

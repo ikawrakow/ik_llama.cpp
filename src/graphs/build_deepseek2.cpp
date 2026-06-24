@@ -323,6 +323,167 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
     return combined;
 }
 
+// DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). Batch-local: the indexer keys are the
+// current batch's tokens (no separate indexer KV-cache). Correct for SINGLE-SEQUENCE prefill
+// (cache starts empty, kv_head==0) where kv slots 0..n_tokens-1 == the batch tokens.
+// LIMITATIONS (documented follow-ups, NOT yet handled here):
+//   - kv_head>0 (decode / continued generation): indexer keys no longer map to slots 0..n_tokens-1.
+//   - multi-sequence batches (n_seq>1, e.g. llama-perplexity default n_batch>n_ctx): the causal
+//     view and key->slot mapping assume one contiguous sequence; cross-sequence batching produces
+//     wrong selections / fully-masked rows -> NaN. Use n_batch==n_ctx (n_seq=1) for now.
+// The Walsh-Hadamard transform is intentionally omitted: it is an orthonormal rotation applied
+// to both indexer_q and indexer_k, so (H q)*(H k) == q*k and it does not change the scores.
+ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
+        int il,
+        ggml_tensor * qr,
+        ggml_tensor * cur,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_pos) {
+    const auto & layer = model.layers[il];
+
+    const int64_t n_ihead   = hparams.indexer_n_head;
+    const int64_t head_size = hparams.indexer_head_size;
+    const int64_t rope_dim  = n_rot;              // n_embd_head_qk_rope
+    const int64_t nope_dim  = head_size - rope_dim;
+
+    // ---- indexer_q : {head_size * n_ihead, n_tokens} ----
+    ggml_tensor * indexer_q = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, qr);
+    cb(indexer_q, "dsa_indexer_q", il);
+
+    // split rope/nope along dim0, per head
+    ggml_tensor * indexer_q_pe = ggml_view_3d(ctx0, indexer_q, rope_dim, n_ihead, n_tokens,
+            ggml_row_size(indexer_q->type, head_size),
+            ggml_row_size(indexer_q->type, head_size) * n_ihead, 0);
+    ggml_tensor * indexer_q_nope = ggml_view_3d(ctx0, indexer_q, nope_dim, n_ihead, n_tokens,
+            ggml_row_size(indexer_q->type, head_size),
+            ggml_row_size(indexer_q->type, head_size) * n_ihead,
+            ggml_row_size(indexer_q->type, rope_dim));
+
+    indexer_q_pe = ggml_rope_ext(ctx0, ggml_cont(ctx0, indexer_q_pe), inp_pos, nullptr, n_rot,
+            LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+
+    // {head_size, n_ihead, n_tokens}
+    indexer_q = ggml_concat(ctx0, indexer_q_pe, ggml_cont(ctx0, indexer_q_nope), 0);
+    cb(indexer_q, "dsa_indexer_q_cat", il);
+
+    // ---- indexer_k : {head_size, n_tokens} (single key head, MQA) ----
+    ggml_tensor * indexer_k = ggml_mul_mat(ctx0, layer.indexer_attn_k, cur);
+    // LayerNorm (with weight + bias) over head_size
+    indexer_k = llm_build_norm(ctx0, indexer_k, hparams, layer.indexer_k_norm, layer.indexer_k_norm_b, LLM_NORM, cb, il);
+    cb(indexer_k, "dsa_indexer_k", il);
+
+    ggml_tensor * indexer_k_pe = ggml_view_3d(ctx0, indexer_k, rope_dim, 1, n_tokens,
+            ggml_row_size(indexer_k->type, head_size),
+            ggml_row_size(indexer_k->type, head_size), 0);
+    ggml_tensor * indexer_k_nope = ggml_view_3d(ctx0, indexer_k, nope_dim, 1, n_tokens,
+            ggml_row_size(indexer_k->type, head_size),
+            ggml_row_size(indexer_k->type, head_size),
+            ggml_row_size(indexer_k->type, rope_dim));
+
+    indexer_k_pe = ggml_rope_ext(ctx0, ggml_cont(ctx0, indexer_k_pe), inp_pos, nullptr, n_rot,
+            LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+
+    // {head_size, 1, n_tokens}
+    indexer_k = ggml_concat(ctx0, indexer_k_pe, ggml_cont(ctx0, indexer_k_nope), 0);
+    cb(indexer_k, "dsa_indexer_k_cat", il);
+
+    // ---- indexer weights : {n_ihead, n_tokens} ----
+    ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
+    indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(head_size * n_ihead)));
+    cb(indexer_weights, "dsa_indexer_weights", il);
+
+    // ---- scores ----
+    // indexer_q : {head_size, n_ihead, n_tokens} -> {head_size, n_tokens, n_ihead}
+    indexer_q = ggml_cont(ctx0, ggml_permute(ctx0, indexer_q, 0, 2, 1, 3));
+    // indexer_k : {head_size, 1, n_tokens} -> {head_size, n_tokens, 1}
+    indexer_k = ggml_cont(ctx0, ggml_permute(ctx0, indexer_k, 0, 2, 1, 3));
+
+    // {n_tokens(keys), n_tokens(q), n_ihead}  (k's head dim broadcasts over n_ihead)
+    ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
+    cb(indexer_kq, "dsa_indexer_kq", il);
+
+    // -> {n_ihead, n_tokens(q), n_tokens(keys)} for per-head weighting
+    indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
+
+    ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
+
+    // weights {n_ihead, n_tokens} -> {n_ihead, n_tokens, 1} broadcast over keys
+    indexer_weights = ggml_reshape_3d(ctx0, indexer_weights, n_ihead, n_tokens, 1);
+    indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
+
+    // sum over heads -> {1, n_tokens(q), n_tokens(keys)}
+    indexer_score = ggml_sum_rows(ctx0, indexer_score);
+
+    // -> {n_tokens(keys), n_tokens(q), 1}
+    indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
+    cb(indexer_score, "dsa_indexer_score", il);
+
+    // add base causal mask over the batch-local keys: first n_tokens rows/cols of KQ_mask
+    // (kv_head==0 => kv slots 0..n_tokens-1 are the batch positions). KQ_mask is {n_kv, n_tokens_pad}.
+    ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_tokens, n_tokens, KQ_mask->nb[1], 0);
+    indexer_score = ggml_add(ctx0, indexer_score, causal);
+    cb(indexer_score, "dsa_indexer_score_masked", il);
+
+    // top-k key positions per query: {n_top_k, n_tokens} (I32)
+    int n_top_k = (int) hparams.indexer_top_k;
+    if (n_top_k > (int) n_tokens) {
+        n_top_k = (int) n_tokens;
+    }
+    ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
+    cb(top_k, "dsa_top_k", il);
+
+    return top_k;
+}
+
+// Build an additive sparse causal mask {n_kv, n_tokens_pad} (F32): start at -inf everywhere,
+// unmask the top_k selected key positions per query, then add the base causal KQ_mask so that
+// any future/padding positions remain masked.
+ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
+        ggml_tensor * top_k,
+        ggml_tensor * KQ_mask) {
+    const int64_t n_kv_local = KQ_mask->ne[0];
+    const int64_t n_tok_pad  = KQ_mask->ne[1];
+    const int64_t n_top_k    = top_k->ne[0];
+    const int64_t n_tok      = top_k->ne[1];
+
+    // Fresh {n_kv, n_tokens_pad} F32 tensor, all -inf (ggml_fill dups KQ_mask, no clobber).
+    // Reshape to rows of size 1 so set_rows can unmask individual key positions:
+    //   {n_kv, n_tokens_pad} -> {1, n_kv, n_tokens_pad}
+    ggml_tensor * mask_all = ggml_fill(ctx0, KQ_mask, -INFINITY);
+    mask_all = ggml_reshape_3d(ctx0, mask_all, 1, n_kv_local, n_tok_pad);
+
+    // Operate only on the first n_tok token-planes (padding planes are unused outputs).
+    ggml_tensor * dest = ggml_view_3d(ctx0, mask_all, 1, n_kv_local, n_tok,
+            mask_all->nb[1], mask_all->nb[2], 0);
+
+    // zeros source: {1, n_top_k, n_tok}; indices: {n_top_k, n_tok, 1}
+    ggml_tensor * zeros = ggml_fill(ctx0,
+            ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_top_k, n_tok), 0.0f);
+    ggml_tensor * idx = ggml_reshape_3d(ctx0, top_k, n_top_k, n_tok, 1);
+
+    // unmask the selected key rows: result views dest -> {1, n_kv, n_tok}
+    ggml_tensor * unmasked = ggml_set_rows(ctx0, dest, zeros, idx);
+
+    // make contiguous and collapse the size-1 leading dim: {n_kv, n_tok}
+    ggml_tensor * sparse = ggml_reshape_2d(ctx0, ggml_cont(ctx0, unmasked), n_kv_local, n_tok);
+
+    // add base causal mask (first n_tok query columns) so future/padding keys stay -inf
+    ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv_local, n_tok, KQ_mask->nb[1], 0);
+    sparse = ggml_add(ctx0, sparse, causal);
+
+    // pad query dim back to n_tokens_pad so shape matches soft_max_ext's expectation
+    if (n_tok_pad > n_tok) {
+        ggml_tensor * pad = ggml_view_2d(ctx0, KQ_mask, n_kv_local, n_tok_pad - n_tok,
+                KQ_mask->nb[1], KQ_mask->nb[1] * n_tok);
+        sparse = ggml_concat(ctx0, sparse, pad, 1);
+    }
+    cb(sparse, "dsa_sparse_mask", -1);
+
+    return sparse;
+}
+
 // Layer-mode attention path (non-TP). Mirrors build_deepseek2_tp_attention's interface.
 ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
         ggml_cgraph * gf, int il,
@@ -342,6 +503,12 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     // norm
     cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "attn_norm", il);
+
+    // DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). Built below from the q_lora latent
+    // and used to construct a sparse causal mask. Defaults to the dense KQ_mask.
+    ggml_tensor * sparse_mask = KQ_mask;
+    ggml_tensor * top_k = nullptr;
+    (void) top_k; // captured for potential reuse/debug; only sparse_mask is consumed downstream
 
     // self_attention
     {
@@ -390,6 +557,16 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
                 q = llm_build_norm(ctx0, q, hparams, model.layers[il].attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(q, "q", il);
+
+                // DSA lightning indexer: compute the batch-local sparse top-k mask from the q_lora latent.
+                // NOTE: batch-local (no indexer KV-cache). Correct for prefill (cache starts empty, kv_head==0),
+                // where the indexer keys are exactly the current batch's tokens (kv slots 0..n_tokens-1).
+                static const bool dsa_disable = getenv("DSA_INDEXER_DISABLE") != nullptr;
+                if (!dsa_disable && model.arch == LLM_ARCH_GLM_DSA && model.layers[il].indexer_attn_q_b) {
+                    ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
+                    top_k = build_deepseek2_dsa_indexer(il, qr, cur, KQ_mask, inp_pos);
+                    sparse_mask = build_deepseek2_dsa_sparse_mask(top_k, KQ_mask);
+                }
 
                 q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
                 cb(q, "q", il);
@@ -647,7 +824,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                             cb(kq, "kq_perm", il);
                         }
 
-                        kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
+                        kq = ggml_soft_max_ext(ctx0, kq, sparse_mask, kq_scale, hparams.f_max_alibi_bias);
                         cb(kq, "kq_soft_max_ext", il);
 
                         if (!pp_opt) {
@@ -673,7 +850,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                             int this_ne12 = i_head + n_per_step <= q->ne[2] ? n_per_step : q->ne[2] - i_head;
                             ggml_tensor * q_i = ggml_view_3d(ctx0, q, q->ne[0], q->ne[1], this_ne12, q->nb[1], q->nb[2], q->nb[2]*i_head);
                             ggml_tensor * kq_i = ggml_mul_mat(ctx0, kv_cache, q_i);
-                            kq_i = ggml_soft_max_ext(ctx0, kq_i, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
+                            kq_i = ggml_soft_max_ext(ctx0, kq_i, sparse_mask, kq_scale, hparams.f_max_alibi_bias);
                             ggml_tensor * kqv_i = ggml_mul_mat(ctx0, kv_cache_trans, kq_i);
                             if (i_head == 0) {
                                 kqv_compressed = kqv_i;
