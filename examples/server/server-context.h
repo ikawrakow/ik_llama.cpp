@@ -251,6 +251,14 @@ struct server_context {
     // multimodal
     mtmd_context* mctx = nullptr;
 
+    // lazy mmproj GPU swap (like buun --mmproj-gpu-swap)
+    bool mmproj_lazy = false;
+    bool mmproj_swapped = false;
+    std::mutex mmproj_swap_mutex;
+    int mmproj_swap_count = 0;
+
+    static bool prompt_has_media(const server_tokens& tokens, size_t from, size_t to);
+
     int32_t n_ctx; // total context for all clients / slots
 
     // system prompt
@@ -321,6 +329,10 @@ struct server_context {
 
     // if multimodal is enabled, send an error and return false
     bool check_no_mtmd(const int id_task);
+
+    // lazy mmproj GPU swap
+    void swap_mmproj_to_gpu();
+    void swap_mmproj_to_cpu();
 
     void send_partial_response(server_slot& slot, completion_token_output tkn);
 
