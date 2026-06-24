@@ -5627,7 +5627,6 @@ bool clip_swap_to_gpu(struct clip_ctx * ctx) {
     if (!ctx->lazy_swap_enabled || !ctx->backend_gpu) return false;
     if (ctx->backend == ctx->backend_gpu) return true; // Already on GPU
 
-    // 清空旧的悬空指针强制 ggml 重新分配
     for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
         t->data = nullptr;
         t->buffer = nullptr;
@@ -5659,7 +5658,6 @@ bool clip_swap_to_cpu(struct clip_ctx * ctx) {
     if (!ctx->lazy_swap_enabled || !ctx->backend_gpu) return false;
     if (ctx->backend == ctx->backend_cpu) return true; // Already on CPU
 
-    // 清空旧的悬空指针强制 ggml 重新分配
     for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
         t->data = nullptr;
         t->buffer = nullptr;
