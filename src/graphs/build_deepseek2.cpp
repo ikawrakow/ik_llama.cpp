@@ -552,6 +552,40 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     return sparse;
 }
 
+// Adapt the (F32, unpadded {n_kv, n_tokens}) sparse mask for ggml_flash_attn_ext, which on this fork
+// requires the mask to be F16, contiguous, and padded in ne[1] to GGML_PAD(n_queries, GGML_KQ_MASK_PAD)
+// (build_inp_KQ_mask creates the dense -fa 1 mask exactly that way). We:
+//   1) cast the sparse mask to F16,
+//   2) concat the dense FA mask's padding rows [n_tok, n_pad) (already F16, causal -inf for the
+//      non-existent padded queries) onto the bottom so ne[1] matches the dense mask,
+//   3) ggml_cont so the result is contiguous (the FA assert requires it).
+// The padded rows feed only the discarded outputs of padded query slots, so reusing the dense mask's
+// padding region is both correct and the cheapest way to get the exact dense shape.
+ggml_tensor * llm_build_context::build_deepseek2_dsa_fa_mask(
+        ggml_tensor * sparse,
+        ggml_tensor * KQ_mask) {
+    const int64_t n_kv_local = KQ_mask->ne[0];
+    const int64_t n_tok      = sparse->ne[1];
+    const int64_t n_pad      = KQ_mask->ne[1];   // GGML_PAD(n_tokens, GGML_KQ_MASK_PAD)
+
+    GGML_ASSERT(KQ_mask->type == GGML_TYPE_F16 && "FA dense KQ_mask expected F16 on -fa 1");
+
+    ggml_tensor * sparse_f16 = ggml_cast(ctx0, sparse, GGML_TYPE_F16);   // {n_kv, n_tok} F16
+
+    ggml_tensor * fa_mask;
+    if (n_pad > n_tok) {
+        // dense padding rows: KQ_mask columns [n_tok, n_pad) -> {n_kv, n_pad - n_tok} F16
+        ggml_tensor * pad = ggml_view_2d(ctx0, KQ_mask, n_kv_local, n_pad - n_tok,
+                KQ_mask->nb[1], KQ_mask->nb[1] * n_tok);
+        fa_mask = ggml_concat(ctx0, sparse_f16, ggml_cont(ctx0, pad), 1); // {n_kv, n_pad} F16
+    } else {
+        fa_mask = sparse_f16;
+    }
+    fa_mask = ggml_cont(ctx0, fa_mask);
+    cb(fa_mask, "dsa_fa_mask", -1);
+    return fa_mask;
+}
+
 // Layer-mode attention path (non-TP). Mirrors build_deepseek2_tp_attention's interface.
 ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
         ggml_cgraph * gf, int il,
@@ -574,9 +608,13 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
     // DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). Built below from the q_lora latent
     // and used to construct a sparse causal mask. Defaults to the dense KQ_mask.
-    ggml_tensor * sparse_mask = KQ_mask;
+    //  - sparse_mask    : F32 additive sparse mask for the soft_max (-fa 0) path.
+    //  - sparse_mask_fa : F16, padded variant for the ggml_flash_attn_ext (-fa 1) path.
+    // Both default to the dense KQ_mask so non-DSA / disabled builds are unchanged.
+    ggml_tensor * sparse_mask    = KQ_mask;
+    ggml_tensor * sparse_mask_fa = KQ_mask;
     ggml_tensor * top_k = nullptr;
-    (void) top_k; // captured for potential reuse/debug; only sparse_mask is consumed downstream
+    (void) top_k; // captured for potential reuse/debug; only the masks are consumed downstream
 
     // self_attention
     {
@@ -635,6 +673,10 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                     ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
                     ggml_tensor * sorted = build_deepseek2_dsa_indexer(gf, il, qr, cur, KQ_mask, inp_pos);
                     sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
+                    // For the FA path the mask must be F16 + padded; build it from the F32 sparse mask.
+                    if (lctx.cparams.flash_attn) {
+                        sparse_mask_fa = build_deepseek2_dsa_fa_mask(sparse_mask, KQ_mask);
+                    }
                     top_k = sorted;
                 }
 
@@ -813,7 +855,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                     auto q_iter = ggml_view_3d(ctx0, q, q->ne[0], q->ne[1], n_max_head,
                             q->nb[1], q->nb[2], q->nb[2]*n_max_head*iter);
 
-                    kqv = ggml_flash_attn_ext(ctx0, q_iter, k, v, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                    kqv = ggml_flash_attn_ext(ctx0, q_iter, k, v, sparse_mask_fa, kq_scale, hparams.f_max_alibi_bias, 0.f);
                     if (use_f32_attn_precision || q->ne[1] <= 8) {
                         ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
                     }
@@ -854,7 +896,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                             ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
                     cb(kv_cache_lora, "kv_cache_lora", il);
 
-                    kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                    kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, sparse_mask_fa, kq_scale, hparams.f_max_alibi_bias, 0.f);
                     cb(kqv_compressed, "kqv_compressed", il);
 
                     if (use_f32_attn_precision) {
