@@ -1046,7 +1046,7 @@ void ggml_cuda_op_fused_rms_rms_add(ggml_backend_cuda_context & ctx, ggml_tensor
     else if (dst->src[0]->type == GGML_TYPE_BF16) {
         fused_rms_rms_add_f32_cuda(ncols, nrows, (float *)dst->data,
                 (const nv_bfloat16 *)dst->src[0]->data, (const float *)dst->src[1]->data,
-                (const nv_bfloat16 *)dst->src[2]->data, (const float *)dst->src[2]->data,
+                (const nv_bfloat16 *)dst->src[2]->data, (const float *)dst->src[3]->data,
                 eps, ctx.stream());
     }
     else {

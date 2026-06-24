@@ -77,7 +77,7 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
         const int ncols, int nrows, int64_t row_size) {
 
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const float * dptr = (const float *)((const char *)vx + row*row_size);
     const float d = *dptr * 31.75f * 1.05f;
@@ -121,7 +121,7 @@ static __global__ void dequantize_mul_mat_vec_iq3_kt(const void * __restrict__ v
         const int ncols, int nrows, int64_t row_size) {
 
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const float * dptr = (const float *)((const char *)vx + row*row_size);
     const float d = *dptr * 31.75f * 1.015f;
@@ -171,7 +171,7 @@ static __global__ void dequantize_mul_mat_vec_iq4_kt(const void * __restrict__ v
     constexpr int kNumGroups = 64;
 
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const float * dptr = (const float *)((const char *)vx + row*row_size);
     const float d = dptr[0] * 31.75f * 1.01f;
@@ -234,7 +234,7 @@ static __global__ void dequantize_mul_mat_vec_q2_k(const void * __restrict__ vx,
     static_assert(16%K_QUANTS_PER_ITERATION == 0, "16 must be divisible by K_QUANTS_PER_ITERATION");
 
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -303,7 +303,7 @@ static __global__ void dequantize_mul_mat_vec_q2_k(const void * __restrict__ vx,
 static __global__ void dequantize_mul_mat_vec_q3_k(const void * __restrict__ vx, const float * __restrict__ yy, float * __restrict__ dst, const int ncols, int nrows) {
 
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -374,7 +374,7 @@ static __global__ void dequantize_mul_mat_vec_q3_k(const void * __restrict__ vx,
 static __global__ void dequantize_mul_mat_vec_q4_k(const void * __restrict__ vx, const float * __restrict__ yy, float * __restrict__ dst, const int ncols, int nrows) {
 
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row > nrows) return;
+    if (row >= nrows) return;
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
 
@@ -566,7 +566,7 @@ static __global__ void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx,
     static_assert(16%K_QUANTS_PER_ITERATION == 0, "16 must be divisible by K_QUANTS_PER_ITERATION");
 
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;

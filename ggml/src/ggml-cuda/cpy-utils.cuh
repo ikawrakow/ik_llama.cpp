@@ -229,7 +229,7 @@ static __device__ void quantize_f32_q6_0_block(const float * __restrict__ xi, bl
 
     for (int j = 0; j < QK6_0/2; ++j) {
         const float x0 = xi[0       + j]*id;
-        const float x1 = xi[QK4_0/2 + j]*id;
+        const float x1 = xi[QK6_0/2 + j]*id;
 
         const uint8_t xi0 = min(63, (int8_t)(x0 + 32.5f));
         const uint8_t xi1 = min(63, (int8_t)(x1 + 32.5f));

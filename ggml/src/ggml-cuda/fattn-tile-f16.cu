@@ -350,7 +350,7 @@ void ggml_cuda_flash_attn_ext_tile_f16(ggml_backend_cuda_context & ctx, ggml_ten
     if (softcap == 0.0f) {
         launch_fattn_tile_f16_64_128<cols_per_block, parallel_blocks, false>(ctx, dst);
     } else {
-        launch_fattn_tile_f16_64_128<cols_per_block, parallel_blocks, false>(ctx, dst);
+        launch_fattn_tile_f16_64_128<cols_per_block, parallel_blocks, true>(ctx, dst);
     }
 }
 
