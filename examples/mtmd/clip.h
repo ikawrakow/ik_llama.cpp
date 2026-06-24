@@ -36,7 +36,11 @@ struct clip_context_params {
     int image_min_tokens;
     int image_max_tokens;
     ggml_type kq_type;
+    bool lazy_swap;
 };
+
+bool clip_swap_to_gpu(struct clip_ctx * ctx);
+bool clip_swap_to_cpu(struct clip_ctx * ctx);
 
 struct clip_init_result {
     struct clip_ctx * ctx_v; // vision context
