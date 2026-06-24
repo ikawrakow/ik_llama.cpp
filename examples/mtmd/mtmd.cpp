@@ -103,6 +103,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
         /* kq_type           */ GGML_TYPE_F32,
+        /* lazy_swap         */ false,
     };
     return params;
 }
@@ -172,6 +173,7 @@ struct mtmd_context {
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
             /* kq_type           */ ctx_params.kq_type,
+            /* lazy_swap         */ ctx_params.lazy_swap,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
@@ -401,6 +403,20 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 
 void mtmd_free(mtmd_context * ctx) {
     delete ctx;
+}
+
+bool mtmd_swap_to_gpu(mtmd_context * ctx) {
+    bool ok = true;
+    if (ctx->ctx_v) ok &= clip_swap_to_gpu(ctx->ctx_v);
+    if (ctx->ctx_a) ok &= clip_swap_to_gpu(ctx->ctx_a);
+    return ok;
+}
+
+bool mtmd_swap_to_cpu(mtmd_context * ctx) {
+    bool ok = true;
+    if (ctx->ctx_v) ok &= clip_swap_to_cpu(ctx->ctx_v);
+    if (ctx->ctx_a) ok &= clip_swap_to_cpu(ctx->ctx_a);
+    return ok;
 }
 
 struct mtmd_tokenizer {
