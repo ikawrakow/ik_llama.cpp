@@ -461,7 +461,13 @@ struct clip_ctx {
 
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
+    ggml_backend_t backend_gpu = nullptr;
     ggml_backend_buffer_ptr buf;
+
+    bool lazy_swap_enabled = false;
+    std::vector<uint8_t> weights_backup;
+    std::vector<std::pair<ggml_tensor *, size_t>> backup_offsets;
+
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
@@ -475,6 +481,7 @@ struct clip_ctx {
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
         kq_type = ctx_params.kq_type;
+        lazy_swap_enabled = ctx_params.lazy_swap;
         debug_graph = std::getenv("MTMD_DEBUG_GRAPH") != nullptr;
         //backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         backend_cpu = ggml_backend_cpu_init();
@@ -487,17 +494,20 @@ struct clip_ctx {
         if (ctx_params.use_gpu) {
             auto backend_name = std::getenv("MTMD_BACKEND_DEVICE");
             if (backend_name != nullptr) {
-                //backend = ggml_backend_init_by_name(backend_name, nullptr);
-                backend = ggml_backend_reg_init_backend_from_str(backend_name);
-                if (!backend) {
+                backend_gpu = ggml_backend_reg_init_backend_from_str(backend_name);
+                if (!backend_gpu) {
                     LOG_WRN("%s: Warning: Failed to initialize \"%s\" backend, falling back to default GPU backend\n", __func__, backend_name);
                 }
             }
-            if (!backend && n_backend > 1) {
-                backend = ggml_backend_reg_init_backend(1, nullptr);
-                //backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
-                //backend = backend ? backend : ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
+            if (!backend_gpu && n_backend > 1) {
+                backend_gpu = ggml_backend_reg_init_backend(1, nullptr);
             }
+        }
+
+        if (lazy_swap_enabled && backend_gpu) {
+            backend = backend_cpu;
+        } else {
+            backend = backend_gpu ? backend_gpu : backend_cpu;
         }
 
         if (backend) {
@@ -507,6 +517,8 @@ struct clip_ctx {
         } else {
             backend = backend_cpu;
             LOG_INF("%s: CLIP using CPU backend\n", __func__);
+            backend_ptrs.push_back(backend);
+            backend_buft.push_back(ggml_backend_get_default_buffer_type(backend));
         }
 
         if (ctx_params.image_min_tokens > 0) {
@@ -3719,26 +3731,55 @@ struct clip_model_loader {
                 throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
             }
 
-            // alloc memory and offload data
-            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            for (auto & t : tensors_to_load) {
-                ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
-                const size_t offset = tensor_offset[t->name];
-                fin.seekg(offset, std::ios::beg);
-                if (!fin) {
-                    throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+            if (ctx_clip.lazy_swap_enabled) {
+                size_t total_size = 0;
+                for (auto & t : tensors_to_load) {
+                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    total_size += ggml_nbytes(cur);
                 }
-                size_t num_bytes = ggml_nbytes(cur);
-                if (ggml_backend_buft_is_host(buft)) {
-                    // for the CPU and Metal backend, we can read directly into the tensor
-                    fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
-                } else {
-                    // read into a temporary buffer first, then copy to device memory
-                    read_buf.resize(num_bytes);
-                    fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                ctx_clip.weights_backup.resize(total_size);
+                
+                size_t offset = 0;
+                for (auto & t : tensors_to_load) {
+                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    ctx_clip.backup_offsets.push_back({cur, offset});
+                    
+                    const size_t file_offset = tensor_offset[t->name];
+                    fin.seekg(file_offset, std::ios::beg);
+                    fin.read(reinterpret_cast<char *>(ctx_clip.weights_backup.data() + offset), ggml_nbytes(cur));
+                    
+                    offset += ggml_nbytes(cur);
+                }
+                
+                ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                
+                for (auto & pair : ctx_clip.backup_offsets) {
+                    ggml_backend_tensor_set(pair.first, ctx_clip.weights_backup.data() + pair.second, 0, ggml_nbytes(pair.first));
+                }
+            } else {
+                // alloc memory and offload data
+                ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                for (auto & t : tensors_to_load) {
+                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    const size_t offset = tensor_offset[t->name];
+                    fin.seekg(offset, std::ios::beg);
+                    if (!fin) {
+                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                    }
+                    size_t num_bytes = ggml_nbytes(cur);
+                    if (ggml_backend_buft_is_host(buft)) {
+                        // for the CPU and Metal backend, we can read directly into the tensor
+                        fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
+                    } else {
+                        // read into a temporary buffer first, then copy to device memory
+                        read_buf.resize(num_bytes);
+                        fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
+                        ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                    }
                 }
             }
             fin.close();
@@ -5578,6 +5619,73 @@ bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_ULTRAVOX
         || ctx->proj_type() == PROJECTOR_TYPE_QWEN2A
         || ctx->proj_type() == PROJECTOR_TYPE_VOXTRAL;
+}
+
+
+
+bool clip_swap_to_gpu(struct clip_ctx * ctx) {
+    if (!ctx->lazy_swap_enabled || !ctx->backend_gpu) return false;
+    if (ctx->backend == ctx->backend_gpu) return true; // Already on GPU
+
+    // 清空旧的悬空指针强制 ggml 重新分配
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+        t->data = nullptr;
+        t->buffer = nullptr;
+    }
+
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx->backend_gpu);
+    ggml_backend_buffer_t new_buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx->ctx_data.get(), buft);
+    if (!new_buf) {
+        LOG_ERR("Failed to allocate mmproj tensors on GPU\n");
+        return false;
+    }
+    ctx->buf.reset(new_buf);
+    ggml_backend_buffer_set_usage(ctx->buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    for (auto & pair : ctx->backup_offsets) {
+        ggml_backend_tensor_set(pair.first, ctx->weights_backup.data() + pair.second, 0, ggml_nbytes(pair.first));
+    }
+
+    ctx->backend = ctx->backend_gpu;
+    ctx->backend_ptrs[0] = ctx->backend_gpu;
+    ctx->backend_buft[0] = buft;
+    ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(), ctx->backend_ptrs.size(), ctx->max_nodes, false));
+    
+    clip_model_loader::warmup(*ctx);
+    return true;
+}
+
+bool clip_swap_to_cpu(struct clip_ctx * ctx) {
+    if (!ctx->lazy_swap_enabled || !ctx->backend_gpu) return false;
+    if (ctx->backend == ctx->backend_cpu) return true; // Already on CPU
+
+    // 清空旧的悬空指针强制 ggml 重新分配
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+        t->data = nullptr;
+        t->buffer = nullptr;
+    }
+
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx->backend_cpu);
+    ggml_backend_buffer_t new_buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx->ctx_data.get(), buft);
+    if (!new_buf) {
+        LOG_ERR("Failed to allocate mmproj tensors on CPU\n");
+        return false;
+    }
+    ctx->buf.reset(new_buf);
+    ggml_backend_buffer_set_usage(ctx->buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    for (auto & pair : ctx->backup_offsets) {
+        ggml_backend_tensor_set(pair.first, ctx->weights_backup.data() + pair.second, 0, ggml_nbytes(pair.first));
+    }
+
+    ctx->backend = ctx->backend_cpu;
+    ctx->backend_ptrs[0] = ctx->backend_cpu;
+    ctx->backend_buft[0] = buft;
+    ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(), ctx->backend_ptrs.size(), ctx->max_nodes, false));
+    clip_model_loader::warmup(*ctx);
+
+    
+    return true;
 }
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {
