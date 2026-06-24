@@ -360,6 +360,18 @@ static void test_loops(testing & t) {
         json::object(),
         "012"
     );
+
+    // {% set %} of a non-loop variable inside a loop body must not leak across
+    // iterations. When a variable is only assigned on some iterations (here via
+    // a conditional branch), the engine must still treat it as undefined on the
+    // iterations where the branch is not taken, rather than reusing the value
+    // from a previous iteration. This matches standard Jinja2 semantics, where
+    // each loop iteration starts with a fresh scope.
+    test_template(t, "conditional set does not leak across iterations",
+        "{%- for m in msgs %}{% if m.x %}{% set r = m.x %}{% endif %}[{{ r|default('-') }}]{% endfor %}",
+        {{"msgs", json::array({json{{"x", "a"}}, json::object(), json{{"x", "c"}}})}},
+        "[a][-][c]"
+    );
 }
 
 static void test_expressions(testing & t) {
