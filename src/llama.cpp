@@ -7146,7 +7146,7 @@ struct llama_context * llama_init_from_model(
         // main_gpu is a local index into model->devices throughout the codebase
         // (auto-fit assigns device_count-1, MTP clamps to [0, device_count), buffer-type
         // setup wraps with model.devices[main_gpu]). Translate to a raw device id here.
-        const int main_gpu_id = (model->main_gpu >= 0 && model->main_gpu < (int)model->devices.size())
+        [[maybe_unused]] const int main_gpu_id = (model->main_gpu >= 0 && model->main_gpu < (int)model->devices.size())
             ? model->devices[model->main_gpu]
             : model->main_gpu;
 #if defined(GGML_USE_METAL)

@@ -1053,7 +1053,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
 // Returns false if cancelled by progress_callback
 bool llama_model_loader::load_all_data(
             struct ggml_context * ctx,
-            struct llama_model * model,
+            [[maybe_unused]] llama_model * model,
             llama_buf_map & bufs_mmap,
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
