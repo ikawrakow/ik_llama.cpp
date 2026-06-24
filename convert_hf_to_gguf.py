@@ -2477,6 +2477,17 @@ class DFlashDraftModel(Qwen3Model):
 
         self.gguf_writer.add_uint32(f"{arch}.dflash.n_target_features", n_target_features)
 
+        # DFlash drafts may be trained with sliding-window attention (for long-context). When the
+        # source config enables it, emit the window size + an all-layers SWA pattern so the runtime
+        # activates the kq_mask_swa path. Absent/false => dense draft (behavior unchanged).
+        use_sliding_window = self.hparams.get("use_sliding_window")
+        sliding_window = self.hparams.get("sliding_window")
+        if use_sliding_window and sliding_window:
+            n_swa_layers = int(self.hparams.get("num_hidden_layers", self.block_count))
+            self.gguf_writer.add_sliding_window(int(sliding_window))
+            self.gguf_writer.add_sliding_window_pattern([True] * n_swa_layers)
+            logger.info("DFlashDraftModel: sliding_window=%d, all %d layers SWA", int(sliding_window), n_swa_layers)
+
         logger.info(
             "DFlashDraftModel metadata: block_size=%s mask_token_id=%s target_layer_ids=%s n_target_features=%s",
             block_size,
