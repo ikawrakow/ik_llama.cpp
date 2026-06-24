@@ -176,7 +176,7 @@ parallel:
 
 multi-modality:
 
-         --mmproj FILE            path to a multimodal projector file for LLaVA. see examples/llava/README.md
+         --mmproj FILE            path to a multimodal projector file. see examples/mtmd/README.md
          --image FILE             path to an image file. use with multimodal models. Specify multiple times for batching
 
 backend:
