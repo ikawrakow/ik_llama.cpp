@@ -468,6 +468,7 @@ struct gpt_params {
     // multimodal models (see examples/mtmd)
     common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
+    bool mmproj_gpu_lazy = false;   // lazy swap mmproj to GPU only when image present (like buun --mmproj-gpu-swap)
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
     int image_min_tokens = -1;
