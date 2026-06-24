@@ -302,6 +302,12 @@ struct llm_build_context {
             ggml_tensor * sorted,   // [n_kv, n_tokens] (I32) full descending argsort of scores
             ggml_tensor * KQ_mask); // F32 causal mask [n_kv, n_tokens_pad]
 
+    // Adapt the (F32, unpadded) sparse mask to the shape/dtype ggml_flash_attn_ext requires on this
+    // fork: F16, contiguous, ne[1] padded to GGML_KQ_MASK_PAD (== the dense KQ_mask's padded shape).
+    ggml_tensor * build_deepseek2_dsa_fa_mask(
+            ggml_tensor * sparse,   // [n_kv, n_tokens] (F32) additive sparse causal mask
+            ggml_tensor * KQ_mask); // FA dense mask [n_kv, n_tokens_pad] (F16 when -fa 1)
+
     ggml_cgraph * build_glm4_moe();
 
     ggml_cgraph * build_bitnet();
