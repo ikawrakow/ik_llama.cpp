@@ -41,6 +41,7 @@ struct llama_cparams {
     bool graph_reuse;
     bool k_cache_hadamard;
     bool v_cache_hadamard;
+    bool dsa_indexer_hadamard = true; // apply Walsh-Hadamard rotation to DSA indexer q/k (precision)
     bool split_mode_graph_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;

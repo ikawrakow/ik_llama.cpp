@@ -950,6 +950,13 @@ static bool llama_kv_cache_init(
     if (needs_v_cache) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
 
+    // DSA lightning-indexer key cache: one [indexer_head_size, kv_size] tensor per layer.
+    // Allocated below (in the MLA branch) only when the model carries the indexer tensors.
+    const bool has_dsa_indexer = model.arch == LLM_ARCH_GLM_DSA && hparams.indexer_head_size > 0;
+    if (has_dsa_indexer) {
+        cache.kr_l.resize(n_layer, nullptr);
+    }
+
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
     const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
@@ -995,6 +1002,13 @@ static bool llama_kv_cache_init(
             ggml_tensor * kv = ggml_new_tensor_2d(ctx, primary_kv_type, kv_lora_rank + n_embd_head_qk_rope, kv_size);
             ggml_format_name(kv, "cache_k_l%d", i);
             cache.k_l.push_back(kv);
+            // DSA lightning-indexer key cache (MQA, single head). Store the Hadamard-rotated
+            // indexer keys in F16 so a decoded token can score against ALL past keys.
+            if (has_dsa_indexer && model.layers[i].indexer_attn_k && !is_mtp_tail_layer) {
+                ggml_tensor * kr = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, hparams.indexer_head_size, kv_size);
+                ggml_format_name(kr, "cache_kr_l%d", i);
+                cache.kr_l[i] = kr;
+            }
             if (!cparams.flash_attn && cparams.mla_attn == 1) {
                 ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
                 ggml_format_name(kvt, "cache_v_l%d", i);
@@ -4278,6 +4292,26 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     const auto & hparams = lctx.model.hparams;
     const auto & cparams = lctx.cparams;
     const auto & kv_self = lctx.kv_self;
+
+    if (lctx.inp_dsa_hadamard) {
+        // Walsh-Hadamard orthonormal rotation matrix for the DSA lightning indexer.
+        // res^2 == I; applied to indexer q and k (score-preserving, improves cached-K precision).
+        const int64_t n = lctx.inp_dsa_hadamard->ne[0];
+        GGML_ASSERT(lctx.inp_dsa_hadamard->ne[1] == n);
+        std::vector<float> h((size_t)n*n, 0.0f);
+        h[0] = 1.0f / sqrtf((float) n);
+        for (int64_t s = 1; s < n; s *= 2) {
+            for (int64_t i = 0; i < s; i++) {
+                for (int64_t j = 0; j < s; j++) {
+                    const float val = h[i*n + j];
+                    h[(i + s)*n + (j    )] =  val;
+                    h[(i    )*n + (j + s)] =  val;
+                    h[(i + s)*n + (j + s)] = -val;
+                }
+            }
+        }
+        ggml_backend_tensor_set(lctx.inp_dsa_hadamard, h.data(), 0, ggml_nbytes(lctx.inp_dsa_hadamard));
+    }
 
     if (batch.token && lctx.inp_tokens) {
 #if IK_PRINT_TIMING == 2

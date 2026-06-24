@@ -61,6 +61,12 @@ struct llama_kv_cache {
     std::vector<struct ggml_tensor *> v_l;
     std::vector<struct ggml_tensor *> s_l; // per layer recurrent state storage (Qwen3Next)
 
+    // DSA lightning-indexer key cache (GLM-5.2 / DeepSeek-V3.2). One per layer, MQA single
+    // head: [indexer_head_size, kv_size]. Mirrors k_l but stores the (Hadamard-rotated)
+    // indexer keys so a decoded token scores against ALL past indexer keys, not just the
+    // current batch. Empty unless the model has the DSA indexer.
+    std::vector<struct ggml_tensor *> kr_l;
+
     // When true, the delta_net graph builder will enable per-step SSM state saves
     bool save_per_step_ssm = false;
 
@@ -378,6 +384,7 @@ struct llama_context {
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
     struct ggml_tensor * inp_mtp_states = nullptr;
+    struct ggml_tensor * inp_dsa_hadamard = nullptr; // F32 [nrot, nrot] Walsh-Hadamard rotation for DSA indexer
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
