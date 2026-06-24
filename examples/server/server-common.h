@@ -378,6 +378,12 @@ public:
     llama_token operator[](size_t index) { return tokens[index]; }
     const llama_token& operator[](size_t index) const { return tokens[index]; }
 
+    // whether there is a media chunk (image/audio) with start index in [from, to)
+    bool has_media_in_range(size_t from, size_t to) const {
+        auto it = map_idx_to_media.lower_bound(from);
+        return it != map_idx_to_media.end() && it->first < to;
+    }
+
     server_tokens(mtmd::input_chunks& mtmd_chunks, bool has_mtmd);
 
     server_tokens(const llama_tokens& tokens, bool has_mtmd);
