@@ -90,9 +90,14 @@ struct mtmd_context_params {
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
     ggml_type kq_type;
+    bool lazy_swap;       // Enable lazy GPU swapping for mmproj
 };
 
 MTMD_API const char * mtmd_default_marker(void);
+
+// Swap backend interfaces
+MTMD_API bool mtmd_swap_to_gpu(mtmd_context * ctx);
+MTMD_API bool mtmd_swap_to_cpu(mtmd_context * ctx);
 
 MTMD_API struct mtmd_context_params mtmd_context_params_default(void);
 
@@ -220,6 +225,9 @@ MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 MTMD_API mtmd_input_chunk * mtmd_create_input_chunk(void);
 MTMD_API mtmd_input_chunk * mtmd_input_chunk_from_json(json & j);
 MTMD_API void mtmd_input_chunk_to_json(mtmd_input_chunk * chunk, json & j);
+
+MTMD_API bool mtmd_swap_to_gpu(mtmd_context * ctx);
+MTMD_API bool mtmd_swap_to_cpu(mtmd_context * ctx);
 
 /////////////////////////////////////////
 
