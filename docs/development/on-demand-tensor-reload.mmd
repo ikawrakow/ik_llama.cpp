@@ -1,0 +1,88 @@
+graph TD
+    START([Start]) --> ENV{LLAMA_HOTSWAP_ENABLED?}
+    ENV -->|No| ENDD([End])
+    ENV -->|Yes| LOAD[Registration Phase<br/>llama_model_load]
+
+    subgraph Load_Time [Load Time]
+        LOAD --> REG[Populate model.reload->tensor_reload_sources<br/>path / offset / mtime / nbytes]
+    end
+
+    REG --> CALL([User calls<br/>llama_reload_changed_tensors])
+
+    CALL --> SNAP{Snapshots<br/>done?}
+    SNAP -->|No| EAGER[snapshot_all_reload_tensors<br/>Capture original_buffer / data / type / ne / nb<br/>Capture original_splits<br/>Discover MoE siblings via populate_moe_siblings]
+    SNAP -->|Yes| DET
+
+    subgraph Detection [Detection Phase]
+        DET[reload_changed_tensors] --> STAT[For each registered tensor:<br/>stat source file]
+        STAT --> CHG{mtime / mtime_ns<br/>changed?}
+        CHG -->|No| SKIP[Skip]
+        CHG -->|Yes| META[gguf_find_tensor_meta<br/>Parse GGUF header only<br/>Get new offset / type / size / ne]
+        META --> DIM{"model ne[i] == file ne[i]?"}
+        DIM -->|No| SKIP2[Skip: dimension mismatch]
+        DIM -->|Yes| JOB[Add to job list<br/>Mark returning = <br/>new_type == original_type]
+    end
+
+    JOB --> SORT[Sort jobs<br/>Returning to original FIRST]
+
+    subgraph Per_Tensor_Reload [Per-Tensor Reload Loop]
+        SORT --> LOOP[For each job:<br/>reload_tensor name]
+
+        LOOP --> RET{Returning to<br/>original?}
+
+        RET -->|Yes| OG_SPLIT{Is split tensor?<br/>tensor->extra != nullptr}
+        OG_SPLIT -->|Yes| REATT_SP[reattach_split_tensor_to_shared<br/>Restore original_buffer / data / extra<br/>Restore original_splits<br/>Free old private buffers ONLY]
+        OG_SPLIT -->|No| REATT_NS[Restore original_buffer / data<br/>Restore original_type / ne / nb]
+        REATT_SP --> ST_ORIG[Set state = ON_ORIGINAL]
+        REATT_NS --> ST_ORIG
+        ST_ORIG --> MT[Update file mtime]
+
+        RET -->|No| TCHG{Type changed<br/>from snapshot?}
+        TCHG -->|Yes| APPLY["apply_tensor_type_change<br/>Update tensor->type / nb[]<br/>If split & blck_size>1:<br/>Re-round per-device ne[0] to block multiples"]
+        TCHG -->|No| KEEP[Keep current metadata]
+        APPLY --> READ[Read new bytes from disk<br/>into host_buf]
+        KEEP --> READ
+        READ --> IS_SPLIT{Is split tensor?}
+
+        IS_SPLIT -->|Yes| SPATH[Split Path:<br/>reload_tensor_split_path]
+        SPATH --> F_SP[Free old main & split buffers<br/>ONLY if state != ON_ORIGINAL]
+        F_SP --> A_SP[Allocate new main buffer<br/>alloc_buffer_fallback<br/>GPU preferred, CPU fallback]
+        A_SP --> AL_SP[ggml_backend_tensor_alloc]
+        AL_SP --> C_SP["ggml_backend_tensor_set<br/>host_buf -> device"]
+        C_SP --> SIB{Has MoE siblings<br/>in this layer?}
+        SIB -->|Yes| RESYNC[resync_moe_sibling_splits]
+        SIB -->|No| ST_DET1[Set state = DETACHED]
+
+        subgraph MoE_Resync [MoE Sibling Resync]
+            RESYNC --> RRET{Is reference<br/>returning to original?}
+            RRET -->|Yes| R_SIB[reattach_split_tensor_to_shared<br/>for each sibling<br/>Zero-copy restore]
+            RRET -->|No| PHA[Phase A: Detach siblings<br/>Free old non-original buffers<br/>Alloc new main handles<br/>data = 0x1 dummy]
+            PHA --> PHB["Phase B: Propagate ref dimensions<br/>to siblings<br/>Recompute nb[] via temp ggml_context"]
+            PHB --> PHC[Phase C: Alloc per-device<br/>GPU split buffers]
+            PHC --> PHF{Any GPU alloc<br/>failed?}
+            PHF -->|Yes| PHD[Phase D: Move ENTIRE layer to CPU<br/>Free GPU splits<br/>Alloc CPU buffer<br/>State = FALLBACK_CPU]
+            PHF -->|No| PHE[Phase E: ggml_backend_tensor_set<br/>Write sibling data back]
+            PHD --> PHE
+            PHE --> ST_DET1
+            R_SIB --> ST_DET1
+        end
+
+        IS_SPLIT -->|No| NSPATH[Non-Split Path:<br/>reload_tensor_non_split_path]
+        NSPATH --> F_NS[Free old buffer<br/>ONLY if state != ON_ORIGINAL]
+        F_NS --> A_NS[Allocate new buffer<br/>alloc_buffer_fallback]
+        A_NS --> AL_NS[ggml_backend_tensor_alloc]
+        AL_NS --> C_NS["ggml_backend_tensor_set<br/>host_buf -> device"]
+        C_NS --> ST_DET2[Set state = DETACHED]
+        ST_DET2 --> MT
+        ST_DET1 --> MT
+    end
+
+    MT --> MORE{More jobs?}
+    MORE -->|Yes| LOOP
+    MORE -->|No| RELOADED{Any tensor<br/>actually reloaded?}
+
+    RELOADED -->|No| ENDD
+    RELOADED -->|Yes| INV[ggml_backend_cuda_invalidate_graphs<br/>Clear cuda_graphs on ALL devices]
+    INV --> CTX["Reset cached compute graphs<br/>ctx->prev.reset()<br/>ctx->prev_mtp.reset()"]
+    CTX --> REUSE[can_reuse_graph sees no cached graph<br/>Forces full graph rebuild<br/>on next eval]
+    REUSE --> ENDD

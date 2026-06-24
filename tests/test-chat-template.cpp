@@ -23,6 +23,7 @@
 using json = nlohmann::ordered_json;
 
 static int main_automated_tests(void);
+static common_chat_msg simple_msg(const std::string & role, const std::string & content);
 
 static void run_multiple(const std::string& dir_path, bool stop_on_first_failure, const json& input, bool use_common = false);
 static void run_single(const std::string& contents, json input, bool use_common = false, const std::string & output_path = "");
@@ -225,7 +226,6 @@ static std::string normalize_newlines(const std::string & s) {
 #endif
 }
 
-
 static std::string format_using_common(
             const std::string & template_str,
             const std::string & bos_token,
@@ -241,6 +241,87 @@ static std::string format_using_common(
     auto output = common_chat_templates_apply(tmpls.get(), inputs).prompt;
     output = normalize_newlines(output);
     return output;
+}
+
+static void test_minimax_m3_native_tool_parser(void) {
+    const std::string template_str = R"(
+{%- set ns_token = ']<]minimax[>[' -%}
+{%- set toolcall_begin_token = ns_token ~ '<tool_call>' -%}
+{%- set toolcall_end_token = ns_token ~ '</tool_call>' -%}
+{%- for message in messages -%}
+{{- message.role ~ ': ' ~ message.content ~ '\n' -}}
+{%- endfor -%}
+{%- if tools -%}
+{{- toolcall_begin_token ~ ns_token ~ '<invoke name="example">' ~ ns_token ~ '</invoke>' ~ toolcall_end_token -}}
+{%- endif -%}
+{%- if add_generation_prompt -%}
+{{- '<mm:think>' -}}
+{%- endif -%}
+)";
+
+    common_chat_templates_inputs inputs;
+    inputs.use_jinja = true;
+    inputs.messages = { simple_msg("user", "Call a tool") };
+    inputs.add_generation_prompt = true;
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    inputs.enable_thinking = true;
+    inputs.parallel_tool_calls = true;
+    inputs.tools = {
+        common_chat_tool{
+            /* .name = */ "special_function",
+            /* .description = */ "Test function",
+            /* .parameters = */ R"({
+                "type": "object",
+                "properties": {
+                    "arg1": { "type": "integer" }
+                },
+                "required": ["arg1"]
+            })",
+        },
+        common_chat_tool{
+            /* .name = */ "python",
+            /* .description = */ "Run Python",
+            /* .parameters = */ R"({
+                "type": "object",
+                "properties": {
+                    "code": { "type": "string" }
+                },
+                "required": ["code"]
+            })",
+        },
+    };
+
+    common_chat_templates_ptr tmpls(common_chat_templates_init(/* model= */ nullptr, template_str));
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+    assert(params.format == COMMON_CHAT_FORMAT_PEG_NATIVE);
+    assert(!params.parser.empty());
+
+    common_peg_arena arena;
+    arena.load(params.parser);
+
+    common_chat_parser_params parser_params(params);
+    parser_params.parser = arena;
+
+    const std::string output =
+        "Calling both</mm:think>\n"
+        "]<]minimax[>[<tool_call>\n"
+        "]<]minimax[>[<invoke name=\"special_function\">"
+        "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[<invoke name=\"python\">"
+        "]<]minimax[>[<code>print('hey')]<]minimax[>[</code>"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>";
+
+    auto msg = common_chat_parse(output, /* is_partial = */ false, parser_params);
+    assert(msg.reasoning_content == "Calling both");
+    assert(msg.content.empty());
+    assert(msg.tool_calls.size() == 2);
+    assert(msg.tool_calls[0].name == "special_function");
+    assert(json::parse(msg.tool_calls[0].arguments) == json::parse(R"({"arg1": 1})"));
+    assert(msg.tool_calls[1].name == "python");
+    assert(json::parse(msg.tool_calls[1].arguments) == json::parse("{\"code\": \"print('hey')\"}"));
 }
 
 
@@ -335,6 +416,8 @@ static common_chat_msg simple_msg(const std::string & role, const std::string & 
 
 int main_automated_tests(void) {
     // jinja::enable_debug(true);
+
+    test_minimax_m3_native_tool_parser();
 
     std::vector<llama_chat_message> conversation {
         {"system", "You are a helpful assistant"},

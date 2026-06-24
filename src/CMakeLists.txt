@@ -53,6 +53,8 @@ add_library(llama
             llama-build-context.cpp
             llama-model.h
             llama-model.cpp
+            llama-reload-info.h
+            llama-reload.cpp
             llama-quantize.cpp
             llama-arch.h
             llama-arch.cpp
@@ -140,4 +142,7 @@ endif()
 
 if (GGML_MAX_CONTEXTS)
     add_compile_definitions(GGML_MAX_CONTEXTS=${GGML_MAX_CONTEXTS})
+endif()
+if (GGML_MAX_SRC)
+  add_compile_definitions(GGML_MAX_SRC=${GGML_MAX_SRC})
 endif()

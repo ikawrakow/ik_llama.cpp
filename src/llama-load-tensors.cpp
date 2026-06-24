@@ -1198,8 +1198,18 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         //layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
         //layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head_l, n_embd}, 0);
-        // head-wise attention gate (Step35 self_attn.g_proj)
-        layer.wqkv_gate = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_head_l}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        const std::string attn_gate_name = tn(LLM_TENSOR_ATTN_GATE, "weight", i);
+        int64_t n_attn_gate = n_head_l;
+        if (model.arch == LLM_ARCH_LAGUNA) {
+            // Step35-style models normally use a head-wise attention gate. Laguna
+            // XS.2 keeps that layout, but M.1 gates every attention output element,
+            // so infer the width from GGUF metadata instead of baking in a model size.
+            const ggml_tensor * meta = ml.get_tensor_meta(attn_gate_name.c_str());
+            if (meta && meta->ne[1] == n_embd_head_v * n_head_l) {
+                n_attn_gate = n_embd_head_v * n_head_l;
+            }
+        }
+        layer.wqkv_gate = create_tensor(ctx_split, attn_gate_name, {n_embd, n_attn_gate}, llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
         // dense MLP (leading dense blocks)
         layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -4681,11 +4691,15 @@ bool create_tensors_helper::create_tensors() {
                 }
                 if (layer.wqkv_gate) {
                     auto wqkv_gate_split = split_kq;
-                    LLAMA_LOG_DEBUG("=================== wqkv_gate_split:");
-                    for (auto & s : wqkv_gate_split) {
-                        s /= hparams.n_embd_head_k(il);
-                        LLAMA_LOG_DEBUG(" %d", s);
+                    if (model.arch == LLM_ARCH_LAGUNA && layer.wqkv_gate->ne[1] == layer.wo->ne[0]) {
+                        // Full-width Laguna M.1 gates follow the value/output partition.
+                        // Head-wise gates still follow the K/Q partition collapsed by head size.
+                        wqkv_gate_split = split_vo;
+                    } else {
+                        for (auto & s : wqkv_gate_split) s /= hparams.n_embd_head_k(il);
                     }
+                    LLAMA_LOG_DEBUG("=================== wqkv_gate_split:");
+                    for ([[maybe_unused]] auto s : wqkv_gate_split) LLAMA_LOG_DEBUG(" %d", s);
                     LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(1, ctx_split, layer.wqkv_gate, layer.split_wqkv_gate, wqkv_gate_split, mem_used);
                 }
