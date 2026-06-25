@@ -166,6 +166,13 @@ common_peg_parser analyze_content::build_parser(parser_build_context & ctx) cons
         }
         return content + p.end();
     }
+    if (ctx.extracting_reasoning && ctx.reasoning && !ctx.reasoning->end.empty()) {
+        auto content = p.tag_with_safe_content(
+            common_chat_peg_builder::CONTENT,
+            trim_whitespace(ctx.reasoning->end),
+            p.optspace(ctx.reasoning->end));
+        return ctx.reasoning_parser + content + p.end();
+    }
     return ctx.reasoning_parser + p.content(p.rest()) + p.end();
 }
 

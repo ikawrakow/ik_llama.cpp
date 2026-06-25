@@ -58,6 +58,12 @@ static void test_nemotron_analysis(testing & t);
 static void test_nemotron_reasoning_detection(testing & t);
 static void test_nemotron_tool_format(testing & t);
 
+// Qwen template parser regression tests
+static void test_qwen_analysis(testing & t);
+static void test_qwen_no_think_stray_end_marker(testing & t);
+static void test_qwen_reasoning_none_preserves_marker(testing & t);
+static void test_qwen_initial_reasoning_still_routes(testing & t);
+
 // CohereForAI template analysis tests
 static void test_cohere_reasoning_detection(testing & t);
 static void test_cohere_analysis(testing & t);
@@ -103,6 +109,7 @@ int main(int argc, char * argv[]) {
     t.test("cohere", test_cohere_analysis);
     t.test("cohere2moe_parser", test_cohere2moe_parser);
     t.test("nemotron", test_nemotron_analysis);
+    t.test("qwen", test_qwen_analysis);
     t.test("smollm3", test_smollm3_analysis);
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
@@ -1377,6 +1384,121 @@ static void test_nemotron_tool_format(testing & t) {
 
     // Verify tool support
     t.assert_true("should support tools", analysis.jinja_caps.supports_tools);
+}
+
+// ============================================================================
+// Qwen Template Parser Regression Tests
+// ============================================================================
+static common_chat_template load_qwen_template(testing & t) {
+    return load_template(t, "models/templates/Qwen3.5-4B.jinja");
+}
+
+static void test_qwen_analysis(testing & t) {
+    t.test("Qwen no-think stray end marker", test_qwen_no_think_stray_end_marker);
+    t.test("Qwen reasoning_format=NONE preserves marker", test_qwen_reasoning_none_preserves_marker);
+    t.test("Qwen initial reasoning still routes", test_qwen_initial_reasoning_still_routes);
+}
+
+static void test_qwen_no_think_stray_end_marker(testing & t) {
+    common_chat_template tmpl = load_qwen_template(t);
+    common_chat_templates_ptr tmpls(common_chat_templates_init(/* model = */ nullptr, tmpl.source()));
+
+    common_chat_msg user;
+    user.role    = "user";
+    user.content = "Hello";
+
+    common_chat_templates_inputs inputs;
+    inputs.messages         = { user };
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    inputs.enable_thinking  = false;
+
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+    common_peg_arena arena;
+    arena.load(params.parser);
+    common_chat_parser_params parser_params(params);
+
+    const std::string generated = "First answer.</think>Final answer.";
+    const std::string expected  = "First answer.Final answer.";
+
+    auto final_msg = common_chat_peg_parse(arena, generated, /* is_partial = */ false, parser_params);
+    t.assert_equal("final content should strip stray reasoning end marker", expected, final_msg.content);
+    t.assert_equal("final reasoning should stay empty", "", final_msg.reasoning_content);
+
+    common_chat_msg previous;
+    common_chat_msg accumulated;
+    previous.role = accumulated.role = "assistant";
+
+    for (size_t i = 1; i <= generated.size(); ++i) {
+        auto current = common_chat_peg_parse(arena, generated.substr(0, i), /* is_partial = */ i < generated.size(), parser_params);
+        for (const auto & diff : common_chat_msg_diff::compute_diffs(previous, current)) {
+            t.assert_true("streaming content delta should not leak stray reasoning end marker",
+                diff.content_delta.find("</think>") == std::string::npos);
+            accumulated.content += diff.content_delta;
+            accumulated.reasoning_content += diff.reasoning_content_delta;
+        }
+        previous = current;
+    }
+
+    t.assert_equal("streaming accumulated content should strip stray reasoning end marker", expected, accumulated.content);
+    t.assert_equal("streaming accumulated reasoning should stay empty", "", accumulated.reasoning_content);
+}
+
+static void test_qwen_reasoning_none_preserves_marker(testing & t) {
+    common_chat_template tmpl = load_qwen_template(t);
+    common_chat_templates_ptr tmpls(common_chat_templates_init(/* model = */ nullptr, tmpl.source()));
+
+    common_chat_msg user;
+    user.role    = "user";
+    user.content = "Hello";
+
+    common_chat_templates_inputs inputs;
+    inputs.messages         = { user };
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    inputs.enable_thinking  = false;
+
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+    common_peg_arena arena;
+    arena.load(params.parser);
+    common_chat_parser_params parser_params(params);
+
+    const std::string generated = "First answer.</think>Final answer.";
+
+    auto final_msg = common_chat_peg_parse(arena, generated, /* is_partial = */ false, parser_params);
+    t.assert_true("reasoning_format=NONE should keep generated marker in content",
+        final_msg.content.find(generated) != std::string::npos);
+    t.assert_true("reasoning_format=NONE should keep marker before generated final text",
+        final_msg.content.find("</think>Final answer.") != std::string::npos);
+    t.assert_equal("reasoning_format=NONE should not populate reasoning", "", final_msg.reasoning_content);
+}
+
+static void test_qwen_initial_reasoning_still_routes(testing & t) {
+    common_chat_template tmpl = load_qwen_template(t);
+    common_chat_templates_ptr tmpls(common_chat_templates_init(/* model = */ nullptr, tmpl.source()));
+
+    common_chat_msg user;
+    user.role    = "user";
+    user.content = "Hello";
+
+    common_chat_templates_inputs inputs;
+    inputs.messages         = { user };
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    inputs.enable_thinking  = true;
+
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+    common_peg_arena arena;
+    arena.load(params.parser);
+    common_chat_parser_params parser_params(params);
+
+    const std::string generated           = "Reasoning</think>Final answer.";
+    const std::string expected_reasoning  = "Reasoning";
+    const std::string expected_content    = "Final answer.";
+
+    auto final_msg = common_chat_peg_parse(arena, generated, /* is_partial = */ false, parser_params);
+    t.assert_equal("initial reasoning should route to reasoning_content", expected_reasoning, final_msg.reasoning_content);
+    t.assert_equal("content after initial reasoning should stay visible", expected_content, final_msg.content);
 }
 
 static common_chat_template load_cohere_template(testing & t) {
