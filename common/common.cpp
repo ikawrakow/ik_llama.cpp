@@ -5483,7 +5483,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             common_params_sampling::elb_param::elb_entry entry = {
                 max_keyword_len,
-                std::vector<size_t>(n_phrase, 0),
+                std::vector<int32_t>(n_phrase, 0),
                 std::move(addsubs),
                 std::vector<bool>(n_phrase, false),
                 std::move(phrases),

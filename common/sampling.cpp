@@ -924,7 +924,7 @@ void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float
                 ++count;
                 pos = search_window.find(phrase, pos + phrase.length());
             }
-            entry.search_posi[j] = SSIZE(ctx_sampling->generated_text) + SSIZE(ctx_sampling->playing_text) - SSIZE(phrase) + 1;
+            entry.search_posi[j] = std::max(0, SSIZE(ctx_sampling->generated_text) + SSIZE(ctx_sampling->playing_text) - SSIZE(phrase) + 1);
             if (count % 2 == 1) {
                 // even = no match or cancelled
                 LLAMA_LOG_DEBUG("%s: before\n", __func__);

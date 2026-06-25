@@ -180,7 +180,7 @@ typedef struct common_params_sampling {
     struct elb_param {
         struct elb_entry {
             int32_t                     max_keyword_len;
-            std::vector<size_t>         search_posi;        // epb: starting search positions for phrases
+            std::vector<int32_t>        search_posi;        // epb: starting search positions for phrases
             std::vector<float>          addsubs;            // epb: bias for sparams
             std::vector<bool>           addflags;           // epb: true if added
             std::vector<std::string>    phrases;            // exitwords for elb (below) OR keywords for epb (above)
