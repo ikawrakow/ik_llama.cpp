@@ -3564,7 +3564,12 @@ static bool llm_load_tensors(
     model.default_layer_device = std::vector<int32_t>(hparams.n_layer+1, device_count-1);
     int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     std::vector<llama_model_tensor_buft_override> overrides;
-    if (device_count > 0) {
+    // device_count comes from model.splits (at least 1), but device_mem below is sized by
+    // model.devices, which is empty on a CPU-only run of a CUDA build (no GPU present or
+    // -ngl 0). This block indexes device_mem[id] for id < device_count, so it reads out of
+    // bounds and crashes unless we also require a non-empty GPU device list. CPU-only
+    // placement is already handled above, so skipping this block is safe.
+    if (device_count > 0 && !model.devices.empty()) {
         std::vector<expert_tensors> experts;
         auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
                 amb, worst_case_tokens, flash_attn, experts);
