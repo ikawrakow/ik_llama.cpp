@@ -847,7 +847,11 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
             }
             return false;
         }
+#ifdef _MSC_VER
+        overrides.push_back({_strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+#else
         overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+#endif
     }
     return true;
 }
