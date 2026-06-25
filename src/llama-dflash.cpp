@@ -327,7 +327,10 @@ bool llama_prepare_dflash_graph_inputs(
     ggml_tensor * kq_mask = lctx.dflash.kv.kq_mask_tensor;
     ggml_tensor * kq_mask_swa = lctx.dflash.kv.kq_mask_swa_tensor;
 
-    if (kq_mask == nullptr) {
+    // An all-SWA draft has no full mask; an all-full draft has no SWA mask. Both masks share the
+    // same dimensions, so use whichever one is live to derive shape.
+    ggml_tensor * mask_dims = kq_mask != nullptr ? kq_mask : kq_mask_swa;
+    if (mask_dims == nullptr) {
         LLAMA_LOG_ERROR("%s: DFlash graph inputs are not initialized\n", __func__);
         return false;
     }
@@ -351,8 +354,8 @@ bool llama_prepare_dflash_graph_inputs(
     const int32_t append_rows_available = lctx.dflash.target.append_features_n_rows;
     const int32_t width = (int32_t) lctx.model.hparams.dflash_n_target_features;
     const int32_t graph_cross_ctx = (int32_t) lctx.dflash.kv.cache_pos.size();
-    const int32_t n_mask_tokens = (int32_t) kq_mask->ne[1];
-    const int32_t n_kv_total = (int32_t) kq_mask->ne[0];
+    const int32_t n_mask_tokens = (int32_t) mask_dims->ne[1];
+    const int32_t n_kv_total = (int32_t) mask_dims->ne[0];
     ggml_tensor * draft_tail_rows = lctx.dflash.kv.draft_tail_rows_tensor;
 
     if (graph_cross_ctx != cross_ctx) {
@@ -559,7 +562,10 @@ bool llama_prepare_dflash_graph_inputs(
     ggml_backend_tensor_set(draft_tail_rows, draft_tail_rows_data.data(), 0, ggml_nbytes(draft_tail_rows));
 
     const size_t mask_elems = (size_t) n_kv_total * (size_t) n_mask_tokens;
-    if (kq_mask->type == GGML_TYPE_F16) {
+    if (kq_mask == nullptr) {
+        // all-SWA draft: the full mask was not created (no non-SWA layer consumes it); only the
+        // SWA mask below is populated.
+    } else if (kq_mask->type == GGML_TYPE_F16) {
         const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
         const ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
         std::vector<ggml_fp16_t> mask_f16(mask_elems, h_inf);
@@ -613,7 +619,10 @@ bool llama_prepare_dflash_graph_inputs(
 
                 for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
                     const int32_t block_k = k - cross_ctx;
-                    if (block_k <= (int32_t) j) {
+                    // intra-block draft tokens are contiguous from draft_pos_base, so the
+                    // SWA distance is (j - block_k); apply the same window bound as the
+                    // cross-context section above (causal AND within n_swa).
+                    if (block_k <= (int32_t) j && ((int32_t) j - block_k) < swa_window) {
                         row[k] = h_zero;
                     }
                 }
@@ -637,7 +646,10 @@ bool llama_prepare_dflash_graph_inputs(
 
                 for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
                     const int32_t block_k = k - cross_ctx;
-                    if (block_k <= (int32_t) j) {
+                    // intra-block draft tokens are contiguous from draft_pos_base, so the
+                    // SWA distance is (j - block_k); apply the same window bound as the
+                    // cross-context section above (causal AND within n_swa).
+                    if (block_k <= (int32_t) j && ((int32_t) j - block_k) < swa_window) {
                         row[k] = 0.0f;
                     }
                 }
