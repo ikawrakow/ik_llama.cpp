@@ -4007,6 +4007,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                     // add the image chunk to cache
                     {
+                        slot.prompt_tokens.free_raw_media_data(slot.n_past_prompt);
                         const auto& chunk = slot.prompt_tokens.find_chunk(slot.n_past_prompt);
                         slot.cache_tokens.push_back(chunk.get()); // copy
                     }

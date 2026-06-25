@@ -233,3 +233,5 @@ struct llama_split_tensor {
 
 void  llama_decode_reset();
 void  llama_decode_stop();
+
+std::vector<llama_model *> & llama_all_loaded_models();
