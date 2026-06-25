@@ -3594,6 +3594,51 @@ void server_context::apply_checkpoint(server_slot & slot) {
     }
 }
 
+static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_variance(server_slot & slot, std::list<server_prompt_checkpoint> & ckpts) {
+    auto it = ckpts.begin();
+    if (ckpts.size() < 3) {
+        return it;
+    } else if (ckpts.size() == 3) {
+        std::advance(it, 1);
+        return it;
+    }
+    std::vector<int64_t> tokens;
+    tokens.reserve(ckpts.size());
+    for (const auto & ckpt : ckpts) {
+        tokens.push_back(int64_t(ckpt.pos_max));
+    }
+    // Remove the checkpoint that makes the distribution most even after removal.
+    // For each interior checkpoint, compute the variance of gaps that would result
+    // if it were removed. Pick the one with the lowest variance (most uniform spacing).
+    size_t best_idx = 1;
+    const size_t n = tokens.size();
+    const size_t start = 1;     // never remove the first
+    const size_t end = n - 1; // never remove the last
+    double max_pos =  tokens[n - 1];
+    // To avoid doing double for loop to calculate variance,
+    // We only need to find the one with the min product of two consecutive gaps.
+    // Why:
+    // Gap between checkpoints: x1, x2, .., x_n-1.
+    // The average is constant because first and last checkpoint is never removed
+    // Variance of the gap after removing i_th checkpoint is:
+    // x1^2+..+(x_n-1)^2+2*x_i*x_(i+1) - average^2
+    // Find the minimum variance is finding min { x_i*x_(i+1) }
+    double diff = (tokens[start] - tokens[start - 1]);
+    double diff2 = (tokens[start + 1] - tokens[start]);
+    double best_variance = diff * (diff2 / max_pos); 
+    for (size_t i = start+1; i < end; i++) {
+        diff = tokens[i] - tokens[i - 1];
+        diff2 = tokens[i + 1] - tokens[i];
+        double variance = diff  * (diff2 / max_pos);
+        if (variance < best_variance) {
+            best_variance = variance;
+            best_idx = i;
+        }
+    }
+    std::advance(it, best_idx);
+    return it;
+}
+
 bool server_context::create_checkpoint(server_slot & slot) {
     bool do_checkpoint = !slot.image_just_processed;
     int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
@@ -3609,12 +3654,15 @@ bool server_context::create_checkpoint(server_slot & slot) {
         const int64_t t_start = ggml_time_us();
         while (slot.server_cached_prompt.checkpoints.size() >= (size_t)params_base.ctx_checkpoints_n) {
             // make room for the new checkpoint, if needed
-            const auto & cur = slot.server_cached_prompt.checkpoints.front();
-
+            auto it = slot.server_cached_prompt.checkpoints.begin();
+            if (params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_VARIANCE ||
+                params_base.ctx_checkpoint_eviction == COMMON_CHECKPOINT_EVICTION_AUTO) {
+                it = evict_checkpoint_by_variance(slot, slot.server_cached_prompt.checkpoints);
+            } 
+            const auto & cur = *it;
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024);
-
-            slot.server_cached_prompt.checkpoints.erase(slot.server_cached_prompt.checkpoints.begin());
+            slot.server_cached_prompt.checkpoints.erase(it);
         }
 
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();

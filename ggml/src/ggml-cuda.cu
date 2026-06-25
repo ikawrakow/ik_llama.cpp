@@ -298,13 +298,22 @@ const ggml_cuda_device_info & ggml_cuda_info() {
 }
 
 /* ---------- hot-swap: invalidate all cached CUDA graphs ---------- */
-extern "C" void ggml_backend_cuda_invalidate_graphs(void) {
+extern "C" void ggml_backend_cuda_invalidate_graphs(const void * model) {
     auto & info = const_cast<ggml_cuda_device_info &>(ggml_cuda_info());
-    for (int i = 0; i < info.device_count; ++i) {
-        if (info.all_ctx[i]) {
-            info.all_ctx[i]->cuda_graphs.clear();
+    if (auto it = info.all_ctx.find(model); it != info.all_ctx.end()) {
+        for (auto ctx : it->second) {
+            if (ctx) {
+                ctx->cuda_graphs.clear();
+            }
         }
+    } else {
+        fprintf(stderr, "================================= %s: did not find entry for model at %p\n", __func__, model);
     }
+    //for (int i = 0; i < info.device_count; ++i) {
+    //    if (info.all_ctx[i]) {
+    //        info.all_ctx[i]->cuda_graphs.clear();
+    //    }
+    //}
 }
 
 // #define DEBUG_CUDA_MALLOC
@@ -517,13 +526,14 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 
-ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
-    device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
+ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * model) :
+    device(device), name(GGML_CUDA_NAME + std::to_string(device)), model(model) {
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
-    if (info->all_ctx[device]) {
+    auto & all_ctx = info->all_ctx[model];
+    if (all_ctx[device]) {
         GGML_CUDA_LOG_WARN("%s: a context for device %d already exists?\n", __func__, device);
     } else{
-        info->all_ctx[device] = this;
+        all_ctx[device] = this;
     }
 }
 
@@ -555,9 +565,12 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
         }
     }
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
-    if (info->all_ctx[device] == this) {
-        info->all_ctx[device] = nullptr;
+    if (auto it = info->all_ctx.find(model); it != info->all_ctx.end() && it->second[device] == this) {
+        it->second[device] = nullptr;
     }
+    //if (info->all_ctx[device] == this) {
+    //    info->all_ctx[device] = nullptr;
+    //}
 
 }
 
@@ -4247,23 +4260,8 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
                 needs_f16_f32_copy = true;
 
             } else {
-#ifdef GGML_USE_NCCL__
-                auto & info = ggml_cuda_info();
-                auto nbytes = ggml_nbytes(src);
-                ncclGroupStart();
-                ggml_cuda_set_device(cuda_ctx_src->device);
-                auto status1 = ncclSend(src->data, nbytes, ncclUint8, cuda_ctx_dst->device, info.nccl_coms[cuda_ctx_src->device],
-                        info.all_ctx[cuda_ctx_src->device]->stream());
-                ggml_cuda_set_device(cuda_ctx_dst->device);
-                auto status2 = ncclRecv(dst->data, nbytes, ncclUint8, cuda_ctx_src->device, info.nccl_coms[cuda_ctx_dst->device],
-                        info.all_ctx[cuda_ctx_dst->device]->stream());
-                ncclGroupEnd();
-                GGML_ASSERT(status1 == ncclSuccess && status2 == ncclSuccess);
-                return true;
-#else
                 ggml_cuda_set_device(cuda_ctx_src->device);
                 CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
-#endif
             }
 #endif
         }
@@ -5249,13 +5247,13 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
     return params;
 }
 
-GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] const void * param_string) {
+GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] const void * param_string, const void * model) {
     if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
         GGML_CUDA_LOG_ERROR("%s: invalid device %d\n", __func__, device);
         return nullptr;
     }
 
-    ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device);
+    ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device, model);
     if (ctx == nullptr) {
         GGML_CUDA_LOG_ERROR("%s: failed to allocate context\n", __func__);
         return nullptr;
@@ -5370,7 +5368,7 @@ GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
 
 // backend registry
 GGML_CALL static ggml_backend_t ggml_backend_reg_cuda_init(const char * params, void * user_data) {
-    ggml_backend_t cuda_backend = ggml_backend_cuda_init((int) (intptr_t) user_data, nullptr);
+    ggml_backend_t cuda_backend = ggml_backend_cuda_init((int) (intptr_t) user_data, nullptr, nullptr);
     return cuda_backend;
 
     GGML_UNUSED(params);
