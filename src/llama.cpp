@@ -377,6 +377,110 @@ ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
     GGML_UNUSED(host_buffer);
 }
 
+// -----------------------------------------------------------------------
+// Transient VRAM Leasing API
+// -----------------------------------------------------------------------
+
+struct llama_vram_lease {
+    ggml_backend_buffer_t buffer = nullptr;
+    void * vram_ptr = nullptr;
+    size_t size = 0;
+    std::vector<uint8_t> ram_backup;
+    std::vector<ggml_tensor*> evicted_tensors;
+};
+
+extern "C" {
+
+LLAMA_API struct llama_vram_lease * llama_vram_lease_acquire(struct llama_model * model, size_t required_bytes) {
+    // Group all physical tensors by buffer (excluding Views)
+    std::map<ggml_backend_buffer_t, std::vector<ggml_tensor*>> buffer_groups;
+    for (const auto & pair : model->tensors_by_name) {
+        ggml_tensor * t = pair.second;
+        if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) continue;
+        if (t->view_src != nullptr) continue; // CRITICAL: Exclude views to prevent overlapping backups
+        buffer_groups[t->buffer].push_back(t);
+    }
+
+    llama_vram_lease * best_lease = nullptr;
+
+    // Scan for the largest contiguous block, preferring blocks closer to the end (trailing layers)
+    for (auto & group : buffer_groups) {
+        auto & t_list = group.second;
+        // Strictly sort by physical memory address
+        std::sort(t_list.begin(), t_list.end(), [](ggml_tensor* a, ggml_tensor* b) {
+            return (uintptr_t)a->data < (uintptr_t)b->data;
+        });
+
+        size_t i = 0;
+        while (i < t_list.size()) {
+            size_t current_size = ggml_nbytes(t_list[i]);
+            size_t j = i + 1;
+            while (j < t_list.size()) {
+                uintptr_t expected_next = (uintptr_t)t_list[j-1]->data + ggml_nbytes(t_list[j-1]);
+                size_t alignment = ggml_backend_buffer_get_alignment(t_list[j]->buffer);
+                expected_next = GGML_PAD(expected_next, alignment);
+
+                // Strict physical contiguity check
+                if (expected_next == (uintptr_t)t_list[j]->data) {
+                    current_size = ((uintptr_t)t_list[j]->data + ggml_nbytes(t_list[j])) - (uintptr_t)t_list[i]->data;
+                    j++;
+                    if (current_size >= required_bytes) break;
+                } else {
+                    break;
+                }
+            }
+
+            if (current_size >= required_bytes) {
+                if (!best_lease) {
+                    best_lease = new llama_vram_lease();
+                } else {
+                    best_lease->evicted_tensors.clear();
+                }
+                best_lease->buffer = group.first;
+                best_lease->vram_ptr = t_list[i]->data;
+                best_lease->size = current_size;
+                for (size_t k = i; k < j; ++k) {
+                    best_lease->evicted_tensors.push_back(t_list[k]);
+                }
+            }
+            i++;
+        }
+    }
+
+    if (!best_lease) {
+        LLAMA_LOG_ERROR("%s: failed to find a contiguous VRAM block of %zu bytes\n", __func__, required_bytes);
+        return nullptr;
+    }
+
+    // Perform backup to RAM
+    best_lease->ram_backup.resize(best_lease->size);
+    for (auto * t : best_lease->evicted_tensors) {
+        size_t b = ggml_nbytes(t);
+        size_t offset = (uintptr_t)t->data - (uintptr_t)best_lease->vram_ptr;
+        ggml_backend_tensor_get(t, best_lease->ram_backup.data() + offset, 0, b);
+    }
+
+    LLAMA_LOG_INFO("%s: leased %zu bytes from %zu tensors in VRAM\n", __func__, best_lease->size, best_lease->evicted_tensors.size());
+    return best_lease;
+}
+
+LLAMA_API void llama_vram_lease_return(struct llama_model * model, struct llama_vram_lease * lease) {
+    if (!lease) return;
+    (void)model;
+    for (auto * t : lease->evicted_tensors) {
+        size_t b = ggml_nbytes(t);
+        size_t offset = (uintptr_t)t->data - (uintptr_t)lease->vram_ptr;
+        ggml_backend_tensor_set(t, lease->ram_backup.data() + offset, 0, b);
+    }
+    LLAMA_LOG_INFO("%s: returned %zu bytes to VRAM\n", __func__, lease->size);
+    delete lease;
+}
+
+LLAMA_API void * llama_vram_lease_get_data(struct llama_vram_lease * lease) { return lease ? lease->vram_ptr : nullptr; }
+LLAMA_API struct ggml_backend_buffer * llama_vram_lease_get_buffer(struct llama_vram_lease * lease) { return lease ? lease->buffer : nullptr; }
+
+} // extern "C"
+
 //
 // globals
 //
