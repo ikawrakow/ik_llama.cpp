@@ -229,6 +229,9 @@ MTMD_API void mtmd_input_chunk_to_json(mtmd_input_chunk * chunk, json & j);
 MTMD_API bool mtmd_swap_to_gpu(mtmd_context * ctx);
 MTMD_API bool mtmd_swap_to_cpu(mtmd_context * ctx);
 
+MTMD_API size_t mtmd_get_mmproj_size(mtmd_context * ctx);
+MTMD_API bool mtmd_swap_to_gpu_leased(mtmd_context * ctx, void * vram_ptr, struct ggml_backend_buffer * vram_buf, size_t lease_size);
+
 /////////////////////////////////////////
 
 // test function, to be used in test-mtmd-c-api.c
