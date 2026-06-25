@@ -287,7 +287,8 @@ void server_context::swap_mmproj_to_gpu() {
         SRV_INF("%s", "loading mmproj to GPU...\n");
         int64_t t0 = ggml_time_us();
 
-        if (!mtmd_swap_to_gpu(mctx)) {
+        bool success = mtmd_swap_to_gpu(mctx);
+        if (!success) {
             if (params_base.n_gpu_layers > 0 && params_base.mmproj_use_gpu) {
                 SRV_WRN("%s", "Normal GPU swap failed (VRAM full?), attempting Transient VRAM Leasing...\n");
                 size_t req_size = mtmd_get_mmproj_size(mctx);
@@ -295,7 +296,9 @@ void server_context::swap_mmproj_to_gpu() {
                 if (vram_lease) {
                     void * ptr = llama_vram_lease_get_data(vram_lease);
                     struct ggml_backend_buffer * buf = llama_vram_lease_get_buffer(vram_lease);
-                    if (!mtmd_swap_to_gpu_leased(mctx, ptr, buf, req_size)) {
+                    if (mtmd_swap_to_gpu_leased(mctx, ptr, buf, req_size)) {
+                        success = true;
+                    } else {
                         SRV_ERR("%s", "Transient VRAM Leasing failed!\n");
                     }
                 } else {
@@ -304,8 +307,13 @@ void server_context::swap_mmproj_to_gpu() {
             }
         }
 
-        SRV_INF("swap done in %" PRId64 " ms\n", (ggml_time_us() - t0) / 1000);
-        mmproj_swapped = true;
+        if (success) {
+            SRV_INF("swap done in %" PRId64 " ms\n", (ggml_time_us() - t0) / 1000);
+            mmproj_swapped = true;
+        } else {
+            SRV_WRN("%s", "Continuing with mmproj on CPU due to swap failure\n");
+            mmproj_swapped = false;
+        }
     }
     mmproj_swap_count++;
 }
