@@ -4246,6 +4246,28 @@ static void llama_set_k_shift(llama_context & lctx) {
     for (int i = 0; i < kv_size; ++i) {
         data[i] = lctx.kv_self.cells[i].delta;
     }
+
+    // DSA indexer K-shift also needs the Walsh-Hadamard matrix (to un/re-rotate the cached indexer
+    // keys around the RoPE-delta). Same symmetric orthonormal construction as the forward indexer
+    // (llama_set_inputs / inp_dsa_hadamard). build_k_shift creates inp_dsa_hadamard iff kr_had.
+    if (lctx.inp_dsa_hadamard) {
+        assert(ggml_backend_buffer_is_host(lctx.inp_dsa_hadamard->buffer));
+        const int64_t n = lctx.inp_dsa_hadamard->ne[0];
+        GGML_ASSERT(lctx.inp_dsa_hadamard->ne[1] == n);
+        std::vector<float> h((size_t)n*n, 0.0f);
+        h[0] = 1.0f / sqrtf((float) n);
+        for (int64_t s = 1; s < n; s *= 2) {
+            for (int64_t i = 0; i < s; i++) {
+                for (int64_t j = 0; j < s; j++) {
+                    const float val = h[i*n + j];
+                    h[(i + s)*n + (j    )] =  val;
+                    h[(i    )*n + (j + s)] =  val;
+                    h[(i + s)*n + (j + s)] = -val;
+                }
+            }
+        }
+        ggml_backend_tensor_set(lctx.inp_dsa_hadamard, h.data(), 0, ggml_nbytes(lctx.inp_dsa_hadamard));
+    }
 }
 
 static void llama_set_s_copy(llama_context & lctx) {
@@ -4315,20 +4337,50 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
     if (lctx.inp_dsa_sink) {
         // Per-sequence attention-sink boost for the DSA lightning indexer top-k selection.
-        // inp_dsa_sink {n_kv, n_tokens}: 1e20 iff key cell i belongs to query j's sequence and
-        // has pos < n_sink, else 0. Filled from kv_self.cells exactly like the KQ_mask so it is
-        // correct for multi-sequence ubatches (each sequence's OWN sink is force-included).
+        // inp_dsa_sink {n_kv, n_tokens}: 1e20 iff key cell i is one of query j's sequence's FIRST
+        // n_sink present tokens, else 0. Filled from kv_self.cells like the KQ_mask so it is correct
+        // for multi-sequence ubatches (each sequence's OWN sink is force-included).
+        //
+        // SERVING FIX: anchor the sink on each sequence's FIRST PRESENT position, not absolute
+        // pos < n_sink. After multi-turn seq_rm drops a sequence's early tokens, its earliest
+        // surviving token has pos >= n_sink; an absolute "pos < n_sink" test would then protect
+        // NOTHING for that sequence and let the (now-)sink token be masked out of top-k, collapsing
+        // it. Anchoring on per-sequence min(pos) keeps the sink protection following the sequence's
+        // actual first present cell. For a fresh sequence starting at pos 0, min(pos)==0 so the
+        // boosted set is identical to the old behaviour (n_seq==1 byte-identical).
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_dsa_sink->buffer));
         static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
         const int64_t n_kv      = lctx.inp_dsa_sink->ne[0];
         const int64_t n_tok_idx = lctx.inp_dsa_sink->ne[1];
         float * data = (float *) lctx.inp_dsa_sink->data;
         std::memset(data, 0, ggml_nbytes(lctx.inp_dsa_sink));
+
+        // Per-sequence first present pos: min over present cells of that seq, restricted to the
+        // n_kv key span the indexer scores. Cache across query rows in this ubatch.
+        // ASSUMPTION (latent today): min(pos) over the whole [0,n_kv) span equals the sequence's
+        // genuine first-present token only for a NON-SLIDING cache. GLM_DSA has no SWA, so the
+        // oldest cell of a seq is its true sink; if SWA were ever added, the window could evict the
+        // real sink and min(pos) would anchor on the wrong (window-floor) cell — revisit then.
+        std::unordered_map<llama_seq_id, llama_pos> seq_min_pos;
+        for (int64_t i = 0; i < n_kv; ++i) {
+            const auto & cell = kv_self.cells[i];
+            if (cell.pos < 0) continue;
+            for (const llama_seq_id sid : cell.seq_id) {
+                auto it = seq_min_pos.find(sid);
+                if (it == seq_min_pos.end() || cell.pos < it->second) {
+                    seq_min_pos[sid] = cell.pos;
+                }
+            }
+        }
+
         for (int64_t j = 0; j < n_tok_idx && j < (int64_t) batch.n_tokens; ++j) {
             const llama_seq_id seq_id = batch.seq_id[j][0];
+            auto it = seq_min_pos.find(seq_id);
+            if (it == seq_min_pos.end()) continue;  // no present cell for this seq in the key span
+            const llama_pos first_pos = it->second;
             for (int64_t i = 0; i < n_kv; ++i) {
                 const auto & cell = kv_self.cells[i];
-                if (cell.pos >= 0 && cell.pos < n_sink && cell.has_seq_id(seq_id)) {
+                if (cell.pos >= first_pos && cell.pos < first_pos + n_sink && cell.has_seq_id(seq_id)) {
                     data[j*n_kv + i] = 1e20f;
                 }
             }
@@ -5993,7 +6045,12 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     //   - x2 for keys and values
     //const uint32_t max_moves = model.max_nodes()/(6*n_layer);
     // TODO: tmp fix https://github.com/ggerganov/llama.cpp/issues/6685#issuecomment-2057579516
-    const uint32_t max_moves = (lctx.model.max_nodes(1) - 2*n_layer)/(6*n_layer);
+    // DSA: build_defrag additionally moves the indexer-key cache (kr_l), +3 tensors/layer/move
+    // (src view, dst view, copy), so budget 9*n_layer per move when the indexer cache is present.
+    const bool has_dsa_indexer_defrag =
+        lctx.model.arch == LLM_ARCH_GLM_DSA && !kv_self.kr_l.empty();
+    const uint32_t tensors_per_move = has_dsa_indexer_defrag ? 9 : 6;
+    const uint32_t max_moves = (lctx.model.max_nodes(1) - 2*n_layer)/(tensors_per_move*n_layer);
 
     // determine which KV cells to move where
     //

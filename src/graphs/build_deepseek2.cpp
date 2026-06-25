@@ -333,10 +333,17 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
 // (H q)*(H k) == q*k so it is score-preserving; its purpose is to improve the precision of the keys
 // we store in the F16 indexer cache (matches the reference). Gated by cparams.dsa_indexer_hadamard.
 //
-// LIMITATIONS still present (documented follow-ups):
-//   - multi-sequence batches (n_seq>1, e.g. llama-perplexity default n_batch>n_ctx): the causal view
-//     assumes a single contiguous sequence at kv_head..kv_head+n_tokens. Use n_batch==n_ctx (n_seq=1).
-//   - the FA path (-fa 1) still uses the dense KQ_mask; this indexer feeds the soft_max path.
+// MULTI-SEQUENCE & FA: both are now handled.
+//   - Multi-sequence batches (n_seq>1) are correct: each token is written to its own cache cell at
+//     kv_self.head+i (per-sequence), the base block-diagonal KQ_mask drives cross-sequence keys to
+//     -inf before argsort, and the attention sink is anchored per-sequence (inp_dsa_sink). Validated
+//     n_seq=4 == n_seq=1 chunk-for-chunk (UPDATE 5).
+//   - The FA path (-fa 1) consumes the sparse top-k mask too: build_deepseek2_dsa_fa_mask converts
+//     the F32 sparse mask into the padded F16 mask the flash-attention kernel reads (UPDATE 4). It
+//     does NOT fall back to the dense KQ_mask.
+//   - Serving (context-shift / defrag / multi-turn seq_rm): the persistent indexer-key cache kr_l is
+//     maintained by build_k_shift (delta-RoPE around the Hadamard), build_defrag (row move), and the
+//     seq ops are metadata-only so kr_l rows stay matched to their cells (UPDATE 6).
 ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         ggml_cgraph * gf,
         int il,
@@ -469,8 +476,8 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     indexer_score = ggml_add(ctx0, indexer_score, causal);
     cb(indexer_score, "dsa_indexer_score_masked", il);
 
-    // Attention-sink force-inclusion: add a finite positive boost to the first n_sink key positions
-    // OF EACH QUERY'S OWN SEQUENCE so the sink token(s) always survive the top-k selection. Masking
+    // Attention-sink force-inclusion: add a finite positive boost to each query's OWN SEQUENCE's
+    // first n_sink present tokens so the sink token(s) always survive the top-k selection. Masking
     // the sink collapses most transformers; a heavily-quantized (IQ2) indexer does not reliably rank
     // it high on its own. The boost is finite, so it cannot un-mask future/causal -inf positions
     // (-inf + boost = -inf).
@@ -480,10 +487,14 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     // "key index < n_sink" boost only protects sequence 0's sink; sequence 1's sink (at cell n0, not
     // cell 0) is left unprotected and gets dropped from top-k once the mask bites, collapsing it.
     // We therefore use a per-graph input tensor inp_dsa_sink {n_kv, n_tokens} (filled on the CPU from
-    // kv_self.cells like the KQ_mask): inp_dsa_sink[j,i] = 1e20 iff key cell i belongs to query j's
-    // sequence AND has pos < n_sink. For a single contiguous sequence starting at pos 0 this is
-    // exactly the old "cell index < n_sink" set with the same 1e20 magnitude, so n_seq==1 is
-    // numerically byte-identical to the previous behavior.
+    // kv_self.cells like the KQ_mask, in llama_set_inputs): inp_dsa_sink[j,i] = 1e20 iff key cell i
+    // belongs to query j's sequence AND its pos is within [min present pos of that seq, +n_sink).
+    //
+    // SERVING: the anchor is each sequence's FIRST PRESENT pos, not absolute pos < n_sink. After
+    // multi-turn seq_rm drops a sequence's early tokens its earliest survivor has pos >= n_sink; an
+    // absolute test would then protect nothing and let the (now-)sink be masked out. For a fresh
+    // sequence starting at pos 0, min(pos)==0 so the boosted set is exactly the old "cell pos <
+    // n_sink" set with the same 1e20 magnitude — n_seq==1 from pos 0 stays byte-identical.
     static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
     if (n_sink > 0 && n_sink < (int) n_kv) {
         if (!lctx.inp_dsa_sink) {
@@ -533,7 +544,13 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     if (tk_env) n_top_k = atoi(tk_env);
     if (n_top_k > n_kv_local) n_top_k = n_kv_local;
 
-    const float BIG = 1e30f; // effectively -inf for softmax, but avoids -inf*0 = NaN hazards
+    // Penalty magnitude for non-top-k keys. On the soft_max (-fa 0) path this F32 -BIG is added to
+    // the score and softmaxed -> effectively -inf, while staying finite avoids -inf*0 = NaN. On the
+    // FA (-fa 1) path this mask is cast to F16 (build_deepseek2_dsa_fa_mask): 1e30 saturates to the
+    // F16 max (~6.5e4), which is still a large-enough negative bias to zero the key in the FA softmax
+    // (the dense FA mask uses -INFINITY/F16 -inf there; our finite-but-huge value is equivalent in
+    // effect and cannot produce NaN). So -BIG masks the key on BOTH paths.
+    const float BIG = 1e30f;
 
     // rank-based penalty vector: pen[rank] = 0 for rank < n_top_k, else -BIG.  {n_kv}
     // sel = step(n_top_k - 0.5 - rank) = 1 for rank <= n_top_k-1, else 0
