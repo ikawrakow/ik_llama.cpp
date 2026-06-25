@@ -11415,13 +11415,13 @@ static void ggml_compute_forward_dup_f16(
 
                         memcpy(dst_ptr, src0_ptr, sizeof(ggml_fp16_t));
 
-                        if (++i10 == ne00) {
+                        if (++i10 == ne0) {
                             i10 = 0;
-                            if (++i11 == ne01) {
+                            if (++i11 == ne1) {
                                 i11 = 0;
-                                if (++i12 == ne02) {
+                                if (++i12 == ne2) {
                                     i12 = 0;
-                                    if (++i13 == ne03) {
+                                    if (++i13 == ne3) {
                                         i13 = 0;
                                     }
                                 }
@@ -11719,13 +11719,13 @@ static void ggml_compute_forward_dup_bf16(
 
                         memcpy(dst_ptr, src0_ptr, sizeof(ggml_bf16_t));
 
-                        if (++i10 == ne00) {
+                        if (++i10 == ne0) {
                             i10 = 0;
-                            if (++i11 == ne01) {
+                            if (++i11 == ne1) {
                                 i11 = 0;
-                                if (++i12 == ne02) {
+                                if (++i12 == ne2) {
                                     i12 = 0;
-                                    if (++i13 == ne03) {
+                                    if (++i13 == ne3) {
                                         i13 = 0;
                                     }
                                 }
@@ -13341,7 +13341,7 @@ static void ggml_compute_forward_add1_q_f32(
         const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
 
         void  * src0_row = (void *) ((char *) src0->data + (i1*nb01 + i2*nb02 + i3*nb03));
-        void  * dst_row  = (void *) ((char *)  dst->data + (i1*nb1  + i2*nb2  + i3*nb0 ));
+        void  * dst_row  = (void *) ((char *)  dst->data + (i1*nb1  + i2*nb2  + i3*nb3 ));
 
         assert(ne0 % 32 == 0);
 
@@ -14401,7 +14401,7 @@ static void ggml_compute_forward_sum_rows_f32(
     for (int ir = first_row; ir < last_row; ++ir) {
         int i3 = ir / (ne01*ne02);
         int i2 = (ir - i3*ne01*ne02)/ne01;
-        int i1 = ir - i3*ne01*ne0 - i2*ne01;
+        int i1 = ir - i3*ne01*ne02 - i2*ne01;
         const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
               float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
         float row_sum = 0;
@@ -26632,7 +26632,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
             case GGML_OP_ACC:
                 {
                     if (ggml_is_quantized(node->src[0]->type)) {
-                        cur = ggml_type_size(GGML_TYPE_F32) * node->src[1]->ne[0] * n_tasks;
+                        cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                     }
                 } break;
             case GGML_OP_MUL_MAT:
@@ -26692,7 +26692,9 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     }
                 } break;
             case GGML_OP_SOFT_MAX:
+            case GGML_OP_SOFT_CAP_MAX:
             case GGML_OP_ROPE:
+            case GGML_OP_ROPE_BACK:
                 {
                     cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
                 } break;

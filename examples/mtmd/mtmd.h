@@ -170,6 +170,9 @@ MTMD_API llama_pos                  mtmd_input_chunk_get_n_pos       (const mtmd
 MTMD_API mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk);
 MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
 
+// Free the raw audio (PCM) or imagebuffers (RGB-f32 (!)) of a multimedia chunk.
+// Provided for the benefit of llama-server as a stopgap to fix memory issues
+MTMD_API void               mtmd_input_chunk_free_raw_data(mtmd_input_chunk * chunk);
 
 // mtmd_image_tokens
 //

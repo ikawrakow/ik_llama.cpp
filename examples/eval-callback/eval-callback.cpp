@@ -27,9 +27,38 @@ static std::string ggml_ne_string(const ggml_tensor * t) {
     return str;
 }
 
+static float ggml_get_float_value(const uint8_t * data, ggml_type type, size_t i) {
+    if (type == GGML_TYPE_F16) {
+        return ggml_fp16_to_fp32(*(const ggml_fp16_t *) &data[i]);
+    } else if (type == GGML_TYPE_F32) {
+        return *(const float *) &data[i];
+    } else if (type == GGML_TYPE_I32) {
+        return (float) *(const int32_t *) &data[i];
+    } else if (type == GGML_TYPE_I16) {
+        return (float) *(const int16_t *) &data[i];
+    } else if (type == GGML_TYPE_I8) {
+        return (float) *(const int8_t *) &data[i];
+    } else {
+        GGML_ABORT("fatal error");
+    }
+}
+
 static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
     GGML_ASSERT(n > 0);
-    float sum = 0;
+    // Compute the FULL tensor sum first (debug aid — was previously summing
+    // only the displayed first/last elements, which made it useless for
+    // comparing two binaries on the same tensor).
+    double sum = 0.0;
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+                    sum += ggml_get_float_value(data, type, i);
+                }
+            }
+        }
+    }
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
         printf("                                     [\n");
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
@@ -50,22 +79,7 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
                         i0 = ne[0] - n;
                     }
                     size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-                    float v;
-                    if (type == GGML_TYPE_F16) {
-                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
-                    } else if (type == GGML_TYPE_F32) {
-                        v = *(float *) &data[i];
-                    } else if (type == GGML_TYPE_I32) {
-                        v = (float) *(int32_t *) &data[i];
-                    } else if (type == GGML_TYPE_I16) {
-                        v = (float) *(int16_t *) &data[i];
-                    } else if (type == GGML_TYPE_I8) {
-                        v = (float) *(int8_t *) &data[i];
-                    } else {
-                        GGML_ABORT("fatal error");
-                    }
-                    printf("%12.4f", v);
-                    sum += v;
+                    printf("%12.4f", ggml_get_float_value(data, type, i));
                     if (i0 < ne[0] - 1) printf(", ");
                 }
                 printf("],\n");
@@ -73,7 +87,7 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
             printf("                                      ],\n");
         }
         printf("                                     ]\n");
-        printf("                                     sum = %f\n", sum);
+        printf("                                     sum = %f\n", (float) sum);
     }
 }
 

@@ -94,6 +94,11 @@ static void copy_missing_tensors(ggml_backend_cuda_context & ctx, ggml_tensor * 
     if (ncopy < 1) return;
 
     auto & info = ggml_cuda_info();
+    auto it = info.all_ctx.find(ctx.model);
+    if (it == info.all_ctx.end()) {
+        GGML_ABORT("Fatal error");
+    }
+    auto & all_ctx = it->second;
     auto size = ggml_nbytes(dst);
     int isrc = 0;
     for (int ii = 0; ii < ncopy; ++ii) {
@@ -102,9 +107,9 @@ static void copy_missing_tensors(ggml_backend_cuda_context & ctx, ggml_tensor * 
         isrc = (isrc + 1)%nhave;
         //printf("%s: copying from device %d to device %d: %p -> %p\n", __func__, j, i, dst->src[j]->data, dst->src[i]->data);
         ggml_cuda_set_device(j);
-        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, info.all_ctx[i]->device, dst->src[j]->data, info.all_ctx[j]->device,
-                            size, info.all_ctx[j]->stream()));
-        CUDA_CHECK(cudaEventRecord(info.all_ctx[j]->copy_event, info.all_ctx[j]->stream()));
+        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, all_ctx[i]->device, dst->src[j]->data, all_ctx[j]->device,
+                            size, all_ctx[j]->stream()));
+        CUDA_CHECK(cudaEventRecord(all_ctx[j]->copy_event, all_ctx[j]->stream()));
     }
     isrc = 0;
     for (int ii = 0; ii < ncopy; ++ii) {
@@ -112,7 +117,7 @@ static void copy_missing_tensors(ggml_backend_cuda_context & ctx, ggml_tensor * 
         int j = idx[isrc];
         isrc = (isrc + 1)%nhave;
         ggml_cuda_set_device(i);
-        CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event, 0));
+        CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[j]->copy_event, 0));
     }
     ggml_cuda_set_device(ctx.device);
 }
@@ -133,6 +138,11 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     }
 
     auto & info = ggml_cuda_info();
+    auto it = info.all_ctx.find(ctx.model);
+    if (it == info.all_ctx.end()) {
+        GGML_ABORT("Fatal error");
+    }
+    auto & all_ctx = it->second;
 #ifdef GGML_USE_NCCL
     // Somehow I'm not able to figure out how to use NCCL correctly.
     // It does not work at all if not all GPUs participate in the reduce op, and we
@@ -153,7 +163,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             ggml_cuda_set_device(i);
             auto status = ncclAllReduce(dst->src[i] ? dst->src[i]->data : nullptr,
                     dst->src[i] ? dst->src[i]->data : nullptr,
-                    ggml_nelements(dst), data_type, ncclSum, info.nccl_coms[i], info.all_ctx[i]->stream());
+                    ggml_nelements(dst), data_type, ncclSum, info.nccl_coms[i], all_ctx[i]->stream());
             if (status != ncclSuccess) {
                 fprintf(stderr, "%s: ncclAllReduce failed with status %d\n", __func__, (int)status);
                 GGML_ABORT("Fatal error");
@@ -275,7 +285,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         auto size_per_device  = nblocks_per_device * tt.type_size;
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
-            auto this_ctx = info.all_ctx[i];
+            auto this_ctx = all_ctx[i];
             if (!this_ctx->copy_event || !this_ctx->compute_event || size_per_device > this_ctx->copy_size) {
                 ggml_cuda_set_device(this_ctx->device);
                 if (!this_ctx->copy_event) {
@@ -300,14 +310,14 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 int peer = idx[(ii+1)%nhave];
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 auto this_size  = (this_nelem / tt.blck_size) * tt.type_size;
-                ggml_cuda_set_device(info.all_ctx[peer]->device);
+                ggml_cuda_set_device(all_ctx[peer]->device);
                 if (stage > 0) {
-                    CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[peer]->stream(), info.all_ctx[i]->compute_event, 0));
+                    CUDA_CHECK(cudaStreamWaitEvent(all_ctx[peer]->stream(), all_ctx[i]->compute_event, 0));
                 }
-                CUDA_CHECK(cudaMemcpyPeerAsync(info.all_ctx[i]->copy_buffer, info.all_ctx[i]->device,
-                            (const char *)dst->src[peer]->data + ichunk*size_per_device, info.all_ctx[peer]->device,
-                            this_size, info.all_ctx[peer]->stream()));
-                CUDA_CHECK(cudaEventRecord(info.all_ctx[peer]->copy_event, info.all_ctx[peer]->stream()));
+                CUDA_CHECK(cudaMemcpyPeerAsync(all_ctx[i]->copy_buffer, all_ctx[i]->device,
+                            (const char *)dst->src[peer]->data + ichunk*size_per_device, all_ctx[peer]->device,
+                            this_size, all_ctx[peer]->stream()));
+                CUDA_CHECK(cudaEventRecord(all_ctx[peer]->copy_event, all_ctx[peer]->stream()));
                 ichunk = (ichunk + 1)%nhave;
             }
             ichunk = stage;
@@ -315,24 +325,24 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 int i = idx[ii];
                 int peer = idx[(ii+1)%nhave];
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
-                ggml_cuda_set_device(info.all_ctx[i]->device);
-                CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
+                ggml_cuda_set_device(all_ctx[i]->device);
+                CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[peer]->copy_event, 0));
                 int num_blocks = (this_nelem + CUDA_REDUCE_BLOCK_SIZE - 1)/CUDA_REDUCE_BLOCK_SIZE;
                 if (dst->type == GGML_TYPE_F16) {
-                    k_add<half, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
-                            (const half *)info.all_ctx[i]->copy_buffer, (half *)dst->src[i]->data + ichunk*nelem_per_device);
+                    k_add<half, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(this_nelem,
+                            (const half *)all_ctx[i]->copy_buffer, (half *)dst->src[i]->data + ichunk*nelem_per_device);
                 } else if (dst->type == GGML_TYPE_Q8_0) {
-                    k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
-                            (const block_q8_0 *)info.all_ctx[i]->copy_buffer, (block_q8_0 *)dst->src[i]->data + ichunk*nelem_per_device/tt.blck_size);
+                    k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(this_nelem,
+                            (const block_q8_0 *)all_ctx[i]->copy_buffer, (block_q8_0 *)dst->src[i]->data + ichunk*nelem_per_device/tt.blck_size);
                 } else if (dst->type == GGML_TYPE_BF16) {
-                    k_add<nv_bfloat16, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(
-                            this_nelem, (const nv_bfloat16 *)info.all_ctx[i]->copy_buffer,
+                    k_add<nv_bfloat16, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(
+                            this_nelem, (const nv_bfloat16 *)all_ctx[i]->copy_buffer,
                             (nv_bfloat16 *)dst->src[i]->data + ichunk*nelem_per_device);
                 } else {
-                    k_add<float, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
-                            (const float *)info.all_ctx[i]->copy_buffer, (float *)dst->src[i]->data + ichunk*nelem_per_device);
+                    k_add<float, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(this_nelem,
+                            (const float *)all_ctx[i]->copy_buffer, (float *)dst->src[i]->data + ichunk*nelem_per_device);
                 }
-                CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->compute_event, info.all_ctx[i]->stream()));
+                CUDA_CHECK(cudaEventRecord(all_ctx[i]->compute_event, all_ctx[i]->stream()));
                 ichunk = (ichunk + 1)%nhave;
             }
         }
@@ -343,21 +353,21 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 int peer = idx[(ii+1)%nhave];
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 auto this_size  = (this_nelem / tt.blck_size) * tt.type_size;
-                ggml_cuda_set_device(info.all_ctx[peer]->device);
+                ggml_cuda_set_device(all_ctx[peer]->device);
                 if (stage == 0) {
-                    CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[peer]->stream(), info.all_ctx[i]->compute_event, 0));
+                    CUDA_CHECK(cudaStreamWaitEvent(all_ctx[peer]->stream(), all_ctx[i]->compute_event, 0));
                 }
-                CUDA_CHECK(cudaMemcpyPeerAsync((char *)dst->src[i]->data + ichunk*size_per_device, info.all_ctx[i]->device,
-                            (const char *)dst->src[peer]->data + ichunk*size_per_device, info.all_ctx[peer]->device,
-                            this_size, info.all_ctx[peer]->stream()));
-                CUDA_CHECK(cudaEventRecord(info.all_ctx[peer]->copy_event, info.all_ctx[peer]->stream()));
+                CUDA_CHECK(cudaMemcpyPeerAsync((char *)dst->src[i]->data + ichunk*size_per_device, all_ctx[i]->device,
+                            (const char *)dst->src[peer]->data + ichunk*size_per_device, all_ctx[peer]->device,
+                            this_size, all_ctx[peer]->stream()));
+                CUDA_CHECK(cudaEventRecord(all_ctx[peer]->copy_event, all_ctx[peer]->stream()));
                 ichunk = (ichunk + 1)%nhave;
             }
             for (int ii = 0; ii < nhave; ++ii) {
                 int i = idx[ii];
                 int peer = idx[(ii+1)%nhave];
-                ggml_cuda_set_device(info.all_ctx[i]->device);
-                CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
+                ggml_cuda_set_device(all_ctx[i]->device);
+                CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[peer]->copy_event, 0));
             }
         }
         ggml_cuda_set_device(ctx.device);
@@ -372,8 +382,8 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             GGML_ASSERT(dst->src[i]->type == dst->type);
             GGML_ASSERT(ggml_are_same_shape(dst, dst->src[i]));
             ggml_cuda_set_device(i);
-            if (!info.all_ctx[i]->copy_event) {
-                CUDA_CHECK(cudaEventCreateWithFlags(&info.all_ctx[i]->copy_event, cudaEventDisableTiming));
+            if (!all_ctx[i]->copy_event) {
+                CUDA_CHECK(cudaEventCreateWithFlags(&all_ctx[i]->copy_event, cudaEventDisableTiming));
             }
         }
         auto nelem = ggml_nelements(dst);
@@ -386,20 +396,20 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             task.ptrs[0] = (char *)dst->src[i]->data;
             int j = idx[2*ii+1];
             ggml_cuda_set_device(j);
-            CUDA_CHECK(cudaEventRecord(info.all_ctx[j]->copy_event, info.all_ctx[j]->stream()));
+            CUDA_CHECK(cudaEventRecord(all_ctx[j]->copy_event, all_ctx[j]->stream()));
             task.ptrs[1] = (char *)dst->src[j]->data;
             ggml_cuda_set_device(i);
-            CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event));
+            CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[j]->copy_event));
             if (dst->type == GGML_TYPE_F16) {
-                k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
             } else {
-                k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
             }
         }
         for (int ii = 0; ii < nhave/2; ++ii) {
             int i = idx[2*ii+0];
             ggml_cuda_set_device(i);
-            CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
+            CUDA_CHECK(cudaEventRecord(all_ctx[i]->copy_event, all_ctx[i]->stream()));
         }
         for (int ii = 0; ii < nhave/2; ++ii) {
             int i = idx[2*ii+1];
@@ -411,23 +421,23 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             int j = idx[(2*ii+2)%nhave];
             task.ptrs[1] = (char *)dst->src[j]->data;
             ggml_cuda_set_device(i);
-            CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event));
+            CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[j]->copy_event));
             if (dst->type == GGML_TYPE_F16) {
-                k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
             } else {
-                k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblocks, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
             }
         }
         for (int ii = 0; ii < nhave/2; ++ii) {
             int i = idx[2*ii+1];
             ggml_cuda_set_device(i);
-            CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
+            CUDA_CHECK(cudaEventRecord(all_ctx[i]->copy_event, all_ctx[i]->stream()));
         }
         for (int ii = 0; ii < nhave/2; ++ii) {
             int i = idx[(2*ii+2)%nhave];
             ggml_cuda_set_device(i);
             int j = idx[2*ii+1];
-            CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event));
+            CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[j]->copy_event));
         }
         ggml_cuda_set_device(ctx.device);
         if (ncopy > 0) {
@@ -442,10 +452,10 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             GGML_ASSERT(dst->src[i]->type == dst->type);
             GGML_ASSERT(ggml_are_same_shape(dst, dst->src[i]));
             ggml_cuda_set_device(i);
-            if (!info.all_ctx[i]->copy_event) {
-                CUDA_CHECK(cudaEventCreateWithFlags(&info.all_ctx[i]->copy_event, cudaEventDisableTiming));
+            if (!all_ctx[i]->copy_event) {
+                CUDA_CHECK(cudaEventCreateWithFlags(&all_ctx[i]->copy_event, cudaEventDisableTiming));
             }
-            CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
+            CUDA_CHECK(cudaEventRecord(all_ctx[i]->copy_event, all_ctx[i]->stream()));
         }
         //printf("Recorded events\n");
         auto nelem = ggml_nelements(dst);
@@ -465,37 +475,37 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             for (int jj = 0; jj < nhave; ++jj) {
                 if (jj == ii) continue;
                 int j = idx[jj];
-                CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event));
+                CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[j]->copy_event));
                 task.ptrs[k++] = (char *)dst->src[j]->data + ii*nelem_per_device*elem_size;
             }
             int nblock = (this_nelem + CUDA_REDUCE_BLOCK_SIZE - 1)/CUDA_REDUCE_BLOCK_SIZE;
             if (dst->type == GGML_TYPE_F16) {
                 switch (nhave) {
                     case 2:
-                        k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                         break;
                     case 3:
-                        k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 3><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 3><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                         break;
                     case 4:
-                        k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 4><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add_T<half, CUDA_REDUCE_BLOCK_SIZE, 4><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                         break;
                     default:
-                        k_reduce_add<half, CUDA_REDUCE_BLOCK_SIZE><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add<half, CUDA_REDUCE_BLOCK_SIZE><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                 }
             } else {
                 switch (nhave) {
                     case 2:
-                        k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 2><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                         break;
                     case 3:
-                        k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 3><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 3><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                         break;
                     case 4:
-                        k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 4><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add_T<float, CUDA_REDUCE_BLOCK_SIZE, 4><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                         break;
                     default:
-                        k_reduce_add<float, CUDA_REDUCE_BLOCK_SIZE><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(task);
+                        k_reduce_add<float, CUDA_REDUCE_BLOCK_SIZE><<<nblock, CUDA_REDUCE_BLOCK_SIZE, 0, all_ctx[i]->stream()>>>(task);
                 }
             }
         }
@@ -503,7 +513,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             ggml_cuda_set_device(i);
-            CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
+            CUDA_CHECK(cudaEventRecord(all_ctx[i]->copy_event, all_ctx[i]->stream()));
         }
         //printf("Recorded events again\n");
         for (int ii = 0; ii < nhave; ++ii) {
@@ -512,7 +522,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             for (int jj = 0; jj < nhave; ++jj) {
                 if (jj == ii) continue;
                 int j = idx[jj];
-                CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event));
+                CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), all_ctx[j]->copy_event));
             }
         }
         ggml_cuda_set_device(ctx.device);
@@ -536,11 +546,11 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         GGML_ASSERT(ggml_are_same_shape(dst, dst->src[i]));
         if (i == ctx.device) continue;
         ggml_cuda_set_device(i);
-        CUDA_CHECK(cudaMemcpyPeerAsync(ptr, ctx.device, dst->src[i]->data, i, nbytes, info.all_ctx[i]->stream()));
-        if (!info.all_ctx[i]->copy_event) {
-            CUDA_CHECK(cudaEventCreateWithFlags(&info.all_ctx[i]->copy_event, cudaEventDisableTiming));
+        CUDA_CHECK(cudaMemcpyPeerAsync(ptr, ctx.device, dst->src[i]->data, i, nbytes, all_ctx[i]->stream()));
+        if (!all_ctx[i]->copy_event) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&all_ctx[i]->copy_event, cudaEventDisableTiming));
         }
-        CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
+        CUDA_CHECK(cudaEventRecord(all_ctx[i]->copy_event, all_ctx[i]->stream()));
         ptr += nbytes;
     }
     auto nelem = ggml_nelements(dst);
@@ -550,7 +560,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     for (int ii = 0; ii < nhave; ++ii) {
         int i = idx[ii];
         if (i == ctx.device) continue;
-        CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), info.all_ctx[i]->copy_event, 0));
+        CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), all_ctx[i]->copy_event, 0));
         if (dst->type == GGML_TYPE_F16) {
             k_add<half, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem, (const half *)ptr, (half *)dst->data);
         } else if (dst->type == GGML_TYPE_BF16) {
@@ -572,15 +582,15 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         int i = idx[ii];
         if (i == ctx.device) continue;
         ggml_cuda_set_device(i);
-        CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), ctx.copy_event, 0));
-        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, i, dst->data, ctx.device, nbytes, info.all_ctx[i]->stream()));
-        CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
+        CUDA_CHECK(cudaStreamWaitEvent(all_ctx[i]->stream(), ctx.copy_event, 0));
+        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, i, dst->data, ctx.device, nbytes, all_ctx[i]->stream()));
+        CUDA_CHECK(cudaEventRecord(all_ctx[i]->copy_event, all_ctx[i]->stream()));
     }
     ggml_cuda_set_device(ctx.device);
     for (int ii = 0; ii < nhave; ++ii) {
         int i = idx[ii];
         if (i == ctx.device) continue;
-        CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), info.all_ctx[i]->copy_event, 0));
+        CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), all_ctx[i]->copy_event, 0));
     }
     if (ncopy > 0) {
         copy_missing_tensors(ctx, dst, nhave, ncopy, idx, copy_idx);

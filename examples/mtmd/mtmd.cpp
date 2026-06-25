@@ -783,12 +783,20 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
             LOG_ERR("%s: model does not support vision input\n", __func__);
             return 1;
         }
+        // If in the future, we somehow accidentally try to reencode an already-encoded chunk,
+        // chunk->tokens_image will have been cleared out to save memory
+        GGML_ASSERT(!chunk->tokens_image->batch_f32.entries.empty()
+            && "mtmd_encode_chunk: image data already released (double encode?)");
         return mtmd_encode(ctx, chunk->tokens_image.get());
     } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
         if (!ctx->ctx_a) {
             LOG_ERR("%s: model does not support audio input\n", __func__);
             return 1;
         }
+        // If in the future, we somehow accidentally try to reencode an already-encoded chunk,
+        // chunk->tokens_audio will have been cleared out to save memory
+        GGML_ASSERT(!chunk->tokens_audio->batch_f32.entries.empty()
+            && "mtmd_encode_chunk: audio data already released (double encode?)");
         int n_mmproj_embd = ctx->n_embd_text;
         ctx->image_embd_v.resize(chunk->tokens_audio->n_tokens * n_mmproj_embd);
         bool ok = clip_image_batch_encode(
@@ -1042,6 +1050,19 @@ void mtmd_input_chunk_free(mtmd_input_chunk * chunk) {
     }
 }
 
+void mtmd_input_chunk_free_raw_data(mtmd_input_chunk * chunk) {
+    if (!chunk) {
+        return;
+    }
+
+    if (chunk->tokens_image) {
+        chunk->tokens_image->batch_f32 = clip_image_f32_batch{};
+    }
+    if (chunk->tokens_audio) {
+        chunk->tokens_audio->batch_f32 = clip_image_f32_batch{};
+    }
+}
+
 // mtmd_image_tokens
 
 size_t mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens) {
@@ -1114,63 +1135,10 @@ mtmd_input_chunks * mtmd_test_create_input_chunks() {
     return chunks;
 }
 
-static json mtmd_clip_image_f32_to_json(const clip_image_f32 & clip) {
-    json j;
-    j["nx"] = clip.nx;
-    j["ny"] = clip.ny;
-    j["buf"] = clip.buf;
-    return j;
-}
-
-static clip_image_f32 * mtmd_clip_image_f32_from_json(const json & j) {
-    clip_image_f32 * clip = new clip_image_f32;
-    clip->nx = j["nx"];
-    clip->ny = j["ny"];
-    clip->buf = j["buf"].get<std::vector<float>>();
-    return clip;
-}
-
-static json mtmd_clip_image_f32_batch_to_json(const clip_image_f32_batch & batch, bool full = false) {
-    json j;
-    j["is_audio"] = batch.is_audio;
-    j["grid_x"] = batch.grid_x;
-    j["grid_y"] = batch.grid_y;
-
-    if (full) {
-        std::vector<nlohmann::json> entries;
-        for (auto & entry : batch.entries) {
-            entries.push_back(mtmd_clip_image_f32_to_json(*entry));
-        }
-        j["entries"] = entries;
-    }
-
-    return j;
-}
-
-static clip_image_f32_batch mtmd_clip_image_f32_batch_from_json(const json & j, bool full = false) {
-    clip_image_f32_batch batch;
-    if (j.contains("is_audio")) {
-        batch.is_audio = j["is_audio"];
-        batch.grid_x = j["grid_x"];
-        batch.grid_y = j["grid_y"];
-        if (full) {
-            auto entries = j["entries"];
-            if (entries.is_array()) {
-                for (auto & entry : entries) {
-                    clip_image_f32 * clip = mtmd_clip_image_f32_from_json(entry);
-                    batch.entries.push_back(clip_image_f32_ptr(clip));
-                }
-            }
-        }
-
-    }
-    return batch;
-}
-
 static mtmd_audio_tokens mtmd_audio_tokens_from_json(json & j) {
     return mtmd_audio_tokens{
         j.value<uint32_t>("n_tokens", 0),
-        mtmd_clip_image_f32_batch_from_json(j.value("batch_f32", json{})),
+        clip_image_f32_batch {},
         j.value("id","")
     };
 }
@@ -1180,7 +1148,7 @@ static mtmd_image_tokens mtmd_image_tokens_from_json(json & j) {
         j.value<uint32_t>("nx", 0),
         j.value<uint32_t>("ny", 0),
         j.value("use_mrope_pos",false),
-        mtmd_clip_image_f32_batch_from_json(j.value("batch_f32", json{})),
+        clip_image_f32_batch {},
         j.value("id","")
     };
 }
@@ -1190,7 +1158,6 @@ static json mtmd_audio_tokens_to_json(mtmd_audio_tokens *  chunk) {
     if (chunk) {
         j["n_tokens"] = chunk->n_tokens;
         j["id"] = chunk->id;
-        j["batch_f32"] = mtmd_clip_image_f32_batch_to_json(chunk->batch_f32);
     }
     return j;
 }
@@ -1201,7 +1168,6 @@ static json mtmd_image_tokens_to_json(mtmd_image_tokens * chunk) {
         j["nx"] = chunk->nx;
         j["ny"] = chunk->ny;
         j["use_mrope_pos"] = chunk->use_mrope_pos;
-        j["batch_f32"] = mtmd_clip_image_f32_batch_to_json(chunk->batch_f32);
         j["id"] = chunk->id;
     }
     return j;

@@ -1253,6 +1253,13 @@ const mtmd::input_chunk_ptr& server_tokens::find_chunk(size_t idx) const {
     throw std::runtime_error("Chunk not found, or idx is not the first token of a chunk");
 }
 
+void server_tokens::free_raw_media_data(size_t idx) {
+    auto it = map_idx_to_media.find(idx);
+    if (it != map_idx_to_media.end() && it->second) {
+        mtmd_input_chunk_free_raw_data(it->second.get());
+    }
+}
+
 void server_tokens::push_back(llama_token tok) {
     if (tok == LLAMA_TOKEN_NULL) {
         throw std::runtime_error("Invalid token");

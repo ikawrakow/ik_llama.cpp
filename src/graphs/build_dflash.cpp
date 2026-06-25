@@ -171,16 +171,34 @@ ggml_cgraph * llm_build_context::build_dflash() {
     }();
     const ggml_type mask_type = flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-    lctx.dflash.inputs.kq_mask = ggml_new_tensor_2d(ctx0, mask_type, n_kv_total, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-    lctx.dflash.kv.kq_mask_tensor = lctx.dflash.inputs.kq_mask;
-    ggml_set_input(lctx.dflash.inputs.kq_mask);
-    cb(lctx.dflash.inputs.kq_mask, "dflash_kq_mask", -1);
+    // The full (non-SWA) mask is only consumed by non-SWA layers. For an all-SWA draft every layer
+    // uses kq_mask_swa, leaving the full mask a dead graph node that the scheduler never backs with a
+    // buffer (and the unconditional input-set then asserts buf!=NULL). So create each mask only when
+    // some layer uses it: full mask iff any non-SWA layer; swa mask iff needs_swa_mask.
+    const bool needs_full_mask = !needs_swa_mask || [&]() {
+        for (int il = 0; il < n_layer; ++il) {
+            if (!hparams.swa_layers[il]) {
+                return true;
+            }
+        }
+        return false;
+    }();
+
+    lctx.dflash.inputs.kq_mask = nullptr;
+    lctx.dflash.kv.kq_mask_tensor = nullptr;
+    ggml_tensor * dflash_kq_mask_full = nullptr;
+    if (needs_full_mask) {
+        lctx.dflash.inputs.kq_mask = ggml_new_tensor_2d(ctx0, mask_type, n_kv_total, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        lctx.dflash.kv.kq_mask_tensor = lctx.dflash.inputs.kq_mask;
+        ggml_set_input(lctx.dflash.inputs.kq_mask);
+        cb(lctx.dflash.inputs.kq_mask, "dflash_kq_mask", -1);
+        dflash_kq_mask_full = lctx.dflash.inputs.kq_mask;
+    }
 
     lctx.dflash.kv.draft_tail_rows_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(lctx.dflash.kv.draft_tail_rows_tensor);
     cb(lctx.dflash.kv.draft_tail_rows_tensor, "dflash_draft_tail_rows", -1);
 
-    ggml_tensor * dflash_kq_mask_full = lctx.dflash.inputs.kq_mask;
     ggml_tensor * dflash_kq_mask_swa = nullptr;
     lctx.dflash.inputs.kq_mask_swa = nullptr;
     lctx.dflash.kv.kq_mask_swa_tensor = nullptr;

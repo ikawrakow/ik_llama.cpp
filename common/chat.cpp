@@ -2144,22 +2144,42 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
     };
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    // Surface reasoning as reasoning_content whenever the output format requests it
+    // (Cohere2MoE has a non-empty THINK_START, so this matches the narrow condition
+    // from the reasoning-delimiter work). Under --reasoning off the model may still
+    // emit an (un)opened thinking block; keeping it in reasoning_content quarantines
+    // it from the user-facing content rather than leaking it into the answer.
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
-        auto end               = p.optional(p.literal(TURN_END)) + p.end();
+        // Cohere2MoE can emit a stray text terminator after an action envelope.
+        auto end               = p.optional(p.literal(TEXT_END)) + p.optional(p.literal(TURN_END)) + p.end();
+
+        auto thinking_body = [&]() {
+            return p.until_one_of({ THINK_END, TEXT_START, ACTION_START });
+        };
 
         common_peg_parser reasoning = p.eps();
         if (extract_reasoning) {
-            reasoning = p.optional(p.literal(THINK_START) +
-                                   p.reasoning(p.until_one_of({ THINK_END, TEXT_START, ACTION_START })) +
-                                   p.optional(p.literal(THINK_END)));
+            auto opened = p.literal(THINK_START) +
+                          p.reasoning(thinking_body()) +
+                          p.optional(p.literal(THINK_END));
+            auto unopened = p.reasoning(thinking_body()) + p.literal(THINK_END);
+            reasoning = p.optional(p.choice({ opened, unopened }));
+        } else if (inputs.enable_thinking) {
+            auto opened = p.content(p.literal(THINK_START) +
+                                    thinking_body() +
+                                    p.optional(p.literal(THINK_END)));
+            auto unopened = p.content(thinking_body() + p.literal(THINK_END));
+            reasoning = p.optional(p.choice({ opened, unopened }));
         } else {
-            reasoning = p.optional(p.content(p.literal(THINK_START) +
-                                             p.until_one_of({ THINK_END, TEXT_START, ACTION_START }) +
-                                             p.optional(p.literal(THINK_END))));
+            auto opened = p.literal(THINK_START) +
+                          p.content(thinking_body()) +
+                          p.optional(p.literal(THINK_END));
+            auto unopened = p.content(thinking_body()) + p.literal(THINK_END);
+            reasoning = p.optional(p.choice({ opened, unopened }));
         }
 
         auto text_content = p.literal(TEXT_START) + p.content(p.until(TEXT_END)) + p.optional(p.literal(TEXT_END));

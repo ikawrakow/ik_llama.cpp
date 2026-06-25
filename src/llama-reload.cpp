@@ -939,7 +939,7 @@ bool reload_info::reload_changed_tensors(llama_model & model) {
 
     if (r) {
 #ifdef GGML_USE_CUDA
-        ggml_backend_cuda_invalidate_graphs();
+        ggml_backend_cuda_invalidate_graphs(&model);
 #endif
     }
     return r;
