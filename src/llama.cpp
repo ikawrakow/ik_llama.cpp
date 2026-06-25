@@ -880,7 +880,7 @@ static bool llama_kv_cache_init(
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
         const bool is_mtp = (model.arch == LLM_ARCH_GLM_DSA ||
-                             model.arch == LLM_ARCH_QWEN35 ||
+                             //model.arch == LLM_ARCH_QWEN35 ||
                              model.arch == LLM_ARCH_QWEN35MOE) && hparams.nextn_predict_layers > 0;
         const int64_t n_mtp_first = hparams.n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
@@ -960,10 +960,10 @@ static bool llama_kv_cache_init(
 
     int n_mla = 0;
     int n_kv_active_layers = 0;
-    const int64_t n_mtp_first_layer = hparams.n_layer - hparams.nextn_predict_layers;
+    const int n_mtp_first_layer = hparams.n_layer - hparams.nextn_predict_layers;
     for (int i = 0; i < (int) n_layer; i++) {
         // For MTP-only context, skip KV allocation for non-MTP layers
-        if (cparams.mtp_op_type != MTP_OP_NONE && i < (int)n_mtp_first_layer) {
+        if (cparams.mtp_op_type != MTP_OP_NONE && i < n_mtp_first_layer) {
             cache.k_l.push_back(nullptr);
             if (!is_mla_attn || !cparams.mla_attn || (cparams.mla_attn == 1 && !cparams.flash_attn)) {
                 cache.v_l.push_back(nullptr);
@@ -976,10 +976,10 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k(i);
 
-        const bool is_mtp_tail_layer = (model.arch == LLM_ARCH_QWEN35 ||
+        const bool is_mtp_tail_layer = (//model.arch == LLM_ARCH_QWEN35 ||
                                         model.arch == LLM_ARCH_QWEN35MOE ||
                                         model.arch == LLM_ARCH_GLM_DSA) &&
-                hparams.nextn_predict_layers > 0 && i >= (int)n_mtp_first_layer;
+                hparams.nextn_predict_layers > 0 && i >= n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
