@@ -42,6 +42,9 @@ struct clip_context_params {
 bool clip_swap_to_gpu(struct clip_ctx * ctx);
 bool clip_swap_to_cpu(struct clip_ctx * ctx);
 
+size_t clip_get_mmproj_size(struct clip_ctx * ctx);
+bool clip_swap_to_gpu_leased(struct clip_ctx * ctx, void * vram_ptr, struct ggml_backend_buffer * vram_buf, size_t lease_size);
+
 struct clip_init_result {
     struct clip_ctx * ctx_v; // vision context
     struct clip_ctx * ctx_a; // audio context
