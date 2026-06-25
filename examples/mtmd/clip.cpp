@@ -5686,6 +5686,60 @@ bool clip_swap_to_cpu(struct clip_ctx * ctx) {
     return true;
 }
 
+size_t clip_get_mmproj_size(struct clip_ctx * ctx) {
+    size_t total_size = 0;
+    size_t alignment = 256;
+    if (ctx->backend_gpu) {
+        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx->backend_gpu);
+        alignment = ggml_backend_buft_get_alignment(buft);
+    }
+    
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+        total_size = GGML_PAD(total_size, alignment);
+        total_size += ggml_nbytes(t);
+    }
+    return total_size;
+}
+
+bool clip_swap_to_gpu_leased(struct clip_ctx * ctx, void * vram_ptr, struct ggml_backend_buffer * vram_buf, size_t lease_size) {
+    if (!ctx->lazy_swap_enabled || !ctx->backend_gpu) return false;
+    if (ctx->backend == ctx->backend_gpu) return true; // Already on GPU
+
+    ctx->buf.reset(); // Release current CPU buffer, DO NOT take ownership of leased VRAM
+
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+        t->data = nullptr;
+        t->buffer = nullptr;
+    }
+
+    size_t offset = 0;
+    size_t alignment = ggml_backend_buffer_get_alignment(vram_buf);
+    
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+        offset = GGML_PAD(offset, alignment);
+        if (offset + ggml_nbytes(t) > lease_size) {
+            LOG_ERR("Leased VRAM size is too small for mmproj tensors\n");
+            return false;
+        }
+        t->data = (char *)vram_ptr + offset;
+        t->buffer = vram_buf;
+        offset += ggml_nbytes(t);
+    }
+
+    // Now copy the data
+    for (auto & pair : ctx->backup_offsets) {
+        ggml_backend_tensor_set(pair.first, ctx->weights_backup.data() + pair.second, 0, ggml_nbytes(pair.first));
+    }
+
+    ctx->backend = ctx->backend_gpu;
+    ctx->backend_ptrs[0] = ctx->backend_gpu;
+    ctx->backend_buft[0] = ggml_backend_buffer_get_type(vram_buf);
+    ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(), ctx->backend_ptrs.size(), ctx->max_nodes, false));
+    
+    clip_model_loader::warmup(*ctx);
+    return true;
+}
+
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {
     clip_image_f32 clip_img;
     clip_img.buf.resize(h * w * 3);
