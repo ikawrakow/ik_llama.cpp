@@ -538,9 +538,11 @@ struct clip_ctx {
     }
 
     ~clip_ctx() {
-        ggml_backend_free(backend);
-        if (backend != backend_cpu) {
+        if (backend_cpu) {
             ggml_backend_free(backend_cpu);
+        }
+        if (backend_gpu) {
+            ggml_backend_free(backend_gpu);
         }
     }
 
@@ -5627,17 +5629,30 @@ bool clip_swap_to_gpu(struct clip_ctx * ctx) {
     if (!ctx->lazy_swap_enabled || !ctx->backend_gpu) return false;
     if (ctx->backend == ctx->backend_gpu) return true; // Already on GPU
 
+    // 1. Backup old pointers so we can safely recover if allocation fails
+    std::vector<std::pair<void *, ggml_backend_buffer_t>> old_ptrs;
     for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+        old_ptrs.push_back({t->data, t->buffer});
         t->data = nullptr;
         t->buffer = nullptr;
     }
 
+    // 2. Try to allocate
     ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx->backend_gpu);
     ggml_backend_buffer_t new_buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx->ctx_data.get(), buft);
+    
+    // 3. Handle failure safely
     if (!new_buf) {
         LOG_ERR("Failed to allocate mmproj tensors on GPU\n");
+        size_t i = 0;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+            t->data = old_ptrs[i].first;
+            t->buffer = old_ptrs[i].second;
+            i++;
+        }
         return false;
     }
+
     ctx->buf.reset(new_buf);
     ggml_backend_buffer_set_usage(ctx->buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
@@ -5658,17 +5673,27 @@ bool clip_swap_to_cpu(struct clip_ctx * ctx) {
     if (!ctx->lazy_swap_enabled || !ctx->backend_gpu) return false;
     if (ctx->backend == ctx->backend_cpu) return true; // Already on CPU
 
+    std::vector<std::pair<void *, ggml_backend_buffer_t>> old_ptrs;
     for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+        old_ptrs.push_back({t->data, t->buffer});
         t->data = nullptr;
         t->buffer = nullptr;
     }
 
     ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx->backend_cpu);
     ggml_backend_buffer_t new_buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx->ctx_data.get(), buft);
+    
     if (!new_buf) {
         LOG_ERR("Failed to allocate mmproj tensors on CPU\n");
+        size_t i = 0;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+            t->data = old_ptrs[i].first;
+            t->buffer = old_ptrs[i].second;
+            i++;
+        }
         return false;
     }
+
     ctx->buf.reset(new_buf);
     ggml_backend_buffer_set_usage(ctx->buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
@@ -5682,9 +5707,9 @@ bool clip_swap_to_cpu(struct clip_ctx * ctx) {
     ctx->sched.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(), ctx->backend_ptrs.size(), ctx->max_nodes, false));
     clip_model_loader::warmup(*ctx);
 
-    
     return true;
 }
+
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {
     clip_image_f32 clip_img;
