@@ -221,6 +221,100 @@ n_seq>=1. **Fully general and PR-ready.**
 
 ---
 
+## UPDATE 6 (2026-06-25): serving-correctness — kr_l maintained across shift/defrag/seq-ops; per-seq sink anchored on first-present pos; context-shift on MLA characterized
+
+Branch `glm-dsa-multiseq`. An adversarial review (verified) flagged that the indexer was proven on the
+**perplexity** path but not the **serving** path: the persistent indexer-K cache `kr_l` was written and
+read but never *maintained* by the KV-cache mutators (K-shift, defrag, seq-ops), and the attention sink
+anchored on absolute `pos < n_sink` (wrong for a sequence whose early tokens were `seq_rm`'d). This
+update closes those gaps and — importantly — pins down what is actually reachable on our MLA model.
+
+### 1. kr_l now wired into every KV-cache mutator
+
+- **`build_k_shift`** (`src/llama-build-context.cpp`): after the main-K RoPE-delta loop, a new block
+  rotates the indexer keys by the **same per-cell delta**. The cached key is `H·concat(RoPE(k_pe,pos),
+  k_nope)`, so we **un-Hadamard (H·kr, H symmetric/orthonormal ⇒ H·H=I) → RoPE-delta the pe sub-block →
+  re-Hadamard**. Exact because GLM-DSA carries **no rope-scaling metadata** ⇒ `ext_factor==0`,
+  `attn_factor==1`, `freq_scale==1` (confirmed at runtime), so NEOX RoPE is a pure, composable rotation:
+  `RoPE(x,pos+delta)==RoPE(RoPE(x,pos),delta)`. Params (`rope_factors=nullptr`, `n_rot`, NEOX,
+  `freq_base`, `ext_factor`, `attn_factor`) mirror the forward indexer RoPE byte-for-byte; the
+  DEEPSEEK2-only `yarn_attn_factor_shift` does NOT leak in (GLM_DSA≠DEEPSEEK2). Non-in-place
+  (cont→rope→concat→re-Had→cpy), no aliasing. The k-shift Hadamard input is filled in
+  `llama_set_k_shift` with the identical Sylvester construction.
+- **`build_defrag`** (`src/llama-build-context.cpp`): a `kr_l` row-move `ggml_cpy` mirrors the `k_l`
+  move (defrag does **not** change `pos`, so no re-RoPE — a plain row follow is correct). `max_moves`
+  divisor bumped 6→9 `*n_layer` when the indexer cache is present (kr_l adds 3 nodes/layer/move).
+- **seq-ops** (`seq_rm`/`seq_cp`/`seq_keep`): verified **metadata-only** — they touch
+  `cells[].seq_id`/`pos`/`used`/`head` and never move K/V/kr_l tensor data, so a cell keeps its physical
+  index and its kr_l row stays matched. `seq_add`/`seq_div` change `pos` and set `has_shift=true`,
+  routing through K-shift. **No kr_l action needed in the seq-ops themselves.**
+
+### 2. Per-sequence sink anchored on first-present pos (not absolute pos<n_sink)
+
+`llama_set_inputs` now boosts each query's own sequence's first `n_sink` **present** tokens:
+`inp_dsa_sink[j,i]=1e20 iff cell i has query j's seq AND cell.pos ∈ [min_pos_of_seq, min_pos_of_seq +
+n_sink)`, where `min_pos_of_seq` is the per-sequence minimum present `pos` over the scored `n_kv` span.
+After multi-turn `seq_rm` drops a sequence's early tokens, its earliest survivor has `pos ≥ n_sink`; the
+old absolute test would have protected *nothing* and let the (now-)sink be masked out. For a fresh
+sequence at pos 0, `min_pos==0` ⇒ the boosted set is **byte-identical** to the old behaviour.
+
+### 3. The serving-scenario test — and what it actually found
+
+The whole point: force a real context-shift (llama-cli infinite-gen path: `seq_rm` then
+`seq_add(-n_discard)` → `has_shift`) on GLM-5.2-IQ2_M with the indexer mask biting, and confirm
+post-shift coherence. **Result: a RoPE context-shift on this model is REFUSED BY THE ENGINE.**
+`llama_kv_cache_update_internal` calls `get_can_shift()`, which returns **false for all MLA models**
+(`is_mla_model()` includes `GLM_DSA`); the update returns 1 and `llama_decode` propagates it as
+`main : failed to eval`. Empirically reproduced and **isolated with a dense control**:
+
+| Config (`-c 256 -n 400`, prompt overflows ctx, shift fires) | At the context-shift |
+|---|---|
+| Indexer ON (`-mla 3 -fa 1`) | coherent up to the shift, then **`failed to eval`** |
+| Dense (`DSA_INDEXER_DISABLE=1`), same prompt/seed | coherent up to the shift, then **`failed to eval`** (identical) |
+
+The failure is **pre-existing MLA engine behaviour, independent of the indexer** — dense fails the same
+way at the same token. The indexer neither causes nor worsens it; on the MLA path the shift simply never
+happens, so the indexer's kr_l can never desync via K-shift. The `build_k_shift` kr_l block is therefore
+**correct-and-dormant**: it is never reached on the current MLA path (guarded by `get_can_shift`), but
+keeps the indexer keys consistent the instant MLA K-shift is ever enabled. This is documented loudly in
+the code (build-context.cpp k-shift block) and is the honest serving-correctness status, not a paper-over.
+
+**Serving implication (R740/llama-swap):** GLM-5.2 (being MLA) cannot do an in-place RoPE context-shift
+at all — n_ctx must be sized to the workload, or the server must truncate/restart on overflow, exactly
+as for any MLA model (DeepSeek-V3, etc.). This is orthogonal to and predates the indexer.
+
+### 4. Validation
+
+- **No regression (single-seq, mask is a no-op):** c512 n_seq=1, 4 chunks, **indexer ON == dense ==
+  `2.1957 +/- 0.12031`**, byte-identical every chunk (2.2770/2.8741/2.3956/2.1957) — re-run post-change,
+  matches the UPDATE 5 baseline exactly. The kr_l/shift/sink changes are a true no-op when no
+  shift/defrag fires and the sequence starts at pos 0.
+- **Multi-seq (mask bites):** c4096 n_seq=2 healthy (see table below), confirming the per-seq sink
+  change did not regress the UPDATE 5 multi-seq fix.
+- **Serving shift:** characterized as engine-refused for MLA (above), with a dense control proving
+  indexer-independence.
+- **Adversarial review:** independent reviewer (did not write the code) verified the K-shift math
+  (Hadamard inverse, RoPE composability, param match), aliasing safety, inp_dsa_hadamard reuse, defrag
+  shape/budget, seq-op metadata-only claim, and per-seq sink fill — verdict **GO**, no correctness
+  defect in the diff; its #1 must-do (run the real shift) is what surfaced the MLA `get_can_shift` gate.
+- **Build:** clean (`llama-cli`, `llama-perplexity`, sm_60).
+
+### Honest serving-correctness status
+
+| Serving path | Reachable on MLA GLM-DSA? | kr_l correct? |
+|---|---|---|
+| prefill + decode (single & multi-seq) | yes | yes — validated, byte-identical no-op vs dense |
+| seq_rm / seq_cp / seq_keep (multi-turn) | yes (metadata-only) | yes — kr_l rows stay matched to cells; per-seq sink re-anchors |
+| defrag | yes (when `do_defrag` fires) | yes — kr_l row-move mirrors k_l; wired + budgeted |
+| RoPE context-shift (K-shift) | **NO — engine `get_can_shift` refuses MLA** | wiring correct but **dormant/unreachable**; dense fails identically |
+
+The indexer is now **serving-general for every path the MLA engine actually executes** (prefill, decode,
+multi-turn seq-ops, defrag, multi-seq), not merely perplexity-general. The only path the review worried
+about, RoPE K-shift, is not an MLA path at all (refused upstream, dense and indexer alike); its kr_l
+wiring is in place and correct for the day MLA shift is enabled.
+
+---
+
 ## Status summary
 
 | Capability | Status |
@@ -231,12 +325,19 @@ n_seq>=1. **Fully general and PR-ready.**
 | c512 exact no-op vs dense (no regression) | DONE (2.0854 == dense, byte-identical) |
 | Hadamard rotation, attention-sink force-include | DONE (gated, on by default) |
 | Multi-seq (n_seq>1) with active mask | **DONE, validated (UPDATE 5)** — per-sequence sink; n_seq=4==n_seq=1 |
+| Serving: kr_l maintained on defrag + seq-ops; per-seq sink on first-present pos | **DONE (UPDATE 6)** — defrag row-move + seq-ops metadata-only; c512 ON==dense byte-identical |
+| Serving: RoPE context-shift (K-shift) on MLA | **ENGINE-GATED OFF for all MLA** (`get_can_shift`); kr_l wiring correct-but-dormant; dense fails identically (UPDATE 6) |
 | deepseek32 arch | N/A in this fork (DSA lives under glm-dsa) |
 
-**Bottom line:** the indexer is feature-complete, sequence-correct, and PR-ready for **both single- and
-multi-sequence** serving (prefill + decode, soft_max + flash-attention, `-mla 1`/`-mla 3`, n_seq>=1),
-the R740 serving target. The UPDATE 5 per-sequence attention-sink fix (`glm-dsa-multiseq` branch) closes
-the last gap: n_seq=2 c4096 dropped from 61.2 to 3.07 (== single-seq), n_seq=4 is chunk-for-chunk
-identical to n_seq=1, and single-seq is byte-identical to dense (no regression). The only remaining
-ceiling is VRAM capacity for very large packed batches (n_seq=4 at full c4096 OOMs the 3x P100 rig), a
-memory limit, not a correctness one.
+**Bottom line:** the indexer is feature-complete, sequence-correct, and serving-general for **every path
+the MLA engine actually executes** — prefill + decode, soft_max + flash-attention, `-mla 1`/`-mla 3`,
+n_seq>=1, multi-turn seq-ops, and defrag — on the R740 serving target. UPDATE 5 closed multi-seq
+(per-sequence sink: n_seq=2 c4096 61.2→3.07, n_seq=4==n_seq=1). UPDATE 6 closed serving-correctness:
+`kr_l` is now maintained by defrag (row-move) and stays matched across the metadata-only seq-ops, the
+attention sink anchors on each sequence's first-present pos (correct after multi-turn `seq_rm`), and
+single-seq is **byte-identical to dense (2.1957, no regression)**. The one path the review worried about,
+RoPE **context-shift**, is **refused by the engine for all MLA models** (`get_can_shift`) — a dense
+control fails identically, proving it pre-existing and indexer-independent; the `kr_l` K-shift wiring is
+in place and correct but dormant until/unless MLA K-shift is enabled. Remaining ceilings are
+operational, not correctness: VRAM for very large packed batches (n_seq=4 at full c4096 OOMs the 3x P100
+rig), and MLA's inability to in-place context-shift (size n_ctx to the workload, as for any MLA model).
