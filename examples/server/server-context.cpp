@@ -235,7 +235,7 @@ bool server_context::load_model(const gpt_params& params_) {
         mparams.verbosity = params_base.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
         mparams.image_min_tokens = params_base.image_min_tokens;
         mparams.image_max_tokens = params_base.image_max_tokens;
-        const bool lazy_swap = params_base.mmproj_gpu_lazy;
+        const bool lazy_swap = params_base.mmproj_gpu_lazy && params_base.mmproj_use_gpu;
         mparams.lazy_swap = lazy_swap;
         mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
         if (mctx == nullptr) {
@@ -286,10 +286,14 @@ void server_context::swap_mmproj_to_gpu() {
         SRV_INF("%s", "loading mmproj to GPU...\n");
         int64_t t0 = ggml_time_us();
 
-        mtmd_swap_to_gpu(mctx);
-
-        SRV_INF("swap done in %" PRId64 " ms\n", (ggml_time_us() - t0) / 1000);
-        mmproj_swapped = true;
+        bool success = mtmd_swap_to_gpu(mctx);
+        if (success) {
+            SRV_INF("swap done in %" PRId64 " ms\n", (ggml_time_us() - t0) / 1000);
+            mmproj_swapped = true;
+        } else {
+            SRV_WRN("%s", "Continuing with mmproj on CPU due to swap failure\n");
+            mmproj_swapped = false;
+        }
     }
     mmproj_swap_count++;
 }
