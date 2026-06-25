@@ -7,7 +7,13 @@
 #include <cstddef>
 #include <memory>
 
-
+extern "C" {
+    struct llama_vram_lease;
+    struct llama_vram_lease * llama_vram_lease_acquire(struct llama_model * model, size_t required_bytes);
+    void llama_vram_lease_return(struct llama_model * model, struct llama_vram_lease * lease);
+    void * llama_vram_lease_get_data(struct llama_vram_lease * lease);
+    struct ggml_backend_buffer * llama_vram_lease_get_buffer(struct llama_vram_lease * lease);
+}
 
 enum slot_state {
     SLOT_STATE_IDLE,
@@ -251,11 +257,12 @@ struct server_context {
     // multimodal
     mtmd_context* mctx = nullptr;
 
-    // lazy mmproj GPU swap (like buun --mmproj-gpu-swap)
+    // lazy mmproj GPU swap
     bool mmproj_lazy = false;
     bool mmproj_swapped = false;
     std::mutex mmproj_swap_mutex;
     int mmproj_swap_count = 0;
+    struct llama_vram_lease * vram_lease = nullptr;
 
     static bool prompt_has_media(const server_tokens& tokens, size_t from, size_t to);
 
