@@ -419,6 +419,19 @@ bool mtmd_swap_to_cpu(mtmd_context * ctx) {
     return ok;
 }
 
+size_t mtmd_get_mmproj_size(mtmd_context * ctx) {
+    size_t size = 0;
+    if (ctx->ctx_v) size = std::max(size, clip_get_mmproj_size(ctx->ctx_v));
+    if (ctx->ctx_a) size = std::max(size, clip_get_mmproj_size(ctx->ctx_a));
+    return size;
+}
+
+bool mtmd_swap_to_gpu_leased(mtmd_context * ctx, void * vram_ptr, struct ggml_backend_buffer * vram_buf, size_t lease_size) {
+    bool ok = true;
+    if (ctx->ctx_v) ok &= clip_swap_to_gpu_leased(ctx->ctx_v, vram_ptr, vram_buf, lease_size);
+    if (ctx->ctx_a) ok &= clip_swap_to_gpu_leased(ctx->ctx_a, vram_ptr, vram_buf, lease_size);
+    return ok;
+}
 struct mtmd_tokenizer {
     mtmd_context * ctx;
     std::vector<const mtmd_bitmap *> bitmaps;
