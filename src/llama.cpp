@@ -415,18 +415,20 @@ LLAMA_API struct llama_vram_lease * llama_vram_lease_acquire(struct llama_model 
         while (i < t_list.size()) {
             size_t current_size = ggml_nbytes(t_list[i]);
             size_t j = i + 1;
-            while (j < t_list.size()) {
-                uintptr_t expected_next = (uintptr_t)t_list[j-1]->data + ggml_nbytes(t_list[j-1]);
-                size_t alignment = ggml_backend_buffer_get_alignment(t_list[j]->buffer);
-                expected_next = GGML_PAD(expected_next, alignment);
+            if (current_size < required_bytes) {
+                while (j < t_list.size()) {
+                    uintptr_t expected_next = (uintptr_t)t_list[j-1]->data + ggml_nbytes(t_list[j-1]);
+                    size_t alignment = ggml_backend_buffer_get_alignment(t_list[j]->buffer);
+                    expected_next = GGML_PAD(expected_next, alignment);
 
-                // Strict physical contiguity check
-                if (expected_next == (uintptr_t)t_list[j]->data) {
-                    current_size = ((uintptr_t)t_list[j]->data + ggml_nbytes(t_list[j])) - (uintptr_t)t_list[i]->data;
-                    j++;
-                    if (current_size >= required_bytes) break;
-                } else {
-                    break;
+                    // Strict physical contiguity check
+                    if (expected_next == (uintptr_t)t_list[j]->data) {
+                        current_size = ((uintptr_t)t_list[j]->data + ggml_nbytes(t_list[j])) - (uintptr_t)t_list[i]->data;
+                        j++;
+                        if (current_size >= required_bytes) break;
+                    } else {
+                        break;
+                    }
                 }
             }
 
