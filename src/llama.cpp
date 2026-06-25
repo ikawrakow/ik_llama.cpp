@@ -4318,6 +4318,28 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         ggml_backend_tensor_set(lctx.inp_dsa_hadamard, h.data(), 0, ggml_nbytes(lctx.inp_dsa_hadamard));
     }
 
+    if (lctx.inp_dsa_sink) {
+        // Per-sequence attention-sink boost for the DSA lightning indexer top-k selection.
+        // inp_dsa_sink {n_kv, n_tokens}: 1e20 iff key cell i belongs to query j's sequence and
+        // has pos < n_sink, else 0. Filled from kv_self.cells exactly like the KQ_mask so it is
+        // correct for multi-sequence ubatches (each sequence's OWN sink is force-included).
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_dsa_sink->buffer));
+        static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
+        const int64_t n_kv      = lctx.inp_dsa_sink->ne[0];
+        const int64_t n_tok_idx = lctx.inp_dsa_sink->ne[1];
+        float * data = (float *) lctx.inp_dsa_sink->data;
+        std::memset(data, 0, ggml_nbytes(lctx.inp_dsa_sink));
+        for (int64_t j = 0; j < n_tok_idx && j < (int64_t) batch.n_tokens; ++j) {
+            const llama_seq_id seq_id = batch.seq_id[j][0];
+            for (int64_t i = 0; i < n_kv; ++i) {
+                const auto & cell = kv_self.cells[i];
+                if (cell.pos >= 0 && cell.pos < n_sink && cell.has_seq_id(seq_id)) {
+                    data[j*n_kv + i] = 1e20f;
+                }
+            }
+        }
+    }
+
     if (batch.token && lctx.inp_tokens) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();

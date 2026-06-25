@@ -470,16 +470,29 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     cb(indexer_score, "dsa_indexer_score_masked", il);
 
     // Attention-sink force-inclusion: add a finite positive boost to the first n_sink key positions
-    // so the sink token(s) always survive the top-k selection. Masking the sink collapses most
-    // transformers; a heavily-quantized (IQ2) indexer does not reliably rank it high on its own.
-    // The boost is finite, so it cannot un-mask future/causal -inf positions (-inf + boost = -inf).
+    // OF EACH QUERY'S OWN SEQUENCE so the sink token(s) always survive the top-k selection. Masking
+    // the sink collapses most transformers; a heavily-quantized (IQ2) indexer does not reliably rank
+    // it high on its own. The boost is finite, so it cannot un-mask future/causal -inf positions
+    // (-inf + boost = -inf).
+    //
+    // MULTI-SEQUENCE: the boost MUST be per-(key,query), not a global per-key vector. With several
+    // sequences packed into one ubatch (seq 0 at cache cells [0,n0), seq 1 at [n0,n1), ...), a global
+    // "key index < n_sink" boost only protects sequence 0's sink; sequence 1's sink (at cell n0, not
+    // cell 0) is left unprotected and gets dropped from top-k once the mask bites, collapsing it.
+    // We therefore use a per-graph input tensor inp_dsa_sink {n_kv, n_tokens} (filled on the CPU from
+    // kv_self.cells like the KQ_mask): inp_dsa_sink[j,i] = 1e20 iff key cell i belongs to query j's
+    // sequence AND has pos < n_sink. For a single contiguous sequence starting at pos 0 this is
+    // exactly the old "cell index < n_sink" set with the same 1e20 magnitude, so n_seq==1 is
+    // numerically byte-identical to the previous behavior.
     static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
     if (n_sink > 0 && n_sink < (int) n_kv) {
-        // boost[key] = 1e20 for key < n_sink, else 0   ({n_kv})
-        ggml_tensor * kidx  = ggml_arange(ctx0, 0.0f, (float) n_kv, 1.0f);
-        ggml_tensor * issink = ggml_step(ctx0, ggml_scale_bias(ctx0, kidx, -1.0f, (float) n_sink - 0.5f));
-        ggml_tensor * boost = ggml_scale(ctx0, issink, 1e20f);             // {n_kv}
-        boost = ggml_reshape_2d(ctx0, boost, n_kv, 1);                     // {n_kv,1} broadcast over q
+        if (!lctx.inp_dsa_sink) {
+            lctx.inp_dsa_sink = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
+            cb(lctx.inp_dsa_sink, "dsa_sink", -1);
+            ggml_set_input(lctx.inp_dsa_sink);
+        }
+        // inp_dsa_sink : {n_kv, n_tokens(q)} -> {n_kv, n_tokens, 1} to match indexer_score
+        ggml_tensor * boost = ggml_reshape_3d(ctx0, lctx.inp_dsa_sink, n_kv, n_tokens, 1);
         indexer_score = ggml_add(ctx0, indexer_score, boost);
         cb(indexer_score, "dsa_indexer_score_sink", il);
     }
