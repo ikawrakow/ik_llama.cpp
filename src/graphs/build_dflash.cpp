@@ -315,9 +315,11 @@ ggml_cgraph * llm_build_context::build_dflash() {
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, "flash_attn", il);
         ggml_build_forward_expand(gf, cur);
-        if (use_swa) {
-            cur->op_params[4] = hparams.n_swa;
-        }
+        // Somethiong goes wrong with thisi optimization.
+        // I guess, the cross context does not mingle well with it.
+        //if (use_swa) {
+        //    cur->op_params[4] = hparams.n_swa;
+        //}
 
         cur = ggml_reshape_2d(ctx0, cur, model.layers[il].wo->ne[0], n_tokens);
         cb(cur, "flash_attn_reshaped", il);
