@@ -3,6 +3,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "ggml.h"
+#include <memory>
 //#include "ggml-backend.h"
 
 #ifdef GGML_USE_CUDA
@@ -24,6 +25,9 @@
 #include <future>
 #include <regex>
 #include <algorithm>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -1101,22 +1105,26 @@ bool llama_model_loader::load_all_data(
     }
 #endif
 
-    for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+
+    // Tensors are loaded in a threadpool. A lot of the ops are serialized
+    // and this is the mutex we use.
+    std::mutex load_mutex;
+
+    // Load model weights into a backing buffer:
+    // * mmap: host page cache        Serial
+    // * host: system ram             Parallel
+    // * cuda: GPU                    Serial
+    // * rest: All other backends,    Serial
+    auto load_tensor = [&](ggml_tensor * cur) -> size_t {
         const auto * weight = get_weight(ggml_get_name(cur));
-        if (weight == nullptr) {
-            // this can happen with split experts models
-            continue;
-        }
+        GGML_ASSERT(weight != nullptr);
+        GGML_ASSERT(weight->idx < files.size());
+        const size_t n_size = ggml_nbytes(cur);
+        const auto file = files.at(weight->idx)->clone();
 
-        if (progress_callback) {
-            if (!progress_callback((float) size_done / size_data, progress_callback_user_data)) {
-                return false;
-            }
-        }
-
-        size_t n_size = ggml_nbytes(cur);
-
+        // mmap. Serialized.
         if (use_mmap) {
+            std::lock_guard<std::mutex> lock(load_mutex);
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
             if (bufs_mmap.count(weight->idx)) {
@@ -1144,53 +1152,134 @@ bool llama_model_loader::load_all_data(
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
-        } else {
-            GGML_ASSERT(weight->idx < files.size());
-            const auto & file = files.at(weight->idx);
-            if (ggml_backend_buffer_is_host(cur->buffer)) {
-                file->seek(weight->offs, SEEK_SET);
-                file->read_raw(cur->data, n_size);
-                if (check_tensors) {
-                    validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
-                                return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
-                                }));
-                }
-            } else {
-#if defined(GGML_USE_CUDA)
-                // If cuda_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
-                if (cuda_backend) {
-                    file->seek(weight->offs, SEEK_SET);
-
-                    size_t bytes_read = 0;
-
-                    while (bytes_read < n_size) {
-                        size_t read_iteration = std::min<size_t>(buffer_size, n_size - bytes_read);
-
-                        ggml_backend_event_synchronize(events[buffer_idx]);
-                        file->read_raw(host_ptrs[buffer_idx], read_iteration);
-                        ggml_backend_tensor_set_async(cuda_backend, cur, host_ptrs[buffer_idx], bytes_read, read_iteration);
-                        ggml_backend_event_record(events[buffer_idx]);
-
-                        bytes_read += read_iteration;
-                        ++buffer_idx;
-                        buffer_idx %= n_buffers;
-                    }
-                }
-                else
-#endif
-                {
-                    read_buf.resize(n_size);
-                    file->seek(weight->offs, SEEK_SET);
-                    file->read_raw(read_buf.data(), n_size);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
-                    if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
-                        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
-                    }
-                }
-            }
+            return n_size;
         }
 
-        size_done += n_size;
+        // host. Parallel.
+        if (ggml_backend_buffer_is_host(cur->buffer)) {
+            file->seek(weight->offs, SEEK_SET);
+            file->read_raw(cur->data, n_size);
+            if (check_tensors) {
+                std::lock_guard<std::mutex> lock(load_mutex);
+                validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
+                            return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
+                            }));
+            }
+            return n_size;
+        }
+
+        // cuda. Serialized
+#if defined(GGML_USE_CUDA)
+        // If cuda_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
+        if (cuda_backend) {
+            std::lock_guard<std::mutex> lock(load_mutex);
+            file->seek(weight->offs, SEEK_SET);
+
+            size_t bytes_read = 0;
+
+            while (bytes_read < n_size) {
+                size_t read_iteration = std::min<size_t>(buffer_size, n_size - bytes_read);
+
+                ggml_backend_event_synchronize(events[buffer_idx]);
+                file->read_raw(host_ptrs[buffer_idx], read_iteration);
+                ggml_backend_tensor_set_async(cuda_backend, cur, host_ptrs[buffer_idx], bytes_read, read_iteration);
+                ggml_backend_event_record(events[buffer_idx]);
+
+                bytes_read += read_iteration;
+                ++buffer_idx;
+                buffer_idx %= n_buffers;
+            }
+            return n_size;
+        }
+#endif
+        // rest. Serialized.
+        {
+            std::lock_guard<std::mutex> lock(load_mutex);
+            read_buf.resize(n_size);
+            file->seek(weight->offs, SEEK_SET);
+            file->read_raw(read_buf.data(), n_size);
+            ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+            if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+                throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+            }
+            return n_size;
+        }
+    };
+
+    // An iterator that the threadpool shares to get the next tensor for loading.
+    // Each thread loops over this function until there are no more tensors left to load.
+    auto make_next_tensor = [&]() {
+        auto cursor = std::make_shared<std::atomic<ggml_tensor *>>(ggml_get_first_tensor(ctx));
+        auto next_tensor = [this, ctx, cursor]() -> ggml_tensor * {
+            while (true) {
+                ggml_tensor * cur = cursor->load();
+                if (!cur) {
+                    return nullptr;
+                }
+                if (!cursor->compare_exchange_weak(cur, ggml_get_next_tensor(ctx, cur))) {
+                    continue;
+                }
+
+                // With split experts models get_weight can return nullptr.
+                if (get_weight(ggml_get_name(cur))) {
+                    return cur;
+                }
+            }
+        };
+        return next_tensor;
+    };
+    auto next_tensor = make_next_tensor();
+
+    std::atomic<size_t>  loaded{size_done}; // bytes loaded so far, for the progress bar
+    std::atomic<bool>    cancelled{false};
+    std::atomic<bool>    failed{false};
+    std::exception_ptr   first_exception;
+
+    // threadpool worker.
+    auto worker = [&]() {
+        try {
+            while (!cancelled.load() && !failed.load()) {
+                if (progress_callback) {
+                    const size_t done   = loaded.load(std::memory_order_relaxed);
+                    std::lock_guard<std::mutex> lock(load_mutex);
+                    if (!progress_callback((float) done / size_data, progress_callback_user_data)) {
+                        cancelled.store(true);
+                        break;
+                    }
+                }
+                ggml_tensor * cur = next_tensor();
+                if (!cur) {
+                    break;
+                }
+                const size_t n_size = load_tensor(cur);
+                loaded.fetch_add(n_size, std::memory_order_relaxed);
+            }
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(load_mutex);
+            if (!failed.exchange(true)) {
+                first_exception = std::current_exception();
+            }
+        }
+    };
+
+    // Number of threads used to keep host-mapped reads disk-limited.
+    // For all other backend buffer types, loading is single threaded
+    // which is controlled by `load_mutex`
+    const int n_workers = 8;
+    std::vector<std::thread> pool;
+    for (int i = 0; i < n_workers; ++i) {
+        pool.emplace_back(worker);
+    }
+    for (auto & t : pool) {
+        t.join();
+    }
+
+    size_done = loaded.load();
+    if (first_exception) {
+        std::rethrow_exception(first_exception);
+    }
+    if (cancelled.load()) {
+        return false;
     }
 
 #if defined(GGML_USE_CUDA)
