@@ -319,7 +319,7 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
     ggml_tensor * ffn_inp;
     if (rope_cache == nullptr) {
         cur = build_std_attention(gf, mtp_layer.attn_norm, cur,
-                inp_pos, nullptr, nullptr,
+                inp_pos, inp_out_ids, nullptr,
                 KQ_mask, nullptr, nullptr,
                 kq_scale, 0.0f, 0, il, true, false, true, false, false, nullptr);
         ffn_inp = cur;
@@ -347,10 +347,9 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
                         kq_scale, cb, il);
         ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "mtp_ffn_inp", il);
-    }
-
-    if (inp_out_ids) {
-        ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+        if (inp_out_ids) {
+            ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+        }
     }
 
     // MoE FFN
@@ -371,15 +370,12 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
     cur = lctx.cvec.apply_to(ctx0, cur, il);
     cb(cur, "ffn_out", il);
 
-    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
-    cb(cur, "result_norm", -1);
-
     // If nextn.shared_head_head is missing (GLM-4.6), use model.output (Main LM Head)
     ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;
     if (mtp_head_weights == nullptr) {
         mtp_head_weights = model.output;
     }
-    cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
+    cur = build_output(lctx, ctx0, cur, mtp_head_weights, mtp_layer.nextn.shared_head_norm, cb);
     cb(cur, "result_output", -1);
 
     return cur;
