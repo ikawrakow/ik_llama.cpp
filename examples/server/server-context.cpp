@@ -2521,6 +2521,52 @@ void server_context::send_embedding(const server_slot& slot, const llama_batch& 
     queue_results.send(std::move(res));
 }
 
+void server_context::send_rerank(const server_slot& slot) {
+    auto res = std::make_unique<server_task_result_rerank>();
+    res->id    = slot.task->id;
+    res->index = slot.task->index;
+    res->server_task_result::index = slot.task->index;
+    res->n_tokens = slot.prompt_tokens.size();
+
+    // Get logits for the last token position
+    const float * logits = llama_get_logits_ith(ctx, -1);
+    if (logits == nullptr) {
+        send_error(*slot.task, "Failed to get logits for rerank");
+        return;
+    }
+
+    const auto * vocab = llama_model_get_vocab(model);
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+
+    // Find "yes" and "no" token IDs by tokenizing
+    llama_token yes_ids[4];
+    llama_token no_ids[4];
+    const int32_t n_yes = llama_tokenize(model, "yes", 3, yes_ids, 4, false, false);
+    const int32_t n_no  = llama_tokenize(model, "no", 2, no_ids, 4, false, false);
+
+    // Take last token of each (should be a single token for common tokenizers)
+    const llama_token yes_id = n_yes > 0 ? yes_ids[n_yes - 1] : -1;
+    const llama_token no_id  = n_no  > 0 ? no_ids[n_no - 1]  : -1;
+
+    if (yes_id < 0 || no_id < 0 || yes_id >= n_vocab || no_id >= n_vocab) {
+        send_error(*slot.task, "Could not determine yes/no token IDs");
+        return;
+    }
+
+    const float logit_yes = logits[yes_id];
+    const float logit_no  = logits[no_id];
+
+    // Score = sigmoid(logit_yes - logit_no) = 1 / (1 + exp(-diff))
+    // This produces a relevance score in (0, 1)
+    const float diff = logit_yes - logit_no;
+    res->score = 1.0f / (1.0f + std::exp(-diff));
+
+    SRV_DBG("rerank: tokens=%zu yes_id=%d logit_yes=%.4f no_id=%d logit_no=%.4f score=%.4f\n",
+        slot.prompt_tokens.size(), (int)yes_id, logit_yes, (int)no_id, logit_no, res->score);
+
+    queue_results.send(std::move(res));
+}
+
 void server_context::apply_server_biases(server_slot& slot) {
     auto& server_biases = slot.ctx_sampling->server_biases;
 
@@ -4571,6 +4617,14 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 slot.release();
                 slot.i_batch = -1;
                 continue; // continue loop of slots
+            }
+
+            // prompt evaluated for rerank (needs logits, not embeddings)
+            if (slot.task && slot.task->type == SERVER_TASK_TYPE_RERANK) {
+                send_rerank(slot);
+                slot.release();
+                slot.i_batch = -1;
+                continue;
             }
 
             if (slot.n_decoded == 0 && slot.can_speculate()) {

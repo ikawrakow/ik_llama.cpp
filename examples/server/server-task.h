@@ -344,6 +344,19 @@ struct server_task_result_embd : server_task_result {
 };
 
 
+struct server_task_result_rerank : server_task_result {
+    int index = 0;
+    float score = 0.0f;
+    int32_t n_tokens = 0;
+
+    virtual json to_json() override {
+        return json{
+            {"index",      index},
+            {"relevance_score", score},
+        };
+    }
+};
+
 // using shared_ptr for polymorphism of server_task_result
 using server_task_result_ptr = std::unique_ptr<server_task_result>;
 

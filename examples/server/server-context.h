@@ -327,6 +327,7 @@ struct server_context {
     void send_final_response(server_slot& slot);
 
     void send_embedding(const server_slot& slot, const llama_batch& batch);
+    void send_rerank(const server_slot& slot);
 
     void apply_server_biases(server_slot& slot);
 

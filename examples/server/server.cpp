@@ -1575,6 +1575,89 @@ int main(int argc, char ** argv) {
         handle_embeddings_impl(req, res, OAICOMPAT_TYPE_EMBEDDING);
     };
 
+    const auto handle_rerank_impl = [&ctx_server](const httplib::Request& req, httplib::Response& res) {
+        const json body = json::parse(req.body);
+
+        if (!body.contains("query") || !body.contains("documents")) {
+            res_err(res, format_error_response("\"query\" and \"documents\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+
+        const std::string query = body.at("query");
+        const json docs = body.at("documents");
+        if (!docs.is_array() || docs.empty()) {
+            res_err(res, format_error_response("\"documents\" must be a non-empty array", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+
+        const std::string instruction = json_value(body, "instruction",
+            std::string("Given a web search query, retrieve relevant passages that answer the query"));
+
+        const auto * vocab = llama_model_get_vocab(ctx_server.model);
+
+        // Build prompt template: <Instruct>...\n<Query>...\n<Document>...
+        // For Qwen3-Reranker, use the standard cross-encoder format.
+        // Each (query, doc) pair is tokenized separately.
+        std::vector<server_tokens> tokenized_prompts;
+        tokenized_prompts.reserve(docs.size());
+
+        for (size_t i = 0; i < docs.size(); i++) {
+            const std::string doc_str = docs[i].get<std::string>();
+            // Build the prompt with Qwen3/BGE cross-encoder format
+            std::string prompt = "<Instruct>: " + instruction + "\n<Query>: " + query + "\n<Document>: " + doc_str;
+
+            auto tokens = tokenize_input_subprompt(vocab, ctx_server.mctx, json(prompt), true, true);
+            if (tokens.empty()) {
+                res_err(res, format_error_response("Empty tokens after tokenization for document " + std::to_string(i), ERROR_TYPE_INVALID_REQUEST));
+                return;
+            }
+            tokenized_prompts.push_back(std::move(tokens));
+        }
+
+        // Create and queue tasks (one per doc, like embeddings)
+        server_response_reader rd(ctx_server);
+        {
+            std::vector<server_task> tasks;
+            for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+                server_task task = server_task(SERVER_TASK_TYPE_RERANK);
+                task.id = ctx_server.queue_tasks.get_new_id();
+                task.index = (int)i;
+                task.tokens = std::move(tokenized_prompts[i]);
+                task.data["n_predict"] = 0; // no generation, just evaluate the prompt
+                tasks.push_back(std::move(task));
+            }
+            rd.post_tasks(std::move(tasks));
+        }
+
+        // Wait for results
+        auto all_results = rd.wait_for_all(req.is_connection_closed);
+        if (all_results.is_terminated) {
+            llama_decode_stop();
+            return;
+        }
+        if (all_results.error) {
+            res_err(res, all_results.error->to_json());
+            return;
+        }
+
+        // Collect scores
+        json results = json::array();
+        for (auto& r : all_results.results) {
+            auto* rerank_res = dynamic_cast<server_task_result_rerank*>(r.get());
+            if (rerank_res) {
+                results.push_back(rerank_res->to_json());
+            }
+        }
+
+        json root = {
+            {"results", results},
+        };
+        res_ok(res, root);
+    };
+
+    const auto handle_rerank = [&handle_rerank_impl](const httplib::Request& req, httplib::Response& res) {
+        handle_rerank_impl(req, res);
+    };
 
     const auto handle_lora_adapters_list = [&](const httplib::Request & req, httplib::Response & res) {
         json result = json::array();
@@ -2130,6 +2213,8 @@ int main(int argc, char ** argv) {
     svr->Post("/embedding",           handle_embeddings); // legacy
     svr->Post("/embeddings",          handle_embeddings);
     svr->Post("/v1/embeddings",       handle_embeddings_oai);
+    svr->Post("/rerank",              handle_rerank);
+    svr->Post("/v1/rerank",           handle_rerank);
     svr->Post("/tokenize",            handle_tokenize);
     svr->Post("/detokenize",          handle_detokenize);
     svr->Post("/apply-template",      handle_apply_template);
