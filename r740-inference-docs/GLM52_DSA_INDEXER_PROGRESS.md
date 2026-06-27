@@ -341,3 +341,60 @@ control fails identically, proving it pre-existing and indexer-independent; the 
 in place and correct but dormant until/unless MLA K-shift is enabled. Remaining ceilings are
 operational, not correctness: VRAM for very large packed batches (n_seq=4 at full c4096 OOMs the 3x P100
 rig), and MLA's inability to in-place context-shift (size n_ctx to the workload, as for any MLA model).
+
+---
+
+## UPDATE 7 — latent graph-reuse cache-fixup bug for `kr_l` (found via MiniMax MSA), FIXED (2026-06-27)
+
+While porting the indexer-cache work to MiniMax-M3 MSA, an adversarial review of the MSA path found a
+graph-reuse cache-fixup omission. The **same class of bug exists here**: the persistent indexer-key cache
+write (`kr_l`) is a bare `ggml_cpy` whose destination view bakes `kv_head` at graph-build time, and it was
+**never registered in `update_cache_copies()`**. That function re-points the K/V cache writes to the current
+`kv_head` whenever a compute graph is REUSED, but it did not touch the `kr_l` write.
+
+### 7.1 Reachability (why it is a real defect)
+`graph_reuse` defaults true (`common/common.h`, `llama.cpp` cparams). `can_reuse_graph()` reuses a graph iff
+`kv_self.n == prev->n_kv`. Under **FA the cache pads to 256**, so consecutive single-token decode ubatches
+share the same padded `n_kv` and the graph IS reused. With `kr_l` unregistered, the reused graph keeps
+writing this ubatch's index keys into the FIRST ubatch's slot; later ubatches never populate their own
+recent index-key cells (those cells stay at the allocation-zeroed 0.0), so the indexer scores against stale
+keys. Structurally identical to the MSA bug (reference fork commit `133d14c9`).
+
+### 7.2 The fix (mirrors the K/V fixup; same shape as MSA `133d14c9`)
+* `src/llama-context.h`: new `std::vector<CacheCopy> dsa_cache_copies;`
+* `src/llama.cpp` ctor: `dsa_cache_copies.resize(hparams.n_layer)` (null entries -> no-op when DSA off).
+* `src/graphs/build_deepseek2.cpp` (the `kr_l` write): register the `ggml_cpy` as
+  `lctx.dsa_cache_copies[il] = { kr_cpy, kr_cache->nb[1] }` (step = one index-key row = `head_size`*F16).
+* `src/llama.cpp` `update_cache_copies()`: a new loop re-points each registered cpy's
+  `view_offs = kv_self.head * step` and patches `src[1]->data` / `data`, exactly like the K/V loop, with the
+  `c.cpy->view_src == kv_self.kr_l[il]` + null/op guard (the MSA fix omitted that guard; included here).
+The soft_max / non-DSA paths are byte-identical (soft_max pads to 32 -> `n_kv` changes each ubatch -> never
+reuses; and even on reuse the patch reproduces the exact offset a fresh build would bake).
+
+### 7.3 Validation (GLM-5.2-UD-IQ2_M, 3x P100 `-ngl 99 --cpu-moe -t 32`, NO_PINNED, `numactl --interleave`)
+
+**FIRST: a platform-fix prerequisite.** This worktree's `glm-dsa-upstream` was rebased to upstream and **lost
+the local R740 P2P-disable patch** (`ggml_cuda_set_peer_access` -> false; fork commit `b78ea479`). On this
+Sky Lake-E box GPU P2P DMA is silently corrupt, so WITHOUT that patch every multi-GPU GLM run is garbage
+(c512 PPL = 154880 = n_vocab; decode = `!!!!`), indexer ON **or** OFF (dense `DSA_INDEXER_DISABLE=1` is
+identically broken; DeepSeek-V2-Lite 3-GPU aborts with an illegal memory access while 1-GPU is clean at PPL
+5.4454). The P2P patch was re-applied to the working tree to obtain a working baseline; it is orthogonal to
+the `kr_l` fix and belongs in its own commit/flag. **None of the #2040 numbers are reproducible on current
+HEAD until that patch is restored.**
+
+With the P2P patch in place:
+
+| config | result | verdict |
+|---|---|---|
+| c512 `-fa 1 -mla 3` indexer ON (no-op floor) | **2.1983** | == #2040 baseline; healthy build confirmed |
+| long-ctx FA decode, 2735-tok recall prompt, `-mla 3 -fa 1` temp0, **reuse ON (default), FIXED** | coherent, recalls "Dr. Mariana Velasquez ... Daniel Okonkwo" verbatim | deep-context recall correct |
+| same, **reuse ON (default), UNFIXED** | **also coherent**, same correct deep-context recall | the bug is **LATENT** here |
+| ub128 PPL `-fa 1 -mla 3`, reuse ON, UNFIXED (4 chunks) | **1.7239 / 1.8211 / 2.1888 / 2.4517** (Final 2.4517) | healthy, no PPL inflation |
+
+**Honest finding: the bug is real in code but does not OBSERVABLY manifest for GLM-DSA at its configured
+`top_k = 2048`.** top_k=2048 is permissive (at a 2735-token prompt it keeps 2048 of ~2735 keys), so even
+when reuse leaves some recent indexer-key cells stale, the genuinely-attended recent blocks still clear the
+top-k and decode stays coherent. This is unlike MSA, whose tighter selection flipped the top-k and inflated
+PPL 9.6 -> ~20. The fix is still correct and necessary (it prevents the latent corruption from biting at any
+tighter top_k, longer context, or future serving config), but it is a latent-bug fix here, not a visible
+regression fix. The earlier ub128 "nan" seen before the P2P patch was P2P corruption, not this bug.

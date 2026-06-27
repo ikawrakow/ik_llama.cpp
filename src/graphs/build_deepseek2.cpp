@@ -432,7 +432,22 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         ggml_tensor * kr_view = ggml_view_2d(ctx0, kr_cache, head_size, n_tokens,
                 ggml_row_size(kr_cache->type, head_size),
                 ggml_row_size(kr_cache->type, head_size) * kv_head);
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, indexer_k_2d, kr_view));
+        ggml_tensor * kr_cpy = ggml_cpy(ctx0, indexer_k_2d, kr_view);
+        // GRAPH-REUSE FIXUP REGISTRATION: the K/V cache_copies fixup in update_cache_copies()
+        // re-points the K/V cache writes to the current kv_head when a graph is reused, but it
+        // does NOT touch this indexer-key (kr_l) write, whose view bakes kv_head at build time.
+        // Under FA the cache pads to 256, so consecutive decode ubatches keep the SAME n_kv and
+        // can_reuse_graph() reuses the graph -- without this registration the kr_l write stays
+        // baked at the first ubatch's kv_head, so later ubatches never write their recent index
+        // keys (those cells read uninitialized -> block-max-pool/top-k drops the genuinely
+        // attended recent block -> degraded/NaN sparse-FA decode). Register it like K/V so
+        // update_cache_copies() patches view_offs = kv_head * step each reuse.
+        // step = one index-key row = head_size * F16 = kr_cache->nb[1].
+        if ((size_t) il < lctx.dsa_cache_copies.size()) {
+            lctx.dsa_cache_copies[il].cpy  = kr_cpy;
+            lctx.dsa_cache_copies[il].step = kr_cache->nb[1];
+        }
+        ggml_build_forward_expand(gf, kr_cpy);
     }
 
     // ---- read back the full cached key set: {head_size, n_kv} ----

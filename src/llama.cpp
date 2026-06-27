@@ -679,6 +679,28 @@ bool llama_context::update_cache_copies() {
             }
         }
     }
+    // GLM-DSA lightning indexer: patch the indexer-key (kr_l) cache write offset for the reused
+    // graph. Each registered cpy writes this ubatch's index keys into kr_l at the kv_head slot;
+    // like the K/V copies above, its baked view_offs must be re-pointed to the CURRENT kv_head,
+    // else a reused graph (FA pad-256, constant n_kv) keeps writing to the first ubatch's slot and
+    // the recent indexer-key cells read uninitialized (scattered selection -> degraded/NaN decode).
+    // step = kr_l->nb[1] (one index-key row = head_size * F16). No-op when DSA is off (entries null).
+    for (size_t il = 0; il < dsa_cache_copies.size(); ++il) {
+        auto & c = dsa_cache_copies[il];
+        if (!c.cpy) continue;
+        // Sanity guard (the MSA fix omitted this): the registered cpy must still be a CPY whose
+        // destination view is rooted at this layer's kr_l cache (mirrors the K/V guard above,
+        // which checks c.cpy->view_src). If the graph was rebuilt with a different shape these no
+        // longer match, so refuse reuse and force a rebuild.
+        if (c.cpy->op != GGML_OP_CPY ||
+            il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr ||
+            c.cpy->view_src != kv_self.kr_l[il]) {
+            return false;
+        }
+        c.cpy->view_offs    = kv_self.head * c.step;
+        c.cpy->src[1]->data = (char *) kv_self.kr_l[il]->data + c.cpy->view_offs;
+        c.cpy->data         = c.cpy->src[1]->data;
+    }
     return true;
 }
 
@@ -695,6 +717,9 @@ llama_context::llama_context(const llama_model & model)
     } else {
         cache_copies.resize(2*hparams.n_layer);
     }
+    // GLM-DSA lightning indexer: one indexer-key (kr_l) cache copy per layer. Entries stay null
+    // for non-DSA models / non-indexer layers, so update_cache_copies() is a no-op when DSA is off.
+    dsa_cache_copies.resize(hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 
