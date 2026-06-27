@@ -32,6 +32,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb/stb_image_resize2.h"
+
 #define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
 
@@ -183,7 +186,7 @@ static int32_t mtmd_helper_decode_image_chunk_impl(
     }
 
     const llama_model * model = llama_get_model(lctx);
-    int n_mmproj_embd = llama_model_n_embd_inp(model);
+    int n_mmproj_embd = llama_model_n_embd(model);
     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
 
     int32_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);

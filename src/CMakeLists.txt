@@ -41,6 +41,8 @@ add_library(llama
             ../include/llama.h
             llama.cpp
             llama-spec-features.cpp
+            llama-spec-features-dflash.cpp
+            llama-dflash.cpp
             llama-vocab.cpp
             llama-grammar.cpp
             llama-sampling.cpp
@@ -51,6 +53,8 @@ add_library(llama
             llama-build-context.cpp
             llama-model.h
             llama-model.cpp
+            llama-reload-info.h
+            llama-reload.cpp
             llama-quantize.cpp
             llama-arch.h
             llama-arch.cpp
@@ -79,10 +83,12 @@ add_library(llama
             graphs/build_mpt.cpp
             graphs/build_stablelm.cpp
             graphs/build_seedoss.cpp
+            graphs/build_laguna.cpp
             graphs/build_step35.cpp
             graphs/build_qwen.cpp
             graphs/build_qwen2.cpp
             graphs/build_qwen3.cpp
+            graphs/build_mellum.cpp
             graphs/build_qwen3next.cpp
             graphs/build_qwen35.cpp
             graphs/build_phi2.cpp
@@ -97,6 +103,7 @@ add_library(llama
             graphs/build_gemma2.cpp
             graphs/build_gemma3.cpp
             graphs/build_gemma4.cpp
+            graphs/build_dflash.cpp
             graphs/build_mamba.cpp
             graphs/build_command_r.cpp
             graphs/build_olmo.cpp
@@ -107,6 +114,7 @@ add_library(llama
             graphs/build_glm4.cpp
             graphs/build_bitnet.cpp
             graphs/build_cohere2.cpp
+            graphs/build_cohere2_moe.cpp
             graphs/build_t5.cpp
             graphs/build_jais.cpp
             graphs/build_chatglm.cpp
@@ -117,6 +125,7 @@ add_library(llama
             graphs/build_openai.cpp
             graphs/build_bailingmoe2.cpp
             graphs/build_minimaxm2.cpp
+            graphs/build_minimaxm3.cpp
             graphs/build_smollm3.cpp
             )
 
@@ -133,4 +142,7 @@ endif()
 
 if (GGML_MAX_CONTEXTS)
     add_compile_definitions(GGML_MAX_CONTEXTS=${GGML_MAX_CONTEXTS})
+endif()
+if (GGML_MAX_SRC)
+  add_compile_definitions(GGML_MAX_SRC=${GGML_MAX_SRC})
 endif()

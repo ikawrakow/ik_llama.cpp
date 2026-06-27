@@ -319,22 +319,22 @@ static std::vector<std::string> ctrlvec_load_prompt_file(std::string path, bool 
 
 //////////////////////////////////////////////////
 
-static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
+static int cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * cb_data = (callback_data *) user_data;
     static const char * l_out_name = "l_out";
     const bool is_l_out = strncmp(t->name, l_out_name, strlen(l_out_name)) == 0;
 
     if (ask) {
-        return is_l_out;
+        return is_l_out ? 1 : 0;
     }
 
     if (!is_l_out || t->ne[1] != cb_data->n_tokens) {
-        return true;
+        return 1;
     }
 
     // save the tensor to current context
     cb_data->save_tensor_for_layer(t);
-    return true;
+    return 1;
 }
 
 static bool get_hidden_layers(llama_context * ctx, std::vector<llama_token> & tokens) {

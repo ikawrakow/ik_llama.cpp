@@ -209,7 +209,7 @@ static bool suffix_corpus_check_limit(const std::string & path, size_t n_tokens,
         return true;
     }
 
-    LOG_ERR("load_corpus: refusing suffix corpus '%s' - estimated insert work %llu exceeds limit %llu (tokens=%zu, depth=%d); reduce corpus size or --suffix-max-depth\n",
+    LOG_ERR("load_corpus: refusing suffix corpus '%s' - estimated insert work %llu exceeds limit %llu (tokens=%zu, depth=%d); reduce corpus size or lower suffix_max_depth inside --spec-type suffix:suffix_max_depth=...\n",
             path.c_str(),
             (unsigned long long) estimated_work,
             (unsigned long long) SUFFIX_CORPUS_MAX_INSERT_WORK,

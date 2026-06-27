@@ -3,8 +3,7 @@
 #include "../llama-context.h"
 
 ggml_cgraph * llm_build_context::build_glm4_moe() {
-    // create a new graph
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
@@ -159,7 +158,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
 }
 
 ggml_cgraph * llm_build_context::build_glm4() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
@@ -299,7 +298,7 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+    struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
 
     // If nextn.embed_tokens is missing (GLM-4.6), use model.tok_embd
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
@@ -350,6 +349,10 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
         cb(ffn_inp, "mtp_ffn_inp", il);
     }
 
+    if (inp_out_ids) {
+        ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+    }
+
     // MoE FFN
     cur = llm_build_std_moe_ffn(ctx0, lctx, mtp_layer.ffn_norm, ffn_inp,
             mtp_layer.ffn_gate_inp,  NULL,
@@ -370,10 +373,6 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
 
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "result_norm", -1);
-
-    if (inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    }
 
     // If nextn.shared_head_head is missing (GLM-4.6), use model.output (Main LM Head)
     ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;

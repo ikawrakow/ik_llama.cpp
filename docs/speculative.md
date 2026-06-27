@@ -33,18 +33,18 @@ An example to use this approach can be the rewriting of source code by a LLM.
 This implementation looks for the last n-gram in history that matches the current n-gram and creates a draft using the m tokens following the matched n-gram. It is the simplest self-speculative approach with minimal overhead.
 
 ```
-llama-server [...] --spec-type ngram-simple --draft-max 64
+llama-server [...] --spec-type ngram-simple:n_max=64
 ```
 
 #### n-gram Map Key (`ngram-map-k`)
 
-This implementation looks for the current n-gram of size n (called the _key_) in the token history. If the key n-gram is followed by the same m tokens (called the _mgram_) multiple times, it creates a draft using these m tokens. This approach requires a minimum number of occurrences (argument `--spec-ngram-min-hits`, default is 1) before generating drafts.
+This implementation looks for the current n-gram of size n (called the _key_) in the token history. If the key n-gram is followed by the same m tokens (called the _mgram_) multiple times, it creates a draft using these m tokens. This approach requires a minimum number of occurrences (stage key `ngram_min_hits`, default is 1) before generating drafts.
 
 The number of accepted tokens is stored for each used n-gram.
 
 **Example:**
 ```
-llama-server [...] --spec-type ngram-map-k --draft-max 64
+llama-server [...] --spec-type ngram-map-k:n_max=64,ngram_min_hits=1
 ```
 
 #### n-gram Map Key-4-Values (`ngram-map-k4v`)
@@ -55,7 +55,7 @@ The number of accepted tokens is stored for each used n-gram.
 
 **Example:** Server options to be used if there are a lot of longer repetitions.
 ```
-llama-server [...] --spec-type ngram-map-k4v --spec-ngram-size-n 8 --spec-ngram-size-m 8 --spec-ngram-min-hits 2 --draft-max 64
+llama-server [...] --spec-type ngram-map-k4v:n_max=64,ngram_size_n=8,ngram_size_m=8,ngram_min_hits=2
 ```
 
 ### n-gram Mod (`ngram-mod`)
@@ -80,9 +80,9 @@ Currently, a single hash pool is shared across all server slots, so different re
 # notes:
 # - small `n` are not recommended
 # - MoEs require long drafts
-# - dense models: can reduce `--draft-min` and `--draft-max`
+# - dense models: can reduce `n_min` and `n_max`
 
-llama-server ... --spec-type ngram-mod --spec-ngram-size-n 24 --draft-min 48 --draft-max 64
+llama-server ... --spec-type ngram-mod:n_max=64,n_min=48,ngram_size_n=24
 ```
 
 Applications:
@@ -103,57 +103,78 @@ Example Video:
 
 ## Command-Line Options
 
-If a draft model is combined with a draftless decoding the draftless decoding has higher precedence.
+The canonical startup surface is repeated `--spec-type SPEC[:k=v,...]`. Legacy `--spec-stage`, `--draft-*`, `--spec-ngram-*`, `--suffix-*`, and `-mtp` flags are rejected with replacement guidance.
 
-```
---draft, --draft-n, --draft-max N       number of tokens to draft for speculative decoding (default: 16)
-                                        (env: LLAMA_ARG_DRAFT_MAX)
---draft-min, --draft-n-min N            minimum number of draft tokens to use for speculative decoding
-                                        (default: 0)
-                                        (env: LLAMA_ARG_DRAFT_MIN)
-[...]
---spec-type [none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
-                                        type of speculative decoding to use when no draft model is provided
-                                        (default: none)
---spec-ngram-size-n N                   ngram size N for ngram-simple/ngram-map speculative decoding, length
-                                        of lookup n-gram (default: 12)
---spec-ngram-size-m N                   ngram size M for ngram-simple/ngram-map speculative decoding, length
-                                        of draft m-gram (default: 48)
---spec-ngram-min-hits N                 minimum hits for ngram-map speculative decoding (default: 1)
-```
+### `--spec-type SPEC[:k=v,...]`
 
-### `--spec-type TYPE`
-
-Specifies a type of speculative decoding without draft model.
+Each `--spec-type` entry defines one speculative stage. Repeat it to configure the supported two-stage path.
 
 | Type | Description |
 |------|-------------|
-| `none` | No speculative decoding (default) |
+| `none` | No speculative decoding |
+| `draft` | Draft-model speculative decoding; pair with `-md/--model-draft` |
+| `mtp` | Embedded or assistant-backed MTP |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
-| `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
-| `ngram-map-k4v` | Use n-gram pattern matching with n-gram-keys and up to four m-gram values (experimental) |
-| `ngram-mod` | Use basic ngram hasher for speculative decoding with shared pool |
+| `ngram-map-k` | Use n-gram pattern matching with n-gram keys |
+| `ngram-map-k4v` | Use n-gram pattern matching with n-gram keys and up to four m-gram values |
+| `ngram-mod` | Use the shared n-gram hasher |
+| `suffix` | Use suffix-tree speculative decoding |
 
-**Example:** Server-instance used to refactor source code.
+Canonical stage keys:
+
+| Key | Meaning |
+|-----|---------|
+| `n_max` | Maximum drafted tokens for that stage |
+| `n_min` | Minimum usable drafted tokens for that stage |
+| `p_min` | Minimum speculative probability threshold |
+| `ngram_size_n` | Lookup n-gram size |
+| `ngram_size_m` | Draft m-gram size |
+| `ngram_min_hits` | Minimum matching hits for n-gram map stages |
+| `suffix_min_match_len` | Minimum suffix context match length |
+| `suffix_max_depth` | Maximum suffix-tree depth |
+| `suffix_corpus` | Optional suffix corpus file for pre-warming |
+
+String-valued stage keys such as `suffix_corpus` need shell-safe quoting when the value contains commas. From a normal shell, quote the value inside the stage payload so the parser sees the comma as part of the string value.
+
+Example shell-safe form:
+
 ```bash
-./llama-server [...] --spec-type ngram-simple
+./llama-server [...] \
+    --spec-type "suffix:n_max=16,n_min=2,suffix_min_match_len=5,suffix_max_depth=64,suffix_corpus='/tmp/spec,type-corpus.json'"
 ```
 
-### `--spec-ngram-size-n N`
+If you are constructing `argv` directly without shell unescaping, the parser also accepts escaped commas as `\,`.
 
-Sets the size N of the lookup n-gram for n-gram map based speculative decoding.
-The n-gram size N determines how many tokens in a row to look back when searching for matching patterns.
+Examples:
 
-### `--spec-ngram-size-m M`
+```bash
+# Single-stage MTP
+./llama-server [...] --spec-type mtp:n_max=1,p_min=0.0
 
-Sets the size M of the draft m-gram for n-gram map based speculative decoding.
-The m-gram size determines how many tokens to draft when a match is found.
-Larger values can provide more speedup but may reduce acceptance rate.
+# Single-stage ngram-mod
+./llama-server [...] --spec-type ngram-mod:n_max=64,n_min=48,ngram_size_n=24
 
-### `--spec-ngram-min-hits H`
+# Draft-model speculation
+./llama-server [...] --model-draft draft.gguf --spec-type draft:n_max=4,p_min=0.0
 
-This option defines how often a key has to appear in the token history to be used as a draft (default is 1).
+# Two-stage self-spec -> MTP fallback
+./llama-server [...] \
+    --spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 \
+    --spec-type mtp:n_max=1,p_min=0.0
+
+# Suffix stage with pre-warmed corpus
+./llama-server [...] \
+    --spec-type suffix:n_max=16,n_min=2,suffix_min_match_len=5,suffix_max_depth=64,suffix_corpus=/path/to/corpus.json
+
+# Suffix stage with a comma-bearing corpus path from a normal shell
+./llama-server [...] \
+    --spec-type "suffix:n_max=16,n_min=2,suffix_min_match_len=5,suffix_max_depth=64,suffix_corpus='/tmp/spec,type-corpus.json'"
+```
+
+### `--spec-autotune`
+
+Autotunes the active stage parameters and reports the best configuration back as a canonical `--spec-type ...` snippet.
 
 ## Statistics
 Each speculative decoding implementation prints statistics.
@@ -180,4 +201,3 @@ statistics ngram_map_k: #calls(b,g,a) = 6 1690 26, #gen drafts = 26, #acc drafts
 - `#gen tokens`: number of tokens generated by this implementation (including rejected tokens)
 - `#acc tokens`: number of tokens accepted by the main model
 - `dur(b,g,a): durations of begin (new prompt), generation and accumulation (process acceptance).
-

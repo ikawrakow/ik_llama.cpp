@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <set>
 
+#include "llama-reload-info.h"
+
 // available llama models
 enum e_model {
     MODEL_UNKNOWN,
@@ -105,9 +107,11 @@ enum e_model {
     MODEL_A13B,
     MODEL_7B_A1B,
     MODEL_8B_A1B,
+    MODEL_12B_A2_5B,
     MODEL_16B_A1B,
     MODEL_21B_A3B, // Ernie MoE small
     MODEL_30B_A3B,
+    MODEL_33B_A3B,
     MODEL_35B_A3B,
     MODEL_80B_A3B, // Qwen3-Next
     MODEL_80B_A13B,
@@ -428,6 +432,8 @@ struct llama_model {
     struct ggml_tensor * mtp_post_proj = nullptr;
     struct ggml_tensor * mtp_token_ordering = nullptr;
     struct ggml_tensor * mtp_centroids = nullptr;
+    struct ggml_tensor * dflash_fc = nullptr;
+    struct ggml_tensor * dflash_hidden_norm = nullptr;
 
     struct ggml_tensor * output_norm;
     struct ggml_tensor * output_norm_b;
@@ -515,6 +521,30 @@ struct llama_model {
         return tensor_overrides;
     }
 
+    bool is_mla_model() const {
+        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
+    }
+
+    static inline int hadamard_size(int head_size) {
+        if ((head_size & ~(head_size - 1)) == head_size) return head_size;
+        // Note: we do not include 32 as an option because the CUDA Hadamard implementation
+        //       does not hcurrently andle a block size of 32.
+        for (int i = 512; i >= 64; i >>= 1) {
+            if (head_size % i == 0) return i;
+        }
+        return 0;
+    }
+
+    inline int hadamard_size_k(int il) const {
+        if (is_mla_model()) return 64;
+        return hadamard_size(hparams.n_embd_head_k(il));
+    }
+
+    inline int hadamard_size_v(int il) const {
+        if (is_mla_model()) return 64;
+        return hadamard_size(hparams.n_embd_head_v(il));
+    }
+
     size_t cache_size(int il, ggml_type type_k, ggml_type type_v, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const;
 
     void set_tensor_overrides(const llama_model_params& params);
@@ -524,6 +554,8 @@ struct llama_model {
 
     std::vector<float> splits;
     ggml_backend_buffer_type_t split_buft = nullptr;
+
+    std::unique_ptr<reload_info> reload;
 };
 
 struct llama_lora_weight {
@@ -597,4 +629,3 @@ struct LLM_TN {
 std::string llama_model_ftype_name(llama_ftype ftype);
 
 const char * llama_model_type_name(e_model type);
-

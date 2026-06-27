@@ -332,35 +332,81 @@ struct fattn_mma_f16_config<192, 192> {
     }
 };
 
+//template <>
+//struct fattn_mma_f16_config<512, 512> {
+//    static constexpr int  nbatch_fa      = 64;
+//    static constexpr int  nwarps_max     = 4;
+//    static constexpr bool Q_in_reg       = false;
+//    static constexpr int  nstages_target = 1;
+//
+//    static int get_nbatch_K2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+//        return 256;
+//    }
+//
+//    static constexpr __device__ int get_nbatch_K2_device([[maybe_unused]] int ncols) {
+//        return 256;
+//    }
+//
+//    static int get_nbatch_V2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+//        return 256;
+//    }
+//
+//    static constexpr __device__ int get_nbatch_V2_device([[maybe_unused]] int ncols) {
+//        return 256;
+//    }
+//
+//    static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
+//        return 256;
+//    }
+//
+//    static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
+//        return 256;
+//    }
+//};
+
 template <>
 struct fattn_mma_f16_config<512, 512> {
-    static constexpr int  nbatch_fa      = 64;
-    static constexpr int  nwarps_max     = 4;
+    static constexpr int  nbatch_fa      = 32;
+    static constexpr int  nwarps_max     = 8;
     static constexpr bool Q_in_reg       = false;
     static constexpr int  nstages_target = 1;
 
-    static int get_nbatch_K2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
-        return 256;
+    static int get_nbatch_K2_host(const int cc, const int ncols) {
+        if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING) {
+            return ncols <= 16 ? 96 : 128;
+        }
+        return ncols <= 16 ? 256 : 128;
     }
 
-    static constexpr __device__ int get_nbatch_K2_device([[maybe_unused]] int ncols) {
-        return 256;
+    static constexpr __device__ int get_nbatch_K2_device(int ncols) {
+#if __CUDA_ARCH__ == CC_TURING
+        return ncols <= 16 ? 96 : 128;
+#else
+        return ncols <= 16 ? 256 : 128;
+#endif // __CUDA_ARCH__ == CC_TURING
     }
 
-    static int get_nbatch_V2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
-        return 256;
+    static int get_nbatch_V2_host(const int cc, const int ncols) {
+        if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING) {
+            return ncols <= 16 ? 64 : 128;
+        }
+        return ncols <= 16 ? 256 : 128;
     }
 
-    static constexpr __device__ int get_nbatch_V2_device([[maybe_unused]] int ncols) {
-        return 256;
+    static constexpr __device__ int get_nbatch_V2_device(int ncols) {
+#if __CUDA_ARCH__ == CC_TURING
+        return ncols <= 16 ? 64 : 128;
+#else
+        return ncols <= 16 ? 256 : 128;
+#endif // __CUDA_ARCH__ == CC_TURING
     }
 
     static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
-        return 256;
+        return 128;
     }
 
     static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
-        return 256;
+        return 128;
     }
 };
 
@@ -2122,7 +2168,10 @@ template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
 
-    if constexpr ((DKQ == 576 || DKQ == 512) && ncols2 <= 4) {
+    if constexpr (DKQ == 512 && ncols2 == 2) {
+        ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 8, ncols2>(ctx, dst);
+    }
+    else if constexpr ((DKQ == 576 || DKQ == 512) && ncols2 <= 4) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 4, ncols2>(ctx, dst);
     } else {
 
@@ -2147,7 +2196,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
         return;
     }
 
-    if (Q->ne[1] <= 32/ncols2) {
+    if (Q->ne[1] <= 32/ncols2 || (DKQ == 512 && ncols2 == 16)) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 32/ncols2, ncols2>(ctx, dst);
         return;
     }
@@ -2255,11 +2304,23 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         return;
     }
     if (Q->ne[0] == 512 && K->ne[0] == 512 && V->ne[0] == 512) {
-        if (gqa_ratio == 8) {
+        // head_dim 512: ncols2=16 exceeds the max dynamic shared memory on some GPUs (e.g. Ada,
+        // where cudaFuncSetAttribute returns invalid argument), so route gqa_ratio % 8 == 0
+        // (covers 8 and 16) through the ncols2=8 kernel. It iterates over Q-head groups
+        // (iter_z = ceil(gqa_ratio/ncols2)), so 16 heads run as two passes of 8. This unblocks
+        // head_dim-512 models with a 16:1 GQA ratio such as Gemma 4 12B's global layers.
+        if (gqa_ratio % 16 == 0) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 16>(ctx, dst);
+        }
+        else if (gqa_ratio % 8 == 0) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 8>(ctx, dst);
         }
-        else if (gqa_ratio == 4) {
+        else if (gqa_ratio % 4 == 0) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 4>(ctx, dst);
+        }
+        else if (gqa_ratio % 2 == 0) {
+            // Gemma4-4B assistant
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 2>(ctx, dst);
         }
         else {
             GGML_ABORT("Fatal error");

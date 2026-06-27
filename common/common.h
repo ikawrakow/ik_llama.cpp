@@ -127,7 +127,16 @@ enum common_webui {
     COMMON_WEBUI_LLAMACPP,
 };
 
+enum common_checkpoint_eviction {
+    COMMON_CHECKPOINT_EVICTION_AUTO,
+    COMMON_CHECKPOINT_EVICTION_FIFO,
+    COMMON_CHECKPOINT_EVICTION_VARIANCE
+};
+
 common_webui common_webui_from_name(const std::string& format);
+
+common_checkpoint_eviction common_checkpoint_eviction_from_name(const std::string & format);
+
 
 struct thinking_tokens {
     bool exclude = true;
@@ -140,6 +149,7 @@ thinking_tokens thinking_tokens_from_string(const std::string& format);
 enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
+    COMMON_SPECULATIVE_TYPE_DFLASH,        // DFlash draft model
     COMMON_SPECULATIVE_TYPE_MTP,           // MTP model
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
@@ -162,6 +172,7 @@ struct common_speculative_stage_params {
     int32_t n_max = -1;
     int32_t n_min = -1;
     float   p_min = -1.0f;
+    int32_t dflash_cross_ctx = -1;
 
     uint16_t ngram_size_n = 0;
     uint16_t ngram_size_m = 0;
@@ -169,15 +180,18 @@ struct common_speculative_stage_params {
 
     int32_t suffix_min_match_len = -1;
     int32_t suffix_max_depth = -1;
+    std::string suffix_corpus;
 
     bool has_n_max_override() const { return n_max >= 0; }
     bool has_n_min_override() const { return n_min >= 0; }
     bool has_p_min_override() const { return p_min >= 0.0f; }
+    bool has_dflash_cross_ctx_override() const { return dflash_cross_ctx >= 0; }
     bool has_ngram_size_n_override() const { return ngram_size_n > 0; }
     bool has_ngram_size_m_override() const { return ngram_size_m > 0; }
     bool has_ngram_min_hits_override() const { return ngram_min_hits > 0; }
     bool has_suffix_min_match_len_override() const { return suffix_min_match_len >= 0; }
     bool has_suffix_max_depth_override() const { return suffix_max_depth >= 0; }
+    bool has_suffix_corpus_override() const { return !suffix_corpus.empty(); }
 };
 
 struct common_params_model {
@@ -204,6 +218,7 @@ struct common_params_speculative {
     int32_t n_max = 16; // number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
     std::vector<common_speculative_stage_params> stages; // explicit stage chain for single-spec or self-spec + model fallback
+    int32_t dflash_cross_ctx = 512; // target-feature context window for DFlash
 
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min = 0.75f; // minimum speculative decoding probability (greedy)
@@ -250,7 +265,10 @@ struct common_params_speculative {
     common_params_speculative with_stage_overrides(const common_speculative_stage_params & stage) const;
     bool has_stage_chain() const;
     bool has_stage_type(common_speculative_type stage_type) const;
+    void remove_stage_type(common_speculative_type stage_type);
     bool has_composite_stage_chain() const;
+    bool needs_dft_model() const;
+    void clear_dft();
     int32_t get_max_stage_n_max() const;
     int32_t get_min_usable_stage_n_min() const;
 
@@ -351,6 +369,7 @@ struct gpt_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;
+    std::vector<int> fit_margin_array;
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
     std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
@@ -500,6 +519,7 @@ struct gpt_params {
 
     // "advanced" endpoints are disabled by default for better security
     common_webui webui = COMMON_WEBUI_AUTO;
+    bool webui_mcp_proxy  = false;
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
@@ -515,7 +535,8 @@ struct gpt_params {
     bool do_checkpoint = false;               // do checkpoint for recurrent models only
     int32_t ctx_checkpoints_n = 32;           // max number of context checkpoints per slot
     int32_t ctx_checkpoints_interval = 512;   // minimum number of tokens between each context checkpoints
-    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint 
+    int32_t ctx_checkpoints_tolerance = 5;    // the number of tokens before the full prompt to create the checkpoint
+    common_checkpoint_eviction ctx_checkpoint_eviction = COMMON_CHECKPOINT_EVICTION_VARIANCE;
     int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
     int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
     float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens

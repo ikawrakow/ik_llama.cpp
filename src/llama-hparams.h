@@ -82,7 +82,6 @@ struct llama_hparams {
     float    yarn_attn_factor =  1.0f;
     float    yarn_beta_fast   = 32.0f;
     float    yarn_beta_slow   =  1.0f;
-
     std::array<int, 4> rope_sections;
     std::array<float,    LLAMA_MAX_LAYERS> rope_freq_base_per_layer;
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_dim_per_layer;
@@ -140,6 +139,13 @@ struct llama_hparams {
     uint32_t mtp_num_centroids = 0;
     uint32_t mtp_centroid_top_k = 0;
 
+    // DFlash draft model metadata
+    uint32_t dflash_block_size = 16;
+    uint32_t dflash_mask_token_id = 0;
+    uint32_t dflash_n_target_features = 0;
+    uint32_t dflash_n_target_layers = 0;
+    uint32_t dflash_target_layer_ids[8] = {};
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = -1;
@@ -159,6 +165,10 @@ struct llama_hparams {
         if (this->n_ctx_train   != other.n_ctx_train)   return true;
         if (this->n_embd        != other.n_embd)        return true;
         if (this->mtp_backbone_n_embd != other.mtp_backbone_n_embd) return true;
+        if (this->dflash_block_size != other.dflash_block_size) return true;
+        if (this->dflash_mask_token_id != other.dflash_mask_token_id) return true;
+        if (this->dflash_n_target_features != other.dflash_n_target_features) return true;
+        if (this->dflash_n_target_layers != other.dflash_n_target_layers) return true;
         if (this->n_layer       != other.n_layer)       return true;
         if (this->n_rot         != other.n_rot)         return true;
         if (this->n_swa         != other.n_swa)         return true;
@@ -189,6 +199,9 @@ struct llama_hparams {
         if (this->ssm_dt_rank != other.ssm_dt_rank) return true;
         if (this->ssm_n_group != other.ssm_n_group) return true;
         if (this->recurrent_layer_arr != other.recurrent_layer_arr) return true;
+        for (int i = 0; i < 8; ++i) {
+            if (this->dflash_target_layer_ids[i] != other.dflash_target_layer_ids[i]) return true;
+        }
 
         if (this->dec_start_token_id != other.dec_start_token_id) return true;
 

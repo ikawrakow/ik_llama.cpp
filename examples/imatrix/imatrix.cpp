@@ -791,8 +791,8 @@ static IMatrixCollector * ik_get_imatrix_collector(void * user_data) {
     return user_data != nullptr ? static_cast<IMatrixCollector *>(user_data) : &g_target_collector;
 }
 
-static bool ik_collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
-    return ik_get_imatrix_collector(user_data)->collect_imatrix(t, ask, user_data);
+static int ik_collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
+    return ik_get_imatrix_collector(user_data)->collect_imatrix(t, ask, user_data) ? 1 : 0;
 }
 
 
@@ -1232,7 +1232,7 @@ int main(int argc, char ** argv) {
     }
 
     if (!use_paired_gemma4_mtp && llama_model_is_gemma4_mtp_assistant(model) && !params.process_output) {
-        fprintf(stderr, "%s: warning: standalone Gemma 4 assistant imatrix does not exercise the assistant layers. Use '-m <target> -md <assistant> -mtp' for meaningful calibration.\n", __func__);
+        fprintf(stderr, "%s: warning: standalone Gemma 4 assistant imatrix does not exercise the assistant layers. Use '-m <target> -md <assistant> --spec-type mtp:n_max=1,p_min=0.0' for meaningful calibration.\n", __func__);
     }
 
     const int n_ctx_train = llama_n_ctx_train(model);

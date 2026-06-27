@@ -11,7 +11,7 @@ uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
     }
 
     const auto & hparams = ctx->model.hparams;
-    if (ctx->cparams.mtp && ctx->model.arch == LLM_ARCH_GEMMA4_MTP && hparams.mtp_backbone_n_embd > 0) {
+    if (ctx->cparams.mtp && (ctx->model.arch == LLM_ARCH_GEMMA4_MTP || ctx->model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && hparams.mtp_backbone_n_embd > 0) {
         return hparams.mtp_backbone_n_embd;
     }
 
@@ -87,6 +87,7 @@ bool llama_spec_get_hidden_feature_view(
 
     return true;
 }
+
 
 bool llama_spec_get_hidden_feature_view_for_seq(
         struct llama_context   * ctx,

@@ -6238,17 +6238,17 @@ struct ggml_tensor * ggml_mul_multi_add(
     return result;
 }
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#include <intrin.h>
-#include <ammintrin.h>
-#include <nmmintrin.h>
-#include <immintrin.h>
-#include <stdlib.h>
-static inline int popcount(uint32_t x) { return __popcnt(x); }
-#else
-static inline int popcount(uint32_t x) { return __builtin_popcount(x); }
-#endif
+//#if defined(_MSC_VER)
+//#pragma warning(disable: 4244 4267) // possible loss of data
+//#include <intrin.h>
+//#include <ammintrin.h>
+//#include <nmmintrin.h>
+//#include <immintrin.h>
+//#include <stdlib.h>
+//static inline int popcount(uint32_t x) { return __popcnt(x); }
+//#else
+//static inline int popcount(uint32_t x) { return __builtin_popcount(x); }
+//#endif
 
 struct ggml_tensor * ggml_hadamard(
         struct ggml_context * ctx,
@@ -6256,8 +6256,16 @@ struct ggml_tensor * ggml_hadamard(
         int                   n) {
 
     GGML_ASSERT(n > 1);                    // no point in Hadamard transforms with less than 2 elements
-    GGML_ASSERT(a->ne[0] % n == 0);
-    GGML_ASSERT(popcount(n) == 1);         // must be a power of 2
+    if (a->ne[0] % n != 0) {
+        fprintf(stderr, "%s: head size %ld is not a multiple of block size %d for tensor %s\n", __func__, a->ne[0], n, a->name);
+        GGML_ABORT("Fatal error");
+    }
+    if ((n & ~(n-1)) != n) {
+        fprintf(stderr, "%s: block size %d is not a power of 2 for tensor %s\n", __func__, n, a->name);
+        GGML_ABORT("Fatal error");
+    }
+    //GGML_ASSERT(a->ne[0] % n == 0);
+    //GGML_ASSERT(popcount(n) == 1);         // must be a power of 2
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, a->ne);
 
@@ -7860,6 +7868,14 @@ struct ggml_tensor * ggml_mul_mat_id(
     GGML_ASSERT(b->ne[3] == 1); // b is 3d
     GGML_ASSERT(ids->ne[2] == 1 && ids->ne[3] == 1); // ids is 2d
     GGML_ASSERT(ids->ne[1] == b->ne[2]); // must have an expert list per b row
+    //// can_mul_mat
+    //if (as->ne[0] != b->ne[0]) {
+    //    fprintf(stderr, "MUL_MAT_ID_FAIL: as='%s' ne[0]=%ld type=%s | b='%s' ne[0]=%ld type=%s | ids->ne[1]=%ld b->ne[2]=%ld as->ne[1]=%ld as->ne[2]=%ld\n",
+    //            as->name, (long)as->ne[0], ggml_type_name(as->type),
+    //            b->name, (long)b->ne[0], ggml_type_name(b->type),
+    //            (long)ids->ne[1], (long)b->ne[2], (long)as->ne[1], (long)as->ne[2]);
+    //    fflush(stderr);
+    //}
     GGML_ASSERT(as->ne[0] == b->ne[0]); // can_mul_mat
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0); // can broadcast
 
@@ -11399,13 +11415,13 @@ static void ggml_compute_forward_dup_f16(
 
                         memcpy(dst_ptr, src0_ptr, sizeof(ggml_fp16_t));
 
-                        if (++i10 == ne00) {
+                        if (++i10 == ne0) {
                             i10 = 0;
-                            if (++i11 == ne01) {
+                            if (++i11 == ne1) {
                                 i11 = 0;
-                                if (++i12 == ne02) {
+                                if (++i12 == ne2) {
                                     i12 = 0;
-                                    if (++i13 == ne03) {
+                                    if (++i13 == ne3) {
                                         i13 = 0;
                                     }
                                 }
@@ -11703,13 +11719,13 @@ static void ggml_compute_forward_dup_bf16(
 
                         memcpy(dst_ptr, src0_ptr, sizeof(ggml_bf16_t));
 
-                        if (++i10 == ne00) {
+                        if (++i10 == ne0) {
                             i10 = 0;
-                            if (++i11 == ne01) {
+                            if (++i11 == ne1) {
                                 i11 = 0;
-                                if (++i12 == ne02) {
+                                if (++i12 == ne2) {
                                     i12 = 0;
-                                    if (++i13 == ne03) {
+                                    if (++i13 == ne3) {
                                         i13 = 0;
                                     }
                                 }
@@ -13325,7 +13341,7 @@ static void ggml_compute_forward_add1_q_f32(
         const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
 
         void  * src0_row = (void *) ((char *) src0->data + (i1*nb01 + i2*nb02 + i3*nb03));
-        void  * dst_row  = (void *) ((char *)  dst->data + (i1*nb1  + i2*nb2  + i3*nb0 ));
+        void  * dst_row  = (void *) ((char *)  dst->data + (i1*nb1  + i2*nb2  + i3*nb3 ));
 
         assert(ne0 % 32 == 0);
 
@@ -14385,7 +14401,7 @@ static void ggml_compute_forward_sum_rows_f32(
     for (int ir = first_row; ir < last_row; ++ir) {
         int i3 = ir / (ne01*ne02);
         int i2 = (ir - i3*ne01*ne02)/ne01;
-        int i1 = ir - i3*ne01*ne0 - i2*ne01;
+        int i1 = ir - i3*ne01*ne02 - i2*ne01;
         const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
               float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
         float row_sum = 0;
@@ -18991,6 +19007,11 @@ static void ggml_compute_forward_set_rows_f32(
     const int64_t ir1 = MIN(ir0 + dr, nr);
 
     ggml_from_float_t const from_float = type_traits[dst->type].from_float;
+    // F32 has no from_float entry in type_traits (it is NULL), so set_rows into an F32
+    // destination would call a NULL function pointer and crash. Handle F32 dst with a
+    // direct float copy. Hit by graphs that scatter F32 rows into an F32 base.
+    const bool dst_is_f32 = (dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst_is_f32 || from_float);
 
     if (src1->type == GGML_TYPE_I64) {
         for (int64_t i03 = 0; i03 < ne03; ++i03) {
@@ -19004,8 +19025,10 @@ static void ggml_compute_forward_set_rows_f32(
 
                     GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
-                    from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    const float * src_row = (const float *) ((char *) src0->data + i*nb01 + i02*nb02 + i03*nb03);
+                    char *        dst_row = (char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3;
+                    if (dst_is_f32) memcpy(dst_row, src_row, nc*sizeof(float));
+                    else            from_float(src_row, dst_row, nc);
                 }
             }
         }
@@ -19022,8 +19045,10 @@ static void ggml_compute_forward_set_rows_f32(
 
                     GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
-                    from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    const float * src_row = (const float *) ((char *) src0->data + i*nb01 + i02*nb02 + i03*nb03);
+                    char *        dst_row = (char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3;
+                    if (dst_is_f32) memcpy(dst_row, src_row, nc*sizeof(float));
+                    else            from_float(src_row, dst_row, nc);
                 }
             }
         }
@@ -26616,7 +26641,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
             case GGML_OP_ACC:
                 {
                     if (ggml_is_quantized(node->src[0]->type)) {
-                        cur = ggml_type_size(GGML_TYPE_F32) * node->src[1]->ne[0] * n_tasks;
+                        cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                     }
                 } break;
             case GGML_OP_MUL_MAT:
@@ -26676,7 +26701,9 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     }
                 } break;
             case GGML_OP_SOFT_MAX:
+            case GGML_OP_SOFT_CAP_MAX:
             case GGML_OP_ROPE:
+            case GGML_OP_ROPE_BACK:
                 {
                     cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
                 } break;
@@ -30043,11 +30070,7 @@ int ggml_cpu_has_wasm_simd(void) {
 }
 
 int ggml_cpu_has_blas(void) {
-#if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
-    return 1;
-#else
     return 0;
-#endif
 }
 
 int ggml_cpu_has_cuda(void) {

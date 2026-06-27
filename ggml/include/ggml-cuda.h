@@ -21,7 +21,7 @@ extern "C" {
 #define GGML_CUDA_MAX_DEVICES       16
 
 // backend API
-GGML_API GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, const void * params);
+GGML_API GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, const void * params, const void * model);
 
 GGML_API GGML_CALL bool ggml_backend_is_cuda(ggml_backend_t backend);
 
@@ -41,7 +41,9 @@ GGML_API GGML_CALL void ggml_backend_cuda_get_device_memory(int device, size_t *
 GGML_API GGML_CALL bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_API GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
-GGML_API void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data);
+GGML_API GGML_CALL void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data);
+
+GGML_API GGML_CALL void ggml_backend_cuda_invalidate_graphs(const void * model);
 #ifdef  __cplusplus
 }
 #endif

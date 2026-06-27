@@ -596,11 +596,18 @@ value for_statement::execute_impl(context & ctx) {
         loop_obj->insert("length", mk_val<value_int>(filtered_items.size()));
         loop_obj->insert("previtem", i > 0 ? filtered_items[i - 1] : mk_val<value_undefined>("previtem"));
         loop_obj->insert("nextitem", i < filtered_items.size() - 1 ? filtered_items[i + 1] : mk_val<value_undefined>("nextitem"));
-        scope.set_val("loop", loop_obj);
-        scope_update_fns[i](scope);
+        // Use a fresh scope for each iteration so that {% set %} variables
+        // (including ones assigned only conditionally inside the body) do not
+        // leak across iterations. This matches standard Jinja2 semantics, where
+        // each loop iteration starts with a clean scope. State that must
+        // accumulate across iterations has to use namespace(), whose mutations
+        // are applied to the shared object referenced from the enclosing scope.
+        context iter_scope(scope);
+        iter_scope.set_val("loop", loop_obj);
+        scope_update_fns[i](iter_scope);
         try {
             for (auto & stmt : body) {
-                value val = stmt->execute(scope);
+                value val = stmt->execute(iter_scope);
                 result->push_back(val);
             }
         } catch (const continue_statement::signal &) {

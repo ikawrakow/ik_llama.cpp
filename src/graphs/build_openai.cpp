@@ -3,7 +3,7 @@
 #include "../llama-context.h"
 
 ggml_cgraph * llm_build_context::build_openai_moe() {
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
+    ggml_cgraph * gf = new_graph_custom();
 
     const int64_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
@@ -43,9 +43,9 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
                 nullptr,
                 nullptr,  nullptr, nullptr,  nullptr, nullptr,  nullptr, // no shared experts
                 n_expert, n_expert_used,
-                LLM_FFN_SWIGLU_OAI_MOE, false, false, 0.0f,
+                LLM_FFN_SWIGLU_OAI, false, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
-                LLM_FFN_SWIGLU_OAI_MOE, cb, il, gf, true,
+                LLM_FFN_SWIGLU_OAI, cb, il, gf, true,
                 model.layers[il].ffn_up_gate_exps, model.layers[il].ffn_up_gate_exps_b);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);

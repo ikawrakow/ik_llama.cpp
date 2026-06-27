@@ -53,7 +53,7 @@
 #define LLAMA_STATE_SEQ_VERSION 3
 
 #define LLAMA_SERVER_MAGIC 0x6c6d7376u // 'lmsv'
-#define LLAMA_SERVER_VERSION 1 
+#define LLAMA_SERVER_VERSION 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -399,6 +399,8 @@ extern "C" {
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 
+        const int   * fit_margin_array;
+
         // comma separated list of RPC servers to use for offloading
         const char * rpc_servers;
 
@@ -695,6 +697,8 @@ extern "C" {
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
     LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
+
+    LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
@@ -1093,6 +1097,10 @@ extern "C" {
     // Negative indicies can be used to access logits in reverse order, -1 is the last logit.
     // returns NULL for invalid ids.
     LLAMA_API float * llama_get_logits_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the argmax token ID for DFlash draft position i without materializing full logits.
+    // Returns LLAMA_TOKEN_NULL if argmax is not available (falls back to logits path).
+    LLAMA_API llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i);
 
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,
@@ -1570,6 +1578,8 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
+
+    LLAMA_API bool llama_reload_changed_tensors(struct llama_context * ctx);
 
 #ifdef __cplusplus
 }

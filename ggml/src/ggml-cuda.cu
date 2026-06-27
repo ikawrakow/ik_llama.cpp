@@ -77,6 +77,10 @@
 #include <vector>
 #include <sstream>
 
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
+
 #define IK_PRINT_TIMING 0
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -90,7 +94,7 @@ static void ggml_cuda_default_log_callback(enum ggml_log_level level, const char
 ggml_log_callback ggml_cuda_log_callback = ggml_cuda_default_log_callback;
 void * ggml_cuda_log_user_data = NULL;
 
-GGML_API void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data) {
+GGML_CALL void ggml_backend_cuda_log_set_callback(ggml_log_callback log_callback, void * user_data) {
     ggml_cuda_log_callback = log_callback;
     ggml_cuda_log_user_data = user_data;
 }
@@ -200,14 +204,10 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     int64_t total_vram = 0;
 #ifdef GGML_CUDA_FORCE_MMQ
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ:    yes\n", __func__);
-#else
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ:    no\n", __func__);
+    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ (instead of CUBLAS):    yes\n", __func__);
 #endif // GGML_CUDA_FORCE_MMQ
 #ifdef GGML_CUDA_FORCE_CUBLAS
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS: yes\n", __func__);
-#else
-    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS: no\n", __func__);
+    GGML_CUDA_LOG_INFO("%s: GGML_CUDA_FORCE_CUBLAS (Instead of MMQ):    yes\n", __func__);
 #endif // GGML_CUDA_FORCE_CUBLAS
     GGML_CUDA_LOG_INFO("%s: found %d " GGML_CUDA_NAME " devices:\n", __func__, info.device_count);
     for (int id = 0; id < info.device_count; ++id) {
@@ -295,6 +295,25 @@ static ggml_cuda_device_info ggml_cuda_init() {
 const ggml_cuda_device_info & ggml_cuda_info() {
     static ggml_cuda_device_info info = ggml_cuda_init();
     return info;
+}
+
+/* ---------- hot-swap: invalidate all cached CUDA graphs ---------- */
+extern "C" void ggml_backend_cuda_invalidate_graphs(const void * model) {
+    auto & info = const_cast<ggml_cuda_device_info &>(ggml_cuda_info());
+    if (auto it = info.all_ctx.find(model); it != info.all_ctx.end()) {
+        for (auto ctx : it->second) {
+            if (ctx) {
+                ctx->cuda_graphs.clear();
+            }
+        }
+    } else {
+        fprintf(stderr, "================================= %s: did not find entry for model at %p\n", __func__, model);
+    }
+    //for (int i = 0; i < info.device_count; ++i) {
+    //    if (info.all_ctx[i]) {
+    //        info.all_ctx[i]->cuda_graphs.clear();
+    //    }
+    //}
 }
 
 // #define DEBUG_CUDA_MALLOC
@@ -507,13 +526,14 @@ static std::condition_variable ggml_cuda_lock_cv;
 //static std::atomic<int> ggml_cuda_lock_counter;
 static int ggml_cuda_lock_counter = 0;
 
-ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
-    device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
+ggml_backend_cuda_context::ggml_backend_cuda_context(int device, const void * model) :
+    device(device), name(GGML_CUDA_NAME + std::to_string(device)), model(model) {
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
-    if (info->all_ctx[device]) {
+    auto & all_ctx = info->all_ctx[model];
+    if (all_ctx[device]) {
         GGML_CUDA_LOG_WARN("%s: a context for device %d already exists?\n", __func__, device);
     } else{
-        info->all_ctx[device] = this;
+        all_ctx[device] = this;
     }
 }
 
@@ -545,9 +565,12 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
         }
     }
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
-    if (info->all_ctx[device] == this) {
-        info->all_ctx[device] = nullptr;
+    if (auto it = info->all_ctx.find(model); it != info->all_ctx.end() && it->second[device] == this) {
+        it->second[device] = nullptr;
     }
+    //if (info->all_ctx[device] == this) {
+    //    info->all_ctx[device] = nullptr;
+    //}
 
 }
 
@@ -843,6 +866,9 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
         }
         //printf("    allocated %zu bytes for tensor %s of type %s, dim = %ld x %ld x %ld. padding: %zu\n", padded_size, split->name, ggml_type_name(split->type),
         //        split->ne[0], split->ne[1], split->ne[2], padded_size - size);
+        //printf("DEBUG init_tensor: dev=%d split_ne0=%ld type=%s ggml_nbytes=%zu padded=%zu data_ptr=%p\n",
+        //       i, (long)ne0, ggml_type_name(split->type), size, padded_size, (void*)buf);
+        //fflush(stdout);
         split->data = buf;
         auto ctx = new ggml_backend_cuda_buffer_context(i, buf);
         auto buft = ggml_backend_cuda_buffer_type(i);
@@ -1050,6 +1076,12 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                         memcpy(dst + tt.row_meta_size*n_interleave, src + source_offset, n_interleave*(split_row_size - tt.row_meta_size));
                     }
                 }
+                //printf("DEBUG set_tensor: dev=%d split_ne0=%ld nrows=%d split_row_size=%zu total=%zu "
+                //       "split_data=%p host_data=%p host_capacity=%zu source_offset=%zu\n",
+                //       i, (long)split->ne[0], nrows, split_row_size, nrows*split_row_size,
+                //       (void*)split->data, (void*)host_buffer.data(), host_buffer.size(),
+                //       (size_t)source_offset);
+                //fflush(stdout);
                 CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
                 ne += split->ne[0];
             }
@@ -1140,7 +1172,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         }
     }
     else {
-        fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim == 0);
+        fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim);
         GGML_ABORT("fatal error");
     }
 
@@ -1378,10 +1410,74 @@ GGML_CALL static const char * ggml_backend_cuda_host_buffer_name(ggml_backend_bu
     GGML_UNUSED(buffer);
 }
 
+#ifdef __linux__
 GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    CUDA_CHECK(cudaFreeHost(buffer->context));
+    CUDA_CHECK(cudaHostUnregister(buffer->context));
+    munmap(buffer->context, buffer->size);
 }
 
+static void * ggml_cuda_host_malloc(size_t size) {
+    if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+        return nullptr;
+    }
+
+    constexpr double k_warn_limit = 8.0;
+    double size_GiB = size/(1024.*1024.*1024.);
+    auto tim1 = ggml_time_us();
+    if (size_GiB > k_warn_limit) {
+        GGML_CUDA_LOG_INFO("\n\nAllocating %.2f GiB of pinned host memory, this may take a while.\n", size_GiB);
+        GGML_CUDA_LOG_INFO("Using pinned host memory improves PP performance by a significant margin.\n");
+        GGML_CUDA_LOG_INFO("But if it takes too long for your model and amount of patience, kill the process and run using\n\n");
+        GGML_CUDA_LOG_INFO("GGML_CUDA_NO_PINNED=1 your_command_goes_here\n");
+    }
+
+    void * ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ptr == MAP_FAILED) {
+        GGML_CUDA_LOG_WARN("%s: mmap of %.2f MiB failed\n", __func__, size/1024.0/1024.0);
+        return nullptr;
+    }
+
+    // Whether to request the kernel to attempt to defragment memory to back the region with 2M hugepages.
+    // Otherwise dependent on kernel settings:
+    //   * enabled="always":  Hand over whatever 2M pages it has on hand and the rest will be 4k 
+    //   * enabled="madvise": 4k pages
+    //   * enabled="never":   4k pages
+    // Potluck on performance. If there's not much defragmentation to do, then you win. Otherwise come back in an hour.
+    // Defaults to disabled unless GGML_CUDA_HOST_MALLOC_THP is set.
+    if (getenv("GGML_CUDA_HOST_MALLOC_THP") != nullptr) {
+        madvise(ptr, size, MADV_HUGEPAGE);
+    }
+
+    // prefault the whole region. If the kernel knows how to do this then let it do so.
+    // Might be worth spawning threads to speed up this process on huge allocations.
+    int needs_manual_prefault = 1;
+#ifdef MADV_POPULATE_WRITE
+    needs_manual_prefault = madvise(ptr, size, MADV_POPULATE_WRITE);
+#endif
+    if (needs_manual_prefault) {
+        char * p = (char *) ptr;
+        for (size_t off = 0; off < size; off += 4096) {
+            p[off] = 0;
+        }
+    }
+
+    cudaError_t err = cudaHostRegister(ptr, size, cudaHostRegisterPortable);
+    if (err != cudaSuccess) {
+        cudaGetLastError(); // clear the error
+        GGML_CUDA_LOG_WARN("%s: cudaHostRegister of %.2f MiB failed: %s\n", __func__,
+                           size/1024.0/1024.0, cudaGetErrorString(err));
+        munmap(ptr, size);
+        return nullptr;
+    }
+
+    if (size_GiB > k_warn_limit) {
+        auto tim2 = ggml_time_us();
+        GGML_CUDA_LOG_INFO("    done allocating %.2f GiB in %.1f ms\n\n", size_GiB, 1e-3*(tim2-tim1));
+    }
+    return ptr;
+}
+
+#else // !__linux__
 static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
@@ -1412,6 +1508,12 @@ static void * ggml_cuda_host_malloc(size_t size) {
 
     return ptr;
 }
+
+GGML_CALL static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    CUDA_CHECK(cudaFreeHost(buffer->context));
+}
+
+#endif // __linux__
 
 GGML_CALL static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     void * ptr = ggml_cuda_host_malloc(size);
@@ -3132,7 +3234,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         if (dst->src[5]) {
             ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[5]->data, (const int32_t *)ids->data,
                     (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
-                    dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
+                    dst_row.nb[1], dst_row.nb[2], dst->src[5]->nb[1], ids->nb[1], stream);
             CUDA_CHECK(cudaGetLastError());
         }
 
@@ -3478,7 +3580,7 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             CUDA_CHECK(cudaGetLastError());
 
             ggml_cuda_op_mul_mat_q(ctx, src0_2, src1, dst, (const char *)src0_2->data, nullptr, src1_quantized.get(), (float *)dst->data,
-                    0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
+                    0, src0_2->ne[1], src1->ne[1], ne10_padded, stream);
             CUDA_CHECK(cudaGetLastError());
         } else {
             auto local_dst = *dst;
@@ -3488,9 +3590,16 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         }
     }
 
-    //printf("%s: using limit = %g\n", __func__, limit);
-    ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
-                    (const float *)dst->data, dst_up.get(), (float *)dst->data, limit);
+    auto unary_op = (ggml_unary_op)dst->op_params[0];
+    if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+        ggml_swiglu_oai_cuda_f32((const float *)dst->data, (const float *)dst_up.get(),
+                (float *)dst->data, ggml_nelements(dst), dst->ne[0],  dst->ne[0],  dst->ne[0],
+                1.702f, 7.0f, stream);
+    } else {
+        //printf("%s: using limit = %g\n", __func__, limit);
+        ggml_fused_mul_unary(ctx, unary_op, ggml_nelements(dst),
+                (const float *)dst->data, dst_up.get(), (float *)dst->data, limit);
+    }
     CUDA_CHECK(cudaGetLastError());
 
 }
@@ -4151,23 +4260,8 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
                 needs_f16_f32_copy = true;
 
             } else {
-#ifdef GGML_USE_NCCL__
-                auto & info = ggml_cuda_info();
-                auto nbytes = ggml_nbytes(src);
-                ncclGroupStart();
-                ggml_cuda_set_device(cuda_ctx_src->device);
-                auto status1 = ncclSend(src->data, nbytes, ncclUint8, cuda_ctx_dst->device, info.nccl_coms[cuda_ctx_src->device],
-                        info.all_ctx[cuda_ctx_src->device]->stream());
-                ggml_cuda_set_device(cuda_ctx_dst->device);
-                auto status2 = ncclRecv(dst->data, nbytes, ncclUint8, cuda_ctx_src->device, info.nccl_coms[cuda_ctx_dst->device],
-                        info.all_ctx[cuda_ctx_dst->device]->stream());
-                ncclGroupEnd();
-                GGML_ASSERT(status1 == ncclSuccess && status2 == ncclSuccess);
-                return true;
-#else
                 ggml_cuda_set_device(cuda_ctx_src->device);
                 CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
-#endif
             }
 #endif
         }
@@ -5153,13 +5247,13 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
     return params;
 }
 
-GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] const void * param_string) {
+GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] const void * param_string, const void * model) {
     if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
         GGML_CUDA_LOG_ERROR("%s: invalid device %d\n", __func__, device);
         return nullptr;
     }
 
-    ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device);
+    ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device, model);
     if (ctx == nullptr) {
         GGML_CUDA_LOG_ERROR("%s: failed to allocate context\n", __func__);
         return nullptr;
@@ -5274,7 +5368,7 @@ GGML_CALL void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
 
 // backend registry
 GGML_CALL static ggml_backend_t ggml_backend_reg_cuda_init(const char * params, void * user_data) {
-    ggml_backend_t cuda_backend = ggml_backend_cuda_init((int) (intptr_t) user_data, nullptr);
+    ggml_backend_t cuda_backend = ggml_backend_cuda_init((int) (intptr_t) user_data, nullptr, nullptr);
     return cuda_backend;
 
     GGML_UNUSED(params);

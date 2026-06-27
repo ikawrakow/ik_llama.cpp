@@ -19,7 +19,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ1_M_R4> {
 };
 
 template <ggml_type type, int vdr, vec_dot_q_cuda_t vec_dot_q_cuda, int ncols_y, int n_interleaved = 1>
-static __device__ void iqk_mul_mat_vec_q_kerne(
+static __device__ void iqk_mul_mat_vec_q_kernel(
     const void * __restrict__ vx, const void * __restrict__ vy,
     const float * bias, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst, const int64_t row_size) {
@@ -190,6 +190,13 @@ static __device__ void iqk_fused_mul_mat_vec_q_kernel(
             float u = tmp_u[j][threadIdx.x];
             float g = tmp_g[j][threadIdx.x];
             float r;
+            if (unary_op == GGML_UNARY_OP_SWIGLU_OAI && !bias_u) {
+                constexpr float alpha = 1.702f;
+                constexpr float limit = 7.0f;
+                g = fminf(g, limit);
+                u = fmaxf(fminf(u, limit), -limit);
+                r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
+            } else {
             switch (unary_op) {
                 case GGML_UNARY_OP_SILU:
                     {
@@ -214,6 +221,7 @@ static __device__ void iqk_fused_mul_mat_vec_q_kernel(
                     r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
                 } break;
             }
+            }
             dst[j*nrows_dst + row0 + threadIdx.x] = r;
         }
     }
@@ -236,7 +244,7 @@ static __global__ void iqk_mul_mat_vec_q(
     const char * cy = (const char *)vy + i2*nb12;
     char * cdst = (char *)dst + i2*nb2;
     const float * b = (const float *)(bias ? ids_data ? (const char *)bias + i02*bias_nb1 : bias : nullptr);
-    iqk_mul_mat_vec_q_kerne<type, vdr, vec_dot_q_cuda, ncols_y, n_interleaved>(cx, cy, b, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst, row_size);
+    iqk_mul_mat_vec_q_kernel<type, vdr, vec_dot_q_cuda, ncols_y, n_interleaved>(cx, cy, b, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst, row_size);
 }
 
 template <ggml_type type, int vdr, vec_dot_q_cuda_t vec_dot_q_cuda, int ncols_y, int n_interleaved = 1>

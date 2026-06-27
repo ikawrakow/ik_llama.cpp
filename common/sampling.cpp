@@ -24,7 +24,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     result->grammar = nullptr;
     result->rbudget = nullptr;
 
-    struct llama_grammar* grmr;
+    struct llama_grammar* grmr = nullptr;
     const std::string & grammar_str = common_grammar_value(params.grammar);
     if (grammar_str.compare(0, 11, "%llguidance") == 0) {
 #ifdef LLAMA_USE_LLGUIDANCE

@@ -1,5 +1,6 @@
 #include "llama-arch.h"
 #include "llama-impl.h"
+#include "llama-model.h"
 
 #include <map>
 
@@ -32,6 +33,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN3VLMOE,      "qwen3vlmoe"   },
     { LLM_ARCH_QWEN35MOE,       "qwen35moe"    },
     { LLM_ARCH_QWEN35,          "qwen35"       },
+    { LLM_ARCH_MELLUM,          "mellum"       },
     { LLM_ARCH_PHI2,            "phi2"         },
     { LLM_ARCH_PHI3,            "phi3"         },
     { LLM_ARCH_PLAMO,           "plamo"        },
@@ -63,6 +65,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GRANITE,         "granite"      },
     { LLM_ARCH_GRANITE_MOE,     "granitemoe"   },
     { LLM_ARCH_COHERE2,         "cohere2"      },
+    { LLM_ARCH_COHERE2_MOE,     "cohere2_moe"  },
     { LLM_ARCH_DOTS1,           "dots1"        },
     { LLM_ARCH_ERNIE4_5,        "ernie4_5"     },
     { LLM_ARCH_ERNIE4_5_MOE,    "ernie4_5-moe" },
@@ -70,15 +73,19 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_OPENAI_MOE,      "gpt-oss"      },
     { LLM_ARCH_BAILINGMOE2,     "bailingmoe2"  },
     { LLM_ARCH_MINIMAX_M2,      "minimax-m2"   },
+    { LLM_ARCH_MINIMAX_M3,      "minimax-m3"   },
     { LLM_ARCH_SMOLLM3,         "smollm3"      },
     { LLM_ARCH_MISTRAL3,        "mistral3"     },
     { LLM_ARCH_MIMO2,           "mimo2"        },
     { LLM_ARCH_SEED_OSS,        "seed_oss"     },
     { LLM_ARCH_STEP35,          "step35"       },
+    { LLM_ARCH_LAGUNA,          "laguna"       },
     { LLM_ARCH_GLM_DSA,         "glm-dsa"      },
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
+    { LLM_ARCH_DFLASH_DRAFT,    "dflash-draft" },
+    { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4-assistant"   },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -90,6 +97,15 @@ llm_arch llm_arch_from_string(const std::string & name) {
     }
 
     return LLM_ARCH_UNKNOWN;
+}
+
+const char * llama_model_arch_string(const struct llama_model * model) {
+    static const char * unknown = "unknown";
+    if (!model) return unknown;
+    if (auto it = LLM_ARCH_NAMES.find(model->arch); it != LLM_ARCH_NAMES.end()) {
+        return it->second;
+    }
+    return unknown;
 }
 
 static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
@@ -145,6 +161,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_MTP_USE_ORDERED_EMBEDDINGS,        "%s.use_ordered_embeddings"            },
     { LLM_KV_MTP_CENTROID_COUNT,                "%s.centroid_count"                    },
     { LLM_KV_MTP_CENTROID_TOP_K,                "%s.centroid_top_k"                    },
+    { LLM_KV_DFLASH_BLOCK_SIZE,                 "%s.dflash.block_size"                 },
+    { LLM_KV_DFLASH_MASK_TOKEN_ID,              "%s.dflash.mask_token_id"              },
+    { LLM_KV_DFLASH_TARGET_LAYER_IDS,           "%s.dflash.target_layer_ids"           },
+    { LLM_KV_DFLASH_N_TARGET_FEATURES,          "%s.dflash.n_target_features"          },
 
     { LLM_KV_ATTENTION_HEAD_COUNT,             "%s.attention.head_count"             },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,          "%s.attention.head_count_kv"          },
@@ -279,4 +299,3 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         return false;
     }
 }
-
