@@ -7100,6 +7100,12 @@ struct llama_context * llama_init_from_model(
     cparams.graph_reuse      = params.graph_reuse;
     cparams.dsa              = params.dsa;
     cparams.dsa_top_k        = params.dsa_top_k;
+    // The DSA lightning indexer is built only in the layer-mode (non-TP) attention path. Under
+    // -sm graph / -sm attn the model runs the tensor-parallel attention path, which has no indexer,
+    // so --dsa would silently run dense MLA. Warn instead of degrading silently.
+    if (cparams.dsa && (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+        LLAMA_LOG_WARN("%s: --dsa is not active under -sm graph/attn (tensor-parallel attention has no indexer); running dense MLA\n", __func__);
+    }
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
     // Folding H into wv_b/wk_b_pp permanently mutates the model; a later context
