@@ -403,6 +403,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
 
     // ---- Walsh-Hadamard rotation (score-preserving; improves cached-K F16 precision) ----
     // nrot = largest power of 2 dividing head_size (== head_size for head_size = 128).
+    // DSA_HADAMARD_DISABLE: DEBUG-ONLY env knob (no CLI surface). Default = rotation enabled.
     static const bool dsa_had_disable = getenv("DSA_HADAMARD_DISABLE") != nullptr;
     if (lctx.cparams.dsa_indexer_hadamard && !dsa_had_disable) {
         int64_t nrot = 1;
@@ -510,6 +511,8 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     // absolute test would then protect nothing and let the (now-)sink be masked out. For a fresh
     // sequence starting at pos 0, min(pos)==0 so the boosted set is exactly the old "cell pos <
     // n_sink" set with the same 1e20 magnitude — n_seq==1 from pos 0 stays byte-identical.
+    // DSA_SINK: DEBUG-ONLY env knob (no CLI surface). Default = 1 (protect each sequence's first
+    // present token from being masked out of top-k). Must stay in sync with the two fill sites.
     static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
     if (n_sink > 0 && n_sink < (int) n_kv) {
         if (!lctx.inp_dsa_sink) {
@@ -552,11 +555,11 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     const int64_t n_tok      = sorted->ne[1];
 
     int64_t n_top_k = (int64_t) hparams.indexer_top_k;
-    // Debug knob: DSA_TOPK_OVERRIDE lets us vary the kept-key count to characterize selection
-    // quality. With the model's configured top_k (2048) on heavily-quantized (IQ2_M) weights the
-    // indexer currently under-ranks some critical keys; a near-n_kv value stays coherent.
-    static const char * tk_env = getenv("DSA_TOPK_OVERRIDE");
-    if (tk_env) n_top_k = atoi(tk_env);
+    // Tuning knob: --dsa-top-k (cparams.dsa_top_k) lets us vary the kept-key count to characterize
+    // selection quality. <0 means use the model's configured top_k. With the model's configured
+    // top_k (2048) on heavily-quantized (IQ2_M) weights the indexer currently under-ranks some
+    // critical keys; a near-n_kv value stays coherent.
+    if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
     if (n_top_k > n_kv_local) n_top_k = n_kv_local;
 
     // Penalty magnitude for non-top-k keys. On the soft_max (-fa 0) path this F32 -BIG is added to
@@ -711,9 +714,10 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
                 // DSA lightning indexer (cache-backed): score the q_lora latent against the persistent
                 // indexer-key cache over the full n_kv, then build a sparse top-k causal mask. Correct
-                // for prefill AND decode (single sequence). Gate: GLM_DSA arch + indexer tensors + cache.
-                static const bool dsa_disable = getenv("DSA_INDEXER_DISABLE") != nullptr;
-                if (!dsa_disable && model.arch == LLM_ARCH_GLM_DSA && model.layers[il].indexer_attn_q_b
+                // for prefill AND decode (single sequence). Gate: --dsa opt-in (off by default) +
+                // GLM_DSA arch + indexer tensors + cache. When off, the model runs the dense MLA path,
+                // byte-identical to a build without this feature.
+                if (lctx.cparams.dsa && model.arch == LLM_ARCH_GLM_DSA && model.layers[il].indexer_attn_q_b
                         && kv_self.kr_l.size() > (size_t) il && kv_self.kr_l[il]) {
                     ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
                     ggml_tensor * sorted = build_deepseek2_dsa_indexer(gf, il, qr, cur, KQ_mask, inp_pos);

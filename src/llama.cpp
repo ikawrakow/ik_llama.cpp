@@ -6684,6 +6684,8 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
         /*.graph_reuse                 =*/ true,
+        /*.dsa                         =*/ false,
+        /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
@@ -7101,6 +7103,8 @@ struct llama_context * llama_init_from_model(
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
+    cparams.dsa              = params.dsa;
+    cparams.dsa_top_k        = params.dsa_top_k;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
     // Folding H into wv_b/wk_b_pp permanently mutates the model; a later context
