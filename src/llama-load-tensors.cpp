@@ -182,7 +182,10 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     inline ggml_context * ctx_for_layer_split(int i, bool force_split = false) const {
         const bool is_mtp_layer = model.hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= model.hparams.n_layer - model.hparams.nextn_predict_layers;
-        return is_mtp_layer && !force_split ? ctx_map.at(model.buft_layer[i].buft) : ctx_map.at(model.buft_layer[i].buft_matrix);
+        if (is_mtp_layer && !force_split && model.arch != LLM_ARCH_GLM4_MOE) {
+            return ctx_map.at(model.buft_layer[i].buft);
+        }
+        return ctx_map.at(model.buft_layer[i].buft_matrix);
     }
 
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
@@ -2870,10 +2873,6 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
 
-        if (is_mtp_layer) {
-            ctx_split = ctx_layer;
-        }
-
         int flags = 0;
         // Skip loading MTP layers if the feature is disabled
         if (!model.mtp) {
@@ -4610,6 +4609,7 @@ bool create_tensors_helper::create_tensors() {
             // For now only run MTP into the per-layer
             if (model.mtp && hparams.nextn_predict_layers > 0 &&
                 model.arch != LLM_ARCH_QWEN35 &&
+                model.arch != LLM_ARCH_GLM4_MOE &&
                 static_cast<uint32_t>(il) >= static_cast<uint32_t>(n_layer) - hparams.nextn_predict_layers) {
                 LLAMA_LOG_DEBUG("%s: not splitting MTP tail layer %d (forced non-split)\n", __func__, il);
                 continue;
