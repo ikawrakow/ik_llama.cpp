@@ -2314,6 +2314,7 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
 
         layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
         layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+        layer.attn_sinks  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_SINKS,  "weight", i), {n_head}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
         layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
         layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);

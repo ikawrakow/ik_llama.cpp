@@ -85,9 +85,13 @@ class Model:
         self.use_temp_file = use_temp_file
         self.lazy = not eager
         self.part_names = Model.get_model_part_names(self.dir_model, "model", ".safetensors")
+        if len(self.part_names) == 0:
+            self.part_names = Model.get_model_part_names_from_weight_map(self.dir_model, "model.safetensors.index.json")
         self.is_safetensors = len(self.part_names) > 0
         if not self.is_safetensors:
             self.part_names = Model.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
+            if len(self.part_names) == 0:
+                self.part_names = Model.get_model_part_names_from_weight_map(self.dir_model, "pytorch_model.bin.index.json")
         self.hparams = Model.load_hparams(self.dir_model)
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -455,6 +459,21 @@ class Model:
 
         part_names.sort()
 
+        return part_names
+
+    @staticmethod
+    def get_model_part_names_from_weight_map(dir_model: Path, index_name: str) -> list[str]:
+        index_path = dir_model / index_name
+        if not index_path.exists():
+            return []
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index: dict[str, Any] = json.load(f)
+            weight_map = index.get("weight_map")
+            if weight_map is None or not isinstance(weight_map, dict):
+                raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
+
+        part_names = sorted({str(part_name) for part_name in weight_map.values()})
         return part_names
 
     @staticmethod
@@ -2484,6 +2503,10 @@ class DFlashDraftModel(Qwen3Model):
         # all-SWA only when it is absent. Absent/false use_sliding_window => dense draft (unchanged).
         use_sliding_window = self.hparams.get("use_sliding_window")
         sliding_window = self.hparams.get("sliding_window")
+        if use_sliding_window is None and "use_swa" in dflash_cfg:
+            use_sliding_window = bool(dflash_cfg["use_swa"])
+        if sliding_window is None and "swa_window_size" in dflash_cfg:
+            sliding_window = int(dflash_cfg["swa_window_size"])
         if use_sliding_window and sliding_window:
             n_swa_layers = int(self.hparams.get("num_hidden_layers", self.block_count))
             layer_types = self.hparams.get("layer_types")
@@ -2533,6 +2556,10 @@ class DFlashDraftModel(Qwen3Model):
             return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_FC]}.weight", data_torch)]
         if top_level_name == "hidden_norm.weight":
             return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_HIDDEN_NORM]}.weight", data_torch)]
+        if top_level_name.endswith(".self_attn.attention_sink_bias"):
+            if bid is None:
+                raise ValueError(f"DFlashDraftModel: can not infer block id for tensor {name!r}")
+            return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.ATTN_SINKS].format(bid=bid)}.weight", data_torch)]
         if name == "norm.weight":
             name = "model.norm.weight"
         elif name.startswith("layers."):

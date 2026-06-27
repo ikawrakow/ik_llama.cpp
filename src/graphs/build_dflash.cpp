@@ -313,6 +313,9 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, dflash_kq_mask_l, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        if (model.layers[il].attn_sinks) {
+            ggml_flash_attn_ext_add_sinks(cur, model.layers[il].attn_sinks);
+        }
         cb(cur, "flash_attn", il);
         ggml_build_forward_expand(gf, cur);
         // Somethiong goes wrong with thisi optimization.
