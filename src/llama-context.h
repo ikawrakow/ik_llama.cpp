@@ -401,6 +401,14 @@ struct llama_context {
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+    // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
+    // the K/V cache_copies fixup does NOT cover. Under graph reuse (FA pads KV to 256, so n_kv
+    // stays constant across consecutive decode ubatches and the graph IS reused) its view_offs
+    // would stay baked at the first ubatch's kv_head, scattering this ubatch's indexer keys to a
+    // stale slot. Later ubatches never populate their own recent index-key cells (those cells read
+    // uninitialized -> wrong block-max-pool/top-k -> degraded/NaN sparse-FA decode). Register the
+    // kr_l cpy per layer here and patch its offset in update_cache_copies(), exactly like K/V.
+    std::vector<CacheCopy> dsa_cache_copies;
 
     bool update_cache_copies();
 
