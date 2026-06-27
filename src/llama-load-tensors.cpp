@@ -2955,7 +2955,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
             layer.nextn.embed_tokens     = create_tensor(nextn_host_ctx,
                     tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", final_layer),
                     { n_embd, n_vocab },
-                    flags | llama_model_loader::TENSOR_NOT_REQUIRED);
+                    flags | llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP);
             layer.nextn.enorm            = create_tensor(nextn_ctx,
                     tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer),
                     { n_embd },
