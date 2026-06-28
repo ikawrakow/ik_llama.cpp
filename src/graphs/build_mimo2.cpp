@@ -17,6 +17,7 @@ ggml_cgraph * llm_build_context::build_mimo2() {
     // inp_pos - contains the positions
     struct ggml_tensor * inp_pos = build_inp_pos();
     struct ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+    const bool needs_dflash_full_final_rows = lctx.dflash.capture != nullptr;
 
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
@@ -26,8 +27,11 @@ ggml_cgraph * llm_build_context::build_mimo2() {
         const bool is_sliding = model.hparams.swa_layers[il];
         auto KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
+        const bool is_final_layer = il == n_layer - 1;
+        struct ggml_tensor * attn_out_ids = is_final_layer && !needs_dflash_full_final_rows ? inp_out_ids : nullptr;
+
         cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
-                inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
+                inp_pos, attn_out_ids, nullptr,
                 KQ_mask_l, model.layers[il].attn_sinks,
                 nullptr, 1.0f/sqrtf(float(n_embd_head_k)), 0.0f, is_sliding ? hparams.n_swa : 0, il, true, false, true);
 
@@ -60,6 +64,11 @@ ggml_cgraph * llm_build_context::build_mimo2() {
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
+        if (is_final_layer && needs_dflash_full_final_rows && inp_out_ids != nullptr) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+            cb(cur, "l_out_selected", il);
+        }
+
         // input for next layer
         inpL = cur;
     }
@@ -73,4 +82,3 @@ ggml_cgraph * llm_build_context::build_mimo2() {
 
     return gf;
 }
-
