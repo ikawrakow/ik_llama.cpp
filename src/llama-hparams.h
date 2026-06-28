@@ -145,6 +145,7 @@ struct llama_hparams {
     uint32_t dflash_n_target_features = 0;
     uint32_t dflash_n_target_layers = 0;
     uint32_t dflash_target_layer_ids[8] = {};
+    float    dflash_backbone_rotary_base = 0.0f;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141

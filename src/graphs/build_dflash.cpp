@@ -44,8 +44,10 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
         ggml_tensor * Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx_proj, n_embd_head_k, n_head_kv, update_rows);
         Kcur_ctx = llm_build_norm(ctx0, Kcur_ctx, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(Kcur_ctx, "dflash_kv_k_norm", il);
+        const float target_freq_base = hparams.dflash_backbone_rotary_base > 0.0f
+            ? hparams.dflash_backbone_rotary_base : freq_base;
         Kcur_ctx = ggml_rope_ext(ctx0, Kcur_ctx, lctx.dflash.kv.cache_input_pos_ctx, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                n_rot, rope_type, n_ctx_orig, target_freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Kcur_ctx, "dflash_kv_k_rope", il);
         Kcur_ctx = ggml_cont(ctx0, ggml_permute(ctx0, Kcur_ctx, 0, 2, 1, 3));

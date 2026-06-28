@@ -165,6 +165,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DFLASH_MASK_TOKEN_ID,              "%s.dflash.mask_token_id"              },
     { LLM_KV_DFLASH_TARGET_LAYER_IDS,           "%s.dflash.target_layer_ids"           },
     { LLM_KV_DFLASH_N_TARGET_FEATURES,          "%s.dflash.n_target_features"          },
+    { LLM_KV_DFLASH_BACKBONE_ROTARY_BASE,       "%s.dflash.backbone_rotary_base"       },
 
     { LLM_KV_ATTENTION_HEAD_COUNT,             "%s.attention.head_count"             },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,          "%s.attention.head_count_kv"          },
