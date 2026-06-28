@@ -53,6 +53,10 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
 
         ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
         cb(Vcur_ctx, "dflash_kv_v_proj", il);
+        if (std::abs(hparams.f_attn_v_scale - 1.0f) > 1e-4f) {
+            Vcur_ctx = ggml_scale(ctx0, Vcur_ctx, hparams.f_attn_v_scale);
+            cb(Vcur_ctx, "dflash_kv_v_scaled", il);
+        }
         Vcur_ctx = ggml_reshape_3d(ctx0, Vcur_ctx, n_embd_head_v, n_head_kv, update_rows);
         Vcur_ctx = ggml_cont(ctx0, ggml_permute(ctx0, Vcur_ctx, 0, 2, 1, 3));
         cb(Vcur_ctx, "dflash_kv_v_physical", il);
@@ -252,6 +256,10 @@ ggml_cgraph * llm_build_context::build_dflash() {
         cb(Kcur_noise, "Kcur_roped", il);
 
         Vcur_noise = ggml_reshape_3d(ctx0, Vcur_noise, n_embd_head_v, n_head_kv, n_tokens);
+        if (std::abs(hparams.f_attn_v_scale - 1.0f) > 1e-4f) {
+            Vcur_noise = ggml_scale(ctx0, Vcur_noise, hparams.f_attn_v_scale);
+            cb(Vcur_noise, "Vcur_noise_scaled", il);
+        }
         cb(Vcur_noise, "Vcur_noise", il);
 
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.k_ctx_cache.size());

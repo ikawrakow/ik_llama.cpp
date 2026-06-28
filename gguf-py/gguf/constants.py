@@ -119,6 +119,7 @@ class Keys:
         SHARED_KV_LAYERS       = "{arch}.attention.shared_kv_layers"
         KEY_LENGTH_SWA         = "{arch}.attention.key_length_swa"
         VALUE_LENGTH_SWA       = "{arch}.attention.value_length_swa"
+        VALUE_SCALE                  = "{arch}.attention.value_scale"
         OUTPUT_SCALE                 = "{arch}.attention.output_scale"
         TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
 

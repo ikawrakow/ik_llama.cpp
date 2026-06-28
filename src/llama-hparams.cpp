@@ -903,6 +903,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_DFLASH_MASK_TOKEN_ID,     hparams.dflash_mask_token_id, false);
                 ml.get_key(LLM_KV_DFLASH_N_TARGET_FEATURES, hparams.dflash_n_target_features, false);
                 load_dflash_target_layer_ids(ml, LLM_KV(model.arch)(LLM_KV_DFLASH_TARGET_LAYER_IDS), hparams, false);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, hparams.f_attn_v_scale, false);
                 // DFlash drafts may be trained with sliding-window attention (for long-context).
                 // Read the window + per-layer pattern so the SWA mask path activates; absent keys
                 // leave n_swa=0 / swa_layers all-zero (dense behavior, unchanged).

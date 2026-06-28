@@ -2447,6 +2447,15 @@ class DFlashDraftModel(Qwen3Model):
         dflash_cfg = self.hparams.get("dflash_config")
         dflash_cfg = dflash_cfg if isinstance(dflash_cfg, dict) else {}
 
+        if (backbone_rotary_base := dflash_cfg.get("backbone_rotary_base")) is not None:
+            self.gguf_writer.add_rope_freq_base(float(backbone_rotary_base))
+            logger.info("DFlashDraftModel: backbone_rotary_base=%s", backbone_rotary_base)
+
+        attention_value_scale = dflash_cfg.get("attention_value_scale", self.hparams.get("attention_value_scale"))
+        if attention_value_scale is not None:
+            self.gguf_writer.add_attention_value_scale(float(attention_value_scale))
+            logger.info("DFlashDraftModel: attention_value_scale=%s", attention_value_scale)
+
         def dflash_required_value(name: str) -> Any:
             if name in dflash_cfg:
                 return dflash_cfg[name]
