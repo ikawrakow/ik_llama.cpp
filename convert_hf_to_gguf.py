@@ -474,6 +474,9 @@ class Model:
                 raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
 
         part_names = sorted({str(part_name) for part_name in weight_map.values()})
+        # Only surface shards that exist on disk; a stale index.json would otherwise set
+        # is_safetensors=True and suppress the pytorch_model*.bin fallback.
+        part_names = [name for name in part_names if (dir_model / name).is_file()]
         return part_names
 
     @staticmethod
