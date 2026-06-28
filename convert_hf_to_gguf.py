@@ -2418,7 +2418,13 @@ class DFlashDraftModel(Qwen3Model):
         super().set_gguf_parameters()
 
         self.gguf_writer.add_causal_attention(False)
-        self.gguf_writer.add_rope_dimension_count(self.hparams.get("head_dim", 128))
+        # MiMo DFlash draft uses partial rotary (partial_rotary_factor=0.5): RoPE is applied to
+        # only head_dim*partial_rotary_factor dims, the rest are NoPE. Honoring it is required;
+        # otherwise the upper half of every head gets spurious position rotation it was never
+        # trained for, which roughly halves draft acceptance.
+        head_dim = self.hparams.get("head_dim", 128)
+        partial_rotary_factor = self.hparams.get("partial_rotary_factor", 1.0)
+        self.gguf_writer.add_rope_dimension_count(int(partial_rotary_factor * head_dim))
 
         rope_scaling = self.hparams.get("rope_scaling")
         if isinstance(rope_scaling, dict):
