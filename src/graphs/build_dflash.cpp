@@ -44,8 +44,10 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
         ggml_tensor * Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx_proj, n_embd_head_k, n_head_kv, update_rows);
         Kcur_ctx = llm_build_norm(ctx0, Kcur_ctx, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(Kcur_ctx, "dflash_kv_k_norm", il);
+        const float target_freq_base = hparams.dflash_backbone_rotary_base > 0.0f
+            ? hparams.dflash_backbone_rotary_base : freq_base;
         Kcur_ctx = ggml_rope_ext(ctx0, Kcur_ctx, lctx.dflash.kv.cache_input_pos_ctx, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                n_rot, rope_type, n_ctx_orig, target_freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Kcur_ctx, "dflash_kv_k_rope", il);
         Kcur_ctx = ggml_cont(ctx0, ggml_permute(ctx0, Kcur_ctx, 0, 2, 1, 3));
@@ -53,6 +55,10 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
 
         ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
         cb(Vcur_ctx, "dflash_kv_v_proj", il);
+        if (std::abs(hparams.f_attn_v_scale - 1.0f) > 1e-4f) {
+            Vcur_ctx = ggml_scale(ctx0, Vcur_ctx, hparams.f_attn_v_scale);
+            cb(Vcur_ctx, "dflash_kv_v_scaled", il);
+        }
         Vcur_ctx = ggml_reshape_3d(ctx0, Vcur_ctx, n_embd_head_v, n_head_kv, update_rows);
         Vcur_ctx = ggml_cont(ctx0, ggml_permute(ctx0, Vcur_ctx, 0, 2, 1, 3));
         cb(Vcur_ctx, "dflash_kv_v_physical", il);
@@ -252,6 +258,10 @@ ggml_cgraph * llm_build_context::build_dflash() {
         cb(Kcur_noise, "Kcur_roped", il);
 
         Vcur_noise = ggml_reshape_3d(ctx0, Vcur_noise, n_embd_head_v, n_head_kv, n_tokens);
+        if (std::abs(hparams.f_attn_v_scale - 1.0f) > 1e-4f) {
+            Vcur_noise = ggml_scale(ctx0, Vcur_noise, hparams.f_attn_v_scale);
+            cb(Vcur_noise, "Vcur_noise_scaled", il);
+        }
         cb(Vcur_noise, "Vcur_noise", il);
 
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.k_ctx_cache.size());
@@ -313,6 +323,9 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, dflash_kq_mask_l, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        if (model.layers[il].attn_sinks) {
+            ggml_flash_attn_ext_add_sinks(cur, model.layers[il].attn_sinks);
+        }
         cb(cur, "flash_attn", il);
         ggml_build_forward_expand(gf, cur);
         // Somethiong goes wrong with thisi optimization.

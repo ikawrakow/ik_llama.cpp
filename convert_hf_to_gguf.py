@@ -85,9 +85,13 @@ class Model:
         self.use_temp_file = use_temp_file
         self.lazy = not eager
         self.part_names = Model.get_model_part_names(self.dir_model, "model", ".safetensors")
+        if len(self.part_names) == 0:
+            self.part_names = Model.get_model_part_names_from_weight_map(self.dir_model, "model.safetensors.index.json")
         self.is_safetensors = len(self.part_names) > 0
         if not self.is_safetensors:
             self.part_names = Model.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
+            if len(self.part_names) == 0:
+                self.part_names = Model.get_model_part_names_from_weight_map(self.dir_model, "pytorch_model.bin.index.json")
         self.hparams = Model.load_hparams(self.dir_model)
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -455,6 +459,24 @@ class Model:
 
         part_names.sort()
 
+        return part_names
+
+    @staticmethod
+    def get_model_part_names_from_weight_map(dir_model: Path, index_name: str) -> list[str]:
+        index_path = dir_model / index_name
+        if not index_path.exists():
+            return []
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index: dict[str, Any] = json.load(f)
+            weight_map = index.get("weight_map")
+            if weight_map is None or not isinstance(weight_map, dict):
+                raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
+
+        part_names = sorted({str(part_name) for part_name in weight_map.values()})
+        # Only surface shards that exist on disk; a stale index.json would otherwise set
+        # is_safetensors=True and suppress the pytorch_model*.bin fallback.
+        part_names = [name for name in part_names if (dir_model / name).is_file()]
         return part_names
 
     @staticmethod
@@ -2399,7 +2421,13 @@ class DFlashDraftModel(Qwen3Model):
         super().set_gguf_parameters()
 
         self.gguf_writer.add_causal_attention(False)
-        self.gguf_writer.add_rope_dimension_count(self.hparams.get("head_dim", 128))
+        # MiMo DFlash draft uses partial rotary (partial_rotary_factor=0.5): RoPE is applied to
+        # only head_dim*partial_rotary_factor dims, the rest are NoPE. Honoring it is required;
+        # otherwise the upper half of every head gets spurious position rotation it was never
+        # trained for, which roughly halves draft acceptance.
+        head_dim = self.hparams.get("head_dim", 128)
+        partial_rotary_factor = self.hparams.get("partial_rotary_factor", 1.0)
+        self.gguf_writer.add_rope_dimension_count(int(partial_rotary_factor * head_dim))
 
         rope_scaling = self.hparams.get("rope_scaling")
         if isinstance(rope_scaling, dict):
@@ -2427,6 +2455,15 @@ class DFlashDraftModel(Qwen3Model):
         arch = self.gguf_writer.arch
         dflash_cfg = self.hparams.get("dflash_config")
         dflash_cfg = dflash_cfg if isinstance(dflash_cfg, dict) else {}
+
+        if (backbone_rotary_base := dflash_cfg.get("backbone_rotary_base")) is not None:
+            self.gguf_writer.add_float32(f"{arch}.dflash.backbone_rotary_base", float(backbone_rotary_base))
+            logger.info("DFlashDraftModel: backbone_rotary_base=%s", backbone_rotary_base)
+
+        attention_value_scale = dflash_cfg.get("attention_value_scale", self.hparams.get("attention_value_scale"))
+        if attention_value_scale is not None:
+            self.gguf_writer.add_attention_value_scale(float(attention_value_scale))
+            logger.info("DFlashDraftModel: attention_value_scale=%s", attention_value_scale)
 
         def dflash_required_value(name: str) -> Any:
             if name in dflash_cfg:
@@ -2484,6 +2521,10 @@ class DFlashDraftModel(Qwen3Model):
         # all-SWA only when it is absent. Absent/false use_sliding_window => dense draft (unchanged).
         use_sliding_window = self.hparams.get("use_sliding_window")
         sliding_window = self.hparams.get("sliding_window")
+        if use_sliding_window is None and "use_swa" in dflash_cfg:
+            use_sliding_window = bool(dflash_cfg["use_swa"])
+        if sliding_window is None and "swa_window_size" in dflash_cfg:
+            sliding_window = int(dflash_cfg["swa_window_size"])
         if use_sliding_window and sliding_window:
             n_swa_layers = int(self.hparams.get("num_hidden_layers", self.block_count))
             layer_types = self.hparams.get("layer_types")
@@ -2505,6 +2546,15 @@ class DFlashDraftModel(Qwen3Model):
 
     def prepare_tensors(self):
         super().prepare_tensors()
+
+        if sum(len(tensors) for tensors in self.gguf_writer.tensors) == 0:
+            raise ValueError(
+                "DFlashDraftModel conversion did not find any tensors. "
+                "DFlash drafts may share target token_embd/output tensors, but the draft "
+                "model must still provide its own block weights. Make sure the draft "
+                "directory contains downloaded model weights that this converter can discover, "
+                "such as model*.safetensors or pytorch_model*.bin; a metadata-only GGUF is not usable."
+            )
 
         if self._saw_output and not self._saw_token_embd:
             raise ValueError(
@@ -2533,6 +2583,10 @@ class DFlashDraftModel(Qwen3Model):
             return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_FC]}.weight", data_torch)]
         if top_level_name == "hidden_norm.weight":
             return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DFLASH_HIDDEN_NORM]}.weight", data_torch)]
+        if top_level_name.endswith(".self_attn.attention_sink_bias"):
+            if bid is None:
+                raise ValueError(f"DFlashDraftModel: can not infer block id for tensor {name!r}")
+            return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.ATTN_SINKS].format(bid=bid)}.weight", data_torch)]
         if name == "norm.weight":
             name = "model.norm.weight"
         elif name.startswith("layers."):
