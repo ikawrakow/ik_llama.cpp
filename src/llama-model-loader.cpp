@@ -1067,16 +1067,16 @@ bool llama_model_loader::load_all_data(
     std::vector<no_init<uint8_t>> read_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 
+    // Number of worker threads for cuda and host tensor loading.
+    const int n_workers = 8;
+
 #if defined(GGML_USE_CUDA)
-    // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
-    // NVMe raid configurations might require more / larger buffers.
-    constexpr size_t n_buffers = 4;
-    constexpr size_t buffer_size = 1 * 1024 * 1024; // 1MB
+    // One pinned staging buffer per worker for async uploads
+    constexpr size_t buffer_size = 16 * 1024 * 1024; // 16MB
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<void*> host_ptrs;
     std::vector<ggml_backend_event_t> events;
-    size_t buffer_idx = 0; // buffer to use for async loads
 
     ggml_backend_t cuda_backend = nullptr;
     if (!use_mmap && !check_tensors) {
@@ -1096,11 +1096,14 @@ bool llama_model_loader::load_all_data(
 
         // If the cuda backend is active create pinned memory buffers and events for synchronisation.
         if (cuda_backend) {
-            for (size_t idx = 0; idx < n_buffers; ++idx) {
+            for (size_t idx = 0; idx < (size_t)n_workers; ++idx) {
                 host_buffers.emplace_back(ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), buffer_size));
                 host_ptrs.emplace_back(ggml_backend_buffer_get_base(host_buffers[idx]));
                 events.emplace_back(ggml_backend_event_new(cuda_backend));
             }
+            // Force creation of the upload stream now
+            ggml_backend_event_record(events[0]);
+            ggml_backend_event_synchronize(events[0]);
         }
     }
 #endif
@@ -1113,9 +1116,9 @@ bool llama_model_loader::load_all_data(
     // Load model weights into a backing buffer:
     // * mmap: host page cache        Serial
     // * host: system ram             Parallel
-    // * cuda: GPU                    Serial
+    // * cuda: GPU                    Parallel
     // * rest: All other backends,    Serial
-    auto load_tensor = [&](ggml_tensor * cur) -> size_t {
+    auto load_tensor = [&](ggml_tensor * cur, [[maybe_unused]] int thread_idx) -> size_t {
         const auto * weight = get_weight(ggml_get_name(cur));
         GGML_ASSERT(weight != nullptr);
         GGML_ASSERT(weight->idx < files.size());
@@ -1168,11 +1171,10 @@ bool llama_model_loader::load_all_data(
             return n_size;
         }
 
-        // cuda. Serialized
+        // cuda. Parallel
 #if defined(GGML_USE_CUDA)
         // If cuda_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
         if (cuda_backend) {
-            std::lock_guard<std::mutex> lock(load_mutex);
             file->seek(weight->offs, SEEK_SET);
 
             size_t bytes_read = 0;
@@ -1180,14 +1182,12 @@ bool llama_model_loader::load_all_data(
             while (bytes_read < n_size) {
                 size_t read_iteration = std::min<size_t>(buffer_size, n_size - bytes_read);
 
-                ggml_backend_event_synchronize(events[buffer_idx]);
-                file->read_raw(host_ptrs[buffer_idx], read_iteration);
-                ggml_backend_tensor_set_async(cuda_backend, cur, host_ptrs[buffer_idx], bytes_read, read_iteration);
-                ggml_backend_event_record(events[buffer_idx]);
+                ggml_backend_event_synchronize(events[thread_idx]);
+                file->read_raw(host_ptrs[thread_idx], read_iteration);
+                ggml_backend_tensor_set_async(cuda_backend, cur, host_ptrs[thread_idx], bytes_read, read_iteration);
+                ggml_backend_event_record(events[thread_idx]);
 
                 bytes_read += read_iteration;
-                ++buffer_idx;
-                buffer_idx %= n_buffers;
             }
             return n_size;
         }
@@ -1236,7 +1236,7 @@ bool llama_model_loader::load_all_data(
     std::exception_ptr   first_exception;
 
     // threadpool worker.
-    auto worker = [&]() {
+    auto worker = [&](int thread_idx) {
         try {
             while (!cancelled.load() && !failed.load()) {
                 if (progress_callback) {
@@ -1251,7 +1251,7 @@ bool llama_model_loader::load_all_data(
                 if (!cur) {
                     break;
                 }
-                const size_t n_size = load_tensor(cur);
+                const size_t n_size = load_tensor(cur, thread_idx);
                 loaded.fetch_add(n_size, std::memory_order_relaxed);
             }
         } catch (...) {
@@ -1262,13 +1262,9 @@ bool llama_model_loader::load_all_data(
         }
     };
 
-    // Number of threads used to keep host-mapped reads disk-limited.
-    // For all other backend buffer types, loading is single threaded
-    // which is controlled by `load_mutex`
-    const int n_workers = 8;
     std::vector<std::thread> pool;
-    for (int i = 0; i < n_workers; ++i) {
-        pool.emplace_back(worker);
+    for (int thread_idx = 0; thread_idx < n_workers; ++thread_idx) {
+        pool.emplace_back(worker, thread_idx);
     }
     for (auto & t : pool) {
         t.join();
@@ -1285,7 +1281,7 @@ bool llama_model_loader::load_all_data(
 #if defined(GGML_USE_CUDA)
     // free temporary resources used for async cuda uploads
     if (cuda_backend) {
-        for (size_t idx = 0; idx < n_buffers;++idx) {
+        for (size_t idx = 0; idx < (size_t)n_workers;++idx) {
             ggml_backend_event_synchronize(events[idx]);
             ggml_backend_event_free(events[idx]);
             ggml_backend_buffer_free(host_buffers[idx]);
