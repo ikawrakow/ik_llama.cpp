@@ -2506,6 +2506,15 @@ class DFlashDraftModel(Qwen3Model):
     def prepare_tensors(self):
         super().prepare_tensors()
 
+        if sum(len(tensors) for tensors in self.gguf_writer.tensors) == 0:
+            raise ValueError(
+                "DFlashDraftModel conversion did not find any tensors. "
+                "DFlash drafts may share target token_embd/output tensors, but the draft "
+                "model must still provide its own block weights. Make sure the draft "
+                "directory contains downloaded model weights that this converter can discover, "
+                "such as model*.safetensors or pytorch_model*.bin; a metadata-only GGUF is not usable."
+            )
+
         if self._saw_output and not self._saw_token_embd:
             raise ValueError(
                 "DFlashDraftModel conversion requires token_embd.weight when output.weight is present"
