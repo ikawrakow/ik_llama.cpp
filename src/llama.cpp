@@ -3379,6 +3379,7 @@ static bool llm_load_tensors(
         bool mtp,
         bool fit,
         bool dry_run,
+        bool split_output_tensor,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -4144,6 +4145,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
+        model.split_output_tensor = params.split_output_tensor;
 
         model.mtp = params.mtp;
 
@@ -4206,6 +4208,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.fit_margin_array,
             params.worst_graph_tokens, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
+            params.split_output_tensor,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -6481,6 +6484,7 @@ struct llama_model_params llama_model_default_params() {
         /*.merge_up_gate_exps          =*/ false,
         /*.mtp                         =*/ false,
         /*.dry_run                     =*/ false,
+        /*.split_output_tensor         =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
     };
