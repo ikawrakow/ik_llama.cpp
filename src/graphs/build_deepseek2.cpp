@@ -489,6 +489,10 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
 
     // add base causal mask over the n_kv keys: first n_tokens query columns of KQ_mask {n_kv, n_tokens_pad}.
     ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+    // Under -fa 1 the dense KQ_mask is F16; CPU ggml_add only supports F32+F16 when src0 is F16,
+    // not F32(score)+F16(mask) (it aborts). Cast the causal mask view to F32 so the add is valid on
+    // CPU. (CUDA add accepts mixed types, so this only bit the CPU build.)
+    if (causal->type != GGML_TYPE_F32) causal = ggml_cast(ctx0, ggml_cont(ctx0, causal), GGML_TYPE_F32);
     indexer_score = ggml_add(ctx0, indexer_score, causal);
     cb(indexer_score, "dsa_indexer_score_masked", il);
 
@@ -594,6 +598,8 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
 
     // add base causal mask (first n_tok query columns) so future/padding keys stay masked
     ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv_local, n_tok, KQ_mask->nb[1], 0);
+    // see note in build_deepseek2_dsa_indexer: cast F16 (-fa 1) mask to F32 for the CPU add.
+    if (causal->type != GGML_TYPE_F32) causal = ggml_cast(ctx0, ggml_cont(ctx0, causal), GGML_TYPE_F32);
     sparse = ggml_add(ctx0, sparse, causal);
     cb(sparse, "dsa_sparse_mask", -1);
 
@@ -618,16 +624,19 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_fa_mask(
 
     GGML_ASSERT(KQ_mask->type == GGML_TYPE_F16 && "FA dense KQ_mask expected F16 on -fa 1");
 
-    ggml_tensor * sparse_f16 = ggml_cast(ctx0, sparse, GGML_TYPE_F16);   // {n_kv, n_tok} F16
-
     ggml_tensor * fa_mask;
     if (n_pad > n_tok) {
-        // dense padding rows: KQ_mask columns [n_tok, n_pad) -> {n_kv, n_pad - n_tok} F16
+        // dense padding rows: KQ_mask columns [n_tok, n_pad) -> {n_kv, n_pad - n_tok} (F16 view)
         ggml_tensor * pad = ggml_view_2d(ctx0, KQ_mask, n_kv_local, n_pad - n_tok,
                 KQ_mask->nb[1], KQ_mask->nb[1] * n_tok);
-        fa_mask = ggml_concat(ctx0, sparse_f16, ggml_cont(ctx0, pad), 1); // {n_kv, n_pad} F16
+        // CPU ggml_concat only supports F16 along dim 0 (concat_any); the dim-1 row concat must be
+        // done in F32 (concat_f32 handles all dims), then cast the padded result to F16. On CUDA the
+        // F16 dim-1 concat is supported, so this path only needed adapting for the CPU build.
+        ggml_tensor * pad_f32 = ggml_cast(ctx0, ggml_cont(ctx0, pad), GGML_TYPE_F32);
+        ggml_tensor * fa_f32  = ggml_concat(ctx0, sparse, pad_f32, 1);    // {n_kv, n_pad} F32
+        fa_mask = ggml_cast(ctx0, fa_f32, GGML_TYPE_F16);                 // {n_kv, n_pad} F16
     } else {
-        fa_mask = sparse_f16;
+        fa_mask = ggml_cast(ctx0, sparse, GGML_TYPE_F16);
     }
     fa_mask = ggml_cont(ctx0, fa_mask);
     cb(fa_mask, "dsa_fa_mask", -1);
