@@ -3539,7 +3539,15 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rbegin(),
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
-                    return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                    // For recurrent/hybrid models (Gated DeltaNet, qwen3next, Mamba),
+                    // llama_kv_cache_seq_pos_min returns the full sequence length, so
+                    // `cur.pos_min < pos_min_thold` is always false. Add a second
+                    // condition matching ggml-org/llama.cpp PR for this case: a
+                    // checkpoint is usable if its captured KV range ends at or before
+                    // the rewind target (pos_next). For dense transformer models the
+                    // original conditions still trip first, so no regression.
+                    return cur.pos_min < pos_min_thold || cur.pos_min == 0
+                        || cur.pos_max <= pos_next;
                 }
             );
 
@@ -3645,7 +3653,13 @@ bool server_context::create_checkpoint(server_slot & slot) {
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
 
     // no need for empty or small checkpoints
-    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.cache_tokens.n_tokens() >= 64);
+    // For recurrent/hybrid architectures, follow-up prompts after a short prior
+    // turn can have very few new tokens, but a checkpoint is still required to
+    // avoid full re-processing on the next request. Lower the threshold for
+    // those architectures so checkpoints survive short turns.
+    const bool is_recurrent = llama_model_has_recurrent(llama_get_model(slot.ctx));
+    const int min_ckpt_tokens = is_recurrent ? 4 : 64;
+    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.cache_tokens.n_tokens() >= min_ckpt_tokens);
 
     // no need to create checkpoints that are too close together
     do_checkpoint = do_checkpoint && (slot.server_cached_prompt.checkpoints.empty() || slot.cache_tokens.n_tokens() > slot.server_cached_prompt.checkpoints.back().n_tokens);
