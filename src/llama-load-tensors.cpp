@@ -182,10 +182,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     inline ggml_context * ctx_for_layer_split(int i, bool force_split = false) const {
         const bool is_mtp_layer = model.hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= model.hparams.n_layer - model.hparams.nextn_predict_layers;
-        if (is_mtp_layer && !force_split && model.arch != LLM_ARCH_GLM4_MOE) {
-            return ctx_map.at(model.buft_layer[i].buft);
-        }
-        return ctx_map.at(model.buft_layer[i].buft_matrix);
+        return is_mtp_layer && !force_split ? ctx_map.at(model.buft_layer[i].buft) : ctx_map.at(model.buft_layer[i].buft_matrix);
     }
 
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
