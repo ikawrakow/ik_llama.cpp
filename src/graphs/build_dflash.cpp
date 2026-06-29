@@ -39,6 +39,7 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.v_ctx_cache.size());
 
         ggml_tensor * Kcur_ctx_proj = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, fused_target);
+        if (model.layers[il].bk) { Kcur_ctx_proj = ggml_add(ctx0, Kcur_ctx_proj, model.layers[il].bk); }
         cb(Kcur_ctx_proj, "dflash_kv_k_proj", il);
 
         ggml_tensor * Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx_proj, n_embd_head_k, n_head_kv, update_rows);
@@ -54,6 +55,7 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
         cb(Kcur_ctx, "dflash_kv_k_physical", il);
 
         ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
+        if (model.layers[il].bv) { Vcur_ctx = ggml_add(ctx0, Vcur_ctx, model.layers[il].bv); }
         cb(Vcur_ctx, "dflash_kv_v_proj", il);
         if (std::abs(hparams.f_attn_v_scale - 1.0f) > 1e-4f) {
             Vcur_ctx = ggml_scale(ctx0, Vcur_ctx, hparams.f_attn_v_scale);
@@ -234,6 +236,9 @@ ggml_cgraph * llm_build_context::build_dflash() {
         ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
         ggml_tensor * Kcur_noise = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
         ggml_tensor * Vcur_noise = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+        if (model.layers[il].bq) { Qcur       = ggml_add(ctx0, Qcur,       model.layers[il].bq); }
+        if (model.layers[il].bk) { Kcur_noise = ggml_add(ctx0, Kcur_noise, model.layers[il].bk); }
+        if (model.layers[il].bv) { Vcur_noise = ggml_add(ctx0, Vcur_noise, model.layers[il].bv); }
         cb(Qcur, "Qcur", il);
         cb(Kcur_noise, "Kcur_noise", il);
         cb(Vcur_noise, "Vcur_noise", il);
@@ -251,7 +256,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
         Kcur_noise = ggml_reshape_3d(ctx0, Kcur_noise, n_embd_head_k, n_head_kv, n_tokens);
         Kcur_noise = llm_build_norm(ctx0, Kcur_noise, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
-        cb(Qcur, "Kcur_normed", il);
+        cb(Kcur_noise, "Kcur_normed", il);
         Kcur_noise = ggml_rope_ext(ctx0, Kcur_noise, inp_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
@@ -338,6 +343,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
         cb(cur, "flash_attn_reshaped", il);
 
         cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+        if (model.layers[il].bo) { cur = ggml_add(ctx0, cur, model.layers[il].bo); }
         cb(cur, "kqv_out", il);
 
         cur = ggml_add(ctx0, cur, inpSA);
