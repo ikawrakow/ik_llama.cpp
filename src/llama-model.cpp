@@ -857,6 +857,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_ATTN_K,               "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_K_NORM,          "blk.%d.attn_k_norm" },
             { LLM_TENSOR_ATTN_V,               "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_SINKS,           "blk.%d.attn_sinks" },
             { LLM_TENSOR_ATTN_OUT,             "blk.%d.attn_output" },
             { LLM_TENSOR_ATTN_POST_NORM,       "blk.%d.post_attention_norm" },
             { LLM_TENSOR_FFN_GATE,             "blk.%d.ffn_gate" },

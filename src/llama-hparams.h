@@ -145,6 +145,7 @@ struct llama_hparams {
     uint32_t dflash_n_target_features = 0;
     uint32_t dflash_n_target_layers = 0;
     uint32_t dflash_target_layer_ids[8] = {};
+    float    dflash_backbone_rotary_base = 0.0f;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
@@ -217,6 +218,7 @@ struct llama_hparams {
         if (!is_float_close(this->f_residual_scale,      other.f_residual_scale,      EPSILON)) return true;
         if (!is_float_close(this->f_embedding_scale,     other.f_embedding_scale,     EPSILON)) return true;
         if (!is_float_close(this->f_attention_scale,     other.f_attention_scale,     EPSILON)) return true;
+        if (!is_float_close(this->f_attn_v_scale,        other.f_attn_v_scale,        EPSILON)) return true;
 
         return false;
     }

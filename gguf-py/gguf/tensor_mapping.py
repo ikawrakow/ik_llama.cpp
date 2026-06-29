@@ -423,6 +423,10 @@ class TensorNameMap:
             "model.layers.{bid}.attention.key_layernorm",                     # bailingmoe2
         ),
 
+        MODEL_TENSOR.ATTN_SINKS: (
+            "model.layers.{bid}.self_attn.attention_sink_bias",                # MiMo DFlash
+        ),
+
         MODEL_TENSOR.ROPE_FREQS: (
             "language_model.encoder.layers.{bid}.self_attention.rotary_emb.inv_freq",  # persimmon
         ),
