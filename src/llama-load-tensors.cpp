@@ -2868,7 +2868,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
-        ggml_context * ctx_split = ctx_for_layer_split(i);
+        ggml_context * ctx_split = ctx_for_layer_split(i, true);
 
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
