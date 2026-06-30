@@ -116,7 +116,6 @@ void llm_build_context::init() {
         lctx.inp_pos_bucket    = nullptr;
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
-        lctx.inp_dsa_hadamard  = nullptr;
         lctx.inp_dsa_sink      = nullptr;
         lctx.dflash.inputs.target_features = nullptr;
         lctx.dflash.inputs.pos_ctx = nullptr;
@@ -225,20 +224,14 @@ ggml_cgraph * llm_build_context::build_k_shift() {
         // Hadamard size used by the forward indexer: largest power-of-2 divisor of head_size that
         // spans the full head row (else the forward path skips it). Rebuild the same matrix here so
         // we can un/re-rotate the cached key. Must match build_deepseek2_dsa_indexer exactly.
+        bool do_hadamard = false;
         static const bool dsa_had_disable = getenv("DSA_HADAMARD_DISABLE") != nullptr;
+        if (lctx.cparams.dsa_indexer_hadamard && !dsa_had_disable) {
+            GGML_ASSERT((head_size & ~(head_size-1)) == head_size);
+            do_hadamard = true;
+        }
         int64_t nrot = 1;
         while ((nrot * 2) <= head_size && head_size % (nrot * 2) == 0) nrot *= 2;
-        const bool kr_had = lctx.cparams.dsa_indexer_hadamard && !dsa_had_disable && (nrot == head_size);
-
-        ggml_tensor * kr_hadamard = nullptr;
-        if (kr_had) {
-            // dedicated K-shift Hadamard input (filled in llama_set_k_shift, same construction as
-            // the forward inp_dsa_hadamard). Separate tensor so it lives in the k-shift graph.
-            lctx.inp_dsa_hadamard = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nrot, nrot);
-            cb(lctx.inp_dsa_hadamard, "dsa_hadamard", -1);
-            ggml_set_input(lctx.inp_dsa_hadamard);
-            kr_hadamard = lctx.inp_dsa_hadamard;
-        }
 
         for (int il = 0; il < n_layer; ++il) {
             if ((size_t) il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr) {
@@ -260,8 +253,8 @@ ggml_cgraph * llm_build_context::build_k_shift() {
             cb(kr_f32, "kr_f32", il);
 
             // un-Hadamard: H * kr  ==  concat(RoPE(k_pe,pos), k_nope)  (H symmetric/orthonormal).
-            if (kr_had) {
-                kr_f32 = ggml_mul_mat(ctx0, kr_hadamard, kr_f32);
+            if (do_hadamard) {
+                kr_f32 = ggml_hadamard(ctx0, kr_f32, head_size);
                 cb(kr_f32, "kr_unhad", il);
             }
 
@@ -288,8 +281,8 @@ ggml_cgraph * llm_build_context::build_k_shift() {
 
             // re-Hadamard: H * concat(RoPE(k_pe,pos+delta), k_nope) == the new cached key.
             ggml_tensor * kr_new = kr_cat;
-            if (kr_had) {
-                kr_new = ggml_mul_mat(ctx0, kr_hadamard, kr_cat);
+            if (do_hadamard) {
+                kr_new = ggml_hadamard(ctx0, kr_cat, head_size);
                 cb(kr_new, "kr_rehad", il);
             }
             // write back into the F16 cache.

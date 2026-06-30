@@ -4276,28 +4276,6 @@ static void llama_set_k_shift(llama_context & lctx) {
     for (int i = 0; i < kv_size; ++i) {
         data[i] = lctx.kv_self.cells[i].delta;
     }
-
-    // DSA indexer K-shift also needs the Walsh-Hadamard matrix (to un/re-rotate the cached indexer
-    // keys around the RoPE-delta). Same symmetric orthonormal construction as the forward indexer
-    // (llama_set_inputs / inp_dsa_hadamard). build_k_shift creates inp_dsa_hadamard iff kr_had.
-    if (lctx.inp_dsa_hadamard) {
-        assert(ggml_backend_buffer_is_host(lctx.inp_dsa_hadamard->buffer));
-        const int64_t n = lctx.inp_dsa_hadamard->ne[0];
-        GGML_ASSERT(lctx.inp_dsa_hadamard->ne[1] == n);
-        std::vector<float> h((size_t)n*n, 0.0f);
-        h[0] = 1.0f / sqrtf((float) n);
-        for (int64_t s = 1; s < n; s *= 2) {
-            for (int64_t i = 0; i < s; i++) {
-                for (int64_t j = 0; j < s; j++) {
-                    const float val = h[i*n + j];
-                    h[(i + s)*n + (j    )] =  val;
-                    h[(i    )*n + (j + s)] =  val;
-                    h[(i + s)*n + (j + s)] = -val;
-                }
-            }
-        }
-        ggml_backend_tensor_set(lctx.inp_dsa_hadamard, h.data(), 0, ggml_nbytes(lctx.inp_dsa_hadamard));
-    }
 }
 
 static void llama_set_s_copy(llama_context & lctx) {
@@ -4344,26 +4322,6 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     const auto & hparams = lctx.model.hparams;
     const auto & cparams = lctx.cparams;
     const auto & kv_self = lctx.kv_self;
-
-    if (lctx.inp_dsa_hadamard) {
-        // Walsh-Hadamard orthonormal rotation matrix for the DSA lightning indexer.
-        // res^2 == I; applied to indexer q and k (score-preserving, improves cached-K precision).
-        const int64_t n = lctx.inp_dsa_hadamard->ne[0];
-        GGML_ASSERT(lctx.inp_dsa_hadamard->ne[1] == n);
-        std::vector<float> h((size_t)n*n, 0.0f);
-        h[0] = 1.0f / sqrtf((float) n);
-        for (int64_t s = 1; s < n; s *= 2) {
-            for (int64_t i = 0; i < s; i++) {
-                for (int64_t j = 0; j < s; j++) {
-                    const float val = h[i*n + j];
-                    h[(i + s)*n + (j    )] =  val;
-                    h[(i    )*n + (j + s)] =  val;
-                    h[(i + s)*n + (j + s)] = -val;
-                }
-            }
-        }
-        ggml_backend_tensor_set(lctx.inp_dsa_hadamard, h.data(), 0, ggml_nbytes(lctx.inp_dsa_hadamard));
-    }
 
     if (lctx.inp_dsa_sink) {
         // Per-sequence attention-sink boost for the DSA lightning indexer top-k selection.

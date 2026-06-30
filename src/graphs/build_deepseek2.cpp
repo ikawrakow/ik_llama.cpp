@@ -406,22 +406,9 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     // DSA_HADAMARD_DISABLE: DEBUG-ONLY env knob (no CLI surface). Default = rotation enabled.
     static const bool dsa_had_disable = getenv("DSA_HADAMARD_DISABLE") != nullptr;
     if (lctx.cparams.dsa_indexer_hadamard && !dsa_had_disable) {
-        int64_t nrot = 1;
-        while ((nrot * 2) <= head_size && head_size % (nrot * 2) == 0) {
-            nrot *= 2;
-        }
-        if (nrot == head_size) { // only apply when the rotation spans a full head row
-            if (!lctx.inp_dsa_hadamard) {
-                lctx.inp_dsa_hadamard = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nrot, nrot);
-                cb(lctx.inp_dsa_hadamard, "dsa_hadamard", -1);
-                ggml_set_input(lctx.inp_dsa_hadamard);
-            }
-            // q: {head_size, n_ihead, n_tokens} ; k: {head_size, 1, n_tokens}. mul_mat rotates dim0.
-            indexer_q = ggml_mul_mat(ctx0, lctx.inp_dsa_hadamard, ggml_cont(ctx0, indexer_q));
-            indexer_k = ggml_mul_mat(ctx0, lctx.inp_dsa_hadamard, ggml_cont(ctx0, indexer_k));
-            cb(indexer_q, "dsa_indexer_q_had", il);
-            cb(indexer_k, "dsa_indexer_k_had", il);
-        }
+        GGML_ASSERT((head_size & ~(head_size - 1)) == head_size);
+        indexer_q = ggml_hadamard(ctx0, indexer_q, head_size);
+        indexer_k = ggml_hadamard(ctx0, indexer_k, head_size);
     }
 
     // ---- write the batch's indexer keys into the persistent indexer-key cache at kv_head ----
@@ -463,38 +450,56 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
 
     // ---- scores ----
     // indexer_q : {head_size, n_ihead, n_tokens} -> {head_size, n_tokens, n_ihead}
-    indexer_q = ggml_cont(ctx0, ggml_permute(ctx0, indexer_q, 0, 2, 1, 3));
+    //indexer_q = ggml_cont(ctx0, ggml_permute(ctx0, indexer_q, 0, 2, 1, 3));
     // cached_k : {head_size, n_kv} -> {head_size, n_kv, 1}; broadcasts over q's n_ihead dim.
     ggml_tensor * indexer_k_b = ggml_reshape_3d(ctx0, cached_k, head_size, n_kv, 1);
 
-    // {n_kv(keys), n_tokens(q), n_ihead}  (k's head dim broadcasts over n_ihead)
-    ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k_b, indexer_q);
-    cb(indexer_kq, "dsa_indexer_kq", il);
+    ggml_tensor * indexer_score = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+    if (indexer_score->type != GGML_TYPE_F32) {
+        indexer_score = ggml_cast(ctx0, indexer_score, GGML_TYPE_F32);
+    }
+    for (int head = 0; head < n_ihead; ++head) {
+        // [head_size, n_tokens]
+        auto q = ggml_view_2d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[2], indexer_q->nb[2], indexer_q->nb[1]*head);
+        // [n_kv, n_tokens]
+        auto kq = ggml_mul_mat(ctx0, indexer_k_b, q);
+        // [n_kv, n_tokens]
+        kq = ggml_relu(ctx0, kq);
+        // [1, n_tokens]
+        auto w  = ggml_cont(ctx0, ggml_view_2d(ctx0, indexer_weights, 1, indexer_weights->ne[1], indexer_weights->nb[1], indexer_weights->nb[0]*head));
+        // [n_kv, n_tokens]
+        auto score = ggml_mul(ctx0, kq, w);
+        indexer_score = ggml_add(ctx0, indexer_score, score);
+    }
 
-    // -> {n_ihead, n_tokens(q), n_kv(keys)} for per-head weighting
-    indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
+    //// {n_kv(keys), n_tokens(q), n_ihead}  (k's head dim broadcasts over n_ihead)
+    //ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k_b, indexer_q);
+    //cb(indexer_kq, "dsa_indexer_kq", il);
 
-    ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
+    //// -> {n_ihead, n_tokens(q), n_kv(keys)} for per-head weighting
+    //indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
 
-    // weights {n_ihead, n_tokens} -> {n_ihead, n_tokens, 1} broadcast over keys
-    indexer_weights = ggml_reshape_3d(ctx0, indexer_weights, n_ihead, n_tokens, 1);
-    indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
+    //ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
 
-    // sum over heads -> {1, n_tokens(q), n_kv(keys)}
-    indexer_score = ggml_sum_rows(ctx0, indexer_score);
+    //// weights {n_ihead, n_tokens} -> {n_ihead, n_tokens, 1} broadcast over keys
+    //indexer_weights = ggml_reshape_3d(ctx0, indexer_weights, n_ihead, n_tokens, 1);
+    //indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
 
-    // -> {n_kv(keys), n_tokens(q), 1}
-    indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
-    cb(indexer_score, "dsa_indexer_score", il);
+    //// sum over heads -> {1, n_tokens(q), n_kv(keys)}
+    //indexer_score = ggml_sum_rows(ctx0, indexer_score);
 
-    // add base causal mask over the n_kv keys: first n_tokens query columns of KQ_mask {n_kv, n_tokens_pad}.
-    ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
-    // Under -fa 1 the dense KQ_mask is F16; CPU ggml_add only supports F32+F16 when src0 is F16,
-    // not F32(score)+F16(mask) (it aborts). Cast the causal mask view to F32 so the add is valid on
-    // CPU. (CUDA add accepts mixed types, so this only bit the CPU build.)
-    if (causal->type != GGML_TYPE_F32) causal = ggml_cast(ctx0, ggml_cont(ctx0, causal), GGML_TYPE_F32);
-    indexer_score = ggml_add(ctx0, indexer_score, causal);
-    cb(indexer_score, "dsa_indexer_score_masked", il);
+    //// -> {n_kv(keys), n_tokens(q), 1}
+    //indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
+    //cb(indexer_score, "dsa_indexer_score", il);
+
+    //// add base causal mask over the n_kv keys: first n_tokens query columns of KQ_mask {n_kv, n_tokens_pad}.
+    //ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+    //// Under -fa 1 the dense KQ_mask is F16; CPU ggml_add only supports F32+F16 when src0 is F16,
+    //// not F32(score)+F16(mask) (it aborts). Cast the causal mask view to F32 so the add is valid on
+    //// CPU. (CUDA add accepts mixed types, so this only bit the CPU build.)
+    //if (causal->type != GGML_TYPE_F32) causal = ggml_cast(ctx0, ggml_cont(ctx0, causal), GGML_TYPE_F32);
+    //indexer_score = ggml_add(ctx0, indexer_score, causal);
+    //cb(indexer_score, "dsa_indexer_score_masked", il);
 
     // Attention-sink force-inclusion: add a finite positive boost to each query's OWN SEQUENCE's
     // first n_sink present tokens so the sink token(s) always survive the top-k selection. Masking
@@ -535,7 +540,8 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     // into EVERY key slot keyed by its rank, which avoids relying on ggml_set_rows preserving an
     // uninitialized base for partially-written destinations (a CUDA in-place quirk that corrupted
     // decode when n_kv > top_k).
-    ggml_tensor * sorted = ggml_cont(ctx0, ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC));
+    //ggml_tensor * sorted = ggml_cont(ctx0, ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC));
+    ggml_tensor * sorted = ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC);
     cb(sorted, "dsa_sorted", il);
 
     return sorted;
