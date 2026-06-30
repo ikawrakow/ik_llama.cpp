@@ -458,7 +458,7 @@ void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_to
 
 void server_slot::reset() {
     n_prompt_tokens = 0;
-    last_gentxt_size = 0;
+    last_gentxt_len = 0;
     generated_text = "";
     truncated = false;
     stopped_eos = false;
@@ -1865,7 +1865,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
 
-            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, exitword.length() });
+            slot.ctx_sampling->elb_states.push_back({ { }, { }, exitword, 0, 0, 0, "", 0, SSIZE(exitword), 0 });
 
             auto& first_tokens = slot.ctx_sampling->elb_states.back().first_tokens;
             auto& other_tokens = slot.ctx_sampling->elb_states.back().other_tokens;
@@ -1925,7 +1925,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                         }
                         other_tokens.push_back({ ids[j], biases[j], size_t(duration + m * j), cond });
                     }
-                    max_cond_len = std::max(int32_t(cond.length()), max_cond_len);
+                    max_cond_len = std::max(SSIZE(cond), max_cond_len);
                 }
             }
         }
@@ -2084,7 +2084,7 @@ bool server_context::process_token(completion_token_output& result, server_slot&
     slot.sampled = result.tok;
 
     // search stop word and delete it
-    slot.last_gentxt_size = slot.generated_text.size();
+    slot.last_gentxt_len = slot.generated_text.size();
     slot.generated_text += token_str;
     slot.has_next_token = true;
 
@@ -4023,6 +4023,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             common_sampler_accept(slot.ctx_sampling, ctx, id, false);
                         }
                     }
+                    slot.ctx_sampling->is_decoding = true;
 
                     // extract the logits only for the last token
                     batch.logits[batch.n_tokens - 1] = true;
@@ -4086,14 +4087,13 @@ void server_context::speculative_decoding_accept() {
         const llama_token sampled_before = slot.sampled;
         size_t n_draft = slot.drafted.size();
 
-        slot.ctx_sampling->to_generated_text = &slot.generated_text;
-        if (n_draft > 0) {
-            (void) populate_vocab_pieces();     // max_piece_len
-            slot.ctx_sampling->drafted_text.reserve(max_piece_len * n_draft);
-            slot.ctx_sampling->drafted_text.clear();
-        }
-
         apply_server_biases(slot);
+
+        slot.ctx_sampling->generated_text = slot.generated_text;
+        slot.ctx_sampling->playing_text.clear();
+        for (const auto& token: slot.token_buffer) {
+            slot.ctx_sampling->playing_text.append(token.text_to_send);
+        }
 
         // the accepted tokens from the speculation
         std::vector<llama_token> ids;
@@ -4164,6 +4164,9 @@ void server_context::speculative_decoding_accept() {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, i);
             }
 
+            slot.ctx_sampling->n_rewind = 0;
+            slot.ctx_sampling->rewinded_text.clear();
+
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {
                 if (!process_token(result, slot)) {
                     // release slot because of stop condition
@@ -4176,6 +4179,21 @@ void server_context::speculative_decoding_accept() {
                 if (slot.task == nullptr) {
                     break;
                 }
+            }
+
+            if (slot.ctx_sampling->n_rewind > 0) {
+                // consume out-of-context tokens
+                auto banned_n = slot.banned_n;
+                slot.banned_n = 0;
+                for (++i; i < ids.size(); ++i) {
+                    slot.token_buffer.push_back({
+                        ids[i],
+                        common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok)),
+                        0.0f,
+                        { } });
+                    rewind_context(slot, slot.n_past);
+                }
+                slot.banned_n = banned_n;
             }
 
             common_sampler_review(slot.ctx_sampling, slot.token_buffer.size(), slot.rewind_status);
@@ -4322,12 +4340,18 @@ inline int32_t check_ban_phrase(server_slot& slot) {
     return -1;
 }
 
-inline void rewind_context(server_slot& slot, int32_t ban_pos) {
+void server_context::rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.rewind_count++;
 
     int32_t buffer_start_pos = slot.n_past - (int32_t)slot.token_buffer.size() + 1;
     int32_t n_keep_buffer = ban_pos - buffer_start_pos;
     if (n_keep_buffer < 0) n_keep_buffer = 0;
+
+    slot.ctx_sampling->n_rewind += slot.token_buffer.size() - n_keep_buffer;
+    LLAMA_LOG_DEBUG("%s[%d]: n_rewind = %d\n", __func__, __LINE__, slot.ctx_sampling->n_rewind);
+    for (int32_t j = n_keep_buffer; j < slot.token_buffer.size(); ++j) {
+        slot.ctx_sampling->rewinded_text.append(slot.token_buffer[j].text_to_send);
+    }
 
     if (slot.banned_n != 0) {
         int32_t n = 0;
@@ -4453,7 +4477,7 @@ void server_context::update_allowlist_state(server_slot& slot) {
 
     // search for keyword
     auto kw = kws[idx];
-    auto pos = slot.generated_text.find(kw, std::max(0, slot.last_gentxt_size - (int32_t)kw.length() + 1));
+    auto pos = slot.generated_text.find(kw, std::max(0, slot.last_gentxt_len - (int32_t)kw.length() + 1));
     while (pos != std::string::npos) {
         if (++idx >= kws.size()) {
             break;
@@ -4594,8 +4618,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 }
             }
 
-            slot.ctx_sampling->to_generated_text = &slot.generated_text;
-
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
 
@@ -4604,6 +4626,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             apply_server_biases(slot);
+
+            slot.ctx_sampling->generated_text = slot.generated_text;
+            slot.ctx_sampling->playing_text.clear();
+            for (const auto& token: slot.token_buffer) {
+                slot.ctx_sampling->playing_text.append(token.text_to_send);
+            }
 
             llama_token id;
             try {
@@ -4647,6 +4675,9 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (slot.sparams.n_probs > 0) {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, tok_idx);
             }
+
+            slot.ctx_sampling->n_rewind = 0;
+            slot.ctx_sampling->rewinded_text.clear();
 
             // no ban string for recurrent/hybrid model
             if (slot.n_buffer == 0 || !params_base.can_ban_phrases) {

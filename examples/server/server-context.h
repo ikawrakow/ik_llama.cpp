@@ -64,7 +64,7 @@ struct server_slot {
     server_tokens prompt_tokens;
     server_tokens cache_tokens;
 
-    int32_t last_gentxt_size = 0;
+    int32_t last_gentxt_len = 0;
     std::string generated_text;
 
     // idx of draft tokens in the main batch
@@ -375,6 +375,8 @@ struct server_context {
     bool has_next_token(const completion_token_output& result, server_slot& slot);
 
     void send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n = 0);
+
+    void rewind_context(server_slot& slot, int32_t ban_pos);
 
     void buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
 

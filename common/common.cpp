@@ -3727,6 +3727,15 @@ bool string_is_found(const std::string& window, const std::string& str, size_t& 
     return pos != std::string::npos;
 }
 
+void string_assign_append(std::string& dst, const std::string_view& sv, const std::string& str, const int32_t pos) {
+    const int32_t margin = SSIZE(sv) - pos;
+    if (margin > 0) {
+        dst.assign(sv, pos).append(str);
+    } else {
+        dst.assign(str, -margin);
+    }
+}
+
 //
 // Filesystem utils
 //
@@ -5422,7 +5431,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
             static const std::vector<std::string> names = { X_COMMON_PARAMS_SAMPLING };
 
             std::vector<float> addsubs(names.size(), 0.0f);
-            bool is_sb = false;
+            bool is_epb = false;
 
             // (... : SPARAM ...)
             const auto window = line.substr(last_qq_pos + 1);
@@ -5438,7 +5447,7 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                     auto sub = string_strip(window.substr(pos, next_pos - pos));
                     if (sub[0] == '~') {
                         addsubs[j] += std::stof(sub.substr(1));
-                        is_sb = true;
+                        is_epb = true;
                         LLAMA_LOG_DEBUG("%s: line %zu: bias = %f\n", __func__, i, addsubs[j]);
                     }
                 }
@@ -5446,18 +5455,19 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
 
             auto& phrases = extracts;
             if (phrases.empty()) {
-                if (is_sb) {
+                if (is_epb) {
                     phrases.push_back("");
                 } else {
                     continue;   // next line
                 }
             }
 
+            int32_t max_keyword_len = 0;
             const auto n_phrase = phrases.size();
             std::vector<float> biases;
             bool is_range = false;
 
-            if (!is_sb) {
+            if (!is_epb) {
                 // (... : BIAS ...)
                 const auto cln_rpos = line.rfind(':');
                 auto sub = line.substr(cln_rpos + 1, n_char - cln_rpos - 2);
@@ -5481,20 +5491,19 @@ void argparse_expiring_logit_bias(const std::string& content, common_params_samp
                 if (biases.empty()) {
                     continue;   // next line
                 }
+            } else {
+                for (const auto& keyword: phrases) {
+                    LLAMA_LOG_DEBUG("%s: line %zu: keyword = \"%s\"\n", __func__, i, keyword.c_str());
+                    max_keyword_len = std::max(SSIZE(keyword), max_keyword_len);
+                }
+                LLAMA_LOG_DEBUG("%s: line %zu: max_keyword_len = %d\n", __func__, i, max_keyword_len);
             }
-
-            size_t max_phrase_len = 0;
-            for (const auto& phrase: phrases) {
-                LLAMA_LOG_DEBUG("%s: line %zu: phrase = \"%s\"\n", __func__, i, phrase.c_str());
-                max_phrase_len = std::max(phrase.length(), max_phrase_len);
-            }
-            LLAMA_LOG_DEBUG("%s: line %zu: max_phrase_len = %zu\n", __func__, i, max_phrase_len);
 
             common_params_sampling::elb_param::elb_entry entry = {
-                std::vector<size_t>(n_phrase, 0),
+                max_keyword_len,
+                std::vector<int32_t>(n_phrase, 0),
                 std::move(addsubs),
                 std::vector<bool>(n_phrase, false),
-                max_phrase_len,
                 std::move(phrases),
                 std::move(biases),
                 duration,
