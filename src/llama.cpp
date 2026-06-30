@@ -7422,10 +7422,16 @@ struct llama_context * llama_init_from_model(
         {
             size_t memory_size_k = 0;
             size_t memory_size_v = 0;
+            size_t memory_size_k_indexer = 0;
 
             for (auto & k : ctx->kv_self.k_l) {
                 if (k) {
                     memory_size_k += ggml_nbytes(k);
+                }
+            }
+            for (auto & k : ctx->kv_self.kr_l) {
+                if (k) {
+                    memory_size_k_indexer += ggml_nbytes(k);
                 }
             }
 
@@ -7435,8 +7441,8 @@ struct llama_context * llama_init_from_model(
                 }
             }
 
-            if (memory_size_k + memory_size_v > 0) {
-	        if (cparams.mla_attn != 0 && !cparams.flash_attn) {
+            if (memory_size_k + memory_size_v) {
+	            if (cparams.mla_attn != 0 && !cparams.flash_attn) {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
                             (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
@@ -7451,6 +7457,9 @@ struct llama_context * llama_init_from_model(
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                             ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
                 }
+            }
+            if (memory_size_k_indexer > 0) {
+                LLAMA_LOG_INFO("%s: KV self indexer size = %7.2f MiB\n", __func__, memory_size_k_indexer/1024./1024.);
             }
         }
 

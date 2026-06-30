@@ -371,12 +371,12 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             ggml_row_size(indexer_q->type, head_size) * n_ihead,
             ggml_row_size(indexer_q->type, rope_dim));
 
-    indexer_q_pe = ggml_rope_ext(ctx0, ggml_cont(ctx0, indexer_q_pe), inp_pos, nullptr, n_rot,
+    indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
             LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
 
     // {head_size, n_ihead, n_tokens}
-    indexer_q = ggml_concat(ctx0, indexer_q_pe, ggml_cont(ctx0, indexer_q_nope), 0);
+    indexer_q = ggml_concat(ctx0, indexer_q_pe, indexer_q_nope, 0);
     cb(indexer_q, "dsa_indexer_q_cat", il);
 
     // ---- indexer_k : {head_size, n_tokens} (single key head, MQA) ----
@@ -393,12 +393,12 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             ggml_row_size(indexer_k->type, head_size),
             ggml_row_size(indexer_k->type, rope_dim));
 
-    indexer_k_pe = ggml_rope_ext(ctx0, ggml_cont(ctx0, indexer_k_pe), inp_pos, nullptr, n_rot,
+    indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot,
             LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
 
     // {head_size, 1, n_tokens}
-    indexer_k = ggml_concat(ctx0, indexer_k_pe, ggml_cont(ctx0, indexer_k_nope), 0);
+    indexer_k = ggml_concat(ctx0, indexer_k_pe, indexer_k_nope, 0);
     cb(indexer_k, "dsa_indexer_k_cat", il);
 
     // ---- Walsh-Hadamard rotation (score-preserving; improves cached-K F16 precision) ----
@@ -450,7 +450,6 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
 
     // ---- scores ----
     // indexer_q : {head_size, n_ihead, n_tokens} -> {head_size, n_tokens, n_ihead}
-    //indexer_q = ggml_cont(ctx0, ggml_permute(ctx0, indexer_q, 0, 2, 1, 3));
     // cached_k : {head_size, n_kv} -> {head_size, n_kv, 1}; broadcasts over q's n_ihead dim.
     ggml_tensor * indexer_k_b = ggml_reshape_3d(ctx0, cached_k, head_size, n_kv, 1);
 
@@ -469,7 +468,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         kq = ggml_relu(ctx0, kq);
         // [n_kv, n_tokens]
         auto score = ggml_mul(ctx0, kq, w);
-        indexer_score = ggml_add(ctx0, indexer_score, score);
+        indexer_score = ggml_add_inplace(ctx0, indexer_score, score);
         ggml_build_forward_expand(gf, indexer_score);
     }
 
@@ -610,10 +609,6 @@ static ggml_tensor * build_deepseek2_dsa_fa_mask(const llama_context & lctx, ggm
     GGML_ASSERT(KQ_mask && KQ_mask->type == GGML_TYPE_F16);
     GGML_ASSERT(sorted && sorted->type == GGML_TYPE_I32);
     GGML_ASSERT(KQ_mask->ne[1] >= sorted->ne[1]);
-    //if (!ggml_are_same_shape(KQ_mask, sorted)) {
-    //    printf("%s: Oops. KQ_mask = %ld x %ld x %ld, sorted = %ld x %ld x %ld\n", __func__, KQ_mask->ne[0], KQ_mask->ne[1], KQ_mask->ne[2], sorted->ne[0], sorted->ne[1], sorted->ne[2]);
-    //}
-    //GGML_ASSERT(ggml_are_same_shape(KQ_mask, sorted));
 
     int n_top_k = (int64_t) lctx.model.hparams.indexer_top_k;
     if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
@@ -703,8 +698,8 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     // Both default to the dense KQ_mask so non-DSA / disabled builds are unchanged.
     ggml_tensor * sparse_mask    = KQ_mask;
     ggml_tensor * sparse_mask_fa = KQ_mask;
-    ggml_tensor * top_k = nullptr;
-    (void) top_k; // captured for potential reuse/debug; only the masks are consumed downstream
+    //ggml_tensor * top_k = nullptr;
+    //(void) top_k; // captured for potential reuse/debug; only the masks are consumed downstream
 
     // self_attention
     {
@@ -773,7 +768,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                     //if (lctx.cparams.flash_attn) {
                     //    sparse_mask_fa = build_deepseek2_dsa_fa_mask(sparse_mask, KQ_mask);
                     //}
-                    top_k = sorted;
+                    //top_k = sorted;
                 }
 
                 q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
