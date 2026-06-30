@@ -456,19 +456,26 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     ggml_tensor * indexer_score = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
     if (indexer_score->type != GGML_TYPE_F32) {
         indexer_score = ggml_cast(ctx0, indexer_score, GGML_TYPE_F32);
+        cb(indexer_score, "indexer_score_f32", il);
     }
     for (int head = 0; head < n_ihead; ++head) {
+        int il_cb = 1000*(il + 1) + head;
         // [1, n_tokens]
         auto w  = ggml_cont(ctx0, ggml_view_2d(ctx0, indexer_weights, 1, indexer_weights->ne[1], indexer_weights->nb[1], indexer_weights->nb[0]*head));
+        cb(w, "iweights", il_cb);
         // [head_size, n_tokens]
         auto q = ggml_view_2d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[2], indexer_q->nb[2], indexer_q->nb[1]*head);
         // [n_kv, n_tokens]
         auto kq = ggml_mul_mat(ctx0, indexer_k_b, q);
+        cb(kq, "ikq", il_cb);
         // [n_kv, n_tokens]
         kq = ggml_relu(ctx0, kq);
+        cb(kq, "ikq_relu", il_cb);
         // [n_kv, n_tokens]
         auto score = ggml_mul(ctx0, kq, w);
+        cb(score, "score", il_cb);
         indexer_score = ggml_add_inplace(ctx0, indexer_score, score);
+        cb(indexer_score, "indexer_score", il_cb);
         ggml_build_forward_expand(gf, indexer_score);
     }
 

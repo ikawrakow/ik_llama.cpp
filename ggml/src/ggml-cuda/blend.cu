@@ -56,21 +56,21 @@ void ggml_cuda_op_blend(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             kernel_blend<<<grid_dims, block_size, 0, ctx.stream()>>>(src0->ne[0], src1->ne[0],
                     (const float *)src0->data, idx, (float *)dst->data, c, src0->ne[1], src0->ne[2],
                     src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float), src0->nb[3]/sizeof(float),
-                    src1->nb[1]/sizeof(int32_t), src0->nb[2]/sizeof(int32_t), src0->nb[3]/sizeof(int32_t),
+                    src1->nb[1]/sizeof(int32_t), src1->nb[2]/sizeof(int32_t), src1->nb[3]/sizeof(int32_t),
                     dst->nb[1]/sizeof(float), dst->nb[2]/sizeof(float), dst->nb[3]/sizeof(float));
         }
         else if (src0->type == GGML_TYPE_F16) {
             kernel_blend<<<grid_dims, block_size, 0, ctx.stream()>>>(src0->ne[0], src1->ne[0],
                     (const half *)src0->data, idx, (half *)dst->data, c, src0->ne[1], src0->ne[2],
                     src0->nb[1]/sizeof(half), src0->nb[2]/sizeof(half), src0->nb[3]/sizeof(half),
-                    src1->nb[1]/sizeof(int32_t), src0->nb[2]/sizeof(int32_t), src0->nb[3]/sizeof(int32_t),
+                    src1->nb[1]/sizeof(int32_t), src1->nb[2]/sizeof(int32_t), src1->nb[3]/sizeof(int32_t),
                     dst->nb[1]/sizeof(half), dst->nb[2]/sizeof(half), dst->nb[3]/sizeof(half));
         }
         else {
             kernel_blend<<<grid_dims, block_size, 0, ctx.stream()>>>(src0->ne[0], src1->ne[0],
                     (const nv_bfloat16 *)src0->data, idx, (nv_bfloat16 *)dst->data, c, src0->ne[1], src0->ne[2],
                     src0->nb[1]/sizeof(nv_bfloat16), src0->nb[2]/sizeof(nv_bfloat16), src0->nb[3]/sizeof(nv_bfloat16),
-                    src1->nb[1]/sizeof(int32_t), src0->nb[2]/sizeof(int32_t), src0->nb[3]/sizeof(int32_t),
+                    src1->nb[1]/sizeof(int32_t), src1->nb[2]/sizeof(int32_t), src1->nb[3]/sizeof(int32_t),
                     dst->nb[1]/sizeof(nv_bfloat16), dst->nb[2]/sizeof(nv_bfloat16), dst->nb[3]/sizeof(nv_bfloat16));
         }
     } else {
@@ -79,21 +79,21 @@ void ggml_cuda_op_blend(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             kernel_blend<<<grid_dims, block_size, 0, ctx.stream()>>>(src0->ne[0], src1->ne[0],
                     (const float *)src0->data, idx, (float *)dst->data, c, src0->ne[1], src0->ne[2],
                     src0->nb[1]/sizeof(float), src0->nb[2]/sizeof(float), src0->nb[3]/sizeof(float),
-                    src1->nb[1]/sizeof(int64_t), src0->nb[2]/sizeof(int64_t), src0->nb[3]/sizeof(int64_t),
+                    src1->nb[1]/sizeof(int64_t), src1->nb[2]/sizeof(int64_t), src1->nb[3]/sizeof(int64_t),
                     dst->nb[1]/sizeof(float), dst->nb[2]/sizeof(float), dst->nb[3]/sizeof(float));
         }
         else if (src0->type == GGML_TYPE_F16) {
             kernel_blend<<<grid_dims, block_size, 0, ctx.stream()>>>(src0->ne[0], src1->ne[0],
                     (const half *)src0->data, idx, (half *)dst->data, c, src0->ne[1], src0->ne[2],
                     src0->nb[1]/sizeof(half), src0->nb[2]/sizeof(half), src0->nb[3]/sizeof(half),
-                    src1->nb[1]/sizeof(int64_t), src0->nb[2]/sizeof(int64_t), src0->nb[3]/sizeof(int64_t),
+                    src1->nb[1]/sizeof(int64_t), src1->nb[2]/sizeof(int64_t), src1->nb[3]/sizeof(int64_t),
                     dst->nb[1]/sizeof(half), dst->nb[2]/sizeof(half), dst->nb[3]/sizeof(half));
         }
         else {
             kernel_blend<<<grid_dims, block_size, 0, ctx.stream()>>>(src0->ne[0], src1->ne[0],
                     (const nv_bfloat16 *)src0->data, idx, (nv_bfloat16 *)dst->data, c, src0->ne[1], src0->ne[2],
                     src0->nb[1]/sizeof(nv_bfloat16), src0->nb[2]/sizeof(nv_bfloat16), src0->nb[3]/sizeof(nv_bfloat16),
-                    src1->nb[1]/sizeof(int64_t), src0->nb[2]/sizeof(int64_t), src0->nb[3]/sizeof(int64_t),
+                    src1->nb[1]/sizeof(int64_t), src1->nb[2]/sizeof(int64_t), src1->nb[3]/sizeof(int64_t),
                     dst->nb[1]/sizeof(nv_bfloat16), dst->nb[2]/sizeof(nv_bfloat16), dst->nb[3]/sizeof(nv_bfloat16));
         }
     }
