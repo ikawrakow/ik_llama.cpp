@@ -4135,9 +4135,537 @@ static bool llm_load_tensors(
     return true;
 }
 
+// --- run-time-repack auto policy ----------------------------------------------------
+//
+// `--run-time-repack auto` (a.k.a. `-rtr auto`) flips repacking on by default, but
+// disables it when CPU-resident tensors that would lose mmap are known to exceed
+// available memory. The check is metadata-only: probe tensor metadata, resolve
+// simple CPU/GPU placement, and compare CPU-resident repackable bytes against
+// ~90% of available memory.
+//
+// The decision is tri-state (KEEP / DISABLE / UNKNOWN). DISABLE also fires
+// when no CPU-resident tensor would actually be repacked, since keeping
+// repack=true in that case only forces the loader's mmap=false coupling
+// without any benefit. On uncertainty (probe exception, OS query failure,
+// unsupported placement) the policy is safety-first: disable repack with a
+// WARN log and preserve the user/default mmap setting.
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#elif defined(__linux__)
+#  include <unistd.h>
+#elif defined(__APPLE__)
+#  include <sys/sysctl.h>
+#  include <mach/mach.h>
+#  include <mach/vm_statistics.h>
+#endif
+
+#if defined(__linux__)
+// Read a single uint64_t from a path. Returns true on success. Treats the
+// cgroup v2 sentinel "max" as success returning UINT64_MAX so the caller
+// can detect "no limit" without re-reading the file.
+static bool llama_read_uint64_file(const std::string & path, uint64_t & out) {
+    FILE * f = std::fopen(path.c_str(), "r");
+    if (!f) return false;
+    char buf[64] = {0};
+    bool ok = std::fgets(buf, sizeof(buf), f) != nullptr;
+    std::fclose(f);
+    if (!ok) return false;
+    std::string s(buf);
+    while (!s.empty() && (s.back() == '\n' || s.back() == ' ' || s.back() == '\t')) {
+        s.pop_back();
+    }
+    if (s == "max") {
+        out = UINT64_MAX;
+        return true;
+    }
+    try {
+        out = std::stoull(s);
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+// Resolve the cgroup path for the current process from /proc/self/cgroup.
+// For cgroup v2 the line has the form "0::/path"; for v1 controllers it is
+// "<id>:<controllers>:/path" and we look for the "memory" controller.
+// Returns empty string on failure.
+static std::string llama_resolve_cgroup_path(const std::string & controller) {
+    FILE * f = std::fopen("/proc/self/cgroup", "r");
+    if (!f) return {};
+    char buf[512];
+    std::string result;
+    while (std::fgets(buf, sizeof(buf), f)) {
+        std::string line(buf);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+            line.pop_back();
+        }
+        // Expected format: <hierarchy_id>:<controllers>:<path>
+        size_t c1 = line.find(':');
+        if (c1 == std::string::npos) continue;
+        size_t c2 = line.find(':', c1 + 1);
+        if (c2 == std::string::npos) continue;
+        const std::string controllers = line.substr(c1 + 1, c2 - c1 - 1);
+        const std::string path        = line.substr(c2 + 1);
+        if (controller == "v2") {
+            // cgroup v2 unified hierarchy: "0::/path"
+            if (controllers.empty()) {
+                result = path;
+                break;
+            }
+        } else {
+            // cgroup v1: comma-separated controller list
+            std::string token;
+            std::stringstream ss(controllers);
+            while (std::getline(ss, token, ',')) {
+                if (token == controller) {
+                    result = path;
+                    break;
+                }
+            }
+            if (!result.empty()) break;
+        }
+    }
+    std::fclose(f);
+    return result;
+}
+
+// Compute effective cgroup memory headroom for the current process. Walks the
+// cgroup path upward to honor inherited limits, capped at 32 levels. Returns
+// 0 when no finite limit is in effect. Tries v2 first, falls back to v1.
+static uint64_t llama_get_cgroup_available_bytes() {
+    // cgroup v2
+    {
+        const std::string cgpath = llama_resolve_cgroup_path("v2");
+        if (!cgpath.empty()) {
+            std::string cur = "/sys/fs/cgroup" + cgpath;
+            uint64_t headroom = UINT64_MAX;
+            for (int depth = 0; depth < 32; ++depth) {
+                uint64_t limit = 0;
+                uint64_t used  = 0;
+                if (llama_read_uint64_file(cur + "/memory.max", limit) &&
+                    llama_read_uint64_file(cur + "/memory.current", used) &&
+                    limit != UINT64_MAX) {
+                    const uint64_t free_here = (limit > used) ? (limit - used) : 0;
+                    if (free_here < headroom) {
+                        headroom = free_here;
+                    }
+                }
+                if (cur == "/sys/fs/cgroup" || cur.empty()) break;
+                size_t slash = cur.find_last_of('/');
+                if (slash == std::string::npos || slash < std::string{"/sys/fs/cgroup"}.size()) break;
+                cur = cur.substr(0, slash);
+            }
+            if (headroom != UINT64_MAX) {
+                return headroom;
+            }
+        }
+    }
+    // cgroup v1 memory controller
+    {
+        const std::string cgpath = llama_resolve_cgroup_path("memory");
+        if (!cgpath.empty()) {
+            std::string cur = "/sys/fs/cgroup/memory" + cgpath;
+            uint64_t headroom = UINT64_MAX;
+            for (int depth = 0; depth < 32; ++depth) {
+                uint64_t limit = 0;
+                uint64_t used  = 0;
+                if (llama_read_uint64_file(cur + "/memory.limit_in_bytes", limit) &&
+                    llama_read_uint64_file(cur + "/memory.usage_in_bytes", used)) {
+                    // v1 reports an effectively-infinite limit when none is set
+                    // (close to INT64_MAX rounded down to page size). Treat
+                    // anything within ~1 PiB of UINT64_MAX as "unlimited".
+                    const uint64_t v1_unlimited_floor = UINT64_MAX - (1ull << 50);
+                    if (limit < v1_unlimited_floor) {
+                        const uint64_t free_here = (limit > used) ? (limit - used) : 0;
+                        if (free_here < headroom) {
+                            headroom = free_here;
+                        }
+                    }
+                }
+                if (cur == "/sys/fs/cgroup/memory" || cur.empty()) break;
+                size_t slash = cur.find_last_of('/');
+                if (slash == std::string::npos || slash < std::string{"/sys/fs/cgroup/memory"}.size()) break;
+                cur = cur.substr(0, slash);
+            }
+            if (headroom != UINT64_MAX) {
+                return headroom;
+            }
+        }
+    }
+    return 0;
+}
+#endif // __linux__
+
+// Returns currently-available memory in bytes for "would this allocation
+// succeed" decisions. 0 means the OS query failed; caller treats that as
+// UNKNOWN. On Linux this honors cgroup v2/v1 limits when running inside a
+// container by taking min(MemAvailable, cgroup headroom).
+static uint64_t llama_get_available_ram_bytes() {
+#if defined(_WIN32)
+    MEMORYSTATUSEX mem_info = {};
+    mem_info.dwLength = sizeof(mem_info);
+    if (GlobalMemoryStatusEx(&mem_info)) {
+        return (uint64_t) mem_info.ullAvailPhys;
+    }
+    return 0;
+#elif defined(__linux__)
+    uint64_t mem_avail = 0;
+    {
+        FILE * f = std::fopen("/proc/meminfo", "r");
+        if (f) {
+            char line[256];
+            while (std::fgets(line, sizeof(line), f)) {
+                unsigned long long kb = 0;
+                if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
+                    mem_avail = (uint64_t) kb * 1024ull;
+                    break;
+                }
+            }
+            std::fclose(f);
+        }
+    }
+    if (mem_avail == 0) {
+        // Fallback to sysconf for older kernels without MemAvailable
+        long avail_pages = sysconf(_SC_AVPHYS_PAGES);
+        long page_size   = sysconf(_SC_PAGE_SIZE);
+        if (avail_pages > 0 && page_size > 0) {
+            mem_avail = (uint64_t) avail_pages * (uint64_t) page_size;
+        }
+    }
+    const uint64_t cg_avail = llama_get_cgroup_available_bytes();
+    if (cg_avail > 0 && (mem_avail == 0 || cg_avail < mem_avail)) {
+        return cg_avail;
+    }
+    return mem_avail;
+#elif defined(__APPLE__)
+    mach_port_t host_port = mach_host_self();
+    vm_size_t   page_size = 0;
+    if (host_page_size(host_port, &page_size) != KERN_SUCCESS || page_size == 0) {
+        int    mib[2] = { CTL_HW, HW_PAGESIZE };
+        int    ps = 0;
+        size_t plen = sizeof(ps);
+        if (sysctl(mib, 2, &ps, &plen, nullptr, 0) == 0 && ps > 0) {
+            page_size = (vm_size_t) ps;
+        } else {
+            return 0;
+        }
+    }
+    vm_statistics64_data_t vm_stat = {};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(host_port, HOST_VM_INFO64, (host_info64_t) &vm_stat, &count) != KERN_SUCCESS) {
+        return 0;
+    }
+    const uint64_t free_pages     = (uint64_t) vm_stat.free_count;
+    const uint64_t inactive_pages = (uint64_t) vm_stat.inactive_count;
+    return (free_pages + inactive_pages) * (uint64_t) page_size;
+#else
+    return 0;
+#endif
+}
+
+enum class llama_rtr_auto_decision {
+    KEEP,    // Repack is safe for this load.
+    DISABLE, // Repack is unsafe or has no work to do; turn it off, log INFO.
+    UNKNOWN, // Could not determine; safety-first disable, log WARN.
+};
+
+struct llama_rtr_auto_override {
+    std::regex pattern;
+    bool       cpu;
+};
+
+static bool llama_rtr_auto_parse_layer(const std::string & name, int & il) {
+    int parsed = -1;
+    int nchars = 0;
+    if (std::sscanf(name.c_str(), "blk.%d.%n", &parsed, &nchars) == 1 && nchars > 0) {
+        il = parsed;
+        return true;
+    }
+    return false;
+}
+
+static bool llama_rtr_auto_is_output_tensor(const std::string & name) {
+    return name == "output.weight" ||
+           name == "output.bias"   ||
+           name.rfind("output_norm", 0) == 0;
+}
+
+static bool llama_rtr_auto_is_expert_tensor(const std::string & name) {
+    return name.find(".ffn_") != std::string::npos &&
+           name.find("_exps.") != std::string::npos;
+}
+
+static bool llama_rtr_auto_compile_overrides(
+        const llama_model_tensor_buft_override * overrides,
+        std::vector<llama_rtr_auto_override>   & out,
+        std::string                            & reason) {
+    if (!overrides) {
+        return true;
+    }
+    try {
+        for (const auto * o = overrides; o->pattern != nullptr; ++o) {
+            out.push_back({ std::regex(o->pattern), ggml_backend_buft_is_host(o->buft) });
+        }
+    } catch (const std::regex_error & e) {
+        reason = format("tensor override regex failed (%s)", e.what());
+        return false;
+    }
+    return true;
+}
+
+static bool llama_rtr_auto_manual_override_cpu(
+        const std::vector<llama_rtr_auto_override> & overrides,
+        const std::string                          & name,
+        bool                                       & cpu) {
+    for (const auto & o : overrides) {
+        if (std::regex_search(name, o.pattern)) {
+            cpu = o.cpu;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool llama_rtr_auto_ncmoe_cpu_override(
+        const std::string        & name,
+        const llama_hparams      & hparams,
+        const llama_model        & model,
+        const llama_model_params & params,
+        bool                     & cpu,
+        std::string              & reason) {
+    if (params.ncmoe <= 0 || !llama_rtr_auto_is_expert_tensor(name)) {
+        return true;
+    }
+
+    int il = -1;
+    if (!llama_rtr_auto_parse_layer(name, il)) {
+        return true;
+    }
+
+    const int n_layer = (int) hparams.n_layer;
+    if (params.split_mode == LLAMA_SPLIT_MODE_ATTN ||
+        params.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
+        params.ncmoe >= n_layer ||
+        model.devices.size() < 2) {
+        cpu = il < std::min(params.ncmoe, n_layer);
+        return true;
+    }
+
+    reason = "-ncmoe with multi-device layer split needs loader placement";
+    return false;
+}
+
+static bool llama_rtr_auto_tensor_is_cpu(
+        const std::string                          & name,
+        const llama_hparams                        & hparams,
+        const llama_model                          & model,
+        const llama_model_params                   & params,
+        const std::vector<llama_rtr_auto_override> & overrides,
+        bool                                       & cpu,
+        std::string                                & reason) {
+    if (llama_rtr_auto_manual_override_cpu(overrides, name, cpu)) {
+        return true;
+    }
+
+    if (!llama_rtr_auto_ncmoe_cpu_override(name, hparams, model, params, cpu, reason)) {
+        return false;
+    }
+    if (cpu) {
+        return true;
+    }
+
+    if (model.devices.empty() || params.n_gpu_layers <= 0) {
+        cpu = true;
+        return true;
+    }
+
+    const int n_layer = (int) hparams.n_layer;
+    const int i_gpu_start = std::max(n_layer - params.n_gpu_layers, 0);
+
+    int il = -1;
+    if (llama_rtr_auto_parse_layer(name, il)) {
+        cpu = il < i_gpu_start;
+        return true;
+    }
+
+    if (llama_rtr_auto_is_output_tensor(name)) {
+        cpu = params.n_gpu_layers <= n_layer;
+        return true;
+    }
+
+    // Input embeddings and miscellaneous metadata tensors are kept on CPU.
+    cpu = true;
+    return true;
+}
+
+static void llama_rtr_auto_log_mmap_override_note(const llama_model_params & params) {
+    if (!params.tensor_buft_overrides || std::getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+        return;
+    }
+    for (const auto * o = params.tensor_buft_overrides; o->pattern != nullptr; ++o) {
+        if (ggml_backend_buft_is_host(o->buft)) {
+            LLAMA_LOG_WARN("%s: --run-time-repack auto: CPU tensor overrides may still disable mmap unless GGML_CUDA_NO_PINNED=1 is set\n",
+                    __func__);
+            return;
+        }
+    }
+}
+
+// Decide whether `--run-time-repack auto` should disable repack for this load.
+// If anything goes wrong (probe exception, OS query failure, unsupported
+// placement mode) the result is UNKNOWN, which the caller treats as
+// safety-first disable.
+static llama_rtr_auto_decision llama_rtr_auto_should_disable(
+        const std::string         & fname,
+        const llama_model         & model,
+        const llama_model_params  & params,
+        std::string               & reason) {
+    if (!params.repack_tensors || !params.repack_tensors_auto) {
+        return llama_rtr_auto_decision::KEEP;
+    }
+
+    // Early UNKNOWN exits — modes whose placement we cannot accurately
+    // simulate from probe metadata alone. Resolve before the probe so we
+    // do not pay the metadata-load cost just to bail out anyway.
+    if (params.fit) {
+        reason = "--fit changes tensor placement during load";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+    if (params.merge_qkv || params.merge_up_gate_exps) {
+        reason = "merged tensor placement is resolved during load";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+    if (params.split_mode == LLAMA_SPLIT_MODE_ATTN || params.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        reason = "split-mode graph/attention tensor placement is not modeled";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
+    const uint64_t avail_ram = llama_get_available_ram_bytes();
+    if (avail_ram == 0) {
+        reason = "could not query available memory";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
+    std::vector<llama_rtr_auto_override> overrides;
+    if (!llama_rtr_auto_compile_overrides(params.tensor_buft_overrides, overrides, reason)) {
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
+    try {
+        // Metadata-only probe: mmap + no repack to inspect arch/hparams cheaply.
+        llama_model_loader probe(
+                fname,
+                params.ncmoe,
+                /*use_mmap*/      true,
+                /*check_tensors*/ false,
+                /*repack_tensors*/false,
+                params.use_thp,
+                params.merge_qkv,
+                params.merge_up_gate_exps,
+                params.defer_experts,
+                params.kv_overrides,
+                params.tensor_buft_overrides);
+
+        llama_model probe_model;
+        probe_model.hparams.vocab_only = params.vocab_only;
+        llm_load_arch(probe, probe_model);
+        llm_load_hparams(probe, probe_model);
+
+        uint64_t cpu_total_bytes      = 0;
+        uint64_t cpu_repackable_bytes = 0;
+
+        for (const auto & w : probe.weights) {
+            const ggml_tensor * tensor = w.tensor;
+            if (!tensor) {
+                continue;
+            }
+            bool is_cpu = false;
+            if (!llama_rtr_auto_tensor_is_cpu(tensor->name, probe_model.hparams, model, params, overrides, is_cpu, reason)) {
+                return llama_rtr_auto_decision::UNKNOWN;
+            }
+            if (!is_cpu) {
+                continue;
+            }
+
+            const uint64_t nbytes = (uint64_t) ggml_nbytes(tensor);
+            cpu_total_bytes += nbytes;
+            if ((ggml_type) iqk_repacked_type(tensor) != tensor->type) {
+                cpu_repackable_bytes += nbytes;
+            }
+        }
+
+        // If no CPU-resident tensor would actually be repacked, keeping
+        // repack=true buys nothing but still forces the loader's mmap=false
+        // coupling. Strictly safer to disable in this case.
+        if (cpu_repackable_bytes == 0) {
+            reason = "no CPU-resident tensors need repacking";
+            return llama_rtr_auto_decision::DISABLE;
+        }
+
+        const uint64_t threshold = avail_ram - avail_ram / 10;
+        if (cpu_repackable_bytes > threshold) {
+            reason = format("CPU-resident repackable tensors %.1f GiB > 90%% of available memory %.1f GiB",
+                    cpu_repackable_bytes / 1073741824.0, avail_ram / 1073741824.0);
+            return llama_rtr_auto_decision::DISABLE;
+        }
+        if (cpu_total_bytes > threshold) {
+            reason = format("CPU-resident tensors %.1f GiB > 90%% of available memory %.1f GiB",
+                    cpu_total_bytes / 1073741824.0, avail_ram / 1073741824.0);
+            return llama_rtr_auto_decision::DISABLE;
+        }
+
+        LLAMA_LOG_INFO("%s: --run-time-repack auto: CPU-resident repackable %.1f GiB, total CPU-resident %.1f GiB, available %.1f GiB\n",
+                __func__,
+                cpu_repackable_bytes / 1073741824.0,
+                cpu_total_bytes / 1073741824.0,
+                avail_ram / 1073741824.0);
+        return llama_rtr_auto_decision::KEEP;
+    } catch (const std::exception & e) {
+        reason = format("probe failed (%s)", e.what());
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+}
+
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
+        if (params.repack_tensors && params.repack_tensors_auto) {
+            std::string reason;
+            const auto d = llama_rtr_auto_should_disable(fname, model, params, reason);
+            switch (d) {
+                case llama_rtr_auto_decision::DISABLE:
+                    // Auto policy turns repack off — leave use_mmap as the
+                    // user configured it (default true, or whatever
+                    // --no-mmap chose).
+                    params.repack_tensors = false;
+                    LLAMA_LOG_INFO("%s: --run-time-repack auto: disabled (%s)\n",
+                            __func__, reason.c_str());
+                    llama_rtr_auto_log_mmap_override_note(params);
+                    break;
+                case llama_rtr_auto_decision::UNKNOWN:
+                    // Could not determine. Safety-first: disable repack and
+                    // keep mmap so a swap-bound load still has a chance.
+                    params.repack_tensors = false;
+                    LLAMA_LOG_WARN("%s: --run-time-repack auto: disabled (uncertainty: %s)\n",
+                            __func__, reason.c_str());
+                    llama_rtr_auto_log_mmap_override_note(params);
+                    break;
+                case llama_rtr_auto_decision::KEEP:
+                    // Auto keeps repack enabled — match the legacy `-rtr 1`
+                    // coupling and force use_mmap=false so the repack pass
+                    // can write back into the tensor buffers.
+                    params.use_mmap = false;
+                    LLAMA_LOG_INFO("%s: --run-time-repack auto: keeping repack enabled\n",
+                            __func__);
+                    break;
+            }
+        }
+
         llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
@@ -6475,6 +7003,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
+        /*.repack_tensors_auto         =*/ false,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,

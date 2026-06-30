@@ -2145,8 +2145,51 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-rtr" || arg == "--run-time-repack") {
-        params.repack_tensors = true;
-        params.use_mmap = false;
+        // Optional value: 0|off to disable, 1|on to force on, auto to enable
+        // with safety net that auto-disables on swap-bound MoE (model > 90%
+        // of available memory). No value (legacy form) behaves like "1".
+        bool repack      = true;
+        bool repack_auto = false;
+
+        if (i + 1 < argc) {
+            std::string v = argv[i + 1];
+            std::transform(v.begin(), v.end(), v.begin(),
+                    [](unsigned char c) { return (char)std::tolower(c); });
+            const bool is_mode_token =
+                    v == "0" || v == "1" || v == "off" || v == "on" || v == "auto";
+            if (is_mode_token) {
+                ++i;  // consume the value
+                if (v == "0" || v == "off") {
+                    repack      = false;
+                    repack_auto = false;
+                } else if (v == "1" || v == "on") {
+                    repack      = true;
+                    repack_auto = false;
+                } else { // "auto"
+                    repack      = true;
+                    repack_auto = true;
+                }
+            }
+        }
+
+        params.repack_tensors      = repack;
+        params.repack_tensors_auto = repack_auto;
+        // Legacy behaviour: forcing run-time repack on requires use_mmap=false
+        // because the repack pass writes back into the tensor buffers. Only
+        // apply that coupling when repack is actually going to run unconditionally
+        // (-rtr / -rtr 1). For -rtr 0 (disable) we leave use_mmap alone so the
+        // user's existing mmap intent is respected; for -rtr auto we defer the
+        // mmap decision to llama_model_load (after the auto policy decides).
+        if (repack && !repack_auto) {
+            params.use_mmap = false;
+        }
+        return true;
+    }
+    if (arg == "-rtra" || arg == "--run-time-repack-auto") {
+        params.repack_tensors      = true;
+        params.repack_tensors_auto = true;
+        // Same reasoning as for -rtr auto above: don't force use_mmap=false at
+        // parse time, because the auto policy may end up disabling repack.
         return true;
     }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
@@ -3222,7 +3265,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     if (llama_supports_mmap()) {
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
-    options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
+    options.push_back({ "*",           "-rtr,  --run-time-repack [0|1|auto]",
+                                                                        "repack tensors if interleaved variant is available.\n"
+                                                                        "0/off = disable, 1/on = always (legacy), auto = enable with auto-disable\n"
+                                                                        "for swap-bound MoE (model > 90%% of available memory). Default: 0."});
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
@@ -4171,6 +4217,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
+    mparams.repack_tensors_auto = params.repack_tensors_auto;
     mparams.use_thp         = params.use_thp;
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
