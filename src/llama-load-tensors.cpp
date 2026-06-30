@@ -447,6 +447,9 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
         if (name == "output.weight" || name == "output_extra.weight") {
             return ctx;
         }
+        if (name.find("output_norm") == 0 || name.find(".output_norm") != std::string::npos || name == "output.bias") {
+            return ctx_output_split;
+        }
     }
     for (auto & o : overrides) {
         if (std::regex_search(name, o.first)) {
