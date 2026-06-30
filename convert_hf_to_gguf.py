@@ -715,6 +715,9 @@ class Model:
         if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
             # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
             res = "mellum2"
+        if chkhsh == "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e":
+            # ref: https://huggingface.co/openai/gpt-oss-20b
+            res = "gpt-4o"
         if res is None:
             logger.warning("\n")
             logger.warning("**************************************************************************************")

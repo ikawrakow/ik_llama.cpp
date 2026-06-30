@@ -5140,16 +5140,6 @@ static bool prepare_mtp_graph_inputs(
     return true;
 }
 
-static bool dflash_layer_has_attention_bias(const llama_layer & layer) {
-    return layer.bq != nullptr ||
-           layer.bk != nullptr ||
-           layer.bv != nullptr ||
-           layer.bo != nullptr ||
-           layer.bqkv != nullptr ||
-           layer.bqk != nullptr ||
-           layer.bkv != nullptr;
-}
-
 // decode a batch of tokens by evaluating the transformer
 //
 //   - lctx:      llama context
