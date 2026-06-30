@@ -459,17 +459,18 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         indexer_score = ggml_cast(ctx0, indexer_score, GGML_TYPE_F32);
     }
     for (int head = 0; head < n_ihead; ++head) {
+        // [1, n_tokens]
+        auto w  = ggml_cont(ctx0, ggml_view_2d(ctx0, indexer_weights, 1, indexer_weights->ne[1], indexer_weights->nb[1], indexer_weights->nb[0]*head));
         // [head_size, n_tokens]
         auto q = ggml_view_2d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[2], indexer_q->nb[2], indexer_q->nb[1]*head);
         // [n_kv, n_tokens]
         auto kq = ggml_mul_mat(ctx0, indexer_k_b, q);
         // [n_kv, n_tokens]
         kq = ggml_relu(ctx0, kq);
-        // [1, n_tokens]
-        auto w  = ggml_cont(ctx0, ggml_view_2d(ctx0, indexer_weights, 1, indexer_weights->ne[1], indexer_weights->nb[1], indexer_weights->nb[0]*head));
         // [n_kv, n_tokens]
         auto score = ggml_mul(ctx0, kq, w);
         indexer_score = ggml_add(ctx0, indexer_score, score);
+        ggml_build_forward_expand(gf, indexer_score);
     }
 
     //// {n_kv(keys), n_tokens(q), n_ihead}  (k's head dim broadcasts over n_ihead)
@@ -522,17 +523,10 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     // n_sink" set with the same 1e20 magnitude — n_seq==1 from pos 0 stays byte-identical.
     // DSA_SINK: DEBUG-ONLY env knob (no CLI surface). Default = 1 (protect each sequence's first
     // present token from being masked out of top-k). Must stay in sync with the two fill sites.
-    static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
-    if (n_sink > 0 && n_sink < (int) n_kv) {
-        if (!lctx.inp_dsa_sink) {
-            lctx.inp_dsa_sink = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
-            cb(lctx.inp_dsa_sink, "dsa_sink", -1);
-            ggml_set_input(lctx.inp_dsa_sink);
-        }
-        // inp_dsa_sink : {n_kv, n_tokens(q)} -> {n_kv, n_tokens, 1} to match indexer_score
-        ggml_tensor * boost = ggml_reshape_3d(ctx0, lctx.inp_dsa_sink, n_kv, n_tokens, 1);
-        indexer_score = ggml_add(ctx0, indexer_score, boost);
+    if (lctx.inp_dsa_sink) {
+        indexer_score = ggml_add(ctx0, indexer_score, lctx.inp_dsa_sink);
         cb(indexer_score, "dsa_indexer_score_sink", il);
+        ggml_build_forward_expand(gf, indexer_score);
     }
 
     // FULL descending argsort of the per-query scores over the n_kv axis: {n_kv, n_tokens} (I32).
@@ -611,6 +605,39 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
 
     return sparse;
 }
+
+static ggml_tensor * build_deepseek2_dsa_fa_mask(const llama_context & lctx, ggml_context * ctx0, ggml_tensor * KQ_mask, ggml_tensor * sorted) {
+    GGML_ASSERT(KQ_mask && KQ_mask->type == GGML_TYPE_F16);
+    GGML_ASSERT(sorted && sorted->type == GGML_TYPE_I32);
+    GGML_ASSERT(KQ_mask->ne[1] >= sorted->ne[1]);
+    //if (!ggml_are_same_shape(KQ_mask, sorted)) {
+    //    printf("%s: Oops. KQ_mask = %ld x %ld x %ld, sorted = %ld x %ld x %ld\n", __func__, KQ_mask->ne[0], KQ_mask->ne[1], KQ_mask->ne[2], sorted->ne[0], sorted->ne[1], sorted->ne[2]);
+    //}
+    //GGML_ASSERT(ggml_are_same_shape(KQ_mask, sorted));
+
+    int n_top_k = (int64_t) lctx.model.hparams.indexer_top_k;
+    if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
+
+    int n_kv_local = KQ_mask->ne[0];
+    if (n_top_k >= n_kv_local) {
+        return KQ_mask;
+    }
+
+    auto top_k = ggml_view_2d(ctx0, sorted, n_top_k, sorted->ne[1], sorted->nb[1], 0);
+    auto minus_inf = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, KQ_mask->ne[0], KQ_mask->ne[1]);
+    minus_inf = ggml_fill_inplace(ctx0, minus_inf, -INFINITY);
+    auto mask32 = ggml_blend(ctx0, minus_inf, top_k, 0.0f);
+    if (KQ_mask->ne[1] == sorted->ne[1]) {
+        auto mask16 = ggml_add(ctx0, KQ_mask, mask32);
+        return mask16;
+    }
+    auto kq1 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], sorted->ne[1], KQ_mask->nb[1], 0);
+    auto kq2 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], KQ_mask->ne[1] - sorted->ne[1], KQ_mask->nb[1], sorted->ne[1]*KQ_mask->nb[1]);
+    kq1 = ggml_add(ctx0, kq1, mask32);
+    auto mask16 = ggml_concat(ctx0, kq1, kq2, 1);
+    return mask16;
+}
+
 
 // Adapt the (F32, unpadded {n_kv, n_tokens}) sparse mask for ggml_flash_attn_ext, which on this fork
 // requires the mask to be F16, contiguous, and padded in ne[1] to GGML_PAD(n_queries, GGML_KQ_MASK_PAD)
@@ -736,11 +763,16 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                         && kv_self.kr_l.size() > (size_t) il && kv_self.kr_l[il]) {
                     ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
                     ggml_tensor * sorted = build_deepseek2_dsa_indexer(gf, il, qr, cur, KQ_mask, inp_pos);
-                    sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
-                    // For the FA path the mask must be F16 + padded; build it from the F32 sparse mask.
+                    //ggml_tensor *sparse_mask = nullptr, *sparse_mask_fa = nullptr;
                     if (lctx.cparams.flash_attn) {
-                        sparse_mask_fa = build_deepseek2_dsa_fa_mask(sparse_mask, KQ_mask);
+                        sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, sorted);
+                    } else {
+                        sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
                     }
+                    //// For the FA path the mask must be F16 + padded; build it from the F32 sparse mask.
+                    //if (lctx.cparams.flash_attn) {
+                    //    sparse_mask_fa = build_deepseek2_dsa_fa_mask(sparse_mask, KQ_mask);
+                    //}
                     top_k = sorted;
                 }
 
@@ -1146,6 +1178,15 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+
+    if (lctx.cparams.dsa && model.arch == LLM_ARCH_GLM_DSA) {
+        static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
+        if (n_sink > 0 && n_sink < (int) n_kv) {
+            lctx.inp_dsa_sink = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
+            cb(lctx.inp_dsa_sink, "dsa_sink", -1);
+            ggml_set_input(lctx.inp_dsa_sink);
+        }
+    }
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case

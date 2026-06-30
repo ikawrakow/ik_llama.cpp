@@ -41,6 +41,8 @@ bool iqk_ssm_conv4(int nr, int nc, int nt,
 
 void iqk_rms_rms_add(struct ggml_tensor * dst, int ith, int nth);
 
+void iqk_blend(struct ggml_tensor * dst, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif

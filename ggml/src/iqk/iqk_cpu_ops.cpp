@@ -974,3 +974,73 @@ void iqk_rms_rms_add(struct ggml_tensor * dst, int ith, int nth) {
         }
     }
 }
+
+namespace {
+template <typename Data, typename Idx>
+inline void iqk_blend_row(int n, int nidx, const Data * x, const Idx * idx, Data * y, float c) {
+    Data b;
+    if constexpr (std::is_same_v<Data, float>) {
+        b = c;
+    }
+    else if constexpr (std::is_same_v<Data, ggml_half>) {
+        b = GGML_FP32_TO_FP16(c);
+    }
+    else {
+        b = GGML_FP32_TO_BF16(c);
+    }
+    if (y != x) {
+        for (int j = 0; j < n; ++j) y[j] = x[j];
+    }
+    for (int j = 0; j < nidx; ++j) y[idx[j]] = b;
+}
+}
+
+void iqk_blend(struct ggml_tensor * dst, int ith, int nth) {
+    auto src0 = dst->src[0];
+    auto src1 = dst->src[1];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
+    GGML_ASSERT(src1->type == GGML_TYPE_I32 || src1->type == GGML_TYPE_I64);
+    GGML_ASSERT(src1->ne[0] <= src0->ne[0]);
+    GGML_ASSERT(src0->type == dst->type);
+    GGML_ASSERT(src0->ne[0] == dst->ne[0]);
+    for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
+        GGML_ASSERT(src0->ne[dim] == src1->ne[dim]);
+        GGML_ASSERT(src0->ne[dim] == dst->ne[dim]);
+    }
+    float c;
+    std::memcpy(&c, dst->op_params, sizeof(c));
+    int nrows = ggml_nrows(src0);
+    int npt   = (nrows + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = std::min(nrows, first + npt);
+    for (int ir = first; ir < last; ++ir) {
+        int ii = ir;
+        int i3 = ii/(src0->ne[1]*src0->ne[2]); ii -= i3*src0->ne[1]*src0->ne[2];
+        int i2 = ii/(src0->ne[1]);             ii -= i2*src0->ne[1];
+        int i1 = ii;
+        auto x   = (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
+        auto y   = (      char *) dst->data + i1* dst->nb[1] + i2* dst->nb[2] + i3* dst->nb[3];
+        auto idx = (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
+        if (src1->type == GGML_TYPE_I32) {
+            if (src0->type == GGML_TYPE_F32) {
+                iqk_blend_row(src0->ne[0], src1->ne[0], (const float *)x, (const int32_t *)idx, (float *)y, c);
+            }
+            else if (src0->type == GGML_TYPE_F16) {
+                iqk_blend_row(src0->ne[0], src1->ne[0], (const ggml_half *)x, (const int32_t *)idx, (ggml_half *)y, c);
+            }
+            else {
+                iqk_blend_row(src0->ne[0], src1->ne[0], (const ggml_bf16_t *)x, (const int32_t *)idx, (ggml_bf16_t *)y, c);
+            }
+        } else {
+            if (src0->type == GGML_TYPE_F32) {
+                iqk_blend_row(src0->ne[0], src1->ne[0], (const float *)x, (const int64_t *)idx, (float *)y, c);
+            }
+            else if (src0->type == GGML_TYPE_F16) {
+                iqk_blend_row(src0->ne[0], src1->ne[0], (const ggml_half *)x, (const int64_t *)idx, (ggml_half *)y, c);
+            }
+            else {
+                iqk_blend_row(src0->ne[0], src1->ne[0], (const ggml_bf16_t *)x, (const int64_t *)idx, (ggml_bf16_t *)y, c);
+            }
+        }
+    }
+}

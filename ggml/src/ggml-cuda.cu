@@ -56,6 +56,7 @@
 #include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/delta-net.cuh"
+#include "ggml-cuda/blend.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3640,6 +3641,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_REDUCE:
             ggml_cuda_op_reduce(ctx, dst);
             break;
+        case GGML_OP_BLEND:
+            ggml_cuda_op_blend(ctx, dst);
+            break;
         case GGML_OP_FAKE_CPY:
             break;
         case GGML_OP_ARGMAX:
@@ -4883,6 +4887,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 return false;
             } break;
         case GGML_OP_REDUCE:
+        case GGML_OP_BLEND:
         case GGML_OP_FAKE_CPY:
         case GGML_OP_ARGMAX:
             return true;
