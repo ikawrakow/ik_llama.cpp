@@ -541,7 +541,17 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     // uninitialized base for partially-written destinations (a CUDA in-place quirk that corrupted
     // decode when n_kv > top_k).
     //ggml_tensor * sorted = ggml_cont(ctx0, ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC));
-    ggml_tensor * sorted = ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC);
+    //ggml_tensor * sorted = ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC);
+    ggml_tensor * sorted;
+    if (cparams.flash_attn) {
+        int64_t n_top_k = (int64_t) hparams.indexer_top_k;
+        if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
+        if (n_top_k > indexer_score->ne[0]) n_top_k = indexer_score->ne[0];
+        sorted = ggml_top_k(ctx0, indexer_score, n_top_k);
+        sorted = ggml_cont(ctx0, sorted);
+    } else {
+        sorted = ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC);
+    }
     cb(sorted, "dsa_sorted", il);
 
     return sorted;
