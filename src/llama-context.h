@@ -385,6 +385,7 @@ struct llama_context {
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
+    struct ggml_tensor * inp_mask_inf = nullptr;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
