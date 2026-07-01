@@ -4970,6 +4970,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         //case GGML_OP_ROPE:
         //    return ggml_is_contiguous(op->src[0]);
         case GGML_OP_ARGSORT:
+            return true;
         case GGML_OP_ARGSORT_THRESH:
             // The CUDA bitonic argsort launches one thread per (padded) column, so the
             // row width rounded up to a power of 2 must fit in a single CUDA block (<=1024

@@ -14998,8 +14998,6 @@ static void ggml_compute_forward_concat_any(
     GGML_ASSERT(src0->type == src1->type && src0->type == dst->type);
 
     const int32_t dim = ggml_get_op_params_i32(dst, 0);
-    // Let's do it for dim = 0 only for now
-    GGML_ASSERT(dim == 0);
 
     int ith = params->ith;
     int nth = params->nth;
@@ -15007,21 +15005,46 @@ static void ggml_compute_forward_concat_any(
     int64_t nrows = ggml_nrows(dst);
     int64_t nrows_per_thread = (nrows + nth - 1)/nth;
     int64_t first_row = ith*nrows_per_thread;
-    if (first_row >= nrows) return;
     int64_t last_row = MIN(first_row + nrows_per_thread, nrows);
+    if (first_row >= last_row) return;
 
     int64_t src0_row_size = ggml_row_size(src0->type, src0->ne[0]);
     int64_t src1_row_size = ggml_row_size(src1->type, src1->ne[0]);
 
-    for (int64_t row = first_row; row < last_row; ++row) {
-        int64_t i3 = row/(dst->ne[1]*dst->ne[2]);
-        int64_t i2 = (row - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
-        int64_t i1 = row - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
-        char * y = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
-        const char * x0 = (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
-        const char * x1 = (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
-        memcpy(y,                 x0, src0_row_size);
-        memcpy(y + src0_row_size, x1, src1_row_size);
+    if (dim == 0) {
+        for (int64_t row = first_row; row < last_row; ++row) {
+            int64_t i3 = row/(dst->ne[1]*dst->ne[2]);
+            int64_t i2 = (row - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int64_t i1 = row - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+            char * y = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+            const char * x0 = (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
+            const char * x1 = (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
+            memcpy(y,                 x0, src0_row_size);
+            memcpy(y + src0_row_size, x1, src1_row_size);
+        }
+    }
+    else {
+        GGML_ASSERT(src0_row_size == src1_row_size);
+        for (int64_t row = first_row; row < last_row; ++row) {
+            int64_t i3 = row/(dst->ne[1]*dst->ne[2]);
+            int64_t i2 = (row - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int64_t i1 = row - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+            char * y = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+            const char * x;
+            if (dim == 1) {
+                x = i1 < src0->ne[1] ? (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]
+                                     : (const char *)src1->data + (i1 - src0->ne[1])*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
+            }
+            else if (dim == 2) {
+                x = i2 < src0->ne[2] ? (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]
+                                     : (const char *)src1->data + i1*src1->nb[1] + (i2 - src0->ne[2])*src1->nb[2] + i3*src1->nb[3];
+            }
+            else {
+                x = i3 < src0->ne[3] ? (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]
+                                     : (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + (i3 - src0->ne[3])*src1->nb[3];
+            }
+            memcpy(y, x, src0_row_size);
+        }
     }
 
 }

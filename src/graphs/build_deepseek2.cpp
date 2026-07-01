@@ -635,14 +635,15 @@ static ggml_tensor * build_deepseek2_dsa_fa_mask(const llama_context & lctx, ggm
         return KQ_mask;
     }
 
+    GGML_ASSERT(sorted->ne[1] == lctx.inp_mask_inf->ne[1]);
     auto top_k = ggml_view_2d(ctx0, sorted, n_top_k, sorted->ne[1], sorted->nb[1], 0);
     auto mask32 = ggml_blend(ctx0, lctx.inp_mask_inf, top_k, 0.0f);
-    if (KQ_mask->ne[1] == sorted->ne[1]) {
+    if (KQ_mask->ne[1] == mask32->ne[1]) {
         auto mask16 = ggml_add(ctx0, KQ_mask, mask32);
         return mask16;
     }
-    auto kq1 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], sorted->ne[1], KQ_mask->nb[1], 0);
-    auto kq2 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], KQ_mask->ne[1] - sorted->ne[1], KQ_mask->nb[1], sorted->ne[1]*KQ_mask->nb[1]);
+    auto kq1 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], mask32->ne[1], KQ_mask->nb[1], 0);
+    auto kq2 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], KQ_mask->ne[1] - mask32->ne[1], KQ_mask->nb[1], mask32->ne[1]*KQ_mask->nb[1]);
     kq1 = ggml_add(ctx0, kq1, mask32);
     auto mask16 = ggml_concat(ctx0, kq1, kq2, 1);
     return mask16;
@@ -1196,7 +1197,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             cb(lctx.inp_dsa_sink, "dsa_sink", -1);
             ggml_set_input(lctx.inp_dsa_sink);
         }
-        auto minus_inf = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, KQ_mask->ne[0], KQ_mask->ne[1]);
+        auto minus_inf = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, KQ_mask->ne[0], n_tokens);
         minus_inf = ggml_fill_inplace(ctx0, minus_inf, -INFINITY);
         ggml_build_forward_expand(gf, minus_inf);
         lctx.inp_mask_inf = minus_inf;
