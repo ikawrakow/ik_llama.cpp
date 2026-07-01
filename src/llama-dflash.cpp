@@ -15,6 +15,82 @@
 #include <type_traits>
 #include <vector>
 
+using llama_dflash_layout = llama_context::dflash_runtime::llama_dflash_kv_layout;
+
+static bool llama_dflash_has_any_swa_layers(const llama_hparams & hparams) {
+    if (hparams.n_swa <= 0) {
+        return false;
+    }
+
+    for (int32_t il = 0; il < (int32_t) hparams.n_layer; ++il) {
+        if (hparams.swa_layers[il]) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool llama_dflash_has_any_full_layers(const llama_hparams & hparams) {
+    for (int32_t il = 0; il < (int32_t) hparams.n_layer; ++il) {
+        if (!hparams.swa_layers[il] || hparams.n_swa <= 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static int32_t llama_dflash_effective_swa_capacity(const llama_hparams & hparams, int32_t cross_ctx) {
+    if (!llama_dflash_has_any_swa_layers(hparams)) {
+        return 0;
+    }
+
+    return std::min<int32_t>(std::max<int32_t>(1, cross_ctx), std::max<int32_t>(1, (int32_t) hparams.n_swa));
+}
+
+static bool llama_dflash_share_swa_with_full(const llama_hparams & hparams, int32_t cross_ctx) {
+    return llama_dflash_has_any_swa_layers(hparams) &&
+           llama_dflash_has_any_full_layers(hparams) &&
+           hparams.n_swa > 0 &&
+           hparams.n_swa >= cross_ctx;
+}
+
+static llama_dflash_layout & llama_dflash_select_layout(llama_context::dflash_runtime::kv_runtime_state & kv, bool use_swa) {
+    return (use_swa && !kv.share_swa_with_full) ? kv.swa_layout : kv.full_layout;
+}
+
+static const llama_dflash_layout & llama_dflash_select_layout(const llama_context::dflash_runtime::kv_runtime_state & kv, bool use_swa) {
+    return (use_swa && !kv.share_swa_with_full) ? kv.swa_layout : kv.full_layout;
+}
+
+static void llama_dflash_resize_layout(llama_dflash_layout & layout, int32_t capacity, bool allocate_slots) {
+    layout.capacity = capacity;
+    layout.n_filled = 0;
+    layout.write_pos = 0;
+    layout.applied_window_version = 0;
+    layout.valid = false;
+    if (allocate_slots && capacity > 0) {
+        layout.positions.assign((size_t) capacity, 0);
+        layout.slot_valid.assign((size_t) capacity, 0);
+    } else {
+        layout.positions.clear();
+        layout.slot_valid.clear();
+    }
+}
+
+static void llama_dflash_assign_layout_state(
+        llama_dflash_layout & layout,
+        int32_t n_filled,
+        int32_t write_pos,
+        uint64_t applied_window_version,
+        bool valid) {
+    layout.n_filled = std::clamp(n_filled, 0, std::max<int32_t>(0, layout.capacity));
+    layout.write_pos = layout.capacity > 0 ? ((write_pos % layout.capacity) + layout.capacity) % layout.capacity : 0;
+    layout.applied_window_version = applied_window_version;
+    layout.valid = valid;
+}
+
 static ggml_backend_buffer_type_t llama_dflash_kv_cache_layer_buft(const llama_context & lctx, int32_t il) {
     if (il >= 0 && il < (int32_t) lctx.model.buft_layer.size() && lctx.model.buft_layer[il].buft != nullptr) {
         return lctx.model.buft_layer[il].buft;
@@ -58,24 +134,47 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
     const int32_t target_token_capacity = std::max<int32_t>(
             1,
             std::max<int32_t>((int32_t) model.hparams.dflash_block_size, (int32_t) cparams.n_ubatch));
-    const int32_t target_cache_n_kv_total = GGML_PAD(target_cross_ctx + target_token_capacity, cparams.flash_attn ? 256 : 32);
     const ggml_type target_cache_type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
     const int32_t n_layer = model.hparams.n_layer;
     const int64_t n_embd_head_k = model.hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = model.hparams.n_embd_head_v(0);
     const int64_t n_head_kv = model.hparams.n_head_kv();
+    const bool has_full_layers = llama_dflash_has_any_full_layers(model.hparams);
+    const bool has_swa_layers = llama_dflash_has_any_swa_layers(model.hparams);
+    const bool share_swa_with_full = llama_dflash_share_swa_with_full(model.hparams, target_cross_ctx);
+    const int32_t target_swa_capacity = llama_dflash_effective_swa_capacity(model.hparams, target_cross_ctx);
+    std::vector<int32_t> target_layer_history_capacity((size_t) n_layer, target_cross_ctx);
+    std::vector<uint8_t> target_layer_uses_swa((size_t) n_layer, 0);
+
+    for (int32_t il = 0; il < n_layer; ++il) {
+        const bool use_swa_layout = model.hparams.swa_layers[il] && target_swa_capacity > 0;
+        target_layer_uses_swa[(size_t) il] = use_swa_layout ? 1 : 0;
+        target_layer_history_capacity[(size_t) il] = use_swa_layout ? target_swa_capacity : target_cross_ctx;
+    }
 
     if (dflash.kv.cache_ctx != nullptr &&
         (int32_t) dflash.kv.k_ctx_cache.size() == n_layer &&
-        (int32_t) dflash.kv.cache_pos.size() == target_cross_ctx &&
-        (int32_t) dflash.kv.cache_slot_valid.size() == target_cross_ctx) {
-        const bool cache_matches =
-                dflash.kv.k_ctx_cache.front() != nullptr &&
-                dflash.kv.v_ctx_cache.front() != nullptr &&
-                dflash.kv.k_ctx_cache.front()->type == target_cache_type &&
-                dflash.kv.v_ctx_cache.front()->type == target_cache_type &&
-                (int32_t) dflash.kv.k_ctx_cache.front()->ne[1] == target_cache_n_kv_total &&
-                (int32_t) dflash.kv.v_ctx_cache.front()->ne[1] == target_cache_n_kv_total;
+        (int32_t) dflash.kv.layer_history_capacity.size() == n_layer &&
+        (int32_t) dflash.kv.layer_uses_swa_layout.size() == n_layer &&
+        dflash.kv.has_full_layers == has_full_layers &&
+        dflash.kv.has_swa_layers == has_swa_layers &&
+        dflash.kv.share_swa_with_full == share_swa_with_full &&
+        dflash.kv.full_layout.capacity == (has_full_layers ? target_cross_ctx : 0) &&
+        dflash.kv.swa_layout.capacity == (has_swa_layers ? target_swa_capacity : 0)) {
+        bool cache_matches = true;
+        for (int32_t il = 0; il < n_layer && cache_matches; ++il) {
+            const int32_t layer_history_capacity = target_layer_history_capacity[(size_t) il];
+            const int32_t target_cache_n_kv_total = GGML_PAD(layer_history_capacity + target_token_capacity, cparams.flash_attn ? 256 : 32);
+            cache_matches =
+                    dflash.kv.k_ctx_cache[(size_t) il] != nullptr &&
+                    dflash.kv.v_ctx_cache[(size_t) il] != nullptr &&
+                    dflash.kv.k_ctx_cache[(size_t) il]->type == target_cache_type &&
+                    dflash.kv.v_ctx_cache[(size_t) il]->type == target_cache_type &&
+                    (int32_t) dflash.kv.k_ctx_cache[(size_t) il]->ne[1] == target_cache_n_kv_total &&
+                    (int32_t) dflash.kv.v_ctx_cache[(size_t) il]->ne[1] == target_cache_n_kv_total &&
+                    dflash.kv.layer_history_capacity[(size_t) il] == layer_history_capacity &&
+                    dflash.kv.layer_uses_swa_layout[(size_t) il] == target_layer_uses_swa[(size_t) il];
+        }
         if (cache_matches) {
             return true;
         }
@@ -87,7 +186,12 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
         }
         dflash.kv.cache_graph = nullptr;
         dflash.kv.cache_graph_rows = 0;
-        dflash.kv.cache_graph_write_pos = 0;
+        dflash.kv.cache_graph_full_update_rows = 0;
+        dflash.kv.cache_graph_swa_update_rows = 0;
+        dflash.kv.cache_graph_full_source_row_offset = 0;
+        dflash.kv.cache_graph_swa_source_row_offset = 0;
+        dflash.kv.cache_graph_full_write_pos = 0;
+        dflash.kv.cache_graph_swa_write_pos = 0;
     }
 
     ggml_init_params params = {
@@ -104,11 +208,24 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
 
     dflash.kv.k_ctx_cache.resize((size_t) n_layer);
     dflash.kv.v_ctx_cache.resize((size_t) n_layer);
-    dflash.kv.cache_pos.assign((size_t) target_cross_ctx, 0);
-    dflash.kv.cache_slot_valid.assign((size_t) target_cross_ctx, 0);
+    dflash.kv.layer_history_capacity = target_layer_history_capacity;
+    dflash.kv.layer_uses_swa_layout = target_layer_uses_swa;
+    dflash.kv.has_full_layers = has_full_layers;
+    dflash.kv.has_swa_layers = has_swa_layers;
+    dflash.kv.share_swa_with_full = share_swa_with_full;
+    llama_dflash_resize_layout(dflash.kv.full_layout, has_full_layers ? target_cross_ctx : 0, has_full_layers);
+    llama_dflash_resize_layout(dflash.kv.swa_layout, has_swa_layers ? target_swa_capacity : 0, has_swa_layers && !share_swa_with_full);
+    dflash.kv.full_update_rows = 0;
+    dflash.kv.swa_update_rows = 0;
+    dflash.kv.full_source_row_offset = 0;
+    dflash.kv.swa_source_row_offset = 0;
+    dflash.kv.full_update_write_pos = 0;
+    dflash.kv.swa_update_write_pos = 0;
     dflash.kv.cache_bufs.clear();
     dflash.kv.cache_bufs.reserve((size_t) std::max(1, n_layer) * 2);
     for (int32_t il = 0; il < n_layer; ++il) {
+        const int32_t layer_history_capacity = target_layer_history_capacity[(size_t) il];
+        const int32_t target_cache_n_kv_total = GGML_PAD(layer_history_capacity + target_token_capacity, cparams.flash_attn ? 256 : 32);
         ggml_backend_buffer_type_t layer_buft = llama_dflash_kv_cache_layer_buft(*this, il);
         ggml_tensor *& k_ctx_cache = dflash.kv.k_ctx_cache[il];
         ggml_tensor *& v_ctx_cache = dflash.kv.v_ctx_cache[il];
@@ -162,25 +279,35 @@ void llama_context::free_dflash_kv_cache_tensors() {
 
     release_vector(dflash.kv.k_ctx_cache);
     release_vector(dflash.kv.v_ctx_cache);
-    release_vector(dflash.kv.cache_pos);
-    release_vector(dflash.kv.cache_slot_valid);
-    dflash.kv.cache_write_pos = 0;
-    dflash.kv.cache_n_filled = 0;
+    release_vector(dflash.kv.layer_history_capacity);
+    release_vector(dflash.kv.layer_uses_swa_layout);
+    llama_dflash_resize_layout(dflash.kv.full_layout, 0, false);
+    llama_dflash_resize_layout(dflash.kv.swa_layout, 0, false);
+    dflash.kv.has_full_layers = false;
+    dflash.kv.has_swa_layers = false;
+    dflash.kv.share_swa_with_full = false;
     dflash.kv.cache_update_rows = 0;
+    dflash.kv.full_update_rows = 0;
+    dflash.kv.swa_update_rows = 0;
+    dflash.kv.full_source_row_offset = 0;
+    dflash.kv.swa_source_row_offset = 0;
+    dflash.kv.full_update_write_pos = 0;
+    dflash.kv.swa_update_write_pos = 0;
     dflash.kv.cache_reserved_rows = 0;
-    dflash.kv.cache_view_write_pos = 0;
-    dflash.kv.cache_view_n_filled = 0;
-    dflash.kv.cache_applied_window_version = 0;
-    dflash.kv.cache_valid = false;
-    dflash.kv.cache_view_valid = false;
     dflash.kv.cache_graph = nullptr;
     dflash.kv.cache_graph_rows = 0;
-    dflash.kv.cache_graph_write_pos = 0;
+    dflash.kv.cache_graph_full_update_rows = 0;
+    dflash.kv.cache_graph_swa_update_rows = 0;
+    dflash.kv.cache_graph_full_source_row_offset = 0;
+    dflash.kv.cache_graph_swa_source_row_offset = 0;
+    dflash.kv.cache_graph_full_write_pos = 0;
+    dflash.kv.cache_graph_swa_write_pos = 0;
     dflash.kv.cache_input_target_features = nullptr;
     dflash.kv.cache_input_pos_ctx = nullptr;
-    dflash.kv.kq_mask_tensor = nullptr;
-    dflash.kv.kq_mask_swa_tensor = nullptr;
-    dflash.kv.draft_tail_rows_tensor = nullptr;
+    dflash.kv.full_kq_mask_tensor = nullptr;
+    dflash.kv.swa_kq_mask_tensor = nullptr;
+    dflash.kv.full_draft_tail_rows_tensor = nullptr;
+    dflash.kv.swa_draft_tail_rows_tensor = nullptr;
 
     for (ggml_backend_buffer_t buf : dflash.kv.cache_bufs) {
         if (buf != nullptr) {
@@ -324,16 +451,10 @@ bool llama_prepare_dflash_graph_inputs(
     const int32_t cross_ctx = lctx.dflash.visible_cross_ctx > 0
             ? lctx.dflash.visible_cross_ctx
             : std::max<int32_t>(1, (int32_t) lctx.cparams.n_ctx - (int32_t) lctx.model.hparams.dflash_block_size);
-    ggml_tensor * kq_mask = lctx.dflash.kv.kq_mask_tensor;
-    ggml_tensor * kq_mask_swa = lctx.dflash.kv.kq_mask_swa_tensor;
-
-    // An all-SWA draft has no full mask; an all-full draft has no SWA mask. Both masks share the
-    // same dimensions, so use whichever one is live to derive shape.
-    ggml_tensor * mask_dims = kq_mask != nullptr ? kq_mask : kq_mask_swa;
-    if (mask_dims == nullptr) {
-        LLAMA_LOG_ERROR("%s: DFlash graph inputs are not initialized\n", __func__);
-        return false;
-    }
+    ggml_tensor * kq_mask = lctx.dflash.kv.full_kq_mask_tensor;
+    ggml_tensor * kq_mask_swa = lctx.dflash.kv.swa_kq_mask_tensor;
+    ggml_tensor * draft_tail_rows_full = lctx.dflash.kv.full_draft_tail_rows_tensor;
+    ggml_tensor * draft_tail_rows_swa = lctx.dflash.kv.swa_draft_tail_rows_tensor;
 
     if (!validate_dflash_graph_contract(lctx)) {
         return false;
@@ -353,14 +474,16 @@ bool llama_prepare_dflash_graph_inputs(
     const int32_t n_rows = lctx.dflash.target.features_n_rows;
     const int32_t append_rows_available = lctx.dflash.target.append_features_n_rows;
     const int32_t width = (int32_t) lctx.model.hparams.dflash_n_target_features;
-    const int32_t graph_cross_ctx = (int32_t) lctx.dflash.kv.cache_pos.size();
-    const int32_t n_mask_tokens = (int32_t) mask_dims->ne[1];
-    const int32_t n_kv_total = (int32_t) mask_dims->ne[0];
-    ggml_tensor * draft_tail_rows = lctx.dflash.kv.draft_tail_rows_tensor;
+    const auto & kv = lctx.dflash.kv;
+    const llama_dflash_layout & full_layout = kv.full_layout;
+    const llama_dflash_layout & swa_layout = llama_dflash_select_layout(kv, true);
+    const int32_t full_capacity = full_layout.capacity;
+    const int32_t swa_capacity = swa_layout.capacity;
+    const int32_t max_layout_capacity = std::max(full_capacity, swa_capacity);
 
-    if (graph_cross_ctx != cross_ctx) {
-        LLAMA_LOG_ERROR("%s: DFlash graph cross_ctx drift (graph=%d configured=%d)\n",
-                __func__, graph_cross_ctx, cross_ctx);
+    if (kv.has_full_layers && full_capacity != cross_ctx) {
+        LLAMA_LOG_ERROR("%s: DFlash full-layout cross_ctx drift (layout=%d configured=%d)\n",
+                __func__, full_capacity, cross_ctx);
         return false;
     }
     if (n_rows <= 0) {
@@ -374,19 +497,6 @@ bool llama_prepare_dflash_graph_inputs(
                 __func__, n_rows, width, total_floats, cross_ctx);
         return false;
     }
-
-    if (n_kv_total < cross_ctx + (int32_t) n_tokens) {
-        LLAMA_LOG_ERROR("%s: invalid DFlash mask shape (n_kv_total=%d < cross_ctx+n_tokens=%d)\n",
-                __func__, n_kv_total, cross_ctx + (int32_t) n_tokens);
-        return false;
-    }
-    if (draft_tail_rows == nullptr || draft_tail_rows->type != GGML_TYPE_I32 || draft_tail_rows->ne[0] != (int64_t) n_tokens) {
-        LLAMA_LOG_ERROR("%s: DFlash draft tail row input is not initialized for n_tokens=%u\n", __func__, n_tokens);
-        return false;
-    }
-
-    lctx.dflash.target.pos_ctx_data.resize((size_t) cross_ctx);
-    std::fill(lctx.dflash.target.pos_ctx_data.begin(), lctx.dflash.target.pos_ctx_data.end(), 0);
     if (src_pos == nullptr || total_positions != (size_t) n_rows) {
         LLAMA_LOG_ERROR("%s: missing DFlash target positions (rows=%d positions=%zu cross_ctx=%d)\n",
                 __func__, n_rows, total_positions, cross_ctx);
@@ -402,32 +512,51 @@ bool llama_prepare_dflash_graph_inputs(
         }
     }
 
-    const llama_dflash_kv_cache_transition cache_plan = llama_plan_dflash_kv_cache_transition(
-        cross_ctx,
-        lctx.dflash.kv.cache_n_filled,
-        lctx.dflash.kv.cache_write_pos,
-        lctx.dflash.kv.cache_valid,
-        lctx.dflash.kv.cache_applied_window_version,
-        lctx.dflash.target.version,
-        lctx.dflash.target.keep_rows,
-        lctx.dflash.target.append_rows,
-        lctx.dflash.target.replace,
-        n_rows);
+    const llama_dflash_kv_cache_transition full_plan = kv.has_full_layers
+            ? llama_plan_dflash_kv_cache_transition(
+                    full_capacity,
+                    full_layout.n_filled,
+                    full_layout.write_pos,
+                    full_layout.valid,
+                    full_layout.applied_window_version,
+                    lctx.dflash.target.version,
+                    lctx.dflash.target.keep_rows,
+                    lctx.dflash.target.append_rows,
+                    lctx.dflash.target.replace,
+                    n_rows)
+            : llama_dflash_kv_cache_transition{};
+    const llama_dflash_kv_cache_transition swa_plan = kv.has_swa_layers
+            ? llama_plan_dflash_kv_cache_transition(
+                    swa_capacity,
+                    swa_layout.n_filled,
+                    swa_layout.write_pos,
+                    swa_layout.valid,
+                    swa_layout.applied_window_version,
+                    lctx.dflash.target.version,
+                    lctx.dflash.target.keep_rows,
+                    lctx.dflash.target.append_rows,
+                    lctx.dflash.target.replace,
+                    n_rows)
+            : llama_dflash_kv_cache_transition{};
 
+    const int32_t full_update_rows = kv.has_full_layers && !full_plan.cache_up_to_date ? full_plan.update_rows : 0;
+    const int32_t swa_update_rows = kv.has_swa_layers && !kv.share_swa_with_full && !swa_plan.cache_up_to_date ? swa_plan.update_rows : 0;
+    const bool cache_up_to_date = full_update_rows == 0 && swa_update_rows == 0;
+    GGML_UNUSED(cache_up_to_date);
+    const int32_t source_rows = std::max(full_update_rows, swa_update_rows);
+    const bool requires_materialized_window =
+            (full_update_rows > 0 && full_plan.requires_materialized_window) ||
+            (swa_update_rows > 0 && swa_plan.requires_materialized_window);
     const bool have_append_src = append_src != nullptr &&
-        append_rows_available == cache_plan.append_rows &&
-        append_floats == (size_t) cache_plan.append_rows * (size_t) width;
-
-    const int32_t update_rows = cache_plan.cache_up_to_date
-            ? 0
-        : (cache_plan.rebuild_cache ? n_rows : cache_plan.append_rows);
+            append_rows_available > 0 &&
+            append_floats == (size_t) append_rows_available * (size_t) width;
     const size_t max_nodes = lctx.model.max_nodes((int) std::max<int32_t>(1, cross_ctx)) + 24 * lctx.model.hparams.n_layer;
     const size_t meta_size = ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false);
     if (lctx.dflash.kv.cache_compute_meta.size() != meta_size) {
         lctx.dflash.kv.cache_compute_meta.resize(meta_size);
     }
 
-    if (lctx.dflash.kv.cache_sched == nullptr || lctx.dflash.kv.cache_reserved_rows != cross_ctx) {
+    if (lctx.dflash.kv.cache_sched == nullptr || lctx.dflash.kv.cache_reserved_rows != max_layout_capacity) {
         std::vector<ggml_backend_buffer_type_t> backend_buft;
         backend_buft.reserve(lctx.backends.size());
         for (auto * backend : lctx.backends) {
@@ -444,12 +573,35 @@ bool llama_prepare_dflash_graph_inputs(
         }
         lctx.dflash.kv.cache_graph = nullptr;
         lctx.dflash.kv.cache_graph_rows = 0;
-        lctx.dflash.kv.cache_graph_write_pos = 0;
+        lctx.dflash.kv.cache_graph_full_update_rows = 0;
+        lctx.dflash.kv.cache_graph_swa_update_rows = 0;
+        lctx.dflash.kv.cache_graph_full_source_row_offset = 0;
+        lctx.dflash.kv.cache_graph_swa_source_row_offset = 0;
+        lctx.dflash.kv.cache_graph_full_write_pos = 0;
+        lctx.dflash.kv.cache_graph_swa_write_pos = 0;
 
         const int32_t saved_update_rows = lctx.dflash.kv.cache_update_rows;
-        lctx.dflash.kv.cache_update_rows = cross_ctx;
+        const int32_t saved_full_update_rows = lctx.dflash.kv.full_update_rows;
+        const int32_t saved_swa_update_rows = lctx.dflash.kv.swa_update_rows;
+        const int32_t saved_full_source_row_offset = lctx.dflash.kv.full_source_row_offset;
+        const int32_t saved_swa_source_row_offset = lctx.dflash.kv.swa_source_row_offset;
+        const int32_t saved_full_update_write_pos = lctx.dflash.kv.full_update_write_pos;
+        const int32_t saved_swa_update_write_pos = lctx.dflash.kv.swa_update_write_pos;
+        lctx.dflash.kv.cache_update_rows = std::max(1, max_layout_capacity);
+        lctx.dflash.kv.full_update_rows = lctx.dflash.kv.full_layout.capacity > 0 ? lctx.dflash.kv.full_layout.capacity : 0;
+        lctx.dflash.kv.swa_update_rows = (!kv.share_swa_with_full && lctx.dflash.kv.swa_layout.capacity > 0) ? lctx.dflash.kv.swa_layout.capacity : 0;
+        lctx.dflash.kv.full_source_row_offset = 0;
+        lctx.dflash.kv.swa_source_row_offset = std::max(0, lctx.dflash.kv.cache_update_rows - lctx.dflash.kv.swa_update_rows);
+        lctx.dflash.kv.full_update_write_pos = lctx.dflash.kv.full_layout.capacity > 1 ? 1 : 0;
+        lctx.dflash.kv.swa_update_write_pos = lctx.dflash.kv.swa_layout.capacity > 1 ? 1 : 0;
         ggml_cgraph * gf_reserve = llm_build_context::llama_build_graph_dflash_kv_cache(lctx);
         lctx.dflash.kv.cache_update_rows = saved_update_rows;
+        lctx.dflash.kv.full_update_rows = saved_full_update_rows;
+        lctx.dflash.kv.swa_update_rows = saved_swa_update_rows;
+        lctx.dflash.kv.full_source_row_offset = saved_full_source_row_offset;
+        lctx.dflash.kv.swa_source_row_offset = saved_swa_source_row_offset;
+        lctx.dflash.kv.full_update_write_pos = saved_full_update_write_pos;
+        lctx.dflash.kv.swa_update_write_pos = saved_swa_update_write_pos;
         if (gf_reserve == nullptr) {
             LLAMA_LOG_ERROR("%s: failed to build DFlash K/V cache reserve graph\n", __func__);
             return false;
@@ -461,34 +613,62 @@ bool llama_prepare_dflash_graph_inputs(
             LLAMA_LOG_ERROR("%s: failed to initialize DFlash K/V scheduler\n", __func__);
             return false;
         }
-        lctx.dflash.kv.cache_reserved_rows = cross_ctx;
+        lctx.dflash.kv.cache_reserved_rows = max_layout_capacity;
     }
 
-    if (update_rows > 0) {
+    if (source_rows > 0) {
         const float * update_src = nullptr;
-        if (have_append_src && update_rows == cache_plan.append_rows) {
-            update_src = append_src;
-        } else if (have_full_src) {
-            update_src = src + (size_t) (n_rows - update_rows) * (size_t) width;
+        if (requires_materialized_window) {
+            if (have_full_src) {
+                update_src = src + (size_t) (n_rows - source_rows) * (size_t) width;
+            }
+        } else if (have_append_src && append_rows_available >= source_rows) {
+            update_src = append_src + (size_t) (append_rows_available - source_rows) * (size_t) width;
         }
-        const llama_pos * update_pos = src_pos + (n_rows - update_rows);
+        const llama_pos * update_pos = src_pos + (n_rows - source_rows);
 
         if (update_src == nullptr) {
-            LLAMA_LOG_ERROR("%s: missing DFlash appended target features for cached update (rows=%d append_rows=%d floats=%zu)\n",
-                    __func__, n_rows, update_rows, append_floats);
+            LLAMA_LOG_ERROR("%s: missing DFlash source features for cached update (rows=%d source_rows=%d append_rows=%d append_floats=%zu materialized=%d)\n",
+                    __func__, n_rows, source_rows, append_rows_available, append_floats, (int) requires_materialized_window);
             return false;
         }
 
-        if (cache_plan.rebuild_cache) {
-            llama_reset_dflash_kv_cache_state(&lctx);
+        auto reset_layout_metadata = [](llama_dflash_layout & layout) {
+            layout.n_filled = 0;
+            layout.write_pos = 0;
+            layout.applied_window_version = 0;
+            layout.valid = false;
+            std::fill(layout.slot_valid.begin(), layout.slot_valid.end(), 0);
+        };
+
+        if (full_update_rows > 0 && full_plan.rebuild_cache) {
+            reset_layout_metadata(lctx.dflash.kv.full_layout);
+        }
+        if (swa_update_rows > 0 && swa_plan.rebuild_cache && !kv.share_swa_with_full) {
+            reset_layout_metadata(lctx.dflash.kv.swa_layout);
         }
 
-        const int32_t cache_write_start = lctx.dflash.kv.cache_write_pos;
-        lctx.dflash.kv.cache_update_rows = update_rows;
+        lctx.dflash.kv.cache_update_rows = source_rows;
+        lctx.dflash.kv.full_update_rows = full_update_rows;
+        lctx.dflash.kv.swa_update_rows = swa_update_rows;
+        lctx.dflash.kv.full_source_row_offset = full_update_rows > 0 ? source_rows - full_update_rows : 0;
+        lctx.dflash.kv.swa_source_row_offset = swa_update_rows > 0 ? source_rows - swa_update_rows : 0;
+        lctx.dflash.kv.full_update_write_pos = full_update_rows > 0
+                ? (full_plan.rebuild_cache ? 0 : lctx.dflash.kv.full_layout.write_pos)
+                : 0;
+        lctx.dflash.kv.swa_update_write_pos = swa_update_rows > 0
+                ? (swa_plan.rebuild_cache ? 0 : lctx.dflash.kv.swa_layout.write_pos)
+                : 0;
+
         ggml_cgraph * gf_kv = nullptr;
         const bool can_reuse_kv_graph = lctx.dflash.kv.cache_graph != nullptr &&
-                lctx.dflash.kv.cache_graph_rows == update_rows &&
-                lctx.dflash.kv.cache_graph_write_pos == lctx.dflash.kv.cache_write_pos;
+                lctx.dflash.kv.cache_graph_rows == source_rows &&
+                lctx.dflash.kv.cache_graph_full_update_rows == full_update_rows &&
+                lctx.dflash.kv.cache_graph_swa_update_rows == swa_update_rows &&
+                lctx.dflash.kv.cache_graph_full_source_row_offset == lctx.dflash.kv.full_source_row_offset &&
+                lctx.dflash.kv.cache_graph_swa_source_row_offset == lctx.dflash.kv.swa_source_row_offset &&
+                lctx.dflash.kv.cache_graph_full_write_pos == lctx.dflash.kv.full_update_write_pos &&
+                lctx.dflash.kv.cache_graph_swa_write_pos == lctx.dflash.kv.swa_update_write_pos;
         if (can_reuse_kv_graph) {
             gf_kv = lctx.dflash.kv.cache_graph;
         } else {
@@ -502,8 +682,13 @@ bool llama_prepare_dflash_graph_inputs(
             ggml_backend_sched_alloc_graph(lctx.dflash.kv.cache_sched, gf_kv);
 
             lctx.dflash.kv.cache_graph = gf_kv;
-            lctx.dflash.kv.cache_graph_rows = update_rows;
-            lctx.dflash.kv.cache_graph_write_pos = lctx.dflash.kv.cache_write_pos;
+            lctx.dflash.kv.cache_graph_rows = source_rows;
+            lctx.dflash.kv.cache_graph_full_update_rows = full_update_rows;
+            lctx.dflash.kv.cache_graph_swa_update_rows = swa_update_rows;
+            lctx.dflash.kv.cache_graph_full_source_row_offset = lctx.dflash.kv.full_source_row_offset;
+            lctx.dflash.kv.cache_graph_swa_source_row_offset = lctx.dflash.kv.swa_source_row_offset;
+            lctx.dflash.kv.cache_graph_full_write_pos = lctx.dflash.kv.full_update_write_pos;
+            lctx.dflash.kv.cache_graph_swa_write_pos = lctx.dflash.kv.swa_update_write_pos;
         }
 
         ggml_backend_t kv_feature_backend = llama_backend_for_tensor(lctx, lctx.dflash.kv.cache_input_target_features);
@@ -522,140 +707,182 @@ bool llama_prepare_dflash_graph_inputs(
         llama_graph_compute_sched(lctx, lctx.dflash.kv.cache_sched, gf_kv, lctx.cparams.n_threads);
         ggml_backend_sched_synchronize(lctx.dflash.kv.cache_sched);
 
-        if ((int32_t) lctx.dflash.kv.cache_pos.size() != cross_ctx) {
-            lctx.dflash.kv.cache_pos.assign((size_t) cross_ctx, 0);
-        }
-        if ((int32_t) lctx.dflash.kv.cache_slot_valid.size() != cross_ctx) {
-            lctx.dflash.kv.cache_slot_valid.assign((size_t) cross_ctx, 0);
-        }
-        for (int32_t i = 0; i < update_rows; ++i) {
-            const int32_t slot = (cache_write_start + i) % cross_ctx;
-            lctx.dflash.kv.cache_pos[(size_t) slot] = update_pos[i];
-            lctx.dflash.kv.cache_slot_valid[(size_t) slot] = 1;
-        }
-
-        lctx.dflash.kv.cache_n_filled = std::min(cross_ctx, lctx.dflash.kv.cache_n_filled + update_rows);
-        lctx.dflash.kv.cache_write_pos = (lctx.dflash.kv.cache_write_pos + update_rows) % cross_ctx;
-        lctx.dflash.kv.cache_applied_window_version = lctx.dflash.target.version;
-        lctx.dflash.kv.cache_valid = true;
-        lctx.dflash.kv.cache_view_n_filled = lctx.dflash.kv.cache_n_filled;
-        lctx.dflash.kv.cache_view_write_pos = lctx.dflash.kv.cache_write_pos;
-        lctx.dflash.kv.cache_view_valid = true;
-    }
-
-    if ((int32_t) lctx.dflash.kv.cache_pos.size() != cross_ctx ||
-            (int32_t) lctx.dflash.kv.cache_slot_valid.size() != cross_ctx) {
-        LLAMA_LOG_ERROR("%s: DFlash physical cache slot map is not initialized\n", __func__);
-        return false;
-    }
-
-    for (int32_t i = 0; i < cross_ctx; ++i) {
-        if (lctx.dflash.kv.cache_slot_valid[(size_t) i]) {
-            lctx.dflash.target.pos_ctx_data[(size_t) i] = lctx.dflash.kv.cache_pos[(size_t) i];
-        }
-    }
-
-    std::vector<int32_t> draft_tail_rows_data((size_t) n_tokens);
-    for (uint32_t i = 0; i < n_tokens; ++i) {
-        draft_tail_rows_data[(size_t) i] = cross_ctx + (int32_t) i;
-    }
-    ggml_backend_tensor_set(draft_tail_rows, draft_tail_rows_data.data(), 0, ggml_nbytes(draft_tail_rows));
-
-    const size_t mask_elems = (size_t) n_kv_total * (size_t) n_mask_tokens;
-    if (kq_mask == nullptr) {
-        // all-SWA draft: the full mask was not created (no non-SWA layer consumes it); only the
-        // SWA mask below is populated.
-    } else if (kq_mask->type == GGML_TYPE_F16) {
-        const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
-        const ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
-        std::vector<ggml_fp16_t> mask_f16(mask_elems, h_inf);
-        std::vector<ggml_fp16_t> row_f16((size_t) n_kv_total, h_inf);
-        for (int32_t i = 0; i < cross_ctx; ++i) {
-            if (lctx.dflash.kv.cache_slot_valid[(size_t) i]) {
-                row_f16[(size_t) i] = h_zero;
+        auto apply_layout_update = [&](llama_dflash_layout & layout, const llama_dflash_kv_cache_transition & plan, int32_t layout_update_rows) {
+            if (layout.capacity <= 0 || layout_update_rows <= 0) {
+                return;
             }
+
+            if ((int32_t) layout.positions.size() != layout.capacity) {
+                layout.positions.assign((size_t) layout.capacity, 0);
+            }
+            if ((int32_t) layout.slot_valid.size() != layout.capacity) {
+                layout.slot_valid.assign((size_t) layout.capacity, 0);
+            }
+
+            const int32_t write_start = plan.rebuild_cache ? 0 : layout.write_pos;
+            const llama_pos * layout_pos = update_pos + (source_rows - layout_update_rows);
+            for (int32_t i = 0; i < layout_update_rows; ++i) {
+                const int32_t slot = (write_start + i) % layout.capacity;
+                layout.positions[(size_t) slot] = layout_pos[i];
+                layout.slot_valid[(size_t) slot] = 1;
+            }
+
+            llama_dflash_assign_layout_state(layout, plan.next_n_filled, plan.next_write_pos, lctx.dflash.target.version, true);
+        };
+
+        if (kv.has_full_layers) {
+            apply_layout_update(lctx.dflash.kv.full_layout, full_plan, full_update_rows);
         }
-        std::fill(row_f16.begin() + cross_ctx, row_f16.begin() + cross_ctx + n_tokens, h_zero);
-        for (uint32_t j = 0; j < n_tokens; ++j) {
-            std::memcpy(mask_f16.data() + (size_t) j * (size_t) n_kv_total, row_f16.data(), (size_t) n_kv_total * sizeof(ggml_fp16_t));
+        if (kv.has_swa_layers && !kv.share_swa_with_full) {
+            apply_layout_update(lctx.dflash.kv.swa_layout, swa_plan, swa_update_rows);
         }
-        ggml_backend_tensor_set(kq_mask, mask_f16.data(), 0, ggml_nbytes(kq_mask));
     } else {
-        lctx.dflash.target.kq_mask_data.assign(mask_elems, -INFINITY);
-        std::vector<float> row_f32((size_t) n_kv_total, -INFINITY);
-        for (int32_t i = 0; i < cross_ctx; ++i) {
-            if (lctx.dflash.kv.cache_slot_valid[(size_t) i]) {
-                row_f32[(size_t) i] = 0.0f;
-            }
-        }
-        std::fill(row_f32.begin() + cross_ctx, row_f32.begin() + cross_ctx + n_tokens, 0.0f);
-        for (uint32_t j = 0; j < n_tokens; ++j) {
-            std::memcpy(lctx.dflash.target.kq_mask_data.data() + (size_t) j * (size_t) n_kv_total, row_f32.data(), (size_t) n_kv_total * sizeof(float));
-        }
-        ggml_backend_tensor_set(kq_mask, lctx.dflash.target.kq_mask_data.data(), 0, ggml_nbytes(kq_mask));
+        lctx.dflash.kv.cache_update_rows = 0;
+        lctx.dflash.kv.full_update_rows = 0;
+        lctx.dflash.kv.swa_update_rows = 0;
+        lctx.dflash.kv.full_source_row_offset = 0;
+        lctx.dflash.kv.swa_source_row_offset = 0;
+        lctx.dflash.kv.full_update_write_pos = 0;
+        lctx.dflash.kv.swa_update_write_pos = 0;
     }
 
-    if (kq_mask_swa != nullptr) {
+    auto set_tail_rows = [&](ggml_tensor * tensor, int32_t history_capacity, const char * tag) -> bool {
+        if (tensor == nullptr) {
+            return true;
+        }
+        if (tensor->type != GGML_TYPE_I32 || tensor->ne[0] != (int64_t) n_tokens) {
+            LLAMA_LOG_ERROR("%s: DFlash %s tail row input is not initialized for n_tokens=%u\n", __func__, tag, n_tokens);
+            return false;
+        }
+        std::vector<int32_t> draft_tail_rows_data((size_t) n_tokens);
+        for (uint32_t i = 0; i < n_tokens; ++i) {
+            draft_tail_rows_data[(size_t) i] = history_capacity + (int32_t) i;
+        }
+        ggml_backend_tensor_set(tensor, draft_tail_rows_data.data(), 0, ggml_nbytes(tensor));
+        return true;
+    };
+
+    auto build_full_mask = [&](ggml_tensor * tensor, const llama_dflash_layout & layout) -> bool {
+        if (tensor == nullptr) {
+            return true;
+        }
+        const int32_t logical_width = layout.capacity + (int32_t) n_tokens;
+        const int32_t mask_width = (int32_t) tensor->ne[0];
+        const int32_t n_mask_tokens = (int32_t) tensor->ne[1];
+        if (mask_width < logical_width) {
+            LLAMA_LOG_ERROR("%s: DFlash full mask width drift (mask=%d expected>=%d)\n",
+                    __func__, mask_width, logical_width);
+            return false;
+        }
+        const size_t mask_elems = (size_t) mask_width * (size_t) n_mask_tokens;
+        if (tensor->type == GGML_TYPE_F16) {
+            const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
+            const ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
+            std::vector<ggml_fp16_t> mask_f16(mask_elems, h_inf);
+            std::vector<ggml_fp16_t> row_f16((size_t) mask_width, h_inf);
+            for (int32_t i = 0; i < layout.capacity; ++i) {
+                if (layout.slot_valid[(size_t) i]) {
+                    row_f16[(size_t) i] = h_zero;
+                }
+            }
+            std::fill(row_f16.begin() + layout.capacity, row_f16.begin() + logical_width, h_zero);
+            for (uint32_t j = 0; j < n_tokens; ++j) {
+                std::memcpy(mask_f16.data() + (size_t) j * (size_t) mask_width, row_f16.data(), (size_t) mask_width * sizeof(ggml_fp16_t));
+            }
+            ggml_backend_tensor_set(tensor, mask_f16.data(), 0, ggml_nbytes(tensor));
+        } else {
+            lctx.dflash.target.kq_mask_data.assign(mask_elems, -INFINITY);
+            std::vector<float> row_f32((size_t) mask_width, -INFINITY);
+            for (int32_t i = 0; i < layout.capacity; ++i) {
+                if (layout.slot_valid[(size_t) i]) {
+                    row_f32[(size_t) i] = 0.0f;
+                }
+            }
+            std::fill(row_f32.begin() + layout.capacity, row_f32.begin() + logical_width, 0.0f);
+            for (uint32_t j = 0; j < n_tokens; ++j) {
+                std::memcpy(lctx.dflash.target.kq_mask_data.data() + (size_t) j * (size_t) mask_width, row_f32.data(), (size_t) mask_width * sizeof(float));
+            }
+            ggml_backend_tensor_set(tensor, lctx.dflash.target.kq_mask_data.data(), 0, ggml_nbytes(tensor));
+        }
+        return true;
+    };
+
+    auto build_swa_mask = [&](ggml_tensor * tensor, const llama_dflash_layout & layout) -> bool {
+        if (tensor == nullptr) {
+            return true;
+        }
+        const int32_t logical_width = layout.capacity + (int32_t) n_tokens;
+        const int32_t mask_width = (int32_t) tensor->ne[0];
+        const int32_t n_mask_tokens = (int32_t) tensor->ne[1];
+        if (mask_width < logical_width) {
+            LLAMA_LOG_ERROR("%s: DFlash SWA mask width drift (mask=%d expected>=%d)\n",
+                    __func__, mask_width, logical_width);
+            return false;
+        }
         const int32_t swa_window = (int32_t) lctx.model.hparams.n_swa;
         const int32_t draft_pos_base = (int32_t) last_target_pos;
-
-        if (kq_mask_swa->type == GGML_TYPE_F16) {
+        const size_t mask_elems = (size_t) mask_width * (size_t) n_mask_tokens;
+        if (tensor->type == GGML_TYPE_F16) {
             const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
             const ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
             std::vector<ggml_fp16_t> mask_swa_f16(mask_elems, h_inf);
             for (uint32_t j = 0; j < n_tokens; ++j) {
-                ggml_fp16_t * row = mask_swa_f16.data() + (size_t) j * (size_t) n_kv_total;
+                ggml_fp16_t * row = mask_swa_f16.data() + (size_t) j * (size_t) mask_width;
                 const int32_t q_pos = draft_pos_base + (int32_t) j;
-
-                for (int32_t k = 0; k < cross_ctx; ++k) {
-                    if (!lctx.dflash.kv.cache_slot_valid[(size_t) k]) {
+                for (int32_t k = 0; k < layout.capacity; ++k) {
+                    if (!layout.slot_valid[(size_t) k]) {
                         continue;
                     }
-                    const int32_t k_pos = (int32_t) lctx.dflash.target.pos_ctx_data[(size_t) k];
+                    const int32_t k_pos = (int32_t) layout.positions[(size_t) k];
                     if (q_pos - k_pos < swa_window) {
                         row[k] = h_zero;
                     }
                 }
-
-                for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
-                    const int32_t block_k = k - cross_ctx;
-                    // intra-block draft tokens are contiguous from draft_pos_base, so the
-                    // SWA distance is (j - block_k); apply the same window bound as the
-                    // cross-context section above (causal AND within n_swa).
+                for (int32_t k = layout.capacity; k < logical_width; ++k) {
+                    const int32_t block_k = k - layout.capacity;
                     if (block_k <= (int32_t) j && ((int32_t) j - block_k) < swa_window) {
                         row[k] = h_zero;
                     }
                 }
             }
-            ggml_backend_tensor_set(kq_mask_swa, mask_swa_f16.data(), 0, ggml_nbytes(kq_mask_swa));
+            ggml_backend_tensor_set(tensor, mask_swa_f16.data(), 0, ggml_nbytes(tensor));
         } else {
             lctx.dflash.target.kq_mask_swa_data.assign(mask_elems, -INFINITY);
             for (uint32_t j = 0; j < n_tokens; ++j) {
-                float * row = lctx.dflash.target.kq_mask_swa_data.data() + (size_t) j * (size_t) n_kv_total;
+                float * row = lctx.dflash.target.kq_mask_swa_data.data() + (size_t) j * (size_t) mask_width;
                 const int32_t q_pos = draft_pos_base + (int32_t) j;
-
-                for (int32_t k = 0; k < cross_ctx; ++k) {
-                    if (!lctx.dflash.kv.cache_slot_valid[(size_t) k]) {
+                for (int32_t k = 0; k < layout.capacity; ++k) {
+                    if (!layout.slot_valid[(size_t) k]) {
                         continue;
                     }
-                    const int32_t k_pos = (int32_t) lctx.dflash.target.pos_ctx_data[(size_t) k];
+                    const int32_t k_pos = (int32_t) layout.positions[(size_t) k];
                     if (q_pos - k_pos < swa_window) {
                         row[k] = 0.0f;
                     }
                 }
-
-                for (int32_t k = cross_ctx; k < cross_ctx + (int32_t) n_tokens; ++k) {
-                    const int32_t block_k = k - cross_ctx;
-                    // intra-block draft tokens are contiguous from draft_pos_base, so the
-                    // SWA distance is (j - block_k); apply the same window bound as the
-                    // cross-context section above (causal AND within n_swa).
+                for (int32_t k = layout.capacity; k < logical_width; ++k) {
+                    const int32_t block_k = k - layout.capacity;
                     if (block_k <= (int32_t) j && ((int32_t) j - block_k) < swa_window) {
                         row[k] = 0.0f;
                     }
                 }
             }
-            ggml_backend_tensor_set(kq_mask_swa, lctx.dflash.target.kq_mask_swa_data.data(), 0, ggml_nbytes(kq_mask_swa));
+            ggml_backend_tensor_set(tensor, lctx.dflash.target.kq_mask_swa_data.data(), 0, ggml_nbytes(tensor));
         }
+        return true;
+    };
+
+    if (!set_tail_rows(draft_tail_rows_full, full_capacity, "full")) {
+        return false;
+    }
+    if (draft_tail_rows_swa != draft_tail_rows_full && !set_tail_rows(draft_tail_rows_swa, swa_capacity, "swa")) {
+        return false;
+    }
+    if (!build_full_mask(kq_mask, full_layout)) {
+        return false;
+    }
+    if (!build_swa_mask(kq_mask_swa, swa_layout)) {
+        return false;
     }
 
     return true;

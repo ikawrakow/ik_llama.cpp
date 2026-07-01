@@ -4,6 +4,12 @@
 
 #include <cmath>
 
+using llama_dflash_layout = llama_context::dflash_runtime::llama_dflash_kv_layout;
+
+static const llama_dflash_layout & llama_dflash_select_layout(const llama_context::dflash_runtime::kv_runtime_state & kv, bool use_swa) {
+    return (use_swa && !kv.share_swa_with_full) ? kv.swa_layout : kv.full_layout;
+}
+
 ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
@@ -11,14 +17,13 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     const int64_t ctx_len = lctx.dflash.visible_cross_ctx > 0
             ? (int64_t) lctx.dflash.visible_cross_ctx
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
-    const int64_t update_rows = std::max<int64_t>(1, lctx.dflash.kv.cache_update_rows > 0 ? lctx.dflash.kv.cache_update_rows : ctx_len);
-    const int32_t write_pos = lctx.dflash.kv.cache_write_pos;
 
     GGML_ASSERT(n_embd_head_k == n_embd_head_v);
     GGML_ASSERT(n_target_features > 0);
     GGML_ASSERT(lctx.ensure_dflash_kv_cache_tensors((int32_t) ctx_len));
-    GGML_ASSERT(update_rows > 0 && update_rows <= ctx_len);
-    GGML_ASSERT(write_pos >= 0 && write_pos < ctx_len);
+    const int64_t update_rows = std::max<int64_t>(1, lctx.dflash.kv.cache_update_rows > 0 ? lctx.dflash.kv.cache_update_rows : ctx_len);
+    const int32_t max_layout_capacity = std::max(lctx.dflash.kv.full_layout.capacity, lctx.dflash.kv.swa_layout.capacity);
+    GGML_ASSERT(update_rows > 0 && update_rows <= std::max<int64_t>(1, max_layout_capacity));
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(1, update_rows)) + 24 * n_layer, false);
 
@@ -37,37 +42,65 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     for (int il = 0; il < n_layer; ++il) {
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.k_ctx_cache.size());
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.v_ctx_cache.size());
+        const bool layer_is_swa = lctx.dflash.kv.layer_uses_swa_layout[(size_t) il] != 0;
+        const bool uses_separate_swa_storage = layer_is_swa && !lctx.dflash.kv.share_swa_with_full;
+        const llama_dflash_layout & layout = llama_dflash_select_layout(lctx.dflash.kv, layer_is_swa);
+        const int32_t layer_capacity = lctx.dflash.kv.layer_history_capacity[(size_t) il];
+        const int32_t layer_update_rows = uses_separate_swa_storage ? lctx.dflash.kv.swa_update_rows : lctx.dflash.kv.full_update_rows;
+        const int32_t source_row_offset = uses_separate_swa_storage ? lctx.dflash.kv.swa_source_row_offset : lctx.dflash.kv.full_source_row_offset;
+        const int32_t write_pos = uses_separate_swa_storage ? lctx.dflash.kv.swa_update_write_pos : lctx.dflash.kv.full_update_write_pos;
 
-        ggml_tensor * Kcur_ctx_proj = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, fused_target);
+        GGML_ASSERT(layer_capacity == layout.capacity);
+        GGML_ASSERT(layer_update_rows >= 0 && layer_update_rows <= (int32_t) update_rows);
+        GGML_ASSERT(write_pos >= 0 && write_pos < std::max(1, layer_capacity));
+
+        if (layer_update_rows <= 0) {
+            continue;
+        }
+
+        ggml_tensor * layer_target = fused_target;
+        ggml_tensor * layer_pos = lctx.dflash.kv.cache_input_pos_ctx;
+        if (source_row_offset > 0 || layer_update_rows != (int32_t) update_rows) {
+            layer_target = ggml_view_2d(ctx0, fused_target,
+                    fused_target->ne[0],
+                    layer_update_rows,
+                    fused_target->nb[1],
+                    (size_t) source_row_offset * fused_target->nb[1]);
+            layer_pos = ggml_view_1d(ctx0, lctx.dflash.kv.cache_input_pos_ctx,
+                    layer_update_rows,
+                    (size_t) source_row_offset * lctx.dflash.kv.cache_input_pos_ctx->nb[0]);
+        }
+
+        ggml_tensor * Kcur_ctx_proj = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, layer_target);
         cb(Kcur_ctx_proj, "dflash_kv_k_proj", il);
 
-        ggml_tensor * Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx_proj, n_embd_head_k, n_head_kv, update_rows);
+        ggml_tensor * Kcur_ctx = ggml_reshape_3d(ctx0, Kcur_ctx_proj, n_embd_head_k, n_head_kv, layer_update_rows);
         Kcur_ctx = llm_build_norm(ctx0, Kcur_ctx, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(Kcur_ctx, "dflash_kv_k_norm", il);
         const float target_freq_base = hparams.dflash_backbone_rotary_base > 0.0f
             ? hparams.dflash_backbone_rotary_base : freq_base;
-        Kcur_ctx = ggml_rope_ext(ctx0, Kcur_ctx, lctx.dflash.kv.cache_input_pos_ctx, nullptr,
+        Kcur_ctx = ggml_rope_ext(ctx0, Kcur_ctx, layer_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, target_freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Kcur_ctx, "dflash_kv_k_rope", il);
         Kcur_ctx = ggml_cont(ctx0, ggml_permute(ctx0, Kcur_ctx, 0, 2, 1, 3));
         cb(Kcur_ctx, "dflash_kv_k_physical", il);
 
-        ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
+        ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, layer_target);
         cb(Vcur_ctx, "dflash_kv_v_proj", il);
         if (std::abs(hparams.f_attn_v_scale - 1.0f) > 1e-4f) {
             Vcur_ctx = ggml_scale(ctx0, Vcur_ctx, hparams.f_attn_v_scale);
             cb(Vcur_ctx, "dflash_kv_v_scaled", il);
         }
-        Vcur_ctx = ggml_reshape_3d(ctx0, Vcur_ctx, n_embd_head_v, n_head_kv, update_rows);
+        Vcur_ctx = ggml_reshape_3d(ctx0, Vcur_ctx, n_embd_head_v, n_head_kv, layer_update_rows);
         Vcur_ctx = ggml_cont(ctx0, ggml_permute(ctx0, Vcur_ctx, 0, 2, 1, 3));
         cb(Vcur_ctx, "dflash_kv_v_physical", il);
 
-        const int32_t first_rows = std::min<int32_t>((int32_t) update_rows, (int32_t) ctx_len - write_pos);
-        const int32_t second_rows = (int32_t) update_rows - first_rows;
+        const int32_t first_rows = std::min<int32_t>(layer_update_rows, layer_capacity - write_pos);
+        const int32_t second_rows = layer_update_rows - first_rows;
 
         if (first_rows > 0) {
-            ggml_tensor * Ksrc_first = first_rows == update_rows
+            ggml_tensor * Ksrc_first = first_rows == layer_update_rows
                 ? Kcur_ctx
                 : ggml_view_3d(ctx0, Kcur_ctx,
                     Kcur_ctx->ne[0],
@@ -76,7 +109,7 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
                     Kcur_ctx->nb[1],
                     Kcur_ctx->nb[2],
                     0);
-            ggml_tensor * Vsrc_first = first_rows == update_rows
+            ggml_tensor * Vsrc_first = first_rows == layer_update_rows
                 ? Vcur_ctx
                 : ggml_view_3d(ctx0, Vcur_ctx,
                     Vcur_ctx->ne[0],
@@ -159,61 +192,56 @@ ggml_cgraph * llm_build_context::build_dflash() {
     const int64_t ctx_len = lctx.dflash.visible_cross_ctx > 0
             ? (int64_t) lctx.dflash.visible_cross_ctx
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
-    const int64_t n_kv_total = GGML_PAD(ctx_len + n_tokens, flash_attn ? 256 : 32);
 
     GGML_ASSERT(n_embd_head_k == n_embd_head_v);
     GGML_ASSERT(n_target_features > 0);
     GGML_ASSERT(lctx.ensure_dflash_kv_cache_tensors((int32_t) ctx_len));
+    const auto & kv = lctx.dflash.kv;
+    const int32_t full_capacity = kv.full_layout.capacity;
+    const int32_t swa_capacity = llama_dflash_select_layout(kv, true).capacity;
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes((int) std::max<int64_t>(n_tokens, ctx_len)) + 32 * n_layer, false);
 
-    const bool needs_swa_mask = hparams.n_swa > 0 && [&]() {
-        for (int il = 0; il < n_layer; ++il) {
-            if (hparams.swa_layers[il]) {
-                return true;
-            }
-        }
-        return false;
-    }();
+    const bool needs_swa_mask = kv.has_swa_layers;
     const ggml_type mask_type = flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
-
-    // The full (non-SWA) mask is only consumed by non-SWA layers. For an all-SWA draft every layer
-    // uses kq_mask_swa, leaving the full mask a dead graph node that the scheduler never backs with a
-    // buffer (and the unconditional input-set then asserts buf!=NULL). So create each mask only when
-    // some layer uses it: full mask iff any non-SWA layer; swa mask iff needs_swa_mask.
-    const bool needs_full_mask = !needs_swa_mask || [&]() {
-        for (int il = 0; il < n_layer; ++il) {
-            if (!hparams.swa_layers[il]) {
-                return true;
-            }
-        }
-        return false;
-    }();
+    const bool needs_full_mask = kv.has_full_layers;
+    const int32_t full_kv_width = GGML_PAD(full_capacity + (int32_t) n_tokens, flash_attn ? 256 : 32);
+    const int32_t swa_kv_width = GGML_PAD(swa_capacity + (int32_t) n_tokens, flash_attn ? 256 : 32);
 
     lctx.dflash.inputs.kq_mask = nullptr;
-    lctx.dflash.kv.kq_mask_tensor = nullptr;
+    lctx.dflash.kv.full_kq_mask_tensor = nullptr;
     ggml_tensor * dflash_kq_mask_full = nullptr;
     if (needs_full_mask) {
-        lctx.dflash.inputs.kq_mask = ggml_new_tensor_2d(ctx0, mask_type, n_kv_total, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-        lctx.dflash.kv.kq_mask_tensor = lctx.dflash.inputs.kq_mask;
+        lctx.dflash.inputs.kq_mask = ggml_new_tensor_2d(ctx0, mask_type, full_kv_width, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        lctx.dflash.kv.full_kq_mask_tensor = lctx.dflash.inputs.kq_mask;
         ggml_set_input(lctx.dflash.inputs.kq_mask);
         cb(lctx.dflash.inputs.kq_mask, "dflash_kq_mask", -1);
         dflash_kq_mask_full = lctx.dflash.inputs.kq_mask;
     }
 
-    lctx.dflash.kv.draft_tail_rows_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-    ggml_set_input(lctx.dflash.kv.draft_tail_rows_tensor);
-    cb(lctx.dflash.kv.draft_tail_rows_tensor, "dflash_draft_tail_rows", -1);
+    lctx.dflash.kv.full_draft_tail_rows_tensor = nullptr;
+    if (needs_full_mask) {
+        lctx.dflash.kv.full_draft_tail_rows_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+        ggml_set_input(lctx.dflash.kv.full_draft_tail_rows_tensor);
+        cb(lctx.dflash.kv.full_draft_tail_rows_tensor, "dflash_draft_tail_rows_full", -1);
+    }
 
     ggml_tensor * dflash_kq_mask_swa = nullptr;
     lctx.dflash.inputs.kq_mask_swa = nullptr;
-    lctx.dflash.kv.kq_mask_swa_tensor = nullptr;
+    lctx.dflash.kv.swa_kq_mask_tensor = nullptr;
     if (needs_swa_mask) {
-        lctx.dflash.inputs.kq_mask_swa = ggml_new_tensor_2d(ctx0, mask_type, n_kv_total, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-        lctx.dflash.kv.kq_mask_swa_tensor = lctx.dflash.inputs.kq_mask_swa;
+        lctx.dflash.inputs.kq_mask_swa = ggml_new_tensor_2d(ctx0, mask_type, swa_kv_width, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        lctx.dflash.kv.swa_kq_mask_tensor = lctx.dflash.inputs.kq_mask_swa;
         ggml_set_input(lctx.dflash.inputs.kq_mask_swa);
         cb(lctx.dflash.inputs.kq_mask_swa, "dflash_kq_mask_swa", -1);
         dflash_kq_mask_swa = lctx.dflash.inputs.kq_mask_swa;
+    }
+
+    lctx.dflash.kv.swa_draft_tail_rows_tensor = lctx.dflash.kv.full_draft_tail_rows_tensor;
+    if (needs_swa_mask && swa_capacity != full_capacity) {
+        lctx.dflash.kv.swa_draft_tail_rows_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+        ggml_set_input(lctx.dflash.kv.swa_draft_tail_rows_tensor);
+        cb(lctx.dflash.kv.swa_draft_tail_rows_tensor, "dflash_draft_tail_rows_swa", -1);
     }
 
     ggml_tensor * tok_embd = model.tok_embd;
@@ -269,8 +297,12 @@ ggml_cgraph * llm_build_context::build_dflash() {
         GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il] != nullptr);
         GGML_ASSERT(lctx.dflash.kv.v_ctx_cache[il] != nullptr);
         GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il]->type == lctx.dflash.kv.v_ctx_cache[il]->type);
-        GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il]->ne[1] >= n_kv_total);
-        GGML_ASSERT(lctx.dflash.kv.v_ctx_cache[il]->ne[1] >= n_kv_total);
+        const bool layer_is_swa = kv.layer_uses_swa_layout[(size_t) il] != 0;
+        const int32_t layer_history_capacity = kv.layer_history_capacity[(size_t) il];
+        const int32_t layer_logical_width = layer_history_capacity + (int32_t) n_tokens;
+        const int32_t layer_active_width = GGML_PAD(layer_logical_width, flash_attn ? 256 : 32);
+        GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il]->ne[1] >= layer_active_width);
+        GGML_ASSERT(lctx.dflash.kv.v_ctx_cache[il]->ne[1] >= layer_active_width);
 
         //ggml_tensor * Kcur_draft = ggml_cont(ctx0, ggml_permute(ctx0, Kcur_noise, 0, 2, 1, 3));
         //ggml_tensor * Vcur_draft = ggml_cont(ctx0, ggml_permute(ctx0, Vcur_noise, 0, 2, 1, 3));
@@ -279,25 +311,26 @@ ggml_cgraph * llm_build_context::build_dflash() {
         cb(Kcur_draft, "dflash_main_k_perm_cont", il);
         cb(Vcur_draft, "dflash_main_v_perm_cont", il);
 
-        ggml_tensor * Kcur = ggml_set_rows(ctx0, lctx.dflash.kv.k_ctx_cache[il], Kcur_draft, lctx.dflash.kv.draft_tail_rows_tensor);
-        ggml_tensor * Vcur = ggml_set_rows(ctx0, lctx.dflash.kv.v_ctx_cache[il], Vcur_draft, lctx.dflash.kv.draft_tail_rows_tensor);
+        ggml_tensor * draft_tail_rows = layer_is_swa ? lctx.dflash.kv.swa_draft_tail_rows_tensor : lctx.dflash.kv.full_draft_tail_rows_tensor;
+        ggml_tensor * Kcur = ggml_set_rows(ctx0, lctx.dflash.kv.k_ctx_cache[il], Kcur_draft, draft_tail_rows);
+        ggml_tensor * Vcur = ggml_set_rows(ctx0, lctx.dflash.kv.v_ctx_cache[il], Vcur_draft, draft_tail_rows);
         cb(Kcur, "dflash_main_k_set_tail", il);
         cb(Vcur, "dflash_main_v_set_tail", il);
 
-        if (Kcur->ne[1] != n_kv_total) {
+        if (Kcur->ne[1] != layer_active_width) {
             Kcur = ggml_view_3d(ctx0, Kcur,
                 Kcur->ne[0],
-                n_kv_total,
+                layer_active_width,
                 Kcur->ne[2],
                 Kcur->nb[1],
                 Kcur->nb[2],
                 0);
             cb(Kcur, "dflash_main_k_active_view", il);
         }
-        if (Vcur->ne[1] != n_kv_total) {
+        if (Vcur->ne[1] != layer_active_width) {
             Vcur = ggml_view_3d(ctx0, Vcur,
                 Vcur->ne[0],
-                n_kv_total,
+                layer_active_width,
                 Vcur->ne[2],
                 Vcur->nb[1],
                 Vcur->nb[2],
@@ -317,22 +350,23 @@ ggml_cgraph * llm_build_context::build_dflash() {
         ggml_tensor * q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
         ggml_tensor * k = Kcur;
         ggml_tensor * v = Vcur;
-        bool use_swa = hparams.swa_layers[il] && dflash_kq_mask_swa != nullptr;
-        ggml_tensor * dflash_kq_mask_l = use_swa ? dflash_kq_mask_swa : dflash_kq_mask_full;
+        ggml_tensor * dflash_kq_mask_l = layer_is_swa ? dflash_kq_mask_swa : dflash_kq_mask_full;
         cb(q, "q", il);
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, dflash_kq_mask_l, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        if (layer_is_swa && hparams.n_swa > 0 && layer_history_capacity <= (int32_t) hparams.n_swa) {
+            GGML_ASSERT(dflash_kq_mask_l != nullptr);
+            GGML_ASSERT(dflash_kq_mask_l->ne[0] == layer_active_width);
+            GGML_ASSERT(k->ne[1] == layer_active_width);
+            GGML_ASSERT(v->ne[1] == layer_active_width);
+            cur->op_params[4] = hparams.n_swa;
+        }
         if (model.layers[il].attn_sinks) {
             ggml_flash_attn_ext_add_sinks(cur, model.layers[il].attn_sinks);
         }
         cb(cur, "flash_attn", il);
         ggml_build_forward_expand(gf, cur);
-        // Somethiong goes wrong with thisi optimization.
-        // I guess, the cross context does not mingle well with it.
-        //if (use_swa) {
-        //    cur->op_params[4] = hparams.n_swa;
-        //}
 
         cur = ggml_reshape_2d(ctx0, cur, model.layers[il].wo->ne[0], n_tokens);
         cb(cur, "flash_attn_reshaped", il);

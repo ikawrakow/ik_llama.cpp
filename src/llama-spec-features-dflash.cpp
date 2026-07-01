@@ -8,21 +8,31 @@
 #include "llama-model.h"
 #include "llama-context.h"
 
+using llama_dflash_layout = llama_context::dflash_runtime::llama_dflash_kv_layout;
+
+static void llama_dflash_reset_layout(llama_dflash_layout & layout) {
+    layout.n_filled = 0;
+    layout.write_pos = 0;
+    layout.applied_window_version = 0;
+    layout.valid = false;
+    std::fill(layout.positions.begin(), layout.positions.end(), 0);
+    std::fill(layout.slot_valid.begin(), layout.slot_valid.end(), 0);
+}
+
 void llama_reset_dflash_kv_cache_state(struct llama_context * ctx) {
     if (ctx == nullptr) {
         return;
     }
 
-    ctx->dflash.kv.cache_write_pos = 0;
-    ctx->dflash.kv.cache_n_filled = 0;
     ctx->dflash.kv.cache_update_rows = 0;
-    ctx->dflash.kv.cache_view_write_pos = 0;
-    ctx->dflash.kv.cache_view_n_filled = 0;
-    ctx->dflash.kv.cache_applied_window_version = 0;
-    ctx->dflash.kv.cache_valid = false;
-    ctx->dflash.kv.cache_view_valid = false;
-    std::fill(ctx->dflash.kv.cache_pos.begin(), ctx->dflash.kv.cache_pos.end(), 0);
-    std::fill(ctx->dflash.kv.cache_slot_valid.begin(), ctx->dflash.kv.cache_slot_valid.end(), 0);
+    ctx->dflash.kv.full_update_rows = 0;
+    ctx->dflash.kv.swa_update_rows = 0;
+    ctx->dflash.kv.full_source_row_offset = 0;
+    ctx->dflash.kv.swa_source_row_offset = 0;
+    ctx->dflash.kv.full_update_write_pos = 0;
+    ctx->dflash.kv.swa_update_write_pos = 0;
+    llama_dflash_reset_layout(ctx->dflash.kv.full_layout);
+    llama_dflash_reset_layout(ctx->dflash.kv.swa_layout);
 
     for (ggml_backend_buffer_t buf : ctx->dflash.kv.cache_bufs) {
         if (buf != nullptr) {
@@ -38,26 +48,64 @@ llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
     if (ctx == nullptr) {
         llama_dflash_kv_cache_transition plan;
         plan.rebuild_cache = true;
-        plan.append_rows = std::clamp(window_update.append_rows, 0, n_rows);
+        plan.update_rows = std::clamp(window_update.append_rows, 0, n_rows);
         plan.next_n_filled = n_rows;
+        plan.requires_materialized_window = true;
         return plan;
     }
 
-    const int32_t cross_ctx = ctx->dflash.visible_cross_ctx > 0
-            ? ctx->dflash.visible_cross_ctx
-            : std::max<int32_t>(1, (int32_t) ctx->cparams.n_ctx - (int32_t) ctx->model.hparams.dflash_block_size);
+    auto plan_for_layout = [&](const llama_dflash_layout & layout) {
+        return llama_plan_dflash_kv_cache_transition(
+                std::max(1, layout.capacity),
+                layout.n_filled,
+                layout.write_pos,
+                layout.valid,
+                layout.applied_window_version,
+                window_update.version,
+                window_update.keep_rows,
+                window_update.append_rows,
+                window_update.replace,
+                n_rows);
+    };
 
-    return llama_plan_dflash_kv_cache_transition(
-            cross_ctx,
-            ctx->dflash.kv.cache_n_filled,
-            ctx->dflash.kv.cache_write_pos,
-            ctx->dflash.kv.cache_valid,
-            ctx->dflash.kv.cache_applied_window_version,
-            window_update.version,
-            window_update.keep_rows,
-            window_update.append_rows,
-            window_update.replace,
-            n_rows);
+    const bool have_full_layout = ctx->dflash.kv.has_full_layers && ctx->dflash.kv.full_layout.capacity > 0;
+    const bool have_swa_layout = ctx->dflash.kv.has_swa_layers &&
+            !ctx->dflash.kv.share_swa_with_full &&
+            ctx->dflash.kv.swa_layout.capacity > 0;
+
+    llama_dflash_kv_cache_transition summary;
+    bool have_plan = false;
+
+    auto merge_plan = [&](const llama_dflash_kv_cache_transition & plan) {
+        if (!have_plan) {
+            summary = plan;
+            have_plan = true;
+            return;
+        }
+
+        summary.cache_up_to_date = summary.cache_up_to_date && plan.cache_up_to_date;
+        summary.rebuild_cache = summary.rebuild_cache || plan.rebuild_cache;
+        summary.update_rows = std::max(summary.update_rows, plan.update_rows);
+        summary.next_n_filled = std::max(summary.next_n_filled, plan.next_n_filled);
+        summary.requires_materialized_window = summary.requires_materialized_window || plan.requires_materialized_window;
+    };
+
+    if (have_full_layout) {
+        merge_plan(plan_for_layout(ctx->dflash.kv.full_layout));
+    }
+    if (have_swa_layout) {
+        merge_plan(plan_for_layout(ctx->dflash.kv.swa_layout));
+    }
+
+    if (!have_plan) {
+        summary.rebuild_cache = true;
+        summary.update_rows = std::clamp(window_update.append_rows, 0, n_rows);
+        summary.next_n_filled = n_rows;
+        summary.next_write_pos = 0;
+        summary.requires_materialized_window = true;
+    }
+
+    return summary;
 }
 
 void llama_set_dflash_visible_cross_ctx(
@@ -273,28 +321,6 @@ static bool llama_set_dflash_target_features_impl(
         ctx->dflash.target.keep_rows = std::max<int32_t>(0, n_rows - ctx->dflash.target.append_rows);
         }
 
-            const int32_t cross_ctx = ctx->dflash.visible_cross_ctx > 0
-                ? ctx->dflash.visible_cross_ctx
-                : std::max<int32_t>(1, (int32_t) ctx->cparams.n_ctx - (int32_t) ctx->model.hparams.dflash_block_size);
-            const llama_dflash_window_update cache_window_update = {
-                ctx->dflash.target.version,
-                ctx->dflash.target.keep_rows,
-                ctx->dflash.target.append_rows,
-                ctx->dflash.target.replace,
-                ctx->dflash.target.append_features,
-                ctx->dflash.target.append_features_n_floats,
-            };
-            const llama_dflash_kv_cache_transition cache_plan = llama_plan_dflash_kv_cache_transition_for_ctx(ctx, cache_window_update, n_rows);
-
-        if (cache_plan.cache_up_to_date) {
-            ctx->dflash.kv.cache_view_n_filled = ctx->dflash.kv.cache_n_filled;
-            ctx->dflash.kv.cache_view_write_pos = ctx->dflash.kv.cache_write_pos;
-            ctx->dflash.kv.cache_view_valid = ctx->dflash.kv.cache_valid;
-        } else if (cross_ctx > 0) {
-            ctx->dflash.kv.cache_view_n_filled = cache_plan.next_n_filled;
-            ctx->dflash.kv.cache_view_write_pos = cache_plan.next_write_pos;
-            ctx->dflash.kv.cache_view_valid = cache_plan.next_n_filled > 0;
-        }
 
     if (target_positions != nullptr) {
         if (copy_data) {
