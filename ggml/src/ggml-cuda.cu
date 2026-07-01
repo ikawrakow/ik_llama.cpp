@@ -56,6 +56,7 @@
 #include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/delta-net.cuh"
+#include "ggml-cuda/blend.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3640,6 +3641,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_REDUCE:
             ggml_cuda_op_reduce(ctx, dst);
             break;
+        case GGML_OP_BLEND:
+            ggml_cuda_op_blend(ctx, dst);
+            break;
         case GGML_OP_FAKE_CPY:
             break;
         case GGML_OP_ARGMAX:
@@ -4865,6 +4869,10 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
                     return true;
                 }
+                if (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_I32) {
+                    // DSA lightning-indexer top_k indices (I32) copy/cont.
+                    return true;
+                }
                 if (ggml_is_quantized(src0_type) && (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_F32)) {
                     return true;
                 }
@@ -4879,6 +4887,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 return false;
             } break;
         case GGML_OP_REDUCE:
+        case GGML_OP_BLEND:
         case GGML_OP_FAKE_CPY:
         case GGML_OP_ARGMAX:
             return true;
@@ -4960,11 +4969,23 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             return ggml_is_contiguous(op->src[0]);
         //case GGML_OP_ROPE:
         //    return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_ARGSORT:
+            return true;
+        case GGML_OP_ARGSORT_THRESH:
+            // The CUDA bitonic argsort launches one thread per (padded) column, so the
+            // row width rounded up to a power of 2 must fit in a single CUDA block (<=1024
+            // threads). Wider rows (e.g. the DSA lightning-indexer scoring over a large
+            // n_kv) would fail at launch with "invalid configuration argument"; report them
+            // as unsupported so the scheduler falls back to the CPU argsort (no size limit).
+            {
+                int64_t ncols = op->src[0]->ne[0];
+                int64_t ncols_pad = 1;
+                while (ncols_pad < ncols) ncols_pad *= 2;
+                return ncols_pad <= 1024;
+            }
         case GGML_OP_IM2COL:
         case GGML_OP_POOL_2D:
         case GGML_OP_SUM_ROWS:
-        case GGML_OP_ARGSORT:
-        case GGML_OP_ARGSORT_THRESH:
         case GGML_OP_GROUPED_TOPK:
         case GGML_OP_ACC:
         case GGML_OP_GROUP_NORM:
