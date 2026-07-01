@@ -23,9 +23,11 @@ struct llama_dflash_window_update {
 struct llama_dflash_kv_cache_transition {
         bool cache_up_to_date = false;
         bool rebuild_cache = false;
-        int32_t append_rows = 0;
+        int32_t update_rows = 0;
+        int32_t source_row_offset = 0;
         int32_t next_n_filled = 0;
         int32_t next_write_pos = 0;
+        bool requires_materialized_window = false;
 };
 
 static inline llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition(
@@ -46,23 +48,40 @@ static inline llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transi
         const int32_t bounded_append_rows = std::clamp(append_rows, 0, n_rows);
         const int32_t bounded_keep_rows = std::clamp(keep_rows, 0, n_rows);
         const int32_t expected_keep_rows = std::min(bounded_n_filled, std::max<int32_t>(0, safe_cross_ctx - bounded_append_rows));
+        const bool steady_suffix_append =
+                cache_valid &&
+                !replace &&
+                bounded_append_rows > 0 &&
+                bounded_keep_rows >= expected_keep_rows;
 
         plan.cache_up_to_date = cache_valid && applied_window_version == target_window_version;
-        plan.rebuild_cache = !cache_valid || replace || bounded_append_rows <= 0 || bounded_append_rows > n_rows;
-        if (!plan.rebuild_cache && bounded_keep_rows != expected_keep_rows) {
-                plan.rebuild_cache = true;
-        }
+        plan.rebuild_cache = !cache_valid ||
+                replace ||
+                bounded_append_rows <= 0 ||
+                bounded_append_rows > n_rows ||
+                !steady_suffix_append;
 
-        plan.append_rows = bounded_append_rows;
         if (plan.cache_up_to_date) {
                 plan.next_n_filled = bounded_n_filled;
                 plan.next_write_pos = safe_cross_ctx > 0
                                 ? ((current_write_pos % safe_cross_ctx) + safe_cross_ctx) % safe_cross_ctx
                                 : 0;
-        } else if (plan.rebuild_cache) {
-                plan.next_n_filled = std::min(safe_cross_ctx, n_rows);
+                return plan;
+        }
+
+        if (plan.rebuild_cache) {
+                plan.update_rows = std::min(safe_cross_ctx, n_rows);
+                const int32_t source_window_offset = std::max<int32_t>(0, n_rows - plan.update_rows);
+                const int32_t append_window_offset = std::max<int32_t>(0, n_rows - bounded_append_rows);
+                plan.requires_materialized_window = source_window_offset < append_window_offset;
+                plan.source_row_offset = plan.requires_materialized_window
+                        ? source_window_offset
+                        : std::max<int32_t>(0, bounded_append_rows - plan.update_rows);
+                plan.next_n_filled = plan.update_rows;
                 plan.next_write_pos = plan.next_n_filled % safe_cross_ctx;
         } else {
+                plan.update_rows = bounded_append_rows;
+                plan.source_row_offset = 0;
                 plan.next_n_filled = std::min(safe_cross_ctx, bounded_n_filled + bounded_append_rows);
                 plan.next_write_pos = (current_write_pos + bounded_append_rows) % safe_cross_ctx;
         }

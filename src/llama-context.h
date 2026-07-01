@@ -276,6 +276,17 @@ struct llama_context {
     std::vector<float> draft_input_hidden_state_owned;
 
     struct dflash_runtime {
+        struct llama_dflash_kv_layout {
+            int32_t capacity = 0;
+            int32_t n_filled = 0;
+            int32_t write_pos = 0;
+            uint64_t applied_window_version = 0;
+            bool valid = false;
+
+            std::vector<llama_pos> positions;
+            std::vector<uint8_t> slot_valid;
+        };
+
         struct target_window_state {
             const float * features = nullptr;
             size_t features_n_floats = 0;
@@ -293,7 +304,6 @@ struct llama_context {
             std::vector<float> append_features_owned;
             std::vector<llama_pos> positions_owned;
             std::vector<float> features_padded;
-            std::vector<llama_pos> pos_ctx_data;
             std::vector<float> kq_mask_data;
             std::vector<float> kq_mask_swa_data;
         };
@@ -303,27 +313,37 @@ struct llama_context {
             std::vector<struct ggml_tensor *> v_ctx_cache;
             struct ggml_context * cache_ctx = nullptr;
             std::vector<ggml_backend_buffer_t> cache_bufs;
-            std::vector<llama_pos> cache_pos;
-            std::vector<uint8_t> cache_slot_valid;
-            int32_t cache_write_pos = 0;
-            int32_t cache_n_filled = 0;
+            std::vector<int32_t> layer_history_capacity;
+            std::vector<uint8_t> layer_uses_swa_layout;
+            llama_dflash_kv_layout full_layout;
+            llama_dflash_kv_layout swa_layout;
+            bool has_full_layers = false;
+            bool has_swa_layers = false;
+            bool share_swa_with_full = false;
             int32_t cache_update_rows = 0;
+            int32_t full_update_rows = 0;
+            int32_t swa_update_rows = 0;
+            int32_t full_source_row_offset = 0;
+            int32_t swa_source_row_offset = 0;
+            int32_t full_update_write_pos = 0;
+            int32_t swa_update_write_pos = 0;
             int32_t cache_reserved_rows = 0;
-            int32_t cache_view_write_pos = 0;
-            int32_t cache_view_n_filled = 0;
-            uint64_t cache_applied_window_version = 0;
-            bool cache_valid = false;
-            bool cache_view_valid = false;
             std::vector<uint8_t> cache_compute_meta;
             ggml_backend_sched_t cache_sched = nullptr;
             ggml_cgraph * cache_graph = nullptr;
             int32_t cache_graph_rows = 0;
-            int32_t cache_graph_write_pos = 0;
+            int32_t cache_graph_full_update_rows = 0;
+            int32_t cache_graph_swa_update_rows = 0;
+            int32_t cache_graph_full_source_row_offset = 0;
+            int32_t cache_graph_swa_source_row_offset = 0;
+            int32_t cache_graph_full_write_pos = 0;
+            int32_t cache_graph_swa_write_pos = 0;
             struct ggml_tensor * cache_input_target_features = nullptr;
             struct ggml_tensor * cache_input_pos_ctx = nullptr;
-            struct ggml_tensor * kq_mask_tensor = nullptr;
-            struct ggml_tensor * kq_mask_swa_tensor = nullptr;
-            struct ggml_tensor * draft_tail_rows_tensor = nullptr;
+            struct ggml_tensor * full_kq_mask_tensor = nullptr;
+            struct ggml_tensor * swa_kq_mask_tensor = nullptr;
+            struct ggml_tensor * full_draft_tail_rows_tensor = nullptr;
+            struct ggml_tensor * swa_draft_tail_rows_tensor = nullptr;
         };
 
         struct capture_state {
@@ -340,8 +360,8 @@ struct llama_context {
         struct input_state {
             struct ggml_tensor * target_features = nullptr; // F32 [n_target_features, cross_ctx]
             struct ggml_tensor * pos_ctx = nullptr;         // I32 [cross_ctx]
-            struct ggml_tensor * kq_mask = nullptr;         // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
-            struct ggml_tensor * kq_mask_swa = nullptr;     // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
+            struct ggml_tensor * kq_mask = nullptr;         // F32 [full_capacity + n_batch, GGML_PAD(n_batch)]
+            struct ggml_tensor * kq_mask_swa = nullptr;     // F32 [swa_capacity + n_batch, GGML_PAD(n_batch)]
         };
 
         target_window_state target;

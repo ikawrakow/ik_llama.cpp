@@ -264,13 +264,10 @@ struct common_speculative_state_dflash : public common_speculative_state {
         const llama_dflash_kv_cache_transition cache_plan =
                 llama_plan_dflash_kv_cache_transition_for_ctx(ctx_dft, window_update, target_window_rows);
 
-        if (cache_plan.rebuild_cache) {
+        if (cache_plan.requires_materialized_window) {
             dflash_materialize_target_window_features(*this);
             target_features = target_window.data();
             target_feature_floats = target_window.size();
-            window_update.append_features = target_window.data();
-            window_update.append_floats = target_window.size();
-            window_update.append_rows = target_window_rows;
         }
 
         if (!llama_set_dflash_target_features_view(ctx_dft, target_features, target_feature_floats, target_window_rows, target_window_pos.data(), &window_update)) {
