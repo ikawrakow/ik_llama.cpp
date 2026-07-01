@@ -2592,6 +2592,8 @@ class DFlashDraftModel(Qwen3Model):
             return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.ATTN_SINKS].format(bid=bid)}.weight", data_torch)]
         if name == "norm.weight":
             name = "model.norm.weight"
+        elif name == "embed_tokens.weight":
+            name = "model.embed_tokens.weight"
         elif name.startswith("layers."):
             name = f"model.{name}"
 
