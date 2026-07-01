@@ -268,6 +268,27 @@ struct llm_build_context {
     ggml_cgraph * build_deepseek2();
     ggml_cgraph * build_openpangu();
 
+    // openPangu attention sublayer body (shared by base layers and the NextN/MTP head):
+    // input is the already-input-normed hidden; returns the post-o_proj attention output.
+    ggml_tensor * build_openpangu_attention(
+        ggml_cgraph * gf,
+        const struct llama_layer & layer,
+        int il,
+        ggml_tensor * x_normed,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_pos,
+        ggml_tensor * conv_state,
+        bool conv_state_valid,
+        float kq_scale);
+
+    // openPangu NextN/MTP head (plain-residual block, no mHC): eh_proj stitching ->
+    // attention -> MoE -> shared head. Returns the draft logits tensor.
+    ggml_tensor * build_openpangu_mtp(
+        const struct llama_layer & mtp_layer,
+        ggml_tensor * prev_embeddings,
+        ggml_cgraph * gf,
+        int il);
+
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,
             ggml_tensor * inpL,

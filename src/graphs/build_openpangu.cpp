@@ -110,25 +110,228 @@ static ggml_tensor * openpangu_sinkhorn(ggml_context * ctx, ggml_tensor * h_res_
     return m; // [row(S), col(S), T]
 }
 
-ggml_cgraph * llm_build_context::build_openpangu() {
-    ggml_cgraph * gf = new_graph_custom();
-
-    const int64_t n_embd_head_qk_rope = hparams.n_rot;                     // 64
-    const int64_t n_embd_head_k       = hparams.n_embd_head_k(0);          // 192
+// Attention sublayer body, shared by the base layers and the NextN/MTP head.
+// x_normed = input-layernormed hidden [n_embd, T]; returns post-o_proj output [n_embd, T].
+// conv_state may be null (MTP head / exotic setups) -> batch-local convs.
+ggml_tensor * llm_build_context::build_openpangu_attention(
+        ggml_cgraph * gf, const llama_layer & layer, int il, ggml_tensor * x_normed,
+        ggml_tensor * KQ_mask, ggml_tensor * inp_pos,
+        ggml_tensor * conv_state, bool conv_state_valid, float kq_scale) {
+    const int64_t n_embd_head_qk_rope = hparams.n_rot;                       // 64
+    const int64_t n_embd_head_k       = hparams.n_embd_head_k(0);            // 192
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope; // 128
-    const int64_t n_embd_head_v       = hparams.n_embd_head_v(0);          // 128
-    const int64_t q_lora_rank         = hparams.n_lora_q;                  // 1024
-    const int64_t kv_lora_rank        = hparams.n_lora_kv;                 // 512
-    const int64_t S                   = hparams.mhc_num_stream;            // 4
-    const int    sink_iters           = (int) hparams.mhc_recur_norm;      // 20
-    const float  hc_eps               = 1e-6f;
-    const float  kq_scale             = 1.0f / sqrtf(float(n_embd_head_k));
+    const int64_t n_embd_head_v       = hparams.n_embd_head_v(0);            // 128
+    const int64_t kv_lora_rank        = hparams.n_lora_kv;                   // 512
+    const int64_t q_lora_rank         = hparams.n_lora_q;                    // 1024
 
     // MoME conv-state offsets into cache_s_l (elements): [qa | compresskv | o], 2 columns each
     const int64_t conv_off_qa  = 0;
     const int64_t conv_off_ckv = 2*q_lora_rank;
     const int64_t conv_off_o   = 2*(q_lora_rank + kv_lora_rank);
-    const bool    conv_state_valid = kv_head > 0;   // kv_head == 0 -> sequence start, zero history
+
+    ggml_tensor * cur = x_normed;
+
+    // --- Q path: q_a -> qa_conv -> q_a_norm -> q_b ---
+    ggml_tensor * q_lora = ggml_mul_mat(ctx0, layer.wq_a, cur);        // [q_lora_rank, T]
+    q_lora = openpangu_causal_conv(ctx0, gf, q_lora, layer.qa_conv, conv_state, conv_off_qa, conv_state_valid);
+    if (il == 0) ggml_set_name(q_lora, "opg0_qlora_conv");
+    q_lora = llm_build_norm(ctx0, q_lora, hparams, layer.attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
+    if (il == 0) ggml_set_name(q_lora, "opg0_qlora_norm");
+    ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, q_lora);          // [n_head*192, T]
+    q = ggml_reshape_3d(ctx0, q, n_embd_head_k, n_head, n_tokens);
+    ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens, q->nb[1], q->nb[2], 0);
+    ggml_tensor * q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens, q->nb[1], q->nb[2],
+                                        n_embd_head_qk_nope*ggml_element_size(q));
+    q_rope = ggml_rope_ext(ctx0, ggml_cont(ctx0, q_rope), inp_pos, nullptr, n_rot, rope_type,
+                           n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    q = ggml_concat(ctx0, ggml_cont(ctx0, q_nope), q_rope, 0);        // [192, n_head, T]
+    if (il == 0) ggml_set_name(q, "opg0_q");
+
+    // --- KV path: kv_a -> split -> compresskv_conv -> kv_a_norm -> kv_b ---
+    ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);       // [kv_lora+64, T]
+    ggml_tensor * ckv = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, kv_lora_rank, n_tokens, kv->nb[1], 0));
+    ggml_tensor * k_pe = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, n_embd_head_qk_rope, n_tokens, kv->nb[1],
+                                        kv_lora_rank*ggml_element_size(kv)));
+    ckv = openpangu_causal_conv(ctx0, gf, ckv, layer.kv_conv, conv_state, conv_off_ckv, conv_state_valid);
+    ckv = llm_build_norm(ctx0, ckv, hparams, layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
+    if (il == 0) ggml_set_name(ckv, "opg0_ckv_norm");
+    ggml_tensor * kvb = ggml_mul_mat(ctx0, layer.wkv_b, ckv);          // [n_head*(128+128), T]
+    kvb = ggml_reshape_3d(ctx0, kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, n_tokens);
+    ggml_tensor * k_nope = ggml_view_3d(ctx0, kvb, n_embd_head_qk_nope, n_head, n_tokens, kvb->nb[1], kvb->nb[2], 0);
+    ggml_tensor * v = ggml_cont(ctx0, ggml_view_3d(ctx0, kvb, n_embd_head_v, n_head, n_tokens, kvb->nb[1], kvb->nb[2],
+                                        n_embd_head_qk_nope*ggml_element_size(kvb)));
+    // rope k_pe (shared across heads) then broadcast to all heads
+    k_pe = ggml_reshape_3d(ctx0, k_pe, n_embd_head_qk_rope, 1, n_tokens);
+    k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type,
+                         n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    ggml_tensor * k_pe_b = ggml_repeat(ctx0, k_pe,
+                             ggml_new_tensor_3d(ctx0, k_pe->type, n_embd_head_qk_rope, n_head, n_tokens));
+    ggml_tensor * k = ggml_concat(ctx0, ggml_cont(ctx0, k_nope), k_pe_b, 0); // [192, n_head, T]
+    if (il == 0) { ggml_set_name(k, "opg0_k"); ggml_set_name(v, "opg0_v"); }
+
+    // ---- store this step's K/V into the cache (standard bookkeeping) ----
+    v = ggml_reshape_2d(ctx0, v, n_embd_head_v * n_head, n_tokens);   // V as 2D for the store
+    ggml_build_forward_expand(gf, q);
+    ggml_build_forward_expand(gf, k);
+    ggml_build_forward_expand(gf, v);
+    llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, k, v, n_tokens, kv_head, cb, il);
+
+    // ---- param_sink: 128 static learned latent-KV entries prepended to the sequence ----
+    // sink_kv -> kv_a_norm -> kv_b gives per-head k_nope/v; sink_k_pe is used rope-free.
+    // Sinks are visible to every query position (they sit "before" the sequence).
+    const int64_t NS = hparams.param_sink_number;
+    ggml_tensor * s_ckv = llm_build_norm(ctx0, layer.param_sink_kv, hparams,
+                                         layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il); // [512, NS]
+    ggml_tensor * s_kvb = ggml_mul_mat(ctx0, layer.wkv_b, s_ckv);                       // [n_head*256, NS]
+    s_kvb = ggml_reshape_3d(ctx0, s_kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, NS);
+    ggml_tensor * s_knope = ggml_view_3d(ctx0, s_kvb, n_embd_head_qk_nope, n_head, NS,
+                                         s_kvb->nb[1], s_kvb->nb[2], 0);
+    ggml_tensor * s_v = ggml_cont(ctx0, ggml_view_3d(ctx0, s_kvb, n_embd_head_v, n_head, NS,
+                                         s_kvb->nb[1], s_kvb->nb[2], n_embd_head_qk_nope*ggml_element_size(s_kvb)));
+    ggml_tensor * s_kpe = ggml_reshape_3d(ctx0, layer.param_sink_k_pe, n_embd_head_qk_rope, 1, NS);
+    s_kpe = ggml_repeat(ctx0, s_kpe, ggml_new_tensor_3d(ctx0, s_kpe->type, n_embd_head_qk_rope, n_head, NS));
+    ggml_tensor * s_k = ggml_concat(ctx0, ggml_cont(ctx0, s_knope), s_kpe, 0);          // [192, n_head, NS]
+    s_k = ggml_cont(ctx0, ggml_permute(ctx0, s_k, 0, 2, 1, 3));                         // [192, NS, n_head]
+    s_v = ggml_cont(ctx0, ggml_permute(ctx0, s_v, 1, 2, 0, 3));                         // [NS, 128, n_head]
+
+    // ---- manual attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
+    auto * k_cache = kv_self.k_l[il];
+    auto * v_cache = kv_self.v_l[il];
+    const int64_t n_ctx_kv = kv_self.size;
+    ggml_tensor * kview = ggml_view_3d(ctx0, k_cache, n_embd_head_k, n_kv, n_head,
+            ggml_row_size(k_cache->type, n_embd_head_k)*n_head,
+            ggml_row_size(k_cache->type, n_embd_head_k), 0);
+    GGML_ASSERT(kv_self.v_trans);
+    ggml_tensor * vview = ggml_view_3d(ctx0, v_cache, n_kv, n_embd_head_v, n_head,
+            ggml_element_size(v_cache)*n_ctx_kv,
+            ggml_element_size(v_cache)*n_ctx_kv*n_embd_head_v, 0);
+
+    // f32 everywhere: the non-f32 concat kernel only handles dim 0, and correctness comes
+    // first on this CPU path (the cache-view casts are the price of prepending sinks).
+    ggml_tensor * k_all = ggml_concat(ctx0, s_k, ggml_cast(ctx0, kview, GGML_TYPE_F32), 1); // [192, NS+n_kv, H]
+    ggml_tensor * v_all = ggml_concat(ctx0, s_v, ggml_cast(ctx0, vview, GGML_TYPE_F32), 0); // [NS+n_kv, 128, H]
+
+    ggml_tensor * qp = ggml_permute(ctx0, q, 0, 2, 1, 3);                               // [192, T, H]
+    ggml_tensor * kq = ggml_mul_mat(ctx0, k_all, qp);                                   // [NS+n_kv, T, H]
+
+    // mask: sinks always visible (0) ++ the causal KQ_mask. The zero block is built by
+    // scaling finite kq data (KQ_mask itself holds -inf, which 0*x would turn into NaN).
+    const int64_t n_mask = KQ_mask->ne[1];
+    ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_mask, NS*ggml_element_size(kq), 0), 0.0f);
+    ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, KQ_mask, 0);                    // [NS+n_kv, n_mask]
+    kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
+
+    ggml_tensor * kqv = ggml_mul_mat(ctx0, v_all, kq);                                  // [128, T, H]
+    ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));        // [128, H, T]
+    cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
+
+    // o_conv (MOME on the pre-o_proj attn output), then o_proj
+    cur = openpangu_causal_conv(ctx0, gf, cur, layer.o_conv, conv_state, conv_off_o, conv_state_valid);
+    cur = llm_build_lora_mm(lctx, ctx0, layer.wo, cur);
+    return cur;
+}
+
+// NextN/MTP head: eh_proj stitching -> one plain-residual Pangu block (sandwich norms,
+// NO mHC, no block_post_norm) -> shared head. Mirrors OpenPanguV2MultiTokenPredictorLayer:
+//   x = eh_proj(cat(enorm(embed(tok)), hnorm(prev_hidden)))
+//   x = x + post_attn_ln(attn(input_ln(x)))
+//   x = x + post_mlp_ln(moe(pre_mlp_ln(x)))
+//   logits = shared_head.head(shared_head.norm(x))
+// v0: convs run batch-local here (no conv-state slot for MTP layers) — drafts are always
+// verified by the base model, so this only affects acceptance rate, never correctness.
+ggml_tensor * llm_build_context::build_openpangu_mtp(
+        const llama_layer & mtp_layer, ggml_tensor * prev_embeddings, ggml_cgraph * gf, int il) {
+    const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(0)));
+
+    ggml_tensor * inp_pos = build_inp_pos();
+    ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+
+    ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens
+        ? mtp_layer.nextn.embed_tokens : model.tok_embd;
+    ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
+
+    ggml_tensor * emb_norm = llm_build_norm(ctx0, token_emb,       hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
+    ggml_tensor * hid_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
+
+    // reference order: cat([inputs_embeds, previous_hidden_states], -1)
+    ggml_tensor * combined = ggml_concat(ctx0, emb_norm, hid_norm, 0);
+    ggml_tensor * cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
+    cb(cur, "mtp_eh_proj", il);
+
+    // --- attention sublayer (plain residual) ---
+    ggml_tensor * inpSA = cur;
+    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
+    cur = build_openpangu_attention(gf, mtp_layer, il, cur, KQ_mask, inp_pos,
+                                    nullptr, false, kq_scale);
+    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
+    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+    cb(ffn_inp, "mtp_ffn_inp", il);
+
+    if (inp_out_ids) {
+        ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+    }
+
+    // --- ffn sublayer: MoE (routed + shared expert), plain residual ---
+    cur = llm_build_norm(ctx0, cur = ffn_inp, hparams, mtp_layer.ffn_norm, NULL, LLM_NORM_RMS, cb, il);
+    {
+        ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
+                mtp_layer.ffn_gate_inp, mtp_layer.ffn_up_exps, mtp_layer.ffn_gate_exps, mtp_layer.ffn_down_exps,
+                mtp_layer.ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU,
+                hparams.expert_weights_norm, true, hparams.expert_weights_scale,
+                (enum llm_expert_gating_func_type) hparams.expert_gating_func, cb, il, gf, false);
+        ggml_tensor * shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
+                mtp_layer.ffn_up_shexp, NULL, NULL, mtp_layer.ffn_gate_shexp, NULL, NULL,
+                mtp_layer.ffn_down_shexp, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+        cur = ggml_add(ctx0, moe_out, shexp);
+    }
+    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.ffn_post_norm, NULL, LLM_NORM_RMS, cb, il);
+    cur = ggml_add(ctx0, cur, ffn_inp);
+    cb(cur, "mtp_out_resid", il);
+
+    // --- shared head ---
+    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, -1);
+    cb(cur, "result_norm", -1);
+    ggml_tensor * head = mtp_layer.nextn.shared_head_head
+        ? mtp_layer.nextn.shared_head_head : model.output;
+    cur = llm_build_lora_mm(lctx, ctx0, head, cur);
+    cb(cur, "result_output", -1);
+    return cur;
+}
+
+ggml_cgraph * llm_build_context::build_openpangu() {
+    ggml_cgraph * gf = new_graph_custom();
+
+    const int64_t n_embd_head_k = hparams.n_embd_head_k(0);                // 192
+    const int64_t S             = hparams.mhc_num_stream;                  // 4
+    const int    sink_iters     = (int) hparams.mhc_recur_norm;            // 20
+    const float  hc_eps         = 1e-6f;
+    const float  kq_scale       = 1.0f / sqrtf(float(n_embd_head_k));
+
+    const bool conv_state_valid = kv_head > 0;   // kv_head == 0 -> sequence start, zero history
+
+    // NextN/MTP graph (speculative decoding): draft with the first NextN layer,
+    // self-chained by the common/speculative framework.
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
+        GGML_ASSERT(model.mtp && hparams.nextn_predict_layers > 0 &&
+                    "OpenPangu MTP graph requested without NextN layers loaded");
+
+        ggml_tensor * hidden_states_from_main_model;
+        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
+            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+        } else {
+            hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
+        }
+        ggml_set_name(hidden_states_from_main_model, "inp_mtp_states");
+        ggml_set_input(hidden_states_from_main_model);
+        lctx.inp_mtp_states = hidden_states_from_main_model;
+
+        const int il_mtp = (int) (hparams.n_layer - hparams.nextn_predict_layers);  // head 1 = layer 46
+        ggml_tensor * mtp_out = build_openpangu_mtp(model.layers[il_mtp],
+                                                    hidden_states_from_main_model, gf, il_mtp);
+        ggml_build_forward_expand(gf, mtp_out);
+        return gf;
+    }
 
     ggml_tensor * cur;
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
@@ -221,103 +424,8 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         cur = llm_build_norm(ctx0, x, hparams, layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
         if (il == 0) ggml_set_name(cur, "opg0_attn_norm");
 
-        // --- Q path: q_a -> qa_conv -> q_a_norm -> q_b ---
-        ggml_tensor * q_lora = ggml_mul_mat(ctx0, layer.wq_a, cur);        // [q_lora_rank, T]
-        q_lora = openpangu_causal_conv(ctx0, gf, q_lora, layer.qa_conv, conv_state, conv_off_qa, conv_state_valid);
-        if (il == 0) ggml_set_name(q_lora, "opg0_qlora_conv");
-        q_lora = llm_build_norm(ctx0, q_lora, hparams, layer.attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
-        if (il == 0) ggml_set_name(q_lora, "opg0_qlora_norm");
-        ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, q_lora);          // [n_head*192, T]
-        q = ggml_reshape_3d(ctx0, q, n_embd_head_k, n_head, n_tokens);
-        ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens, q->nb[1], q->nb[2], 0);
-        ggml_tensor * q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens, q->nb[1], q->nb[2],
-                                            n_embd_head_qk_nope*ggml_element_size(q));
-        q_rope = ggml_rope_ext(ctx0, ggml_cont(ctx0, q_rope), inp_pos, nullptr, n_rot, rope_type,
-                               n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-        q = ggml_concat(ctx0, ggml_cont(ctx0, q_nope), q_rope, 0);        // [192, n_head, T]
-        if (il == 0) ggml_set_name(q, "opg0_q");
-
-        // --- KV path: kv_a -> split -> compresskv_conv -> kv_a_norm -> kv_b ---
-        ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);       // [kv_lora+64, T]
-        ggml_tensor * ckv = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, kv_lora_rank, n_tokens, kv->nb[1], 0));
-        ggml_tensor * k_pe = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, n_embd_head_qk_rope, n_tokens, kv->nb[1],
-                                            kv_lora_rank*ggml_element_size(kv)));
-        ckv = openpangu_causal_conv(ctx0, gf, ckv, layer.kv_conv, conv_state, conv_off_ckv, conv_state_valid);
-        ckv = llm_build_norm(ctx0, ckv, hparams, layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
-        if (il == 0) ggml_set_name(ckv, "opg0_ckv_norm");
-        ggml_tensor * kvb = ggml_mul_mat(ctx0, layer.wkv_b, ckv);          // [n_head*(128+128), T]
-        kvb = ggml_reshape_3d(ctx0, kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, n_tokens);
-        ggml_tensor * k_nope = ggml_view_3d(ctx0, kvb, n_embd_head_qk_nope, n_head, n_tokens, kvb->nb[1], kvb->nb[2], 0);
-        ggml_tensor * v = ggml_cont(ctx0, ggml_view_3d(ctx0, kvb, n_embd_head_v, n_head, n_tokens, kvb->nb[1], kvb->nb[2],
-                                            n_embd_head_qk_nope*ggml_element_size(kvb)));
-        // rope k_pe (shared across heads) then broadcast to all heads
-        k_pe = ggml_reshape_3d(ctx0, k_pe, n_embd_head_qk_rope, 1, n_tokens);
-        k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type,
-                             n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-        ggml_tensor * k_pe_b = ggml_repeat(ctx0, k_pe,
-                                 ggml_new_tensor_3d(ctx0, k_pe->type, n_embd_head_qk_rope, n_head, n_tokens));
-        ggml_tensor * k = ggml_concat(ctx0, ggml_cont(ctx0, k_nope), k_pe_b, 0); // [192, n_head, T]
-        if (il == 0) { ggml_set_name(k, "opg0_k"); ggml_set_name(v, "opg0_v"); }
-
-        // ---- store this step's K/V into the cache (standard bookkeeping) ----
-        v = ggml_reshape_2d(ctx0, v, n_embd_head_v * n_head, n_tokens);   // V as 2D for the store
-        ggml_build_forward_expand(gf, q);
-        ggml_build_forward_expand(gf, k);
-        ggml_build_forward_expand(gf, v);
-        llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, k, v, n_tokens, kv_head, cb, il);
-
-        // ---- param_sink: 128 static learned latent-KV entries prepended to the sequence ----
-        // sink_kv -> kv_a_norm -> kv_b gives per-head k_nope/v; sink_k_pe is used rope-free.
-        // Sinks are visible to every query position (they sit "before" the sequence).
-        const int64_t NS = hparams.param_sink_number;
-        ggml_tensor * s_ckv = llm_build_norm(ctx0, layer.param_sink_kv, hparams,
-                                             layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il); // [512, NS]
-        ggml_tensor * s_kvb = ggml_mul_mat(ctx0, layer.wkv_b, s_ckv);                       // [n_head*256, NS]
-        s_kvb = ggml_reshape_3d(ctx0, s_kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, NS);
-        ggml_tensor * s_knope = ggml_view_3d(ctx0, s_kvb, n_embd_head_qk_nope, n_head, NS,
-                                             s_kvb->nb[1], s_kvb->nb[2], 0);
-        ggml_tensor * s_v = ggml_cont(ctx0, ggml_view_3d(ctx0, s_kvb, n_embd_head_v, n_head, NS,
-                                             s_kvb->nb[1], s_kvb->nb[2], n_embd_head_qk_nope*ggml_element_size(s_kvb)));
-        ggml_tensor * s_kpe = ggml_reshape_3d(ctx0, layer.param_sink_k_pe, n_embd_head_qk_rope, 1, NS);
-        s_kpe = ggml_repeat(ctx0, s_kpe, ggml_new_tensor_3d(ctx0, s_kpe->type, n_embd_head_qk_rope, n_head, NS));
-        ggml_tensor * s_k = ggml_concat(ctx0, ggml_cont(ctx0, s_knope), s_kpe, 0);          // [192, n_head, NS]
-        s_k = ggml_cont(ctx0, ggml_permute(ctx0, s_k, 0, 2, 1, 3));                         // [192, NS, n_head]
-        s_v = ggml_cont(ctx0, ggml_permute(ctx0, s_v, 1, 2, 0, 3));                         // [NS, 128, n_head]
-
-        // ---- manual attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
-        auto * k_cache = kv_self.k_l[il];
-        auto * v_cache = kv_self.v_l[il];
-        const int64_t n_ctx_kv = kv_self.size;
-        ggml_tensor * kview = ggml_view_3d(ctx0, k_cache, n_embd_head_k, n_kv, n_head,
-                ggml_row_size(k_cache->type, n_embd_head_k)*n_head,
-                ggml_row_size(k_cache->type, n_embd_head_k), 0);
-        GGML_ASSERT(kv_self.v_trans);
-        ggml_tensor * vview = ggml_view_3d(ctx0, v_cache, n_kv, n_embd_head_v, n_head,
-                ggml_element_size(v_cache)*n_ctx_kv,
-                ggml_element_size(v_cache)*n_ctx_kv*n_embd_head_v, 0);
-
-        // f32 everywhere: the non-f32 concat kernel only handles dim 0, and correctness comes
-        // first on this CPU path (the cache-view casts are the price of prepending sinks).
-        ggml_tensor * k_all = ggml_concat(ctx0, s_k, ggml_cast(ctx0, kview, GGML_TYPE_F32), 1); // [192, NS+n_kv, H]
-        ggml_tensor * v_all = ggml_concat(ctx0, s_v, ggml_cast(ctx0, vview, GGML_TYPE_F32), 0); // [NS+n_kv, 128, H]
-
-        ggml_tensor * qp = ggml_permute(ctx0, q, 0, 2, 1, 3);                               // [192, T, H]
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k_all, qp);                                   // [NS+n_kv, T, H]
-
-        // mask: sinks always visible (0) ++ the causal KQ_mask. The zero block is built by
-        // scaling finite kq data (KQ_mask itself holds -inf, which 0*x would turn into NaN).
-        const int64_t n_mask = KQ_mask->ne[1];
-        ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_mask, NS*ggml_element_size(kq), 0), 0.0f);
-        ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, KQ_mask, 0);                    // [NS+n_kv, n_mask]
-        kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
-
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, v_all, kq);                                  // [128, T, H]
-        ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));        // [128, H, T]
-        cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
-
-        // o_conv (MOME on the pre-o_proj attn output), then o_proj
-        cur = openpangu_causal_conv(ctx0, gf, cur, layer.o_conv, conv_state, conv_off_o, conv_state_valid);
-        cur = llm_build_lora_mm(lctx, ctx0, layer.wo, cur);
+        cur = build_openpangu_attention(gf, layer, il, cur, KQ_mask, inp_pos,
+                                        conv_state, conv_state_valid, kq_scale);
         if (il == 0) ggml_set_name(cur, "opg0_attn_out");
 
         cur = llm_build_norm(ctx0, cur, hparams, layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -377,9 +485,13 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         cur = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, wperm), n_embd, n_tokens);
     }
 
-    // select only the output tokens (the framework binds n_outputs rows, not all n_tokens)
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
-    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    // select only the output tokens (the framework binds n_outputs rows, not all n_tokens).
+    // With MTP enabled, keep every token: the speculative framework consumes per-token
+    // hidden states (result_norm via pooling) to warm up / feed the NextN head.
+    if (!cparams.mtp) {
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
