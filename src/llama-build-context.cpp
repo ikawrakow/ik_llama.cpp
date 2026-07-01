@@ -2507,6 +2507,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_deepseek2();
             } break;
+        case LLM_ARCH_OPENPANGU:
+            {
+                result = llm.build_openpangu();
+            } break;
         case LLM_ARCH_CHATGLM:
             {
                 result = llm.build_chatglm();

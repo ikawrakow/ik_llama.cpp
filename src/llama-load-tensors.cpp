@@ -2895,9 +2895,9 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
 
     // global mHC stream-merge module (non-block)
     model.mhc_merge_phi   = create_tensor(ctx_output, tn(LLM_TENSOR_MHC_MERGE_PHI,   "weight"), {SH, S});
-    model.mhc_merge_alpha = create_tensor(ctx_output, tn(LLM_TENSOR_MHC_MERGE_ALPHA, "weight"), {1});
-    model.mhc_merge_beta  = create_tensor(ctx_output, tn(LLM_TENSOR_MHC_MERGE_BETA,  "weight"), {S});
-    model.mhc_merge_gamma = create_tensor(ctx_output, tn(LLM_TENSOR_MHC_MERGE_GAMMA, "weight"), {SH});
+    model.mhc_merge_alpha = create_tensor(ctx_output, tn(LLM_TENSOR_MHC_MERGE_ALPHA), {1});
+    model.mhc_merge_beta  = create_tensor(ctx_output, tn(LLM_TENSOR_MHC_MERGE_BETA),  {S});
+    model.mhc_merge_gamma = create_tensor(ctx_output, tn(LLM_TENSOR_MHC_MERGE_GAMMA), {SH});
 
     for (int i = 0; i < n_layer; ++i) {
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
@@ -2923,25 +2923,29 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
         layer.attn_q_a_norm  = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_Q_A_NORM,  "weight", i), {q_lora_rank}, flags);
         layer.attn_kv_a_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", i), {kv_lora_rank}, flags);
         // block_post_norm only present on a layer subset -> optional
-        layer.block_post_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_BLOCK_POST_NORM, "weight", i), {n_embd}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
+        // block_post_layernorm is RMSNorm over the concatenated S*H (mhc_num_stream * hidden)
+        layer.block_post_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_BLOCK_POST_NORM, "weight", i), {SH}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
 
         // --- MLA projections (ik-native, pre-split k_b/v_b) ---
         layer.wq_a      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, flags);
         layer.wq_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head_k}, flags);
         layer.wkv_a_mqa = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + n_embd_head_qk_rope}, flags);
-        layer.wk_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, flags);
-        layer.wv_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_embd_head_v, n_head}, flags);
+        // full kv_b_proj — the decompressed-MHA graph materializes K/V from this
+        layer.wkv_b     = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, flags);
+        // pre-split k_b/v_b are emitted by the converter but unused here; load (2D, as written) so they're consumed
+        layer.wk_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, flags);
+        layer.wv_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, flags);
         layer.wo        = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {n_head * n_embd_head_v, n_embd}, flags);
 
-        // --- MoME causal convs (torch [C,1,3] -> ggml {3,1,C}) ---
-        layer.qa_conv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QA_CONV, "weight", i), {kernel, 1, q_lora_rank}, flags);
+        // --- MoME causal convs (torch [C,1,3] -> gguf squeezes to 2D {3, C}) ---
+        layer.qa_conv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QA_CONV, "weight", i), {kernel, q_lora_rank}, flags);
         // compresskv_conv acts on the compressed-kv latent only (kv_lora_rank), NOT the k_pe part
-        layer.kv_conv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_CONV, "weight", i), {kernel, 1, kv_lora_rank}, flags);
-        layer.o_conv  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_O_CONV,  "weight", i), {kernel, 1, n_head * n_embd_head_v}, flags);
+        layer.kv_conv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_CONV, "weight", i), {kernel, kv_lora_rank}, flags);
+        layer.o_conv  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_O_CONV,  "weight", i), {kernel, n_head * n_embd_head_v}, flags);
 
         // --- learned static param sink (latent-kv prepended to attention) ---
-        layer.param_sink_kv   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_PARAM_SINK_KV,   "weight", i), {kv_lora_rank,        sink_n}, flags);
-        layer.param_sink_k_pe = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_PARAM_SINK_K_PE, "weight", i), {n_embd_head_qk_rope, sink_n}, flags);
+        layer.param_sink_kv   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_PARAM_SINK_KV,   i), {kv_lora_rank,        sink_n}, flags);
+        layer.param_sink_k_pe = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_PARAM_SINK_K_PE, i), {n_embd_head_qk_rope, sink_n}, flags);
 
         // --- DSA indexer (loaded-but-unused in the dense-fallback graph) ---
         layer.indexer_k_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_NORM,   "weight", i), {hparams.indexer_head_size}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -2951,13 +2955,13 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
 
         // --- mHC / Hyper-Connections (per attn + per mlp sublayer, float32) ---
         layer.mhc_attn_phi   = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_ATTN_PHI,   "weight", i), {SH, phi_out}, flags);
-        layer.mhc_attn_alpha = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_ATTN_ALPHA, "weight", i), {3}, flags);
-        layer.mhc_attn_beta  = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_ATTN_BETA,  "weight", i), {beta_len}, flags);
-        layer.mhc_attn_gamma = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_ATTN_GAMMA, "weight", i), {SH}, flags);
+        layer.mhc_attn_alpha = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_ATTN_ALPHA, i), {3}, flags);
+        layer.mhc_attn_beta  = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_ATTN_BETA,  i), {beta_len}, flags);
+        layer.mhc_attn_gamma = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_ATTN_GAMMA, i), {SH}, flags);
         layer.mhc_mlp_phi    = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_MLP_PHI,   "weight", i), {SH, phi_out}, flags);
-        layer.mhc_mlp_alpha  = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_MLP_ALPHA, "weight", i), {3}, flags);
-        layer.mhc_mlp_beta   = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_MLP_BETA,  "weight", i), {beta_len}, flags);
-        layer.mhc_mlp_gamma  = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_MLP_GAMMA, "weight", i), {SH}, flags);
+        layer.mhc_mlp_alpha  = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_MLP_ALPHA, i), {3}, flags);
+        layer.mhc_mlp_beta   = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_MLP_BETA,  i), {beta_len}, flags);
+        layer.mhc_mlp_gamma  = create_tensor(norm_ctx, tn(LLM_TENSOR_MHC_MLP_GAMMA, i), {SH}, flags);
 
         // --- FFN: dense-lead then MoE (routed + shared, sigmoid bias) ---
         layer.ffn_norm      = create_tensor(norm_ctx, tn(LLM_TENSOR_FFN_NORM,      "weight", i), {n_embd}, flags);
@@ -4997,7 +5001,6 @@ bool create_tensors_helper::create_tensors() {
             if (layer.wo && !layer.wk &&
                 (model.arch == LLM_ARCH_DEEPSEEK2 ||
                  model.arch == LLM_ARCH_GLM_DSA ||
-                 model.arch == LLM_ARCH_OPENPANGU ||
                  model.arch == LLM_ARCH_MISTRAL4)) {
                 distribute_mla_tensors_for_split_mode_graph(
                     layer, hparams, cur_splits, mem_used, ctx_split, il);

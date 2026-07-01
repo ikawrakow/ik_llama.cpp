@@ -7582,6 +7582,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_OPENPANGU:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
