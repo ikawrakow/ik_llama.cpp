@@ -2935,7 +2935,8 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
 
         // --- MoME causal convs (torch [C,1,3] -> ggml {3,1,C}) ---
         layer.qa_conv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QA_CONV, "weight", i), {kernel, 1, q_lora_rank}, flags);
-        layer.kv_conv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_CONV, "weight", i), {kernel, 1, kv_lora_rank + n_embd_head_qk_rope}, flags);
+        // compresskv_conv acts on the compressed-kv latent only (kv_lora_rank), NOT the k_pe part
+        layer.kv_conv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_CONV, "weight", i), {kernel, 1, kv_lora_rank}, flags);
         layer.o_conv  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_O_CONV,  "weight", i), {kernel, 1, n_head * n_embd_head_v}, flags);
 
         // --- learned static param sink (latent-kv prepended to attention) ---
