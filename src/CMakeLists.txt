@@ -111,6 +111,7 @@ add_library(llama
             graphs/build_gptneox.cpp
             graphs/build_arctic.cpp
             graphs/build_deepseek2.cpp
+            graphs/build_openpangu.cpp
             graphs/build_glm4.cpp
             graphs/build_bitnet.cpp
             graphs/build_cohere2.cpp

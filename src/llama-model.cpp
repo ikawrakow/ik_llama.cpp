@@ -2177,7 +2177,8 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint3
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
         return hparams.n_embd_v_s() * state_sots * sizeof(float);
     }
-    bool is_mla_attn = arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_OPENPANGU;
+    // OPENPANGU runs decompressed MHA (materialized K/V) with a standard KV cache, so it is NOT is_mla_attn.
+    bool is_mla_attn = arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
     if (is_mla_attn && mla_attn) {
         auto n_embd_head_qk_rope = hparams.n_rot;
         auto kv_lora_rank = hparams.n_lora_kv;
