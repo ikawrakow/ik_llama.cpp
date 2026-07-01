@@ -18,51 +18,51 @@
 // --- causal depthwise conv1d, kernel=3: out[t] = w0*x[t-2] + w1*x[t-1] + w2*x[t] (per channel) ---
 // x: [C, n_tokens]; w: ggml tensor with ne = {3, 1, C} (kernel-major). Returns [C, n_tokens].
 static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w) {
-    // NOTE(v0): passthrough. A correct causal conv1d needs a per-channel conv-state cache
-    // (like the SSM short-conv) so single-token decode steps see prior-token history; a stateless
-    // full-sequence conv both breaks at T<kernel and is wrong in incremental decode. Deferred to v1
-    // together with o_conv + param_sink. This drops the MoME local-mixing (bounded approximation).
-    (void) w;
-    return x;
+    // MOME: out = x + depthwise causal conv1d(k=3). Every Infer call site passes
+    // residual_connection=1; the tap magnitudes confirm the conv is a small learned
+    // perturbation on top of the identity, not a standalone filter.
+    // NOTE(v0): batch-local — the conv window does not cross ubatch boundaries. Exact for a
+    // fresh-sequence prefill; single-token decode steps miss the t-1/t-2 taps until a
+    // conv-state cache exists (bounded error, |taps| < 1).
     const int64_t C = x->ne[0];
     const int64_t T = x->ne[1];
-    // weight rows per tap: w_tap[k] is a [C] vector = w[k, 0, :]
-    ggml_tensor * wc = ggml_cont(ctx, w);                       // {3,1,C}
-    wc = ggml_reshape_2d(ctx, wc, 3, C);                        // [3, C]
-    ggml_tensor * w0 = ggml_cont(ctx, ggml_view_1d(ctx, wc, C, 0*wc->nb[1] + 0)); // stride tricks below
-    // simpler: build per-tap [C] via views on the [3,C] tensor along ne0
-    ggml_tensor * tap0 = ggml_cont(ctx, ggml_view_2d(ctx, wc, 1, C, wc->nb[1], 0*ggml_element_size(wc)));
-    ggml_tensor * tap1 = ggml_cont(ctx, ggml_view_2d(ctx, wc, 1, C, wc->nb[1], 1*ggml_element_size(wc)));
-    ggml_tensor * tap2 = ggml_cont(ctx, ggml_view_2d(ctx, wc, 1, C, wc->nb[1], 2*ggml_element_size(wc)));
-    tap0 = ggml_reshape_1d(ctx, tap0, C);
-    tap1 = ggml_reshape_1d(ctx, tap1, C);
-    tap2 = ggml_reshape_1d(ctx, tap2, C);
-    (void) w0;
+    // weight is stored f16 with ne = {3, C}: per-channel taps contiguous. ggml_mul needs an
+    // f32 src1, so cast once (tiny tensor).
+    ggml_tensor * wc = ggml_reshape_2d(ctx, ggml_cast(ctx, w, GGML_TYPE_F32), 3, C);
+    ggml_tensor * tap0 = ggml_reshape_1d(ctx, ggml_cont(ctx, ggml_view_2d(ctx, wc, 1, C, wc->nb[1], 0*ggml_element_size(wc))), C);
+    ggml_tensor * tap1 = ggml_reshape_1d(ctx, ggml_cont(ctx, ggml_view_2d(ctx, wc, 1, C, wc->nb[1], 1*ggml_element_size(wc))), C);
+    ggml_tensor * tap2 = ggml_reshape_1d(ctx, ggml_cont(ctx, ggml_view_2d(ctx, wc, 1, C, wc->nb[1], 2*ggml_element_size(wc))), C);
 
-    // shifted copies of x along the token axis with left zero-padding
-    // x_shift(d)[:, t] = x[:, t-d] (0 for t<d). Build via ggml_pad on a rolled view.
-    // We pad C rows x (T+2) cols conceptually; implement with concat of zeros + slice.
+    // shifted copies of x along the token axis with left zero-padding:
+    // x_shift(d)[:, t] = x[:, t-d] (0 for t<d). zeros come from x, so they are always finite.
     ggml_tensor * zeros = ggml_scale(ctx, x, 0.0f);             // [C, T] of zeros
-    ggml_tensor * z1 = ggml_view_2d(ctx, zeros, C, 1, zeros->nb[1], 0); // [C,1]
-    ggml_tensor * z2 = ggml_view_2d(ctx, zeros, C, 2, zeros->nb[1], 0); // [C,2]
+    ggml_tensor * x_t   = x;
+    ggml_tensor * x_tm1 = T > 1
+        ? ggml_concat(ctx, ggml_view_2d(ctx, zeros, C, 1, zeros->nb[1], 0),
+                           ggml_view_2d(ctx, x, C, T-1, x->nb[1], 0), 1)
+        : zeros;                                                // T==1: no history in batch
+    ggml_tensor * x_tm2 = T > 2
+        ? ggml_concat(ctx, ggml_view_2d(ctx, zeros, C, 2, zeros->nb[1], 0),
+                           ggml_view_2d(ctx, x, C, T-2, x->nb[1], 0), 1)
+        : zeros;                                                // T<=2: all zero-history
 
-    ggml_tensor * x_t   = x;                                                   // t
-    ggml_tensor * x_tm1 = ggml_concat(ctx, z1, ggml_view_2d(ctx, x, C, T-1, x->nb[1], 0), 1); // t-1
-    ggml_tensor * x_tm2 = ggml_concat(ctx, z2, ggml_view_2d(ctx, x, C, T-2, x->nb[1], 0), 1); // t-2
-
-    // out = tap2 (*) x_t + tap1 (*) x_tm1 + tap0 (*) x_tm2   (tap index = kernel position)
+    // conv = tap2 (*) x_t + tap1 (*) x_tm1 + tap0 (*) x_tm2   (tap index = kernel position)
     ggml_tensor * out = ggml_mul(ctx, x_t,   tap2);
     out = ggml_add(ctx, out, ggml_mul(ctx, x_tm1, tap1));
     out = ggml_add(ctx, out, ggml_mul(ctx, x_tm2, tap0));
-    return out;
+    return ggml_add(ctx, x, out);
 }
 
 // --- mHC Sinkhorn: h_res [S*S, T] -> doubly-stochastic per token, 20 iters (ends on col norm) ---
 static ggml_tensor * openpangu_sinkhorn(ggml_context * ctx, ggml_tensor * h_res_flat,
                                         int64_t S, int64_t T, int iters, float hc_eps) {
-    // reshape to [S(row), S(col), T]: convention m[r,c] with ne0=row(S), ne1=col(S), ne2=T
+    // The flat h_res is torch [r,c] row-major (c fastest), so a bare reshape gives ne0=col.
+    // Transpose once so ne0=row(S), ne1=col(S): every axis op below then matches the
+    // reference _mhc_sinkhorn_naive (softmax over col, first norm over row, end on col-sum=1)
+    // and mhc_post's out[c] = sum_r m[r,c]*residual[r].
     (void) hc_eps; // softmax outputs are strictly positive, so the eps is numerically inert here
     ggml_tensor * m = ggml_reshape_3d(ctx, h_res_flat, S, S, T);
+    m = ggml_cont(ctx, ggml_permute(ctx, m, 1, 0, 2, 3));
     // ref softmaxes h_res over columns (final S). ggml_soft_max works over ne0, so permute col->ne0.
     m = ggml_cont(ctx, ggml_permute(ctx, m, 1, 0, 2, 3));      // [col, row, T]
     m = ggml_soft_max(ctx, m);                                 // softmax over col
@@ -109,6 +109,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     // mHC entry: repeat the embedding into S residual streams -> R [n_embd, S, n_tokens]
     ggml_tensor * R = ggml_repeat(ctx0, ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
                                   ggml_new_tensor_3d(ctx0, inpL->type, n_embd, S, n_tokens));
+    ggml_set_name(R, "opg_R_entry");
 
     // mHC pre: combine S streams -> x [n_embd, n_tokens]; also returns h_post [S,T], h_res_mix [S,S,T]
     auto mhc_pre = [&](ggml_tensor * Rin, ggml_tensor * phi, ggml_tensor * alpha,
@@ -186,12 +187,16 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_tensor * h_post_a, * h_res_a;
         ggml_tensor * x = mhc_pre(R, layer.mhc_attn_phi, layer.mhc_attn_alpha,
                                   layer.mhc_attn_beta, layer.mhc_attn_gamma, &h_post_a, &h_res_a);
+        if (il == 0) ggml_set_name(x, "opg0_attn_mhcpre_x");
         cur = llm_build_norm(ctx0, x, hparams, layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        if (il == 0) ggml_set_name(cur, "opg0_attn_norm");
 
         // --- Q path: q_a -> qa_conv -> q_a_norm -> q_b ---
         ggml_tensor * q_lora = ggml_mul_mat(ctx0, layer.wq_a, cur);        // [q_lora_rank, T]
         q_lora = openpangu_causal_conv(ctx0, q_lora, layer.qa_conv);
+        if (il == 0) ggml_set_name(q_lora, "opg0_qlora_conv");
         q_lora = llm_build_norm(ctx0, q_lora, hparams, layer.attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
+        if (il == 0) ggml_set_name(q_lora, "opg0_qlora_norm");
         ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, q_lora);          // [n_head*192, T]
         q = ggml_reshape_3d(ctx0, q, n_embd_head_k, n_head, n_tokens);
         ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens, q->nb[1], q->nb[2], 0);
@@ -200,6 +205,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         q_rope = ggml_rope_ext(ctx0, ggml_cont(ctx0, q_rope), inp_pos, nullptr, n_rot, rope_type,
                                n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
         q = ggml_concat(ctx0, ggml_cont(ctx0, q_nope), q_rope, 0);        // [192, n_head, T]
+        if (il == 0) ggml_set_name(q, "opg0_q");
 
         // --- KV path: kv_a -> split -> compresskv_conv -> kv_a_norm -> kv_b ---
         ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);       // [kv_lora+64, T]
@@ -208,6 +214,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                                             kv_lora_rank*ggml_element_size(kv)));
         ckv = openpangu_causal_conv(ctx0, ckv, layer.kv_conv);
         ckv = llm_build_norm(ctx0, ckv, hparams, layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
+        if (il == 0) ggml_set_name(ckv, "opg0_ckv_norm");
         ggml_tensor * kvb = ggml_mul_mat(ctx0, layer.wkv_b, ckv);          // [n_head*(128+128), T]
         kvb = ggml_reshape_3d(ctx0, kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, n_tokens);
         ggml_tensor * k_nope = ggml_view_3d(ctx0, kvb, n_embd_head_qk_nope, n_head, n_tokens, kvb->nb[1], kvb->nb[2], 0);
@@ -220,21 +227,75 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_tensor * k_pe_b = ggml_repeat(ctx0, k_pe,
                                  ggml_new_tensor_3d(ctx0, k_pe->type, n_embd_head_qk_rope, n_head, n_tokens));
         ggml_tensor * k = ggml_concat(ctx0, ggml_cont(ctx0, k_nope), k_pe_b, 0); // [192, n_head, T]
+        if (il == 0) { ggml_set_name(k, "opg0_k"); ggml_set_name(v, "opg0_v"); }
 
-        // NOTE(v0): param_sink (128 learned latent-KV prepended) is deferred — a documented
-        // approximation for the first coherence smoke; add before claiming full fidelity.
+        // ---- store this step's K/V into the cache (standard bookkeeping) ----
+        v = ggml_reshape_2d(ctx0, v, n_embd_head_v * n_head, n_tokens);   // V as 2D for the store
+        ggml_build_forward_expand(gf, q);
+        ggml_build_forward_expand(gf, k);
+        ggml_build_forward_expand(gf, v);
+        llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, k, v, n_tokens, kv_head, cb, il);
 
-        v = ggml_reshape_2d(ctx0, v, n_embd_head_v * n_head, n_tokens);   // V as 2D (matches template)
-        cur = llm_build_kv(ctx0, lctx, kv_self, gf, layer.wo, NULL,
-                           k, v, q, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+        // ---- param_sink: 128 static learned latent-KV entries prepended to the sequence ----
+        // sink_kv -> kv_a_norm -> kv_b gives per-head k_nope/v; sink_k_pe is used rope-free.
+        // Sinks are visible to every query position (they sit "before" the sequence).
+        const int64_t NS = hparams.param_sink_number;
+        ggml_tensor * s_ckv = llm_build_norm(ctx0, layer.param_sink_kv, hparams,
+                                             layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il); // [512, NS]
+        ggml_tensor * s_kvb = ggml_mul_mat(ctx0, layer.wkv_b, s_ckv);                       // [n_head*256, NS]
+        s_kvb = ggml_reshape_3d(ctx0, s_kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, NS);
+        ggml_tensor * s_knope = ggml_view_3d(ctx0, s_kvb, n_embd_head_qk_nope, n_head, NS,
+                                             s_kvb->nb[1], s_kvb->nb[2], 0);
+        ggml_tensor * s_v = ggml_cont(ctx0, ggml_view_3d(ctx0, s_kvb, n_embd_head_v, n_head, NS,
+                                             s_kvb->nb[1], s_kvb->nb[2], n_embd_head_qk_nope*ggml_element_size(s_kvb)));
+        ggml_tensor * s_kpe = ggml_reshape_3d(ctx0, layer.param_sink_k_pe, n_embd_head_qk_rope, 1, NS);
+        s_kpe = ggml_repeat(ctx0, s_kpe, ggml_new_tensor_3d(ctx0, s_kpe->type, n_embd_head_qk_rope, n_head, NS));
+        ggml_tensor * s_k = ggml_concat(ctx0, ggml_cont(ctx0, s_knope), s_kpe, 0);          // [192, n_head, NS]
+        s_k = ggml_cont(ctx0, ggml_permute(ctx0, s_k, 0, 2, 1, 3));                         // [192, NS, n_head]
+        s_v = ggml_cont(ctx0, ggml_permute(ctx0, s_v, 1, 2, 0, 3));                         // [NS, 128, n_head]
 
-        // NOTE(v0): o_conv acts on the pre-o_proj attn output ([n_head*v_head]=6144), but
-        // llm_build_kv bundles wo internally. Deferred with param_sink; needs a manual
-        // attention path (wo=NULL) to insert o_conv before o_proj. (void) layer.o_conv;
+        // ---- manual attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
+        auto * k_cache = kv_self.k_l[il];
+        auto * v_cache = kv_self.v_l[il];
+        const int64_t n_ctx_kv = kv_self.size;
+        ggml_tensor * kview = ggml_view_3d(ctx0, k_cache, n_embd_head_k, n_kv, n_head,
+                ggml_row_size(k_cache->type, n_embd_head_k)*n_head,
+                ggml_row_size(k_cache->type, n_embd_head_k), 0);
+        GGML_ASSERT(kv_self.v_trans);
+        ggml_tensor * vview = ggml_view_3d(ctx0, v_cache, n_kv, n_embd_head_v, n_head,
+                ggml_element_size(v_cache)*n_ctx_kv,
+                ggml_element_size(v_cache)*n_ctx_kv*n_embd_head_v, 0);
+
+        // f32 everywhere: the non-f32 concat kernel only handles dim 0, and correctness comes
+        // first on this CPU path (the cache-view casts are the price of prepending sinks).
+        ggml_tensor * k_all = ggml_concat(ctx0, s_k, ggml_cast(ctx0, kview, GGML_TYPE_F32), 1); // [192, NS+n_kv, H]
+        ggml_tensor * v_all = ggml_concat(ctx0, s_v, ggml_cast(ctx0, vview, GGML_TYPE_F32), 0); // [NS+n_kv, 128, H]
+
+        ggml_tensor * qp = ggml_permute(ctx0, q, 0, 2, 1, 3);                               // [192, T, H]
+        ggml_tensor * kq = ggml_mul_mat(ctx0, k_all, qp);                                   // [NS+n_kv, T, H]
+
+        // mask: sinks always visible (0) ++ the causal KQ_mask. The zero block is built by
+        // scaling finite kq data (KQ_mask itself holds -inf, which 0*x would turn into NaN).
+        const int64_t n_mask = KQ_mask->ne[1];
+        ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_mask, NS*ggml_element_size(kq), 0), 0.0f);
+        ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, KQ_mask, 0);                    // [NS+n_kv, n_mask]
+        kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
+
+        ggml_tensor * kqv = ggml_mul_mat(ctx0, v_all, kq);                                  // [128, T, H]
+        ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));        // [128, H, T]
+        cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
+
+        // o_conv (MOME on the pre-o_proj attn output), then o_proj
+        cur = openpangu_causal_conv(ctx0, cur, layer.o_conv);
+        cur = llm_build_lora_mm(lctx, ctx0, layer.wo, cur);
+        if (il == 0) ggml_set_name(cur, "opg0_attn_out");
+
         cur = llm_build_norm(ctx0, cur, hparams, layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
+        if (il == 0) ggml_set_name(cur, "opg0_attn_postnorm");
 
         // mHC post -> scatter back to S streams
         R = mhc_post(cur, h_post_a, R, layer.mhc_attn_alpha, layer.mhc_attn_beta, h_res_a);
+        if (il == 0) ggml_set_name(R, "opg0_R_attn");
 
         // ================= ffn sublayer =================
         ggml_tensor * h_post_m, * h_res_m;
@@ -258,6 +319,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
             cur = ggml_add(ctx0, moe_out, shexp);
         }
         cur = llm_build_norm(ctx0, cur, hparams, layer.ffn_post_norm, NULL, LLM_NORM_RMS, cb, il);
+        if (il == 0) ggml_set_name(cur, "opg0_ffn_postnorm");
 
         R = mhc_post(cur, h_post_m, R, layer.mhc_mlp_alpha, layer.mhc_mlp_beta, h_res_m);
 
@@ -268,6 +330,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
             flat = ggml_mul(ctx0, flat, layer.block_post_norm);
             R = ggml_reshape_3d(ctx0, flat, n_embd, S, n_tokens);
         }
+        if (il == 0) ggml_set_name(R, "opg0_R_block");
         R = lctx.cvec.apply_to(ctx0, R, il);
     }
 

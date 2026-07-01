@@ -4610,6 +4610,9 @@ class OpenPanguV2Model(DeepseekV2Model):
         # OpenPanguV2Tokenizer is a GPT2/BPE-style tokenizer. The pre-tokenizer hash is
         # registered in Model.get_vocab_base_pre (see the openpangu entry).
         self._set_vocab_gpt2()
+        # HF prepends <|pangu_text_start|> via the tokenizer post-processor; tokenizer_config
+        # has no add_bos_token key, so state it explicitly for the GGUF.
+        self.gguf_writer.add_add_bos_token(True)
 
     def set_gguf_parameters(self):
         # Base transformer params (block_count now includes NextN layers).
