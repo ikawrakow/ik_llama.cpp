@@ -388,6 +388,22 @@ struct llama_layer {
 
     struct llama_layer_nextn nextn;
 
+    // openPangu-2.0: MoME causal convs + learned static param sink + mHC + block post-norm
+    struct ggml_tensor * qa_conv          = nullptr;
+    struct ggml_tensor * kv_conv          = nullptr; // compresskv_conv
+    struct ggml_tensor * o_conv           = nullptr;
+    struct ggml_tensor * param_sink_kv    = nullptr;
+    struct ggml_tensor * param_sink_k_pe  = nullptr;
+    struct ggml_tensor * block_post_norm  = nullptr;
+    struct ggml_tensor * mhc_attn_phi     = nullptr;
+    struct ggml_tensor * mhc_attn_alpha   = nullptr;
+    struct ggml_tensor * mhc_attn_beta    = nullptr;
+    struct ggml_tensor * mhc_attn_gamma   = nullptr;
+    struct ggml_tensor * mhc_mlp_phi      = nullptr;
+    struct ggml_tensor * mhc_mlp_alpha    = nullptr;
+    struct ggml_tensor * mhc_mlp_beta     = nullptr;
+    struct ggml_tensor * mhc_mlp_gamma    = nullptr;
+
     std::unique_ptr<ggml_tensor> computed_wk_b;
     std::unique_ptr<ggml_tensor> computed_wk_b_pp;
     std::unique_ptr<ggml_tensor> computed_wv_b;
@@ -441,6 +457,12 @@ struct llama_model {
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
     struct ggml_tensor * output_mtp = nullptr;
+
+    // openPangu-2.0: global mHC stream-merge module (non-block)
+    struct ggml_tensor * mhc_merge_phi   = nullptr;
+    struct ggml_tensor * mhc_merge_alpha = nullptr;
+    struct ggml_tensor * mhc_merge_beta  = nullptr;
+    struct ggml_tensor * mhc_merge_gamma = nullptr;
 
     std::unique_ptr<ggml_tensor> output_mtp_ptr;
 

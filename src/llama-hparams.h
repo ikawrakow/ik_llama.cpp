@@ -131,6 +131,11 @@ struct llama_hparams {
     // indexer_types metadata if present, else derived from the GLM-5.2 config rule at load time.
     std::array<bool, LLAMA_MAX_LAYERS> indexer_is_full = {};
 
+    // openPangu-2.0 (mHC / Hyper-Connections + learned param sink)
+    uint32_t mhc_num_stream    = 1;
+    uint32_t mhc_recur_norm    = 0;
+    uint32_t param_sink_number = 0;
+
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
