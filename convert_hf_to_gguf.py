@@ -592,6 +592,9 @@ class Model:
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
+        if chkhsh == "65df2fe396b537a53433301848c0a739f56d56f67ad3d35eba27961ac33c12bb":
+            # ref: https://huggingface.co/openpangu/openPangu-2.0-Flash
+            res = "openpangu"
         if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
@@ -4586,6 +4589,147 @@ class DeepseekV2Model(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("OpenPanguV2ForCausalLM")
+class OpenPanguV2Model(DeepseekV2Model):
+    # openPangu-2.0-Flash: MLA + DSA/SWA hybrid + MoE + mHC(Hyper-Connections) + MoME convs.
+    # Stage-1 converter probe: emits a complete, self-contained GGUF (weights + metadata).
+    # The runtime graph (mHC / MoME conv-state / param-sink / DSA+SWA schedule) is Stage-2.
+    model_arch = gguf.MODEL_ARCH.OPENPANGU
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # MTP/NextN layers (num_hidden_layers .. +num_nextn_predict_layers-1) are real blocks
+        # in ik_llama's layout (n_layer includes NextN; n_layer_kv_from_start excludes them).
+        self._nextn = int(self.hparams.get("num_nextn_predict_layers", 0) or 0)
+        self.block_count = int(self.hparams["num_hidden_layers"]) + self._nextn
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        # OpenPanguV2Tokenizer is a GPT2/BPE-style tokenizer. The pre-tokenizer hash is
+        # registered in Model.get_vocab_base_pre (see the openpangu entry).
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        # Base transformer params (block_count now includes NextN layers).
+        Model.set_gguf_parameters(self)
+        hparams = self.hparams
+        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
+        self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
+        self.gguf_writer.add_key_length(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
+        self.gguf_writer.add_value_length(hparams["v_head_dim"])
+
+        # MoE
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
+        self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
+        self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
+        self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+        # router_enable_expert_bias => sigmoid gating with e_score_correction bias
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        # RoPE
+        self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
+        self.gguf_writer.add_rope_freq_base(hparams["rope_theta"])
+
+        # NextN / MTP
+        self.gguf_writer.add_uint32(
+            gguf.Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=arch), self._nextn
+        )
+
+        # DSA lightning indexer
+        self.gguf_writer.add_uint32(
+            gguf.Keys.Attention.INDEXER_HEAD_COUNT.format(arch=arch), hparams["index_n_heads"]
+        )
+        self.gguf_writer.add_uint32(
+            gguf.Keys.Attention.INDEXER_KEY_LENGTH.format(arch=arch), hparams["index_head_dim"]
+        )
+        self.gguf_writer.add_uint32(
+            gguf.Keys.Attention.INDEXER_TOP_K.format(arch=arch), hparams["index_topk"]
+        )
+
+        # SWA (window; last few layers widen to 2048 per sliding_window_list)
+        if hparams.get("sliding_window") is not None:
+            self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+
+        # Pangu-specific structural metadata (consumed by the Stage-2 OPENPANGU graph).
+        self.gguf_writer.add_uint32(f"{arch}.mhc_num_stream", hparams["mhc_num_stream"])
+        self.gguf_writer.add_uint32(f"{arch}.mhc_recur_norm", hparams["mhc_recur_norm"])
+        self.gguf_writer.add_uint32(f"{arch}.param_sink_number", hparams["param_sink_number"])
+        self.gguf_writer.add_array(f"{arch}.dsa_layers", hparams["dsa_layers"])
+        self.gguf_writer.add_array(f"{arch}.swa_layers", hparams["swa_layers"])
+        if hparams.get("block_post_layernorm_idx") is not None:
+            self.gguf_writer.add_array(
+                f"{arch}.block_post_layernorm_idx", hparams["block_post_layernorm_idx"]
+            )
+        if hparams.get("sliding_window_list") is not None:
+            self.gguf_writer.add_array(f"{arch}.sliding_window_list", hparams["sliding_window_list"])
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Sigmoid router bias: rename to the deepseek-style ".bias" the tensor map expects.
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        # NOTE: unlike DeepseekV2, we do NOT skip MTP layers — they are real blocks here.
+
+        # Merge routed experts into stacked 3D tensors (same layout as deepseek/glm4moe).
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    tensors.append((self.map_tensor_name(merged_name), data_torch))
+                return tensors
+            else:
+                return []
+
+        # Split the fused MLA kv_b into k_b / v_b (deepseek MLA layout).
+        if name.endswith("kv_b_proj.weight"):
+            name_kb = name.replace("kv_b_proj", "k_b_proj")
+            name_vb = name.replace("kv_b_proj", "v_b_proj")
+
+            n_head_kv = self.hparams["num_attention_heads"]
+            v_head_dim = self.hparams["v_head_dim"]
+            qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+
+            assert data_torch.shape[0] == n_head_kv * (v_head_dim + qk_nope_head_dim)
+
+            kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
+            k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
+            k_b = k_b.transpose(1, 2)
+            k_b = k_b.reshape(n_head_kv * data_torch.shape[-1], qk_nope_head_dim)
+            v_b = v_b.reshape(n_head_kv * v_head_dim, data_torch.shape[-1])
+
+            return [
+                (self.map_tensor_name(name),    data_torch),
+                (self.map_tensor_name(name_kb), k_b),
+                (self.map_tensor_name(name_vb), v_b),
+            ]
+
+        # Everything else (attn/norms/mHC/MoME conv/param-sink/indexer/nextn) maps by name.
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @Model.register("T5WithLMHeadModel")
