@@ -458,55 +458,62 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         indexer_score = ggml_cast(ctx0, indexer_score, GGML_TYPE_F32);
         cb(indexer_score, "indexer_score_f32", il);
     }
-    for (int head = 0; head < n_ihead; ++head) {
-        int il_cb = 1000*(il + 1) + head;
-        // [1, n_tokens]
-        auto w  = ggml_cont(ctx0, ggml_view_2d(ctx0, indexer_weights, 1, indexer_weights->ne[1], indexer_weights->nb[1], indexer_weights->nb[0]*head));
-        cb(w, "iweights", il_cb);
-        // [head_size, n_tokens]
-        auto q = ggml_view_2d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[2], indexer_q->nb[2], indexer_q->nb[1]*head);
-        // [n_kv, n_tokens]
-        auto kq = ggml_mul_mat(ctx0, indexer_k_b, q);
-        cb(kq, "ikq", il_cb);
-        // [n_kv, n_tokens]
-        kq = ggml_relu(ctx0, kq);
-        cb(kq, "ikq_relu", il_cb);
-        // [n_kv, n_tokens]
-        auto score = ggml_mul(ctx0, kq, w);
-        cb(score, "score", il_cb);
-        indexer_score = ggml_add_inplace(ctx0, indexer_score, score);
-        cb(indexer_score, "indexer_score", il_cb);
-        ggml_build_forward_expand(gf, indexer_score);
+    if (indexer_q->ne[2] <= 8) {
+        // This covers TG and small batches (as needed for instance for speculative decoding). It is quite a bit faster than
+        // the loop over attention heads in the other branch. We limit it to a maximum of 8 tokens to limit compute buffer size.
+        // For insrtance, at a context of 512k tokens (n_kv = 524288), with 32 indexer attention heads (GLM-5), the K*Q result is
+        // 512 MiB for 8 tokens (64 MiB for 1 token). The ggml_relu op will be scheduled in-place, so no extra buffer needed there.
+        // The ggml_mul op will be hopefully also in-place.
+        // The ggml_cont(ctx0, ggml_transpose(ctx0, indexer_kq)) will require a second buffer. We use ggml_cont for now
+        // because the CUDA ggml_mul implementation does not support non-contiguous tensors.
+        // So, worse case for 512k context and 8 tokens is 1 GiB compute buffer.
+        // A dedicated op that performs the relu, the multiplication, and the summation over attention heads would reduce
+        // this by a factor of 32 (and most likely also bring non-negligible performance gains).
+        // But for now, let's go with this.
+        indexer_q = ggml_reshape_2d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[1]*indexer_q->ne[2]); // [head_size, n_ihead*n_tokens]
+        auto indexer_kq = ggml_mul_mat(ctx0, indexer_k_b, indexer_q); // [n_kv, n_ihead*n_tokens]
+        cb(indexer_kq, "dsa_indexer_kq", il);
+        indexer_kq = ggml_relu(ctx0, indexer_kq);
+        cb(indexer_kq, "dsa_indexer_kq_relu", il);
+        indexer_kq = ggml_reshape_3d(ctx0, indexer_kq, indexer_kq->ne[0], indexer_q->ne[1], indexer_kq->ne[1]/indexer_q->ne[1]); // [n_kv, n_ihead, n_tokens]
+        indexer_kq = ggml_cont(ctx0, ggml_transpose(ctx0, indexer_kq));                                                          // [n_ihead, n_kv, n_tokens]
+        indexer_weights = ggml_reshape_3d(ctx0, indexer_weights, indexer_weights->ne[0], 1, indexer_weights->ne[1]);  // [n_ihead,    1, n_tokens]
+        indexer_kq = ggml_mul(ctx0, indexer_kq, indexer_weights);
+        cb(indexer_kq, "dsa_indexer_kq_w", il);
+        auto score = ggml_sum_rows(ctx0, indexer_kq); // [1, n_kv, n_tokens]
+        cb(score, "dsa_indexer_score", il);
+        score = ggml_reshape_2d(ctx0, score, score->ne[1], score->ne[2]);
+        indexer_score = ggml_add(ctx0, indexer_score, score);
+        cb(indexer_score, "dsa_indexer_score", il);
+    } else {
+        // -fa 0: KQ_mask is the raw F32 input tensor, so the seed above still aliases it and the in-place
+        // per-head accumulation below would corrupt the shared causal mask that the sparse-mask and later
+        // softmax layers read back. Copy the seed first. On -fa 1 the F16 mask was already cast to a private
+        // F32 buffer above (so this does not fire), and the small-batch path uses a non-inplace add.
+        if (KQ_mask->type == GGML_TYPE_F32) {
+            indexer_score = ggml_cont(ctx0, indexer_score);
+        }
+        for (int head = 0; head < n_ihead; ++head) {
+            int il_cb = 1000*(il + 1) + head;
+            // [1, n_tokens]
+            auto w  = ggml_cont(ctx0, ggml_view_2d(ctx0, indexer_weights, 1, indexer_weights->ne[1], indexer_weights->nb[1], indexer_weights->nb[0]*head));
+            cb(w, "iweights", il_cb);
+            // [head_size, n_tokens]
+            auto q = ggml_view_2d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[2], indexer_q->nb[2], indexer_q->nb[1]*head);
+            // [n_kv, n_tokens]
+            auto kq = ggml_mul_mat(ctx0, indexer_k_b, q);
+            cb(kq, "ikq", il_cb);
+            // [n_kv, n_tokens]
+            kq = ggml_relu(ctx0, kq);
+            cb(kq, "ikq_relu", il_cb);
+            // [n_kv, n_tokens]
+            auto score = ggml_mul(ctx0, kq, w);
+            cb(score, "score", il_cb);
+            indexer_score = ggml_add_inplace(ctx0, indexer_score, score);
+            cb(indexer_score, "indexer_score", il_cb);
+            ggml_build_forward_expand(gf, indexer_score);
+        }
     }
-
-    //// {n_kv(keys), n_tokens(q), n_ihead}  (k's head dim broadcasts over n_ihead)
-    //ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k_b, indexer_q);
-    //cb(indexer_kq, "dsa_indexer_kq", il);
-
-    //// -> {n_ihead, n_tokens(q), n_kv(keys)} for per-head weighting
-    //indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
-
-    //ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
-
-    //// weights {n_ihead, n_tokens} -> {n_ihead, n_tokens, 1} broadcast over keys
-    //indexer_weights = ggml_reshape_3d(ctx0, indexer_weights, n_ihead, n_tokens, 1);
-    //indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
-
-    //// sum over heads -> {1, n_tokens(q), n_kv(keys)}
-    //indexer_score = ggml_sum_rows(ctx0, indexer_score);
-
-    //// -> {n_kv(keys), n_tokens(q), 1}
-    //indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
-    //cb(indexer_score, "dsa_indexer_score", il);
-
-    //// add base causal mask over the n_kv keys: first n_tokens query columns of KQ_mask {n_kv, n_tokens_pad}.
-    //ggml_tensor * causal = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
-    //// Under -fa 1 the dense KQ_mask is F16; CPU ggml_add only supports F32+F16 when src0 is F16,
-    //// not F32(score)+F16(mask) (it aborts). Cast the causal mask view to F32 so the add is valid on
-    //// CPU. (CUDA add accepts mixed types, so this only bit the CPU build.)
-    //if (causal->type != GGML_TYPE_F32) causal = ggml_cast(ctx0, ggml_cont(ctx0, causal), GGML_TYPE_F32);
-    //indexer_score = ggml_add(ctx0, indexer_score, causal);
-    //cb(indexer_score, "dsa_indexer_score_masked", il);
 
     // Attention-sink force-inclusion: add a finite positive boost to each query's OWN SEQUENCE's
     // first n_sink present tokens so the sink token(s) always survive the top-k selection. Masking
@@ -714,8 +721,6 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     // Both default to the dense KQ_mask so non-DSA / disabled builds are unchanged.
     ggml_tensor * sparse_mask    = KQ_mask;
     ggml_tensor * sparse_mask_fa = KQ_mask;
-    //ggml_tensor * top_k = nullptr;
-    //(void) top_k; // captured for potential reuse/debug; only the masks are consumed downstream
 
     // self_attention
     {
@@ -777,24 +782,21 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                     // shared layer indexer=None, topk_indices=prev_topk_indices). The full/shared map is
                     // hparams.indexer_is_full (GGUF metadata or derived config rule). At a given step all
                     // layers share the same n_kv/n_tokens, so a full layer's argsort is valid to reuse.
-                    ggml_tensor * sorted;
-                    if (hparams.indexer_is_full[il] || dsa_last_full_sorted == nullptr) {
-                        ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
-                        sorted = build_deepseek2_dsa_indexer(gf, il, qr, cur, KQ_mask, inp_pos);
-                        dsa_last_full_sorted = sorted;
-                    } else {
-                        sorted = dsa_last_full_sorted;
+                    if (hparams.indexer_is_full[il]) {
+                        auto sorted = build_deepseek2_dsa_indexer(gf, il, q, cur, KQ_mask, inp_pos);
+                        if (lctx.cparams.flash_attn) {
+                            last_sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, sorted);
+                        } else {
+                            last_sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
+                        }
                     }
                     if (lctx.cparams.flash_attn) {
-                        sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, sorted);
+                        GGML_ASSERT(last_sparse_mask_fa);
+                        sparse_mask_fa = last_sparse_mask_fa;
                     } else {
-                        sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
+                        GGML_ASSERT(last_sparse_mask);
+                        sparse_mask = last_sparse_mask;
                     }
-                    //// For the FA path the mask must be F16 + padded; build it from the F32 sparse mask.
-                    //if (lctx.cparams.flash_attn) {
-                    //    sparse_mask_fa = build_deepseek2_dsa_fa_mask(sparse_mask, KQ_mask);
-                    //}
-                    //top_k = sorted;
                 }
 
                 q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
@@ -1168,7 +1170,6 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 }
 
 ggml_cgraph * llm_build_context::build_deepseek2() {
-    dsa_last_full_sorted = nullptr; // GLM-5.2 IndexShare: reset shared-layer top-k reuse state (before any layer, incl. the MTP early-return path)
     const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
                           model.split_mode == LLAMA_SPLIT_MODE_ATTN);
 #ifdef GGML_USE_VULKAN
@@ -1213,6 +1214,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         ggml_build_forward_expand(gf, minus_inf);
         lctx.inp_mask_inf = minus_inf;
     }
+
+    last_sparse_mask = last_sparse_mask_fa = nullptr;
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case
