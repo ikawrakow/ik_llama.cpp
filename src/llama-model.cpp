@@ -2197,10 +2197,11 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint3
         return hparams.n_embd_v_s() * state_sots * sizeof(float);
     }
     if (arch == LLM_ARCH_OPENPANGU) {
-        // MLA-latent cache, always f32: K row [ckv | roped k_pe], V row = the 512 latent
+        // MLA-latent cache: K row [ckv | roped k_pe], V row = the 512 latent
         // (transposed). DSA layers also cache one indexer key per position; the 16-column
         // conv ring is constant-size and negligible here.
-        size_t size = (size_t) (2*hparams.n_lora_kv + hparams.n_rot) * kv_size * sizeof(float);
+        size_t size = ggml_row_size(type_k, hparams.n_lora_kv + hparams.n_rot) * kv_size;
+        size += ggml_row_size(type_v, (int64_t) hparams.n_lora_kv * kv_size);
         if (hparams.indexer_head_size > 0 && hparams.n_swa > 0 &&
             il < (int) hparams.n_layer - (int) hparams.nextn_predict_layers &&
             hparams.openpangu_window[il] == 0) {

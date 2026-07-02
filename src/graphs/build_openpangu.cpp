@@ -302,16 +302,16 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_tensor * s_lat_t = ggml_cont(ctx0, ggml_transpose(ctx0, s_ckv));                   // [NS, 512]
 
     // ---- latent attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
-    // One [576, NS+n_kv] key block shared by all heads (f32 cache, no casts); the value
-    // side reads the transposed 512-latent, and wv_b up-projects after the weighted sum.
+    // Keep sinks and cached tokens separate until after KQ so f16 latent caches do not need
+    // unsupported non-f32 concat along dim1.
     ggml_tensor * kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv,
                                         kv_self.k_l[il]->nb[1], 0);
     ggml_tensor * vl_all = ggml_view_2d(ctx0, kv_self.v_l[il], n_kv, kv_lora_rank,
                                         (int64_t) kv_self.size*ggml_element_size(kv_self.v_l[il]), 0);
-    ggml_tensor * lat_all = ggml_concat(ctx0, sink_blk, kl_all, 1);                         // [576, NS+n_kv]
-    ggml_tensor * v_all   = ggml_concat(ctx0, s_lat_t, vl_all, 0);                          // [NS+n_kv, 512]
 
-    ggml_tensor * kq = ggml_mul_mat(ctx0, lat_all, q_all);                                  // [NS+n_kv, T, H]
+    ggml_tensor * kq_sinks = ggml_mul_mat(ctx0, sink_blk, q_all);                           // [NS, T, H]
+    ggml_tensor * kq_cache = ggml_mul_mat(ctx0, kl_all,    q_all);                           // [n_kv, T, H]
+    ggml_tensor * kq = ggml_concat(ctx0, kq_sinks, kq_cache, 0);                             // [NS+n_kv, T, H]
 
     // mask: sinks always visible (0) ++ the causal/SWA KQ_mask (+ the DSA top-k selection
     // mask on indexer layers). The zero block is built by scaling finite kq data (KQ_mask
@@ -325,7 +325,12 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);                // [NS+n_kv, T]
     kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
 
-    ggml_tensor * kqv = ggml_mul_mat(ctx0, v_all, kq);                                  // [512, T, H]
+    ggml_tensor * kq_s = ggml_view_3d(ctx0, kq, NS, n_tokens, n_head, kq->nb[1], kq->nb[2], 0);
+    ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv, n_tokens, n_head, kq->nb[1], kq->nb[2],
+                                      NS*ggml_element_size(kq));
+    ggml_tensor * kqv = ggml_add(ctx0,
+            ggml_mul_mat(ctx0, s_lat_t, kq_s),
+            ggml_mul_mat(ctx0, vl_all,  kq_c));                                           // [512, T, H]
     ggml_tensor * wv_b3 = ggml_reshape_3d(ctx0, layer.wv_b, kv_lora_rank, n_embd_head_v, n_head);
     ggml_tensor * out_h = ggml_mul_mat(ctx0, wv_b3, kqv);                               // [128, T, H]
     ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, out_h, 0, 2, 1, 3));      // [128, H, T]

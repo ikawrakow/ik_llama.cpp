@@ -820,6 +820,36 @@ static inline uint32_t llama_kv_k_row_embd(
     return hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
 }
 
+static inline bool llama_openpangu_latent_cache_type_supported(ggml_type type) {
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16;
+}
+
+static void llama_openpangu_resolve_latent_cache_types(
+        const char * fn,
+        ggml_type &  type_k,
+        ggml_type &  type_v,
+        bool         type_k_explicit,
+        bool         type_v_explicit) {
+    if (!type_k_explicit) {
+        type_k = GGML_TYPE_F32;
+    }
+    if (!type_v_explicit) {
+        type_v = GGML_TYPE_F32;
+    }
+
+    if (!llama_openpangu_latent_cache_type_supported(type_k) ||
+        !llama_openpangu_latent_cache_type_supported(type_v)) {
+        LLAMA_LOG_WARN("%s: OpenPangu latent KV cache supports f32/f16 only - using f32 for unsupported requested type(s) (%s/%s)\n",
+                fn, ggml_type_name(type_k), ggml_type_name(type_v));
+        if (!llama_openpangu_latent_cache_type_supported(type_k)) {
+            type_k = GGML_TYPE_F32;
+        }
+        if (!llama_openpangu_latent_cache_type_supported(type_v)) {
+            type_v = GGML_TYPE_F32;
+        }
+    }
+}
+
 static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
     return std::min<uint32_t>(std::max<uint32_t>(1, cparams.n_seq_max), kv_size);
 }
@@ -1140,10 +1170,10 @@ static bool llama_kv_cache_init(
             }
             int n_embd_head_v = hparams.n_embd_head_v(i);
             auto this_type_k = type_k;
-            if (type_k_first != type_k && n_k_first > 0 && i < n_k_first) {
+            if (model.arch != LLM_ARCH_OPENPANGU && type_k_first != type_k && n_k_first > 0 && i < n_k_first) {
                 this_type_k = type_k_first;
             }
-            if (type_k_last != type_k && n_k_last > 0 && i >= n_layer - n_k_last) {
+            if (model.arch != LLM_ARCH_OPENPANGU && type_k_last != type_k && n_k_last > 0 && i >= n_layer - n_k_last) {
                 this_type_k = type_k_last;
             }
             if (this_type_k != type_k) {
@@ -1151,10 +1181,10 @@ static bool llama_kv_cache_init(
             }
             int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
             auto this_type_v = type_v;
-            if (type_v_first != type_v && n_v_first > 0 && i < n_v_first) {
+            if (model.arch != LLM_ARCH_OPENPANGU && type_v_first != type_v && n_v_first > 0 && i < n_v_first) {
                 this_type_v = type_v_first;
             }
-            if (type_v_last != type_v && n_v_last > 0 && i >= n_layer - n_v_last) {
+            if (model.arch != LLM_ARCH_OPENPANGU && type_v_last != type_v && n_v_last > 0 && i >= n_layer - n_v_last) {
                 this_type_v = type_v_last;
             }
             if (this_type_v != type_v) {
@@ -1163,12 +1193,11 @@ static bool llama_kv_cache_init(
 
             if (model.arch == LLM_ARCH_OPENPANGU) {
                 // MLA-latent cache: k_l holds [ckv_norm 512 | roped k_pe 64] per position
-                // (f32, straight layout); v_l holds the transposed 512-latent for the value
-                // side (f32, v_trans layout). The per-head K/V never get materialized —
-                // ~27x less cache data per token than storing them through kv_b.
+                // (straight layout); v_l holds the transposed 512-latent for the value side
+                // (v_trans layout). The per-head K/V never get materialized.
                 const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
-                k = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_lat, kv_size);
-                v = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t) hparams.n_lora_kv * kv_size);
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, kv_size);
+                v = ggml_new_tensor_1d(ctx, this_type_v, (int64_t) hparams.n_lora_kv * kv_size);
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
@@ -4274,6 +4303,10 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
+        if (model.arch == LLM_ARCH_OPENPANGU) {
+            llama_openpangu_resolve_latent_cache_types(__func__,
+                    params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit);
+        }
         if (params.defer_experts && params.use_mmap) {
 #ifdef __linux__
             ml.build_expert_tensor_index(model.hparams);
@@ -6626,6 +6659,8 @@ struct llama_model_params llama_model_default_params() {
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.type_k_explicit             =*/ false,
+        /*.type_v_explicit             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
         /*.max_ctx_size                =*/ 0,
         /*.n_seq_max                   =*/ 1,
@@ -6699,6 +6734,8 @@ struct llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.type_k_explicit             =*/ false,
+        /*.type_v_explicit             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
         /*.type_reduce                 =*/ GGML_TYPE_F16,
         /*.type_graph_attn             =*/ GGML_TYPE_F16,
@@ -7091,12 +7128,18 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    if (model->arch == LLM_ARCH_OPENPANGU) {
+        llama_openpangu_resolve_latent_cache_types(__func__,
+                params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit);
+    }
+
     //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
     //    LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
     //    params.flash_attn = false;
     //}
 
-    if (params.type_v != GGML_TYPE_F16 && params.type_v != GGML_TYPE_BF16 && !params.flash_attn) {
+    if (model->arch != LLM_ARCH_OPENPANGU &&
+        params.type_v != GGML_TYPE_F16 && params.type_v != GGML_TYPE_BF16 && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
     }
@@ -7349,18 +7392,6 @@ struct llama_context * llama_init_from_model(
         // it's probably best to keep as much precision as possible for the states
         type_k = GGML_TYPE_F32; // required by ggml_ssm_conv for Mamba's conv_states
         type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
-    }
-
-    if (model->arch == LLM_ARCH_OPENPANGU) {
-        // the latent cache is f32 only for now (the graph reads/writes it as f32);
-        // force the types so the KV size log reports what is actually allocated
-        if (ggml_is_quantized(type_k) || ggml_is_quantized(type_v) ||
-            type_k == GGML_TYPE_BF16 || type_v == GGML_TYPE_BF16) {
-            LLAMA_LOG_WARN("%s: OpenPangu's latent KV cache is f32 only - ignoring requested K/V cache types (%s/%s)\n",
-                    __func__, ggml_type_name(type_k), ggml_type_name(type_v));
-        }
-        type_k = GGML_TYPE_F32;
-        type_v = GGML_TYPE_F32;
     }
 
     GGML_ASSERT(hparams.n_embd_head_k(0) % ggml_blck_size(type_k) == 0);
