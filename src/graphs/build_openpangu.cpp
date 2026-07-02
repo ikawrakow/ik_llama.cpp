@@ -264,18 +264,25 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             sc = ggml_mul(ctx0, sc, ggml_reshape_3d(ctx0, w_idx, 1, n_ihead, n_tokens));
             sc = ggml_cont(ctx0, ggml_permute(ctx0, sc, 1, 0, 2, 3));                // [n_ihead, n_kv, T]
             sc = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, sc), n_kv, n_tokens);     // [n_kv, T]
-            sc = ggml_add(ctx0, sc, ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0));
+            // FINITE pre-mask scores: the zero-tricks below must scale finite data only.
+            // After the mask add, sc contains -inf, and 0 * -inf = NaN; the CPU clamp
+            // launders NaN back to -1e30 (fminf/fmaxf ignore NaN) but the CUDA clamp
+            // propagates it -> NaN logits at n_kv > top_k (the '!!!' failure mode).
+            ggml_tensor * sc_finite = sc;
+            sc = ggml_add(ctx0, sc, ggml_cont(ctx0, ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0)));
             if (il == 0) ggml_set_name(sc, "opg0_idx_scores");
 
             // exact top-k -> additive mask: scatter zeros into a -1e30 base at the selected
             // positions ([1, n_kv, T] row layout makes set_rows a per-query scatter)
+            // (the CUDA set_rows kernel is stride-aware for the index tensor, so the strided
+            // top_k view is consumed directly; do NOT cont it — i32 cont has no CUDA cpy path)
             ggml_tensor * sel_idx = ggml_top_k(ctx0, sc, (int) topk);                // [topk, T] i32
             if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
-            ggml_tensor * base  = ggml_clamp(ctx0, ggml_scale(ctx0, sc, 0.0f), -1e30f, -1e30f);
+            ggml_tensor * base  = ggml_clamp(ctx0, ggml_scale(ctx0, sc_finite, 0.0f), -1e30f, -1e30f);
             base = ggml_reshape_3d(ctx0, ggml_cont(ctx0, base), 1, n_kv, n_tokens);
-            // contiguous [topk, T] reinterpretation of sc's buffer (values irrelevant, scaled to 0;
-            // ggml_scale requires a contiguous src)
-            ggml_tensor * zeros = ggml_scale(ctx0, ggml_view_2d(ctx0, sc, topk, n_tokens, topk*ggml_element_size(sc), 0), 0.0f);
+            // contiguous [topk, T] reinterpretation of sc_finite's buffer (values irrelevant,
+            // scaled to 0; ggml_scale requires a contiguous src, and the source must be finite)
+            ggml_tensor * zeros = ggml_scale(ctx0, ggml_view_2d(ctx0, sc_finite, topk, n_tokens, topk*ggml_element_size(sc_finite), 0), 0.0f);
             zeros = ggml_reshape_3d(ctx0, zeros, 1, topk, n_tokens);
             sel_mask = ggml_set_rows(ctx0, base, zeros, sel_idx);
             sel_mask = ggml_reshape_2d(ctx0, sel_mask, n_kv, n_tokens);
