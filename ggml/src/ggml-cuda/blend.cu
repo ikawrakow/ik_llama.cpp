@@ -29,7 +29,7 @@ static __global__ void kernel_blend(int n, int nidx, const Data * x, const Idx *
         __syncthreads();
     }
     for (int i = threadIdx.x; i < nidx; i += blockDim.x) {
-        y_row[idx[i]] = b;
+        y_row[idx_row[i]] = b;
     }
 }
 
