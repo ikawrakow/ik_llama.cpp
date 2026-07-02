@@ -41,6 +41,9 @@ struct llama_cparams {
     bool graph_reuse;
     bool k_cache_hadamard;
     bool v_cache_hadamard;
+    bool dsa_indexer_hadamard = true; // apply Walsh-Hadamard rotation to DSA indexer q/k (precision)
+    bool dsa = false;                 // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
+    int  dsa_top_k = -1;              // DSA top-k override (<0 => use the model's configured indexer_top_k)
     bool split_mode_graph_scheduling;
     //bool split_mode_f16;
     bool scheduler_async;

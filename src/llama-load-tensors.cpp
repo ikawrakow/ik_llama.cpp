@@ -2814,15 +2814,23 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
         layer.wo   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_embd_head_v, n_embd}, flags);
 
                        // DSA indexer
-        // GLM-5.2 only ships the DSA indexer on a subset of layers; the rest omit it.
-        // The DSA indexer runtime is not implemented (graph is plain MLA), so these
-        // tensors are loaded-but-unused. Mark them optional so layers without an
-        // indexer load as nullptr (ported from ggml-org/llama.cpp#24770).
+        // DSA indexer tensors. GLM-5.2's reference marks "shared" layers indexer=None, but the GGUFs
+        // in circulation (e.g. unsloth) ship indexer weights on every layer, and the DSA runtime IS
+        // implemented (see build_deepseek2_dsa_indexer + IndexShare reuse). These are TENSOR_NOT_REQUIRED
+        // so a faithful conversion that omits shared-layer indexer weights still loads: full layers must
+        // have them (they compute the top-k), shared layers reuse the previous full layer's top-k. A
+        // "full" layer (per hparams.indexer_is_full) that loads a null indexer will warn below.
         layer.indexer_k_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_NORM,   "weight", i), {hparams.indexer_head_size}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_k_norm_b = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_K_NORM,   "bias",   i), {hparams.indexer_head_size}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_proj     = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_PROJ,     "weight", i), {n_embd, hparams.indexer_n_head}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_attn_k   = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_ATTN_K,   "weight", i), {n_embd, hparams.indexer_head_size}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_attn_q_b = create_tensor(ctx_split, tn(LLM_TENSOR_INDEXER_ATTN_Q_B, "weight", i), {q_lora_rank, hparams.indexer_n_head * hparams.indexer_head_size}, flags | llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        // IndexShare: a "full" layer must carry indexer weights (it computes the top-k that shared layers
+        // reuse). If a conversion omits them on a full layer, DSA silently falls back to dense there.
+        if (i < (int) hparams.n_layer && hparams.indexer_is_full[i] && !layer.indexer_attn_q_b) {
+            LLAMA_LOG_WARN("%s: GLM-DSA layer %d is 'full' per indexer_types but has no indexer weights; DSA will run dense on it\n", __func__, i);
+        }
 
         layer.ffn_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, flags);
 

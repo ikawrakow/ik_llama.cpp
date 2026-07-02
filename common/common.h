@@ -417,6 +417,8 @@ struct gpt_params {
     bool grouped_expert_routing = false; // if to use grouped expert routing (BailingMoeV2 arch)
     bool rope_cache        = false; // if to use RoPE cache (for supported models)
     bool graph_reuse       = true;  // if to reuse compute graphs
+    bool dsa               = false; // enable GLM DSA sparse attention (off by default; opt-in via --dsa)
+    int  dsa_top_k         = -1;    // DSA top-k override (<0 => use the model's configured indexer_top_k)
     int  min_experts       = -1;
     float thresh_experts   = 0;
 
