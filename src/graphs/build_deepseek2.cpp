@@ -486,6 +486,13 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         indexer_score = ggml_add(ctx0, indexer_score, score);
         cb(indexer_score, "dsa_indexer_score", il);
     } else {
+        // -fa 0: KQ_mask is the raw F32 input tensor, so the seed above still aliases it and the in-place
+        // per-head accumulation below would corrupt the shared causal mask that the sparse-mask and later
+        // softmax layers read back. Copy the seed first. On -fa 1 the F16 mask was already cast to a private
+        // F32 buffer above (so this does not fire), and the small-batch path uses a non-inplace add.
+        if (KQ_mask->type == GGML_TYPE_F32) {
+            indexer_score = ggml_cont(ctx0, indexer_score);
+        }
         for (int head = 0; head < n_ihead; ++head) {
             int il_cb = 1000*(il + 1) + head;
             // [1, n_tokens]
