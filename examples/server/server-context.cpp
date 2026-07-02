@@ -608,7 +608,7 @@ void server_slot::release() {
 
 
 json server_slot::get_formated_timings() const {
-    return json{
+    json timings = json{
         {"prompt_n",               n_prompt_tokens_processed},
         {"prompt_ms",              t_prompt_processing},
         {"prompt_per_token_ms",    t_prompt_processing / n_prompt_tokens_processed},
@@ -622,6 +622,11 @@ json server_slot::get_formated_timings() const {
         {"n_ctx",           n_ctx},
         {"n_past",           n_past},
     };
+    if (n_draft_total > 0) {
+        timings["draft_n"]          = n_draft_total;
+        timings["draft_n_accepted"] = n_draft_accepted;
+    }
+    return timings;
 }
 
 result_timings server_slot::get_timings() const {
