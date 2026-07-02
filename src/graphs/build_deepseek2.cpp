@@ -714,8 +714,6 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     // Both default to the dense KQ_mask so non-DSA / disabled builds are unchanged.
     ggml_tensor * sparse_mask    = KQ_mask;
     ggml_tensor * sparse_mask_fa = KQ_mask;
-    //ggml_tensor * top_k = nullptr;
-    //(void) top_k; // captured for potential reuse/debug; only the masks are consumed downstream
 
     // self_attention
     {
@@ -777,24 +775,21 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                     // shared layer indexer=None, topk_indices=prev_topk_indices). The full/shared map is
                     // hparams.indexer_is_full (GGUF metadata or derived config rule). At a given step all
                     // layers share the same n_kv/n_tokens, so a full layer's argsort is valid to reuse.
-                    ggml_tensor * sorted;
-                    if (hparams.indexer_is_full[il] || dsa_last_full_sorted == nullptr) {
-                        ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
-                        sorted = build_deepseek2_dsa_indexer(gf, il, qr, cur, KQ_mask, inp_pos);
-                        dsa_last_full_sorted = sorted;
-                    } else {
-                        sorted = dsa_last_full_sorted;
+                    if (hparams.indexer_is_full[il]) {
+                        auto sorted = build_deepseek2_dsa_indexer(gf, il, q, cur, KQ_mask, inp_pos);
+                        if (lctx.cparams.flash_attn) {
+                            last_sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, sorted);
+                        } else {
+                            last_sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
+                        }
                     }
                     if (lctx.cparams.flash_attn) {
-                        sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, sorted);
+                        GGML_ASSERT(last_sparse_mask_fa);
+                        sparse_mask_fa = last_sparse_mask_fa;
                     } else {
-                        sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
+                        GGML_ASSERT(last_sparse_mask);
+                        sparse_mask = last_sparse_mask;
                     }
-                    //// For the FA path the mask must be F16 + padded; build it from the F32 sparse mask.
-                    //if (lctx.cparams.flash_attn) {
-                    //    sparse_mask_fa = build_deepseek2_dsa_fa_mask(sparse_mask, KQ_mask);
-                    //}
-                    //top_k = sorted;
                 }
 
                 q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
@@ -1168,7 +1163,6 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 }
 
 ggml_cgraph * llm_build_context::build_deepseek2() {
-    dsa_last_full_sorted = nullptr; // GLM-5.2 IndexShare: reset shared-layer top-k reuse state (before any layer, incl. the MTP early-return path)
     const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
                           model.split_mode == LLAMA_SPLIT_MODE_ATTN);
 #ifdef GGML_USE_VULKAN
@@ -1213,6 +1207,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         ggml_build_forward_expand(gf, minus_inf);
         lctx.inp_mask_inf = minus_inf;
     }
+
+    last_sparse_mask = last_sparse_mask_fa = nullptr;
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case
