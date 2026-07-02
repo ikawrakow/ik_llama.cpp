@@ -119,6 +119,7 @@ void llm_build_context::init() {
         lctx.inp_dsa_sink      = nullptr;
         lctx.inp_openpangu_conv_hist  = nullptr;
         lctx.inp_openpangu_conv_write = nullptr;
+        lctx.inp_mtp_carry     = nullptr;
         lctx.dflash.inputs.target_features = nullptr;
         lctx.dflash.inputs.pos_ctx = nullptr;
         lctx.dflash.inputs.kq_mask = nullptr;

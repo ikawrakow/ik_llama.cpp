@@ -300,6 +300,12 @@ struct llm_build_context {
         ggml_tensor * prev_embeddings,
         ggml_cgraph * gf,
         int il,
+        ggml_tensor * inp_pos,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_out_ids,
+        ggml_tensor * inp_tokens,
+        ggml_tensor * conv_hist_idx,
+        ggml_tensor * conv_write_idx,
         ggml_tensor ** full_hidden_out = nullptr,
         bool select_outputs = true,
         bool build_logits = true);

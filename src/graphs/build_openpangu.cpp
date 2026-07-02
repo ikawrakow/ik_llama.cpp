@@ -391,6 +391,12 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
         ggml_tensor * prev_embeddings,
         ggml_cgraph * gf,
         int il,
+        ggml_tensor * inp_pos,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_out_ids,
+        ggml_tensor * inp_tokens,
+        ggml_tensor * conv_hist_idx,
+        ggml_tensor * conv_write_idx,
         ggml_tensor ** full_hidden_out,
         bool select_outputs,
         bool build_logits) {
@@ -402,17 +408,14 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
                     "openPangu KV cache is position-addressed; kv head must equal the first batch position");
     }
 
-    ggml_tensor * inp_pos = build_inp_pos();
-    // the NextN/MTP layers are SWA layers with their own window (2048); the mask fill uses
-    // hparams.n_swa_mtp when the graph is built with an MTP op type
-    ggml_tensor * KQ_mask = hparams.n_swa_mtp > 0 && hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
-    ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
-    ggml_tensor * conv_hist_idx = build_inp_openpangu_conv_hist();
-    ggml_tensor * conv_write_idx = build_inp_openpangu_conv_write(std::min<int64_t>(n_tokens, OPENPANGU_CONV_RING));
-
+    // the batch inputs (tokens, positions, masks, output selection, conv ring indices) are
+    // created ONCE by the caller and shared by every head built into the graph:
+    // llama_set_inputs fills the tensors the lctx.inp_* pointers reference, so per-head
+    // creation would leave every head but the last reading unwritten memory
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens
         ? mtp_layer.nextn.embed_tokens : model.tok_embd;
-    ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
+    ggml_tensor * token_emb = ggml_get_rows(ctx0, mtp_embd_weights, inp_tokens);
+    cb(token_emb, "inp_embd", il);
 
     ggml_tensor * emb_norm = llm_build_norm(ctx0, token_emb,       hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
     ggml_tensor * hid_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
@@ -497,11 +500,16 @@ ggml_cgraph * llm_build_context::build_openpangu() {
 
 
     // NextN/MTP graph (speculative decoding): draft generation selects the
-    // requested head by depth; warmup/update runs all heads to keep their local
-    // conv rings warm while exposing head 1 as the legacy one-token shortcut.
+    // requested head by depth; warmup/update chains all active heads so their conv rings and
+    // latent caches hold real committed rows, exposing head 1 as the one-token shortcut.
+    // Chaining convention (mirrors how head 1 consumes the target's shifted hidden rows):
+    // head k+1's row at position p consumes head k's output row at position p-1; the p-1 of
+    // the first batch row lives in the previous warmup/update batch and crosses decodes
+    // through the inp_mtp_carry input / lctx.mtp_carry storage.
     if (cparams.mtp_op_type != MTP_OP_NONE) {
         GGML_ASSERT(model.mtp && hparams.nextn_predict_layers > 0 &&
                     "OpenPangu MTP graph requested without NextN layers loaded");
+        GGML_ASSERT(batch.token && "openPangu MTP graphs decode token batches");
 
         ggml_tensor * hidden_states_from_main_model;
         if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
@@ -513,26 +521,78 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_set_input(hidden_states_from_main_model);
         lctx.inp_mtp_states = hidden_states_from_main_model;
 
+        // shared batch inputs, created exactly once per graph (see build_openpangu_mtp)
+        ggml_tensor * inp_pos = build_inp_pos();
+        // the NextN/MTP layers are SWA layers with their own window (2048); the mask fill
+        // uses hparams.n_swa_mtp when the graph is built with an MTP op type
+        ggml_tensor * KQ_mask = hparams.n_swa_mtp > 0 && hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
+        ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+        lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
+        cb(lctx.inp_tokens, "inp_tokens", -1);
+        ggml_set_input(lctx.inp_tokens);
+        ggml_tensor * inp_tokens = lctx.inp_tokens;
+        ggml_tensor * conv_hist_idx = build_inp_openpangu_conv_hist();
+        ggml_tensor * conv_write_idx = build_inp_openpangu_conv_write(std::min<int64_t>(n_tokens, OPENPANGU_CONV_RING));
+
         const int il_mtp_first = (int) (hparams.n_layer - hparams.nextn_predict_layers);
         const int n_mtp_heads_model = (int) hparams.nextn_predict_layers;
         const int n_mtp_heads = lctx.mtp_n_heads > 0
             ? std::max(1, std::min((int) lctx.mtp_n_heads, n_mtp_heads_model))
             : n_mtp_heads_model;
+        const int step_idx = (int) std::min<int32_t>(std::max<int32_t>(0, lctx.mtp_step_idx), n_mtp_heads - 1);
+
+        // carry input: head k's output at the last committed position (k = 1..n_heads_model-1),
+        // fixed at model width so the storage layout is head-count independent
+        ggml_tensor * inp_carry = nullptr;
+        const bool is_cache_update = cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED;
+        const bool needs_carry = n_mtp_heads_model > 1 &&
+            ((is_cache_update && n_mtp_heads > 1) ||
+             (cparams.mtp_op_type == MTP_OP_DRAFT_GEN && step_idx == 1 && n_mtp_heads > 2));
+        if (needs_carry) {
+            inp_carry = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_mtp_heads_model - 1);
+            ggml_set_name(inp_carry, "inp_mtp_carry");
+            ggml_set_input(inp_carry);
+            lctx.inp_mtp_carry = inp_carry;
+        }
 
         ggml_tensor * mtp_out = nullptr;
         if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN) {
-            const int step_idx = (int) std::min<int32_t>(std::max<int32_t>(0, lctx.mtp_step_idx), n_mtp_heads - 1);
             const int il_mtp = il_mtp_first + step_idx;
             mtp_out = build_openpangu_mtp(model.layers[il_mtp],
-                                          hidden_states_from_main_model, gf, il_mtp);
+                                          hidden_states_from_main_model, gf, il_mtp,
+                                          inp_pos, KQ_mask, inp_out_ids, inp_tokens,
+                                          conv_hist_idx, conv_write_idx);
+            // each draft step runs one head, so a deeper head has no cache row at this
+            // position when its own decode comes later. Head h first decodes at step h+1 and
+            // the update batches cover everything below the draft base, which with three
+            // heads leaves exactly one gap: head 3's row at draft step 2. Pre-write it here
+            // from the committed carry (head 2's output at the last committed position).
+            if (step_idx == 1 && n_mtp_heads > 2) {
+                ggml_tensor * fill_hidden = ggml_view_2d(ctx0, inp_carry, hparams.n_embd, 1,
+                                                         inp_carry->nb[1], (size_t) 1 * inp_carry->nb[1]);
+                ggml_tensor * fill = build_openpangu_mtp(model.layers[il_mtp_first + 2],
+                                                         fill_hidden, gf, il_mtp_first + 2,
+                                                         inp_pos, KQ_mask, nullptr, inp_tokens,
+                                                         conv_hist_idx, conv_write_idx,
+                                                         nullptr, false, false);
+                ggml_build_forward_expand(gf, fill);
+            }
+        } else if (n_mtp_heads == 1) {
+            mtp_out = build_openpangu_mtp(model.layers[il_mtp_first],
+                                          hidden_states_from_main_model, gf, il_mtp_first,
+                                          inp_pos, KQ_mask, inp_out_ids, inp_tokens,
+                                          conv_hist_idx, conv_write_idx);
         } else {
-            ggml_tensor * prev_hidden = hidden_states_from_main_model;
+            ggml_tensor * prev_full = hidden_states_from_main_model;
             ggml_tensor * head1_hidden = nullptr;
+            std::vector<ggml_tensor *> carry_out_rows;
             for (int i = 0; i < n_mtp_heads; ++i) {
                 const int il_mtp = il_mtp_first + i;
                 ggml_tensor * full_hidden = nullptr;
                 ggml_tensor * out = build_openpangu_mtp(model.layers[il_mtp],
-                                                        prev_hidden, gf, il_mtp,
+                                                        prev_full, gf, il_mtp,
+                                                        inp_pos, KQ_mask, inp_out_ids, inp_tokens,
+                                                        conv_hist_idx, conv_write_idx,
                                                         &full_hidden,
                                                         i == 0,
                                                         false);
@@ -541,9 +601,35 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                 } else {
                     ggml_build_forward_expand(gf, out);
                 }
-                prev_hidden = full_hidden ? full_hidden : out;
+                if (i + 1 < n_mtp_heads) {
+                    // shift: head i+1's row p consumes this head's row p-1; row 0's
+                    // predecessor comes from the carry
+                    ggml_tensor * carry_col = ggml_view_2d(ctx0, inp_carry, hparams.n_embd, 1,
+                                                           inp_carry->nb[1], (size_t) i * inp_carry->nb[1]);
+                    if (n_tokens > 1) {
+                        ggml_tensor * shifted = ggml_view_2d(ctx0, full_hidden, hparams.n_embd, n_tokens - 1,
+                                                             full_hidden->nb[1], 0);
+                        prev_full = ggml_concat(ctx0, carry_col, shifted, 1);
+                    } else {
+                        prev_full = carry_col;
+                    }
+                    carry_out_rows.push_back(ggml_view_2d(ctx0, full_hidden, hparams.n_embd, 1,
+                                                          full_hidden->nb[1],
+                                                          (size_t) (n_tokens - 1) * full_hidden->nb[1]));
+                }
             }
             GGML_ASSERT(head1_hidden != nullptr);
+
+            // committed carries for the next warmup/update and for draft-time row fills
+            ggml_tensor * carry_out = carry_out_rows[0];
+            for (size_t k = 1; k < carry_out_rows.size(); ++k) {
+                carry_out = ggml_concat(ctx0, carry_out, carry_out_rows[k], 1);
+            }
+            carry_out = ggml_cont(ctx0, carry_out);
+            ggml_set_name(carry_out, "mtp_carry_out");
+            ggml_set_output(carry_out);
+            ggml_build_forward_expand(gf, carry_out);
+
             const auto & head1_layer = model.layers[il_mtp_first];
             cb(head1_hidden, "result_norm", -1);
             ggml_tensor * head = head1_layer.nextn.shared_head_head

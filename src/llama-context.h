@@ -390,10 +390,16 @@ struct llama_context {
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
     struct ggml_tensor * inp_mtp_states = nullptr;
+    struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
     struct ggml_tensor * inp_mask_inf = nullptr;
     struct ggml_tensor * inp_openpangu_conv_hist = nullptr;  // I32 [2], rows in [zero | ring] for t-2/t-1
     struct ggml_tensor * inp_openpangu_conv_write = nullptr; // I32 [min(n_tokens, 16)], ring rows to update
+
+    // multi-head MTP chaining state: head k's output row at the last committed position,
+    // written back after each warmup/update decode and fed into the next MTP graph through
+    // inp_mtp_carry (zeroed when a prompt warmup restarts from position 0)
+    std::vector<float> mtp_carry;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 

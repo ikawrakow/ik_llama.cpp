@@ -566,6 +566,7 @@ struct llama_context::Prev {
     int per_step_max_allocated;
     llama_mtp_op_type mtp_op_type;
     int32_t mtp_step_idx;
+    int32_t mtp_n_heads;
     ggml_cgraph * graph;
 };
 
@@ -589,6 +590,7 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
     if (u_batch.n_tokens != the_prev->n_tokens) { printf("    n_tokens is not the same\n"); return; }
     if (ctx.cparams.mtp_op_type != the_prev->mtp_op_type) { printf("    mtp_op_type is not the same\n"); return; }
     if (ctx.mtp_step_idx != the_prev->mtp_step_idx) { printf("    mtp_step_idx is not the same\n"); return; }
+    if (ctx.mtp_n_heads != the_prev->mtp_n_heads) { printf("    mtp_n_heads is not the same\n"); return; }
     printf("    update_cache_copies() must have failed\n");
 }
 
@@ -608,6 +610,7 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
            u_batch.n_tokens == the_prev->n_tokens &&
            cparams.mtp_op_type == the_prev->mtp_op_type &&
            mtp_step_idx == the_prev->mtp_step_idx &&
+           mtp_n_heads == the_prev->mtp_n_heads &&
            update_cache_copies();
     if (false && !result) {
         printf("%s(%d):", __func__, cparams.mtp_op_type);
@@ -4601,6 +4604,17 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
+    if (lctx.inp_mtp_carry) {
+        const size_t n_floats = (size_t) ggml_nelements(lctx.inp_mtp_carry);
+        if (lctx.cparams.mtp_op_type == MTP_OP_WARMUP && batch.pos && batch.pos[0] == 0) {
+            // fresh prompt warmup: no committed history for the deeper heads yet
+            lctx.mtp_carry.assign(n_floats, 0.0f);
+        } else if (lctx.mtp_carry.size() < n_floats) {
+            lctx.mtp_carry.resize(n_floats, 0.0f);
+        }
+        ggml_backend_tensor_set(lctx.inp_mtp_carry, lctx.mtp_carry.data(), 0, n_floats*sizeof(float));
+    }
+
     if (lctx.inp_pos && lctx.inp_scale) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();
@@ -5744,7 +5758,7 @@ static int llama_decode_internal(
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)kv_self_used.n,
                         (int)u_batch.n_tokens,
                         kv_self_used.save_per_step_ssm, kv_self_used.ckpt.per_step_max_allocated,
-                        cparams.mtp_op_type, lctx.mtp_step_idx, gf});
+                        cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads, gf});
             }
         } else {
             if (track_graph_reuse) {
@@ -5970,6 +5984,20 @@ static int llama_decode_internal(
             printf("get_embedding(...): %d us\n", int(tim2-tim1));
 #endif
         }
+        // persist the multi-head MTP carries (each head's output at the last committed row)
+        // for the next warmup/update graph; must happen per ubatch so a multi-ubatch prompt
+        // warmup chains its heads across ubatch boundaries
+        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
+            if (ggml_tensor * carry_out = ggml_graph_get_tensor(gf, "mtp_carry_out"); carry_out != nullptr) {
+                const size_t n_floats = (size_t) ggml_nelements(carry_out);
+                if (lctx.mtp_carry.size() < n_floats) {
+                    lctx.mtp_carry.resize(n_floats, 0.0f);
+                }
+                ggml_backend_sched_synchronize(lctx.sched);
+                ggml_backend_tensor_get(carry_out, lctx.mtp_carry.data(), 0, n_floats*sizeof(float));
+            }
+        }
+
         n_outputs_prev += lctx.n_outputs;
         n_outputs_prev_embd += (has_mtp && embd) ? embd->ne[1] : lctx.n_outputs;
         cur_token += n_tokens;
