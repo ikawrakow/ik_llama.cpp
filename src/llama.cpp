@@ -29,6 +29,7 @@
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 void llama_set_mtp_step_idx(struct llama_context * ctx, int32_t mtp_step_idx);
+void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 
 // TODO: fix these includes
 #include "iqk/iqk_quantize.h"
@@ -756,6 +757,12 @@ void llama_context::set_mtp_step_idx(int32_t value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     mtp_step_idx = std::max<int32_t>(0, value);
+}
+
+void llama_context::set_mtp_n_heads(int32_t value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    mtp_n_heads = std::max<int32_t>(0, value);
 }
 
 llama_context::~llama_context() {
@@ -10151,6 +10158,10 @@ void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
 
 void llama_set_mtp_step_idx(llama_context * ctx, int32_t mtp_step_idx) {
     ctx->set_mtp_step_idx(mtp_step_idx);
+}
+
+void llama_set_mtp_n_heads(llama_context * ctx, int32_t mtp_n_heads) {
+    ctx->set_mtp_n_heads(mtp_n_heads);
 }
 
 void llama_synchronize(struct llama_context * ctx) {

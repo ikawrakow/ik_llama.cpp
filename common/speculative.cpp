@@ -25,6 +25,7 @@
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 void llama_set_mtp_step_idx(struct llama_context * ctx, int32_t mtp_step_idx);
+void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
@@ -219,7 +220,7 @@ static std::vector<llama_token> mtp_speculative_gen_draft(
     llama_seq_id seq_id,
     bool constant_draft_positions = false);
 
-static int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup);
+static int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup, int32_t mtp_heads);
 
 struct mtp_last_embd {
     std::vector<float> embd;
@@ -230,6 +231,7 @@ struct mtp_last_embd {
 struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
     llama_context * ctx_mtp = nullptr;
+    int32_t mtp_heads_active = 0;
     common_sampler * smpl;
     // For Gemma 4 external MTP assistant: draft positions are held constant
     bool constant_draft_positions = false;
@@ -310,6 +312,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         }
 
         llama_context * ctx = ctx_mtp;
+        mtp_heads_active = std::max<int32_t>(0, params.mtp_heads);
 
         const auto hidden_it = target_hidden_by_seq.find(seq_id);
         if (hidden_it == target_hidden_by_seq.end() || (int) hidden_it->second.size() != n_embd) {
@@ -2700,7 +2703,7 @@ static int32_t mtp_accept_batch(
     if (!llama_set_draft_input_hidden_state_copy(state.ctx_mtp, hidden_rows, hidden_rows_floats)) {
         return -1;
     }
-    if (mtp_update_kv_cache(state.ctx_mtp, accepted_batch, false) != 0) {
+    if (mtp_update_kv_cache(state.ctx_mtp, accepted_batch, false, state.mtp_heads_active) != 0) {
         return -1;
     }
 
@@ -2821,7 +2824,7 @@ int32_t common_speculative_on_target_batch(
     if (!llama_set_draft_input_hidden_state_copy(mtp_state->ctx_mtp, conditioned_hidden_rows, hidden_rows_storage.size())) {
         return -1;
     }
-    const int32_t ret = mtp_update_kv_cache(mtp_state->ctx_mtp, batch, true);
+    const int32_t ret = mtp_update_kv_cache(mtp_state->ctx_mtp, batch, true, mtp_state->mtp_heads_active);
     mtp_invalidate_cached_draft(*mtp_state, seq_id);
     return ret;
 }
@@ -2874,7 +2877,14 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     common_sampler_reset(smpl);
 
+    const int n_embd = llama_mtp_state_n_embd(ctx);
+    const int n_mtp_heads_model = std::max(1, llama_model_n_nextn_layer(llama_get_model(ctx)));
+    const int n_mtp_heads = mtp_heads > 0
+        ? std::max(1, std::min((int) mtp_heads, n_mtp_heads_model))
+        : n_mtp_heads_model;
+
     llama_batch mtp_batch = llama_batch_init(1, 0, 1);
+    llama_set_mtp_n_heads(ctx, n_mtp_heads);
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
     float prob;
@@ -2882,11 +2892,6 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     llama_token current_input_id = id_last;
     llama_pos current_n_past = n_past;
-    const int n_embd = llama_mtp_state_n_embd(ctx);
-    const int n_mtp_heads_model = std::max(1, llama_model_n_nextn_layer(llama_get_model(ctx)));
-    const int n_mtp_heads = mtp_heads > 0
-        ? std::max(1, std::min((int) mtp_heads, n_mtp_heads_model))
-        : n_mtp_heads_model;
 
     auto & last = mtp_get_last_embd(state, seq_id);
     int i0 = 0;
@@ -2901,6 +2906,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         if (!llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
             llama_batch_free(mtp_batch);
             llama_set_mtp_step_idx(ctx, 0);
+            llama_set_mtp_n_heads(ctx, 0);
             llama_set_mtp_op_type(ctx, MTP_OP_NONE);
             return drafts;
         }
@@ -2947,6 +2953,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     }
     llama_batch_free(mtp_batch);
     llama_set_mtp_step_idx(ctx, 0);
+    llama_set_mtp_n_heads(ctx, 0);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
     // Purge the metadata for the draft tokens.
@@ -2963,7 +2970,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 }
 
 
-int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup) {
+int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup, int32_t mtp_heads) {
     if (batch.n_tokens == 0) {
         return 0;
     }
@@ -2987,15 +2994,18 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     }
     mtp_batch.logits[mtp_batch.n_tokens-1] = true;
     if (is_prompt_warmup) {
+        llama_set_mtp_n_heads(ctx, mtp_heads);
         llama_set_mtp_step_idx(ctx, 0);
         llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
     } else {
+        llama_set_mtp_n_heads(ctx, mtp_heads);
         llama_set_mtp_step_idx(ctx, 0);
         llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
     }
 
     const int32_t ret = llama_decode(ctx, mtp_batch);
     llama_set_mtp_step_idx(ctx, 0);
+    llama_set_mtp_n_heads(ctx, 0);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
     return ret;
 }

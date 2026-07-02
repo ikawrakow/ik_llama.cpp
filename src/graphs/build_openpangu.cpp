@@ -514,7 +514,10 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         lctx.inp_mtp_states = hidden_states_from_main_model;
 
         const int il_mtp_first = (int) (hparams.n_layer - hparams.nextn_predict_layers);
-        const int n_mtp_heads  = (int) hparams.nextn_predict_layers;
+        const int n_mtp_heads_model = (int) hparams.nextn_predict_layers;
+        const int n_mtp_heads = lctx.mtp_n_heads > 0
+            ? std::max(1, std::min((int) lctx.mtp_n_heads, n_mtp_heads_model))
+            : n_mtp_heads_model;
 
         ggml_tensor * mtp_out = nullptr;
         if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN) {
