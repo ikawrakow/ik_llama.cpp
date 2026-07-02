@@ -107,6 +107,7 @@ models = [
     {"name": "minimax-m2",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/MiniMaxAI/MiniMax-M2", },
     {"name": "mellum2",        "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base", },
     {"name": "gpt-4o",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openai/gpt-oss-20b", "chkhsh": "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e", },  # o200k_harmony shares the GPT-4o pre-tokenizer
+    {"name": "openpangu",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openpangu/openPangu-2.0-Flash", "chkhsh": "65df2fe396b537a53433301848c0a739f56d56f67ad3d35eba27961ac33c12bb", },  # primary source: https://gitcode.com/ascend-tribe/openPangu-2.0-Flash
 ]
 
 

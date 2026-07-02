@@ -232,6 +232,9 @@ struct common_speculative_state_mtp : public common_speculative_state {
     // For Gemma 4 external MTP assistant: draft positions are held constant
     bool constant_draft_positions = false;
     int n_embd = 0;
+    // model-imposed draft-length cap (0 = none), e.g. openPangu's 16-column conv ring
+    int32_t n_max_model = 0;
+    bool n_max_clamp_warned = false;
     std::unordered_map<llama_seq_id, std::vector<float>> target_hidden_by_seq;
     std::unordered_map<llama_seq_id, mtp_last_embd> draft_cache_by_seq;
 
@@ -252,6 +255,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
         smpl = common_sampler_init(llama_get_model(ctx_mtp), sparams);
         llama_set_mtp_target_context(ctx_mtp, ctx_tgt);
         n_embd = llama_mtp_state_n_embd(ctx_mtp);
+        n_max_model = llama_model_max_draft_tokens(llama_get_model(ctx_mtp));
 
         LOG_INF("%s: MTP context ready (n_ctx=%d, constant_draft_positions=%s)\n", __func__,
                 llama_n_ctx(ctx_mtp), constant_draft_positions ? "true" : "false");
@@ -317,11 +321,21 @@ struct common_speculative_state_mtp : public common_speculative_state {
             return;
         }
 
+        int n_max = params.n_max;
+        if (n_max_model > 0 && n_max > n_max_model) {
+            if (!n_max_clamp_warned) {
+                LOG_WRN("%s: n_max = %d exceeds the model's draft-length limit, clamping to %d\n",
+                        __func__, n_max, n_max_model);
+                n_max_clamp_warned = true;
+            }
+            n_max = n_max_model;
+        }
+
         result = mtp_speculative_gen_draft(
             *this,
             smpl,
             ctx,
-            params.n_max,
+            n_max,
             params.p_min,
             id_last,
             n_past,
