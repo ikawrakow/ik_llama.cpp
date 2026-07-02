@@ -1231,6 +1231,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (!common_speculative_validate_chain(slot.params.speculative, &spec_error)) {
             throw std::runtime_error("Error: invalid speculative request configuration: " + spec_error);
         }
+        common_speculative_prepare_request(slot.spec, slot.params.speculative);
     } catch (const std::exception & e) {
         send_error(task, e.what(), ERROR_TYPE_INVALID_REQUEST);
         return false;

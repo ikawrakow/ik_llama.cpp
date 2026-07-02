@@ -1092,6 +1092,7 @@ static common_params_speculative common_speculative_get_runtime_params(
     result.n_max = stage.has_n_max_override() ? stage.n_max : params.n_max;
     result.n_min = stage.has_n_min_override() ? stage.n_min : params.n_min;
     result.p_min = stage.has_p_min_override() ? stage.p_min : params.p_min;
+    result.mtp_heads = stage.has_mtp_heads_override() ? stage.mtp_heads : params.mtp_heads;
 
     if (config.type == COMMON_SPECULATIVE_TYPE_SUFFIX) {
         result.suffix_min_match_len = stage.has_suffix_min_match_len_override()
@@ -1101,9 +1102,30 @@ static common_params_speculative common_speculative_get_runtime_params(
 
     result.n_max = std::max(result.n_max, 0);
     result.n_min = std::max(0, std::min(result.n_min, result.n_max));
+    result.mtp_heads = std::max(result.mtp_heads, 0);
     result.stages.clear();
 
     return result;
+}
+
+void common_speculative_prepare_request(common_speculative * spec, common_params_speculative & params) {
+    if (spec == nullptr) {
+        return;
+    }
+
+    const auto runtime_stages = params.get_resolved_stages();
+    const bool use_runtime_stage_overrides = common_speculative_stage_chain_matches(runtime_stages, spec->configs);
+
+    for (size_t i = 0; i < spec->impls.size(); ++i) {
+        auto * mtp_state = dynamic_cast<common_speculative_state_mtp *>(spec->impls[i].get());
+        if (mtp_state == nullptr) {
+            continue;
+        }
+
+        const auto & runtime_stage = use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
+        common_params_speculative impl_params = common_speculative_get_runtime_params(spec->configs[i], params, runtime_stage);
+        mtp_state->mtp_heads_active = std::max<int32_t>(0, impl_params.mtp_heads);
+    }
 }
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
@@ -1427,6 +1449,7 @@ common_speculative * common_speculative_init(
         /* .configs = */ std::move(configs),
         /* .impls = */ std::move(impls)
     };
+    common_speculative_prepare_request(result, params);
 
     // initialize autotune if requested
     if (params.autotune && params.has_composite_stage_chain()) {
