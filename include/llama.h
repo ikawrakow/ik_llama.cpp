@@ -698,6 +698,19 @@ extern "C" {
 
     LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
 
+    // Returns false for models whose KV cache cannot be re-positioned after the fact
+    // (K-shift / context shift / self-extend), e.g. openPangu's latent cache.
+    LLAMA_API bool llama_model_supports_ctx_shift(const struct llama_model * model);
+
+    // Returns false for models that can only reuse a cached sequence as a pure extension:
+    // rewinding into the middle of a decoded sequence loses per-position side state
+    // (e.g. openPangu's conv ring keeps only the most recent 16 positions).
+    LLAMA_API bool llama_model_supports_partial_kv_reuse(const struct llama_model * model);
+
+    // Upper bound on speculative draft length imposed by the model's cache design
+    // (0 = no model-imposed limit).
+    LLAMA_API int32_t llama_model_max_draft_tokens(const struct llama_model * model);
+
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 
     // Returns 0 on success

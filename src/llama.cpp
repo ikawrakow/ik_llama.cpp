@@ -769,6 +769,11 @@ static inline uint32_t llama_kv_v_row_embd(
         const llama_model &   model,
         const llama_hparams & hparams,
         uint32_t              il) {
+    // openPangu caches the 512-d compressed latent as its (transposed) V, not per-head values
+    if (model.arch == LLM_ARCH_OPENPANGU) {
+        return hparams.n_lora_kv;
+    }
+
     // qwen3next recurrent state is stored in a dedicated V-cache tail (per sequence),
     // so per-token V rows include only attention values.
     if (llm_arch_is_hybrid(model.arch)) {
@@ -776,6 +781,18 @@ static inline uint32_t llama_kv_v_row_embd(
     }
 
     return hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+}
+
+// per-token K-cache row width in elements: openPangu stores [ckv 512 | roped k_pe 64]
+// latents instead of per-head keys
+static inline uint32_t llama_kv_k_row_embd(
+        const llama_model &   model,
+        const llama_hparams & hparams,
+        uint32_t              il) {
+    if (model.arch == LLM_ARCH_OPENPANGU) {
+        return hparams.n_lora_kv + hparams.n_rot;
+    }
+    return hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
 }
 
 static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
@@ -802,6 +819,11 @@ static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) 
 }
 
 static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
+    // openPangu stores a position-indexed conv ring in s_l; it is not per-sequence
+    // recurrent state and none of the qnext handling applies to it
+    if (cache.s_l_position_ring) {
+        return false;
+    }
     return llama_kv_qnext_state_slots(cache) > 0;
 }
 
@@ -949,6 +971,7 @@ static bool llama_kv_cache_init(
     }
     if (needs_v_cache) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
+    cache.idx_l.resize(n_layer, nullptr);
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
@@ -1086,8 +1109,6 @@ static bool llama_kv_cache_init(
             if (this_type_k != type_k) {
                 LLAMA_LOG_INFO("================= Setting K-cache type in layer %2d to %s\n", i, ggml_type_name(this_type_k));
             }
-            k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
-
             int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
             auto this_type_v = type_v;
             if (type_v_first != type_v && n_v_first > 0 && i < n_v_first) {
@@ -1099,12 +1120,52 @@ static bool llama_kv_cache_init(
             if (this_type_v != type_v) {
                 LLAMA_LOG_INFO("================= Setting V-cache type in layer %2d to %s\n", i, ggml_type_name(this_type_v));
             }
-            v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+
+            if (model.arch == LLM_ARCH_OPENPANGU) {
+                // MLA-latent cache: k_l holds [ckv_norm 512 | roped k_pe 64] per position
+                // (f32, straight layout); v_l holds the transposed 512-latent for the value
+                // side (f32, v_trans layout). The per-head K/V never get materialized —
+                // ~27x less cache data per token than storing them through kv_b.
+                const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
+                k = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_lat, kv_size);
+                v = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t) hparams.n_lora_kv * kv_size);
+            } else {
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
+                v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+            }
 
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
             auto v_name = std::string{"cache_v_l"} + std::to_string(i);
             ggml_set_name(k, k_name.c_str());
             ggml_set_name(v, v_name.c_str());
+
+            if (model.arch == LLM_ARCH_OPENPANGU) {
+                // MoME conv-state ring: one column per absolute token position (mod ring size),
+                // each holding that position's pre-conv latents for the three conv sites,
+                // packed [qa n_lora_q | compresskv n_lora_kv | o n_head*v_dim].
+                // Position-indexed so speculative-decoding rollbacks are safe: latents at
+                // accepted positions depend only on the committed prefix and stay valid, and
+                // rejected columns are never read again before being overwritten. The ring must
+                // hold at least n_draft_max+3 columns; 16 covers any practical draft length.
+                // Also allocated for the NextN/MTP layers so the draft head chains conv state
+                // across draft steps (single sequence; the graph zero-fills at pos < 2).
+                const int64_t conv_ring = 16;
+                const int64_t conv_col_ne = hparams.n_lora_q + hparams.n_lora_kv
+                                            + (int64_t) hparams.n_head(i)*hparams.n_embd_head_v(i);
+                ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, conv_col_ne, conv_ring);
+                ggml_format_name(s_conv, "cache_s_l%d", i);
+                cache.s_l[i] = s_conv;
+                cache.s_l_position_ring = true;
+
+                // DSA layers (window == 0, indexer present) also cache the per-position
+                // 128-d indexer key. Position-indexed like everything else in the cache, so
+                // the same rollback invariant applies: committed columns never change.
+                if (hparams.indexer_head_size > 0 && i < n_mtp_first_layer && hparams.openpangu_window[i] == 0 && hparams.n_swa > 0) {
+                    ggml_tensor * idxk = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.indexer_head_size, kv_size);
+                    ggml_format_name(idxk, "cache_idx_l%d", i);
+                    cache.idx_l[i] = idxk;
+                }
+            }
 
             if (split_cache_i) {
                 bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
@@ -1928,6 +1989,11 @@ static void llama_kv_cache_seq_add(
                     llama_pos   p0,
                     llama_pos   p1,
                     llama_pos   delta) {
+    // position-strict caches (openPangu latent + conv ring + indexer keys) cannot be
+    // re-positioned: rope is baked into the cached k_pe rows and the side state is keyed
+    // by absolute position. Fail loudly instead of corrupting.
+    GGML_ASSERT(!cache.s_l_position_ring && "K-shift/context shift is not supported for this model's position-indexed KV cache");
+
     uint32_t new_head = cache.size;
 
     if (p0 < 0) p0 = 0;
@@ -1976,6 +2042,9 @@ static void llama_kv_cache_seq_div(
                     llama_pos   p0,
                     llama_pos   p1,
                           int   d) {
+    // see llama_kv_cache_seq_add: position-strict caches cannot be re-positioned
+    GGML_ASSERT(!cache.s_l_position_ring && "self-extend/position division is not supported for this model's position-indexed KV cache");
+
     if (p0 < 0) p0 = 0;
     if (p1 < 0) p1 = std::numeric_limits<llama_pos>::max();
     // If there is no range then return early to avoid looping over the cache.
@@ -2031,6 +2100,12 @@ static llama_pos llama_kv_cache_seq_pos_min(struct llama_kv_cache & cache, llama
 }
 
 static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
+    if (cache.s_l_position_ring) {
+        // defrag moves cells, which would break the cell-index == position mapping the
+        // openPangu indexer cache relies on; skipping is safe (defrag is an optimization)
+        LLAMA_LOG_WARN("%s: defrag is not supported for this model's position-indexed KV cache - skipping\n", __func__);
+        return;
+    }
     cache.do_defrag = true;
 }
 
@@ -2311,7 +2386,9 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     const int n_layer = model.layers.size();
     int n_to_compute = 0;
     for (auto& l : model.layers) {
-        if (!l.wk_b) ++n_to_compute;
+        // layers without attention weights (e.g. NextN/MTP heads whose tensors were
+        // skipped at load) have nothing to derive from
+        if (!l.wk_b && l.wkv_b) ++n_to_compute;
     }
     if (mla > 0 && n_to_compute > 0) {
         // Prepare wk_b tensors to enable MLA usage also for model files that do not include
@@ -2341,7 +2418,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         size_t max_wkv_size = 0;
         size_t max_wk_size = 0;
         for (auto& l : model.layers) {
-            if (!l.wk_b) {
+            if (!l.wk_b && l.wkv_b) {
                 auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
                 auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
                 max_wk_size = std::max(max_wk_size, size);
@@ -2367,7 +2444,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + 2*max_wk_size);
         for (int il = 0; il < n_layer; ++il) {
             auto& l = model.layers[il];
-            if (l.wk_b) continue;
+            if (l.wk_b || !l.wkv_b) continue;
             auto wkv_b = *l.wkv_b;
             if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
                 ggml_backend_tensor_get(l.wkv_b, wkv_buffer.data(), 0, ggml_nbytes(l.wkv_b));
@@ -4399,6 +4476,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 ? lctx.mtp_target_ctx->kv_self
                 : kv_self;
         const int64_t n_kv = mask_kv_self.n;
+        // openPangu: the NextN/MTP layers carry their own sliding window, and MTP graphs
+        // run with mtp_op_type set, so the effective window is per-context.
+        const uint32_t n_swa_eff = lctx.model.arch == LLM_ARCH_OPENPANGU &&
+                cparams.mtp_op_type != MTP_OP_NONE && hparams.n_swa_mtp > 0
+                ? hparams.n_swa_mtp : hparams.n_swa;
         if (cparams.causal_attn && !lctx.is_encoding) {
             const int64_t n_tokens = batch.n_tokens;
 
@@ -4426,7 +4508,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
-            auto noalibi_f16 = [&mask_kv_self, &hparams, n_kv, data_f16, data_swa_f16] (int j, llama_pos pos, llama_seq_id seq_id, int first, int last) {
+            auto noalibi_f16 = [&mask_kv_self, &hparams, n_kv, n_swa_eff, data_f16, data_swa_f16] (int j, llama_pos pos, llama_seq_id seq_id, int first, int last) {
                 ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
                 ggml_half h_zero = ggml_fp32_to_fp16(0.f);
                 for (int i = first; i < last; ++i) {
@@ -4440,7 +4522,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                     h = h_inf;
                                 }
                             } else {
-                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                     h = h_inf;
                                 }
                             }
@@ -4453,7 +4535,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             if (n_kv >= 1024 && n_tokens >= 32) {
                 int n_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
                 int npt = (n_kv + n_thread - 1)/n_thread;
-                auto compute = [&batch, &mask_kv_self, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, npt, data, data_swa, data_f16, data_swa_f16] (int ith) {
+                auto compute = [&batch, &mask_kv_self, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, n_swa_eff, npt, data, data_swa, data_f16, data_swa_f16] (int ith) {
                     int first = ith * npt;
                     int last  = std::min(int(n_kv), first + npt);
                     if (last <= first) return;
@@ -4494,7 +4576,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                             f = -INFINITY;
                                         }
                                     } else {
-                                        if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                        if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                             f = -INFINITY;
                                         }
                                     }
@@ -4574,7 +4656,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                     f = -INFINITY;
                                 }
                             } else {
-                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                     f = -INFINITY;
                                 }
                             }
@@ -4664,7 +4746,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                     if (mask_kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
                                         h = h_inf;
                                     }
-                                } else if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                } else if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                     h = h_inf;
                                 }
                             }
@@ -6885,6 +6967,29 @@ struct llama_context * llama_init_from_model(
         params.flash_attn = false;
     }
 
+    if (params.flash_attn && model->arch == LLM_ARCH_OPENPANGU) {
+        // openPangu attention prepends 128 learned param_sink K/V entries, which the manual
+        // (soft_max) attention path handles; the FA kernel has no way to include them.
+        LLAMA_LOG_WARN("%s: flash_attn is not compatible with OpenPangu param_sink attention - forcing off\n", __func__);
+        params.flash_attn = false;
+    }
+
+    if (params.graph_reuse && model->arch == LLM_ARCH_OPENPANGU) {
+        // The MoME conv-state ring bakes position-dependent view offsets into the graph
+        // (reads at pos-1/pos-2, write-back at pos..pos+T-1); the reuse patcher only updates
+        // the standard K/V-store copies, so a reused graph would touch stale ring columns.
+        LLAMA_LOG_WARN("%s: graph_reuse is not compatible with the OpenPangu conv-state ring - forcing off\n", __func__);
+        params.graph_reuse = false;
+    }
+
+    if (params.n_seq_max > 1 && model->arch == LLM_ARCH_OPENPANGU) {
+        // The conv-state ring and the DSA indexer cache are single-sequence (one position
+        // stream); parallel sequences would silently share and corrupt them.
+        LLAMA_LOG_ERROR("%s: OpenPangu supports a single sequence only (requested n_seq_max = %u); run with -np 1\n",
+                __func__, params.n_seq_max);
+        return nullptr;
+    }
+
     //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
     //    LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
     //    params.flash_attn = false;
@@ -7082,6 +7187,7 @@ struct llama_context * llama_init_from_model(
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
         model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
         model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
+        model->arch != LLM_ARCH_OPENPANGU &&
         cparams.mtp != 0) {
         cparams.mtp = 0;
     }
@@ -7134,6 +7240,18 @@ struct llama_context * llama_init_from_model(
         // it's probably best to keep as much precision as possible for the states
         type_k = GGML_TYPE_F32; // required by ggml_ssm_conv for Mamba's conv_states
         type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
+    }
+
+    if (model->arch == LLM_ARCH_OPENPANGU) {
+        // the latent cache is f32 only for now (the graph reads/writes it as f32);
+        // force the types so the KV size log reports what is actually allocated
+        if (ggml_is_quantized(type_k) || ggml_is_quantized(type_v) ||
+            type_k == GGML_TYPE_BF16 || type_v == GGML_TYPE_BF16) {
+            LLAMA_LOG_WARN("%s: OpenPangu's latent KV cache is f32 only - ignoring requested K/V cache types (%s/%s)\n",
+                    __func__, ggml_type_name(type_k), ggml_type_name(type_v));
+        }
+        type_k = GGML_TYPE_F32;
+        type_v = GGML_TYPE_F32;
     }
 
     GGML_ASSERT(hparams.n_embd_head_k(0) % ggml_blck_size(type_k) == 0);
@@ -7585,6 +7703,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
+        case LLM_ARCH_OPENPANGU: // rope_interleave=false -> rotate_half (Infer: is_neox_style = not rope_interleave)
         case LLM_ARCH_FALCON:
         case LLM_ARCH_GROK:
         case LLM_ARCH_DBRX:
@@ -8459,7 +8578,7 @@ struct llama_data_write {
         // Iterate and write all the keys first, each row is a cell
         // Get whole range at a time
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
@@ -8882,7 +9001,7 @@ struct llama_data_read {
 
         // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
@@ -9383,6 +9502,18 @@ struct llama_data_read_file : llama_data_read {
     }
 };
 
+// openPangu: refuse state I/O outright until the position-indexed side state is part of
+// the format. K/V rows alone are not a complete snapshot — the MoME conv ring (s_l) and
+// the DSA indexer-key cache (idx_l) are needed to resume a sequence, and restoring
+// without them diverges silently instead of failing.
+static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
+    if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
+        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (conv ring and indexer cache are not serialized)\n", func);
+        return false;
+    }
+    return true;
+}
+
 /** copy state data into either a buffer or file depending on the passed in context
  *
  * file context:
@@ -9397,6 +9528,9 @@ struct llama_data_read_file : llama_data_read {
  *
 */
 static size_t llama_state_get_data_internal(struct llama_context * ctx, llama_data_write & data_ctx) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.write_model_info(ctx);
@@ -9436,6 +9570,9 @@ size_t llama_state_get_size(struct llama_context * ctx) {
 }
 
 static size_t llama_state_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.read_model_info(ctx);
@@ -9465,6 +9602,9 @@ size_t llama_state_set_data(struct llama_context * ctx, const uint8_t * src, siz
 }
 
 static bool llama_state_load_file_internal(struct llama_context * ctx, const char * path_session, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return false;
+    }
     llama_file file(path_session, "rb");
 
     // sanity checks
@@ -9516,6 +9656,9 @@ bool llama_state_load_file(struct llama_context * ctx, const char * path_session
 }
 
 static bool llama_state_save_file_internal(struct llama_context * ctx, const char * path_session, const llama_token * tokens, size_t n_token_count) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return false;
+    }
     llama_file file(path_session, "wb");
 
     file.write_u32(LLAMA_SESSION_MAGIC);
@@ -9542,6 +9685,9 @@ bool llama_state_save_file(struct llama_context * ctx, const char * path_session
 }
 
 static size_t llama_state_seq_get_data_internal(struct llama_context * ctx, llama_data_write & data_ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.write_kv_cache(ctx, seq_id, flags);
@@ -9565,6 +9711,9 @@ size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_
 }
 
 static size_t llama_state_seq_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx, llama_seq_id dest_seq_id, llama_state_seq_flags flags) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.read_kv_cache(ctx, dest_seq_id, flags);
@@ -9583,6 +9732,9 @@ size_t llama_state_seq_set_data(struct llama_context * ctx, const uint8_t * src,
 }
 
 static size_t llama_state_seq_save_file_internal(struct llama_context * ctx, const char * filepath, llama_seq_id seq_id, const llama_token * tokens, size_t n_token_count) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_file file(filepath, "wb");
 
     file.write_u32(LLAMA_STATE_SEQ_MAGIC);
@@ -9602,6 +9754,9 @@ static size_t llama_state_seq_save_file_internal(struct llama_context * ctx, con
 }
 
 static size_t llama_state_seq_load_file_internal(struct llama_context * ctx, const char * filepath, llama_seq_id dest_seq_id, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_file file(filepath, "rb");
 
     // version checks

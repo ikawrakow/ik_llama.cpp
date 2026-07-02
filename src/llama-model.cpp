@@ -1776,6 +1776,71 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_OPENPANGU,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,             "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,            "output_norm" },
+            { LLM_TENSOR_OUTPUT,                 "output" },
+            { LLM_TENSOR_ATTN_NORM,              "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q_A,               "blk.%d.attn_q_a" },
+            { LLM_TENSOR_ATTN_Q_A_NORM,          "blk.%d.attn_q_a_norm" },
+            { LLM_TENSOR_ATTN_Q_B,               "blk.%d.attn_q_b" },
+            { LLM_TENSOR_ATTN_KV_A_MQA,          "blk.%d.attn_kv_a_mqa" },
+            { LLM_TENSOR_ATTN_KV_A_NORM,         "blk.%d.attn_kv_a_norm" },
+            { LLM_TENSOR_ATTN_KV_B,              "blk.%d.attn_kv_b" },
+            { LLM_TENSOR_ATTN_K_B,               "blk.%d.attn_k_b" },
+            { LLM_TENSOR_ATTN_V_B,               "blk.%d.attn_v_b" },
+            { LLM_TENSOR_ATTN_OUT,               "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_POST_NORM,         "blk.%d.post_attention_norm" },
+            // DSA lightning indexer (loaded; unused in the dense-fallback graph)
+            { LLM_TENSOR_INDEXER_K_NORM,         "blk.%d.attn_indexer_k_norm" },
+            { LLM_TENSOR_INDEXER_PROJ,           "blk.%d.attn_indexer_weights_proj" },
+            { LLM_TENSOR_INDEXER_ATTN_K,         "blk.%d.attn_indexer_k" },
+            { LLM_TENSOR_INDEXER_ATTN_Q_B,       "blk.%d.attn_indexer_q_b" },
+            // MoME causal convs + param sink
+            { LLM_TENSOR_ATTN_QA_CONV,           "blk.%d.attn_qa_conv" },
+            { LLM_TENSOR_ATTN_KV_CONV,           "blk.%d.attn_compresskv_conv" },
+            { LLM_TENSOR_ATTN_O_CONV,            "blk.%d.attn_o_conv" },
+            { LLM_TENSOR_ATTN_PARAM_SINK_KV,     "blk.%d.attn_param_sink_kv" },
+            { LLM_TENSOR_ATTN_PARAM_SINK_K_PE,   "blk.%d.attn_param_sink_k_pe" },
+            // FFN (dense-lead + MoE, sandwich norms)
+            { LLM_TENSOR_FFN_NORM,               "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_POST_NORM,          "blk.%d.post_ffw_norm" },
+            { LLM_TENSOR_FFN_GATE,               "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_UP,                 "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_DOWN,               "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_GATE_INP,           "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,          "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,          "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,            "blk.%d.ffn_up_exps" },
+            { LLM_TENSOR_FFN_GATE_SHEXP,         "blk.%d.ffn_gate_shexp" },
+            { LLM_TENSOR_FFN_DOWN_SHEXP,         "blk.%d.ffn_down_shexp" },
+            { LLM_TENSOR_FFN_UP_SHEXP,           "blk.%d.ffn_up_shexp" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B,        "blk.%d.exp_probs_b" },
+            // mHC / Hyper-Connections
+            { LLM_TENSOR_MHC_ATTN_PHI,           "blk.%d.attn_mhc_phi" },
+            { LLM_TENSOR_MHC_ATTN_ALPHA,         "blk.%d.attn_mhc_alpha" },
+            { LLM_TENSOR_MHC_ATTN_BETA,          "blk.%d.attn_mhc_beta" },
+            { LLM_TENSOR_MHC_ATTN_GAMMA,         "blk.%d.attn_mhc_gamma" },
+            { LLM_TENSOR_MHC_MLP_PHI,            "blk.%d.mlp_mhc_phi" },
+            { LLM_TENSOR_MHC_MLP_ALPHA,          "blk.%d.mlp_mhc_alpha" },
+            { LLM_TENSOR_MHC_MLP_BETA,           "blk.%d.mlp_mhc_beta" },
+            { LLM_TENSOR_MHC_MLP_GAMMA,          "blk.%d.mlp_mhc_gamma" },
+            { LLM_TENSOR_MHC_MERGE_PHI,          "merge_mhc_phi" },
+            { LLM_TENSOR_MHC_MERGE_ALPHA,        "merge_mhc_alpha" },
+            { LLM_TENSOR_MHC_MERGE_BETA,         "merge_mhc_beta" },
+            { LLM_TENSOR_MHC_MERGE_GAMMA,        "merge_mhc_gamma" },
+            { LLM_TENSOR_BLOCK_POST_NORM,        "blk.%d.block_post_norm" },
+            // NextN / MTP tail
+            { LLM_TENSOR_NEXTN_EH_PROJ,          "blk.%d.nextn.eh_proj" },
+            { LLM_TENSOR_NEXTN_EMBED_TOKENS,     "blk.%d.nextn.embed_tokens" },
+            { LLM_TENSOR_NEXTN_ENORM,            "blk.%d.nextn.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,            "blk.%d.nextn.hnorm" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.nextn.shared_head_head" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.nextn.shared_head_norm" },
+        },
+    },
+    {
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -2075,6 +2140,25 @@ bool llama_model_is_split_mode_graph(const struct llama_model * model) {
     return model && (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN);
 }
 
+bool llama_model_supports_ctx_shift(const struct llama_model * model) {
+    // openPangu's latent K rows carry baked-in rope (k_pe) and the DSA indexer cache is
+    // keyed by absolute position; neither survives K-shift/defrag-style repositioning.
+    return model && model->arch != LLM_ARCH_OPENPANGU;
+}
+
+bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {
+    // openPangu's MoME conv-state ring keeps only the most recent 16 positions, so a
+    // sequence can be extended or reset, but not rewound into its decoded middle.
+    return model && model->arch != LLM_ARCH_OPENPANGU;
+}
+
+int32_t llama_model_max_draft_tokens(const struct llama_model * model) {
+    // openPangu: a rejected draft must not overwrite the ring columns the next decode
+    // reads (positions P-1 and P-2). With a 16-column ring the verify batch of
+    // n_draft+1 tokens is safe up to n_draft = 13.
+    return model && model->arch == LLM_ARCH_OPENPANGU ? 13 : 0;
+}
+
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
     auto it = LLM_TENSOR_NAMES.find(arch);
     if (it == LLM_TENSOR_NAMES.end()) {
@@ -2111,6 +2195,18 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, uint3
     if (hparams.recurrent_layer_arr[il]) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
         return hparams.n_embd_v_s() * state_sots * sizeof(float);
+    }
+    if (arch == LLM_ARCH_OPENPANGU) {
+        // MLA-latent cache, always f32: K row [ckv | roped k_pe], V row = the 512 latent
+        // (transposed). DSA layers also cache one indexer key per position; the 16-column
+        // conv ring is constant-size and negligible here.
+        size_t size = (size_t) (2*hparams.n_lora_kv + hparams.n_rot) * kv_size * sizeof(float);
+        if (hparams.indexer_head_size > 0 && hparams.n_swa > 0 &&
+            il < (int) hparams.n_layer - (int) hparams.nextn_predict_layers &&
+            hparams.openpangu_window[il] == 0) {
+            size += (size_t) hparams.indexer_head_size * kv_size * sizeof(float);
+        }
+        return size;
     }
     bool is_mla_attn = arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
     if (is_mla_attn && mla_attn) {

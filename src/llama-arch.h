@@ -84,6 +84,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA4_MTP,
     LLM_ARCH_DFLASH_DRAFT,
     LLM_ARCH_GEMMA4_ASSISTANT,
+    LLM_ARCH_OPENPANGU,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -247,6 +248,11 @@ enum llm_kv {
 
     LLM_KV_ADAPTER_TYPE,
     LLM_KV_ADAPTER_LORA_ALPHA,
+
+    // openPangu-2.0 (mHC / Hyper-Connections + param sink)
+    LLM_KV_OPENPANGU_MHC_NUM_STREAM,
+    LLM_KV_OPENPANGU_MHC_RECUR_NORM,
+    LLM_KV_OPENPANGU_PARAM_SINK_NUMBER,
 };
 
 struct LLM_KV {
@@ -380,6 +386,26 @@ enum llm_tensor {
     LLM_TENSOR_MTP_CENTROIDS,
     LLM_TENSOR_DFLASH_FC,
     LLM_TENSOR_DFLASH_HIDDEN_NORM,
+
+    // openPangu-2.0
+    LLM_TENSOR_ATTN_QA_CONV,        // MoME causal conv on q-lora latent
+    LLM_TENSOR_ATTN_KV_CONV,        // MoME causal conv on compressed-kv latent
+    LLM_TENSOR_ATTN_O_CONV,         // MoME causal conv on attn output
+    LLM_TENSOR_ATTN_PARAM_SINK_KV,  // learned static latent-kv sink
+    LLM_TENSOR_ATTN_PARAM_SINK_K_PE,
+    LLM_TENSOR_BLOCK_POST_NORM,     // sandwich whole-block post-norm (layer subset)
+    LLM_TENSOR_MHC_ATTN_PHI,        // mHC / Hyper-Connections (per attn sublayer)
+    LLM_TENSOR_MHC_ATTN_ALPHA,
+    LLM_TENSOR_MHC_ATTN_BETA,
+    LLM_TENSOR_MHC_ATTN_GAMMA,
+    LLM_TENSOR_MHC_MLP_PHI,         // mHC (per mlp sublayer)
+    LLM_TENSOR_MHC_MLP_ALPHA,
+    LLM_TENSOR_MHC_MLP_BETA,
+    LLM_TENSOR_MHC_MLP_GAMMA,
+    LLM_TENSOR_MHC_MERGE_PHI,       // mHC global stream-merge (non-block)
+    LLM_TENSOR_MHC_MERGE_ALPHA,
+    LLM_TENSOR_MHC_MERGE_BETA,
+    LLM_TENSOR_MHC_MERGE_GAMMA,
 
     LLM_TENSOR_UNKNOWN,
 };
