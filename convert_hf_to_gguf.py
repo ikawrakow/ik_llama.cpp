@@ -4586,6 +4586,30 @@ class DeepseekV2Model(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("DeepseekV4ForCausalLM")
+@Model.register("DeepseekV4FlashForCausalLM")
+@Model.register("DeepseekV4ProForCausalLM")
+class DeepseekV4Model(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK4
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        if (indexer_heads := self.hparams.get("num_indexer_heads")) is not None:
+            self.gguf_writer.add_attention_indexer_head_count(indexer_heads)
+        if (indexer_dim := self.hparams.get("indexer_head_dim")) is not None:
+            self.gguf_writer.add_attention_indexer_key_length(indexer_dim)
+        if (indexer_top_k := self.hparams.get("indexer_topk")) is not None:
+            self.gguf_writer.add_attention_indexer_top_k(indexer_top_k)
+        if (nextn_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(nextn_layers)
+
+
 @Model.register("T5WithLMHeadModel")
 @Model.register("T5ForConditionalGeneration")
 @Model.register("MT5ForConditionalGeneration")

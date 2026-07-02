@@ -1578,6 +1578,7 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_GLM_DSA:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp);
@@ -1594,7 +1595,30 @@ void llm_load_hparams(
 
                 // deepseek MLA parameters
                 ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,      hparams.n_lora_q);
-                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv, false);
+                if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_lora_kv == 0) {
+                    auto * kv_a = ml.get_tensor_meta("blk.0.attn_kv_latent.weight");
+                    bool subtract_rope = false;
+                    if (kv_a == nullptr) {
+                        kv_a = ml.require_tensor_meta("blk.0.attn_kv_a_mqa.weight");
+                        subtract_rope = true;
+                    }
+
+                    const int64_t kv_a_inner = kv_a->ne[0] == hparams.n_embd ? kv_a->ne[1] : kv_a->ne[0];
+                    if (subtract_rope) {
+                        if (kv_a_inner <= hparams.n_rot) {
+                            throw std::runtime_error(format(
+                                "%s: unable to infer %s from blk.0.attn_kv_a_mqa.weight shape [%lld, %lld]",
+                                __func__,
+                                LLM_KV_ATTENTION_KV_LORA_RANK,
+                                (long long) kv_a->ne[0],
+                                (long long) kv_a->ne[1]));
+                        }
+                        hparams.n_lora_kv = (uint32_t) (kv_a_inner - hparams.n_rot);
+                    } else {
+                        hparams.n_lora_kv = (uint32_t) kv_a_inner;
+                    }
+                }
                 //ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_mla_impl, false);
                 //ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_mla_impl, false);
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
@@ -1622,10 +1646,11 @@ void llm_load_hparams(
                 }
 
                 switch (hparams.n_layer) {
+                    case 61: model.type = MODEL_290B; break;
                     case 79: model.type = MODEL_744B_A40B; break;
                     default: model.type = MODEL_UNKNOWN;
                 }
-                if (hparams.n_head_kv() == 1) {
+                if (model.arch != LLM_ARCH_DEEPSEEK4 && hparams.n_head_kv() == 1) {
                     int n_nead_kv = hparams.n_gqa();
                     if (n_nead_kv%4 != 0 || hparams.n_embd_head_k_full != 576 || hparams.n_embd_head_v_full != 512 ||
                         hparams.n_rot != 64) {
