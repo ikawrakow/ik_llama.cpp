@@ -481,7 +481,9 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         // alpha = [a_pre, a_post, a_res]; beta = [b_pre(S), b_post(S), b_res(S*S)]
         ggml_tensor * a_pre  = ggml_view_1d(ctx0, alpha, 1, 0);
         ggml_tensor * b_pre  = ggml_view_1d(ctx0, beta, S, 0);
-        h_pre = ggml_add(ctx0, ggml_mul(ctx0, h_pre, a_pre), b_pre);  // broadcast scalar + [S]
+        // cont is required: the CUDA broadcast-mul path misreads strided views (h_pre is a
+        // row-slice of mixes), while CPU handles the strides — token 0 right, tokens 1+ garbage
+        h_pre = ggml_add(ctx0, ggml_mul(ctx0, ggml_cont(ctx0, h_pre), a_pre), b_pre);  // broadcast scalar + [S]
         h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+hc_eps omitted, inert)
 
         // combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
