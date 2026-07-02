@@ -769,6 +769,11 @@ static inline uint32_t llama_kv_v_row_embd(
         const llama_model &   model,
         const llama_hparams & hparams,
         uint32_t              il) {
+    // openPangu caches the 512-d compressed latent as its (transposed) V, not per-head values
+    if (model.arch == LLM_ARCH_OPENPANGU) {
+        return hparams.n_lora_kv;
+    }
+
     // qwen3next recurrent state is stored in a dedicated V-cache tail (per sequence),
     // so per-token V rows include only attention values.
     if (llm_arch_is_hybrid(model.arch)) {
@@ -776,6 +781,18 @@ static inline uint32_t llama_kv_v_row_embd(
     }
 
     return hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+}
+
+// per-token K-cache row width in elements: openPangu stores [ckv 512 | roped k_pe 64]
+// latents instead of per-head keys
+static inline uint32_t llama_kv_k_row_embd(
+        const llama_model &   model,
+        const llama_hparams & hparams,
+        uint32_t              il) {
+    if (model.arch == LLM_ARCH_OPENPANGU) {
+        return hparams.n_lora_kv + hparams.n_rot;
+    }
+    return hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
 }
 
 static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
@@ -1087,8 +1104,6 @@ static bool llama_kv_cache_init(
             if (this_type_k != type_k) {
                 LLAMA_LOG_INFO("================= Setting K-cache type in layer %2d to %s\n", i, ggml_type_name(this_type_k));
             }
-            k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
-
             int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
             auto this_type_v = type_v;
             if (type_v_first != type_v && n_v_first > 0 && i < n_v_first) {
@@ -1100,7 +1115,19 @@ static bool llama_kv_cache_init(
             if (this_type_v != type_v) {
                 LLAMA_LOG_INFO("================= Setting V-cache type in layer %2d to %s\n", i, ggml_type_name(this_type_v));
             }
-            v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+
+            if (model.arch == LLM_ARCH_OPENPANGU) {
+                // MLA-latent cache: k_l holds [ckv_norm 512 | roped k_pe 64] per position
+                // (f32, straight layout); v_l holds the transposed 512-latent for the value
+                // side (f32, v_trans layout). The per-head K/V never get materialized —
+                // ~27x less cache data per token than storing them through kv_b.
+                const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
+                k = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_lat, kv_size);
+                v = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t) hparams.n_lora_kv * kv_size);
+            } else {
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
+                v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+            }
 
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
             auto v_name = std::string{"cache_v_l"} + std::to_string(i);
@@ -2334,12 +2361,19 @@ static void llm_requantize_output_tensor(llama_model & model, ggml_type new_type
 }
 
 static void llm_prepare_mla(llama_model & model, int mla) {
-    if (!model.is_mla_model()) return;
+    if (model.arch == LLM_ARCH_OPENPANGU) {
+        // openPangu's graph always runs latent (absorbed) attention; derive wk_b/wv_b
+        // from wkv_b unconditionally. The hparams the derivation reads (qk_nope 128,
+        // kv_lora 512, v 128, 48 heads) match the DeepSeek MLA contract exactly.
+        mla = 1;
+    } else if (!model.is_mla_model()) return;
     const auto& hparams = model.hparams;
     const int n_layer = model.layers.size();
     int n_to_compute = 0;
     for (auto& l : model.layers) {
-        if (!l.wk_b) ++n_to_compute;
+        // layers without attention weights (e.g. openPangu's idle NextN heads 2/3, which the
+        // self-chained MTP graph never touches) have nothing to derive from
+        if (!l.wk_b && l.wkv_b) ++n_to_compute;
     }
     if (mla > 0 && n_to_compute > 0) {
         // Prepare wk_b tensors to enable MLA usage also for model files that do not include
@@ -2369,7 +2403,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         size_t max_wkv_size = 0;
         size_t max_wk_size = 0;
         for (auto& l : model.layers) {
-            if (!l.wk_b) {
+            if (!l.wk_b && l.wkv_b) {
                 auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
                 auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
                 max_wk_size = std::max(max_wk_size, size);
@@ -2395,7 +2429,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + 2*max_wk_size);
         for (int il = 0; il < n_layer; ++il) {
             auto& l = model.layers[il];
-            if (l.wk_b) continue;
+            if (l.wk_b || !l.wkv_b) continue;
             auto wkv_b = *l.wkv_b;
             if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
                 ggml_backend_tensor_get(l.wkv_b, wkv_buffer.data(), 0, ggml_nbytes(l.wkv_b));
@@ -4059,7 +4093,7 @@ static bool llm_load_tensors(
         }
     }
 
-    if (model.is_mla_model()) {
+    if (model.is_mla_model() || model.arch == LLM_ARCH_OPENPANGU) {
         // -sm graph/attn needs wk_b->extra populated; run prepare even under dry-run.
         const bool graph_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
                                  model.split_mode == LLAMA_SPLIT_MODE_ATTN);
@@ -8509,7 +8543,7 @@ struct llama_data_write {
         // Iterate and write all the keys first, each row is a cell
         // Get whole range at a time
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
@@ -8932,7 +8966,7 @@ struct llama_data_read {
 
         // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+            const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
