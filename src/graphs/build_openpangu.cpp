@@ -192,6 +192,76 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_build_forward_expand(gf, v);
     llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, k, v, n_tokens, kv_head, cb, il);
 
+    // ---- DSA lightning indexer: per-query top-k selection mask (DSA layers only) ----
+    // Reference (Infer _pangu_torch_calib): q_idx = wq_b(q_lora_normed) [24 heads x 128],
+    // k_idx = rms(k_norm)(wk(x_normed)) [128, shared across heads], both NEOX-roped on the
+    // FIRST n_rot channels (opposite order vs the main head's [nope|rope] split);
+    // score[t,s] = sum_g weights_proj(x)[t,g] * relu(q_idx[t,g]·k_idx[s]) in f32, causal,
+    // then top-k. Selection only prunes when the causal window exceeds top_k; below that it
+    // covers everything, so the mask is skipped and the layer is exactly dense.
+    ggml_tensor * sel_mask = nullptr;   // [n_kv, T] additive mask: 0 = selected, -1e30 = pruned
+    ggml_tensor * idx_cache = (size_t) il < kv_self.idx_l.size() ? kv_self.idx_l[il] : nullptr;
+    if (idx_cache && layer.indexer_attn_q_b) {
+        const int64_t n_ihead = hparams.indexer_n_head;    // 24
+        const int64_t d_idx   = hparams.indexer_head_size; // 128
+        const int64_t topk    = hparams.indexer_top_k;     // 2048
+
+        // indexer keys for this batch -> position-indexed cache (write-before-read holds by
+        // graph order, same as the kv store; committed columns never change -> rollback-safe)
+        ggml_tensor * k_idx = ggml_mul_mat(ctx0, layer.indexer_attn_k, x_normed);   // [d_idx, T]
+        k_idx = llm_build_norm(ctx0, k_idx, hparams, layer.indexer_k_norm, layer.indexer_k_norm_b,
+                               layer.indexer_k_norm_b ? LLM_NORM : LLM_NORM_RMS, cb, il);
+        ggml_tensor * k_idx_rope = ggml_view_2d(ctx0, k_idx, n_embd_head_qk_rope, n_tokens, k_idx->nb[1], 0);
+        ggml_tensor * k_idx_pass = ggml_view_2d(ctx0, k_idx, d_idx - n_embd_head_qk_rope, n_tokens, k_idx->nb[1],
+                                                n_embd_head_qk_rope*ggml_element_size(k_idx));
+        k_idx_rope = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, ggml_cont(ctx0, k_idx_rope), n_embd_head_qk_rope, 1, n_tokens),
+                                   inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                                   ext_factor, attn_factor, beta_fast, beta_slow);
+        k_idx = ggml_concat(ctx0, ggml_reshape_2d(ctx0, k_idx_rope, n_embd_head_qk_rope, n_tokens),
+                            ggml_cont(ctx0, k_idx_pass), 0);                        // [d_idx, T]
+        if (il == 0) ggml_set_name(k_idx, "opg0_idx_k");
+        ggml_tensor * idx_w = ggml_view_2d(ctx0, idx_cache, d_idx, n_tokens, idx_cache->nb[1], kv_head*idx_cache->nb[1]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_idx, idx_w));
+
+        if (n_kv > topk) {
+            // indexer queries
+            ggml_tensor * q_idx = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, q_lora); // [n_ihead*d_idx, T]
+            q_idx = ggml_reshape_3d(ctx0, q_idx, d_idx, n_ihead, n_tokens);
+            ggml_tensor * q_idx_rope = ggml_view_3d(ctx0, q_idx, n_embd_head_qk_rope, n_ihead, n_tokens,
+                                                    q_idx->nb[1], q_idx->nb[2], 0);
+            ggml_tensor * q_idx_pass = ggml_view_3d(ctx0, q_idx, d_idx - n_embd_head_qk_rope, n_ihead, n_tokens,
+                                                    q_idx->nb[1], q_idx->nb[2], n_embd_head_qk_rope*ggml_element_size(q_idx));
+            q_idx_rope = ggml_rope_ext(ctx0, ggml_cont(ctx0, q_idx_rope), inp_pos, nullptr, n_rot, rope_type,
+                                       n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            q_idx = ggml_concat(ctx0, q_idx_rope, ggml_cont(ctx0, q_idx_pass), 0);   // [d_idx, n_ihead, T]
+            if (il == 0) ggml_set_name(q_idx, "opg0_idx_q");
+
+            // scores over the whole cache window, causal-masked before selection
+            ggml_tensor * k_all_idx = ggml_view_2d(ctx0, idx_cache, d_idx, n_kv, idx_cache->nb[1], 0);
+            ggml_tensor * sc = ggml_mul_mat(ctx0, k_all_idx, q_idx);                 // [n_kv, n_ihead, T]
+            sc = ggml_relu(ctx0, sc);
+            ggml_tensor * w_idx = ggml_mul_mat(ctx0, layer.indexer_proj, x_normed);  // [n_ihead, T]
+            sc = ggml_mul(ctx0, sc, ggml_reshape_3d(ctx0, w_idx, 1, n_ihead, n_tokens));
+            sc = ggml_cont(ctx0, ggml_permute(ctx0, sc, 1, 0, 2, 3));                // [n_ihead, n_kv, T]
+            sc = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, sc), n_kv, n_tokens);     // [n_kv, T]
+            sc = ggml_add(ctx0, sc, ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0));
+            if (il == 0) ggml_set_name(sc, "opg0_idx_scores");
+
+            // exact top-k -> additive mask: scatter zeros into a -1e30 base at the selected
+            // positions ([1, n_kv, T] row layout makes set_rows a per-query scatter)
+            ggml_tensor * sel_idx = ggml_top_k(ctx0, sc, (int) topk);                // [topk, T] i32
+            if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
+            ggml_tensor * base  = ggml_clamp(ctx0, ggml_scale(ctx0, sc, 0.0f), -1e30f, -1e30f);
+            base = ggml_reshape_3d(ctx0, ggml_cont(ctx0, base), 1, n_kv, n_tokens);
+            // contiguous [topk, T] reinterpretation of sc's buffer (values irrelevant, scaled to 0;
+            // ggml_scale requires a contiguous src)
+            ggml_tensor * zeros = ggml_scale(ctx0, ggml_view_2d(ctx0, sc, topk, n_tokens, topk*ggml_element_size(sc), 0), 0.0f);
+            zeros = ggml_reshape_3d(ctx0, zeros, 1, topk, n_tokens);
+            sel_mask = ggml_set_rows(ctx0, base, zeros, sel_idx);
+            sel_mask = ggml_reshape_2d(ctx0, sel_mask, n_kv, n_tokens);
+        }
+    }
+
     // ---- param_sink: 128 static learned latent-KV entries prepended to the sequence ----
     // sink_kv -> kv_a_norm -> kv_b gives per-head k_nope/v; sink_k_pe is used rope-free.
     // Sinks are visible to every query position (they sit "before" the sequence).
@@ -230,11 +300,16 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_tensor * qp = ggml_permute(ctx0, q, 0, 2, 1, 3);                               // [192, T, H]
     ggml_tensor * kq = ggml_mul_mat(ctx0, k_all, qp);                                   // [NS+n_kv, T, H]
 
-    // mask: sinks always visible (0) ++ the causal KQ_mask. The zero block is built by
-    // scaling finite kq data (KQ_mask itself holds -inf, which 0*x would turn into NaN).
-    const int64_t n_mask = KQ_mask->ne[1];
-    ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_mask, NS*ggml_element_size(kq), 0), 0.0f);
-    ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, KQ_mask, 0);                    // [NS+n_kv, n_mask]
+    // mask: sinks always visible (0) ++ the causal/SWA KQ_mask (+ the DSA top-k selection
+    // mask on indexer layers). The zero block is built by scaling finite kq data (KQ_mask
+    // itself holds -inf, which 0*x would turn into NaN).
+    ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+    if (sel_mask) {
+        kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask);
+    }
+    kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
+    ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_tokens, NS*ggml_element_size(kq), 0), 0.0f);
+    ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);                // [NS+n_kv, T]
     kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
 
     ggml_tensor * kqv = ggml_mul_mat(ctx0, v_all, kq);                                  // [128, T, H]
@@ -260,7 +335,9 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(0)));
 
     ggml_tensor * inp_pos = build_inp_pos();
-    ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    // the NextN/MTP layers are SWA layers with their own window (2048); the mask fill uses
+    // hparams.n_swa_mtp when the graph is built with an MTP op type
+    ggml_tensor * KQ_mask = hparams.n_swa_mtp > 0 && hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
     ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
 
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens
@@ -355,6 +432,10 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    // SWA layers get the windowed mask (window 512 base); DSA layers keep the plain causal
+    // mask and add the indexer's top-k selection inside the attention builder. Absent
+    // schedule keys (n_swa == 0) keep every layer dense (pre-DSA GGUF fallback).
+    ggml_tensor * KQ_mask_swa = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : nullptr;
 
     // mHC entry: repeat the embedding into S residual streams -> R [n_embd, S, n_tokens]
     ggml_tensor * R = ggml_repeat(ctx0, ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
@@ -442,7 +523,8 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         cur = llm_build_norm(ctx0, x, hparams, layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
         if (il == 0) ggml_set_name(cur, "opg0_attn_norm");
 
-        cur = build_openpangu_attention(gf, layer, il, cur, KQ_mask, inp_pos,
+        ggml_tensor * layer_mask = KQ_mask_swa && hparams.openpangu_window[il] > 0 ? KQ_mask_swa : KQ_mask;
+        cur = build_openpangu_attention(gf, layer, il, cur, layer_mask, inp_pos,
                                         conv_state, kv_head, kq_scale);
         if (il == 0) ggml_set_name(cur, "opg0_attn_out");
 

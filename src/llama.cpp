@@ -949,6 +949,7 @@ static bool llama_kv_cache_init(
     }
     if (needs_v_cache) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
+    cache.idx_l.resize(n_layer, nullptr);
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
@@ -1122,6 +1123,15 @@ static bool llama_kv_cache_init(
                 ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, conv_col_ne, conv_ring);
                 ggml_format_name(s_conv, "cache_s_l%d", i);
                 cache.s_l[i] = s_conv;
+
+                // DSA layers (window == 0, indexer present) also cache the per-position
+                // 128-d indexer key. Position-indexed like everything else in the cache, so
+                // the same rollback invariant applies: committed columns never change.
+                if (hparams.indexer_head_size > 0 && i < n_mtp_first_layer && hparams.openpangu_window[i] == 0 && hparams.n_swa > 0) {
+                    ggml_tensor * idxk = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.indexer_head_size, kv_size);
+                    ggml_format_name(idxk, "cache_idx_l%d", i);
+                    cache.idx_l[i] = idxk;
+                }
             }
 
             if (split_cache_i) {
@@ -4417,6 +4427,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 ? lctx.mtp_target_ctx->kv_self
                 : kv_self;
         const int64_t n_kv = mask_kv_self.n;
+        // openPangu: the NextN/MTP layers carry their own sliding window, and MTP graphs
+        // run with mtp_op_type set, so the effective window is per-context.
+        const uint32_t n_swa_eff = lctx.model.arch == LLM_ARCH_OPENPANGU &&
+                cparams.mtp_op_type != MTP_OP_NONE && hparams.n_swa_mtp > 0
+                ? hparams.n_swa_mtp : hparams.n_swa;
         if (cparams.causal_attn && !lctx.is_encoding) {
             const int64_t n_tokens = batch.n_tokens;
 
@@ -4444,7 +4459,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
-            auto noalibi_f16 = [&mask_kv_self, &hparams, n_kv, data_f16, data_swa_f16] (int j, llama_pos pos, llama_seq_id seq_id, int first, int last) {
+            auto noalibi_f16 = [&mask_kv_self, &hparams, n_kv, n_swa_eff, data_f16, data_swa_f16] (int j, llama_pos pos, llama_seq_id seq_id, int first, int last) {
                 ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
                 ggml_half h_zero = ggml_fp32_to_fp16(0.f);
                 for (int i = first; i < last; ++i) {
@@ -4458,7 +4473,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                     h = h_inf;
                                 }
                             } else {
-                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                     h = h_inf;
                                 }
                             }
@@ -4471,7 +4486,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             if (n_kv >= 1024 && n_tokens >= 32) {
                 int n_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
                 int npt = (n_kv + n_thread - 1)/n_thread;
-                auto compute = [&batch, &mask_kv_self, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, npt, data, data_swa, data_f16, data_swa_f16] (int ith) {
+                auto compute = [&batch, &mask_kv_self, &hparams, &cparams, &noalibi_f16, n_tokens, n_kv, n_swa_eff, npt, data, data_swa, data_f16, data_swa_f16] (int ith) {
                     int first = ith * npt;
                     int last  = std::min(int(n_kv), first + npt);
                     if (last <= first) return;
@@ -4512,7 +4527,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                             f = -INFINITY;
                                         }
                                     } else {
-                                        if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                        if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                             f = -INFINITY;
                                         }
                                     }
@@ -4592,7 +4607,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                     f = -INFINITY;
                                 }
                             } else {
-                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                     f = -INFINITY;
                                 }
                             }
@@ -4682,7 +4697,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                     if (mask_kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
                                         h = h_inf;
                                     }
-                                } else if (pos - mask_kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                } else if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
                                     h = h_inf;
                                 }
                             }

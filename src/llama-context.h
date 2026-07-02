@@ -60,6 +60,7 @@ struct llama_kv_cache {
     std::vector<struct ggml_tensor *> k_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
     std::vector<struct ggml_tensor *> s_l; // per layer recurrent state storage (Qwen3Next)
+    std::vector<struct ggml_tensor *> idx_l; // per layer DSA indexer-key cache (OpenPangu; null elsewhere)
 
     // When true, the delta_net graph builder will enable per-step SSM state saves
     bool save_per_step_ssm = false;
