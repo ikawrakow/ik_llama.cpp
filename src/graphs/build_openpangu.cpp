@@ -387,7 +387,13 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
 // real t-1/t-2 taps across warmup and sequential draft steps (drafts are always verified by
 // the base model, so conv-state quality affects acceptance rate, never correctness).
 ggml_tensor * llm_build_context::build_openpangu_mtp(
-        const llama_layer & mtp_layer, ggml_tensor * prev_embeddings, ggml_cgraph * gf, int il) {
+        const llama_layer & mtp_layer,
+        ggml_tensor * prev_embeddings,
+        ggml_cgraph * gf,
+        int il,
+        ggml_tensor ** full_hidden_out,
+        bool select_outputs,
+        bool build_logits) {
     const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(0)));
 
     // same position-addressing invariant as build_openpangu (worst-case builds exempt)
@@ -428,7 +434,8 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
     cb(ffn_inp, "mtp_ffn_inp", il);
 
-    if (inp_out_ids) {
+    const bool keep_full_hidden = full_hidden_out != nullptr;
+    if (select_outputs && inp_out_ids && !keep_full_hidden) {
         ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
     }
 
@@ -451,6 +458,16 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
 
     // --- shared head ---
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, -1);
+    if (full_hidden_out) {
+        *full_hidden_out = cur;
+    }
+    if (select_outputs && inp_out_ids && keep_full_hidden) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+    if (!build_logits) {
+        cb(cur, "mtp_hidden", il);
+        return cur;
+    }
     cb(cur, "result_norm", -1);
     ggml_tensor * head = mtp_layer.nextn.shared_head_head
         ? mtp_layer.nextn.shared_head_head : model.output;
@@ -479,8 +496,9 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     const float  kq_scale       = 1.0f / sqrtf(float(n_embd_head_k));
 
 
-    // NextN/MTP graph (speculative decoding): draft with the first NextN layer,
-    // self-chained by the common/speculative framework.
+    // NextN/MTP graph (speculative decoding): draft generation selects the
+    // requested head by depth; warmup/update runs all heads to keep their local
+    // conv rings warm while exposing head 1 as the legacy one-token shortcut.
     if (cparams.mtp_op_type != MTP_OP_NONE) {
         GGML_ASSERT(model.mtp && hparams.nextn_predict_layers > 0 &&
                     "OpenPangu MTP graph requested without NextN layers loaded");
@@ -495,9 +513,36 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_set_input(hidden_states_from_main_model);
         lctx.inp_mtp_states = hidden_states_from_main_model;
 
-        const int il_mtp = (int) (hparams.n_layer - hparams.nextn_predict_layers);  // head 1 = layer 46
-        ggml_tensor * mtp_out = build_openpangu_mtp(model.layers[il_mtp],
-                                                    hidden_states_from_main_model, gf, il_mtp);
+        const int il_mtp_first = (int) (hparams.n_layer - hparams.nextn_predict_layers);
+        const int n_mtp_heads  = (int) hparams.nextn_predict_layers;
+
+        ggml_tensor * mtp_out = nullptr;
+        if (cparams.mtp_op_type == MTP_OP_DRAFT_GEN) {
+            const int step_idx = (int) std::min<int32_t>(std::max<int32_t>(0, lctx.mtp_step_idx), n_mtp_heads - 1);
+            const int il_mtp = il_mtp_first + step_idx;
+            mtp_out = build_openpangu_mtp(model.layers[il_mtp],
+                                          hidden_states_from_main_model, gf, il_mtp);
+        } else {
+            ggml_tensor * prev_hidden = hidden_states_from_main_model;
+            ggml_tensor * head1_out = nullptr;
+            for (int i = 0; i < n_mtp_heads; ++i) {
+                const int il_mtp = il_mtp_first + i;
+                ggml_tensor * full_hidden = nullptr;
+                ggml_tensor * out = build_openpangu_mtp(model.layers[il_mtp],
+                                                        prev_hidden, gf, il_mtp,
+                                                        &full_hidden,
+                                                        i == 0,
+                                                        i == 0);
+                if (i == 0) {
+                    head1_out = out;
+                } else {
+                    ggml_build_forward_expand(gf, out);
+                }
+                prev_hidden = full_hidden ? full_hidden : out;
+            }
+            mtp_out = head1_out;
+        }
+
         ggml_build_forward_expand(gf, mtp_out);
         return gf;
     }

@@ -28,6 +28,7 @@
 #include "ggml-backend.h"
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
+void llama_set_mtp_step_idx(struct llama_context * ctx, int32_t mtp_step_idx);
 
 // TODO: fix these includes
 #include "iqk/iqk_quantize.h"
@@ -563,6 +564,7 @@ struct llama_context::Prev {
     int save_per_step_ssm;
     int per_step_max_allocated;
     llama_mtp_op_type mtp_op_type;
+    int32_t mtp_step_idx;
     ggml_cgraph * graph;
 };
 
@@ -585,6 +587,7 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
     if (ctx.n_outputs != the_prev->n_outputs) { printf("    n_outputs is not the same\n"); return; }
     if (u_batch.n_tokens != the_prev->n_tokens) { printf("    n_tokens is not the same\n"); return; }
     if (ctx.cparams.mtp_op_type != the_prev->mtp_op_type) { printf("    mtp_op_type is not the same\n"); return; }
+    if (ctx.mtp_step_idx != the_prev->mtp_step_idx) { printf("    mtp_step_idx is not the same\n"); return; }
     printf("    update_cache_copies() must have failed\n");
 }
 
@@ -603,6 +606,7 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
            n_outputs == the_prev->n_outputs &&
            u_batch.n_tokens == the_prev->n_tokens &&
            cparams.mtp_op_type == the_prev->mtp_op_type &&
+           mtp_step_idx == the_prev->mtp_step_idx &&
            update_cache_copies();
     if (false && !result) {
         printf("%s(%d):", __func__, cparams.mtp_op_type);
@@ -746,6 +750,12 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     cparams.mtp_op_type = value;
+}
+
+void llama_context::set_mtp_step_idx(int32_t value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    mtp_step_idx = std::max<int32_t>(0, value);
 }
 
 llama_context::~llama_context() {
@@ -5727,7 +5737,7 @@ static int llama_decode_internal(
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)kv_self_used.n,
                         (int)u_batch.n_tokens,
                         kv_self_used.save_per_step_ssm, kv_self_used.ckpt.per_step_max_allocated,
-                        cparams.mtp_op_type, gf});
+                        cparams.mtp_op_type, lctx.mtp_step_idx, gf});
             }
         } else {
             if (track_graph_reuse) {
@@ -10137,6 +10147,10 @@ int32_t llama_decode(
 
 void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
     ctx->set_mtp_op_type(mtp_op_type);
+}
+
+void llama_set_mtp_step_idx(llama_context * ctx, int32_t mtp_step_idx) {
+    ctx->set_mtp_step_idx(mtp_step_idx);
 }
 
 void llama_synchronize(struct llama_context * ctx) {

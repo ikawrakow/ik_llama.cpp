@@ -402,6 +402,7 @@ struct llama_context {
     std::unique_ptr<Prev> prev_mtp;
     uint64_t graph_reuse_hits = 0;
     uint64_t graph_reuse_misses = 0;
+    int32_t mtp_step_idx = 0;
 
     void reset_scheduler();
     bool can_reuse_graph(const llama_batch & u_batch);
@@ -431,6 +432,7 @@ struct llama_context {
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);
     void set_mtp_op_type(llama_mtp_op_type value);
+    void set_mtp_step_idx(int32_t value);
 
     int max_nodes(int n_tokens, int n_kv) const;
 };

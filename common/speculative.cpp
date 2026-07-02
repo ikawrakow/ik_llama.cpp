@@ -24,6 +24,7 @@
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
+void llama_set_mtp_step_idx(struct llama_context * ctx, int32_t mtp_step_idx);
 
 const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
@@ -2879,6 +2880,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_token current_input_id = id_last;
     llama_pos current_n_past = n_past;
     const int n_embd = llama_mtp_state_n_embd(ctx);
+    const int n_mtp_heads = std::max(1, llama_model_n_nextn_layer(llama_get_model(ctx)));
 
     auto & last = mtp_get_last_embd(state, seq_id);
     int i0 = 0;
@@ -2892,6 +2894,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         current_n_past++;
         if (!llama_set_draft_input_hidden_state_copy(ctx, last.embd.data(), last.embd.size())) {
             llama_batch_free(mtp_batch);
+            llama_set_mtp_step_idx(ctx, 0);
             llama_set_mtp_op_type(ctx, MTP_OP_NONE);
             return drafts;
         }
@@ -2903,6 +2906,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         mtp_batch.n_tokens = 0;
         const llama_pos draft_pos = constant_draft_positions ? n_past : current_n_past;
         common_batch_add(mtp_batch, current_input_id, draft_pos, {seq_id}, true);
+        llama_set_mtp_step_idx(ctx, std::min(i, n_mtp_heads - 1));
 
         ++n_decode;
         if (llama_decode(ctx, mtp_batch) != 0) {
@@ -2936,6 +2940,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         }
     }
     llama_batch_free(mtp_batch);
+    llama_set_mtp_step_idx(ctx, 0);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
     // Purge the metadata for the draft tokens.
@@ -2976,12 +2981,15 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     }
     mtp_batch.logits[mtp_batch.n_tokens-1] = true;
     if (is_prompt_warmup) {
+        llama_set_mtp_step_idx(ctx, 0);
         llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
     } else {
+        llama_set_mtp_step_idx(ctx, 0);
         llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
     }
 
     const int32_t ret = llama_decode(ctx, mtp_batch);
+    llama_set_mtp_step_idx(ctx, 0);
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
     return ret;
 }

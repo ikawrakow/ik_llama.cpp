@@ -299,7 +299,10 @@ struct llm_build_context {
         const struct llama_layer & mtp_layer,
         ggml_tensor * prev_embeddings,
         ggml_cgraph * gf,
-        int il);
+        int il,
+        ggml_tensor ** full_hidden_out = nullptr,
+        bool select_outputs = true,
+        bool build_logits = true);
 
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,

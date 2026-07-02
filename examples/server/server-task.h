@@ -8,6 +8,8 @@
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
 
+#include <vector>
+
 using json = nlohmann::ordered_json;
 
 enum stop_type {
@@ -130,6 +132,8 @@ struct result_timings {
     // Optional speculative metrics - only included when > 0
     int32_t draft_n = 0;
     int32_t draft_n_accepted = 0;
+    std::vector<int32_t> draft_n_by_depth;
+    std::vector<int32_t> draft_n_accepted_by_depth;
 
     json to_json() const;
 };
