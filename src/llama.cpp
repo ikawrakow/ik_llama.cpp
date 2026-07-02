@@ -679,6 +679,28 @@ bool llama_context::update_cache_copies() {
             }
         }
     }
+    // GLM-DSA lightning indexer: patch the indexer-key (kr_l) cache write offset for the reused
+    // graph. Each registered cpy writes this ubatch's index keys into kr_l at the kv_head slot;
+    // like the K/V copies above, its baked view_offs must be re-pointed to the CURRENT kv_head,
+    // else a reused graph (FA pad-256, constant n_kv) keeps writing to the first ubatch's slot and
+    // the recent indexer-key cells read uninitialized (scattered selection -> degraded/NaN decode).
+    // step = kr_l->nb[1] (one index-key row = head_size * F16). No-op when DSA is off (entries null).
+    for (size_t il = 0; il < dsa_cache_copies.size(); ++il) {
+        auto & c = dsa_cache_copies[il];
+        if (!c.cpy) continue;
+        // Sanity guard (the MSA fix omitted this): the registered cpy must still be a CPY whose
+        // destination view is rooted at this layer's kr_l cache (mirrors the K/V guard above,
+        // which checks c.cpy->view_src). If the graph was rebuilt with a different shape these no
+        // longer match, so refuse reuse and force a rebuild.
+        if (c.cpy->op != GGML_OP_CPY ||
+            il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr ||
+            c.cpy->view_src != kv_self.kr_l[il]) {
+            return false;
+        }
+        c.cpy->view_offs    = kv_self.head * c.step;
+        c.cpy->src[1]->data = (char *) kv_self.kr_l[il]->data + c.cpy->view_offs;
+        c.cpy->data         = c.cpy->src[1]->data;
+    }
     return true;
 }
 
@@ -695,6 +717,9 @@ llama_context::llama_context(const llama_model & model)
     } else {
         cache_copies.resize(2*hparams.n_layer);
     }
+    // GLM-DSA lightning indexer: one indexer-key (kr_l) cache copy per layer. Entries stay null
+    // for non-DSA models / non-indexer layers, so update_cache_copies() is a no-op when DSA is off.
+    dsa_cache_copies.resize(hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 
@@ -950,6 +975,13 @@ static bool llama_kv_cache_init(
     if (needs_v_cache) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
 
+    // DSA lightning-indexer key cache: one [indexer_head_size, kv_size] tensor per layer.
+    // Allocated below (in the MLA branch) only when the model carries the indexer tensors.
+    const bool has_dsa_indexer = model.arch == LLM_ARCH_GLM_DSA && hparams.indexer_head_size > 0;
+    if (has_dsa_indexer) {
+        cache.kr_l.resize(n_layer, nullptr);
+    }
+
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
     const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
@@ -995,6 +1027,13 @@ static bool llama_kv_cache_init(
             ggml_tensor * kv = ggml_new_tensor_2d(ctx, primary_kv_type, kv_lora_rank + n_embd_head_qk_rope, kv_size);
             ggml_format_name(kv, "cache_k_l%d", i);
             cache.k_l.push_back(kv);
+            // DSA lightning-indexer key cache (MQA, single head). Store the Hadamard-rotated
+            // indexer keys in F16 so a decoded token can score against ALL past keys.
+            if (has_dsa_indexer && model.layers[i].indexer_attn_k && !is_mtp_tail_layer) {
+                ggml_tensor * kr = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, hparams.indexer_head_size, kv_size);
+                ggml_format_name(kr, "cache_kr_l%d", i);
+                cache.kr_l[i] = kr;
+            }
             if (!cparams.flash_attn && cparams.mla_attn == 1) {
                 ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
                 ggml_format_name(kvt, "cache_v_l%d", i);
@@ -4284,6 +4323,58 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     const auto & cparams = lctx.cparams;
     const auto & kv_self = lctx.kv_self;
 
+    if (lctx.inp_dsa_sink) {
+        // Per-sequence attention-sink boost for the DSA lightning indexer top-k selection.
+        // inp_dsa_sink {n_kv, n_tokens}: 1e20 iff key cell i is one of query j's sequence's FIRST
+        // n_sink present tokens, else 0. Filled from kv_self.cells like the KQ_mask so it is correct
+        // for multi-sequence ubatches (each sequence's OWN sink is force-included).
+        //
+        // SERVING FIX: anchor the sink on each sequence's FIRST PRESENT position, not absolute
+        // pos < n_sink. After multi-turn seq_rm drops a sequence's early tokens, its earliest
+        // surviving token has pos >= n_sink; an absolute "pos < n_sink" test would then protect
+        // NOTHING for that sequence and let the (now-)sink token be masked out of top-k, collapsing
+        // it. Anchoring on per-sequence min(pos) keeps the sink protection following the sequence's
+        // actual first present cell. For a fresh sequence starting at pos 0, min(pos)==0 so the
+        // boosted set is identical to the old behaviour (n_seq==1 byte-identical).
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_dsa_sink->buffer));
+        static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
+        const int64_t n_kv      = lctx.inp_dsa_sink->ne[0];
+        const int64_t n_tok_idx = lctx.inp_dsa_sink->ne[1];
+        float * data = (float *) lctx.inp_dsa_sink->data;
+        std::memset(data, 0, ggml_nbytes(lctx.inp_dsa_sink));
+
+        // Per-sequence first present pos: min over present cells of that seq, restricted to the
+        // n_kv key span the indexer scores. Cache across query rows in this ubatch.
+        // ASSUMPTION (latent today): min(pos) over the whole [0,n_kv) span equals the sequence's
+        // genuine first-present token only for a NON-SLIDING cache. GLM_DSA has no SWA, so the
+        // oldest cell of a seq is its true sink; if SWA were ever added, the window could evict the
+        // real sink and min(pos) would anchor on the wrong (window-floor) cell — revisit then.
+        std::unordered_map<llama_seq_id, llama_pos> seq_min_pos;
+        for (int64_t i = 0; i < n_kv; ++i) {
+            const auto & cell = kv_self.cells[i];
+            if (cell.pos < 0) continue;
+            for (const llama_seq_id sid : cell.seq_id) {
+                auto it = seq_min_pos.find(sid);
+                if (it == seq_min_pos.end() || cell.pos < it->second) {
+                    seq_min_pos[sid] = cell.pos;
+                }
+            }
+        }
+
+        for (int64_t j = 0; j < n_tok_idx && j < (int64_t) batch.n_tokens; ++j) {
+            const llama_seq_id seq_id = batch.seq_id[j][0];
+            auto it = seq_min_pos.find(seq_id);
+            if (it == seq_min_pos.end()) continue;  // no present cell for this seq in the key span
+            const llama_pos first_pos = it->second;
+            for (int64_t i = 0; i < n_kv; ++i) {
+                const auto & cell = kv_self.cells[i];
+                if (cell.pos >= first_pos && cell.pos < first_pos + n_sink && cell.has_seq_id(seq_id)) {
+                    data[j*n_kv + i] = 1e20f;
+                }
+            }
+        }
+    }
+
     if (batch.token && lctx.inp_tokens) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();
@@ -5932,7 +6023,12 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     //   - x2 for keys and values
     //const uint32_t max_moves = model.max_nodes()/(6*n_layer);
     // TODO: tmp fix https://github.com/ggerganov/llama.cpp/issues/6685#issuecomment-2057579516
-    const uint32_t max_moves = (lctx.model.max_nodes(1) - 2*n_layer)/(6*n_layer);
+    // DSA: build_defrag additionally moves the indexer-key cache (kr_l), +3 tensors/layer/move
+    // (src view, dst view, copy), so budget 9*n_layer per move when the indexer cache is present.
+    const bool has_dsa_indexer_defrag =
+        lctx.model.arch == LLM_ARCH_GLM_DSA && !kv_self.kr_l.empty();
+    const uint32_t tensors_per_move = has_dsa_indexer_defrag ? 9 : 6;
+    const uint32_t max_moves = (lctx.model.max_nodes(1) - 2*n_layer)/(tensors_per_move*n_layer);
 
     // determine which KV cells to move where
     //
@@ -6541,6 +6637,8 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
         /*.graph_reuse                 =*/ true,
+        /*.dsa                         =*/ false,
+        /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
@@ -6958,6 +7056,14 @@ struct llama_context * llama_init_from_model(
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
+    cparams.dsa              = params.dsa;
+    cparams.dsa_top_k        = params.dsa_top_k;
+    // The DSA lightning indexer is built only in the layer-mode (non-TP) attention path. Under
+    // -sm graph / -sm attn the model runs the tensor-parallel attention path, which has no indexer,
+    // so --dsa would silently run dense MLA. Warn instead of degrading silently.
+    if (cparams.dsa && (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+        LLAMA_LOG_WARN("%s: --dsa is not active under -sm graph/attn (tensor-parallel attention has no indexer); running dense MLA\n", __func__);
+    }
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
     // Folding H into wv_b/wk_b_pp permanently mutates the model; a later context
@@ -7316,10 +7422,16 @@ struct llama_context * llama_init_from_model(
         {
             size_t memory_size_k = 0;
             size_t memory_size_v = 0;
+            size_t memory_size_k_indexer = 0;
 
             for (auto & k : ctx->kv_self.k_l) {
                 if (k) {
                     memory_size_k += ggml_nbytes(k);
+                }
+            }
+            for (auto & k : ctx->kv_self.kr_l) {
+                if (k) {
+                    memory_size_k_indexer += ggml_nbytes(k);
                 }
             }
 
@@ -7329,8 +7441,8 @@ struct llama_context * llama_init_from_model(
                 }
             }
 
-            if (memory_size_k + memory_size_v > 0) {
-	        if (cparams.mla_attn != 0 && !cparams.flash_attn) {
+            if (memory_size_k + memory_size_v) {
+	            if (cparams.mla_attn != 0 && !cparams.flash_attn) {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
                             (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
@@ -7345,6 +7457,9 @@ struct llama_context * llama_init_from_model(
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                             ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
                 }
+            }
+            if (memory_size_k_indexer > 0) {
+                LLAMA_LOG_INFO("%s: KV self indexer size = %7.2f MiB\n", __func__, memory_size_k_indexer/1024./1024.);
             }
         }
 
