@@ -38,6 +38,27 @@ struct common_speculative_draft_result {
     bool target_only = false;
 };
 
+struct common_speculative_metrics_stage_snapshot {
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+
+    uint64_t n_call_begin = 0;
+    uint64_t n_call_draft = 0;
+    uint64_t n_call_accept = 0;
+
+    uint64_t n_gen_drafts = 0;
+    uint64_t n_acc_drafts = 0;
+    uint64_t n_gen_tokens = 0;
+    uint64_t n_acc_tokens = 0;
+
+    int64_t t_begin_us = 0;
+    int64_t t_draft_us = 0;
+    int64_t t_accept_us = 0;
+};
+
+struct common_speculative_metrics_snapshot {
+    std::vector<common_speculative_metrics_stage_snapshot> stages;
+};
+
 // comma separated list of all types
 std::string common_speculative_type_name_str();
 
@@ -233,6 +254,8 @@ int32_t common_speculative_on_target_batch(
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps = 0.0, int n_decoded = 0, int n_past = 0, common_params_speculative * active_params = nullptr);
 
 common_speculative_type common_speculative_current_type(const common_speculative * spec);
+
+common_speculative_metrics_snapshot common_speculative_get_metrics_snapshot(const common_speculative * spec);
 
 // Context shift for MTP to match how server handle main model
 void common_speculative_context_shift(

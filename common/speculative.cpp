@@ -2919,6 +2919,32 @@ common_speculative_type common_speculative_current_type(const common_speculative
     return spec->curr_impl->type;
 }
 
+common_speculative_metrics_snapshot common_speculative_get_metrics_snapshot(const common_speculative * spec) {
+    common_speculative_metrics_snapshot snapshot;
+    if (spec == nullptr) {
+        return snapshot;
+    }
+
+    snapshot.stages.reserve(spec->impls.size());
+    for (const auto & impl : spec->impls) {
+        snapshot.stages.push_back({
+            /* .type         = */ impl->type,
+            /* .n_call_begin = */ impl->n_call_begin,
+            /* .n_call_draft = */ impl->n_call_draft,
+            /* .n_call_accept = */ impl->n_call_accept,
+            /* .n_gen_drafts = */ impl->n_gen_drafts,
+            /* .n_acc_drafts = */ impl->n_acc_drafts,
+            /* .n_gen_tokens = */ impl->n_gen_tokens,
+            /* .n_acc_tokens = */ impl->n_acc_tokens,
+            /* .t_begin_us   = */ impl->t_begin_us,
+            /* .t_draft_us   = */ impl->t_draft_us,
+            /* .t_accept_us  = */ impl->t_accept_us,
+        });
+    }
+
+    return snapshot;
+}
+
 void common_speculative_context_shift(
         common_speculative * spec,
         llama_seq_id         seq_id,
