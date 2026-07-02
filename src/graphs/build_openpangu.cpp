@@ -343,6 +343,12 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
         const llama_layer & mtp_layer, ggml_tensor * prev_embeddings, ggml_cgraph * gf, int il) {
     const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(0)));
 
+    // same position-addressing invariant as build_openpangu (worst-case builds exempt)
+    if (batch.pos && batch.n_tokens > 0) {
+        GGML_ASSERT((llama_pos) kv_head == batch.pos[0] &&
+                    "openPangu KV cache is position-addressed; kv head must equal the first batch position");
+    }
+
     ggml_tensor * inp_pos = build_inp_pos();
     // the NextN/MTP layers are SWA layers with their own window (2048); the mask fill uses
     // hparams.n_swa_mtp when the graph is built with an MTP op type
@@ -406,6 +412,15 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
 
 ggml_cgraph * llm_build_context::build_openpangu() {
     ggml_cgraph * gf = new_graph_custom();
+
+    // the ring, indexer and latent stores are addressed by absolute position through
+    // kv_head; enforce head == first batch position on real builds so any future cache
+    // plumbing that breaks the append-only invariant fails here instead of corrupting
+    // (worst-case measurement builds pass pos = null and are exempt)
+    if (batch.pos && batch.n_tokens > 0) {
+        GGML_ASSERT((llama_pos) kv_head == batch.pos[0] &&
+                    "openPangu KV cache is position-addressed; kv head must equal the first batch position");
+    }
 
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);                // 192
     const int64_t S             = hparams.mhc_num_stream;                  // 4
