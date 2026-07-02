@@ -160,8 +160,16 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                                         n_embd_head_qk_nope*ggml_element_size(q));
     q_rope = ggml_rope_ext(ctx0, ggml_cont(ctx0, q_rope), inp_pos, nullptr, n_rot, rope_type,
                            n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-    q = ggml_concat(ctx0, ggml_cont(ctx0, q_nope), q_rope, 0);        // [192, n_head, T]
-    if (il == 0) ggml_set_name(q, "opg0_q");
+    // absorbed (MLA-latent) queries: q_nope projected into the 512-latent through the
+    // load-derived wk_b, then ++ roped q_pe -> one [576, T, H] query against the latent cache
+    ggml_tensor * qn = ggml_cont(ctx0, ggml_permute(ctx0, ggml_cont(ctx0, q_nope), 0, 2, 1, 3)); // [128, T, H]
+    ggml_tensor * qp = ggml_cont(ctx0, ggml_permute(ctx0, q_rope, 0, 2, 1, 3));                  // [64, T, H]
+    // wk_b loads 2D [128, H*512] from the converter split (head-major rows) or 3D from the
+    // load-time derivation; either way the data is [d, r, h] — reshape to the batched form
+    ggml_tensor * wk_b3 = ggml_reshape_3d(ctx0, layer.wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head);
+    ggml_tensor * q_lat = ggml_mul_mat(ctx0, wk_b3, qn);                                          // [512, T, H]
+    ggml_tensor * q_all = ggml_concat(ctx0, q_lat, qp, 0);                                       // [576, T, H]
+    if (il == 0) ggml_set_name(q_all, "opg0_q_lat");
 
     // --- KV path: kv_a -> split -> compresskv_conv -> kv_a_norm -> kv_b ---
     ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);       // [kv_lora+64, T]
@@ -171,26 +179,28 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ckv = openpangu_causal_conv(ctx0, gf, ckv, layer.kv_conv, conv_state, conv_off_ckv, conv_pos);
     ckv = llm_build_norm(ctx0, ckv, hparams, layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
     if (il == 0) ggml_set_name(ckv, "opg0_ckv_norm");
-    ggml_tensor * kvb = ggml_mul_mat(ctx0, layer.wkv_b, ckv);          // [n_head*(128+128), T]
-    kvb = ggml_reshape_3d(ctx0, kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, n_tokens);
-    ggml_tensor * k_nope = ggml_view_3d(ctx0, kvb, n_embd_head_qk_nope, n_head, n_tokens, kvb->nb[1], kvb->nb[2], 0);
-    ggml_tensor * v = ggml_cont(ctx0, ggml_view_3d(ctx0, kvb, n_embd_head_v, n_head, n_tokens, kvb->nb[1], kvb->nb[2],
-                                        n_embd_head_qk_nope*ggml_element_size(kvb)));
-    // rope k_pe (shared across heads) then broadcast to all heads
+    // rope k_pe (shared across heads)
     k_pe = ggml_reshape_3d(ctx0, k_pe, n_embd_head_qk_rope, 1, n_tokens);
     k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type,
                          n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-    ggml_tensor * k_pe_b = ggml_repeat(ctx0, k_pe,
-                             ggml_new_tensor_3d(ctx0, k_pe->type, n_embd_head_qk_rope, n_head, n_tokens));
-    ggml_tensor * k = ggml_concat(ctx0, ggml_cont(ctx0, k_nope), k_pe_b, 0); // [192, n_head, T]
-    if (il == 0) { ggml_set_name(k, "opg0_k"); ggml_set_name(v, "opg0_v"); }
+    ggml_tensor * k_pe2d = ggml_reshape_2d(ctx0, k_pe, n_embd_head_qk_rope, n_tokens);
 
-    // ---- store this step's K/V into the cache (standard bookkeeping) ----
-    v = ggml_reshape_2d(ctx0, v, n_embd_head_v * n_head, n_tokens);   // V as 2D for the store
-    ggml_build_forward_expand(gf, q);
-    ggml_build_forward_expand(gf, k);
-    ggml_build_forward_expand(gf, v);
-    llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, k, v, n_tokens, kv_head, cb, il);
+    // ---- latent cache store: per position [ckv 512 | roped k_pe 64] straight into k_l,
+    // and the 512-latent transposed into v_l (v_trans layout) for the value side. The
+    // per-head K/V are never materialized; attention runs against the shared latents.
+    {
+        GGML_ASSERT(kv_self.v_trans);
+        ggml_tensor * kl = kv_self.k_l[il];
+        ggml_tensor * vl = kv_self.v_l[il];
+        ggml_tensor * kl_ckv = ggml_view_2d(ctx0, kl, kv_lora_rank, n_tokens, kl->nb[1], kv_head*kl->nb[1]);
+        ggml_tensor * kl_kpe = ggml_view_2d(ctx0, kl, n_embd_head_qk_rope, n_tokens, kl->nb[1],
+                                            kv_head*kl->nb[1] + kv_lora_rank*ggml_element_size(kl));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ckv, kl_ckv));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_pe2d, kl_kpe));
+        ggml_tensor * vl_view = ggml_view_2d(ctx0, vl, n_tokens, kv_lora_rank,
+                                             (int64_t) kv_self.size*ggml_element_size(vl), kv_head*ggml_element_size(vl));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, ckv), vl_view));
+    }
 
     // ---- DSA lightning indexer: per-query top-k selection mask (DSA layers only) ----
     // Reference (Infer _pangu_torch_calib): q_idx = wq_b(q_lora_normed) [24 heads x 128],
@@ -262,43 +272,29 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         }
     }
 
-    // ---- param_sink: 128 static learned latent-KV entries prepended to the sequence ----
-    // sink_kv -> kv_a_norm -> kv_b gives per-head k_nope/v; sink_k_pe is used rope-free.
-    // Sinks are visible to every query position (they sit "before" the sequence).
+    // ---- param_sink: 128 learned latent-KV entries prepended to the sequence ----
+    // The sinks are native latent-space entries: kv_a_norm of the learned latent IS the
+    // key/value latent; sink_k_pe is used rope-free. Sinks are visible to every query.
     const int64_t NS = hparams.param_sink_number;
     ggml_tensor * s_ckv = llm_build_norm(ctx0, layer.param_sink_kv, hparams,
                                          layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il); // [512, NS]
-    ggml_tensor * s_kvb = ggml_mul_mat(ctx0, layer.wkv_b, s_ckv);                       // [n_head*256, NS]
-    s_kvb = ggml_reshape_3d(ctx0, s_kvb, n_embd_head_qk_nope + n_embd_head_v, n_head, NS);
-    ggml_tensor * s_knope = ggml_view_3d(ctx0, s_kvb, n_embd_head_qk_nope, n_head, NS,
-                                         s_kvb->nb[1], s_kvb->nb[2], 0);
-    ggml_tensor * s_v = ggml_cont(ctx0, ggml_view_3d(ctx0, s_kvb, n_embd_head_v, n_head, NS,
-                                         s_kvb->nb[1], s_kvb->nb[2], n_embd_head_qk_nope*ggml_element_size(s_kvb)));
-    ggml_tensor * s_kpe = ggml_reshape_3d(ctx0, layer.param_sink_k_pe, n_embd_head_qk_rope, 1, NS);
-    s_kpe = ggml_repeat(ctx0, s_kpe, ggml_new_tensor_3d(ctx0, s_kpe->type, n_embd_head_qk_rope, n_head, NS));
-    ggml_tensor * s_k = ggml_concat(ctx0, ggml_cont(ctx0, s_knope), s_kpe, 0);          // [192, n_head, NS]
-    s_k = ggml_cont(ctx0, ggml_permute(ctx0, s_k, 0, 2, 1, 3));                         // [192, NS, n_head]
-    s_v = ggml_cont(ctx0, ggml_permute(ctx0, s_v, 1, 2, 0, 3));                         // [NS, 128, n_head]
+    ggml_tensor * s_kpe = layer.param_sink_k_pe->type == GGML_TYPE_F32
+        ? layer.param_sink_k_pe
+        : ggml_cast(ctx0, layer.param_sink_k_pe, GGML_TYPE_F32);                            // [64, NS]
+    ggml_tensor * sink_blk = ggml_concat(ctx0, s_ckv, s_kpe, 0);                            // [576, NS]
+    ggml_tensor * s_lat_t = ggml_cont(ctx0, ggml_transpose(ctx0, s_ckv));                   // [NS, 512]
 
-    // ---- manual attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
-    auto * k_cache = kv_self.k_l[il];
-    auto * v_cache = kv_self.v_l[il];
-    const int64_t n_ctx_kv = kv_self.size;
-    ggml_tensor * kview = ggml_view_3d(ctx0, k_cache, n_embd_head_k, n_kv, n_head,
-            ggml_row_size(k_cache->type, n_embd_head_k)*n_head,
-            ggml_row_size(k_cache->type, n_embd_head_k), 0);
-    GGML_ASSERT(kv_self.v_trans);
-    ggml_tensor * vview = ggml_view_3d(ctx0, v_cache, n_kv, n_embd_head_v, n_head,
-            ggml_element_size(v_cache)*n_ctx_kv,
-            ggml_element_size(v_cache)*n_ctx_kv*n_embd_head_v, 0);
+    // ---- latent attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
+    // One [576, NS+n_kv] key block shared by all heads (f32 cache, no casts); the value
+    // side reads the transposed 512-latent, and wv_b up-projects after the weighted sum.
+    ggml_tensor * kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv,
+                                        kv_self.k_l[il]->nb[1], 0);
+    ggml_tensor * vl_all = ggml_view_2d(ctx0, kv_self.v_l[il], n_kv, kv_lora_rank,
+                                        (int64_t) kv_self.size*ggml_element_size(kv_self.v_l[il]), 0);
+    ggml_tensor * lat_all = ggml_concat(ctx0, sink_blk, kl_all, 1);                         // [576, NS+n_kv]
+    ggml_tensor * v_all   = ggml_concat(ctx0, s_lat_t, vl_all, 0);                          // [NS+n_kv, 512]
 
-    // f32 everywhere: the non-f32 concat kernel only handles dim 0, and correctness comes
-    // first on this CPU path (the cache-view casts are the price of prepending sinks).
-    ggml_tensor * k_all = ggml_concat(ctx0, s_k, ggml_cast(ctx0, kview, GGML_TYPE_F32), 1); // [192, NS+n_kv, H]
-    ggml_tensor * v_all = ggml_concat(ctx0, s_v, ggml_cast(ctx0, vview, GGML_TYPE_F32), 0); // [NS+n_kv, 128, H]
-
-    ggml_tensor * qp = ggml_permute(ctx0, q, 0, 2, 1, 3);                               // [192, T, H]
-    ggml_tensor * kq = ggml_mul_mat(ctx0, k_all, qp);                                   // [NS+n_kv, T, H]
+    ggml_tensor * kq = ggml_mul_mat(ctx0, lat_all, q_all);                                  // [NS+n_kv, T, H]
 
     // mask: sinks always visible (0) ++ the causal/SWA KQ_mask (+ the DSA top-k selection
     // mask on indexer layers). The zero block is built by scaling finite kq data (KQ_mask
@@ -312,8 +308,10 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);                // [NS+n_kv, T]
     kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
 
-    ggml_tensor * kqv = ggml_mul_mat(ctx0, v_all, kq);                                  // [128, T, H]
-    ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));        // [128, H, T]
+    ggml_tensor * kqv = ggml_mul_mat(ctx0, v_all, kq);                                  // [512, T, H]
+    ggml_tensor * wv_b3 = ggml_reshape_3d(ctx0, layer.wv_b, kv_lora_rank, n_embd_head_v, n_head);
+    ggml_tensor * out_h = ggml_mul_mat(ctx0, wv_b3, kqv);                               // [128, T, H]
+    ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, out_h, 0, 2, 1, 3));      // [128, H, T]
     cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
 
     // o_conv (MOME on the pre-o_proj attn output), then o_proj
