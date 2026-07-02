@@ -157,6 +157,9 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     if (stage.has_p_min_override()) {
         result.p_min = stage.p_min;
     }
+    if (stage.has_mtp_heads_override()) {
+        result.mtp_heads = stage.mtp_heads;
+    }
     if (stage.has_dflash_cross_ctx_override()) {
         result.dflash_cross_ctx = stage.dflash_cross_ctx;
     }
@@ -182,6 +185,7 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
 
     result.n_max = std::max(result.n_max, 0);
     result.n_min = std::max(0, std::min(result.n_min, result.n_max));
+    result.mtp_heads = std::max(result.mtp_heads, 0);
     result.stages.clear();
 
     return result;
@@ -929,6 +933,13 @@ static void common_speculative_stage_apply_kv(
         stage.p_min = std::stof(value_raw);
         if (stage.p_min < 0.0f) {
             throw std::invalid_argument("speculative stage p_min must be >= 0");
+        }
+        return;
+    }
+    if (key == "heads" || key == "mtp_heads") {
+        stage.mtp_heads = std::stoi(value_raw);
+        if (stage.mtp_heads < 0) {
+            throw std::invalid_argument("speculative stage mtp_heads must be >= 0");
         }
         return;
     }

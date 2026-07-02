@@ -164,7 +164,15 @@ static common_speculative_stage_params server_parse_speculative_stage_json(const
             continue;
         }
 
-        throw std::runtime_error("Error: per-request speculative.stages only support type, n_max, n_min, and p_min; structural stage overrides are startup-only");
+        if (item.key() == "heads" || item.key() == "mtp_heads") {
+            stage.mtp_heads = item.value().get<int32_t>();
+            if (stage.mtp_heads < 0) {
+                throw std::runtime_error("Error: speculative.stages[].heads must be >= 0");
+            }
+            continue;
+        }
+
+        throw std::runtime_error("Error: per-request speculative.stages only support type, n_max, n_min, p_min, and heads; structural stage overrides are startup-only");
     }
 
     return stage;
@@ -1182,6 +1190,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
                 if (stage_override.has_p_min_override()) {
                     slot.params.speculative.stages[i].p_min = stage_override.p_min;
+                }
+                if (stage_override.has_mtp_heads_override()) {
+                    slot.params.speculative.stages[i].mtp_heads = stage_override.mtp_heads;
                 }
             }
 

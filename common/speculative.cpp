@@ -213,6 +213,7 @@ static std::vector<llama_token> mtp_speculative_gen_draft(
     struct llama_context * ctx,
     int n_draft,
     float p_min,
+    int32_t mtp_heads,
     llama_token id_last,
     llama_pos n_past,
     llama_seq_id seq_id,
@@ -338,6 +339,7 @@ struct common_speculative_state_mtp : public common_speculative_state {
             ctx,
             n_max,
             params.p_min,
+            params.mtp_heads,
             id_last,
             n_past,
             seq_id,
@@ -2854,6 +2856,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     struct llama_context * ctx,
     int n_draft,
     float p_min,
+    int32_t mtp_heads,
     llama_token id_last,
     llama_pos n_past,
     llama_seq_id seq_id,
@@ -2880,7 +2883,10 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     llama_token current_input_id = id_last;
     llama_pos current_n_past = n_past;
     const int n_embd = llama_mtp_state_n_embd(ctx);
-    const int n_mtp_heads = std::max(1, llama_model_n_nextn_layer(llama_get_model(ctx)));
+    const int n_mtp_heads_model = std::max(1, llama_model_n_nextn_layer(llama_get_model(ctx)));
+    const int n_mtp_heads = mtp_heads > 0
+        ? std::max(1, std::min((int) mtp_heads, n_mtp_heads_model))
+        : n_mtp_heads_model;
 
     auto & last = mtp_get_last_embd(state, seq_id);
     int i0 = 0;
