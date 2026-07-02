@@ -102,6 +102,7 @@ struct llm_build_context {
     struct ggml_tensor * dsa_last_full_sorted = nullptr;
     struct ggml_tensor * last_sparse_mask_fa  = nullptr;
     struct ggml_tensor * last_sparse_mask     = nullptr;
+    struct ggml_tensor * dsa_tg_fast_mask     = nullptr;
 
     // TODO: consider making the entire interface noexcept
     llm_build_context(
