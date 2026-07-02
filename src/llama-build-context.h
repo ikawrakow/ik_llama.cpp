@@ -97,6 +97,10 @@ struct llm_build_context {
 
     struct ggml_context * ctx0 = nullptr;
 
+    // GLM-5.2 IndexShare: the most-recent "full" indexer layer's top-k selection (argsort indices).
+    // "shared" layers reuse this instead of computing their own. Reset to nullptr at each graph build.
+    struct ggml_tensor * dsa_last_full_sorted = nullptr;
+
     // TODO: consider making the entire interface noexcept
     llm_build_context(
         llama_context  & lctx,

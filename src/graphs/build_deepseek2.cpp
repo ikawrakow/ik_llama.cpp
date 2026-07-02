@@ -772,9 +772,19 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                 // byte-identical to a build without this feature.
                 if (lctx.cparams.dsa && model.arch == LLM_ARCH_GLM_DSA && model.layers[il].indexer_attn_q_b
                         && kv_self.kr_l.size() > (size_t) il && kv_self.kr_l[il]) {
-                    ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
-                    ggml_tensor * sorted = build_deepseek2_dsa_indexer(gf, il, qr, cur, KQ_mask, inp_pos);
-                    //ggml_tensor *sparse_mask = nullptr, *sparse_mask_fa = nullptr;
+                    // GLM-5.2 IndexShare: "full" layers compute their own lightning-indexer top-k;
+                    // "shared" layers reuse the previous full layer's top-k (transformers reference:
+                    // shared layer indexer=None, topk_indices=prev_topk_indices). The full/shared map is
+                    // hparams.indexer_is_full (GGUF metadata or derived config rule). At a given step all
+                    // layers share the same n_kv/n_tokens, so a full layer's argsort is valid to reuse.
+                    ggml_tensor * sorted;
+                    if (hparams.indexer_is_full[il] || dsa_last_full_sorted == nullptr) {
+                        ggml_tensor * qr = q; // q_lora latent (after attn_q_a_norm, before wq_b)
+                        sorted = build_deepseek2_dsa_indexer(gf, il, qr, cur, KQ_mask, inp_pos);
+                        dsa_last_full_sorted = sorted;
+                    } else {
+                        sorted = dsa_last_full_sorted;
+                    }
                     if (lctx.cparams.flash_attn) {
                         sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, sorted);
                     } else {
@@ -1158,6 +1168,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 }
 
 ggml_cgraph * llm_build_context::build_deepseek2() {
+    dsa_last_full_sorted = nullptr; // GLM-5.2 IndexShare: reset shared-layer top-k reuse state (before any layer, incl. the MTP early-return path)
     const bool tp_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
                           model.split_mode == LLAMA_SPLIT_MODE_ATTN);
 #ifdef GGML_USE_VULKAN
