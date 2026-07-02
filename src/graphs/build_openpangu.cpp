@@ -524,7 +524,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                                           hidden_states_from_main_model, gf, il_mtp);
         } else {
             ggml_tensor * prev_hidden = hidden_states_from_main_model;
-            ggml_tensor * head1_out = nullptr;
+            ggml_tensor * head1_hidden = nullptr;
             for (int i = 0; i < n_mtp_heads; ++i) {
                 const int il_mtp = il_mtp_first + i;
                 ggml_tensor * full_hidden = nullptr;
@@ -532,15 +532,21 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                                                         prev_hidden, gf, il_mtp,
                                                         &full_hidden,
                                                         i == 0,
-                                                        i == 0);
+                                                        false);
                 if (i == 0) {
-                    head1_out = out;
+                    head1_hidden = out;
                 } else {
                     ggml_build_forward_expand(gf, out);
                 }
                 prev_hidden = full_hidden ? full_hidden : out;
             }
-            mtp_out = head1_out;
+            GGML_ASSERT(head1_hidden != nullptr);
+            const auto & head1_layer = model.layers[il_mtp_first];
+            cb(head1_hidden, "result_norm", -1);
+            ggml_tensor * head = head1_layer.nextn.shared_head_head
+                ? head1_layer.nextn.shared_head_head : model.output;
+            mtp_out = llm_build_lora_mm(lctx, ctx0, head, head1_hidden);
+            cb(mtp_out, "result_output", -1);
         }
 
         ggml_build_forward_expand(gf, mtp_out);
