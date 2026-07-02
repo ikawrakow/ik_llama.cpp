@@ -220,7 +220,7 @@ struct common_params_speculative {
     int32_t n_max = 16; // number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
     std::vector<common_speculative_stage_params> stages; // explicit stage chain for single-spec or self-spec + model fallback
-    int32_t mtp_heads = 0; // MTP heads to use; 0 means all model heads
+    int32_t mtp_heads = 1; // MTP heads to use; 0 means all model heads, default stays single-head (opt in per stage with heads=N)
     int32_t dflash_cross_ctx = 512; // target-feature context window for DFlash
 
     float   p_split = 0.1f; // speculative decoding split probability
