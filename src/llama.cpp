@@ -1106,14 +1106,20 @@ static bool llama_kv_cache_init(
             ggml_set_name(k, k_name.c_str());
             ggml_set_name(v, v_name.c_str());
 
-            if (model.arch == LLM_ARCH_OPENPANGU && i < n_mtp_first_layer) {
-                // MoME conv-state: the last kernel-1 = 2 pre-conv latents for the three conv
-                // sites, packed [qa 2*n_lora_q | compresskv 2*n_lora_kv | o 2*n_head*v_dim].
-                // One state slot (v0: single sequence); the graph substitutes zeros at
-                // sequence start (kv_head == 0), so stale contents are harmless there.
-                const int64_t conv_state_ne = 2*(hparams.n_lora_q + hparams.n_lora_kv
-                                                 + (int64_t) hparams.n_head(i)*hparams.n_embd_head_v(i));
-                ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, conv_state_ne, 1);
+            if (model.arch == LLM_ARCH_OPENPANGU) {
+                // MoME conv-state ring: one column per absolute token position (mod ring size),
+                // each holding that position's pre-conv latents for the three conv sites,
+                // packed [qa n_lora_q | compresskv n_lora_kv | o n_head*v_dim].
+                // Position-indexed so speculative-decoding rollbacks are safe: latents at
+                // accepted positions depend only on the committed prefix and stay valid, and
+                // rejected columns are never read again before being overwritten. The ring must
+                // hold at least n_draft_max+3 columns; 16 covers any practical draft length.
+                // Also allocated for the NextN/MTP layers so the draft head chains conv state
+                // across draft steps (single sequence; the graph zero-fills at pos < 2).
+                const int64_t conv_ring = 16;
+                const int64_t conv_col_ne = hparams.n_lora_q + hparams.n_lora_kv
+                                            + (int64_t) hparams.n_head(i)*hparams.n_embd_head_v(i);
+                ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, conv_col_ne, conv_ring);
                 ggml_format_name(s_conv, "cache_s_l%d", i);
                 cache.s_l[i] = s_conv;
             }
@@ -6902,6 +6908,14 @@ struct llama_context * llama_init_from_model(
         // (soft_max) attention path handles; the FA kernel has no way to include them.
         LLAMA_LOG_WARN("%s: flash_attn is not compatible with OpenPangu param_sink attention - forcing off\n", __func__);
         params.flash_attn = false;
+    }
+
+    if (params.graph_reuse && model->arch == LLM_ARCH_OPENPANGU) {
+        // The MoME conv-state ring bakes position-dependent view offsets into the graph
+        // (reads at pos-1/pos-2, write-back at pos..pos+T-1); the reuse patcher only updates
+        // the standard K/V-store copies, so a reused graph would touch stale ring columns.
+        LLAMA_LOG_WARN("%s: graph_reuse is not compatible with the OpenPangu conv-state ring - forcing off\n", __func__);
+        params.graph_reuse = false;
     }
 
     //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {

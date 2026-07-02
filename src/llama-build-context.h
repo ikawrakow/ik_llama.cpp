@@ -278,7 +278,7 @@ struct llm_build_context {
         ggml_tensor * KQ_mask,
         ggml_tensor * inp_pos,
         ggml_tensor * conv_state,
-        bool conv_state_valid,
+        int64_t conv_pos,
         float kq_scale);
 
     // openPangu NextN/MTP head (plain-residual block, no mHC): eh_proj stitching ->
