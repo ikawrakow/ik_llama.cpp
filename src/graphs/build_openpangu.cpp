@@ -4,16 +4,26 @@
 
 // openPangu-2.0-Flash graph.
 //
-// Dense-fallback for first generation: every attention layer runs as plain causal MHA
-// (MLA projections materialized to full Q/K/V), which is bit-exact to the real DSA/SWA
-// model for prompts <= 512 tokens (DSA top-2048 and SWA window-512 are inert there).
+// Attention runs absorbed MLA over a latent KV cache: per position the cache stores only
+// the 512-d compressed latent plus the 64-d roped k_pe (k_l, straight layout) and the
+// transposed latent (v_l); q_nope is projected into latent space through attn_k_b and the
+// attention output is up-projected through attn_v_b after the weighted sum. Per-head K/V
+// never materialize.
 //
 // Pangu-specific pieces implemented here (see vault Stage-2b forward spec):
 //   - mHC / Hyper-Connections: 4 parallel residual streams mixed per sublayer via a phi
 //     projection (h_pre combine-in, h_post/h_res scatter-out) with a 20-iter Sinkhorn.
-//   - MoME: causal depthwise conv (k=3) on the q-lora latent, compressed-kv latent, attn out.
+//   - MoME: causal depthwise conv (k=3) on the q-lora latent, compressed-kv latent, attn out;
+//     decode taps come from a 16-column position-indexed ring (openpangu_causal_conv below).
+//   - param_sink: 128 learned latent-space KV entries per layer, prepended to every query's
+//     attention span outside the causal/window/top-k masks.
+//   - DSA + SWA schedule: windowed base layers use the SWA mask; windowless base layers run
+//     the lightning indexer over a per-position indexer-key cache (idx_l) and restrict
+//     attention to the top-k scored positions plus the sinks. Schedule-less GGUFs run dense.
+//     For prompts <= 512 tokens both mechanisms are inert and output is bit-exact to dense.
 //   - sandwich norms (post_attention / pre_mlp / post_mlp) + block_post on a layer subset.
-//   - MTP layers skipped; param_sink deferred (v0) — documented below.
+//   - NextN/MTP layers (build_openpangu_mtp below) drive the mtp speculative framework,
+//     chaining conv state through the same position-indexed ring.
 
 // --- causal depthwise conv1d, kernel=3: out[t] = w0*x[t-2] + w1*x[t-1] + w2*x[t] (per channel) ---
 // x: [C, n_tokens]; w: ggml tensor with ne = {3, 1, C} (kernel-major). Returns [C, n_tokens].
@@ -326,8 +336,9 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
 //   x = x + post_attn_ln(attn(input_ln(x)))
 //   x = x + post_mlp_ln(moe(pre_mlp_ln(x)))
 //   logits = shared_head.head(shared_head.norm(x))
-// v0: convs run batch-local here (no conv-state slot for MTP layers) — drafts are always
-// verified by the base model, so this only affects acceptance rate, never correctness.
+// The MTP context allocates conv-state rings for the NextN layers too, so draft convs chain
+// real t-1/t-2 taps across warmup and sequential draft steps (drafts are always verified by
+// the base model, so conv-state quality affects acceptance rate, never correctness).
 ggml_tensor * llm_build_context::build_openpangu_mtp(
         const llama_layer & mtp_layer, ggml_tensor * prev_embeddings, ggml_cgraph * gf, int il) {
     const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(0)));

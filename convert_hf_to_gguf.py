@@ -4594,8 +4594,8 @@ class DeepseekV2Model(Model):
 @Model.register("OpenPanguV2ForCausalLM")
 class OpenPanguV2Model(DeepseekV2Model):
     # openPangu-2.0-Flash: MLA + DSA/SWA hybrid + MoE + mHC(Hyper-Connections) + MoME convs.
-    # Stage-1 converter probe: emits a complete, self-contained GGUF (weights + metadata).
-    # The runtime graph (mHC / MoME conv-state / param-sink / DSA+SWA schedule) is Stage-2.
+    # Emits a complete, self-contained GGUF: weights (incl. pre-split attn_k_b/attn_v_b for
+    # the latent-attention graph) plus the DSA/SWA schedule and mHC/MoME/sink metadata.
     model_arch = gguf.MODEL_ARCH.OPENPANGU
 
     def __init__(self, *args, **kwargs):
@@ -4661,16 +4661,14 @@ class OpenPanguV2Model(DeepseekV2Model):
         if hparams.get("sliding_window") is not None:
             self.gguf_writer.add_sliding_window(hparams["sliding_window"])
 
-        # Pangu-specific structural metadata (consumed by the Stage-2 OPENPANGU graph).
+        # Pangu-specific structural metadata (consumed by the OPENPANGU graph). The runtime
+        # derives everything else from these plus tensor presence: DSA layers are the
+        # windowless base layers (dsa_layers is redundant with swa_layers, so it is not
+        # written), and block_post_norm placement follows the tensors themselves.
         self.gguf_writer.add_uint32(f"{arch}.mhc_num_stream", hparams["mhc_num_stream"])
         self.gguf_writer.add_uint32(f"{arch}.mhc_recur_norm", hparams["mhc_recur_norm"])
         self.gguf_writer.add_uint32(f"{arch}.param_sink_number", hparams["param_sink_number"])
-        self.gguf_writer.add_array(f"{arch}.dsa_layers", hparams["dsa_layers"])
         self.gguf_writer.add_array(f"{arch}.swa_layers", hparams["swa_layers"])
-        if hparams.get("block_post_layernorm_idx") is not None:
-            self.gguf_writer.add_array(
-                f"{arch}.block_post_layernorm_idx", hparams["block_post_layernorm_idx"]
-            )
         if hparams.get("sliding_window_list") is not None:
             self.gguf_writer.add_array(f"{arch}.sliding_window_list", hparams["sliding_window_list"])
 

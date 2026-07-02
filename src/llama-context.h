@@ -42,6 +42,11 @@ struct llama_kv_cache {
     bool hybrid    = false;
     bool v_trans   = true;  // the value tensor is transposed
 
+    // s_l holds a position-indexed ring (openPangu MoME conv state), not per-sequence
+    // recurrent slots; all Qwen3Next-style s_l handling (seq ops, state serialization,
+    // s_copy) must skip it
+    bool s_l_position_ring = false;
+
     // Note: The value of head isn't only used to optimize searching
     // for a free KV slot. llama_decode_internal also uses it, so it
     // cannot be freely changed after a slot has been allocated.

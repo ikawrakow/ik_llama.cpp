@@ -2863,9 +2863,11 @@ bool create_tensors_helper::create_glm_dsa_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-// openPangu-2.0-Flash: GLM-DSA-style MLA + MoE base, plus mHC / MoME conv / param-sink / sandwich norms.
-// Dense-fallback runtime (no DSA indexer / SWA windowing) for first generation; indexer tensors are
-// loaded-but-unused. Conv weights keep their torch [C,1,kernel] layout (ggml ne = {kernel,1,C}).
+// openPangu-2.0-Flash: GLM-DSA-style MLA + MoE base, plus mHC / MoME conv / param-sink /
+// sandwich norms / DSA lightning indexer. The graph runs absorbed MLA over a latent KV
+// cache from the converter's pre-split attn_k_b/attn_v_b; the indexer tensors feed the
+// DSA top-k selection on windowless layers when the GGUF carries a DSA/SWA schedule.
+// Conv weights keep their torch [C,1,kernel] layout (ggml ne = {kernel,1,C}).
 bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
@@ -2930,9 +2932,11 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
         layer.wq_a      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, flags);
         layer.wq_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head_k}, flags);
         layer.wkv_a_mqa = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + n_embd_head_qk_rope}, flags);
-        // full kv_b_proj — the decompressed-MHA graph materializes K/V from this
-        layer.wkv_b     = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, flags);
-        // pre-split k_b/v_b are emitted by the converter but unused here; load (2D, as written) so they're consumed
+        // the fused kv_b_proj is in the GGUF but has no consumer in the absorbed-MLA graph
+        // (attention runs entirely on the pre-split k_b/v_b below) -> skip it
+        layer.wkv_b     = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, flags | llama_model_loader::TENSOR_SKIP);
+        // converter-emitted pre-split k_b/v_b, loaded 2D as written (head-major rows) and
+        // reshaped in-graph: k_b absorbs q_nope into latent space, v_b up-projects the output
         layer.wk_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, flags);
         layer.wv_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, flags);
         layer.wo        = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {n_head * n_embd_head_v, n_embd}, flags);

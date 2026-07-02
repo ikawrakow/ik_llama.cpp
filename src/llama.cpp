@@ -819,6 +819,11 @@ static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) 
 }
 
 static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
+    // openPangu stores a position-indexed conv ring in s_l; it is not per-sequence
+    // recurrent state and none of the qnext handling applies to it
+    if (cache.s_l_position_ring) {
+        return false;
+    }
     return llama_kv_qnext_state_slots(cache) > 0;
 }
 
@@ -1150,6 +1155,7 @@ static bool llama_kv_cache_init(
                 ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, conv_col_ne, conv_ring);
                 ggml_format_name(s_conv, "cache_s_l%d", i);
                 cache.s_l[i] = s_conv;
+                cache.s_l_position_ring = true;
 
                 // DSA layers (window == 0, indexer present) also cache the per-position
                 // 128-d indexer key. Position-indexed like everything else in the cache, so
@@ -1983,6 +1989,11 @@ static void llama_kv_cache_seq_add(
                     llama_pos   p0,
                     llama_pos   p1,
                     llama_pos   delta) {
+    // position-strict caches (openPangu latent + conv ring + indexer keys) cannot be
+    // re-positioned: rope is baked into the cached k_pe rows and the side state is keyed
+    // by absolute position. Fail loudly instead of corrupting.
+    GGML_ASSERT(!cache.s_l_position_ring && "K-shift/context shift is not supported for this model's position-indexed KV cache");
+
     uint32_t new_head = cache.size;
 
     if (p0 < 0) p0 = 0;
@@ -2031,6 +2042,9 @@ static void llama_kv_cache_seq_div(
                     llama_pos   p0,
                     llama_pos   p1,
                           int   d) {
+    // see llama_kv_cache_seq_add: position-strict caches cannot be re-positioned
+    GGML_ASSERT(!cache.s_l_position_ring && "self-extend/position division is not supported for this model's position-indexed KV cache");
+
     if (p0 < 0) p0 = 0;
     if (p1 < 0) p1 = std::numeric_limits<llama_pos>::max();
     // If there is no range then return early to avoid looping over the cache.
@@ -2086,6 +2100,12 @@ static llama_pos llama_kv_cache_seq_pos_min(struct llama_kv_cache & cache, llama
 }
 
 static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
+    if (cache.s_l_position_ring) {
+        // defrag moves cells, which would break the cell-index == position mapping the
+        // openPangu indexer cache relies on; skipping is safe (defrag is an optimization)
+        LLAMA_LOG_WARN("%s: defrag is not supported for this model's position-indexed KV cache - skipping\n", __func__);
+        return;
+    }
     cache.do_defrag = true;
 }
 
@@ -2361,18 +2381,13 @@ static void llm_requantize_output_tensor(llama_model & model, ggml_type new_type
 }
 
 static void llm_prepare_mla(llama_model & model, int mla) {
-    if (model.arch == LLM_ARCH_OPENPANGU) {
-        // openPangu's graph always runs latent (absorbed) attention; derive wk_b/wv_b
-        // from wkv_b unconditionally. The hparams the derivation reads (qk_nope 128,
-        // kv_lora 512, v 128, 48 heads) match the DeepSeek MLA contract exactly.
-        mla = 1;
-    } else if (!model.is_mla_model()) return;
+    if (!model.is_mla_model()) return;
     const auto& hparams = model.hparams;
     const int n_layer = model.layers.size();
     int n_to_compute = 0;
     for (auto& l : model.layers) {
-        // layers without attention weights (e.g. openPangu's idle NextN heads 2/3, which the
-        // self-chained MTP graph never touches) have nothing to derive from
+        // layers without attention weights (e.g. NextN/MTP heads whose tensors were
+        // skipped at load) have nothing to derive from
         if (!l.wk_b && l.wkv_b) ++n_to_compute;
     }
     if (mla > 0 && n_to_compute > 0) {
@@ -4093,7 +4108,7 @@ static bool llm_load_tensors(
         }
     }
 
-    if (model.is_mla_model() || model.arch == LLM_ARCH_OPENPANGU) {
+    if (model.is_mla_model()) {
         // -sm graph/attn needs wk_b->extra populated; run prepare even under dry-run.
         const bool graph_mode = (model.split_mode == LLAMA_SPLIT_MODE_GRAPH ||
                                  model.split_mode == LLAMA_SPLIT_MODE_ATTN);
@@ -6967,6 +6982,14 @@ struct llama_context * llama_init_from_model(
         params.graph_reuse = false;
     }
 
+    if (params.n_seq_max > 1 && model->arch == LLM_ARCH_OPENPANGU) {
+        // The conv-state ring and the DSA indexer cache are single-sequence (one position
+        // stream); parallel sequences would silently share and corrupt them.
+        LLAMA_LOG_ERROR("%s: OpenPangu supports a single sequence only (requested n_seq_max = %u); run with -np 1\n",
+                __func__, params.n_seq_max);
+        return nullptr;
+    }
+
     //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
     //    LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
     //    params.flash_attn = false;
@@ -7217,6 +7240,18 @@ struct llama_context * llama_init_from_model(
         // it's probably best to keep as much precision as possible for the states
         type_k = GGML_TYPE_F32; // required by ggml_ssm_conv for Mamba's conv_states
         type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
+    }
+
+    if (model->arch == LLM_ARCH_OPENPANGU) {
+        // the latent cache is f32 only for now (the graph reads/writes it as f32);
+        // force the types so the KV size log reports what is actually allocated
+        if (ggml_is_quantized(type_k) || ggml_is_quantized(type_v) ||
+            type_k == GGML_TYPE_BF16 || type_v == GGML_TYPE_BF16) {
+            LLAMA_LOG_WARN("%s: OpenPangu's latent KV cache is f32 only - ignoring requested K/V cache types (%s/%s)\n",
+                    __func__, ggml_type_name(type_k), ggml_type_name(type_v));
+        }
+        type_k = GGML_TYPE_F32;
+        type_v = GGML_TYPE_F32;
     }
 
     GGML_ASSERT(hparams.n_embd_head_k(0) % ggml_blck_size(type_k) == 0);
@@ -9467,6 +9502,18 @@ struct llama_data_read_file : llama_data_read {
     }
 };
 
+// openPangu: refuse state I/O outright until the position-indexed side state is part of
+// the format. K/V rows alone are not a complete snapshot — the MoME conv ring (s_l) and
+// the DSA indexer-key cache (idx_l) are needed to resume a sequence, and restoring
+// without them diverges silently instead of failing.
+static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
+    if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
+        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (conv ring and indexer cache are not serialized)\n", func);
+        return false;
+    }
+    return true;
+}
+
 /** copy state data into either a buffer or file depending on the passed in context
  *
  * file context:
@@ -9481,6 +9528,9 @@ struct llama_data_read_file : llama_data_read {
  *
 */
 static size_t llama_state_get_data_internal(struct llama_context * ctx, llama_data_write & data_ctx) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.write_model_info(ctx);
@@ -9520,6 +9570,9 @@ size_t llama_state_get_size(struct llama_context * ctx) {
 }
 
 static size_t llama_state_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.read_model_info(ctx);
@@ -9549,6 +9602,9 @@ size_t llama_state_set_data(struct llama_context * ctx, const uint8_t * src, siz
 }
 
 static bool llama_state_load_file_internal(struct llama_context * ctx, const char * path_session, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return false;
+    }
     llama_file file(path_session, "rb");
 
     // sanity checks
@@ -9600,6 +9656,9 @@ bool llama_state_load_file(struct llama_context * ctx, const char * path_session
 }
 
 static bool llama_state_save_file_internal(struct llama_context * ctx, const char * path_session, const llama_token * tokens, size_t n_token_count) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return false;
+    }
     llama_file file(path_session, "wb");
 
     file.write_u32(LLAMA_SESSION_MAGIC);
@@ -9626,6 +9685,9 @@ bool llama_state_save_file(struct llama_context * ctx, const char * path_session
 }
 
 static size_t llama_state_seq_get_data_internal(struct llama_context * ctx, llama_data_write & data_ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.write_kv_cache(ctx, seq_id, flags);
@@ -9649,6 +9711,9 @@ size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_
 }
 
 static size_t llama_state_seq_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx, llama_seq_id dest_seq_id, llama_state_seq_flags flags) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.read_kv_cache(ctx, dest_seq_id, flags);
@@ -9667,6 +9732,9 @@ size_t llama_state_seq_set_data(struct llama_context * ctx, const uint8_t * src,
 }
 
 static size_t llama_state_seq_save_file_internal(struct llama_context * ctx, const char * filepath, llama_seq_id seq_id, const llama_token * tokens, size_t n_token_count) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_file file(filepath, "wb");
 
     file.write_u32(LLAMA_STATE_SEQ_MAGIC);
@@ -9686,6 +9754,9 @@ static size_t llama_state_seq_save_file_internal(struct llama_context * ctx, con
 }
 
 static size_t llama_state_seq_load_file_internal(struct llama_context * ctx, const char * filepath, llama_seq_id dest_seq_id, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
+    if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
     llama_file file(filepath, "rb");
 
     // version checks
