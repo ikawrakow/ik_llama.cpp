@@ -431,6 +431,14 @@ static void argsort_openai_f32_f32_i32_cuda(const float * x, float * weights, in
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
 #ifdef GGML_CUDA_USE_CUB
+#    ifdef _WIN32
+#        ifndef WIN32_LEAN_AND_MEAN
+#            define WIN32_LEAN_AND_MEAN
+#        endif
+#        ifndef NOMINMAX
+#            define NOMINMAX
+#        endif
+#    endif
 #    include <cub/cub.cuh>
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 1)
 #        define STRIDED_ITERATOR_AVAILABLE
