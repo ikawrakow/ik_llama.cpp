@@ -68,7 +68,7 @@ IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv,      // v*softmax(scale*(k*q))
                             void * work_buffer, barrier_t barrier, void * barrier_data,
-                            int ith, int nth, int n_swa);
+                            int ith, int nth, int n_swa, struct ggml_tensor * indexer);
 
 IQK_API void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
         float * weights, int32_t * ids, int ith, int nth);

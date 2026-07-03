@@ -1007,6 +1007,9 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                     if (use_f32_attn_precision || q->ne[1] <= 8) {
                         ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
                     }
+                    if (use_dsa && dsa_last_full_sorted) {
+                        kqv->src[5] = dsa_last_full_sorted;
+                    }
                     cb(kqv, "kqv", il);
 
                     if (iter == 0) {
@@ -1063,6 +1066,9 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
                     if (use_f32_attn_precision) {
                         ggml_flash_attn_ext_set_prec(kqv_compressed, GGML_PREC_F32);
+                    }
+                    if (use_dsa && dsa_last_full_sorted) {
+                        kqv_compressed->src[5] = dsa_last_full_sorted;
                     }
 
                     kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
