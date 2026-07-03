@@ -3890,6 +3890,18 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                 slot.n_past_offset = 0;
                             }
 
+                            if (slot.n_past > 0 && slot.spec != nullptr &&
+                                common_speculative_mtp_requires_fresh_warmup(slot.spec)) {
+                                // the request drafts with more MTP heads than the cached
+                                // prefix was warmed with; deeper-head cache rows for the
+                                // reused span were never written
+                                LLAMA_LOG_INFO("%s: request drafts with more MTP heads than the cached prefix was warmed with - reprocessing from scratch\n",
+                                        __func__);
+                                slot.n_past = 0;
+                                slot.n_past_prompt = 0;
+                                slot.n_past_offset = 0;
+                            }
+
                             //if (slot.n_past != slot.n_past_prompt) {
                             //    LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
                             //}

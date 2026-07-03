@@ -232,7 +232,18 @@ struct common_speculative_state_mtp : public common_speculative_state {
     llama_context * ctx_tgt;
     llama_context * ctx_mtp = nullptr;
     int32_t mtp_heads_active = 0;
+    // number of NextN heads the model carries, and the minimum head count the committed
+    // context has been warmed with since position 0 (deeper heads' caches only hold valid
+    // rows for spans warmed with them; a request drafting with MORE heads than the cached
+    // prefix was warmed with must reprocess from scratch). Single-sequence by design, like
+    // the rest of the openPangu MTP state.
+    int32_t n_heads_model = 1;
+    int32_t mtp_warmed_heads = 0;
     common_sampler * smpl;
+
+    int32_t resolved_heads() const {
+        return mtp_heads_active > 0 ? std::min(mtp_heads_active, n_heads_model) : n_heads_model;
+    }
     // For Gemma 4 external MTP assistant: draft positions are held constant
     bool constant_draft_positions = false;
     int n_embd = 0;
@@ -260,9 +271,15 @@ struct common_speculative_state_mtp : public common_speculative_state {
         llama_set_mtp_target_context(ctx_mtp, ctx_tgt);
         n_embd = llama_mtp_state_n_embd(ctx_mtp);
         n_max_model = llama_model_max_draft_tokens(llama_get_model(ctx_mtp));
+        n_heads_model = std::max(1, llama_model_n_nextn_layer(llama_get_model(ctx_mtp)));
 
         LOG_INF("%s: MTP context ready (n_ctx=%d, constant_draft_positions=%s)\n", __func__,
                 llama_n_ctx(ctx_mtp), constant_draft_positions ? "true" : "false");
+        if (n_heads_model > 1) {
+            LOG_INF("%s: model carries %d NextN/MTP heads; drafting defaults to a single head "
+                    "(request more per stage with heads=N, or heads=0 for all)\n",
+                    __func__, n_heads_model);
+        }
     }
 
     ~common_speculative_state_mtp() override {
@@ -1106,6 +1123,17 @@ static common_params_speculative common_speculative_get_runtime_params(
     result.stages.clear();
 
     return result;
+}
+
+bool common_speculative_mtp_requires_fresh_warmup(const common_speculative * spec) {
+    const auto * mtp_state = common_speculative_get_mtp_state(spec);
+    if (mtp_state == nullptr || mtp_state->n_heads_model <= 1) {
+        return false;
+    }
+
+    // drafting with more heads than the cached prefix was warmed with would read
+    // never-written deeper-head cache rows; the caller must reprocess from position 0
+    return mtp_state->resolved_heads() > mtp_state->mtp_warmed_heads && mtp_state->mtp_warmed_heads > 0;
 }
 
 void common_speculative_prepare_request(common_speculative * spec, common_params_speculative & params) {
@@ -2809,6 +2837,18 @@ int32_t common_speculative_on_target_batch(
 
     const float * last_hidden = hidden_rows_storage.data() + (size_t) (batch.n_tokens - 1) * features.width;
     mtp_store_target_hidden(*mtp_state, seq_id, last_hidden, features.width);
+
+    // track the minimum head count the committed context has been warmed with: a fresh
+    // position-0 warmup resets it, everything after can only narrow it
+    {
+        const int32_t resolved = mtp_state->resolved_heads();
+        if (is_prompt_warmup && batch.pos != nullptr && batch.n_tokens > 0 && batch.pos[0] == 0) {
+            mtp_state->mtp_warmed_heads = resolved;
+        } else {
+            mtp_state->mtp_warmed_heads = mtp_state->mtp_warmed_heads > 0
+                ? std::min(mtp_state->mtp_warmed_heads, resolved) : resolved;
+        }
+    }
 
     if (mtp_state->constant_draft_positions) {
         mtp_invalidate_cached_draft(*mtp_state, seq_id);
