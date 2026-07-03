@@ -329,7 +329,7 @@ static inline int dsa_n_top_k(const llama_context & lctx) {
     return n_top_k;
 }
 static inline bool dsa_should_use(const llama_context & lctx) {
-    return lctx.cparams.dsa && lctx.model.arch == LLM_ARCH_GLM_DSA && !lctx.kv_self.kr_l.empty();
+    return lctx.cparams.mtp_op_type == MTP_OP_NONE && lctx.cparams.dsa && lctx.model.arch == LLM_ARCH_GLM_DSA && !lctx.kv_self.kr_l.empty();
 }
 static inline bool dsa_should_use(const llama_context & lctx, int il) {
     return dsa_should_use(lctx) && lctx.model.layers[il].indexer_attn_q_b && lctx.kv_self.kr_l.size() > (size_t) il && lctx.kv_self.kr_l[il];
@@ -1277,7 +1277,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         }
     }
 
-    last_sparse_mask = last_sparse_mask_fa = nullptr;
+    last_sparse_mask = last_sparse_mask_fa = dsa_last_full_sorted = dsa_tg_fast_mask = nullptr;
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case
