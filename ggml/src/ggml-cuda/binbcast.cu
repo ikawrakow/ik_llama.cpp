@@ -575,7 +575,11 @@ static __global__ void k_mul_fast(int ne0, int nelem, const float * x, const flo
 }
 
 void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    if (ggml_nelements(dst->src[1]) == 1 && dst->src[1]->type == GGML_TYPE_F32 && dst->src[0]->type == GGML_TYPE_F32) {
+    // The scalar fast-path reads src0 and writes dst as flat/contiguous buffers, so it is only
+    // valid when both are contiguous. A non-contiguous (e.g. row-gapped view) src0 must fall
+    // through to the general bin_bcast path, which honours the per-dimension strides.
+    if (ggml_nelements(dst->src[1]) == 1 && dst->src[1]->type == GGML_TYPE_F32 && dst->src[0]->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(dst->src[0]) && ggml_is_contiguous(dst)) {
         ggml_cuda_op_scale_tensor(ctx, dst);
         return;
     }

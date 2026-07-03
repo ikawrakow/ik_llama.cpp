@@ -475,7 +475,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         cb(indexer_kq, "dsa_indexer_kq", il);
         indexer_kq = ggml_relu(ctx0, indexer_kq);
         cb(indexer_kq, "dsa_indexer_kq_relu", il);
-        indexer_kq = ggml_reshape_3d(ctx0, indexer_kq, indexer_kq->ne[0], indexer_q->ne[1], indexer_kq->ne[1]/indexer_q->ne[1]); // [n_kv, n_ihead, n_tokens]
+        indexer_kq = ggml_reshape_3d(ctx0, indexer_kq, indexer_kq->ne[0], n_ihead, n_tokens); // [n_kv, n_ihead, n_tokens]
         indexer_kq = ggml_cont(ctx0, ggml_transpose(ctx0, indexer_kq));                                                          // [n_ihead, n_kv, n_tokens]
         indexer_weights = ggml_reshape_3d(ctx0, indexer_weights, indexer_weights->ne[0], 1, indexer_weights->ne[1]);  // [n_ihead,    1, n_tokens]
         indexer_kq = ggml_mul(ctx0, indexer_kq, indexer_weights);
@@ -1208,6 +1208,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             lctx.inp_dsa_sink = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
             cb(lctx.inp_dsa_sink, "dsa_sink", -1);
             ggml_set_input(lctx.inp_dsa_sink);
+            ggml_build_forward_expand(gf, lctx.inp_dsa_sink);
         }
         auto minus_inf = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, KQ_mask->ne[0], n_tokens);
         minus_inf = ggml_fill_inplace(ctx0, minus_inf, -INFINITY);
