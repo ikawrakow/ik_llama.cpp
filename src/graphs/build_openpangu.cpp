@@ -399,7 +399,8 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
         ggml_tensor * conv_write_idx,
         ggml_tensor ** full_hidden_out,
         bool select_outputs,
-        bool build_logits) {
+        bool build_logits,
+        bool cache_writes_only) {
     const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(0)));
 
     // same position-addressing invariant as build_openpangu (worst-case builds exempt)
@@ -433,6 +434,13 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     ggml_tensor * mtp_conv_state = (size_t) il < kv_self.s_l.size() ? kv_self.s_l[il] : nullptr;
     cur = build_openpangu_attention(gf, mtp_layer, il, cur, KQ_mask, inp_pos,
                                     mtp_conv_state, conv_hist_idx, conv_write_idx, kq_scale);
+    if (cache_writes_only) {
+        // only this head's latent-cache and conv-ring writes matter at this site (the
+        // update chain's last head and the draft-time row fill); the FFN, norms, and
+        // shared head would compute values nobody consumes
+        cb(cur, "mtp_cache_write_anchor", il);
+        return cur;
+    }
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
     cb(ffn_inp, "mtp_ffn_inp", il);
@@ -574,7 +582,8 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                                                          fill_hidden, gf, il_mtp_first + 2,
                                                          inp_pos, KQ_mask, nullptr, inp_tokens,
                                                          conv_hist_idx, conv_write_idx,
-                                                         nullptr, false, false);
+                                                         nullptr, false, false,
+                                                         /*cache_writes_only=*/true);
                 ggml_build_forward_expand(gf, fill);
             }
         } else if (n_mtp_heads == 1) {
@@ -588,14 +597,18 @@ ggml_cgraph * llm_build_context::build_openpangu() {
             std::vector<ggml_tensor *> carry_out_rows;
             for (int i = 0; i < n_mtp_heads; ++i) {
                 const int il_mtp = il_mtp_first + i;
+                // the last head's block output feeds nothing (no carry, no logits) - only
+                // its cache writes matter, so skip its FFN and norms
+                const bool is_last_head = i + 1 == n_mtp_heads;
                 ggml_tensor * full_hidden = nullptr;
                 ggml_tensor * out = build_openpangu_mtp(model.layers[il_mtp],
                                                         prev_full, gf, il_mtp,
                                                         inp_pos, KQ_mask, inp_out_ids, inp_tokens,
                                                         conv_hist_idx, conv_write_idx,
-                                                        &full_hidden,
+                                                        is_last_head ? nullptr : &full_hidden,
                                                         i == 0,
-                                                        false);
+                                                        false,
+                                                        /*cache_writes_only=*/is_last_head && i > 0);
                 if (i == 0) {
                     head1_hidden = out;
                 } else {

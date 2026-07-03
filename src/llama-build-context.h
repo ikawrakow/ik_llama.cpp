@@ -308,7 +308,8 @@ struct llm_build_context {
         ggml_tensor * conv_write_idx,
         ggml_tensor ** full_hidden_out = nullptr,
         bool select_outputs = true,
-        bool build_logits = true);
+        bool build_logits = true,
+        bool cache_writes_only = false);
 
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,

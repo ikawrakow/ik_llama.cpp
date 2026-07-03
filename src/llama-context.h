@@ -398,8 +398,11 @@ struct llama_context {
 
     // multi-head MTP chaining state: head k's output row at the last committed position,
     // written back after each warmup/update decode and fed into the next MTP graph through
-    // inp_mtp_carry (zeroed when a prompt warmup restarts from position 0)
+    // inp_mtp_carry (zeroed when a prompt warmup restarts from position 0). The readback is
+    // issued async after compute; mtp_carry_pending marks a copy that must be synchronized
+    // before the host buffer is read or resized.
     std::vector<float> mtp_carry;
+    bool mtp_carry_pending = false;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 

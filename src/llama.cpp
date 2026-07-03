@@ -4606,6 +4606,12 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
     if (lctx.inp_mtp_carry) {
         const size_t n_floats = (size_t) ggml_nelements(lctx.inp_mtp_carry);
+        if (lctx.mtp_carry_pending) {
+            // retire the async readback issued after the previous warmup/update before
+            // touching the host buffer
+            ggml_backend_sched_synchronize(lctx.sched);
+            lctx.mtp_carry_pending = false;
+        }
         if (lctx.cparams.mtp_op_type == MTP_OP_WARMUP && batch.pos && batch.pos[0] == 0) {
             // fresh prompt warmup: no committed history for the deeper heads yet
             lctx.mtp_carry.assign(n_floats, 0.0f);
@@ -5986,15 +5992,24 @@ static int llama_decode_internal(
         }
         // persist the multi-head MTP carries (each head's output at the last committed row)
         // for the next warmup/update graph; must happen per ubatch so a multi-ubatch prompt
-        // warmup chains its heads across ubatch boundaries
+        // warmup chains its heads across ubatch boundaries. The copy is issued async on the
+        // backend stream (ordered before any later graph can overwrite the source buffer)
+        // and synchronized lazily when the host buffer is next consumed, so the update
+        // decode does not stall on a device readback.
         if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
             if (ggml_tensor * carry_out = ggml_graph_get_tensor(gf, "mtp_carry_out"); carry_out != nullptr) {
                 const size_t n_floats = (size_t) ggml_nelements(carry_out);
+                if (lctx.mtp_carry_pending) {
+                    ggml_backend_sched_synchronize(lctx.sched);
+                    lctx.mtp_carry_pending = false;
+                }
                 if (lctx.mtp_carry.size() < n_floats) {
                     lctx.mtp_carry.resize(n_floats, 0.0f);
                 }
-                ggml_backend_sched_synchronize(lctx.sched);
-                ggml_backend_tensor_get(carry_out, lctx.mtp_carry.data(), 0, n_floats*sizeof(float));
+                ggml_backend_t backend_carry = ggml_backend_sched_get_tensor_backend(lctx.sched, carry_out);
+                GGML_ASSERT(backend_carry != nullptr);
+                ggml_backend_tensor_get_async(backend_carry, carry_out, lctx.mtp_carry.data(), 0, n_floats*sizeof(float));
+                lctx.mtp_carry_pending = true;
             }
         }
 
