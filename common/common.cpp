@@ -1794,6 +1794,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cache_type_v = argv[++i];
         return true;
     }
+    if (arg == "-ictk" || arg == "--indexer-cache-type-k") {
+        params.indexer_cache_type_k = argv[++i];
+        return true;
+    }
     if (arg == "-ctk-first" || arg == "--cache-type-k-first") {
         CHECK_ARG
         auto p = string_split(argv[i], ",");
@@ -3184,6 +3188,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-dkvc, --dump-kv-cache",        "verbose print of the KV cache" });
     options.push_back({ "*",           "-nkvo, --no-kv-offload",        "disable KV offload" });
     options.push_back({ "*",           "-ctk,  --cache-type-k TYPE",    "KV cache data type for K (default: %s)", params.cache_type_k.c_str() });
+    options.push_back({ "*",           "-ictk, --indexer-cache-type-k TYPE", "indexer K-cache data type (default: %s)", params.indexer_cache_type_k.c_str() });
     options.push_back({ "*",           "-ctv,  --cache-type-v TYPE",    "KV cache data type for V (default: %s)", params.cache_type_v.c_str() });
     options.push_back({ "*",           "-ctk-first, --cache-type-k-first TYPE,N", "KV cache data type for the first N layers of K (default: %s,-1)", params.type_k_first.c_str() });
     options.push_back({ "*",           "-ctv-last,  --cache-type-k-last  TYPE,N", "KV cache data type for the last N layers of K  (default: %s,-1)", params.type_k_last.c_str() });
@@ -4161,6 +4166,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.worst_graph_tokens = params.worst_graph_tokens;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
+    mparams.idx_type_k      = kv_cache_type_from_str(params.indexer_cache_type_k);
     mparams.type_k_first    = kv_cache_type_from_str(params.type_k_first);
     mparams.type_k_last     = kv_cache_type_from_str(params.type_k_last );
     mparams.type_v_first    = kv_cache_type_from_str(params.type_v_first);
@@ -4283,6 +4289,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+    cparams.idx_type_k = kv_cache_type_from_str(params.indexer_cache_type_k);
     cparams.type_reduce = ggml_type_from_str(params.reduce_type);
     cparams.type_graph_attn = ggml_type_from_str(params.graph_attn_precision);
     if (!cparams.flash_attn && ggml_is_quantized(cparams.type_v)) {
