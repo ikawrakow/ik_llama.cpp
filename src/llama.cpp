@@ -4336,12 +4336,13 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // it. Anchoring on per-sequence min(pos) keeps the sink protection following the sequence's
         // actual first present cell. For a fresh sequence starting at pos 0, min(pos)==0 so the
         // boosted set is identical to the old behaviour (n_seq==1 byte-identical).
-        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_dsa_sink->buffer));
         static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
         const int64_t n_kv      = lctx.inp_dsa_sink->ne[0];
         const int64_t n_tok_idx = lctx.inp_dsa_sink->ne[1];
-        float * data = (float *) lctx.inp_dsa_sink->data;
-        std::memset(data, 0, ggml_nbytes(lctx.inp_dsa_sink));
+        if (lctx.inp_dsa_sink->buffer == nullptr) {
+        } else {
+        std::vector<float> host_data(ggml_nbytes(lctx.inp_dsa_sink) / sizeof(float), 0.0f);
+        float * data = host_data.data();
 
         // Per-sequence first present pos: min over present cells of that seq, restricted to the
         // n_kv key span the indexer scores. Cache across query rows in this ubatch.
@@ -4372,6 +4373,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     data[j*n_kv + i] = 1e20f;
                 }
             }
+        }
+        ggml_backend_tensor_set(lctx.inp_dsa_sink, host_data.data(), 0, ggml_nbytes(lctx.inp_dsa_sink));
         }
     }
 
