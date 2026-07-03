@@ -129,6 +129,10 @@ struct llm_build_context {
 
     ggml_tensor * build_inp_pos();
 
+    ggml_tensor * build_inp_openpangu_conv_hist();
+
+    ggml_tensor * build_inp_openpangu_conv_write(int64_t n_write);
+
     ggml_tensor * build_input_scale(int n_tokens);
 
     ggml_tensor * build_rope_factors(int il);
@@ -285,7 +289,8 @@ struct llm_build_context {
         ggml_tensor * KQ_mask,
         ggml_tensor * inp_pos,
         ggml_tensor * conv_state,
-        int64_t conv_pos,
+        ggml_tensor * conv_hist_idx,
+        ggml_tensor * conv_write_idx,
         float kq_scale);
 
     // openPangu NextN/MTP head (plain-residual block, no mHC): eh_proj stitching ->

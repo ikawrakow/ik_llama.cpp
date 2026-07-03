@@ -117,6 +117,8 @@ void llm_build_context::init() {
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
         lctx.inp_dsa_sink      = nullptr;
+        lctx.inp_openpangu_conv_hist  = nullptr;
+        lctx.inp_openpangu_conv_write = nullptr;
         lctx.dflash.inputs.target_features = nullptr;
         lctx.dflash.inputs.pos_ctx = nullptr;
         lctx.dflash.inputs.kq_mask = nullptr;
@@ -455,6 +457,21 @@ ggml_tensor * llm_build_context::build_inp_pos() {
     cb(lctx.inp_pos, "inp_pos", -1);
     ggml_set_input(lctx.inp_pos);
     return lctx.inp_pos;
+}
+
+ggml_tensor * llm_build_context::build_inp_openpangu_conv_hist() {
+    lctx.inp_openpangu_conv_hist = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 2);
+    cb(lctx.inp_openpangu_conv_hist, "opg_conv_hist_idx", -1);
+    ggml_set_input(lctx.inp_openpangu_conv_hist);
+    return lctx.inp_openpangu_conv_hist;
+}
+
+ggml_tensor * llm_build_context::build_inp_openpangu_conv_write(int64_t n_write) {
+    GGML_ASSERT(n_write > 0);
+    lctx.inp_openpangu_conv_write = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_write);
+    cb(lctx.inp_openpangu_conv_write, "opg_conv_write_idx", -1);
+    ggml_set_input(lctx.inp_openpangu_conv_write);
+    return lctx.inp_openpangu_conv_write;
 }
 
 ggml_tensor * llm_build_context::build_input_scale(int n_tokens) {

@@ -392,12 +392,16 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
     struct ggml_tensor * inp_mask_inf = nullptr;
+    struct ggml_tensor * inp_openpangu_conv_hist = nullptr;  // I32 [2], rows in [zero | ring] for t-2/t-1
+    struct ggml_tensor * inp_openpangu_conv_write = nullptr; // I32 [min(n_tokens, 16)], ring rows to update
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
     struct Prev;
     std::unique_ptr<Prev> prev;
     std::unique_ptr<Prev> prev_mtp;
+    uint64_t graph_reuse_hits = 0;
+    uint64_t graph_reuse_misses = 0;
 
     void reset_scheduler();
     bool can_reuse_graph(const llama_batch & u_batch);
@@ -405,6 +409,7 @@ struct llama_context {
     struct CacheCopy {
         ggml_tensor * cpy = nullptr;
         size_t        step = 0;
+        size_t        base_offset = 0;
     };
     std::vector<CacheCopy> cache_copies;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
@@ -415,6 +420,8 @@ struct llama_context {
     // uninitialized -> wrong block-max-pool/top-k -> degraded/NaN sparse-FA decode). Register the
     // kr_l cpy per layer here and patch its offset in update_cache_copies(), exactly like K/V.
     std::vector<CacheCopy> dsa_cache_copies;
+    std::vector<CacheCopy> openpangu_cache_copies;
+    std::vector<CacheCopy> openpangu_cache_copies_mtp;
 
     bool update_cache_copies();
 

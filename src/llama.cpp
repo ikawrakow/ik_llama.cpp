@@ -613,6 +613,23 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
 
 bool llama_context::update_cache_copies() {
     if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) return true;
+    if (model.arch == LLM_ARCH_OPENPANGU) {
+        auto & copies = cparams.mtp_op_type == MTP_OP_NONE ? openpangu_cache_copies : openpangu_cache_copies_mtp;
+        bool any = false;
+        for (auto & c : copies) {
+            if (!c.cpy) {
+                continue;
+            }
+            any = true;
+            if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src == nullptr || c.cpy->src[1] == nullptr) {
+                return false;
+            }
+            c.cpy->view_offs = kv_self.head*c.step + c.base_offset;
+            c.cpy->src[1]->data = (char *)c.cpy->view_src->data + c.cpy->view_offs;
+            c.cpy->data = c.cpy->src[1]->data;
+        }
+        return any;
+    }
     const int n_layer = model.mtp && cparams.mtp_op_type != MTP_OP_NONE ?
         model.hparams.n_layer : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     auto layer_has_attention_kv = [&](int il) {
@@ -720,6 +737,8 @@ llama_context::llama_context(const llama_model & model)
     // GLM-DSA lightning indexer: one indexer-key (kr_l) cache copy per layer. Entries stay null
     // for non-DSA models / non-indexer layers, so update_cache_copies() is a no-op when DSA is off.
     dsa_cache_copies.resize(hparams.n_layer);
+    openpangu_cache_copies.resize(4*hparams.n_layer);
+    openpangu_cache_copies_mtp.resize(4*hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 
@@ -730,6 +749,14 @@ void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
 }
 
 llama_context::~llama_context() {
+    const uint64_t graph_reuse_total = graph_reuse_hits + graph_reuse_misses;
+    if (graph_reuse_total > 0) {
+        LLAMA_LOG_INFO("%s: graph reuse hits = %llu / %llu (%.2f%%)\n", __func__,
+                (unsigned long long) graph_reuse_hits,
+                (unsigned long long) graph_reuse_total,
+                100.0 * (double) graph_reuse_hits / (double) graph_reuse_total);
+    }
+
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }
@@ -4526,6 +4553,37 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
     }
 
+    if (lctx.inp_openpangu_conv_hist || lctx.inp_openpangu_conv_write) {
+        const llama_pos pos0 = batch.pos ? batch.pos[0] : batch.all_pos_0;
+        constexpr int64_t ring = 16;
+        auto ring_row = [](llama_pos pos) {
+            constexpr int64_t ring = 16;
+            int64_t row = pos % ring;
+            if (row < 0) row += ring;
+            return (int32_t) row;
+        };
+
+        if (lctx.inp_openpangu_conv_hist) {
+            int32_t hist[2] = {
+                pos0 >= 2 ? ring_row(pos0 - 2) + 1 : 0,
+                pos0 >= 1 ? ring_row(pos0 - 1) + 1 : 0,
+            };
+            ggml_backend_tensor_set(lctx.inp_openpangu_conv_hist, hist, 0, sizeof(hist));
+        }
+
+        if (lctx.inp_openpangu_conv_write) {
+            const int64_t n_write = lctx.inp_openpangu_conv_write->ne[0];
+            GGML_ASSERT(n_write > 0 && n_write <= ring);
+            GGML_ASSERT(n_write <= batch.n_tokens);
+            int32_t write_idx[ring];
+            const int64_t t0 = batch.n_tokens - n_write;
+            for (int64_t i = 0; i < n_write; ++i) {
+                write_idx[i] = ring_row(pos0 + t0 + i);
+            }
+            ggml_backend_tensor_set(lctx.inp_openpangu_conv_write, write_idx, 0, n_write*sizeof(write_idx[0]));
+        }
+    }
+
     if (lctx.inp_pos && lctx.inp_scale) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();
@@ -5629,7 +5687,15 @@ static int llama_decode_internal(
 #endif
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
+        const bool track_graph_reuse = lctx.cparams.graph_reuse && u_batch.embd == nullptr;
         if (!lctx.can_reuse_graph(u_batch)) {
+            if (track_graph_reuse) {
+                lctx.graph_reuse_misses++;
+                if (getenv("LLAMA_GRAPH_REUSE_TRACE")) {
+                    LLAMA_LOG_INFO("%s: graph reuse miss type=%d n_tokens=%d\n", __func__,
+                            (int) cparams.mtp_op_type, (int) u_batch.n_tokens);
+                }
+            }
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
@@ -5664,6 +5730,13 @@ static int llama_decode_internal(
                         cparams.mtp_op_type, gf});
             }
         } else {
+            if (track_graph_reuse) {
+                lctx.graph_reuse_hits++;
+                if (getenv("LLAMA_GRAPH_REUSE_TRACE")) {
+                    LLAMA_LOG_INFO("%s: graph reuse hit type=%d n_kv=%d n_tokens=%d\n", __func__,
+                            (int) cparams.mtp_op_type, prev ? (int) prev->n_kv : -1, (int) u_batch.n_tokens);
+                }
+            }
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
             gf = prev->graph;
         }
@@ -7110,14 +7183,6 @@ struct llama_context * llama_init_from_model(
         // (soft_max) attention path handles; the FA kernel has no way to include them.
         LLAMA_LOG_WARN("%s: flash_attn is not compatible with OpenPangu param_sink attention - forcing off\n", __func__);
         params.flash_attn = false;
-    }
-
-    if (params.graph_reuse && model->arch == LLM_ARCH_OPENPANGU) {
-        // The MoME conv-state ring bakes position-dependent view offsets into the graph
-        // (reads at pos-1/pos-2, write-back at pos..pos+T-1); the reuse patcher only updates
-        // the standard K/V-store copies, so a reused graph would touch stale ring columns.
-        LLAMA_LOG_WARN("%s: graph_reuse is not compatible with the OpenPangu conv-state ring - forcing off\n", __func__);
-        params.graph_reuse = false;
     }
 
     if (params.n_seq_max > 1 && model->arch == LLM_ARCH_OPENPANGU) {

@@ -2,6 +2,36 @@
 #include "../llama-model.h"
 #include "../llama-context.h"
 
+#include <algorithm>
+#include <vector>
+
+static constexpr int64_t OPENPANGU_CONV_RING = 16;
+static constexpr int OPENPANGU_CACHE_COPIES_PER_LAYER = 4;
+static constexpr int OPENPANGU_COPY_K_CKV = 0;
+static constexpr int OPENPANGU_COPY_K_KPE = 1;
+static constexpr int OPENPANGU_COPY_V_TRANS = 2;
+static constexpr int OPENPANGU_COPY_IDX = 3;
+
+static std::vector<llama_context::CacheCopy> & openpangu_cache_copies(llama_context & lctx) {
+    return lctx.cparams.mtp_op_type == MTP_OP_NONE ? lctx.openpangu_cache_copies : lctx.openpangu_cache_copies_mtp;
+}
+
+static void openpangu_clear_cache_copies(llama_context & lctx) {
+    auto & copies = openpangu_cache_copies(lctx);
+    std::fill(copies.begin(), copies.end(), llama_context::CacheCopy{});
+}
+
+static void openpangu_register_cache_copy(
+        llama_context & lctx, int il, int slot, ggml_tensor * cpy, size_t step, size_t base_offset = 0) {
+    GGML_ASSERT(slot >= 0 && slot < OPENPANGU_CACHE_COPIES_PER_LAYER);
+    auto & copies = openpangu_cache_copies(lctx);
+    const size_t idx = (size_t) OPENPANGU_CACHE_COPIES_PER_LAYER*il + slot;
+    GGML_ASSERT(idx < copies.size());
+    copies[idx].cpy = cpy;
+    copies[idx].step = step;
+    copies[idx].base_offset = base_offset;
+}
+
 // openPangu-2.0-Flash graph.
 //
 // Attention runs absorbed MLA over a latent KV cache: per position the cache stores only
@@ -33,15 +63,15 @@
 //
 // Conv state: `state_all` is this layer's cache_s_l ring [col_ne, K] (may be null on exotic
 // setups -> batch-local conv). Ring column (pos % K) holds position pos's pre-conv latents,
-// with this site's C channels at element offset `site_off` within the column. `P` is the
-// absolute position of the first batch token (kv cache head; single-sequence contiguous).
+// with this site's C channels at element offset `site_off` within the column. History and
+// write positions are graph inputs so the topology is position-static under graph reuse.
 // Position indexing makes speculative rollbacks safe: accepted positions' latents depend only
 // on the committed prefix and stay valid; rejected columns are overwritten before any read.
 // Positions < 0 (sequence start) read zero history — the exact reference behaviour.
-// Note: view offsets depend on P, so graph reuse is forced off for this arch.
 static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
                                            ggml_tensor * x, ggml_tensor * w,
-                                           ggml_tensor * state_all, int64_t site_off, int64_t P) {
+                                           ggml_tensor * state_all, int64_t site_off,
+                                           ggml_tensor * hist_idx, ggml_tensor * write_idx) {
     const int64_t C = x->ne[0];
     const int64_t T = x->ne[1];
     // weight is stored f16 with ne = {3, C}: per-channel taps contiguous. ggml_mul needs an
@@ -52,22 +82,21 @@ static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
     ggml_tensor * tap2 = ggml_reshape_1d(ctx, ggml_cont(ctx, ggml_view_2d(ctx, wc, 1, C, wc->nb[1], 2*ggml_element_size(wc))), C);
 
     const int64_t K = state_all ? state_all->ne[1] : 0;
-    auto ring_col = [&](int64_t pos) {  // [C,1] view of this site's channels at ring column pos%K
-        const int64_t j = ((pos % K) + K) % K;
-        return ggml_view_2d(ctx, state_all, C, 1, state_all->nb[1],
-                            j*state_all->nb[1] + site_off*ggml_element_size(state_all));
-    };
+    ggml_tensor * site_state = state_all
+        ? ggml_view_2d(ctx, state_all, C, K, state_all->nb[1],
+                site_off*ggml_element_size(state_all))
+        : nullptr;
 
     // history [C,2] = [t-2, t-1]: pre-conv latents at P-2 and P-1 from the ring,
     // zero-filled at sequence start (zeros are built from x so they are always finite).
-    ggml_tensor * hist_tm1 = state_all && P >= 1 ? ring_col(P-1) : nullptr;
-    ggml_tensor * hist_tm2 = state_all && P >= 2 ? ring_col(P-2) : nullptr;
-    if (!hist_tm1 || !hist_tm2) {
-        ggml_tensor * zcol = ggml_scale(ctx, ggml_view_2d(ctx, x, C, 1, x->nb[1], 0), 0.0f);
-        if (!hist_tm1) hist_tm1 = zcol;
-        if (!hist_tm2) hist_tm2 = zcol;
+    ggml_tensor * zcol = ggml_scale(ctx, ggml_view_2d(ctx, x, C, 1, x->nb[1], 0), 0.0f);
+    ggml_tensor * hist = nullptr;
+    if (site_state && hist_idx) {
+        ggml_tensor * ring_with_zero = ggml_concat(ctx, zcol, site_state, 1); // row 0 = zero, rows 1..K = ring
+        hist = ggml_get_rows(ctx, ring_with_zero, hist_idx);                  // [C,2]
+    } else {
+        hist = ggml_concat(ctx, zcol, zcol, 1);
     }
-    ggml_tensor * hist = ggml_concat(ctx, hist_tm2, hist_tm1, 1);   // [C,2]
 
     // xx = [hist ++ x]: xx[:, j] = x at token j-2 relative to this ubatch's first token
     ggml_tensor * xx = ggml_concat(ctx, hist, x, 1);            // [C, T+2]
@@ -81,22 +110,15 @@ static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
     out = ggml_add(ctx, out, ggml_mul(ctx, x_tm2, tap0));
     out = ggml_add(ctx, x, out);
 
-    if (state_all) {
-        // persist the last min(T,K) positions' pre-conv latents into their ring columns,
-        // in at most two contiguous segments (wraparound). The copy sources are views of xx,
-        // so the history read (concat above) is an ancestor of every write: read-before-write
-        // holds even when a long ubatch wraps onto the history columns.
-        const int64_t t0 = T > K ? T - K : 0;
-        int64_t seg_t = t0;
-        while (seg_t < T) {
-            const int64_t j = (P + seg_t) % K;
-            const int64_t len = std::min(T - seg_t, K - j);
-            ggml_tensor * src = ggml_view_2d(ctx, xx, C, len, xx->nb[1], (2 + seg_t)*xx->nb[1]);
-            ggml_tensor * dst = ggml_view_2d(ctx, state_all, C, len, state_all->nb[1],
-                                             j*state_all->nb[1] + site_off*ggml_element_size(state_all));
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, src, dst));
-            seg_t += len;
-        }
+    if (site_state && write_idx) {
+        // Persist the last min(T,K) positions' pre-conv latents into their ring columns with a
+        // single topology-static scatter. The source is a view of xx, not x, so the history read
+        // remains an ancestor of the write even when a long ubatch wraps onto history columns.
+        const int64_t n_write = write_idx->ne[0];
+        const int64_t t0 = T > n_write ? T - n_write : 0;
+        ggml_tensor * src = ggml_view_2d(ctx, xx, C, n_write, xx->nb[1], (2 + t0)*xx->nb[1]);
+        src = ggml_cont(ctx, src);
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx, site_state, src, write_idx));
     }
     return out;
 }
@@ -137,12 +159,13 @@ static ggml_tensor * openpangu_sinkhorn(ggml_context * ctx, ggml_tensor * h_res_
 
 // Attention sublayer body, shared by the base layers and the NextN/MTP head.
 // x_normed = input-layernormed hidden [n_embd, T]; returns post-o_proj output [n_embd, T].
-// conv_state may be null (exotic setups) -> batch-local convs. conv_pos is the absolute
-// position of the first batch token (ring index into the conv-state cache).
+// conv_state may be null (exotic setups) -> batch-local convs. Ring positions arrive as
+// graph inputs so the same topology can be reused at different absolute positions.
 ggml_tensor * llm_build_context::build_openpangu_attention(
         ggml_cgraph * gf, const llama_layer & layer, int il, ggml_tensor * x_normed,
         ggml_tensor * KQ_mask, ggml_tensor * inp_pos,
-        ggml_tensor * conv_state, int64_t conv_pos, float kq_scale) {
+        ggml_tensor * conv_state, ggml_tensor * conv_hist_idx, ggml_tensor * conv_write_idx,
+        float kq_scale) {
     const int64_t n_embd_head_qk_rope = hparams.n_rot;                       // 64
     const int64_t n_embd_head_k       = hparams.n_embd_head_k(0);            // 192
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope; // 128
@@ -159,7 +182,8 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
 
     // --- Q path: q_a -> qa_conv -> q_a_norm -> q_b ---
     ggml_tensor * q_lora = ggml_mul_mat(ctx0, layer.wq_a, cur);        // [q_lora_rank, T]
-    q_lora = openpangu_causal_conv(ctx0, gf, q_lora, layer.qa_conv, conv_state, conv_off_qa, conv_pos);
+    q_lora = openpangu_causal_conv(ctx0, gf, q_lora, layer.qa_conv, conv_state, conv_off_qa,
+                                   conv_hist_idx, conv_write_idx);
     if (il == 0) ggml_set_name(q_lora, "opg0_qlora_conv");
     q_lora = llm_build_norm(ctx0, q_lora, hparams, layer.attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
     if (il == 0) ggml_set_name(q_lora, "opg0_qlora_norm");
@@ -186,7 +210,8 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_tensor * ckv = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, kv_lora_rank, n_tokens, kv->nb[1], 0));
     ggml_tensor * k_pe = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, n_embd_head_qk_rope, n_tokens, kv->nb[1],
                                         kv_lora_rank*ggml_element_size(kv)));
-    ckv = openpangu_causal_conv(ctx0, gf, ckv, layer.kv_conv, conv_state, conv_off_ckv, conv_pos);
+    ckv = openpangu_causal_conv(ctx0, gf, ckv, layer.kv_conv, conv_state, conv_off_ckv,
+                                conv_hist_idx, conv_write_idx);
     ckv = llm_build_norm(ctx0, ckv, hparams, layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
     if (il == 0) ggml_set_name(ckv, "opg0_ckv_norm");
     // rope k_pe (shared across heads)
@@ -205,11 +230,18 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         ggml_tensor * kl_ckv = ggml_view_2d(ctx0, kl, kv_lora_rank, n_tokens, kl->nb[1], kv_head*kl->nb[1]);
         ggml_tensor * kl_kpe = ggml_view_2d(ctx0, kl, n_embd_head_qk_rope, n_tokens, kl->nb[1],
                                             kv_head*kl->nb[1] + kv_lora_rank*ggml_element_size(kl));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ckv, kl_ckv));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_pe2d, kl_kpe));
+        ggml_tensor * cpy_kl_ckv = ggml_cpy(ctx0, ckv, kl_ckv);
+        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_CKV, cpy_kl_ckv, kl->nb[1]);
+        ggml_build_forward_expand(gf, cpy_kl_ckv);
+        ggml_tensor * cpy_kl_kpe = ggml_cpy(ctx0, k_pe2d, kl_kpe);
+        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_KPE, cpy_kl_kpe, kl->nb[1],
+                                      kv_lora_rank*ggml_element_size(kl));
+        ggml_build_forward_expand(gf, cpy_kl_kpe);
         ggml_tensor * vl_view = ggml_view_2d(ctx0, vl, n_tokens, kv_lora_rank,
                                              (int64_t) kv_self.size*ggml_element_size(vl), kv_head*ggml_element_size(vl));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, ckv), vl_view));
+        ggml_tensor * cpy_vl = ggml_cpy(ctx0, ggml_transpose(ctx0, ckv), vl_view);
+        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_V_TRANS, cpy_vl, ggml_element_size(vl));
+        ggml_build_forward_expand(gf, cpy_vl);
     }
 
     // ---- DSA lightning indexer: per-query top-k selection mask (DSA layers only) ----
@@ -241,7 +273,9 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                             ggml_cont(ctx0, k_idx_pass), 0);                        // [d_idx, T]
         if (il == 0) ggml_set_name(k_idx, "opg0_idx_k");
         ggml_tensor * idx_w = ggml_view_2d(ctx0, idx_cache, d_idx, n_tokens, idx_cache->nb[1], kv_head*idx_cache->nb[1]);
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_idx, idx_w));
+        ggml_tensor * cpy_idx = ggml_cpy(ctx0, k_idx, idx_w);
+        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_IDX, cpy_idx, idx_cache->nb[1]);
+        ggml_build_forward_expand(gf, cpy_idx);
 
         if (n_kv > topk) {
             // indexer queries
@@ -337,7 +371,8 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
 
     // o_conv (MOME on the pre-o_proj attn output), then o_proj
-    cur = openpangu_causal_conv(ctx0, gf, cur, layer.o_conv, conv_state, conv_off_o, conv_pos);
+    cur = openpangu_causal_conv(ctx0, gf, cur, layer.o_conv, conv_state, conv_off_o,
+                                conv_hist_idx, conv_write_idx);
     cur = llm_build_lora_mm(lctx, ctx0, layer.wo, cur);
     return cur;
 }
@@ -366,6 +401,8 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     // hparams.n_swa_mtp when the graph is built with an MTP op type
     ggml_tensor * KQ_mask = hparams.n_swa_mtp > 0 && hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
     ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+    ggml_tensor * conv_hist_idx = build_inp_openpangu_conv_hist();
+    ggml_tensor * conv_write_idx = build_inp_openpangu_conv_write(std::min<int64_t>(n_tokens, OPENPANGU_CONV_RING));
 
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens
         ? mtp_layer.nextn.embed_tokens : model.tok_embd;
@@ -386,7 +423,7 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     // chains real t-1/t-2 taps across warmup and sequential draft steps
     ggml_tensor * mtp_conv_state = (size_t) il < kv_self.s_l.size() ? kv_self.s_l[il] : nullptr;
     cur = build_openpangu_attention(gf, mtp_layer, il, cur, KQ_mask, inp_pos,
-                                    mtp_conv_state, kv_head, kq_scale);
+                                    mtp_conv_state, conv_hist_idx, conv_write_idx, kq_scale);
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
     cb(ffn_inp, "mtp_ffn_inp", il);
@@ -424,6 +461,7 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
 
 ggml_cgraph * llm_build_context::build_openpangu() {
     ggml_cgraph * gf = new_graph_custom();
+    openpangu_clear_cache_copies(lctx);
 
     // the ring, indexer and latent stores are addressed by absolute position through
     // kv_head; enforce head == first batch position on real builds so any future cache
@@ -472,6 +510,8 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     // mask and add the indexer's top-k selection inside the attention builder. Absent
     // schedule keys (n_swa == 0) keep every layer dense (pre-DSA GGUF fallback).
     ggml_tensor * KQ_mask_swa = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : nullptr;
+    ggml_tensor * conv_hist_idx = build_inp_openpangu_conv_hist();
+    ggml_tensor * conv_write_idx = build_inp_openpangu_conv_write(std::min<int64_t>(n_tokens, OPENPANGU_CONV_RING));
 
     // mHC entry: repeat the embedding into S residual streams -> R [n_embd, S, n_tokens]
     ggml_tensor * R = ggml_repeat(ctx0, ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
@@ -563,7 +603,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
 
         ggml_tensor * layer_mask = KQ_mask_swa && hparams.openpangu_window[il] > 0 ? KQ_mask_swa : KQ_mask;
         cur = build_openpangu_attention(gf, layer, il, cur, layer_mask, inp_pos,
-                                        conv_state, kv_head, kq_scale);
+                                        conv_state, conv_hist_idx, conv_write_idx, kq_scale);
         if (il == 0) ggml_set_name(cur, "opg0_attn_out");
 
         cur = llm_build_norm(ctx0, cur, hparams, layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
