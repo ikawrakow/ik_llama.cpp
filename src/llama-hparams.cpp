@@ -1629,6 +1629,72 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
                 ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
 
+                if (model.arch == LLM_ARCH_DEEPSEEK4) {
+                    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                    hparams.rope_freq_scale_train_swa = 1.0f;
+                    if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false) && hparams.n_swa > 0) {
+                        std::fill(hparams.swa_layers.begin(), hparams.swa_layers.end(), true);
+                    }
+
+                    const auto * hc_head_base = ml.get_tensor_meta("hc_head_base");
+                    const auto * wo_a_0 = ml.get_tensor_meta("blk.0.attn_output_a.weight");
+                    const auto * wo_b_0 = ml.get_tensor_meta("blk.0.attn_output_b.weight");
+
+                    if (!ml.get_key(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT, hparams.dsv4_o_group_count, false) && wo_a_0 != nullptr) {
+                        GGML_ASSERT(wo_a_0->ne[0] > 0);
+                        hparams.dsv4_o_group_count = (uint32_t) ((hparams.n_head() * hparams.n_embd_head_k(0)) / wo_a_0->ne[0]);
+                    }
+                    if (!ml.get_key(LLM_KV_ATTENTION_OUTPUT_LORA_RANK, hparams.dsv4_o_lora_rank, false) && wo_b_0 != nullptr) {
+                        GGML_ASSERT(hparams.dsv4_o_group_count > 0);
+                        hparams.dsv4_o_lora_rank = (uint32_t) (wo_b_0->ne[0] / hparams.dsv4_o_group_count);
+                    }
+                    if (!ml.get_key(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE, hparams.dsv4_compress_rope_base, false)) {
+                        hparams.dsv4_compress_rope_base = hparams.rope_freq_base_train_swa != 0.0f
+                            ? hparams.rope_freq_base_train_swa
+                            : hparams.rope_freq_base_train;
+                    }
+                    if (!ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.dsv4_hc_mult, false)) {
+                        if (hc_head_base != nullptr) {
+                            hparams.dsv4_hc_mult = (uint32_t) hc_head_base->ne[0];
+                        } else if (wo_a_0 != nullptr) {
+                            hparams.dsv4_hc_mult = (uint32_t) (wo_a_0->ne[1] / hparams.n_embd);
+                        }
+                    }
+                    if (!ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters, false)) {
+                        hparams.dsv4_hc_sinkhorn_iters = 3;
+                    }
+                    if (!ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON, hparams.dsv4_hc_eps, false)) {
+                        hparams.dsv4_hc_eps = hparams.f_norm_rms_eps;
+                    }
+                    ml.get_key(LLM_KV_HASH_LAYER_COUNT, hparams.dsv4_hash_layer_count, false);
+
+                    uint32_t n_compress_ratios = 0;
+                    if (ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_compress_ratios, false)) {
+                        if (n_compress_ratios < hparams.n_layer) {
+                            throw std::runtime_error("DeepSeek-V4 compress_ratios is shorter than block_count");
+                        }
+                        std::vector<uint32_t> compress_ratios;
+                        ml.get_arr(ml.llm_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS), compress_ratios);
+                        std::copy_n(compress_ratios.begin(), hparams.n_layer, hparams.dsv4_compress_ratios.begin());
+                    } else {
+                        hparams.dsv4_compress_ratios.fill(0);
+                    }
+
+                    if (hparams.dsv4_hc_mult == 0) {
+                        throw std::runtime_error("DeepSeek-V4 hyper_connection.count is missing and could not be inferred");
+                    }
+                    if (hparams.dsv4_o_group_count == 0 || hparams.dsv4_o_lora_rank == 0) {
+                        throw std::runtime_error("DeepSeek-V4 output projection metadata is missing and could not be inferred");
+                    }
+                    if (wo_b_0 != nullptr && (int64_t) hparams.dsv4_o_group_count * hparams.dsv4_o_lora_rank != wo_b_0->ne[0]) {
+                        throw std::runtime_error("DeepSeek-V4 inferred output_group_count/output_lora_rank does not match attn_output_b shape");
+                    }
+                    if (wo_a_0 != nullptr && (int64_t) hparams.dsv4_o_group_count * wo_a_0->ne[0] != (int64_t) hparams.n_head() * hparams.n_embd_head_k(0)) {
+                        throw std::runtime_error("DeepSeek-V4 inferred output_group_count does not match attn_output_a shape");
+                    }
+                }
+
                 // Expert gating function (GLM-4.5 uses sigmoid)
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
                 if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {

@@ -2,7 +2,516 @@
 #include "../llama-context.h"
 #include "../llama-build-context.h"
 
+#include <algorithm>
 #include <cmath>
+#include <string>
+
+static size_t dsv4_elem_offset(const ggml_tensor * t, int64_t i) {
+    return ggml_row_size(t->type, i);
+}
+
+static ggml_tensor * dsv4_view_1d(ggml_context * ctx, ggml_tensor * t, int64_t ne0, int64_t i0) {
+    return ggml_view_1d(ctx, t, ne0, dsv4_elem_offset(t, i0));
+}
+
+static ggml_tensor * dsv4_view_2d(
+        ggml_context * ctx,
+        ggml_tensor  * t,
+        int64_t        ne0,
+        int64_t        ne1,
+        int64_t        i0) {
+    return ggml_view_2d(ctx, t, ne0, ne1, t->nb[1], dsv4_elem_offset(t, i0));
+}
+
+static ggml_tensor * dsv4_hc_affine(
+        ggml_context * ctx,
+        ggml_tensor  * x,
+        ggml_tensor  * scale,
+        ggml_tensor  * base) {
+    x = ggml_mul(ctx, x, scale);
+    x = ggml_add(ctx, x, base);
+    return x;
+}
+
+static ggml_tensor * dsv4_new_i32_input(ggml_context * ctx, ggml_tensor ** dst, int64_t n, const char * name) {
+    *dst = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, std::max<int64_t>(1, n));
+    ggml_set_input(*dst);
+    ggml_set_name(*dst, name);
+    return *dst;
+}
+
+static ggml_tensor * dsv4_new_i64_input(ggml_context * ctx, ggml_tensor ** dst, int64_t n, const char * name) {
+    *dst = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, std::max<int64_t>(1, n));
+    ggml_set_input(*dst);
+    ggml_set_name(*dst, name);
+    return *dst;
+}
+
+static ggml_tensor * dsv4_new_mask_input(ggml_context * ctx, ggml_tensor ** dst, int64_t n_kv, int64_t n_tokens, const char * name) {
+    *dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, std::max<int64_t>(1, n_kv), GGML_PAD(std::max<int64_t>(1, n_tokens), GGML_KQ_MASK_PAD));
+    ggml_set_input(*dst);
+    ggml_set_name(*dst, name);
+    return *dst;
+}
+
+static void dsv4_build_plan_inputs(
+        ggml_context * ctx,
+        llama_context & lctx,
+        llama_context::dsv4_runtime::comp_inputs & inputs,
+        const llama_context::dsv4_runtime::comp_plan & plan,
+        const char * tag,
+        int64_t n_tokens) {
+    dsv4_new_i32_input(ctx, &inputs.state_pos, (int64_t) plan.state_pos.size(), (std::string(tag) + "_state_pos").c_str());
+    dsv4_new_i32_input(ctx, &inputs.state_persist_src_idxs, (int64_t) plan.state_persist_src_idxs.size(), (std::string(tag) + "_persist_src").c_str());
+    dsv4_new_i32_input(ctx, &inputs.state_persist_dst_idxs, (int64_t) plan.state_persist_dst_idxs.size(), (std::string(tag) + "_persist_dst").c_str());
+    dsv4_new_i32_input(ctx, &inputs.state_read_idxs, (int64_t) plan.state_read_idxs.size(), (std::string(tag) + "_state_read").c_str());
+    dsv4_new_i64_input(ctx, &inputs.state_write_idxs, (int64_t) plan.state_write_idxs.size(), (std::string(tag) + "_state_write").c_str());
+    dsv4_new_i32_input(ctx, &inputs.state_write_pos, (int64_t) plan.state_write_pos.size(), (std::string(tag) + "_write_pos").c_str());
+    dsv4_new_mask_input(ctx, &inputs.kq_mask, std::max<int64_t>(1, plan.n_kv), n_tokens, (std::string(tag) + "_kq_mask").c_str());
+    GGML_UNUSED(lctx);
+}
+
+static ggml_tensor * dsv4_append_zero_row(ggml_context * ctx, ggml_tensor * t, bool neg_inf) {
+    ggml_tensor * row = ggml_view_1d(ctx, t, t->ne[0], 0);
+    row = neg_inf ? ggml_scale_bias(ctx, row, 0.0f, -INFINITY) : ggml_scale(ctx, row, 0.0f);
+    row = ggml_reshape_2d(ctx, row, t->ne[0], 1);
+    return ggml_concat(ctx, t, row, 1);
+}
+
+static ggml_tensor * dsv4_with_zero_dep(ggml_context * ctx, ggml_tensor * t, ggml_tensor * dep) {
+    if (dep == nullptr) {
+        return t;
+    }
+
+    ggml_tensor * zero = ggml_scale(ctx, ggml_sum(ctx, dep), 0.0f);
+    return ggml_add(ctx, t, zero);
+}
+
+static ggml_tensor * dsv4_cache_view_2d(
+        ggml_context * ctx,
+        ggml_tensor  * cache,
+        int64_t        dim0,
+        int64_t        dim1) {
+    return ggml_view_2d(ctx, cache, dim0, dim1, ggml_row_size(cache->type, dim0), 0);
+}
+
+static ggml_tensor * dsv4_build_raw_mask_view(
+        ggml_context * ctx,
+        ggml_tensor  * mask,
+        int64_t        n_kv) {
+    return ggml_view_2d(ctx, mask, n_kv, mask->ne[1], mask->nb[1], 0);
+}
+
+static ggml_tensor * dsv4_cache_view_3d(
+        ggml_context * ctx,
+        ggml_tensor  * cache,
+        int64_t        n_embd_head,
+        int64_t        n_kv) {
+    return ggml_view_3d(ctx, cache,
+            n_embd_head, n_kv, 1,
+            ggml_row_size(cache->type, n_embd_head),
+            ggml_row_size(cache->type, n_embd_head),
+            0);
+}
+
+static ggml_tensor * dsv4_build_attn(
+        ggml_context * ctx,
+        const llama_hparams & hparams,
+        const llama_cparams & cparams,
+        ggml_tensor  * q,
+        ggml_tensor  * k,
+        ggml_tensor  * v,
+        ggml_tensor  * kq_mask,
+        ggml_tensor  * sinks,
+        float          kq_scale) {
+    const int64_t n_embd_head = q->ne[0];
+    const int64_t n_head = q->ne[1];
+    const int64_t n_tokens = q->ne[2];
+
+    ggml_tensor * q_perm = ggml_permute(ctx, q, 0, 2, 1, 3);
+
+    if (cparams.flash_attn) {
+        ggml_tensor * cur = ggml_flash_attn_ext(ctx, q_perm, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        ggml_flash_attn_ext_add_sinks(cur, sinks);
+        return ggml_reshape_2d(ctx, cur, n_embd_head * n_head, n_tokens);
+    }
+
+    ggml_tensor * kq = ggml_mul_mat(ctx, k, q_perm);
+    if (hparams.attn_soft_cap) {
+        kq = ggml_softcap_max(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+    } else {
+        kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+        ggml_soft_max_add_sinks(kq, sinks);
+    }
+    ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
+    ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+    return ggml_cont_2d(ctx, kqv_merged, n_embd_head * n_head, n_tokens);
+}
+
+static ggml_tensor * build_hc_weighted_sum(
+        ggml_context * ctx0,
+        const llama_hparams & hparams,
+        int64_t n_embd,
+        ggml_tensor * x,
+        ggml_tensor * weights) {
+    const int64_t hc = hparams.dsv4_hc_mult;
+    const int64_t nt = x->ne[2];
+
+    ggml_tensor * acc = nullptr;
+    for (int64_t ih = 0; ih < hc; ++ih) {
+        ggml_tensor * xh = ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], ih*x->nb[1]);
+        ggml_tensor * wh = ggml_view_2d(ctx0, weights, 1, nt, weights->nb[1], ih*weights->nb[0]);
+        ggml_tensor * cur = ggml_mul(ctx0, xh, wh);
+        acc = acc ? ggml_add(ctx0, acc, cur) : cur;
+    }
+
+    return acc;
+}
+
+static ggml_tensor * build_hc_sinkhorn(
+        ggml_context * ctx0,
+        const llama_hparams & hparams,
+        ggml_tensor * comb) {
+    comb = ggml_soft_max(ctx0, comb);
+
+    ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+    eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
+
+    comb = ggml_add(ctx0, comb, eps);
+
+    auto norm_cols = [&]() {
+        ggml_tensor * comb_src_dst = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3));
+        ggml_tensor * col_sum = ggml_sum_rows(ctx0, comb_src_dst);
+        col_sum = ggml_add(ctx0, col_sum, eps);
+        col_sum = ggml_permute(ctx0, col_sum, 1, 0, 2, 3);
+        comb = ggml_div(ctx0, comb, col_sum);
+    };
+
+    auto norm_rows = [&]() {
+        ggml_tensor * row_sum = ggml_sum_rows(ctx0, comb);
+        row_sum = ggml_add(ctx0, row_sum, eps);
+        comb = ggml_div(ctx0, comb, row_sum);
+    };
+
+    norm_cols();
+    for (uint32_t i = 1; i < hparams.dsv4_hc_sinkhorn_iters; ++i) {
+        norm_rows();
+        norm_cols();
+    }
+
+    return comb;
+}
+
+static ggml_tensor * build_hc_pre(
+        ggml_context * ctx0,
+        const llama_hparams & hparams,
+        int64_t n_embd,
+        float norm_rms_eps,
+        ggml_tensor * x,
+        ggml_tensor * hc_fn,
+        ggml_tensor * hc_scale,
+        ggml_tensor * hc_base,
+        ggml_tensor ** post,
+        ggml_tensor ** comb) {
+    const int64_t hc         = hparams.dsv4_hc_mult;
+    const int64_t hc_dim     = hc*n_embd;
+    const int64_t hc_mix_dim = (2 + hc)*hc;
+    const int64_t nt         = x->ne[2];
+
+    ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
+    ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
+    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+
+    ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
+    ggml_tensor * scale_post = dsv4_view_1d(ctx0, hc_scale, 1, 1);
+    ggml_tensor * scale_comb = dsv4_view_1d(ctx0, hc_scale, 1, 2);
+
+    ggml_tensor * base_pre  = dsv4_view_1d(ctx0, hc_base, hc, 0);
+    ggml_tensor * base_post = dsv4_view_1d(ctx0, hc_base, hc, hc);
+    ggml_tensor * base_comb = dsv4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
+
+    ggml_tensor * pre = dsv4_view_2d(ctx0, mixes, hc, nt, 0);
+    pre = dsv4_hc_affine(ctx0, pre, scale_pre, base_pre);
+    pre = ggml_sigmoid(ctx0, pre);
+    pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
+
+    *post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
+    *post = dsv4_hc_affine(ctx0, *post, scale_post, base_post);
+    *post = ggml_sigmoid(ctx0, *post);
+    *post = ggml_scale(ctx0, *post, 2.0f);
+
+    *comb = dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
+    *comb = dsv4_hc_affine(ctx0, *comb, scale_comb, base_comb);
+    *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
+    *comb = build_hc_sinkhorn(ctx0, hparams, *comb);
+
+    return build_hc_weighted_sum(ctx0, hparams, n_embd, x, pre);
+}
+
+static ggml_tensor * build_hc_post(
+        ggml_context * ctx0,
+        const llama_hparams & hparams,
+        int64_t n_embd,
+        ggml_tensor * x,
+        ggml_tensor * residual,
+        ggml_tensor * post,
+        ggml_tensor * comb) {
+    const int64_t hc = hparams.dsv4_hc_mult;
+    const int64_t nt = x->ne[1];
+
+    ggml_tensor * out = nullptr;
+    for (int64_t dst = 0; dst < hc; ++dst) {
+        ggml_tensor * post_dst = ggml_view_2d(ctx0, post, 1, nt, post->nb[1], dst*post->nb[0]);
+        ggml_tensor * cur = ggml_mul(ctx0, x, post_dst);
+
+        for (int64_t src = 0; src < hc; ++src) {
+            ggml_tensor * res_src = ggml_view_2d(ctx0, residual, n_embd, nt, residual->nb[2], src*residual->nb[1]);
+            ggml_tensor * comb_src_dst = ggml_view_2d(ctx0, comb, 1, nt, comb->nb[2], dst*comb->nb[0] + src*comb->nb[1]);
+            cur = ggml_add(ctx0, cur, ggml_mul(ctx0, res_src, comb_src_dst));
+        }
+
+        cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, nt);
+        out = out ? ggml_concat(ctx0, out, cur, 1) : cur;
+    }
+
+    return out;
+}
+
+static ggml_tensor * build_hc_head(
+        ggml_context * ctx0,
+        const llama_hparams & hparams,
+        int64_t n_embd,
+        float norm_rms_eps,
+        ggml_tensor * x,
+        ggml_tensor * hc_fn,
+        ggml_tensor * hc_scale,
+        ggml_tensor * hc_base) {
+    const int64_t hc     = hparams.dsv4_hc_mult;
+    const int64_t hc_dim = hc*n_embd;
+    const int64_t nt     = x->ne[2];
+
+    ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
+    ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
+    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * pre = dsv4_hc_affine(ctx0, mixes, hc_scale, hc_base);
+    pre = ggml_sigmoid(ctx0, pre);
+    pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
+
+    return build_hc_weighted_sum(ctx0, hparams, n_embd, x, pre);
+}
+
+static ggml_tensor * build_hca_compressed_kv_from_state(
+        ggml_context * ctx0,
+        llm_build_context & llm,
+        ggml_tensor * kv_state,
+        ggml_tensor * score_state,
+        ggml_tensor * state_read_idxs,
+        ggml_tensor * comp_pos,
+        ggml_tensor * norm,
+        int64_t n_embd_head,
+        int il) {
+    const int64_t n_embd_head_rope = llm.hparams.n_rot;
+    const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+    const int64_t n_blocks = comp_pos ? comp_pos->ne[0] : 0;
+
+    GGML_ASSERT(n_blocks > 0);
+    GGML_ASSERT(state_read_idxs != nullptr);
+
+    ggml_tensor * kv = ggml_get_rows(ctx0, kv_state, state_read_idxs);
+    kv = ggml_reshape_3d(ctx0, kv, n_embd_head, llama_context::dsv4_runtime::HCA_RATIO, n_blocks);
+    llm.cb(kv, "hca_comp_kv_rows", il);
+
+    ggml_tensor * score = ggml_get_rows(ctx0, score_state, state_read_idxs);
+    score = ggml_reshape_3d(ctx0, score, n_embd_head, llama_context::dsv4_runtime::HCA_RATIO, n_blocks);
+    llm.cb(score, "hca_comp_score_rows", il);
+
+    ggml_tensor * values = ggml_cont(ctx0, ggml_permute(ctx0, kv, 1, 0, 2, 3));
+    ggml_tensor * scores = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
+    ggml_tensor * weights = ggml_soft_max(ctx0, scores);
+    ggml_tensor * comp = ggml_mul(ctx0, values, weights);
+    comp = ggml_sum_rows(ctx0, comp);
+    comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
+    llm.cb(comp, "hca_comp_merge", il);
+
+    comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
+    llm.cb(comp, "hca_comp_norm", il);
+
+    ggml_tensor * comp_nope = ggml_view_3d(ctx0, comp, n_embd_head_nope, 1, n_blocks,
+            ggml_row_size(comp->type, n_embd_head),
+            ggml_row_size(comp->type, n_embd_head),
+            0);
+    ggml_tensor * comp_pe = ggml_view_3d(ctx0, comp, n_embd_head_rope, 1, n_blocks,
+            ggml_row_size(comp->type, n_embd_head),
+            ggml_row_size(comp->type, n_embd_head),
+            ggml_row_size(comp->type, n_embd_head_nope));
+    comp_pe = ggml_rope_ext(ctx0, comp_pe, comp_pos, nullptr, n_embd_head_rope, llm.rope_type, llm.n_ctx_orig,
+            llm.hparams.dsv4_compress_rope_base, llm.freq_scale, llm.ext_factor, llm.attn_factor, llm.beta_fast, llm.beta_slow);
+    comp = ggml_concat(ctx0, comp_nope, comp_pe, 0);
+    llm.cb(comp, "hca_comp_out", il);
+
+    return comp;
+}
+
+static ggml_tensor * build_overlap_compressed_kv_from_state(
+        ggml_context * ctx0,
+        llm_build_context & llm,
+        ggml_tensor * kv_state,
+        ggml_tensor * score_state,
+        ggml_tensor * state_read_idxs,
+        ggml_tensor * comp_pos,
+        ggml_tensor * norm,
+        int64_t ratio,
+        int64_t n_embd_head,
+        int il,
+        const char * tag) {
+    const int64_t n_embd_head_rope = llm.hparams.n_rot;
+    const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+    const int64_t n_blocks = comp_pos ? comp_pos->ne[0] : 0;
+
+    GGML_ASSERT(n_blocks > 0);
+    GGML_ASSERT(state_read_idxs != nullptr);
+
+    kv_state = dsv4_append_zero_row(ctx0, kv_state, false);
+    score_state = dsv4_append_zero_row(ctx0, score_state, true);
+
+    ggml_tensor * prev_idxs = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, 0);
+    ggml_tensor * cur_idxs  = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, ratio * n_blocks);
+
+    ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state, prev_idxs);
+    kv_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_prev, n_embd_head, ratio * n_blocks, kv_prev->nb[1], 0));
+    kv_prev = ggml_reshape_3d(ctx0, kv_prev, n_embd_head, ratio, n_blocks);
+
+    ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state, prev_idxs);
+    score_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, score_prev, n_embd_head, ratio * n_blocks, score_prev->nb[1], 0));
+    score_prev = ggml_reshape_3d(ctx0, score_prev, n_embd_head, ratio, n_blocks);
+
+    ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state, cur_idxs);
+    kv_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_cur, n_embd_head, ratio * n_blocks, kv_cur->nb[1],
+            ggml_row_size(kv_cur->type, n_embd_head)));
+    kv_cur = ggml_reshape_3d(ctx0, kv_cur, n_embd_head, ratio, n_blocks);
+
+    ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state, cur_idxs);
+    score_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, score_cur, n_embd_head, ratio * n_blocks, score_cur->nb[1],
+            ggml_row_size(score_cur->type, n_embd_head)));
+    score_cur = ggml_reshape_3d(ctx0, score_cur, n_embd_head, ratio, n_blocks);
+
+    ggml_tensor * values = ggml_concat(ctx0, kv_prev, kv_cur, 1);
+    ggml_tensor * scores = ggml_concat(ctx0, score_prev, score_cur, 1);
+    values = ggml_cont(ctx0, ggml_permute(ctx0, values, 1, 0, 2, 3));
+    scores = ggml_cont(ctx0, ggml_permute(ctx0, scores, 1, 0, 2, 3));
+
+    ggml_tensor * weights = ggml_soft_max(ctx0, scores);
+    ggml_tensor * comp = ggml_mul(ctx0, values, weights);
+    comp = ggml_sum_rows(ctx0, comp);
+    comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
+    llm.cb(comp, tag, il);
+
+    comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
+    llm.cb(comp, tag, il);
+
+    ggml_tensor * comp_nope = ggml_view_3d(ctx0, comp, n_embd_head_nope, 1, n_blocks,
+            ggml_row_size(comp->type, n_embd_head),
+            ggml_row_size(comp->type, n_embd_head),
+            0);
+    ggml_tensor * comp_pe = ggml_view_3d(ctx0, comp, n_embd_head_rope, 1, n_blocks,
+            ggml_row_size(comp->type, n_embd_head),
+            ggml_row_size(comp->type, n_embd_head),
+            ggml_row_size(comp->type, n_embd_head_nope));
+    comp_pe = ggml_rope_ext(ctx0, comp_pe, comp_pos, nullptr, n_embd_head_rope, llm.rope_type, llm.n_ctx_orig,
+            llm.hparams.dsv4_compress_rope_base, llm.freq_scale, llm.ext_factor, llm.attn_factor, llm.beta_fast, llm.beta_slow);
+    comp = ggml_concat(ctx0, comp_nope, comp_pe, 0);
+    llm.cb(comp, tag, il);
+
+    return comp;
+}
+
+static ggml_tensor * build_top_k_mask(
+        ggml_context * ctx0,
+        ggml_tensor * kq_mask,
+        ggml_tensor * top_k) {
+    ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
+    kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], 1,
+            kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
+
+    ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], 1, 1,
+            top_k->nb[1], top_k->nb[2], top_k->nb[3], 0);
+
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], 1);
+    zeros = ggml_fill(ctx0, zeros, 0.0f);
+
+    ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
+    kq_mask_top_k = ggml_view_2d(ctx0, kq_mask_top_k, kq_mask->ne[0], kq_mask->ne[1], kq_mask->nb[1], 0);
+    return ggml_add(ctx0, kq_mask_top_k, kq_mask);
+}
+
+static ggml_tensor * dsv4_build_lid_top_k(
+        ggml_context * ctx0,
+        llm_build_context & llm,
+        ggml_tensor * qr,
+        ggml_tensor * cur,
+        ggml_tensor * inp_pos,
+        int il) {
+    const auto & hparams = llm.hparams;
+    const auto & layer = llm.model.layers[il];
+    const int64_t n_embd_indexer_head = hparams.indexer_head_size;
+    const int64_t n_embd_indexer_head_rope = hparams.n_rot;
+    const int64_t n_embd_indexer_head_nope = n_embd_indexer_head - n_embd_indexer_head_rope;
+    const int64_t n_indexer_head = hparams.indexer_n_head;
+    const int64_t n_tokens = cur->ne[1];
+    const int64_t n_lid = llm.lctx.dsv4.lid_plan.n_kv;
+
+    GGML_ASSERT(n_embd_indexer_head >= n_embd_indexer_head_rope);
+    GGML_ASSERT(n_lid > 0);
+
+    ggml_tensor * indexer_q = llm.llm_build_lora_mm(llm.lctx, ctx0, layer.indexer_attn_q_b, qr);
+    indexer_q = ggml_reshape_3d(ctx0, indexer_q, n_embd_indexer_head, n_indexer_head, n_tokens);
+    llm.cb(indexer_q, "lid_q", il);
+
+    ggml_tensor * indexer_q_nope = ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_nope, n_indexer_head, n_tokens,
+            ggml_row_size(indexer_q->type, n_embd_indexer_head),
+            ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head,
+            0);
+    ggml_tensor * indexer_q_pe = ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_rope, n_indexer_head, n_tokens,
+            ggml_row_size(indexer_q->type, n_embd_indexer_head),
+            ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head,
+            ggml_row_size(indexer_q->type, n_embd_indexer_head_nope));
+    indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_embd_indexer_head_rope,
+            llm.rope_type, llm.n_ctx_orig,
+            hparams.dsv4_compress_rope_base, llm.freq_scale,
+            llm.ext_factor, llm.attn_factor, llm.beta_fast, llm.beta_slow);
+    indexer_q = ggml_concat(ctx0, indexer_q_nope, indexer_q_pe, 0);
+    indexer_q = ggml_hadamard(ctx0, indexer_q, (int) n_embd_indexer_head);
+    llm.cb(indexer_q, "lid_q_rope", il);
+
+    ggml_tensor * indexer_weights = llm.llm_build_lora_mm(llm.lctx, ctx0, layer.indexer_proj, cur);
+    indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / std::sqrt(float(n_embd_indexer_head * n_indexer_head)));
+    llm.cb(indexer_weights, "lid_weights", il);
+
+    ggml_tensor * indexer_k = dsv4_cache_view_3d(ctx0, llm.lctx.dsv4.cache.lid_k[(size_t) il], n_embd_indexer_head, n_lid);
+    llm.cb(indexer_k, "lid_k", il);
+
+    ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
+    llm.cb(indexer_kq, "lid_kq", il);
+
+    indexer_kq = ggml_relu(ctx0, indexer_kq);
+    ggml_tensor * indexer_weights_3d = ggml_reshape_3d(ctx0, indexer_weights, 1, n_indexer_head, n_tokens);
+    ggml_tensor * indexer_score = ggml_mul(ctx0, indexer_kq, indexer_weights_3d);
+    indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 1, 0, 2, 3));
+    indexer_score = ggml_sum_rows(ctx0, indexer_score);
+    indexer_score = ggml_view_2d(ctx0, indexer_score, n_lid, n_tokens, indexer_score->nb[2], 0);
+    llm.cb(indexer_score, "lid_score", il);
+
+    indexer_score = ggml_add(ctx0, indexer_score, dsv4_build_raw_mask_view(ctx0, llm.lctx.dsv4.inputs.lid.kq_mask, n_lid));
+    llm.cb(indexer_score, "lid_score_masked", il);
+
+    const uint32_t n_top_k = (uint32_t) std::min<int64_t>(indexer_score->ne[0], hparams.indexer_top_k);
+    ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
+    llm.cb(top_k, "lid_top_k", il);
+
+    return top_k;
+}
 
 ggml_cgraph * llm_build_context::build_deepseek4() {
     ggml_cgraph * gf = new_graph_custom();
@@ -10,18 +519,37 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     const int64_t n_embd_head = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_rope = hparams.n_rot;
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+    const int64_t hc = hparams.dsv4_hc_mult;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(0));
     GGML_ASSERT(n_embd_head_nope > 0);
 
-    ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+    dsv4_new_i64_input(ctx0, &lctx.dsv4.inputs.raw_k_idxs, n_tokens, "dsv4_raw_k_idxs");
+    dsv4_build_plan_inputs(ctx0, lctx, lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, "dsv4_csa", n_tokens);
+    dsv4_build_plan_inputs(ctx0, lctx, lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, "dsv4_hca", n_tokens);
+    dsv4_build_plan_inputs(ctx0, lctx, lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, "dsv4_lid", n_tokens);
+
+    ggml_tensor * inp = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
-    ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    ggml_tensor * KQ_mask = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
+    ggml_tensor * inpL = ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens);
+    inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
+    cb(inpL, "hc_init", -1);
 
     for (int il = 0; il < n_layer; ++il) {
-        ggml_tensor * inpSA = inpL;
+        ggml_tensor * residual = inpL;
+        ggml_tensor * post = nullptr;
+        ggml_tensor * comb = nullptr;
 
-        ggml_tensor * cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
+        ggml_tensor * cur = build_hc_pre(ctx0, hparams, n_embd, hparams.f_norm_rms_eps,
+                inpL,
+                model.layers[il].hc_attn_fn,
+                model.layers[il].hc_attn_scale,
+                model.layers[il].hc_attn_base,
+                &post, &comb);
+        cb(cur, "hc_attn_pre", il);
+
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         ggml_tensor * qr = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq_a, cur);
@@ -29,6 +557,16 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
 
         qr = llm_build_norm(ctx0, qr, hparams, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(qr, "qr_norm", il);
+
+        const int64_t ratio = hparams.dsv4_compress_ratios[(size_t) il];
+        const bool use_compress_rope = ratio != 0;
+        const float freq_base_l = use_compress_rope ? hparams.dsv4_compress_rope_base : freq_base;
+        const float freq_scale_l = use_compress_rope ? freq_scale : 1.0f;
+        const float ext_factor_l = use_compress_rope ? ext_factor : 0.0f;
+        const float attn_factor_l = use_compress_rope ? attn_factor : 1.0f;
+        const float beta_fast_l = use_compress_rope ? beta_fast : 0.0f;
+        const float beta_slow_l = use_compress_rope ? beta_slow : 0.0f;
+        const int32_t n_ctx_orig_l = use_compress_rope ? n_ctx_orig : 0;
 
         ggml_tensor * q = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq_b, qr);
         q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
@@ -43,8 +581,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 ggml_row_size(q->type, n_embd_head),
                 ggml_row_size(q->type, n_embd_head) * n_head,
                 ggml_row_size(q->type, n_embd_head_nope));
-        q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig,
-                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+        q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
+                freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         cb(q_pe, "q_pe", il);
         q = ggml_concat(ctx0, q_nope, q_pe, 0);
         cb(q, "q", il);
@@ -62,17 +600,176 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 ggml_row_size(kv->type, n_embd_head),
                 ggml_row_size(kv->type, n_embd_head),
                 ggml_row_size(kv->type, n_embd_head_nope));
-        kv_pe = ggml_rope_ext(ctx0, kv_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig,
-                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+        kv_pe = ggml_rope_ext(ctx0, kv_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
+                freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         cb(kv_pe, "kv_pe", il);
         kv = ggml_concat(ctx0, kv_nope, kv_pe, 0);
         cb(kv, "kv", il);
+        const float kq_scale = 1.0f / std::sqrt(float(n_embd_head));
 
-        ggml_tensor * attn = llm_build_kv(ctx0, lctx, kv_self, gf,
-                nullptr, nullptr,
-                kv, kv, q, KQ_mask, n_tokens, kv_head, n_kv,
-                1.0f / std::sqrt(float(n_embd_head)), cb, il);
-        cb(attn, "attn_raw", il);
+        ggml_tensor * hca_state_kv = nullptr;
+        ggml_tensor * hca_state_score = nullptr;
+        if (ratio == llama_context::dsv4_runtime::HCA_RATIO && lctx.dsv4.inputs.hca.state_pos != nullptr && lctx.dsv4.hca_plan.state_pos.size() > 0) {
+            hca_state_kv = llm_build_lora_mm(lctx, ctx0, model.layers[il].attn_comp_wkv, cur);
+            hca_state_score = llm_build_lora_mm(lctx, ctx0, model.layers[il].attn_comp_wgate, cur);
+            ggml_tensor * ape_rows = ggml_get_rows(ctx0, model.layers[il].attn_comp_ape, lctx.dsv4.inputs.hca.state_pos);
+            hca_state_score = ggml_add(ctx0, hca_state_score, ape_rows);
+            cb(hca_state_kv, "hca_state_kv", il);
+            cb(hca_state_score, "hca_state_score", il);
+        }
+
+        if (ratio == llama_context::dsv4_runtime::CSA_RATIO && lctx.dsv4.inputs.csa.state_pos != nullptr && lctx.dsv4.csa_plan.state_pos.size() > 0) {
+            ggml_tensor * csa_state_kv = llm_build_lora_mm(lctx, ctx0, model.layers[il].attn_comp_wkv, cur);
+            ggml_tensor * csa_state_score = llm_build_lora_mm(lctx, ctx0, model.layers[il].attn_comp_wgate, cur);
+            ggml_tensor * csa_ape_rows = ggml_get_rows(ctx0, model.layers[il].attn_comp_ape, lctx.dsv4.inputs.csa.state_pos);
+            csa_state_score = ggml_add(ctx0, csa_state_score, csa_ape_rows);
+
+            if (lctx.dsv4.inputs.csa.state_write_idxs != nullptr && lctx.dsv4.csa_plan.state_write_idxs.size() > 0) {
+                ggml_tensor * csa_source_kv = ggml_concat(ctx0, lctx.dsv4.cache.csa_state_kv[(size_t) il], csa_state_kv, 1);
+                ggml_tensor * csa_source_score = ggml_concat(ctx0, lctx.dsv4.cache.csa_state_score[(size_t) il], csa_state_score, 1);
+                ggml_tensor * csa_comp = build_overlap_compressed_kv_from_state(
+                        ctx0, *this,
+                        csa_source_kv, csa_source_score,
+                        lctx.dsv4.inputs.csa.state_read_idxs,
+                        lctx.dsv4.inputs.csa.state_write_pos,
+                        model.layers[il].attn_comp_norm,
+                        llama_context::dsv4_runtime::CSA_RATIO,
+                        n_embd_head,
+                        il,
+                        "csa_state_compress");
+                ggml_tensor * csa_comp_2d = ggml_reshape_2d(ctx0, csa_comp, n_embd_head, lctx.dsv4.inputs.csa.state_write_idxs->ne[0]);
+                ggml_tensor * csa_k_full = dsv4_cache_view_2d(ctx0, lctx.dsv4.cache.csa_k[(size_t) il], n_embd_head, lctx.dsv4.cache.csa_k[(size_t) il]->ne[1]);
+                ggml_tensor * csa_write = ggml_set_rows(ctx0, csa_k_full, csa_comp_2d, lctx.dsv4.inputs.csa.state_write_idxs);
+                ggml_build_forward_expand(gf, csa_write);
+                csa_state_kv = dsv4_with_zero_dep(ctx0, csa_state_kv, csa_comp);
+                csa_state_score = dsv4_with_zero_dep(ctx0, csa_state_score, csa_comp);
+            }
+
+            ggml_tensor * csa_persist_kv = ggml_get_rows(ctx0, csa_state_kv, lctx.dsv4.inputs.csa.state_persist_src_idxs);
+            ggml_tensor * csa_persist_score = ggml_get_rows(ctx0, csa_state_score, lctx.dsv4.inputs.csa.state_persist_src_idxs);
+            ggml_tensor * csa_state_kv_write = ggml_set_rows(ctx0, lctx.dsv4.cache.csa_state_kv[(size_t) il], csa_persist_kv, lctx.dsv4.inputs.csa.state_persist_dst_idxs);
+            ggml_tensor * csa_state_score_write = ggml_set_rows(ctx0, lctx.dsv4.cache.csa_state_score[(size_t) il], csa_persist_score, lctx.dsv4.inputs.csa.state_persist_dst_idxs);
+            ggml_build_forward_expand(gf, csa_state_kv_write);
+            ggml_build_forward_expand(gf, csa_state_score_write);
+
+            ggml_tensor * lid_state_kv = llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_comp_wkv, cur);
+            ggml_tensor * lid_state_score = llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_comp_wgate, cur);
+            ggml_tensor * lid_ape_rows = ggml_get_rows(ctx0, model.layers[il].indexer_comp_ape, lctx.dsv4.inputs.lid.state_pos);
+            lid_state_score = ggml_add(ctx0, lid_state_score, lid_ape_rows);
+
+            if (lctx.dsv4.inputs.lid.state_write_idxs != nullptr && lctx.dsv4.lid_plan.state_write_idxs.size() > 0) {
+                ggml_tensor * lid_source_kv = ggml_concat(ctx0, lctx.dsv4.cache.lid_state_kv[(size_t) il], lid_state_kv, 1);
+                ggml_tensor * lid_source_score = ggml_concat(ctx0, lctx.dsv4.cache.lid_state_score[(size_t) il], lid_state_score, 1);
+                ggml_tensor * lid_comp = build_overlap_compressed_kv_from_state(
+                        ctx0, *this,
+                        lid_source_kv, lid_source_score,
+                        lctx.dsv4.inputs.lid.state_read_idxs,
+                        lctx.dsv4.inputs.lid.state_write_pos,
+                        model.layers[il].indexer_comp_norm,
+                        llama_context::dsv4_runtime::CSA_RATIO,
+                        hparams.indexer_head_size,
+                        il,
+                        "lid_state_compress");
+                lid_comp = ggml_hadamard(ctx0, lid_comp, (int) hparams.indexer_head_size);
+                cb(lid_comp, "lid_state_compress_rot", il);
+                ggml_tensor * lid_comp_2d = ggml_reshape_2d(ctx0, lid_comp, hparams.indexer_head_size, lctx.dsv4.inputs.lid.state_write_idxs->ne[0]);
+                ggml_tensor * lid_k_full = dsv4_cache_view_2d(ctx0, lctx.dsv4.cache.lid_k[(size_t) il], hparams.indexer_head_size, lctx.dsv4.cache.lid_k[(size_t) il]->ne[1]);
+                ggml_tensor * lid_write = ggml_set_rows(ctx0, lid_k_full, lid_comp_2d, lctx.dsv4.inputs.lid.state_write_idxs);
+                ggml_build_forward_expand(gf, lid_write);
+                lid_state_kv = dsv4_with_zero_dep(ctx0, lid_state_kv, lid_comp);
+                lid_state_score = dsv4_with_zero_dep(ctx0, lid_state_score, lid_comp);
+            }
+
+            ggml_tensor * lid_persist_kv = ggml_get_rows(ctx0, lid_state_kv, lctx.dsv4.inputs.lid.state_persist_src_idxs);
+            ggml_tensor * lid_persist_score = ggml_get_rows(ctx0, lid_state_score, lctx.dsv4.inputs.lid.state_persist_src_idxs);
+            ggml_tensor * lid_state_kv_write = ggml_set_rows(ctx0, lctx.dsv4.cache.lid_state_kv[(size_t) il], lid_persist_kv, lctx.dsv4.inputs.lid.state_persist_dst_idxs);
+            ggml_tensor * lid_state_score_write = ggml_set_rows(ctx0, lctx.dsv4.cache.lid_state_score[(size_t) il], lid_persist_score, lctx.dsv4.inputs.lid.state_persist_dst_idxs);
+            ggml_build_forward_expand(gf, lid_state_kv_write);
+            ggml_build_forward_expand(gf, lid_state_score_write);
+        }
+
+        if (ratio == llama_context::dsv4_runtime::HCA_RATIO && hca_state_kv != nullptr && hca_state_score != nullptr) {
+            ggml_tensor * hca_dep = nullptr;
+            if (lctx.dsv4.inputs.hca.state_write_idxs != nullptr && lctx.dsv4.hca_plan.state_write_idxs.size() > 0) {
+                ggml_tensor * hca_source_kv = ggml_concat(ctx0, lctx.dsv4.cache.hca_state_kv[(size_t) il], hca_state_kv, 1);
+                ggml_tensor * hca_source_score = ggml_concat(ctx0, lctx.dsv4.cache.hca_state_score[(size_t) il], hca_state_score, 1);
+                ggml_tensor * hca_comp = build_hca_compressed_kv_from_state(
+                        ctx0, *this,
+                        hca_source_kv, hca_source_score,
+                        lctx.dsv4.inputs.hca.state_read_idxs,
+                        lctx.dsv4.inputs.hca.state_write_pos,
+                        model.layers[il].attn_comp_norm,
+                        n_embd_head,
+                        il);
+                ggml_tensor * hca_comp_2d = ggml_reshape_2d(ctx0, hca_comp, n_embd_head, lctx.dsv4.inputs.hca.state_write_idxs->ne[0]);
+                ggml_tensor * hca_k_full = dsv4_cache_view_2d(ctx0, lctx.dsv4.cache.hca_k[(size_t) il], n_embd_head, lctx.dsv4.cache.hca_k[(size_t) il]->ne[1]);
+                ggml_tensor * hca_write = ggml_set_rows(ctx0, hca_k_full, hca_comp_2d, lctx.dsv4.inputs.hca.state_write_idxs);
+                ggml_build_forward_expand(gf, hca_write);
+                hca_dep = hca_comp;
+            }
+
+            hca_state_kv = dsv4_with_zero_dep(ctx0, hca_state_kv, hca_dep);
+            hca_state_score = dsv4_with_zero_dep(ctx0, hca_state_score, hca_dep);
+
+            ggml_tensor * hca_persist_kv = ggml_get_rows(ctx0, hca_state_kv, lctx.dsv4.inputs.hca.state_persist_src_idxs);
+            ggml_tensor * hca_persist_score = ggml_get_rows(ctx0, hca_state_score, lctx.dsv4.inputs.hca.state_persist_src_idxs);
+            ggml_tensor * hca_state_kv_write = ggml_set_rows(ctx0, lctx.dsv4.cache.hca_state_kv[(size_t) il], hca_persist_kv, lctx.dsv4.inputs.hca.state_persist_dst_idxs);
+            ggml_tensor * hca_state_score_write = ggml_set_rows(ctx0, lctx.dsv4.cache.hca_state_score[(size_t) il], hca_persist_score, lctx.dsv4.inputs.hca.state_persist_dst_idxs);
+            ggml_build_forward_expand(gf, hca_state_kv_write);
+            ggml_build_forward_expand(gf, hca_state_score_write);
+        }
+
+        llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, kv, kv, n_tokens, kv_head, cb, il);
+
+        ggml_tensor * raw_k = ggml_view_3d(ctx0, kv_self.k_l[il],
+                n_embd_head, n_kv, hparams.n_head_kv(il),
+                ggml_row_size(kv_self.k_l[il]->type, n_embd_head) * hparams.n_head_kv(il),
+                ggml_row_size(kv_self.k_l[il]->type, n_embd_head),
+                0);
+        cb(raw_k, "raw_k", il);
+
+        ggml_tensor * raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask, n_kv);
+        ggml_tensor * attn = nullptr;
+
+        if (ratio == llama_context::dsv4_runtime::CSA_RATIO &&
+                lctx.dsv4.inputs.csa.kq_mask != nullptr &&
+                lctx.dsv4.csa_plan.n_kv > 0 &&
+                lctx.dsv4.inputs.lid.kq_mask != nullptr &&
+                lctx.dsv4.lid_plan.n_kv > 0) {
+            ggml_tensor * csa_k = dsv4_cache_view_3d(ctx0,
+                    lctx.dsv4.cache.csa_k[(size_t) il],
+                    n_embd_head,
+                    lctx.dsv4.csa_plan.n_kv);
+            ggml_tensor * top_k = dsv4_build_lid_top_k(ctx0, *this, qr, cur, inp_pos, il);
+            ggml_tensor * csa_mask = build_top_k_mask(ctx0,
+                    dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, lctx.dsv4.csa_plan.n_kv),
+                    top_k);
+            ggml_tensor * k_all = ggml_concat(ctx0, raw_k, csa_k, 1);
+            ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
+            cb(csa_k, "csa_k", il);
+            cb(k_all, "csa_k_all", il);
+            cb(kq_mask, "csa_kq_mask", il);
+            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_mask, model.layers[il].attn_sinks, kq_scale);
+            cb(attn, "attn_csa", il);
+        } else if (ratio == llama_context::dsv4_runtime::HCA_RATIO &&
+                lctx.dsv4.inputs.hca.kq_mask != nullptr &&
+                lctx.dsv4.hca_plan.n_kv > 0) {
+            ggml_tensor * hca_k = dsv4_cache_view_3d(ctx0,
+                    lctx.dsv4.cache.hca_k[(size_t) il],
+                    n_embd_head,
+                    lctx.dsv4.hca_plan.n_kv);
+            ggml_tensor * hca_mask = dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.hca.kq_mask, lctx.dsv4.hca_plan.n_kv);
+            ggml_tensor * k_all = ggml_concat(ctx0, raw_k, hca_k, 1);
+            ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
+            cb(hca_k, "hca_k", il);
+            cb(k_all, "hca_k_all", il);
+            cb(kq_mask, "hca_kq_mask", il);
+            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_mask, model.layers[il].attn_sinks, kq_scale);
+            cb(attn, "attn_hca", il);
+        } else {
+            attn = dsv4_build_attn(ctx0, hparams, cparams, q, raw_k, raw_k, raw_mask, model.layers[il].attn_sinks, kq_scale);
+            cb(attn, "attn_raw", il);
+        }
 
         attn = ggml_reshape_3d(ctx0, attn, n_embd_head, n_head, n_tokens);
         ggml_tensor * attn_nope = ggml_view_3d(ctx0, attn, n_embd_head_nope, n_head, n_tokens,
@@ -83,6 +780,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 ggml_row_size(attn->type, n_embd_head),
                 ggml_row_size(attn->type, n_embd_head) * n_head,
                 ggml_row_size(attn->type, n_embd_head_nope));
+        attn_pe = ggml_rope_back(ctx0, attn_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
+                freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         cb(attn_pe, "attn_derope", il);
         attn = ggml_concat(ctx0, attn_nope, attn_pe, 0);
 
@@ -106,16 +805,19 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo_b, oa);
         cb(cur, "attn_out", il);
 
-        if (il == n_layer - 1) {
-            ggml_tensor * inp_out_ids = build_inp_out_ids();
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        }
+        inpL = build_hc_post(ctx0, hparams, n_embd, cur, residual, post, comb);
+        cb(inpL, "hc_attn_post", il);
 
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "ffn_inp", il);
+        residual = inpL;
+        cur = build_hc_pre(ctx0, hparams, n_embd, hparams.f_norm_rms_eps,
+                inpL,
+                model.layers[il].hc_ffn_fn,
+                model.layers[il].hc_ffn_scale,
+                model.layers[il].hc_ffn_base,
+                &post, &comb);
+        cb(cur, "hc_ffn_pre", il);
 
-        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
@@ -152,14 +854,26 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
 
         cb(cur, "ffn_out", il);
 
-        cur = ggml_add(ctx0, cur, ffn_inp);
-        cur = lctx.cvec.apply_to(ctx0, cur, il);
-        cb(cur, "l_out", il);
-
-        inpL = cur;
+        inpL = build_hc_post(ctx0, hparams, n_embd, cur, residual, post, comb);
+        inpL = lctx.cvec.apply_to(ctx0, inpL, il);
+        cb(inpL, "l_out", il);
     }
 
-    ggml_tensor * out = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
+    if (n_outputs != n_tokens) {
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+        ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd*hc, n_tokens);
+        flat = ggml_get_rows(ctx0, flat, inp_out_ids);
+        inpL = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_outputs);
+    }
+
+    ggml_tensor * out = build_hc_head(ctx0, hparams, n_embd, hparams.f_norm_rms_eps,
+            inpL,
+            model.hc_head_fn,
+            model.hc_head_scale,
+            model.hc_head_base);
+    cb(out, "hc_head", -1);
+
+    out = build_output(lctx, ctx0, out, model.output, model.output_norm, cb);
     cb(out, "result_output", -1);
 
     ggml_build_forward_expand(gf, out);

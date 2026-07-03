@@ -19,6 +19,7 @@
 #include "llama-context.h"
 #include "llama-spec-features.h"
 #include "llama-dflash.h"
+#include "llama-dsv4.h"
 #include "llama-quantize.h"
 
 #include "unicode.h"
@@ -591,6 +592,7 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!cparams.graph_reuse) return false;
+    if (model.arch == LLM_ARCH_DEEPSEEK4) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     if (u_batch.embd) return false;
@@ -710,6 +712,7 @@ llama_context::~llama_context() {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }
     free_dflash_kv_cache_tensors();
+    free_dsv4_cache_tensors();
     ggml_backend_sched_free(sched);
 
     for (ggml_backend_t backend : backends) {
@@ -5470,6 +5473,10 @@ static int llama_decode_internal(
         }
 
         if (is_dflash_decode && !llama_prepare_dflash_graph_inputs(lctx, n_tokens)) {
+            return GGML_STATUS_FAILED;
+        }
+
+        if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch)) {
             return GGML_STATUS_FAILED;
         }
 
