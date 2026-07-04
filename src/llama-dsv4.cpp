@@ -8,10 +8,181 @@
 #include "ggml-backend.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <mutex>
 #include <map>
+#include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
+
+namespace {
+
+bool dsv4_env_flag_enabled(const char * name) {
+    const char * env = std::getenv(name);
+    return env != nullptr && *env != '\0' &&
+            std::strcmp(env, "0") != 0 &&
+            std::strcmp(env, "false") != 0 &&
+            std::strcmp(env, "off") != 0;
+}
+
+std::string dsv4_trace_path() {
+    const char * env = std::getenv("LLAMA_DSV4_TRACE");
+    if (env == nullptr || *env == '\0') {
+        return std::string();
+    }
+
+    if (std::strcmp(env, "1") == 0 || std::strcmp(env, "true") == 0 || std::strcmp(env, "on") == 0) {
+        const char * override_path = std::getenv("LLAMA_DSV4_TRACE_PATH");
+        return override_path != nullptr && *override_path != '\0'
+            ? override_path
+            : "/tmp/llama_dsv4_trace.jsonl";
+    }
+
+    return env;
+}
+
+std::mutex & dsv4_trace_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::string dsv4_json_escape(std::string_view value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (char c : value) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                out.push_back(c);
+                break;
+        }
+    }
+    return out;
+}
+
+template<typename T>
+void dsv4_json_append_array(std::ostringstream & out, const std::vector<T> & values) {
+    out << '[';
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        out << values[i];
+    }
+    out << ']';
+}
+
+void dsv4_trace_emit_tokens(const llama_context & lctx, const llama_batch & batch, const std::vector<int64_t> & raw_k_idxs) {
+    std::ostringstream out;
+    out << "{\"event\":\"tokens\",\"n_tokens\":" << batch.n_tokens
+        << ",\"kv_head\":" << lctx.kv_self.head
+        << ",\"raw_k_idxs\":";
+    dsv4_json_append_array(out, raw_k_idxs);
+    out << ",\"positions\":[";
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        const llama_pos pos = batch.pos != nullptr
+                ? batch.pos[i]
+                : batch.all_pos_0 + i*batch.all_pos_1;
+        out << pos;
+    }
+    out << "]";
+    if (batch.token != nullptr) {
+        out << ",\"tokens\":[";
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            if (i != 0) {
+                out << ',';
+            }
+            out << batch.token[i];
+        }
+        out << "]";
+    }
+    out << "}";
+    llama_dsv4_trace_jsonl(out.str());
+}
+
+void dsv4_trace_emit_plan(
+        const char * tag,
+        uint32_t ratio,
+        bool overlap,
+        uint32_t state_size,
+        uint32_t kv_size,
+        const llama_context::dsv4_runtime::comp_plan & plan) {
+    std::ostringstream out;
+    out << "{\"event\":\"plan\",\"tag\":\"" << dsv4_json_escape(tag)
+        << "\",\"ratio\":" << ratio
+        << ",\"overlap\":" << (overlap ? "true" : "false")
+        << ",\"state_size\":" << state_size
+        << ",\"kv_size\":" << kv_size
+        << ",\"n_stream\":" << plan.n_stream
+        << ",\"n_kv\":" << plan.n_kv
+        << ",\"state_pos\":";
+    dsv4_json_append_array(out, plan.state_pos);
+    out << ",\"state_persist_src_idxs\":";
+    dsv4_json_append_array(out, plan.state_persist_src_idxs);
+    out << ",\"state_persist_dst_idxs\":";
+    dsv4_json_append_array(out, plan.state_persist_dst_idxs);
+    out << ",\"state_read_idxs\":";
+    dsv4_json_append_array(out, plan.state_read_idxs);
+    out << ",\"state_write_idxs\":";
+    dsv4_json_append_array(out, plan.state_write_idxs);
+    out << ",\"state_write_pos\":";
+    dsv4_json_append_array(out, plan.state_write_pos);
+    out << ",\"n_visible\":";
+    dsv4_json_append_array(out, plan.n_visible);
+    out << "}";
+    llama_dsv4_trace_jsonl(out.str());
+}
+
+} // namespace
+
+bool llama_dsv4_trace_enabled() {
+    return dsv4_env_flag_enabled("LLAMA_DSV4_TRACE");
+}
+
+void llama_dsv4_trace_jsonl(const std::string & record) {
+    if (!llama_dsv4_trace_enabled()) {
+        return;
+    }
+
+    const std::string path = dsv4_trace_path();
+    if (path.empty()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(dsv4_trace_mutex());
+
+    if (path == "-") {
+        std::fputs(record.c_str(), stderr);
+        std::fputc('\n', stderr);
+        return;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path fs_path(path);
+    if (fs_path.has_parent_path()) {
+        std::filesystem::create_directories(fs_path.parent_path(), ec);
+    }
+
+    FILE * fp = std::fopen(path.c_str(), "ab");
+    if (fp == nullptr) {
+        return;
+    }
+
+    std::fwrite(record.data(), 1, record.size(), fp);
+    std::fputc('\n', fp);
+    std::fclose(fp);
+}
 
 static ggml_backend_buffer_type_t llama_dsv4_layer_buft(const llama_context & lctx, int32_t il) {
     if (il >= 0 && il < (int32_t) lctx.model.buft_layer.size() && lctx.model.buft_layer[il].buft != nullptr) {
@@ -35,9 +206,101 @@ static uint32_t dsv4_comp_size(uint32_t kv_size, uint32_t ratio) {
     return std::max<uint32_t>(1, (kv_size + ratio - 1)/ratio);
 }
 
+static void dsv4_batch_shape(
+        const llama_batch & batch,
+        uint32_t & n_seqs,
+        uint32_t & n_seq_tokens) {
+    n_seqs = 1;
+    n_seq_tokens = (uint32_t) std::max(1, batch.n_tokens);
+
+    if (batch.n_tokens <= 0 || batch.n_seq_id == nullptr || batch.seq_id == nullptr) {
+        return;
+    }
+
+    std::map<llama_seq_id, uint32_t> counts;
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] != 1 || batch.seq_id[i] == nullptr) {
+            return;
+        }
+
+        counts[batch.seq_id[i][0]]++;
+    }
+
+    if (counts.empty()) {
+        return;
+    }
+
+    const uint32_t seq_tokens = counts.begin()->second;
+    for (const auto & [_, count] : counts) {
+        if (count != seq_tokens) {
+            return;
+        }
+    }
+
+    n_seqs = (uint32_t) counts.size();
+    n_seq_tokens = std::max<uint32_t>(1, seq_tokens);
+}
+
 static int64_t dsv4_graph_n_stream(const llama_batch & batch) {
     GGML_UNUSED(batch);
     return 1;
+}
+
+static llama_context::dsv4_runtime::comp_plan dsv4_build_reserve_comp_plan(
+        const llama_batch & batch,
+        uint32_t ratio,
+        bool overlap,
+        uint32_t state_size,
+        uint32_t kv_size) {
+    llama_context::dsv4_runtime::comp_plan plan;
+    plan.n_visible.resize((size_t) batch.n_tokens, (int32_t) kv_size);
+    plan.n_stream = dsv4_graph_n_stream(batch);
+    plan.n_kv = kv_size;
+
+    if (batch.n_tokens == 0) {
+        return plan;
+    }
+
+    uint32_t n_seqs = 1;
+    uint32_t n_seq_tokens = 1;
+    dsv4_batch_shape(batch, n_seqs, n_seq_tokens);
+
+    plan.n_visible.assign((size_t) batch.n_tokens, 0);
+
+    const uint64_t n_blocks_u64 = (uint64_t) n_seqs*((n_seq_tokens + ratio - 1)/ratio);
+    const size_t n_blocks = (size_t) std::max<uint64_t>(1, n_blocks_u64);
+    GGML_ASSERT((uint64_t) n_blocks == std::max<uint64_t>(1, n_blocks_u64));
+    const uint64_t state_rows = (uint64_t) state_size*(uint64_t) plan.n_stream;
+    const size_t n_persist = (size_t) std::min<uint64_t>((uint64_t) batch.n_tokens, state_rows);
+
+    plan.state_pos.resize((size_t) batch.n_tokens);
+    plan.state_persist_src_idxs.resize(n_persist);
+    plan.state_persist_dst_idxs.resize(n_persist);
+    plan.state_read_idxs.resize((overlap ? 2u : 1u)*ratio*n_blocks);
+    plan.state_write_idxs.resize(n_blocks);
+    plan.state_write_pos.resize(n_blocks);
+
+    return plan;
+}
+
+static uint32_t dsv4_cache_kv_size(const std::vector<ggml_tensor *> & tensors) {
+    for (ggml_tensor * tensor : tensors) {
+        if (tensor != nullptr) {
+            return (uint32_t) tensor->ne[1];
+        }
+    }
+
+    return 0;
+}
+
+static uint32_t dsv4_cache_state_size(const std::vector<ggml_tensor *> & tensors) {
+    for (ggml_tensor * tensor : tensors) {
+        if (tensor != nullptr) {
+            return (uint32_t) tensor->ne[1];
+        }
+    }
+
+    return 0;
 }
 
 static llama_context::dsv4_runtime::comp_plan dsv4_build_comp_plan(
@@ -329,7 +592,7 @@ void llama_reset_dsv4_state(llama_context * ctx) {
     }
 }
 
-bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & batch) {
+bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & batch, bool set_tensors, bool reserve_plan) {
     if (lctx.model.arch != LLM_ARCH_DEEPSEEK4) {
         return true;
     }
@@ -338,13 +601,39 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
         return false;
     }
 
-    lctx.dsv4.csa_plan = dsv4_build_comp_plan(batch, llama_context::dsv4_runtime::CSA_RATIO, true, 2*llama_context::dsv4_runtime::CSA_RATIO, dsv4_comp_size(lctx.cparams.n_ctx, llama_context::dsv4_runtime::CSA_RATIO));
-    lctx.dsv4.hca_plan = dsv4_build_comp_plan(batch, llama_context::dsv4_runtime::HCA_RATIO, false, llama_context::dsv4_runtime::HCA_RATIO, dsv4_comp_size(lctx.cparams.n_ctx, llama_context::dsv4_runtime::HCA_RATIO));
-    lctx.dsv4.lid_plan = dsv4_build_comp_plan(batch, llama_context::dsv4_runtime::CSA_RATIO, true, 2*llama_context::dsv4_runtime::CSA_RATIO, dsv4_comp_size(lctx.cparams.n_ctx, llama_context::dsv4_runtime::CSA_RATIO));
+    const uint32_t csa_kv_size = dsv4_cache_kv_size(lctx.dsv4.cache.csa_k);
+    const uint32_t hca_kv_size = dsv4_cache_kv_size(lctx.dsv4.cache.hca_k);
+    const uint32_t lid_kv_size = dsv4_cache_kv_size(lctx.dsv4.cache.lid_k);
+    const uint32_t csa_state_size = dsv4_cache_state_size(lctx.dsv4.cache.csa_state_kv);
+    const uint32_t hca_state_size = dsv4_cache_state_size(lctx.dsv4.cache.hca_state_kv);
+    const uint32_t lid_state_size = dsv4_cache_state_size(lctx.dsv4.cache.lid_state_kv);
+
+    const auto build_plan = [&](uint32_t ratio, bool overlap, uint32_t state_size, uint32_t kv_size) {
+        return reserve_plan
+            ? dsv4_build_reserve_comp_plan(batch, ratio, overlap, state_size, kv_size)
+            : dsv4_build_comp_plan(batch, ratio, overlap, state_size, kv_size);
+    };
+
+    lctx.dsv4.csa_plan = build_plan(llama_context::dsv4_runtime::CSA_RATIO, true, csa_state_size, csa_kv_size);
+    lctx.dsv4.hca_plan = build_plan(llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size);
+    lctx.dsv4.lid_plan = build_plan(llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size);
 
     std::vector<int64_t> raw_k_idxs((size_t) batch.n_tokens);
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
         raw_k_idxs[(size_t) i] = lctx.kv_self.head + i;
+    }
+
+    if (llama_dsv4_trace_enabled()) {
+        dsv4_trace_emit_tokens(lctx, batch, raw_k_idxs);
+    }
+
+    if (!set_tensors) {
+        if (llama_dsv4_trace_enabled()) {
+            dsv4_trace_emit_plan("csa", llama_context::dsv4_runtime::CSA_RATIO, true, csa_state_size, csa_kv_size, lctx.dsv4.csa_plan);
+            dsv4_trace_emit_plan("hca", llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size, lctx.dsv4.hca_plan);
+            dsv4_trace_emit_plan("lid", llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size, lctx.dsv4.lid_plan);
+        }
+        return true;
     }
 
     dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_idxs, raw_k_idxs);

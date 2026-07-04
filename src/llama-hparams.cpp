@@ -3,6 +3,7 @@
 #include "llama-model-loader.h"
 #include "llama-model.h"
 
+#include <algorithm>
 #include <limits>
 #include <map>
 
@@ -1610,7 +1611,7 @@ void llm_load_hparams(
                             throw std::runtime_error(format(
                                 "%s: unable to infer %s from blk.0.attn_kv_a_mqa.weight shape [%lld, %lld]",
                                 __func__,
-                                LLM_KV_ATTENTION_KV_LORA_RANK,
+                                ml.llm_kv(LLM_KV_ATTENTION_KV_LORA_RANK).c_str(),
                                 (long long) kv_a->ne[0],
                                 (long long) kv_a->ne[1]));
                         }
@@ -1678,7 +1679,21 @@ void llm_load_hparams(
                         ml.get_arr(ml.llm_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS), compress_ratios);
                         std::copy_n(compress_ratios.begin(), hparams.n_layer, hparams.dsv4_compress_ratios.begin());
                     } else {
-                        hparams.dsv4_compress_ratios.fill(0);
+                        for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                            const bool has_attn_compress =
+                                ml.get_tensor_meta(format("blk.%u.attn_compress_kv.weight",   il).c_str()) != nullptr ||
+                                ml.get_tensor_meta(format("blk.%u.attn_compressor_kv.weight", il).c_str()) != nullptr;
+                            const bool has_indexer =
+                                ml.get_tensor_meta(format("blk.%u.indexer.attn_q_b.weight",       il).c_str()) != nullptr ||
+                                ml.get_tensor_meta(format("blk.%u.indexer.compress_kv.weight",    il).c_str()) != nullptr ||
+                                ml.get_tensor_meta(format("blk.%u.indexer_compressor_kv.weight",  il).c_str()) != nullptr;
+
+                            if (has_indexer && !has_attn_compress) {
+                                throw std::runtime_error(format("DeepSeek-V4 layer %u has indexer tensors without attention compressor tensors", il));
+                            }
+
+                            hparams.dsv4_compress_ratios[il] = has_indexer ? 4 : (has_attn_compress ? 128 : 0);
+                        }
                     }
 
                     if (hparams.dsv4_hc_mult == 0) {

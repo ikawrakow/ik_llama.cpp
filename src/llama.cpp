@@ -5438,6 +5438,10 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
+            if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, false, false)) {
+                return GGML_STATUS_FAILED;
+            }
+
             gf = llm_build_context::llama_build_graph(lctx, u_batch, false);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
@@ -5476,9 +5480,9 @@ static int llama_decode_internal(
             return GGML_STATUS_FAILED;
         }
 
-        if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch)) {
-            return GGML_STATUS_FAILED;
-        }
+            if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, true, false)) {
+                return GGML_STATUS_FAILED;
+            }
 
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
@@ -6221,7 +6225,11 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         int n_tokens = (int)std::min(lctx.cparams.n_ctx, lctx.cparams.n_ubatch);
         int n_past = lctx.cparams.n_ctx - n_tokens;
         llama_token token = llama_token_bos(&lctx.model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-        ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, lctx.cparams.worst_graph_tokens);
+        llama_batch reserve_batch = llama_batch_get_one(&token, n_tokens, n_past, 0);
+        if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, reserve_batch, false, true)) {
+            return GGML_STATUS_FAILED;
+        }
+        ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, reserve_batch, true, lctx.cparams.worst_graph_tokens);
 
         // initialize scheduler with the worst-case graph
         lctx.reset_scheduler();
@@ -7413,7 +7421,12 @@ struct llama_context * llama_init_from_model(
             // build worst-case graph
             int n_past = cparams.n_ctx - n_tokens;
             llama_token token = llama_token_bos(&ctx->model); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-            ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true, cparams.worst_graph_tokens);
+            llama_batch reserve_batch = llama_batch_get_one(&token, n_tokens, n_past, 0);
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(*ctx, reserve_batch, false, true)) {
+                llama_free(ctx);
+                return nullptr;
+            }
+            ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, reserve_batch, true, cparams.worst_graph_tokens);
 
             // initialize scheduler with the worst-case graph
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
