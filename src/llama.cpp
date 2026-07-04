@@ -878,10 +878,10 @@ static void llama_openpangu_resolve_latent_cache_types(
         bool         type_k_explicit,
         bool         type_v_explicit) {
     if (!type_k_explicit) {
-        type_k = GGML_TYPE_F32;
+        type_k = GGML_TYPE_F16;
     }
     if (!type_v_explicit) {
-        type_v = GGML_TYPE_F32;
+        type_v = GGML_TYPE_F16;
     }
 
     if (!llama_openpangu_latent_cache_type_supported(type_k) ||
