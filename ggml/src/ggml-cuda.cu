@@ -2723,6 +2723,15 @@ static __global__ void k_copy_src_to_contiguous(const char * __restrict__ src_or
                                                   int64_t ne10, int64_t ne11, size_t nb11, size_t nb12) {
     int32_t i = blockIdx.x;
 
+    // Defense-in-depth: skip rows whose routing indices are the "no valid expert" sentinel (INT32_MAX) or are
+    // otherwise out of any sane range. Real token/expert indices are always far below this bound, so valid
+    // routings are never skipped; this only fires on a degenerate/uninitialized row mapping and prevents a wild
+    // global access (seen as Xid 13 "Out Of Range Address" when an upstream kernel corrupts the MoE router).
+    if (row_mapping[i].i1 < 0 || row_mapping[i].i2 < 0 ||
+        row_mapping[i].i1 >= (1 << 30) || row_mapping[i].i2 >= (1 << 30)) {
+        return;
+    }
+
     const int32_t i11 = row_mapping[i].i1 % ne11;
     const int32_t i12 = row_mapping[i].i2;
 
@@ -2742,6 +2751,14 @@ static __global__ void k_copy_dst_from_contiguous(char * __restrict__ dst_origin
 
     const int32_t i1 = row_mapping[i].i1;
     const int32_t i2 = row_mapping[i].i2;
+
+    // Defense-in-depth: skip rows whose routing indices are the "no valid expert" sentinel (INT32_MAX) or are
+    // otherwise out of any sane range. Real token/expert indices are always far below this bound, so valid
+    // routings are never skipped; this only fires on a degenerate/uninitialized row mapping and prevents a wild
+    // global write (seen as Xid 13 "Out Of Range Address" when an upstream kernel corrupts the MoE router).
+    if (i1 < 0 || i2 < 0 || i1 >= (1 << 30) || i2 >= (1 << 30)) {
+        return;
+    }
 
     const float * dst_row_contiguous = (const float *)(dst_contiguous + i*nb1);
     float * dst_row_original = (float *)(dst_original + i1*nb1 + i2*nb2);
