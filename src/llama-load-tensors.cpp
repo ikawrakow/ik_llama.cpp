@@ -2940,9 +2940,10 @@ bool create_tensors_helper::create_openpangu_tensors(const LLM_TN & tn) {
         layer.wq_a      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, flags);
         layer.wq_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head_k}, flags);
         layer.wkv_a_mqa = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + n_embd_head_qk_rope}, flags);
-        // the fused kv_b_proj is in the GGUF but has no consumer in the absorbed-MLA graph
-        // (attention runs entirely on the pre-split k_b/v_b below) -> skip it
-        layer.wkv_b     = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, flags | llama_model_loader::TENSOR_SKIP);
+        // older GGUFs include the fused kv_b_proj, but the absorbed-MLA graph has no
+        // consumer for it (attention runs entirely on pre-split k_b/v_b below) -> skip
+        // when present and allow it to be absent from new conversions
+        layer.wkv_b     = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, flags | llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED);
         // converter-emitted pre-split k_b/v_b, loaded 2D as written (head-major rows) and
         // reshaped in-graph: k_b absorbs q_nope into latent space, v_b up-projects the output
         layer.wk_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, flags);

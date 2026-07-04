@@ -4706,7 +4706,8 @@ class OpenPanguV2Model(DeepseekV2Model):
             else:
                 return []
 
-        # Split the fused MLA kv_b into k_b / v_b (deepseek MLA layout).
+        # Split the fused MLA kv_b into k_b / v_b (deepseek MLA layout). OpenPangu's
+        # graph consumes the pre-split tensors directly, so do not emit the fused copy.
         if name.endswith("kv_b_proj.weight"):
             name_kb = name.replace("kv_b_proj", "k_b_proj")
             name_vb = name.replace("kv_b_proj", "v_b_proj")
@@ -4724,7 +4725,6 @@ class OpenPanguV2Model(DeepseekV2Model):
             v_b = v_b.reshape(n_head_kv * v_head_dim, data_torch.shape[-1])
 
             return [
-                (self.map_tensor_name(name),    data_torch),
                 (self.map_tensor_name(name_kb), k_b),
                 (self.map_tensor_name(name_vb), v_b),
             ]
