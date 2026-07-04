@@ -28,6 +28,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <cstring>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -1064,11 +1065,12 @@ bool llama_model_loader::load_all_data(
             void * progress_callback_user_data) {
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 
-    std::vector<no_init<uint8_t>> read_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 
     // Number of worker threads for cuda and host tensor loading.
     const int n_workers = 8;
+
+    std::vector<std::vector<no_init<uint8_t>>> read_bufs(n_workers);
 
 #if defined(GGML_USE_CUDA)
     // One pinned staging buffer per worker for async uploads
@@ -1114,11 +1116,12 @@ bool llama_model_loader::load_all_data(
     std::mutex load_mutex;
 
     // Load model weights into a backing buffer:
-    // * mmap: host page cache        Serial
-    // * host: system ram             Parallel
-    // * cuda: GPU                    Parallel
-    // * rest: All other backends,    Serial
-    auto load_tensor = [&](ggml_tensor * cur, [[maybe_unused]] int thread_idx) -> size_t {
+    // * mmap:               host page cache        Serial
+    // * host:               system ram             Parallel
+    // * cuda:               GPU                    Parallel
+    // * --split-mode graph: GPU                    Parallel
+    // * rest:               All other backends,    Serial
+    auto load_tensor = [&](ggml_tensor * cur, int thread_idx) -> size_t {
         const auto * weight = get_weight(ggml_get_name(cur));
         GGML_ASSERT(weight != nullptr);
         GGML_ASSERT(weight->idx < files.size());
@@ -1191,10 +1194,29 @@ bool llama_model_loader::load_all_data(
             }
             return n_size;
         }
+
+        // --split-mode graph. Parallel
+        const char * buffer_name = ggml_backend_buffer_name(cur->buffer);
+        const bool   is_probably_split_mode_graph = std::strncmp(buffer_name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
+        if (is_probably_split_mode_graph) {
+            auto & read_buf = read_bufs[thread_idx];
+            if (read_buf.capacity() > n_size) {
+                read_buf = std::vector<no_init<uint8_t>>();
+            }
+            read_buf.resize(n_size);
+            file->seek(weight->offs, SEEK_SET);
+            file->read_raw(read_buf.data(), n_size);
+            ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+            if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+                throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+            }
+            return n_size;
+        }
 #endif
         // rest. Serialized.
         {
             std::lock_guard<std::mutex> lock(load_mutex);
+            auto & read_buf = read_bufs[thread_idx];
             read_buf.resize(n_size);
             file->seek(weight->offs, SEEK_SET);
             file->read_raw(read_buf.data(), n_size);
