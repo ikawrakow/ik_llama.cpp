@@ -404,6 +404,7 @@ int main(int argc, char ** argv) {
 
         LOG("prompt: \"%s\"\n", log_tostr(prompt));
         LOG("tokens: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, embd_inp).c_str());
+
     }
 
     // Should not run without any tokens
@@ -631,6 +632,13 @@ int main(int argc, char ** argv) {
     std::ostringstream output_ss;     g_output_ss     = &output_ss;
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
+    const int64_t t_start_process_prompt_us = ggml_time_us();
+    int64_t t_start_generation_us = 0;
+    double t_prompt_processing_ms = 0.0;
+    double t_token_generation_ms = 0.0;
+    int n_prompt_tokens_processed = 0;
+    int n_decoded = 0;
+
     // the first thing we will do is to output the prompt, so set color accordingly
     console::set_display(console::prompt);
     display = params.display_prompt;
@@ -670,15 +678,16 @@ int main(int argc, char ** argv) {
         embd_inp.push_back(decoder_start_token_id);
     }
 
-    if (spec != nullptr) {
-        common_speculative_begin(spec, embd_inp);
-    }
-
     bool embd_is_prompt = false;
     bool emitted_generated = false;
     std::vector<llama_token> emitted;
     llama_tokens speculative_tokens = embd_inp;
     bool emitted_hit_eog = false;
+    bool speculative_started = false;
+    int32_t final_prompt_output_index = -1;
+    llama_pos final_prompt_hidden_pos = -1;
+    bool have_speculative_sampled = false;
+    llama_token speculative_sampled = LLAMA_TOKEN_NULL;
 
     while ((n_remain != 0 && !is_antiprompt) || params.interactive) {
         // predict
@@ -833,20 +842,50 @@ int main(int argc, char ** argv) {
 
                 LOG("eval: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, embd).c_str());
 
-                llama_batch batch = llama_batch_get_one(&embd[i], n_eval, n_past, 0);
+                const bool need_prompt_target_features =
+                    embd_is_prompt &&
+                    spec != nullptr &&
+                    (params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) ||
+                     params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH));
+
+                llama_batch batch = {};
+                if (need_prompt_target_features) {
+                    batch = llama_batch_init(n_eval, 0, 1);
+                    for (int j = 0; j < n_eval; ++j) {
+                        common_batch_add(batch, embd[i + j], n_past + j, { 0 }, true);
+                    }
+                } else {
+                    batch = llama_batch_get_one(&embd[i], n_eval, n_past, 0);
+                }
+
                 if (llama_decode(ctx, batch)) {
+                    if (need_prompt_target_features) {
+                        llama_batch_free(batch);
+                    }
                     LOG_TEE("%s : failed to eval\n", __func__);
                     return 1;
                 }
+
                 if (spec != nullptr) {
-                    if (embd_is_prompt) {
+                    if (need_prompt_target_features) {
                         if (common_speculative_on_target_seq_batch(spec, ctx, batch, 0, true) != 0) {
+                            llama_batch_free(batch);
                             LOG_TEE("%s : failed to warm speculative target state\n", __func__);
                             return 1;
                         }
-                    } else {
+                        final_prompt_output_index = n_eval - 1;
+                        final_prompt_hidden_pos = n_past + n_eval - 1;
+                    } else if (!embd_is_prompt) {
                         speculative_tokens.insert(speculative_tokens.end(), embd.begin() + i, embd.begin() + i + n_eval);
                     }
+                }
+
+                if (need_prompt_target_features) {
+                    llama_batch_free(batch);
+                }
+
+                if (embd_is_prompt) {
+                    n_prompt_tokens_processed += n_eval;
                 }
 
                 n_past += n_eval;
@@ -869,6 +908,29 @@ int main(int argc, char ** argv) {
         embd_guidance.clear();
 
         if ((int) embd_inp.size() <= n_consumed && !is_interacting) {
+            if (!speculative_started) {
+                if (spec != nullptr) {
+                    static const llama_tokens empty_speculative_prompt;
+                    const llama_tokens & speculative_prompt =
+                        params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+                        !params.speculative.has_composite_stage_chain()
+                            ? empty_speculative_prompt
+                            : speculative_tokens;
+                    common_speculative_begin(spec, speculative_prompt);
+                    if (params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+                        final_prompt_output_index >= 0 &&
+                        final_prompt_hidden_pos >= 0 &&
+                        !common_speculative_capture_output_hidden(spec, ctx, final_prompt_output_index, 0, final_prompt_hidden_pos)) {
+                        LOG_TEE("%s: failed to capture final prompt hidden state for speculative init (output_index=%d, pos=%d)\n",
+                                __func__, final_prompt_output_index, final_prompt_hidden_pos);
+                    }
+                }
+                if (params.has_mtp) {
+                    llama_set_embeddings(ctx, false);
+                }
+                speculative_started = true;
+            }
+
             // optionally save the session on first sample (for faster prompt loading next time)
             if (!path_session.empty() && need_to_save_session && !params.prompt_cache_ro) {
                 need_to_save_session = false;
@@ -879,19 +941,29 @@ int main(int argc, char ** argv) {
 
             const int n_predict_budget = n_remain < 0 ? std::numeric_limits<int>::max() : n_remain;
             bool used_speculative = false;
-            bool have_fallback_sampled = false;
-            llama_token fallback_sampled = LLAMA_TOKEN_NULL;
 
             if (spec != nullptr && n_predict_budget != 1) {
-                const llama_token sampled_before = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
-                have_fallback_sampled = true;
-                fallback_sampled = sampled_before;
-                common_sampler_accept(ctx_sampling, ctx, sampled_before, /* apply_grammar= */ true);
+                const bool sampled_before_from_carry = have_speculative_sampled;
+                llama_token sampled_before = LLAMA_TOKEN_NULL;
+                if (sampled_before_from_carry) {
+                    sampled_before = speculative_sampled;
+                    have_speculative_sampled = false;
+                    speculative_sampled = LLAMA_TOKEN_NULL;
+                } else {
+                    sampled_before = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
+                    common_sampler_accept(ctx_sampling, ctx, sampled_before, /* apply_grammar= */ true);
+                }
+                static const llama_tokens empty_speculative_tokens;
+                const llama_tokens & draft_history =
+                    params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+                    !params.speculative.has_composite_stage_chain()
+                        ? empty_speculative_tokens
+                        : speculative_tokens;
                 auto draft_result = common_speculative_draft_ex(
                     spec,
                     ctx,
                     params.speculative,
-                    speculative_tokens,
+                    draft_history,
                     sampled_before,
                     n_past,
                     0);
@@ -972,9 +1044,12 @@ int main(int argc, char ** argv) {
                         llama_batch_free(verify_batch);
 
                         if (!ids.empty()) {
-                            emitted.push_back(sampled_before);
+                            have_speculative_sampled = true;
+                            speculative_sampled = ids.back();
+                            if (!sampled_before_from_carry) {
+                                emitted.push_back(sampled_before);
+                            }
                             emitted.insert(emitted.end(), ids.begin(), ids.end());
-                            embd.push_back(ids.back());
                             embd_is_prompt = false;
                             emitted_generated = true;
                             used_speculative = true;
@@ -991,13 +1066,8 @@ int main(int argc, char ** argv) {
             }
 
             if (!used_speculative) {
-                const llama_token id = have_fallback_sampled
-                    ? fallback_sampled
-                    : common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
-
-                if (!have_fallback_sampled) {
-                    common_sampler_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
-                }
+                const llama_token id = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
+                common_sampler_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
 
                 LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, ctx_sampling->prev).c_str());
 
@@ -1090,6 +1160,17 @@ int main(int argc, char ** argv) {
             }
 
             emitted.swap(emitted_visible);
+
+            if (emitted_generated && !emitted.empty()) {
+                n_decoded += (int) emitted.size();
+                const int64_t t_current_us = ggml_time_us();
+                if (n_decoded == (int) emitted.size()) {
+                    t_start_generation_us = t_current_us;
+                    t_prompt_processing_ms = (t_start_generation_us - t_start_process_prompt_us) / 1e3;
+                }
+                t_token_generation_ms = std::max<int64_t>(1, t_current_us - t_start_generation_us) / 1e3;
+            }
+
         }
 
         // display text
@@ -1268,8 +1349,28 @@ int main(int argc, char ** argv) {
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
     }
 
-    llama_print_timings(ctx);
-    common_speculative_print_stats(spec);
+    if (n_decoded > 0) {
+        const double t_prompt = n_prompt_tokens_processed > 0 ? t_prompt_processing_ms / n_prompt_tokens_processed : 0.0;
+        const double n_prompt_second = (t_prompt_processing_ms > 0 && n_prompt_tokens_processed > 0)
+            ? 1e3 / t_prompt_processing_ms * n_prompt_tokens_processed
+            : 0.0;
+
+        const double t_gen = t_token_generation_ms / n_decoded;
+        const double n_gen_second = 1e3 / t_token_generation_ms * n_decoded;
+
+        LOG_TEE("\n");
+        LOG_TEE("main: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+                t_prompt_processing_ms, n_prompt_tokens_processed, t_prompt, n_prompt_second);
+        LOG_TEE("main:        eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+                t_token_generation_ms, n_decoded, t_gen, n_gen_second);
+        LOG_TEE("main:       total time = %10.2f ms / %5d tokens\n",
+                t_prompt_processing_ms + t_token_generation_ms, n_prompt_tokens_processed + n_decoded);
+
+        common_speculative_print_stats(spec, n_gen_second, n_decoded, n_past, &params.speculative);
+    } else {
+        llama_print_timings(ctx);
+        common_speculative_print_stats(spec);
+    }
     write_logfile(ctx, params, model, input_tokens, output_ss.str(), output_tokens);
 
     if (ctx_guidance) { llama_free(ctx_guidance); }
