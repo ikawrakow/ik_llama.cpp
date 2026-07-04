@@ -871,12 +871,17 @@ static inline bool llama_openpangu_latent_cache_type_supported(ggml_type type) {
     return type == GGML_TYPE_F32 || type == GGML_TYPE_F16;
 }
 
-static void llama_openpangu_resolve_latent_cache_types(
-        const char * fn,
-        ggml_type &  type_k,
-        ggml_type &  type_v,
-        bool         type_k_explicit,
-        bool         type_v_explicit) {
+static std::string llama_openpangu_latent_cache_type_error(ggml_type type_k, ggml_type type_v) {
+    return format("OpenPangu latent KV cache supports only f32 and f16 (requested %s/%s); use -ctk f16 -ctv f16",
+            ggml_type_name(type_k), ggml_type_name(type_v));
+}
+
+static bool llama_openpangu_resolve_latent_cache_types(
+        ggml_type &   type_k,
+        ggml_type &   type_v,
+        bool          type_k_explicit,
+        bool          type_v_explicit,
+        std::string * error_msg) {
     if (!type_k_explicit) {
         type_k = GGML_TYPE_F16;
     }
@@ -884,17 +889,19 @@ static void llama_openpangu_resolve_latent_cache_types(
         type_v = GGML_TYPE_F16;
     }
 
-    if (!llama_openpangu_latent_cache_type_supported(type_k) ||
-        !llama_openpangu_latent_cache_type_supported(type_v)) {
-        LLAMA_LOG_WARN("%s: OpenPangu latent KV cache supports f32/f16 only - using f32 for unsupported requested type(s) (%s/%s)\n",
-                fn, ggml_type_name(type_k), ggml_type_name(type_v));
-        if (!llama_openpangu_latent_cache_type_supported(type_k)) {
-            type_k = GGML_TYPE_F32;
+    const bool type_k_unsupported = type_k_explicit && !llama_openpangu_latent_cache_type_supported(type_k);
+    const bool type_v_unsupported = type_v_explicit && !llama_openpangu_latent_cache_type_supported(type_v);
+
+    if (type_k_unsupported || type_v_unsupported) {
+        // Quantized latent cache is planned as a follow-up; this refusal can relax once
+        // those cache types are real for OpenPangu.
+        if (error_msg) {
+            *error_msg = llama_openpangu_latent_cache_type_error(type_k, type_v);
         }
-        if (!llama_openpangu_latent_cache_type_supported(type_v)) {
-            type_v = GGML_TYPE_F32;
-        }
+        return false;
     }
+
+    return true;
 }
 
 static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
@@ -4351,8 +4358,11 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
         if (model.arch == LLM_ARCH_OPENPANGU) {
-            llama_openpangu_resolve_latent_cache_types(__func__,
-                    params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit);
+            std::string error_msg;
+            if (!llama_openpangu_resolve_latent_cache_types(
+                        params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit, &error_msg)) {
+                throw std::runtime_error(error_msg);
+            }
         }
         if (params.defer_experts && params.use_mmap) {
 #ifdef __linux__
@@ -7254,8 +7264,12 @@ struct llama_context * llama_init_from_model(
     }
 
     if (model->arch == LLM_ARCH_OPENPANGU) {
-        llama_openpangu_resolve_latent_cache_types(__func__,
-                params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit);
+        std::string error_msg;
+        if (!llama_openpangu_resolve_latent_cache_types(
+                    params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit, &error_msg)) {
+            LLAMA_LOG_ERROR("%s: %s\n", __func__, error_msg.c_str());
+            return nullptr;
+        }
     }
 
     //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
