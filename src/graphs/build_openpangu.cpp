@@ -3,6 +3,7 @@
 #include "../llama-context.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <vector>
 
 static constexpr int64_t OPENPANGU_CONV_RING = 16;
@@ -30,6 +31,45 @@ static void openpangu_register_cache_copy(
     copies[idx].cpy = cpy;
     copies[idx].step = step;
     copies[idx].base_offset = base_offset;
+}
+
+static uint32_t openpangu_kv_cache_pad(const llama_cparams & cparams) {
+    return cparams.flash_attn ? 256u : 32u;
+}
+
+static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm, uint32_t window, bool * windowed) {
+    *windowed = false;
+    llm.lctx.openpangu_swa_window_view = {};
+
+    if (window == 0) {
+        return nullptr;
+    }
+
+    const uint32_t pad = openpangu_kv_cache_pad(llm.cparams);
+    const llama_openpangu_swa_window_view view =
+        llama_openpangu_calc_swa_window_view(llm.n_kv, llm.n_tokens, window, pad);
+
+    if (std::getenv("LLAMA_OPENPANGU_SWA_WINDOW_TRACE")) {
+        LLAMA_LOG_INFO("%s: openPangu SWA window %s n_kv=%d n_tokens=%d window=%u pad=%u W_view=%d win_off=%d\n",
+                __func__, view.engaged ? "engaged" : "not-engaged",
+                (int) llm.n_kv, (int) llm.n_tokens, window, pad, (int) view.w_view, (int) view.win_off);
+    }
+
+    if (!view.engaged) {
+        return llm.build_inp_KQ_mask_swa();
+    }
+
+    llm.lctx.openpangu_swa_window_view = {
+        true,
+        llm.n_kv,
+        llm.n_tokens,
+        (int64_t) window,
+        (int64_t) pad,
+        view.w_view,
+        view.win_off,
+    };
+    *windowed = true;
+    return llm.build_inp_KQ_mask_swa_win(view.w_view);
 }
 
 // openPangu-2.0-Flash graph.
@@ -165,7 +205,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         ggml_cgraph * gf, const llama_layer & layer, int il, ggml_tensor * x_normed,
         ggml_tensor * KQ_mask, ggml_tensor * inp_pos,
         ggml_tensor * conv_state, ggml_tensor * conv_hist_idx, ggml_tensor * conv_write_idx,
-        float kq_scale) {
+        float kq_scale, bool KQ_mask_swa_windowed) {
     const int64_t n_embd_head_qk_rope = hparams.n_rot;                       // 64
     const int64_t n_embd_head_k       = hparams.n_embd_head_k(0);            // 192
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope; // 128
@@ -338,19 +378,27 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     // ---- latent attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
     // Keep sinks and cached tokens separate until after KQ so f16 latent caches do not need
     // unsupported non-f32 concat along dim1.
-    ggml_tensor * kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv,
-                                        kv_self.k_l[il]->nb[1], 0);
-    ggml_tensor * vl_all = ggml_view_2d(ctx0, kv_self.v_l[il], n_kv, kv_lora_rank,
-                                        (int64_t) kv_self.size*ggml_element_size(kv_self.v_l[il]), 0);
+    const bool use_swa_window = KQ_mask_swa_windowed && lctx.openpangu_swa_window_view.active;
+    const int64_t n_kv_attn   = use_swa_window ? lctx.openpangu_swa_window_view.w_view  : n_kv;
+    const int64_t win_off     = use_swa_window ? lctx.openpangu_swa_window_view.win_off : 0;
+    if (sel_mask) {
+        GGML_ASSERT(!use_swa_window && "openPangu DSA/indexer layers must not use SWA window views");
+    }
+
+    ggml_tensor * kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv_attn,
+                                        kv_self.k_l[il]->nb[1], (size_t) win_off*kv_self.k_l[il]->nb[1]);
+    ggml_tensor * vl_all = ggml_view_2d(ctx0, kv_self.v_l[il], n_kv_attn, kv_lora_rank,
+                                        (int64_t) kv_self.size*ggml_element_size(kv_self.v_l[il]),
+                                        (size_t) win_off*ggml_element_size(kv_self.v_l[il]));
 
     ggml_tensor * kq_sinks = ggml_mul_mat(ctx0, sink_blk, q_all);                           // [NS, T, H]
-    ggml_tensor * kq_cache = ggml_mul_mat(ctx0, kl_all,    q_all);                           // [n_kv, T, H]
-    ggml_tensor * kq = ggml_concat(ctx0, kq_sinks, kq_cache, 0);                             // [NS+n_kv, T, H]
+    ggml_tensor * kq_cache = ggml_mul_mat(ctx0, kl_all,    q_all);                           // [n_kv_attn, T, H]
+    ggml_tensor * kq = ggml_concat(ctx0, kq_sinks, kq_cache, 0);                             // [NS+n_kv_attn, T, H]
 
     // mask: sinks always visible (0) ++ the causal/SWA KQ_mask (+ the DSA top-k selection
     // mask on indexer layers). The zero block is built by scaling finite kq data (KQ_mask
     // itself holds -inf, which 0*x would turn into NaN).
-    ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0);
+    ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, n_tokens, KQ_mask->nb[1], 0);
     if (sel_mask) {
         kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask);
     }
@@ -360,7 +408,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
 
     ggml_tensor * kq_s = ggml_view_3d(ctx0, kq, NS, n_tokens, n_head, kq->nb[1], kq->nb[2], 0);
-    ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv, n_tokens, n_head, kq->nb[1], kq->nb[2],
+    ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv_attn, n_tokens, n_head, kq->nb[1], kq->nb[2],
                                       NS*ggml_element_size(kq));
     ggml_tensor * kqv = ggml_add(ctx0,
             ggml_mul_mat(ctx0, s_lat_t, kq_s),
@@ -400,7 +448,8 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
         ggml_tensor ** full_hidden_out,
         bool select_outputs,
         bool build_logits,
-        bool cache_writes_only) {
+        bool cache_writes_only,
+        bool KQ_mask_swa_windowed) {
     const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k(0)));
 
     // same position-addressing invariant as build_openpangu (worst-case builds exempt)
@@ -433,7 +482,8 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     // chains real t-1/t-2 taps across warmup and sequential draft steps
     ggml_tensor * mtp_conv_state = (size_t) il < kv_self.s_l.size() ? kv_self.s_l[il] : nullptr;
     cur = build_openpangu_attention(gf, mtp_layer, il, cur, KQ_mask, inp_pos,
-                                    mtp_conv_state, conv_hist_idx, conv_write_idx, kq_scale);
+                                    mtp_conv_state, conv_hist_idx, conv_write_idx, kq_scale,
+                                    KQ_mask_swa_windowed);
     if (cache_writes_only) {
         // only this head's latent-cache and conv-ring writes matter at this site (the
         // update chain's last head and the draft-time row fill); the FFN, norms, and
@@ -533,7 +583,10 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_tensor * inp_pos = build_inp_pos();
         // the NextN/MTP layers are SWA layers with their own window (2048); the mask fill
         // uses hparams.n_swa_mtp when the graph is built with an MTP op type
-        ggml_tensor * KQ_mask = hparams.n_swa_mtp > 0 && hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
+        bool KQ_mask_swa_windowed = false;
+        ggml_tensor * KQ_mask = hparams.n_swa_mtp > 0 && hparams.n_swa > 0
+            ? openpangu_build_swa_mask_for_graph(*this, hparams.n_swa_mtp, &KQ_mask_swa_windowed)
+            : build_inp_KQ_mask();
         ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
         lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
         cb(lctx.inp_tokens, "inp_tokens", -1);
@@ -569,7 +622,9 @@ ggml_cgraph * llm_build_context::build_openpangu() {
             mtp_out = build_openpangu_mtp(model.layers[il_mtp],
                                           hidden_states_from_main_model, gf, il_mtp,
                                           inp_pos, KQ_mask, inp_out_ids, inp_tokens,
-                                          conv_hist_idx, conv_write_idx);
+                                          conv_hist_idx, conv_write_idx,
+                                          nullptr, true, true, false,
+                                          KQ_mask_swa_windowed);
             // each draft step runs one head, so a deeper head has no cache row at this
             // position when its own decode comes later. Head h first decodes at step h+1 and
             // the update batches cover everything below the draft base, which with three
@@ -583,14 +638,17 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                                                          inp_pos, KQ_mask, nullptr, inp_tokens,
                                                          conv_hist_idx, conv_write_idx,
                                                          nullptr, false, false,
-                                                         /*cache_writes_only=*/true);
+                                                         /*cache_writes_only=*/true,
+                                                         KQ_mask_swa_windowed);
                 ggml_build_forward_expand(gf, fill);
             }
         } else if (n_mtp_heads == 1) {
             mtp_out = build_openpangu_mtp(model.layers[il_mtp_first],
                                           hidden_states_from_main_model, gf, il_mtp_first,
                                           inp_pos, KQ_mask, inp_out_ids, inp_tokens,
-                                          conv_hist_idx, conv_write_idx);
+                                          conv_hist_idx, conv_write_idx,
+                                          nullptr, true, true, false,
+                                          KQ_mask_swa_windowed);
         } else {
             ggml_tensor * prev_full = hidden_states_from_main_model;
             ggml_tensor * head1_hidden = nullptr;
@@ -608,7 +666,8 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                                                         is_last_head ? nullptr : &full_hidden,
                                                         i == 0,
                                                         false,
-                                                        /*cache_writes_only=*/is_last_head && i > 0);
+                                                        /*cache_writes_only=*/is_last_head && i > 0,
+                                                        KQ_mask_swa_windowed);
                 if (i == 0) {
                     head1_hidden = out;
                 } else {
@@ -662,7 +721,8 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     // SWA layers get the windowed mask (window 512 base); DSA layers keep the plain causal
     // mask and add the indexer's top-k selection inside the attention builder. Absent
     // schedule keys (n_swa == 0) keep every layer dense (pre-DSA GGUF fallback).
-    ggml_tensor * KQ_mask_swa = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : nullptr;
+    bool KQ_mask_swa_windowed = false;
+    ggml_tensor * KQ_mask_swa = hparams.n_swa > 0 ? openpangu_build_swa_mask_for_graph(*this, hparams.n_swa, &KQ_mask_swa_windowed) : nullptr;
     ggml_tensor * conv_hist_idx = build_inp_openpangu_conv_hist();
     ggml_tensor * conv_write_idx = build_inp_openpangu_conv_write(std::min<int64_t>(n_tokens, OPENPANGU_CONV_RING));
 
@@ -754,9 +814,11 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         cur = llm_build_norm(ctx0, x, hparams, layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
         if (il == 0) ggml_set_name(cur, "opg0_attn_norm");
 
-        ggml_tensor * layer_mask = KQ_mask_swa && hparams.openpangu_window[il] > 0 ? KQ_mask_swa : KQ_mask;
+        const bool layer_swa = KQ_mask_swa && hparams.openpangu_window[il] > 0;
+        ggml_tensor * layer_mask = layer_swa ? KQ_mask_swa : KQ_mask;
         cur = build_openpangu_attention(gf, layer, il, cur, layer_mask, inp_pos,
-                                        conv_state, conv_hist_idx, conv_write_idx, kq_scale);
+                                        conv_state, conv_hist_idx, conv_write_idx, kq_scale,
+                                        layer_swa && KQ_mask_swa_windowed);
         if (il == 0) ggml_set_name(cur, "opg0_attn_out");
 
         cur = llm_build_norm(ctx0, cur, hparams, layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);

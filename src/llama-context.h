@@ -13,6 +13,28 @@ struct llama_model;
 #include <set>
 #include <memory>
 
+struct llama_openpangu_swa_window_view {
+    int64_t w_view  = 0;
+    int64_t win_off = 0;
+    bool engaged    = false;
+};
+
+static inline llama_openpangu_swa_window_view llama_openpangu_calc_swa_window_view(
+        int64_t n_kv, int64_t n_tokens, int64_t window, int64_t pad) {
+    llama_openpangu_swa_window_view result;
+    if (window <= 0 || n_kv <= 0) {
+        result.w_view = n_kv;
+        return result;
+    }
+
+    const int64_t unpadded = window + pad + n_tokens;
+    const int64_t overcovered = pad > 1 ? ((unpadded + pad - 1) / pad) * pad : unpadded;
+    result.w_view  = overcovered < n_kv ? overcovered : n_kv;
+    result.win_off = n_kv - result.w_view;
+    result.engaged = result.w_view < n_kv;
+    return result;
+}
+
 struct llama_kv_cell {
     llama_pos pos   = -1;
     llama_pos delta = 0;
@@ -378,6 +400,7 @@ struct llama_context {
     struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]
     struct ggml_tensor * inp_KQ_mask;     // F32 [kv_size, n_batch]
     struct ggml_tensor * inp_KQ_mask_swa; // F32 [kv_size, n_batch]
+    struct ggml_tensor * inp_KQ_mask_swa_win = nullptr; // F32 [openPangu SWA W_view, n_batch]
     struct ggml_tensor * inp_K_shift;     // I32 [kv_size]
     struct ggml_tensor * inp_mean;        // F32 [n_batch, n_batch]
     struct ggml_tensor * inp_cls;         // I32 [n_batch]
@@ -395,6 +418,16 @@ struct llama_context {
     struct ggml_tensor * inp_mask_inf = nullptr;
     struct ggml_tensor * inp_openpangu_conv_hist = nullptr;  // I32 [2], rows in [zero | ring] for t-2/t-1
     struct ggml_tensor * inp_openpangu_conv_write = nullptr; // I32 [min(n_tokens, 16)], ring rows to update
+
+    struct openpangu_swa_window_view_state {
+        bool active       = false;
+        int64_t n_kv      = 0;
+        int64_t n_tokens  = 0;
+        int64_t window    = 0;
+        int64_t pad       = 0;
+        int64_t w_view    = 0;
+        int64_t win_off   = 0;
+    } openpangu_swa_window_view;
 
     // multi-head MTP chaining state: head k's output row at the last committed position,
     // written back after each warmup/update decode and fed into the next MTP graph through

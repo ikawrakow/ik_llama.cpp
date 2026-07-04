@@ -143,6 +143,8 @@ struct llm_build_context {
 
     ggml_tensor * build_inp_KQ_mask_swa(bool causal = true);
 
+    ggml_tensor * build_inp_KQ_mask_swa_win(int64_t n_kv_win, bool causal = true);
+
     ggml_tensor * build_inp_mean();
 
     ggml_tensor * build_inp_cls();
@@ -291,7 +293,8 @@ struct llm_build_context {
         ggml_tensor * conv_state,
         ggml_tensor * conv_hist_idx,
         ggml_tensor * conv_write_idx,
-        float kq_scale);
+        float kq_scale,
+        bool KQ_mask_swa_windowed = false);
 
     // openPangu NextN/MTP head (plain-residual block, no mHC): eh_proj stitching ->
     // attention -> MoE -> shared head. Returns the draft logits tensor.
@@ -309,7 +312,8 @@ struct llm_build_context {
         ggml_tensor ** full_hidden_out = nullptr,
         bool select_outputs = true,
         bool build_logits = true,
-        bool cache_writes_only = false);
+        bool cache_writes_only = false,
+        bool KQ_mask_swa_windowed = false);
 
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,
