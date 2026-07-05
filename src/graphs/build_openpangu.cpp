@@ -16,6 +16,7 @@ static constexpr int OPENPANGU_COPY_K_KPE = 1;
 static constexpr int OPENPANGU_COPY_V_TRANS = 2;
 static constexpr int OPENPANGU_COPY_IDX = 3;
 static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
+static constexpr int64_t OPENPANGU_IDX_SCORE_CHUNK = 256;
 
 static std::vector<llama_context::CacheCopy> & openpangu_cache_copies(llama_context & lctx) {
     return lctx.cparams.mtp_op_type == MTP_OP_NONE ? lctx.openpangu_cache_copies : lctx.openpangu_cache_copies_mtp;
@@ -47,6 +48,11 @@ struct openpangu_dsa_gather_env {
     bool    trace          = false;
 };
 
+struct openpangu_idx_score_env {
+    int64_t chunk = OPENPANGU_IDX_SCORE_CHUNK;
+    bool    trace = false;
+};
+
 static bool openpangu_env_flag_value(const char * env, bool default_value) {
     if (env == nullptr || env[0] == '\0') {
         return default_value;
@@ -72,6 +78,22 @@ static int64_t openpangu_env_i64_value(const char * name, const char * env, int6
     return (int64_t) value;
 }
 
+static int64_t openpangu_env_i64_value_allow_zero(const char * name, const char * env, int64_t default_value) {
+    if (env == nullptr || env[0] == '\0') {
+        return default_value;
+    }
+
+    errno = 0;
+    char * end = nullptr;
+    const long value = std::strtol(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || value < 0) {
+        LLAMA_LOG_WARN("%s: ignoring invalid %s=%s\n", __func__, name, env);
+        return default_value;
+    }
+
+    return (int64_t) value;
+}
+
 static const openpangu_dsa_gather_env & openpangu_dsa_gather_env_once() {
     static const openpangu_dsa_gather_env env = [] {
         openpangu_dsa_gather_env result;
@@ -82,6 +104,21 @@ static const openpangu_dsa_gather_env & openpangu_dsa_gather_env_once() {
         return result;
     }();
     return env;
+}
+
+static const openpangu_idx_score_env & openpangu_idx_score_env_once() {
+    static const openpangu_idx_score_env env = [] {
+        openpangu_idx_score_env result;
+        result.chunk = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_IDX_CHUNK",
+                std::getenv("LLAMA_OPENPANGU_IDX_CHUNK"), OPENPANGU_IDX_SCORE_CHUNK);
+        result.trace = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_IDX_CHUNK_TRACE"), false);
+        return result;
+    }();
+    return env;
+}
+
+static bool openpangu_idx_score_should_chunk(int64_t n_tokens, int64_t chunk) {
+    return chunk > 0 && n_tokens > 14 && n_tokens > chunk;
 }
 
 static bool openpangu_dsa_gather_should_engage(int64_t n_kv, int64_t n_tokens, int64_t topk, int64_t pad) {
@@ -407,40 +444,85 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             q_idx = ggml_concat(ctx0, q_idx_rope, ggml_cont(ctx0, q_idx_pass), 0);   // [d_idx, n_ihead, T]
             if (il == 0) ggml_set_name(q_idx, "opg0_idx_q");
 
-            // scores over the whole cache window, causal-masked before selection
             ggml_tensor * k_all_idx = ggml_view_2d(ctx0, idx_cache, d_idx, n_kv, idx_cache->nb[1], 0);
-            ggml_tensor * sc = ggml_mul_mat(ctx0, k_all_idx, q_idx);                 // [n_kv, n_ihead, T]
-            sc = ggml_relu(ctx0, sc);
             ggml_tensor * w_idx = ggml_mul_mat(ctx0, layer.indexer_proj, x_normed);  // [n_ihead, T]
-            sc = ggml_mul(ctx0, sc, ggml_reshape_3d(ctx0, w_idx, 1, n_ihead, n_tokens));
-            sc = ggml_cont(ctx0, ggml_permute(ctx0, sc, 1, 0, 2, 3));                // [n_ihead, n_kv, T]
-            sc = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, sc), n_kv, n_tokens);     // [n_kv, T]
-            // FINITE pre-mask scores: the zero-tricks below must scale finite data only.
-            // After the mask add, sc contains -inf, and 0 * -inf = NaN; the CPU clamp
-            // launders NaN back to -1e30 (fminf/fmaxf ignore NaN) but the CUDA clamp
-            // propagates it -> NaN logits at n_kv > top_k (the '!!!' failure mode).
-            ggml_tensor * sc_finite = sc;
-            sc = ggml_add(ctx0, sc, ggml_cont(ctx0, ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0)));
-            if (il == 0) ggml_set_name(sc, "opg0_idx_scores");
 
-            // exact top-k -> additive mask: scatter zeros into a -1e30 base at the selected
-            // positions ([1, n_kv, T] row layout makes set_rows a per-query scatter).
-            // The legacy scatter path consumes this strided top_k view directly; the gathered
-            // path below flattens a tiny contiguous copy for one get_rows.
-            sel_idx = ggml_top_k(ctx0, sc, (int) topk);                              // [topk, T] i32
-            if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
-            dsa_gather_engaged = dsa_gather_allowed;
-            if (dsa_gather_engaged) {
-                GGML_ASSERT(n_kv >= topk + (int64_t) pad + n_tokens);
+            const openpangu_idx_score_env & idx_env = openpangu_idx_score_env_once();
+            const bool chunk_scores = openpangu_idx_score_should_chunk(n_tokens, idx_env.chunk);
+            if (idx_env.trace) {
+                const int64_t n_chunks = chunk_scores ? (n_tokens + idx_env.chunk - 1)/idx_env.chunk : 0;
+                LLAMA_LOG_INFO("%s: openPangu idx chunk n_kv=%d T=%d chunk=%d chunks=%d engaged=%d il=%d\n",
+                        __func__, (int) n_kv, (int) n_tokens, (int) idx_env.chunk, (int) n_chunks,
+                        chunk_scores ? 1 : 0, il);
+            }
+
+            if (chunk_scores) {
+                ggml_tensor * sel_mask_parts = nullptr;
+                for (int64_t c0 = 0; c0 < n_tokens; c0 += idx_env.chunk) {
+                    const int64_t tc = std::min<int64_t>(idx_env.chunk, n_tokens - c0);
+                    ggml_tensor * q_idx_c = ggml_view_3d(ctx0, q_idx, d_idx, n_ihead, tc,
+                                                         q_idx->nb[1], q_idx->nb[2], (size_t) c0*q_idx->nb[2]);
+                    q_idx_c = ggml_cont(ctx0, q_idx_c);
+                    ggml_tensor * w_idx_c = ggml_view_2d(ctx0, w_idx, n_ihead, tc, w_idx->nb[1], (size_t) c0*w_idx->nb[1]);
+                    w_idx_c = ggml_cont(ctx0, w_idx_c);
+
+                    // Scores over the whole cache window, causal-masked before selection.
+                    // The chunked path never materializes the legacy [n_kv, n_ihead, T] score tensor.
+                    ggml_tensor * sc_c = ggml_mul_mat(ctx0, k_all_idx, q_idx_c);              // [n_kv, n_ihead, Tc]
+                    sc_c = ggml_relu(ctx0, sc_c);
+                    sc_c = ggml_mul(ctx0, sc_c, ggml_reshape_3d(ctx0, w_idx_c, 1, n_ihead, tc));
+                    sc_c = ggml_cont(ctx0, ggml_permute(ctx0, sc_c, 1, 0, 2, 3));             // [n_ihead, n_kv, Tc]
+                    sc_c = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, sc_c), n_kv, tc);        // [n_kv, Tc]
+
+                    sc_c = ggml_add(ctx0, sc_c, ggml_cont(ctx0, ggml_view_2d(ctx0, KQ_mask, n_kv, tc,
+                                    KQ_mask->nb[1], (size_t) c0*KQ_mask->nb[1])));
+                    ggml_tensor * sel_idx_c = ggml_top_k(ctx0, sc_c, (int) topk);             // [topk, Tc] i32
+                    sel_idx = sel_idx == nullptr ? sel_idx_c : ggml_concat(ctx0, sel_idx, sel_idx_c, 1);
+
+                    if (!dsa_gather_allowed) {
+                        ggml_tensor * base_c = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_kv, tc);
+                        base_c = ggml_fill(ctx0, base_c, -1e30f);
+                        ggml_tensor * zeros_c = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, topk, tc);
+                        zeros_c = ggml_fill(ctx0, zeros_c, 0.0f);
+                        ggml_tensor * sel_mask_c = ggml_set_rows(ctx0, base_c, zeros_c, sel_idx_c);
+                        sel_mask_c = ggml_reshape_2d(ctx0, sel_mask_c, n_kv, tc);
+                        sel_mask_parts = sel_mask_parts == nullptr ? sel_mask_c : ggml_concat(ctx0, sel_mask_parts, sel_mask_c, 1);
+                    }
+                }
+                if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
+                dsa_gather_engaged = dsa_gather_allowed;
+                if (dsa_gather_engaged) {
+                    GGML_ASSERT(n_kv >= topk + (int64_t) pad + n_tokens);
+                } else {
+                    sel_mask = sel_mask_parts;
+                }
             } else {
-                ggml_tensor * base  = ggml_clamp(ctx0, ggml_scale(ctx0, sc_finite, 0.0f), -1e30f, -1e30f);
-                base = ggml_reshape_3d(ctx0, ggml_cont(ctx0, base), 1, n_kv, n_tokens);
-                // contiguous [topk, T] reinterpretation of sc_finite's buffer (values irrelevant,
-                // scaled to 0; ggml_scale requires a contiguous src, and the source must be finite)
-                ggml_tensor * zeros = ggml_scale(ctx0, ggml_view_2d(ctx0, sc_finite, topk, n_tokens, topk*ggml_element_size(sc_finite), 0), 0.0f);
-                zeros = ggml_reshape_3d(ctx0, zeros, 1, topk, n_tokens);
-                sel_mask = ggml_set_rows(ctx0, base, zeros, sel_idx);
-                sel_mask = ggml_reshape_2d(ctx0, sel_mask, n_kv, n_tokens);
+                GGML_ASSERT(n_tokens <= 14 || idx_env.chunk == 0 || n_tokens <= idx_env.chunk);
+                ggml_tensor * sc = ggml_mul_mat(ctx0, k_all_idx, q_idx);                 // [n_kv, n_ihead, T]
+                sc = ggml_relu(ctx0, sc);
+                sc = ggml_mul(ctx0, sc, ggml_reshape_3d(ctx0, w_idx, 1, n_ihead, n_tokens));
+                sc = ggml_cont(ctx0, ggml_permute(ctx0, sc, 1, 0, 2, 3));                // [n_ihead, n_kv, T]
+                sc = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, sc), n_kv, n_tokens);     // [n_kv, T]
+                sc = ggml_add(ctx0, sc, ggml_cont(ctx0, ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens, KQ_mask->nb[1], 0)));
+                if (il == 0) ggml_set_name(sc, "opg0_idx_scores");
+
+                // Exact top-k -> additive mask: scatter zeros into a -1e30 base at the selected
+                // positions ([1, n_kv, T] row layout makes set_rows a per-query scatter).
+                // The legacy scatter path consumes this strided top_k view directly; the gathered
+                // path below flattens a tiny contiguous copy for one get_rows.
+                sel_idx = ggml_top_k(ctx0, sc, (int) topk);                              // [topk, T] i32
+                if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
+                dsa_gather_engaged = dsa_gather_allowed;
+                if (dsa_gather_engaged) {
+                    GGML_ASSERT(n_kv >= topk + (int64_t) pad + n_tokens);
+                } else {
+                    ggml_tensor * base = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_kv, n_tokens);
+                    base = ggml_fill(ctx0, base, -1e30f);
+                    ggml_tensor * zeros = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, topk, n_tokens);
+                    zeros = ggml_fill(ctx0, zeros, 0.0f);
+                    sel_mask = ggml_set_rows(ctx0, base, zeros, sel_idx);
+                    sel_mask = ggml_reshape_2d(ctx0, sel_mask, n_kv, n_tokens);
+                }
             }
         }
     }
