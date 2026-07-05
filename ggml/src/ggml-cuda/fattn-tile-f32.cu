@@ -72,7 +72,8 @@ static __global__ void flash_attn_tile_ext_f32(
     // fattn.cu n_swa windowing re-points K/V/mask to the last nton tokens (ne11 = nton) while the mask keeps
     // its original row stride, so indexing the mask by ne11 reads garbage and yields NaN on the tile kernels.
     const int    stride_mask = nb31 / sizeof(half);
-    const half   * maskh = (const half   *)  mask + stride_mask*ic0;
+    const half   * maskh  = (const half   *)  mask + stride_mask*ic0;
+    const float  * sinksf = (const float  *)  sinks;
 
     const int stride_KV2 = nb11 / sizeof(half2);
 
@@ -258,6 +259,34 @@ static __global__ void flash_attn_tile_ext_f32(
         }
 
         __syncthreads();
+    }
+
+    // Apply attention sinks (e.g. gpt-oss): the sink is a per-head extra softmax logit whose value
+    // contribution is zero, so it only joins the running max and rescales the denominator/value
+    // accumulator. Only ip==0 adds the sink term so it is counted exactly once across the
+    // parallel_blocks KV split. Ported from fattn-vec-f16.cuh. kqmax is warp-uniform here (already
+    // warp_reduce_max'd in the KV loop); kqsum holds per-lane partials reduced in the epilogue, so
+    // the sink term is added on a single lane.
+    if (sinksf && ip == 0) {
+        const float sink = sinksf[blockIdx.y];
+
+#pragma unroll
+        for (int j0 = 0; j0 < ncols; j0 += nwarps) {
+            const float kqmax_new_j = fmaxf(kqmax[j0/nwarps], sink);
+            const float KQ_max_scale = expf(kqmax[j0/nwarps] - kqmax_new_j);
+            kqmax[j0/nwarps] = kqmax_new_j;
+
+            kqsum[j0/nwarps] = kqsum[j0/nwarps]*KQ_max_scale;
+            if (threadIdx.x == 0) {
+                kqsum[j0/nwarps] += expf(sink - kqmax[j0/nwarps]);
+            }
+
+#pragma unroll
+            for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
+                VKQ[j0/nwarps][i0/WARP_SIZE].x *= KQ_max_scale;
+                VKQ[j0/nwarps][i0/WARP_SIZE].y *= KQ_max_scale;
+            }
+        }
     }
 
 #pragma unroll
