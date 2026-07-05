@@ -34,6 +34,7 @@ static inline const char * llm_expert_gating_func_name(llm_expert_gating_func_ty
         case LLM_EXPERT_GATING_FUNC_SOFTMAX: return "softmax";
         case LLM_EXPERT_GATING_FUNC_SIGMOID: return "sigmoid";
         case LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT: return "weight";
+        case LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS: return "sqrtsoftplus";
         default: return "none";
     }
 }
@@ -1598,26 +1599,33 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,      hparams.n_lora_q);
                 ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv, false);
                 if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_lora_kv == 0) {
-                    auto * kv_a = ml.get_tensor_meta("blk.0.attn_kv_latent.weight");
-                    bool subtract_rope = false;
-                    if (kv_a == nullptr) {
-                        kv_a = ml.require_tensor_meta("blk.0.attn_kv_a_mqa.weight");
-                        subtract_rope = true;
-                    }
-
-                    const int64_t kv_a_inner = kv_a->ne[0] == hparams.n_embd ? kv_a->ne[1] : kv_a->ne[0];
-                    if (subtract_rope) {
-                        if (kv_a_inner <= hparams.n_rot) {
-                            throw std::runtime_error(format(
-                                "%s: unable to infer %s from blk.0.attn_kv_a_mqa.weight shape [%lld, %lld]",
-                                __func__,
-                                ml.llm_kv(LLM_KV_ATTENTION_KV_LORA_RANK).c_str(),
-                                (long long) kv_a->ne[0],
-                                (long long) kv_a->ne[1]));
-                        }
-                        hparams.n_lora_kv = (uint32_t) (kv_a_inner - hparams.n_rot);
+                    if (auto * kv_norm = ml.get_tensor_meta("blk.0.attn_kv_a_norm.weight")) {
+                        hparams.n_lora_kv = (uint32_t) kv_norm->ne[0];
+                    } else if (auto * kv = ml.get_tensor_meta("blk.0.attn_kv.weight")) {
+                        const int64_t kv_inner = kv->ne[0] == hparams.n_embd ? kv->ne[1] : kv->ne[0];
+                        hparams.n_lora_kv = (uint32_t) kv_inner;
                     } else {
-                        hparams.n_lora_kv = (uint32_t) kv_a_inner;
+                        auto * kv_a = ml.get_tensor_meta("blk.0.attn_kv_latent.weight");
+                        bool subtract_rope = false;
+                        if (kv_a == nullptr) {
+                            kv_a = ml.require_tensor_meta("blk.0.attn_kv_a_mqa.weight");
+                            subtract_rope = true;
+                        }
+
+                        const int64_t kv_a_inner = kv_a->ne[0] == hparams.n_embd ? kv_a->ne[1] : kv_a->ne[0];
+                        if (subtract_rope) {
+                            if (kv_a_inner <= hparams.n_rot) {
+                                throw std::runtime_error(format(
+                                    "%s: unable to infer %s from blk.0.attn_kv_a_mqa.weight shape [%lld, %lld]",
+                                    __func__,
+                                    ml.llm_kv(LLM_KV_ATTENTION_KV_LORA_RANK).c_str(),
+                                    (long long) kv_a->ne[0],
+                                    (long long) kv_a->ne[1]));
+                            }
+                            hparams.n_lora_kv = (uint32_t) (kv_a_inner - hparams.n_rot);
+                        } else {
+                            hparams.n_lora_kv = (uint32_t) kv_a_inner;
+                        }
                     }
                 }
                 //ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_mla_impl, false);
@@ -1714,6 +1722,11 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
                 if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
                     hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                }
+
+                if (model.arch == LLM_ARCH_DEEPSEEK4 &&
+                    hparams.expert_gating_func != LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+                    throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
                 }
 
                 // NextN/MTP parameters

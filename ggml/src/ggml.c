@@ -9470,6 +9470,26 @@ struct ggml_tensor * ggml_rope_back(
     return result;
 }
 
+struct ggml_tensor * ggml_rope_ext_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * c,
+        int                   n_dims,
+        int                   mode,
+        int                   n_ctx_orig,
+        float                 freq_base,
+        float                 freq_scale,
+        float                 ext_factor,
+        float                 attn_factor,
+        float                 beta_fast,
+        float                 beta_slow) {
+    struct ggml_tensor * result = ggml_rope_ext(
+        ctx, a, b, c, n_dims, mode, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    result->op = GGML_OP_ROPE_BACK;
+    return result;
+}
+
 // ggml_clamp
 
 struct ggml_tensor * ggml_clamp(
@@ -14972,34 +14992,51 @@ static void ggml_compute_forward_concat_any(
     const struct ggml_tensor * src1 = dst->src[1];
 
     GGML_ASSERT(src0->type == src1->type && src0->type == dst->type);
+    GGML_ASSERT(!ggml_is_quantized(src0->type));
+
+    const size_t len = ggml_type_size(src0->type);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
 
     const int32_t dim = ggml_get_op_params_i32(dst, 0);
-    // Let's do it for dim = 0 only for now
-    GGML_ASSERT(dim == 0);
 
-    int ith = params->ith;
-    int nth = params->nth;
+    GGML_ASSERT(dim >= 0 && dim < 4);
 
-    int64_t nrows = ggml_nrows(dst);
-    int64_t nrows_per_thread = (nrows + nth - 1)/nth;
-    int64_t first_row = ith*nrows_per_thread;
-    if (first_row >= nrows) return;
-    int64_t last_row = MIN(first_row + nrows_per_thread, nrows);
-
-    int64_t src0_row_size = ggml_row_size(src0->type, src0->ne[0]);
-    int64_t src1_row_size = ggml_row_size(src1->type, src1->ne[0]);
-
-    for (int64_t row = first_row; row < last_row; ++row) {
-        int64_t i3 = row/(dst->ne[1]*dst->ne[2]);
-        int64_t i2 = (row - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
-        int64_t i1 = row - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
-        char * y = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
-        const char * x0 = (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
-        const char * x1 = (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
-        memcpy(y,                 x0, src0_row_size);
-        memcpy(y + src0_row_size, x1, src1_row_size);
+    for (int d = 0; d < 4; ++d) {
+        if (d == dim) {
+            GGML_ASSERT(dst->ne[d] == src0->ne[d] + src1->ne[d]);
+        } else {
+            GGML_ASSERT(src0->ne[d] == src1->ne[d]);
+            GGML_ASSERT(dst->ne[d] == src0->ne[d]);
+        }
     }
 
+    int64_t o[4] = { 0, 0, 0, 0 };
+    o[dim] = src0->ne[dim];
+
+    const char * x;
+
+    // Keep the reference stride-aware behavior here. DSV4 naturally concatenates
+    // along dim 1/2, and assuming contiguous slices causes backend-only failures.
+    for (int64_t i3 = 0; i3 < ne3; ++i3) {
+        for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+            for (int64_t i1 = 0; i1 < ne1; ++i1) {
+                for (int64_t i0 = 0; i0 < ne0; ++i0) {
+                    if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
+                        x = (const char *) src0->data + (i0       )*nb00 + (i1       )*nb01 + (i2       )*nb02 + (i3       )*nb03;
+                    } else {
+                        x = (const char *) src1->data + (i0 - o[0])*nb10 + (i1 - o[1])*nb11 + (i2 - o[2])*nb12 + (i3 - o[3])*nb13;
+                    }
+
+                    char * y = (char *) dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3;
+                    memcpy(y, x, len);
+                }
+            }
+        }
+    }
 }
 
 static void ggml_compute_forward_concat(

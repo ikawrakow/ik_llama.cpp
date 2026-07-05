@@ -13,6 +13,7 @@ enum llm_expert_gating_func_type {
     LLM_EXPERT_GATING_FUNC_SOFTMAX               = 1,
     LLM_EXPERT_GATING_FUNC_SIGMOID               = 2,
     LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT = 3,
+    LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS  = 4,
 };
 
 struct llama_hparams {

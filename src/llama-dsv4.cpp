@@ -206,6 +206,55 @@ static uint32_t dsv4_comp_size(uint32_t kv_size, uint32_t ratio) {
     return std::max<uint32_t>(1, (kv_size + ratio - 1)/ratio);
 }
 
+static int64_t dsv4_k_rot_size(int64_t n_embd) {
+    if (n_embd < 64 || n_embd % 64 != 0) {
+        return 0;
+    }
+
+    int64_t n_rot = 64;
+    do {
+        n_rot *= 2;
+    } while (n_embd % n_rot == 0);
+
+    return n_rot / 2;
+}
+
+static void dsv4_build_hadamard_matrix(std::vector<float> & storage, int64_t n_rot) {
+    if (n_rot <= 0) {
+        storage.clear();
+        return;
+    }
+
+    const size_t n_elem = (size_t) n_rot*(size_t) n_rot;
+    if (storage.size() == n_elem) {
+        return;
+    }
+
+    storage.assign(n_elem, 0.0f);
+    storage[0] = 1.0f;
+
+    for (int64_t size = 1; size < n_rot; size *= 2) {
+        for (int64_t row = 0; row < size; ++row) {
+            const float * src = storage.data() + row*n_rot;
+            float * dst_top = storage.data() + row*n_rot + size;
+            float * dst_bottom = storage.data() + (row + size)*n_rot;
+            float * dst_bottom_right = dst_bottom + size;
+
+            for (int64_t col = 0; col < size; ++col) {
+                const float v = src[col];
+                dst_top[col] = v;
+                dst_bottom[col] = v;
+                dst_bottom_right[col] = -v;
+            }
+        }
+    }
+
+    const float scale = 1.0f / std::sqrt((float) n_rot);
+    for (float & v : storage) {
+        v *= scale;
+    }
+}
+
 static void dsv4_batch_shape(
         const llama_batch & batch,
         uint32_t & n_seqs,
@@ -651,6 +700,14 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     set_comp(lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, lctx.dsv4.csa_mask_data);
     set_comp(lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, lctx.dsv4.hca_mask_data);
     set_comp(lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, lctx.dsv4.lid_mask_data);
+
+    if (lctx.dsv4.inputs.lid.k_rot != nullptr && lctx.dsv4.inputs.lid.k_rot->buffer != nullptr) {
+        const int64_t n_rot = dsv4_k_rot_size(lctx.model.hparams.indexer_head_size);
+        dsv4_build_hadamard_matrix(lctx.dsv4.lid_k_rot_data, n_rot);
+        if (!lctx.dsv4.lid_k_rot_data.empty()) {
+            ggml_backend_tensor_set(lctx.dsv4.inputs.lid.k_rot, lctx.dsv4.lid_k_rot_data.data(), 0, lctx.dsv4.lid_k_rot_data.size()*sizeof(float));
+        }
+    }
 
     return true;
 }

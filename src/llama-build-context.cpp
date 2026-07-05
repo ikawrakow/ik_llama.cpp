@@ -1050,7 +1050,8 @@ ggml_tensor * llm_build_context::llm_build_moe_ffn(
 llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
          ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b,
-         ggml_tensor * input_logits, ggml_tensor * down_exps_s) {
+         ggml_tensor * input_logits, ggml_tensor * down_exps_s,
+         ggml_tensor * selected_experts) {
 
     GGML_ASSERT(gate_inp || input_logits);
 
@@ -1068,6 +1069,9 @@ llm_expert_gating_func_type   gating_op,
         cb(logits, "ffn_moe_logits_biased", il);
     }
 
+    if (gating_op == LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+        ggml_mul_mat_set_prec(logits, GGML_PREC_F32);
+    }
 
     //ggml_tensor * probs = ggml_soft_max(ctx, logits); // [n_expert, n_tokens]
     ggml_tensor * probs = nullptr;
@@ -1083,6 +1087,10 @@ llm_expert_gating_func_type   gating_op,
         case LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT:
             {
                 probs = logits; // [n_expert, n_tokens]
+            } break;
+        case LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS:
+            {
+                probs = ggml_sqrt(ctx, ggml_softplus(ctx, logits)); // [n_expert, n_tokens]
             } break;
         default:
             GGML_ABORT("fatal error");
@@ -1104,14 +1112,15 @@ llm_expert_gating_func_type   gating_op,
     }
 
     // select experts
-    ggml_tensor * selected_experts;
-    if (lctx.cparams.grouped_expert_routing && lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
-        auto& hparams = lctx.model.hparams;
-        selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
-    } else {
-        //selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
-        //        lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
-        selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+    if (selected_experts == nullptr) {
+        if (lctx.cparams.grouped_expert_routing && lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
+            auto& hparams = lctx.model.hparams;
+            selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
+        } else {
+            //selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
+            //        lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
+            selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+        }
     }
     cb(selected_experts, "ffn_moe_topk", il);
     ggml_tensor * weights = ggml_get_rows(ctx,

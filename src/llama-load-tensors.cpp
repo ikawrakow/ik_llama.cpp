@@ -2771,16 +2771,16 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
     model.output_norm = create_tensor_from_meta(ctx_output, "output_norm.weight");
     model.output      = create_tensor_from_meta(ctx_output, "output.weight");
 
-    model.hc_head_base  = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_base", "output_hc_base"}), llama_model_loader::TENSOR_NOT_REQUIRED);
-    model.hc_head_fn    = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_fn", "output_hc_fn"}), llama_model_loader::TENSOR_NOT_REQUIRED);
-    model.hc_head_scale = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_scale", "output_hc_scale"}), llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.hc_head_base  = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_base.weight", "output_hc_base.weight"}), llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.hc_head_fn    = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_fn.weight", "output_hc_fn.weight"}), llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.hc_head_scale = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_scale.weight", "output_hc_scale.weight"}), llama_model_loader::TENSOR_NOT_REQUIRED);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
         auto & layer = model.layers[i];
 
         layer.attn_norm      = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_norm"));
-        layer.attn_sinks     = create_tensor_from_meta(ctx_split, format("blk.%d.attn_sinks", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.attn_sinks     = create_tensor_from_meta(ctx_split, format("blk.%d.attn_sinks.weight", i), llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.wq_a           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a"));
         layer.attn_q_a_norm  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_a_norm"));
         layer.wq_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_q_b"));
@@ -2797,12 +2797,12 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
         layer.wo_b           = create_tensor_from_meta(ctx_split, layer_weight_name(i, "attn_output_b"));
         layer.wo             = layer.wo_b;
 
-        layer.hc_attn_base  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_base", i),  llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.hc_attn_fn    = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_fn", i),    llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.hc_attn_scale = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_scale", i), llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.hc_ffn_base   = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_base", i),   llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.hc_ffn_fn     = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_fn", i),     llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.hc_ffn_scale  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_scale", i),  llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.hc_attn_base  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_base.weight", i),  llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.hc_attn_fn    = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_fn.weight", i),    llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.hc_attn_scale = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_scale.weight", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.hc_ffn_base   = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_base.weight", i),   llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.hc_ffn_fn     = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_fn.weight", i),     llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.hc_ffn_scale  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_scale.weight", i),  llama_model_loader::TENSOR_NOT_REQUIRED);
 
         layer.attn_comp_wkv = create_tensor_from_meta(ctx_split, pick_tensor_name({
             layer_weight_name(i, "attn_compress_kv"),
@@ -2813,14 +2813,16 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
             layer_weight_name(i, "attn_compressor_gate"),
         }), llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.attn_comp_ape = create_tensor_from_meta(ctx_split, pick_tensor_name({
-            format("blk.%d.attn_compress_ape", i),
-            format("blk.%d.attn_compressor_ape", i),
+            format("blk.%d.attn_compress_ape.weight", i),
+            format("blk.%d.attn_compressor_ape.weight", i),
         }), llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.attn_comp_norm = create_tensor_from_meta(ctx_split, pick_tensor_name({
             layer_weight_name(i, "attn_compress_norm"),
             layer_weight_name(i, "attn_compressor_norm"),
         }), llama_model_loader::TENSOR_NOT_REQUIRED);
 
+        layer.indexer_k_norm   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.k_norm"),   llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.indexer_attn_k   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.attn_k"),   llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_proj     = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.proj"),     llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_attn_q_b = create_tensor_from_meta(ctx_split, layer_weight_name(i, "indexer.attn_q_b"), llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_comp_wkv = create_tensor_from_meta(ctx_split, pick_tensor_name({
@@ -2832,8 +2834,8 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
             layer_weight_name(i, "indexer_compressor_gate"),
         }), llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_comp_ape = create_tensor_from_meta(ctx_split, pick_tensor_name({
-            format("blk.%d.indexer.compress_ape", i),
-            format("blk.%d.indexer_compressor_ape", i),
+            format("blk.%d.indexer.compress_ape.weight", i),
+            format("blk.%d.indexer_compressor_ape.weight", i),
         }), llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.indexer_comp_norm = create_tensor_from_meta(ctx_split, pick_tensor_name({
             layer_weight_name(i, "indexer.compress_norm"),
@@ -2849,9 +2851,12 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
         layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_shexp"));
         layer.ffn_up_shexp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_shexp"));
 
-        layer.ffn_gate_tid2eid = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_gate_tid2eid", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_gate_tid2eid = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_gate_tid2eid.weight", i), llama_model_loader::TENSOR_NOT_REQUIRED);
         if (layer.ffn_gate_tid2eid == nullptr) {
-            layer.ffn_exp_probs_b = create_tensor_from_meta(ctx_split, format("blk.%d.exp_probs_b", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.ffn_exp_probs_b = create_tensor_from_meta(ctx_split, pick_tensor_name({
+                format("blk.%d.exp_probs_b.bias", i),
+                format("blk.%d.exp_probs_b.weight", i),
+            }), llama_model_loader::TENSOR_NOT_REQUIRED);
         }
     }
 
