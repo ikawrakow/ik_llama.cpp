@@ -3,7 +3,10 @@
 #include "../llama-context.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 static constexpr int64_t OPENPANGU_CONV_RING = 16;
@@ -12,6 +15,7 @@ static constexpr int OPENPANGU_COPY_K_CKV = 0;
 static constexpr int OPENPANGU_COPY_K_KPE = 1;
 static constexpr int OPENPANGU_COPY_V_TRANS = 2;
 static constexpr int OPENPANGU_COPY_IDX = 3;
+static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
 
 static std::vector<llama_context::CacheCopy> & openpangu_cache_copies(llama_context & lctx) {
     return lctx.cparams.mtp_op_type == MTP_OP_NONE ? lctx.openpangu_cache_copies : lctx.openpangu_cache_copies_mtp;
@@ -35,6 +39,55 @@ static void openpangu_register_cache_copy(
 
 static uint32_t openpangu_kv_cache_pad(const llama_cparams & cparams) {
     return cparams.flash_attn ? 256u : 32u;
+}
+
+struct openpangu_dsa_gather_env {
+    bool    gather_enabled = true;
+    int64_t topk_override  = -1;
+    bool    trace          = false;
+};
+
+static bool openpangu_env_flag_value(const char * env, bool default_value) {
+    if (env == nullptr || env[0] == '\0') {
+        return default_value;
+    }
+    return std::strcmp(env, "0") != 0 &&
+           std::strcmp(env, "false") != 0 &&
+           std::strcmp(env, "off") != 0;
+}
+
+static int64_t openpangu_env_i64_value(const char * name, const char * env, int64_t default_value) {
+    if (env == nullptr || env[0] == '\0') {
+        return default_value;
+    }
+
+    errno = 0;
+    char * end = nullptr;
+    const long value = std::strtol(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || value <= 0) {
+        LLAMA_LOG_WARN("%s: ignoring invalid %s=%s\n", __func__, name, env);
+        return default_value;
+    }
+
+    return (int64_t) value;
+}
+
+static const openpangu_dsa_gather_env & openpangu_dsa_gather_env_once() {
+    static const openpangu_dsa_gather_env env = [] {
+        openpangu_dsa_gather_env result;
+        result.gather_enabled = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_DSA_GATHER"), true);
+        result.topk_override  = openpangu_env_i64_value("LLAMA_OPENPANGU_DSA_TOPK",
+                std::getenv("LLAMA_OPENPANGU_DSA_TOPK"), -1);
+        result.trace          = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_DSA_GATHER_TRACE"), false);
+        return result;
+    }();
+    return env;
+}
+
+static bool openpangu_dsa_gather_should_engage(int64_t n_kv, int64_t n_tokens, int64_t topk, int64_t pad) {
+    // Gather must prune at least half the cache to beat get_rows/cast/cont-transpose copy
+    // overhead; measured 2K regression at ratio ~1 where top_k covers nearly all cache rows.
+    return n_tokens <= 14 && n_kv >= OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad + n_tokens;
 }
 
 static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm, uint32_t window, bool * windowed) {
@@ -292,11 +345,35 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     // then top-k. Selection only prunes when the causal window exceeds top_k; below that it
     // covers everything, so the mask is skipped and the layer is exactly dense.
     ggml_tensor * sel_mask = nullptr;   // [n_kv, T] additive mask: 0 = selected, -1e30 = pruned
+    ggml_tensor * sel_idx  = nullptr;   // [topk, T] per-token top-k rows, reused by gathered DSA
+    bool dsa_gather_engaged = false;
+    int64_t dsa_topk = 0;
     ggml_tensor * idx_cache = (size_t) il < kv_self.idx_l.size() ? kv_self.idx_l[il] : nullptr;
     if (idx_cache && layer.indexer_attn_q_b) {
         const int64_t n_ihead = hparams.indexer_n_head;    // 24
         const int64_t d_idx   = hparams.indexer_head_size; // 128
-        const int64_t topk    = hparams.indexer_top_k;     // 2048
+        int64_t topk = hparams.indexer_top_k;              // 2048
+        if (lctx.cparams.dsa_top_k > 0) {
+            topk = lctx.cparams.dsa_top_k;
+        }
+        const openpangu_dsa_gather_env & dsa_env = openpangu_dsa_gather_env_once();
+        if (dsa_env.topk_override > 0) {
+            topk = dsa_env.topk_override;
+        }
+        GGML_ASSERT(topk > 0 && topk <= INT_MAX);
+        dsa_topk = topk;
+
+        const uint32_t pad = openpangu_kv_cache_pad(cparams);
+        const int64_t dsa_gather_threshold = OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad + n_tokens;
+        const bool is_base_graph = cparams.mtp_op_type == MTP_OP_NONE;
+        const bool dsa_gather_predicate =
+            openpangu_dsa_gather_should_engage(n_kv, n_tokens, topk, pad);
+        const bool dsa_gather_allowed = is_base_graph && dsa_env.gather_enabled && dsa_gather_predicate;
+        if (dsa_env.trace) {
+            LLAMA_LOG_INFO("%s: openPangu DSA gather n_kv=%d T=%d topk=%d pad=%u threshold=%d engaged=%d il=%d base=%d enabled=%d\n",
+                    __func__, (int) n_kv, (int) n_tokens, (int) topk, pad, (int) dsa_gather_threshold,
+                    dsa_gather_allowed ? 1 : 0, il, is_base_graph ? 1 : 0, dsa_env.gather_enabled ? 1 : 0);
+        }
 
         // indexer keys for this batch -> position-indexed cache (write-before-read holds by
         // graph order, same as the kv store; committed columns never change -> rollback-safe)
@@ -347,19 +424,24 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             if (il == 0) ggml_set_name(sc, "opg0_idx_scores");
 
             // exact top-k -> additive mask: scatter zeros into a -1e30 base at the selected
-            // positions ([1, n_kv, T] row layout makes set_rows a per-query scatter)
-            // (the CUDA set_rows kernel is stride-aware for the index tensor, so the strided
-            // top_k view is consumed directly; do NOT cont it — i32 cont has no CUDA cpy path)
-            ggml_tensor * sel_idx = ggml_top_k(ctx0, sc, (int) topk);                // [topk, T] i32
+            // positions ([1, n_kv, T] row layout makes set_rows a per-query scatter).
+            // The legacy scatter path consumes this strided top_k view directly; the gathered
+            // path below flattens a tiny contiguous copy for one get_rows.
+            sel_idx = ggml_top_k(ctx0, sc, (int) topk);                              // [topk, T] i32
             if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
-            ggml_tensor * base  = ggml_clamp(ctx0, ggml_scale(ctx0, sc_finite, 0.0f), -1e30f, -1e30f);
-            base = ggml_reshape_3d(ctx0, ggml_cont(ctx0, base), 1, n_kv, n_tokens);
-            // contiguous [topk, T] reinterpretation of sc_finite's buffer (values irrelevant,
-            // scaled to 0; ggml_scale requires a contiguous src, and the source must be finite)
-            ggml_tensor * zeros = ggml_scale(ctx0, ggml_view_2d(ctx0, sc_finite, topk, n_tokens, topk*ggml_element_size(sc_finite), 0), 0.0f);
-            zeros = ggml_reshape_3d(ctx0, zeros, 1, topk, n_tokens);
-            sel_mask = ggml_set_rows(ctx0, base, zeros, sel_idx);
-            sel_mask = ggml_reshape_2d(ctx0, sel_mask, n_kv, n_tokens);
+            dsa_gather_engaged = dsa_gather_allowed;
+            if (dsa_gather_engaged) {
+                GGML_ASSERT(n_kv >= topk + (int64_t) pad + n_tokens);
+            } else {
+                ggml_tensor * base  = ggml_clamp(ctx0, ggml_scale(ctx0, sc_finite, 0.0f), -1e30f, -1e30f);
+                base = ggml_reshape_3d(ctx0, ggml_cont(ctx0, base), 1, n_kv, n_tokens);
+                // contiguous [topk, T] reinterpretation of sc_finite's buffer (values irrelevant,
+                // scaled to 0; ggml_scale requires a contiguous src, and the source must be finite)
+                ggml_tensor * zeros = ggml_scale(ctx0, ggml_view_2d(ctx0, sc_finite, topk, n_tokens, topk*ggml_element_size(sc_finite), 0), 0.0f);
+                zeros = ggml_reshape_3d(ctx0, zeros, 1, topk, n_tokens);
+                sel_mask = ggml_set_rows(ctx0, base, zeros, sel_idx);
+                sel_mask = ggml_reshape_2d(ctx0, sel_mask, n_kv, n_tokens);
+            }
         }
     }
 
@@ -379,40 +461,108 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     // Keep sinks and cached tokens separate until after KQ so f16 latent caches do not need
     // unsupported non-f32 concat along dim1.
     const bool use_swa_window = KQ_mask_swa_windowed && lctx.openpangu_swa_window_view.active;
-    const int64_t n_kv_attn   = use_swa_window ? lctx.openpangu_swa_window_view.w_view  : n_kv;
+    const bool use_dsa_gather = dsa_gather_engaged && sel_idx != nullptr;
+    const int64_t n_kv_attn   = use_dsa_gather ? dsa_topk :
+                                use_swa_window ? lctx.openpangu_swa_window_view.w_view  : n_kv;
     const int64_t win_off     = use_swa_window ? lctx.openpangu_swa_window_view.win_off : 0;
     if (sel_mask) {
         GGML_ASSERT(!use_swa_window && "openPangu DSA/indexer layers must not use SWA window views");
     }
+    if (use_dsa_gather) {
+        GGML_ASSERT(!use_swa_window && "openPangu gathered DSA layers must not use SWA window views");
+        GGML_ASSERT(dsa_topk > 0 && n_kv_attn == dsa_topk);
+        GGML_ASSERT(hparams.f_max_alibi_bias == 0.0f && "maskless gathered DSA cannot carry ALiBi bias");
+    }
 
-    ggml_tensor * kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv_attn,
-                                        kv_self.k_l[il]->nb[1], (size_t) win_off*kv_self.k_l[il]->nb[1]);
-    ggml_tensor * vl_all = ggml_view_2d(ctx0, kv_self.v_l[il], n_kv_attn, kv_lora_rank,
-                                        (int64_t) kv_self.size*ggml_element_size(kv_self.v_l[il]),
-                                        (size_t) win_off*ggml_element_size(kv_self.v_l[il]));
+    ggml_tensor * kl_all = nullptr;
+    ggml_tensor * vl_all = nullptr;
+    if (!use_dsa_gather) {
+        kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv_attn,
+                              kv_self.k_l[il]->nb[1], (size_t) win_off*kv_self.k_l[il]->nb[1]);
+        vl_all = ggml_view_2d(ctx0, kv_self.v_l[il], n_kv_attn, kv_lora_rank,
+                              (int64_t) kv_self.size*ggml_element_size(kv_self.v_l[il]),
+                              (size_t) win_off*ggml_element_size(kv_self.v_l[il]));
+    }
 
     ggml_tensor * kq_sinks = ggml_mul_mat(ctx0, sink_blk, q_all);                           // [NS, T, H]
-    ggml_tensor * kq_cache = ggml_mul_mat(ctx0, kl_all,    q_all);                           // [n_kv_attn, T, H]
+    ggml_tensor * k_gath = nullptr;
+    ggml_tensor * kq_cache = nullptr;
+    if (use_dsa_gather) {
+        if (n_tokens == 1) {
+            ggml_tensor * kl_full = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv,
+                                                 kv_self.k_l[il]->nb[1], 0);
+            ggml_tensor * sel_idx_flat = ggml_cont_2d(ctx0, sel_idx, dsa_topk, 1);            // [topk] i32
+            k_gath = ggml_get_rows(ctx0, kl_full, sel_idx_flat);                              // [576, topk] f32
+            if (k_gath->type != kv_self.k_l[il]->type) {
+                k_gath = ggml_cast(ctx0, k_gath, kv_self.k_l[il]->type);
+            }
+            k_gath = ggml_reshape_3d(ctx0, k_gath, kv_lora_rank + n_embd_head_qk_rope, dsa_topk, 1);
+            kq_cache = ggml_mul_mat(ctx0,
+                    ggml_reshape_2d(ctx0, k_gath, kv_lora_rank + n_embd_head_qk_rope, dsa_topk),
+                    q_all);                                                                   // [topk, 1, H]
+        } else {
+            ggml_tensor * kl_full = ggml_view_2d(ctx0, kv_self.k_l[il],
+                                                 kv_lora_rank + n_embd_head_qk_rope, n_kv,
+                                                 kv_self.k_l[il]->nb[1], 0);
+            ggml_tensor * sel_idx_flat = ggml_cont_2d(ctx0, sel_idx, dsa_topk*n_tokens, 1);   // [topk*T] i32
+            k_gath = ggml_get_rows(ctx0, kl_full, sel_idx_flat);                              // [576, topk*T] f32
+            if (k_gath->type != kv_self.k_l[il]->type) {
+                k_gath = ggml_cast(ctx0, k_gath, kv_self.k_l[il]->type);
+            }
+            k_gath = ggml_reshape_3d(ctx0, k_gath, kv_lora_rank + n_embd_head_qk_rope,
+                                     dsa_topk, n_tokens);                                    // [576, topk, T]
+            ggml_tensor * q_gath = ggml_cont(ctx0, ggml_permute(ctx0, q_all, 0, 2, 1, 3));   // [576, H, T]
+            kq_cache = ggml_mul_mat(ctx0, k_gath, q_gath);                                  // [topk, H, T]
+            kq_cache = ggml_cont(ctx0, ggml_permute(ctx0, kq_cache, 0, 2, 1, 3));            // [topk, T, H]
+        }
+    } else {
+        kq_cache = ggml_mul_mat(ctx0, kl_all, q_all);                                        // [n_kv_attn, T, H]
+    }
     ggml_tensor * kq = ggml_concat(ctx0, kq_sinks, kq_cache, 0);                             // [NS+n_kv_attn, T, H]
 
     // mask: sinks always visible (0) ++ the causal/SWA KQ_mask (+ the DSA top-k selection
     // mask on indexer layers). The zero block is built by scaling finite kq data (KQ_mask
     // itself holds -inf, which 0*x would turn into NaN).
-    ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, n_tokens, KQ_mask->nb[1], 0);
-    if (sel_mask) {
-        kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask);
+    if (use_dsa_gather) {
+        // sel_idx came from scores after adding the causal KQ_mask. The engagement bound gives
+        // every token at least topk valid positions, so all gathered rows are visible here.
+        kq = ggml_soft_max_ext(ctx0, kq, nullptr, kq_scale, hparams.f_max_alibi_bias);
+    } else {
+        ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, n_tokens, KQ_mask->nb[1], 0);
+        if (sel_mask) {
+            kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask);
+        }
+        kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
+        ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_tokens, NS*ggml_element_size(kq), 0), 0.0f);
+        ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);            // [NS+n_kv, T]
+        kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
     }
-    kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
-    ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_tokens, NS*ggml_element_size(kq), 0), 0.0f);
-    ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);                // [NS+n_kv, T]
-    kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
 
     ggml_tensor * kq_s = ggml_view_3d(ctx0, kq, NS, n_tokens, n_head, kq->nb[1], kq->nb[2], 0);
     ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv_attn, n_tokens, n_head, kq->nb[1], kq->nb[2],
                                       NS*ggml_element_size(kq));
+    ggml_tensor * kqv_cache = nullptr;
+    if (use_dsa_gather) {
+        GGML_ASSERT(k_gath != nullptr);
+        if (n_tokens == 1) {
+            ggml_tensor * v_gath = ggml_view_2d(ctx0, k_gath, kv_lora_rank, dsa_topk,
+                                                k_gath->nb[1], 0);                       // [512, topk]
+            ggml_tensor * v_gath_t = ggml_cont(ctx0, ggml_transpose(ctx0, v_gath));       // [topk, 512]
+            kqv_cache = ggml_mul_mat(ctx0, v_gath_t, kq_c);                              // [512, 1, H]
+        } else {
+            ggml_tensor * v_gath = ggml_view_3d(ctx0, k_gath, kv_lora_rank, dsa_topk, n_tokens,
+                                                k_gath->nb[1], k_gath->nb[2], 0);          // [512, topk, T]
+            ggml_tensor * v_gath_t = ggml_cont(ctx0, ggml_permute(ctx0, v_gath, 1, 0, 2, 3)); // [topk, 512, T]
+            ggml_tensor * kq_c_gath = ggml_cont(ctx0, ggml_permute(ctx0, kq_c, 0, 2, 1, 3));  // [topk, H, T]
+            kqv_cache = ggml_mul_mat(ctx0, v_gath_t, kq_c_gath);                           // [512, H, T]
+            kqv_cache = ggml_cont(ctx0, ggml_permute(ctx0, kqv_cache, 0, 2, 1, 3));         // [512, T, H]
+        }
+    } else {
+        kqv_cache = ggml_mul_mat(ctx0, vl_all, kq_c);                                     // [512, T, H]
+    }
     ggml_tensor * kqv = ggml_add(ctx0,
             ggml_mul_mat(ctx0, s_lat_t, kq_s),
-            ggml_mul_mat(ctx0, vl_all,  kq_c));                                           // [512, T, H]
+            kqv_cache);                                                                  // [512, T, H]
     ggml_tensor * wv_b3 = ggml_reshape_3d(ctx0, layer.wv_b, kv_lora_rank, n_embd_head_v, n_head);
     ggml_tensor * out_h = ggml_mul_mat(ctx0, wv_b3, kqv);                               // [128, T, H]
     ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, out_h, 0, 2, 1, 3));      // [128, H, T]
