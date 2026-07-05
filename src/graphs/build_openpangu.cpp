@@ -17,6 +17,8 @@ static constexpr int OPENPANGU_COPY_V_TRANS = 2;
 static constexpr int OPENPANGU_COPY_IDX = 3;
 static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
 static constexpr int64_t OPENPANGU_IDX_SCORE_CHUNK = 256;
+static constexpr int64_t OPENPANGU_ATT_SCORE_CHUNK = 256;
+static constexpr int64_t OPENPANGU_ATT_FULL_KQ_MAX_MIB = 1024;
 
 static std::vector<llama_context::CacheCopy> & openpangu_cache_copies(llama_context & lctx) {
     return lctx.cparams.mtp_op_type == MTP_OP_NONE ? lctx.openpangu_cache_copies : lctx.openpangu_cache_copies_mtp;
@@ -51,6 +53,12 @@ struct openpangu_dsa_gather_env {
 struct openpangu_idx_score_env {
     int64_t chunk = OPENPANGU_IDX_SCORE_CHUNK;
     bool    trace = false;
+};
+
+struct openpangu_att_score_env {
+    int64_t chunk   = OPENPANGU_ATT_SCORE_CHUNK;
+    int64_t cap_mib = OPENPANGU_ATT_FULL_KQ_MAX_MIB;
+    bool    trace   = false;
 };
 
 static bool openpangu_env_flag_value(const char * env, bool default_value) {
@@ -117,8 +125,34 @@ static const openpangu_idx_score_env & openpangu_idx_score_env_once() {
     return env;
 }
 
+static const openpangu_att_score_env & openpangu_att_score_env_once() {
+    static const openpangu_att_score_env env = [] {
+        openpangu_att_score_env result;
+        result.chunk = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_ATT_CHUNK",
+                std::getenv("LLAMA_OPENPANGU_ATT_CHUNK"), OPENPANGU_ATT_SCORE_CHUNK);
+        result.cap_mib = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_ATT_KQ_MAX_MIB",
+                std::getenv("LLAMA_OPENPANGU_ATT_KQ_MAX_MIB"), OPENPANGU_ATT_FULL_KQ_MAX_MIB);
+        result.trace = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_ATT_CHUNK_TRACE"), false);
+        return result;
+    }();
+    return env;
+}
+
 static bool openpangu_idx_score_should_chunk(int64_t n_tokens, int64_t chunk) {
     return chunk > 0 && n_tokens > 14 && n_tokens > chunk;
+}
+
+static bool openpangu_att_score_should_chunk(
+        int64_t n_kv_eff, int64_t n_sinks, int64_t n_head, int64_t n_tokens,
+        int64_t chunk, int64_t cap_mib) {
+    if (chunk <= 0 || cap_mib <= 0 || n_tokens <= 14 || n_tokens <= chunk) {
+        return false;
+    }
+
+    const double full_kq_bytes =
+        (double) (n_kv_eff + n_sinks) * (double) n_head * (double) n_tokens * (double) sizeof(float);
+    const double cap_bytes = (double) cap_mib * 1024.0 * 1024.0;
+    return full_kq_bytes > cap_bytes;
 }
 
 static bool openpangu_dsa_gather_should_engage(int64_t n_kv, int64_t n_tokens, int64_t topk, int64_t pad) {
@@ -449,11 +483,16 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
 
             const openpangu_idx_score_env & idx_env = openpangu_idx_score_env_once();
             const bool chunk_scores = openpangu_idx_score_should_chunk(n_tokens, idx_env.chunk);
+            const openpangu_att_score_env & att_env = openpangu_att_score_env_once();
+            const bool defer_sel_mask_to_att_chunks =
+                !dsa_gather_allowed &&
+                openpangu_att_score_should_chunk(n_kv, hparams.param_sink_number, n_head, n_tokens,
+                        att_env.chunk, att_env.cap_mib);
             if (idx_env.trace) {
                 const int64_t n_chunks = chunk_scores ? (n_tokens + idx_env.chunk - 1)/idx_env.chunk : 0;
-                LLAMA_LOG_INFO("%s: openPangu idx chunk n_kv=%d T=%d chunk=%d chunks=%d engaged=%d il=%d\n",
+                LLAMA_LOG_INFO("%s: openPangu idx chunk n_kv=%d T=%d chunk=%d chunks=%d engaged=%d il=%d defer_sel_mask=%d\n",
                         __func__, (int) n_kv, (int) n_tokens, (int) idx_env.chunk, (int) n_chunks,
-                        chunk_scores ? 1 : 0, il);
+                        chunk_scores ? 1 : 0, il, defer_sel_mask_to_att_chunks ? 1 : 0);
             }
 
             if (chunk_scores) {
@@ -479,7 +518,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                     ggml_tensor * sel_idx_c = ggml_top_k(ctx0, sc_c, (int) topk);             // [topk, Tc] i32
                     sel_idx = sel_idx == nullptr ? sel_idx_c : ggml_concat(ctx0, sel_idx, sel_idx_c, 1);
 
-                    if (!dsa_gather_allowed) {
+                    if (!dsa_gather_allowed && !defer_sel_mask_to_att_chunks) {
                         ggml_tensor * base_c = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_kv, tc);
                         base_c = ggml_fill(ctx0, base_c, -1e30f);
                         ggml_tensor * zeros_c = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, topk, tc);
@@ -493,6 +532,8 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 dsa_gather_engaged = dsa_gather_allowed;
                 if (dsa_gather_engaged) {
                     GGML_ASSERT(n_kv >= topk + (int64_t) pad + n_tokens);
+                } else if (defer_sel_mask_to_att_chunks) {
+                    sel_mask = nullptr;
                 } else {
                     sel_mask = sel_mask_parts;
                 }
@@ -566,10 +607,10 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                               (size_t) win_off*ggml_element_size(kv_self.v_l[il]));
     }
 
-    ggml_tensor * kq_sinks = ggml_mul_mat(ctx0, sink_blk, q_all);                           // [NS, T, H]
     ggml_tensor * k_gath = nullptr;
     ggml_tensor * kq_cache = nullptr;
     if (use_dsa_gather) {
+        ggml_tensor * kq_sinks = ggml_mul_mat(ctx0, sink_blk, q_all);                       // [NS, T, H]
         if (n_tokens == 1) {
             ggml_tensor * kl_full = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv,
                                                  kv_self.k_l[il]->nb[1], 0);
@@ -597,34 +638,15 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             kq_cache = ggml_mul_mat(ctx0, k_gath, q_gath);                                  // [topk, H, T]
             kq_cache = ggml_cont(ctx0, ggml_permute(ctx0, kq_cache, 0, 2, 1, 3));            // [topk, T, H]
         }
-    } else {
-        kq_cache = ggml_mul_mat(ctx0, kl_all, q_all);                                        // [n_kv_attn, T, H]
-    }
-    ggml_tensor * kq = ggml_concat(ctx0, kq_sinks, kq_cache, 0);                             // [NS+n_kv_attn, T, H]
-
-    // mask: sinks always visible (0) ++ the causal/SWA KQ_mask (+ the DSA top-k selection
-    // mask on indexer layers). The zero block is built by scaling finite kq data (KQ_mask
-    // itself holds -inf, which 0*x would turn into NaN).
-    if (use_dsa_gather) {
+        ggml_tensor * kq = ggml_concat(ctx0, kq_sinks, kq_cache, 0);                         // [NS+topk, T, H]
         // sel_idx came from scores after adding the causal KQ_mask. The engagement bound gives
         // every token at least topk valid positions, so all gathered rows are visible here.
         kq = ggml_soft_max_ext(ctx0, kq, nullptr, kq_scale, hparams.f_max_alibi_bias);
-    } else {
-        ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, n_tokens, KQ_mask->nb[1], 0);
-        if (sel_mask) {
-            kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask);
-        }
-        kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
-        ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_tokens, NS*ggml_element_size(kq), 0), 0.0f);
-        ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);            // [NS+n_kv, T]
-        kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
-    }
 
-    ggml_tensor * kq_s = ggml_view_3d(ctx0, kq, NS, n_tokens, n_head, kq->nb[1], kq->nb[2], 0);
-    ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv_attn, n_tokens, n_head, kq->nb[1], kq->nb[2],
-                                      NS*ggml_element_size(kq));
-    ggml_tensor * kqv_cache = nullptr;
-    if (use_dsa_gather) {
+        ggml_tensor * kq_s = ggml_view_3d(ctx0, kq, NS, n_tokens, n_head, kq->nb[1], kq->nb[2], 0);
+        ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv_attn, n_tokens, n_head, kq->nb[1], kq->nb[2],
+                                          NS*ggml_element_size(kq));
+        ggml_tensor * kqv_cache = nullptr;
         GGML_ASSERT(k_gath != nullptr);
         if (n_tokens == 1) {
             ggml_tensor * v_gath = ggml_view_2d(ctx0, k_gath, kv_lora_rank, dsa_topk,
@@ -639,16 +661,111 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             kqv_cache = ggml_mul_mat(ctx0, v_gath_t, kq_c_gath);                           // [512, H, T]
             kqv_cache = ggml_cont(ctx0, ggml_permute(ctx0, kqv_cache, 0, 2, 1, 3));         // [512, T, H]
         }
+        ggml_tensor * kqv = ggml_add(ctx0,
+                ggml_mul_mat(ctx0, s_lat_t, kq_s),
+                kqv_cache);                                                                // [512, T, H]
+        ggml_tensor * wv_b3 = ggml_reshape_3d(ctx0, layer.wv_b, kv_lora_rank, n_embd_head_v, n_head);
+        ggml_tensor * out_h = ggml_mul_mat(ctx0, wv_b3, kqv);                               // [128, T, H]
+        ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, out_h, 0, 2, 1, 3));      // [128, H, T]
+        cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
     } else {
-        kqv_cache = ggml_mul_mat(ctx0, vl_all, kq_c);                                     // [512, T, H]
+        const openpangu_att_score_env & att_env = openpangu_att_score_env_once();
+        const bool chunk_att = openpangu_att_score_should_chunk(n_kv_attn, NS, n_head, n_tokens,
+                att_env.chunk, att_env.cap_mib);
+        if (att_env.trace) {
+            const int64_t n_chunks = chunk_att ? (n_tokens + att_env.chunk - 1)/att_env.chunk : 0;
+            const double full_kq_mib =
+                (double) (n_kv_attn + NS) * (double) n_head * (double) n_tokens *
+                (double) sizeof(float) / (1024.0 * 1024.0);
+            LLAMA_LOG_INFO("%s: openPangu att chunk n_kv_eff=%d sinks=%d T=%d heads=%d chunk=%d cap_mib=%d full_kq_mib=%.2f chunks=%d engaged=%d il=%d swa=%d sel_mask=%d\n",
+                    __func__, (int) n_kv_attn, (int) NS, (int) n_tokens, (int) n_head,
+                    (int) att_env.chunk, (int) att_env.cap_mib, full_kq_mib, (int) n_chunks,
+                    chunk_att ? 1 : 0, il, use_swa_window ? 1 : 0, sel_mask ? 1 : 0);
+        }
+
+        const bool use_dsa_sel_idx_mask = sel_idx != nullptr && dsa_topk > 0;
+        ggml_tensor * kqv = nullptr;
+        if (chunk_att) {
+            for (int64_t c0 = 0; c0 < n_tokens; c0 += att_env.chunk) {
+                const int64_t tc = std::min<int64_t>(att_env.chunk, n_tokens - c0);
+                ggml_tensor * q_all_c = ggml_view_3d(ctx0, q_all, kv_lora_rank + n_embd_head_qk_rope,
+                                                     tc, n_head, q_all->nb[1], q_all->nb[2],
+                                                     (size_t) c0*q_all->nb[1]);
+                q_all_c = ggml_cont(ctx0, q_all_c);
+
+                ggml_tensor * kq_sinks_c = ggml_mul_mat(ctx0, sink_blk, q_all_c);            // [NS, Tc, H]
+                ggml_tensor * kq_cache_c = ggml_mul_mat(ctx0, kl_all, q_all_c);              // [n_kv_attn, Tc, H]
+                ggml_tensor * kq_c_all = ggml_concat(ctx0, kq_sinks_c, kq_cache_c, 0);       // [NS+n_kv_attn, Tc, H]
+
+                ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, tc,
+                                                         KQ_mask->nb[1], (size_t) c0*KQ_mask->nb[1]);
+                if (sel_mask) {
+                    ggml_tensor * sel_mask_c = ggml_view_2d(ctx0, sel_mask, n_kv_attn, tc,
+                                                            sel_mask->nb[1], (size_t) c0*sel_mask->nb[1]);
+                    kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask_c);
+                } else if (use_dsa_sel_idx_mask) {
+                    ggml_tensor * sel_idx_c = ggml_view_2d(ctx0, sel_idx, dsa_topk, tc,
+                                                           sel_idx->nb[1], (size_t) c0*sel_idx->nb[1]);
+                    ggml_tensor * base_src_c = ggml_view_2d(ctx0, kq_cache_c, n_kv_attn, tc, kq_cache_c->nb[1], 0);
+                    ggml_tensor * base_c = ggml_scale_bias(ctx0, base_src_c, 0.0f, -1e30f);
+                    base_c = ggml_reshape_3d(ctx0, base_c, 1, n_kv_attn, tc);
+                    ggml_tensor * zeros_src_c = ggml_view_2d(ctx0, kq_cache_c, dsa_topk, tc,
+                                                             dsa_topk*ggml_element_size(kq_cache_c), 0);
+                    ggml_tensor * zeros_c = ggml_scale(ctx0, zeros_src_c, 0.0f);
+                    zeros_c = ggml_reshape_3d(ctx0, zeros_c, 1, dsa_topk, tc);
+                    ggml_tensor * sel_mask_c = ggml_set_rows(ctx0, base_c, zeros_c, sel_idx_c);
+                    sel_mask_c = ggml_reshape_2d(ctx0, sel_mask_c, n_kv_attn, tc);
+                    kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask_c);
+                }
+                kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
+                ggml_tensor * s_mask0 = ggml_scale(ctx0,
+                        ggml_view_2d(ctx0, kq_c_all, NS, tc, NS*ggml_element_size(kq_c_all), 0), 0.0f);
+                ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);         // [NS+n_kv_attn, Tc]
+                kq_c_all = ggml_soft_max_ext(ctx0, kq_c_all, mask_all, kq_scale, hparams.f_max_alibi_bias);
+
+                ggml_tensor * kq_s_c = ggml_view_3d(ctx0, kq_c_all, NS, tc, n_head,
+                                                    kq_c_all->nb[1], kq_c_all->nb[2], 0);
+                ggml_tensor * kq_cache_soft_c = ggml_view_3d(ctx0, kq_c_all, n_kv_attn, tc, n_head,
+                                                             kq_c_all->nb[1], kq_c_all->nb[2],
+                                                             NS*ggml_element_size(kq_c_all));
+                ggml_tensor * kqv_cache_c = ggml_mul_mat(ctx0, vl_all, kq_cache_soft_c);     // [512, Tc, H]
+                ggml_tensor * kqv_c = ggml_add(ctx0,
+                        ggml_mul_mat(ctx0, s_lat_t, kq_s_c),
+                        kqv_cache_c);                                                       // [512, Tc, H]
+                kqv = kqv == nullptr ? kqv_c : ggml_concat(ctx0, kqv, kqv_c, 1);
+            }
+        } else {
+            GGML_ASSERT(!use_dsa_sel_idx_mask || sel_mask != nullptr);
+            ggml_tensor * kq_sinks = ggml_mul_mat(ctx0, sink_blk, q_all);                   // [NS, T, H]
+            kq_cache = ggml_mul_mat(ctx0, kl_all, q_all);                                   // [n_kv_attn, T, H]
+            ggml_tensor * kq = ggml_concat(ctx0, kq_sinks, kq_cache, 0);                    // [NS+n_kv_attn, T, H]
+
+            // mask: sinks always visible (0) ++ the causal/SWA KQ_mask (+ the DSA top-k selection
+            // mask on indexer layers). The zero block is built by scaling finite kq data (KQ_mask
+            // itself holds -inf, which 0*x would turn into NaN).
+            ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, n_tokens, KQ_mask->nb[1], 0);
+            if (sel_mask) {
+                kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask);
+            }
+            kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
+            ggml_tensor * s_mask0 = ggml_scale(ctx0, ggml_view_2d(ctx0, kq, NS, n_tokens, NS*ggml_element_size(kq), 0), 0.0f);
+            ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);            // [NS+n_kv, T]
+            kq = ggml_soft_max_ext(ctx0, kq, mask_all, kq_scale, hparams.f_max_alibi_bias);
+
+            ggml_tensor * kq_s = ggml_view_3d(ctx0, kq, NS, n_tokens, n_head, kq->nb[1], kq->nb[2], 0);
+            ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv_attn, n_tokens, n_head, kq->nb[1], kq->nb[2],
+                                              NS*ggml_element_size(kq));
+            ggml_tensor * kqv_cache = ggml_mul_mat(ctx0, vl_all, kq_c);                    // [512, T, H]
+            kqv = ggml_add(ctx0,
+                    ggml_mul_mat(ctx0, s_lat_t, kq_s),
+                    kqv_cache);                                                           // [512, T, H]
+        }
+
+        ggml_tensor * wv_b3 = ggml_reshape_3d(ctx0, layer.wv_b, kv_lora_rank, n_embd_head_v, n_head);
+        ggml_tensor * out_h = ggml_mul_mat(ctx0, wv_b3, kqv);                              // [128, T, H]
+        ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, out_h, 0, 2, 1, 3));      // [128, H, T]
+        cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
     }
-    ggml_tensor * kqv = ggml_add(ctx0,
-            ggml_mul_mat(ctx0, s_lat_t, kq_s),
-            kqv_cache);                                                                  // [512, T, H]
-    ggml_tensor * wv_b3 = ggml_reshape_3d(ctx0, layer.wv_b, kv_lora_rank, n_embd_head_v, n_head);
-    ggml_tensor * out_h = ggml_mul_mat(ctx0, wv_b3, kqv);                               // [128, T, H]
-    ggml_tensor * merged = ggml_cont(ctx0, ggml_permute(ctx0, out_h, 0, 2, 1, 3));      // [128, H, T]
-    cur = ggml_reshape_2d(ctx0, merged, n_embd_head_v * n_head, n_tokens);
 
     // o_conv (MOME on the pre-o_proj attn output), then o_proj
     cur = openpangu_causal_conv(ctx0, gf, cur, layer.o_conv, conv_state, conv_off_o,
