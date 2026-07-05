@@ -68,7 +68,11 @@ static __global__ void flash_attn_tile_ext_f16(
     const float2 * Q_f2  = (const float2 *) (Q    + nb02* blockIdx.y              + nb01*ic0);
     const half2  * K_h2  = (const half2  *) (K    + nb12*(blockIdx.y / gqa_ratio));
     const half2  * V_h2  = (const half2  *) (V    + nb12*(blockIdx.y / gqa_ratio)); // K and V have same shape
-    const half   * maskh = (const half   *)  mask + ne11*ic0;
+    // Mask row stride must come from the mask tensor (nb31), not ne11 (= K->ne[1]). For SWA models the
+    // fattn.cu n_swa windowing re-points K/V/mask to the last nton tokens (ne11 = nton) while the mask keeps
+    // its original row stride, so indexing the mask by ne11 reads garbage and yields NaN on the tile kernels.
+    const int    stride_mask = nb31 / sizeof(half);
+    const half   * maskh = (const half   *)  mask + stride_mask*ic0;
 
     const int stride_KV2 = nb11 / sizeof(half2);
 
@@ -176,7 +180,7 @@ static __global__ void flash_attn_tile_ext_f16(
                 } else {
                     sum = __low2half(sum2[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]) + __high2half(sum2[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]);
                 }
-                sum += mask ? slopeh*maskh[j_KQ*ne11 + k_VKQ_0 + i_KQ] : __float2half(0.0f);
+                sum += mask ? slopeh*maskh[j_KQ*stride_mask + k_VKQ_0 + i_KQ] : __float2half(0.0f);
 
                 kqmax_new[j_KQ_0/nwarps] = ggml_cuda_hmax(kqmax_new[j_KQ_0/nwarps], sum);
 
