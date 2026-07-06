@@ -4320,9 +4320,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FAKE_CPY",
     "FUSED_NORM",
     "FUSED_RMS_RMS_ADD",
+    "BLEND",
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4440,10 +4441,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "fake_cpy(x,y)",
     "norm(x,y)",
     "rms(x1)+rms(x2)",
+    "blend(a,b,c)",
 
 };
 
-static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -10137,6 +10139,28 @@ struct ggml_tensor * ggml_fill_inplace(
     return ggml_fill_impl(ctx, a, c, true);
 }
 
+// ggml blend
+struct ggml_tensor * ggml_blend(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 c) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
+    GGML_ASSERT(b->type == GGML_TYPE_I32 || b->type == GGML_TYPE_I64);
+    GGML_ASSERT(b->ne[0] <= a->ne[0]);
+    for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
+        GGML_ASSERT(a->ne[dim] == b->ne[dim]);
+    }
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    result->src[0] = a;
+    result->src[1] = b;
+    memcpy(result->op_params, &c, sizeof(c));
+    result->op = GGML_OP_BLEND;
+
+    return result;
+}
+
 // ggml_argsort
 
 struct ggml_tensor * ggml_argsort(
@@ -14974,8 +14998,6 @@ static void ggml_compute_forward_concat_any(
     GGML_ASSERT(src0->type == src1->type && src0->type == dst->type);
 
     const int32_t dim = ggml_get_op_params_i32(dst, 0);
-    // Let's do it for dim = 0 only for now
-    GGML_ASSERT(dim == 0);
 
     int ith = params->ith;
     int nth = params->nth;
@@ -14983,21 +15005,46 @@ static void ggml_compute_forward_concat_any(
     int64_t nrows = ggml_nrows(dst);
     int64_t nrows_per_thread = (nrows + nth - 1)/nth;
     int64_t first_row = ith*nrows_per_thread;
-    if (first_row >= nrows) return;
     int64_t last_row = MIN(first_row + nrows_per_thread, nrows);
+    if (first_row >= last_row) return;
 
     int64_t src0_row_size = ggml_row_size(src0->type, src0->ne[0]);
     int64_t src1_row_size = ggml_row_size(src1->type, src1->ne[0]);
 
-    for (int64_t row = first_row; row < last_row; ++row) {
-        int64_t i3 = row/(dst->ne[1]*dst->ne[2]);
-        int64_t i2 = (row - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
-        int64_t i1 = row - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
-        char * y = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
-        const char * x0 = (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
-        const char * x1 = (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
-        memcpy(y,                 x0, src0_row_size);
-        memcpy(y + src0_row_size, x1, src1_row_size);
+    if (dim == 0) {
+        for (int64_t row = first_row; row < last_row; ++row) {
+            int64_t i3 = row/(dst->ne[1]*dst->ne[2]);
+            int64_t i2 = (row - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int64_t i1 = row - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+            char * y = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+            const char * x0 = (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
+            const char * x1 = (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
+            memcpy(y,                 x0, src0_row_size);
+            memcpy(y + src0_row_size, x1, src1_row_size);
+        }
+    }
+    else {
+        GGML_ASSERT(src0_row_size == src1_row_size);
+        for (int64_t row = first_row; row < last_row; ++row) {
+            int64_t i3 = row/(dst->ne[1]*dst->ne[2]);
+            int64_t i2 = (row - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int64_t i1 = row - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+            char * y = (char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+            const char * x;
+            if (dim == 1) {
+                x = i1 < src0->ne[1] ? (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]
+                                     : (const char *)src1->data + (i1 - src0->ne[1])*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3];
+            }
+            else if (dim == 2) {
+                x = i2 < src0->ne[2] ? (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]
+                                     : (const char *)src1->data + i1*src1->nb[1] + (i2 - src0->ne[2])*src1->nb[2] + i3*src1->nb[3];
+            }
+            else {
+                x = i3 < src0->ne[3] ? (const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]
+                                     : (const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + (i3 - src0->ne[3])*src1->nb[3];
+            }
+            memcpy(y, x, src0_row_size);
+        }
     }
 
 }
@@ -24404,6 +24451,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 iqk_rms_rms_add(tensor, params->ith, params->nth);
             } break;
+        case GGML_OP_BLEND:
+            {
+                iqk_blend(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_FUSED_NORM:
             {
                 ggml_compute_forward_fused_norm(params, tensor);
@@ -25243,6 +25294,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_FUSED_RMS_NORM:
         case GGML_OP_FUSED_RMS_RMS_ADD:
         case GGML_OP_FUSED_NORM:
+        case GGML_OP_BLEND:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -26443,6 +26495,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_RMS_NORM:
         case GGML_OP_FUSED_RMS_NORM:
         case GGML_OP_FUSED_RMS_RMS_ADD:
+        case GGML_OP_BLEND:
         case GGML_OP_FUSED_NORM:
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_GROUP_NORM:

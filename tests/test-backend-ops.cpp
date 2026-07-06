@@ -850,9 +850,10 @@ struct test_bin_bcast : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const std::array<int, 4> nr;
+    const int nc; // 1: make src0 a non-contiguous view (row-gapped) instead of a fresh tensor
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, nr);
+        return VARS_TO_STR4(type, ne, nr, nc);
     }
 
     size_t op_size(ggml_tensor * t) override {
@@ -861,11 +862,23 @@ struct test_bin_bcast : public test_case {
 
     test_bin_bcast(op_t op, ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 1, 1},
-            std::array<int, 4> nr = {1, 2, 1, 1})
-        : op(op), type(type), ne(ne), nr(nr) {}
+            std::array<int, 4> nr = {1, 2, 1, 1},
+            int nc = 0)
+        : op(op), type(type), ne(ne), nr(nr), nc(nc) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
+        ggml_tensor * a;
+        if (nc) {
+            // non-contiguous src0: allocate padded in dim0 and view it back, so nb[1] > ne[0]*nb[0]
+            // (contiguous within a row, a gap between rows). This is the strided-view shape that
+            // openPangu's mHC produces and that the CUDA scalar-mul path used to misread.
+            ggml_tensor * a_full = ggml_new_tensor_4d(ctx, type,
+                    2*ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
+            a = ggml_view_4d(ctx, a_full, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3],
+                    a_full->nb[1], a_full->nb[2], a_full->nb[3], 0);
+        } else {
+            a = ggml_new_tensor_4d(ctx, type, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
+        }
         ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_tensor * out = op(ctx, a, b);
         return out;
@@ -2218,6 +2231,11 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     add_test_bin_bcast(GGML_TYPE_F32, {16, 10, 10, 10}, {1, 1, 2, 2});
     add_test_bin_bcast(GGML_TYPE_F32, {16, 10, 10, 10}, {1, 2, 2, 2});
     add_test_bin_bcast(GGML_TYPE_F32, {16, 10, 10, 10}, {2, 2, 2, 2});
+
+    // non-contiguous src0 (row-gapped view), the openPangu mHC strided-view shape.
+    // The scalar-src1 case used to take a CUDA scale fast-path that read src0 as flat/contiguous.
+    test_cases.emplace_back(new test_bin_bcast(ggml_mul, GGML_TYPE_F32, {1,  1, 1, 1}, {4, 32, 1, 1}, /*nc=*/1)); // scalar src1 (scale path)
+    test_cases.emplace_back(new test_bin_bcast(ggml_mul, GGML_TYPE_F32, {1, 32, 1, 1}, {4,  1, 1, 1}, /*nc=*/1)); // vector src1 (general bin_bcast path)
 
     // stable diffusion
     add_test_bin_bcast(GGML_TYPE_F32, {1280, 1, 1, 1}, {1, 1, 1, 1});

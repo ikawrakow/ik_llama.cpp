@@ -116,6 +116,7 @@ void llm_build_context::init() {
         lctx.inp_pos_bucket    = nullptr;
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
+        lctx.inp_dsa_sink      = nullptr;
         lctx.dflash.inputs.target_features = nullptr;
         lctx.dflash.inputs.pos_ctx = nullptr;
         lctx.dflash.inputs.kq_mask = nullptr;
@@ -192,6 +193,103 @@ ggml_cgraph * llm_build_context::build_k_shift() {
         }
         cb(tmp, "K_shifted", il);
         ggml_build_forward_expand(gf, tmp);
+    }
+
+    // DSA lightning-indexer key cache (GLM-5.2 / DeepSeek-V3.2): the persistent indexer keys in
+    // kv_self.kr_l[il] are RoPE-position-encoded at write time (build_deepseek2_dsa_indexer rotates
+    // the first rope_dim dims with the cell's absolute pos), so a context-shift that re-RoPEs the
+    // main K cache MUST apply the identical delta-rotation to the indexer keys, or query/key
+    // rotations desync and the indexer top-k silently degrades. We mirror the main K-shift here.
+    //
+    // Subtlety: the cached key is H * concat(RoPE(k_pe,pos), k_nope), where H is the symmetric
+    // orthonormal Walsh-Hadamard rotation applied AFTER RoPE (head-wide, mixing pe+nope dims). So we
+    // cannot RoPE the cached key directly. We un-rotate by H (H==H^T, H*H==I), RoPE-delta the pe
+    // sub-block, then re-rotate by H. This is exact because (a) for this model ext_factor==0 and
+    // attn_factor==1 (no YaRN: GLM-DSA carries no rope-scaling metadata), so NEOX RoPE is a pure
+    // rotation and composable: RoPE(x,pos+delta)==RoPE(RoPE(x,pos),delta); and (b) when the Hadamard
+    // is disabled (DSA_HADAMARD_DISABLE) the un/re-rotate by H is simply absent (kr_had==false).
+    //
+    // NOTE (engine gate): build_k_shift only runs after get_can_shift() passes, which currently
+    // returns FALSE for ALL MLA models (llama.cpp llama_kv_cache_update_internal -> get_can_shift:
+    // is_mla_model() includes GLM_DSA). So on GLM-5.2 a RoPE context-shift is refused by the engine
+    // (decode returns 1 == "failed to eval") BEFORE any kr_l graph is built, identically with or
+    // without the indexer. This block is therefore correct-and-dormant: it never executes on the
+    // current MLA path, but keeps the indexer keys consistent the instant MLA K-shift is ever enabled.
+    // It is NOT a way for the indexer to desync — the shift simply does not happen for MLA.
+    if (model.arch == LLM_ARCH_GLM_DSA && hparams.indexer_head_size > 0 && !kv_self.kr_l.empty()) {
+        const int64_t head_size = hparams.indexer_head_size;
+        const int64_t rope_dim  = n_rot;              // n_embd_head_qk_rope (indexer pe dims)
+        const int64_t nope_dim  = head_size - rope_dim;
+
+        // Hadamard size used by the forward indexer: largest power-of-2 divisor of head_size that
+        // spans the full head row (else the forward path skips it). Rebuild the same matrix here so
+        // we can un/re-rotate the cached key. Must match build_deepseek2_dsa_indexer exactly.
+        bool do_hadamard = false;
+        static const bool dsa_had_disable = getenv("DSA_HADAMARD_DISABLE") != nullptr;
+        if (lctx.cparams.dsa_indexer_hadamard && !dsa_had_disable) {
+            GGML_ASSERT((head_size & ~(head_size-1)) == head_size);
+            do_hadamard = true;
+        }
+        int64_t nrot = 1;
+        while ((nrot * 2) <= head_size && head_size % (nrot * 2) == 0) nrot *= 2;
+
+        for (int il = 0; il < n_layer; ++il) {
+            if ((size_t) il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr) {
+                continue;
+            }
+            ggml_tensor * kr = kv_self.kr_l[il]; // {head_size, kv_size} F16
+            // The indexer forward RoPE (build_deepseek2_dsa_indexer) passes rope_factors==nullptr;
+            // mirror that exactly here so the delta-rotation matches the encoding.
+            struct ggml_tensor * rope_factors = nullptr;
+
+            // {head_size, kv_size} -> work in F32 for the rotation, write back F16.
+            ggml_tensor * kr_f32 = ggml_cast(ctx0, kr, GGML_TYPE_F32);
+            for (auto * backend : lctx.backends) {
+                if (ggml_backend_supports_buft(backend, lctx.model.buft_layer[il].buft)) {
+                    ggml_backend_sched_set_tensor_backend(lctx.sched, kr_f32, backend);
+                    break;
+                }
+            }
+            cb(kr_f32, "kr_f32", il);
+
+            // un-Hadamard: H * kr  ==  concat(RoPE(k_pe,pos), k_nope)  (H symmetric/orthonormal).
+            if (do_hadamard) {
+                kr_f32 = ggml_hadamard(ctx0, kr_f32, head_size);
+                cb(kr_f32, "kr_unhad", il);
+            }
+
+            // view the pe sub-block {rope_dim, 1, kv_size} and the nope sub-block {nope_dim,1,kv_size}.
+            ggml_tensor * kr_pe = ggml_view_3d(ctx0, kr_f32, rope_dim, 1, n_ctx,
+                    ggml_row_size(kr_f32->type, head_size),
+                    ggml_row_size(kr_f32->type, head_size), 0);
+            ggml_tensor * kr_nope = ggml_view_3d(ctx0, kr_f32, nope_dim, 1, n_ctx,
+                    ggml_row_size(kr_f32->type, head_size),
+                    ggml_row_size(kr_f32->type, head_size),
+                    ggml_row_size(kr_f32->type, rope_dim));
+            // RoPE the pe block by the per-cell delta (inp_K_shift holds cells[i].delta) into a NEW
+            // tensor (non-in-place; ggml_cont copies the view first to avoid aliasing the source).
+            // NEOX, identical params to the indexer forward RoPE.
+            ggml_tensor * kr_pe_rot = ggml_rope_ext(ctx0, ggml_cont(ctx0, kr_pe),
+                    lctx.inp_K_shift, rope_factors, n_rot, LLAMA_ROPE_TYPE_NEOX, n_ctx_orig,
+                    freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            cb(kr_pe_rot, "kr_pe_shifted", il);
+
+            // reassemble {head_size, 1, kv_size} = concat(rotated pe, untouched nope) along dim0.
+            ggml_tensor * kr_cat = ggml_concat(ctx0, kr_pe_rot, ggml_cont(ctx0, kr_nope), 0);
+            kr_cat = ggml_reshape_2d(ctx0, kr_cat, head_size, n_ctx);
+            cb(kr_cat, "kr_cat_shifted", il);
+
+            // re-Hadamard: H * concat(RoPE(k_pe,pos+delta), k_nope) == the new cached key.
+            ggml_tensor * kr_new = kr_cat;
+            if (do_hadamard) {
+                kr_new = ggml_hadamard(ctx0, kr_cat, head_size);
+                cb(kr_new, "kr_rehad", il);
+            }
+            // write back into the F16 cache.
+            ggml_tensor * kr_back = ggml_cpy(ctx0, kr_new, kr);
+            cb(kr_back, "kr_shifted", il);
+            ggml_build_forward_expand(gf, kr_back);
+        }
     }
 
     return gf;
@@ -301,6 +399,24 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, view_k_src, view_k_dst));
             if (view_v_src && view_v_dst) {
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, view_v_src, view_v_dst));
+            }
+
+            // DSA lightning-indexer key cache: move the indexer keys alongside k_l. Each cell's
+            // indexer key (kr_l row, one per cache cell) must follow its cell, or after defrag the
+            // kr_l rows no longer match the cells the indexer scores by cell index. The indexer key
+            // is RoPE-encoded at its (unchanged) absolute pos, and defrag does NOT change pos, so a
+            // plain row move is correct (no re-RoPE needed; only seq_add/K-shift change pos).
+            if ((size_t) il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr) {
+                const int64_t head_size = hparams.indexer_head_size;
+                ggml_tensor * view_kr_src = ggml_view_2d(ctx0, kv_self.kr_l[il],
+                        head_size, nm,
+                        ggml_row_size(kv_self.kr_l[il]->type, head_size),
+                        ggml_row_size(kv_self.kr_l[il]->type, head_size*i));
+                ggml_tensor * view_kr_dst = ggml_view_2d(ctx0, kv_self.kr_l[il],
+                        head_size, nm,
+                        ggml_row_size(kv_self.kr_l[il]->type, head_size),
+                        ggml_row_size(kv_self.kr_l[il]->type, head_size*id));
+                ggml_build_forward_expand(gf, ggml_cpy(ctx0, view_kr_src, view_kr_dst));
             }
         }
 

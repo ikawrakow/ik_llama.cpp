@@ -215,13 +215,11 @@ static void llama_graph_compute_sched(
 }
 
 static bool dflash_layer_has_attention_bias(const llama_layer & layer) {
-    return layer.bq != nullptr ||
-           layer.bk != nullptr ||
-           layer.bv != nullptr ||
-           layer.bo != nullptr ||
-           layer.bqkv != nullptr ||
-           layer.bqk != nullptr ||
-           layer.bkv != nullptr;
+    // build_dflash() now applies separate q/k/v/o attention biases (bq/bk/bv/bo).
+    // Only fused qkv-style biases remain unimplemented in the DFlash graph.
+    return layer.bqkv != nullptr ||
+           layer.bqk  != nullptr ||
+           layer.bkv  != nullptr;
 }
 
 static bool validate_dflash_graph_contract(const llama_context & lctx) {
@@ -309,7 +307,7 @@ static bool validate_dflash_graph_contract(const llama_context & lctx) {
             }
 
         if (dflash_layer_has_attention_bias(model.layers[il])) {
-            LLAMA_LOG_ERROR("%s: DFlash graph does not implement attention bias tensors, but layer %d requires them\n",
+            LLAMA_LOG_ERROR("%s: DFlash graph implements only separate q/k/v/o attention bias; layer %d uses an unsupported fused qkv bias\n",
                     __func__, il);
             return false;
         }

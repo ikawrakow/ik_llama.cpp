@@ -703,6 +703,7 @@ extern "C" {
         GGML_OP_FAKE_CPY,
         GGML_OP_FUSED_NORM,
         GGML_OP_FUSED_RMS_RMS_ADD,
+        GGML_OP_BLEND,
 
         GGML_OP_COUNT,
     };
@@ -2392,6 +2393,14 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 c);
+
+    // Overwrite values in a with c for the indeces stored in b
+    GGML_API struct ggml_tensor * ggml_blend(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 c);
+
 
     // sort rows
     enum ggml_sort_order {
