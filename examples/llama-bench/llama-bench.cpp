@@ -1288,7 +1288,6 @@ struct test {
     static const int build_number;
     static const bool cuda;
     static const bool vulkan;
-    static const bool kompute;
     static const bool metal;
     static const bool sycl;
     static const bool gpu_blas;
@@ -1454,9 +1453,6 @@ struct test {
         if (vulkan) {
             return "Vulkan";
         }
-        if (kompute) {
-            return "Kompute";
-        }
         if (metal) {
             return "Metal";
         }
@@ -1484,7 +1480,7 @@ struct test {
             field == "avg_ns" || field == "stddev_ns" || field == "max_gpu") {
             return INT;
         }
-        if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
+        if (field == "cuda" || field == "vulkan" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
@@ -1521,7 +1517,7 @@ struct test {
         bool is_gen = n_gen > 0;
         std::vector<std::string> values = {
             build_commit, std::to_string(build_number),
-            std::to_string(cuda), std::to_string(vulkan), std::to_string(kompute),
+            std::to_string(cuda), std::to_string(vulkan),
             std::to_string(metal), std::to_string(sycl), std::to_string(has_rpc), std::to_string(gpu_blas), std::to_string(blas),
             cpu_info, gpu_info,
             model_filename, model_type, std::to_string(model_size), std::to_string(model_n_params),
@@ -1546,7 +1542,7 @@ struct test {
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
             "build_commit", "build_number",
-            "cuda", "vulkan", "kompute", "metal", "sycl", "rpc", "gpu_blas", "blas",
+            "cuda", "vulkan", "metal", "sycl", "rpc", "gpu_blas", "blas",
             "cpu_info", "gpu_info",
             "model_filename", "model_type", "model_size", "model_n_params",
             "n_batch", "n_ubatch",
@@ -1576,7 +1572,6 @@ const std::string test::build_commit = LLAMA_COMMIT;
 const int         test::build_number = LLAMA_BUILD_NUMBER;
 const bool        test::cuda         = !!ggml_cpu_has_cuda();
 const bool        test::vulkan       = !!ggml_cpu_has_vulkan();
-const bool        test::kompute      = !!ggml_cpu_has_kompute();
 const bool        test::metal        = !!ggml_cpu_has_metal();
 const bool        test::gpu_blas     = !!ggml_cpu_has_gpublas();
 const bool        test::blas         = !!ggml_cpu_has_blas();
