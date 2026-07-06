@@ -10,11 +10,10 @@
 #include <vector>
 
 static constexpr int64_t OPENPANGU_CONV_RING = 16;
-static constexpr int OPENPANGU_CACHE_COPIES_PER_LAYER = 4;
+static constexpr int OPENPANGU_CACHE_COPIES_PER_LAYER = 3;
 static constexpr int OPENPANGU_COPY_K_CKV = 0;
 static constexpr int OPENPANGU_COPY_K_KPE = 1;
-static constexpr int OPENPANGU_COPY_V_TRANS = 2;
-static constexpr int OPENPANGU_COPY_IDX = 3;
+static constexpr int OPENPANGU_COPY_IDX = 2;
 static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
 static constexpr int64_t OPENPANGU_IDX_SCORE_CHUNK = 256;
 static constexpr int64_t OPENPANGU_ATT_SCORE_CHUNK = 256;
@@ -187,6 +186,15 @@ static bool openpangu_dsa_prefill_gather_should_engage(
     return min_causal_kv >= OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad;
 }
 
+static ggml_tensor * openpangu_build_v_latent_from_k(
+        ggml_context * ctx, const llama_kv_cache & kv_self, int il,
+        int64_t kv_lora_rank, int64_t n_kv_view, int64_t win_off) {
+    ggml_tensor * kl = kv_self.k_l[il];
+    ggml_tensor * v_src = ggml_view_2d(ctx, kl, kv_lora_rank, n_kv_view,
+                                       kl->nb[1], (size_t) win_off*kl->nb[1]);
+    return ggml_cont(ctx, ggml_transpose(ctx, v_src));
+}
+
 static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm, uint32_t window, bool * windowed) {
     *windowed = false;
     llm.lctx.openpangu_swa_window_view = {};
@@ -225,8 +233,8 @@ static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm,
 // openPangu-2.0-Flash graph.
 //
 // Attention runs absorbed MLA over a latent KV cache: per position the cache stores only
-// the 512-d compressed latent plus the 64-d roped k_pe (k_l, straight layout) and the
-// transposed latent (v_l); q_nope is projected into latent space through attn_k_b and the
+// the 512-d compressed latent plus the 64-d roped k_pe (k_l, straight layout);
+// q_nope is projected into latent space through attn_k_b and the
 // attention output is up-projected through attn_v_b after the weighted sum. Per-head K/V
 // never materialize.
 //
@@ -410,13 +418,10 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                          n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
     ggml_tensor * k_pe2d = ggml_reshape_2d(ctx0, k_pe, n_embd_head_qk_rope, n_tokens);
 
-    // ---- latent cache store: per position [ckv 512 | roped k_pe 64] straight into k_l,
-    // and the 512-latent transposed into v_l (v_trans layout) for the value side. The
-    // per-head K/V are never materialized; attention runs against the shared latents.
+    // ---- latent cache store: per position [ckv 512 | roped k_pe 64] straight into k_l.
+    // The value-side latent is rebuilt from k_l per graph; per-head K/V are never materialized.
     {
-        GGML_ASSERT(kv_self.v_trans);
         ggml_tensor * kl = kv_self.k_l[il];
-        ggml_tensor * vl = kv_self.v_l[il];
         ggml_tensor * kl_ckv = ggml_view_2d(ctx0, kl, kv_lora_rank, n_tokens, kl->nb[1], kv_head*kl->nb[1]);
         ggml_tensor * kl_kpe = ggml_view_2d(ctx0, kl, n_embd_head_qk_rope, n_tokens, kl->nb[1],
                                             kv_head*kl->nb[1] + kv_lora_rank*ggml_element_size(kl));
@@ -427,11 +432,6 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_KPE, cpy_kl_kpe, kl->nb[1],
                                       kv_lora_rank*ggml_element_size(kl));
         ggml_build_forward_expand(gf, cpy_kl_kpe);
-        ggml_tensor * vl_view = ggml_view_2d(ctx0, vl, n_tokens, kv_lora_rank,
-                                             (int64_t) kv_self.size*ggml_element_size(vl), kv_head*ggml_element_size(vl));
-        ggml_tensor * cpy_vl = ggml_cpy(ctx0, ggml_transpose(ctx0, ckv), vl_view);
-        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_V_TRANS, cpy_vl, ggml_element_size(vl));
-        ggml_build_forward_expand(gf, cpy_vl);
     }
 
     // ---- DSA lightning indexer: per-query top-k selection mask (DSA layers only) ----
@@ -628,10 +628,13 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     if (!use_dsa_gather) {
         kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv_attn,
                               kv_self.k_l[il]->nb[1], (size_t) win_off*kv_self.k_l[il]->nb[1]);
-        vl_all = ggml_view_2d(ctx0, kv_self.v_l[il], n_kv_attn, kv_lora_rank,
-                              (int64_t) kv_self.size*ggml_element_size(kv_self.v_l[il]),
-                              (size_t) win_off*ggml_element_size(kv_self.v_l[il]));
     }
+    auto get_vl_all = [&]() -> ggml_tensor * {
+        if (vl_all == nullptr) {
+            vl_all = openpangu_build_v_latent_from_k(ctx0, kv_self, il, kv_lora_rank, n_kv_attn, win_off);
+        }
+        return vl_all;
+    };
 
     ggml_tensor * k_gath = nullptr;
     ggml_tensor * kq_cache = nullptr;
@@ -810,7 +813,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                     ggml_tensor * kq_cache_soft_c = ggml_view_3d(ctx0, kq_c_all, n_kv_attn, tc, n_head,
                                                                  kq_c_all->nb[1], kq_c_all->nb[2],
                                                                  NS*ggml_element_size(kq_c_all));
-                    ggml_tensor * kqv_cache_c = ggml_mul_mat(ctx0, vl_all, kq_cache_soft_c);     // [512, Tc, H]
+                    ggml_tensor * kqv_cache_c = ggml_mul_mat(ctx0, get_vl_all(), kq_cache_soft_c); // [512, Tc, H]
                     kqv_c = ggml_add(ctx0,
                             ggml_mul_mat(ctx0, s_lat_t, kq_s_c),
                             kqv_cache_c);                                                       // [512, Tc, H]
@@ -838,7 +841,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             ggml_tensor * kq_s = ggml_view_3d(ctx0, kq, NS, n_tokens, n_head, kq->nb[1], kq->nb[2], 0);
             ggml_tensor * kq_c = ggml_view_3d(ctx0, kq, n_kv_attn, n_tokens, n_head, kq->nb[1], kq->nb[2],
                                               NS*ggml_element_size(kq));
-            ggml_tensor * kqv_cache = ggml_mul_mat(ctx0, vl_all, kq_c);                    // [512, T, H]
+            ggml_tensor * kqv_cache = ggml_mul_mat(ctx0, get_vl_all(), kq_c);              // [512, T, H]
             kqv = ggml_add(ctx0,
                     ggml_mul_mat(ctx0, s_lat_t, kq_s),
                     kqv_cache);                                                           // [512, T, H]

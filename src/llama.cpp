@@ -745,8 +745,8 @@ llama_context::llama_context(const llama_model & model)
     // GLM-DSA lightning indexer: one indexer-key (kr_l) cache copy per layer. Entries stay null
     // for non-DSA models / non-indexer layers, so update_cache_copies() is a no-op when DSA is off.
     dsa_cache_copies.resize(hparams.n_layer);
-    openpangu_cache_copies.resize(4*hparams.n_layer);
-    openpangu_cache_copies_mtp.resize(4*hparams.n_layer);
+    openpangu_cache_copies.resize(3*hparams.n_layer);
+    openpangu_cache_copies_mtp.resize(3*hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 
@@ -1105,7 +1105,8 @@ static bool llama_kv_cache_init(
         // For MTP-only context, skip KV allocation for non-MTP layers
         if (cparams.mtp_op_type != MTP_OP_NONE && i < n_mtp_first_layer) {
             cache.k_l.push_back(nullptr);
-            if (!is_mla_attn || !cparams.mla_attn || (cparams.mla_attn == 1 && !cparams.flash_attn)) {
+            if (model.arch != LLM_ARCH_OPENPANGU &&
+                    (!is_mla_attn || !cparams.mla_attn || (cparams.mla_attn == 1 && !cparams.flash_attn))) {
                 cache.v_l.push_back(nullptr);
             }
             continue;
@@ -1246,12 +1247,10 @@ static bool llama_kv_cache_init(
             }
 
             if (model.arch == LLM_ARCH_OPENPANGU) {
-                // MLA-latent cache: k_l holds [ckv_norm 512 | roped k_pe 64] per position
-                // (straight layout); v_l holds the transposed 512-latent for the value side
-                // (v_trans layout). The per-head K/V never get materialized.
+                // MLA-latent cache: k_l holds [ckv_norm 512 | roped k_pe 64] per position.
+                // The value-side latent is rederived from k_l per graph; no persistent V store.
                 const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, kv_size);
-                v = ggml_new_tensor_1d(ctx, this_type_v, (int64_t) hparams.n_lora_kv * kv_size);
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
@@ -1260,7 +1259,9 @@ static bool llama_kv_cache_init(
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
             auto v_name = std::string{"cache_v_l"} + std::to_string(i);
             ggml_set_name(k, k_name.c_str());
-            ggml_set_name(v, v_name.c_str());
+            if (v) {
+                ggml_set_name(v, v_name.c_str());
+            }
 
             if (model.arch == LLM_ARCH_OPENPANGU) {
                 // MoME conv-state ring: one column per absolute token position (mod ring size),
@@ -1290,6 +1291,12 @@ static bool llama_kv_cache_init(
                 }
             }
 
+            if (split_cache_i) {
+                if (model.arch == LLM_ARCH_OPENPANGU) {
+                    ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+                    split_cache_i = false;
+                }
+            }
             if (split_cache_i) {
                 bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
                 auto extra_K = (const ggml_split_tensor_t *)K->extra;
@@ -1329,7 +1336,9 @@ static bool llama_kv_cache_init(
                 v->extra = (void *)&split_v_l.ggml;
             }
             cache.k_l.push_back(k);
-            cache.v_l.push_back(v);
+            if (model.arch != LLM_ARCH_OPENPANGU) {
+                cache.v_l.push_back(v);
+            }
         }
     }
     if (is_mla_attn && cparams.mla_attn && n_mla < n_kv_active_layers && n_mla > 0) {
@@ -1373,7 +1382,7 @@ static bool llama_kv_cache_init(
             }
             printf("\n");
         }
-        if (cache.v_l[il]->extra) {
+        if (cache.v_l.size() > (size_t) il && cache.v_l[il] && cache.v_l[il]->extra) {
             printf("Layer %2d, V-buffer: %p:", il, (void *)cache.v_l[il]->buffer);
             auto split_vl = (ggml_split_tensor_t *)cache.v_l[il]->extra;
             for (int id = 0; id < split_vl->n_device; ++id) {
@@ -9931,7 +9940,7 @@ size_t llama_state_get_size(struct llama_context * ctx) {
 
 static size_t llama_state_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx) {
     if (!llama_state_io_supported(ctx, __func__)) {
-        return 0;
+        return SIZE_MAX;
     }
     llama_synchronize(ctx);
 
@@ -10072,7 +10081,7 @@ size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_
 
 static size_t llama_state_seq_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx, llama_seq_id dest_seq_id, llama_state_seq_flags flags) {
     if (!llama_state_io_supported(ctx, __func__)) {
-        return 0;
+        return SIZE_MAX;
     }
     llama_synchronize(ctx);
 
