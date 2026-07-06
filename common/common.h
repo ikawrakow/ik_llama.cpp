@@ -458,6 +458,7 @@ struct gpt_params {
     bool cache_type_k_explicit = false;
     bool cache_type_v_explicit = false;
     std::string indexer_cache_type_k = "f16"; // indexer K-cache data type
+    bool indexer_cache_type_k_explicit = false;
 
     std::string reduce_type = "f16";
     std::string graph_attn_precision = "f16";

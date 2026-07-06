@@ -381,6 +381,7 @@ extern "C" {
         bool type_k_explicit; // true when caller explicitly requested type_k
         bool type_v_explicit; // true when caller explicitly requested type_v
         enum ggml_type idx_type_k;
+        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
         uint32_t max_ctx_size;
         int32_t  n_seq_max;
         int32_t  n_ubatch;
@@ -471,6 +472,7 @@ extern "C" {
         bool type_k_explicit; // true when caller explicitly requested type_k
         bool type_v_explicit; // true when caller explicitly requested type_v
         enum ggml_type idx_type_k; // data type for indexer K cache [EXPERIMENTAL]
+        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
         enum ggml_type type_reduce; // data type for reduce operations
         enum ggml_type type_graph_attn; // flash-attn precision under -sm graph
         enum ggml_type type_k_first;

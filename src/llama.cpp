@@ -904,6 +904,33 @@ static bool llama_openpangu_resolve_latent_cache_types(
     return true;
 }
 
+static inline bool llama_openpangu_indexer_cache_type_supported(ggml_type type) {
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
+}
+
+static std::string llama_openpangu_indexer_cache_type_error(ggml_type type) {
+    return format("OpenPangu indexer K cache supports only f32, f16, bf16, and q8_0 (requested %s); use -ictk q8_0",
+            ggml_type_name(type));
+}
+
+static bool llama_openpangu_resolve_indexer_cache_type(
+        ggml_type &   idx_type_k,
+        bool          idx_type_k_explicit,
+        std::string * error_msg) {
+    if (!idx_type_k_explicit) {
+        idx_type_k = GGML_TYPE_F32;
+    }
+
+    if (!llama_openpangu_indexer_cache_type_supported(idx_type_k)) {
+        if (error_msg) {
+            *error_msg = llama_openpangu_indexer_cache_type_error(idx_type_k);
+        }
+        return false;
+    }
+
+    return true;
+}
+
 static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
     return std::min<uint32_t>(std::max<uint32_t>(1, cparams.n_seq_max), kv_size);
 }
@@ -1285,7 +1312,7 @@ static bool llama_kv_cache_init(
                 // 128-d indexer key. Position-indexed like everything else in the cache, so
                 // the same rollback invariant applies: committed columns never change.
                 if (hparams.indexer_head_size > 0 && i < n_mtp_first_layer && hparams.openpangu_window[i] == 0 && hparams.n_swa > 0) {
-                    ggml_tensor * idxk = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.indexer_head_size, kv_size);
+                    ggml_tensor * idxk = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, kv_size);
                     ggml_format_name(idxk, "cache_idx_l%d", i);
                     cache.idx_l[i] = idxk;
                 }
@@ -3335,7 +3362,7 @@ struct expert_tensors {
 };
 
 static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model,
-        ggml_type cache_type_k, ggml_type cache_type_v, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
+        ggml_type cache_type_k, ggml_type cache_type_v, ggml_type idx_type_k, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
         int amb, int worst_case_tokens, bool flash_attn,
         std::vector<expert_tensors> & experts) {
     int n_layer = model.hparams.n_layer;
@@ -3543,7 +3570,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
-        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, flash_attn);
+        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn);
         LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
         tot_model += result[il];
@@ -3574,6 +3601,7 @@ static bool llm_load_tensors(
         const float * tensor_split,
         ggml_type cache_type_k,
         ggml_type cache_type_v,
+        ggml_type idx_type_k,
         ggml_type extra_output_type,
         uint32_t max_ctx_size,
         int n_seq_max,
@@ -3780,7 +3808,7 @@ static bool llm_load_tensors(
     // placement is already handled above, so skipping this block is safe.
     if (device_count > 0 && !model.devices.empty()) {
         std::vector<expert_tensors> experts;
-        auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
+        auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
                 amb, worst_case_tokens, flash_attn, experts);
         size_t required_mem = 0;
         for (int i = 0; i <= n_layer; ++i) {
@@ -4372,6 +4400,10 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                         params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit, &error_msg)) {
                 throw std::runtime_error(error_msg);
             }
+            if (!llama_openpangu_resolve_indexer_cache_type(
+                        params.idx_type_k, params.idx_type_k_explicit, &error_msg)) {
+                throw std::runtime_error(error_msg);
+            }
         }
         if (params.defer_experts && params.use_mmap) {
 #ifdef __linux__
@@ -4418,7 +4450,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
-            params.type_k, params.type_v, params.extra_output_type,
+            params.type_k, params.type_v, params.idx_type_k, params.extra_output_type,
             params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.fit_margin_array,
             params.worst_graph_tokens, params.flash_attn,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
@@ -6885,6 +6917,7 @@ struct llama_model_params llama_model_default_params() {
         /*.type_k_explicit             =*/ false,
         /*.type_v_explicit             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
+        /*.idx_type_k_explicit         =*/ false,
         /*.max_ctx_size                =*/ 0,
         /*.n_seq_max                   =*/ 1,
         /*.n_ubatch                    =*/ 512,
@@ -6960,6 +6993,7 @@ struct llama_context_params llama_context_default_params() {
         /*.type_k_explicit             =*/ false,
         /*.type_v_explicit             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
+        /*.idx_type_k_explicit         =*/ false,
         /*.type_reduce                 =*/ GGML_TYPE_F16,
         /*.type_graph_attn             =*/ GGML_TYPE_F16,
         /*.type_first_k                =*/ GGML_TYPE_F16,
@@ -7347,6 +7381,11 @@ struct llama_context * llama_init_from_model(
         std::string error_msg;
         if (!llama_openpangu_resolve_latent_cache_types(
                     params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit, &error_msg)) {
+            LLAMA_LOG_ERROR("%s: %s\n", __func__, error_msg.c_str());
+            return nullptr;
+        }
+        if (!llama_openpangu_resolve_indexer_cache_type(
+                    params.idx_type_k, params.idx_type_k_explicit, &error_msg)) {
             LLAMA_LOG_ERROR("%s: %s\n", __func__, error_msg.c_str());
             return nullptr;
         }
@@ -7801,6 +7840,11 @@ struct llama_context * llama_init_from_model(
                 }
             }
             for (auto & k : ctx->kv_self.kr_l) {
+                if (k) {
+                    memory_size_k_indexer += ggml_nbytes(k);
+                }
+            }
+            for (auto & k : ctx->kv_self.idx_l) {
                 if (k) {
                     memory_size_k_indexer += ggml_nbytes(k);
                 }
