@@ -177,9 +177,6 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
 
     if (indexer && indexer->type == GGML_TYPE_I32) {
         if (indexer->ne[0] < nek1 && neq1 >= nth && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 == 1) {
-            //if (ith == 0) {
-            //    printf("%s: could use indexer as indexer->ne[0] = %ld, neq1 = %d, nek1 = %d, nek2 = %d nth = %d\n", __func__, indexer->ne[0], neq1, nek1, nek2, nth);
-            //}
             int npt = (neq1 + nth - 1)/nth;
             int ith_mid = nth;
             int neq1_this_thread = npt;
@@ -212,13 +209,6 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 }
                 auto this_q = (const char *)q + iq*stride_q;
                 auto this_qkv = qkv + iq*ne1*nb1/sizeof(float);
-                //iqk_flash_attn_noalibi(type_q, type_mask, max_bias,
-                //        neq3, neq2, nbq3, nbq2, nek3, nek2, nbk3, nbk2, nev3, nev2, nbv3, nbv2, ne2, ne1, nb1,
-                //        int_type_k_in, int_type_v, Dk, Dv, 1, nkv,
-                //        stride_q, row_size_k, row_size_v, 0,
-                //        this_q, work_k, work_v, work_m,
-                //        sinks, scale, softcap, this_qkv,
-                //        nullptr, barrier, barrier_data, 0, 1, 0, nullptr);
                 if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
                          Dk, Dv, neq2, nkv, nbq2, row_size_k, row_size_v, 0, Dv,
                          (const float *)this_q, work_k, work_v, work_m, nullptr, 0,
