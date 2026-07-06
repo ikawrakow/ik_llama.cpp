@@ -1283,7 +1283,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         }
     }
 
-    last_sparse_mask = last_sparse_mask_fa = dsa_last_full_sorted = dsa_tg_fast_mask = nullptr;
+    last_sparse_mask = last_sparse_mask_fa = dsa_last_full_sorted = nullptr;
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case
