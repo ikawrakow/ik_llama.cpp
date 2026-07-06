@@ -45,24 +45,19 @@ static uint32_t openpangu_kv_cache_pad(const llama_cparams & cparams) {
 
 struct openpangu_dsa_gather_env {
     bool    gather_enabled = true;
-    int64_t topk_override  = -1;
-    bool    trace          = false;
 };
 
 struct openpangu_idx_score_env {
     int64_t chunk = OPENPANGU_IDX_SCORE_CHUNK;
-    bool    trace = false;
 };
 
 struct openpangu_att_score_env {
     int64_t chunk   = OPENPANGU_ATT_SCORE_CHUNK;
     int64_t cap_mib = OPENPANGU_ATT_FULL_KQ_MAX_MIB;
-    bool    trace   = false;
 };
 
 struct openpangu_prefill_gather_env {
     bool gather_enabled = true;
-    bool trace          = false;
 };
 
 static bool openpangu_env_flag_value(const char * env, bool default_value) {
@@ -72,22 +67,6 @@ static bool openpangu_env_flag_value(const char * env, bool default_value) {
     return std::strcmp(env, "0") != 0 &&
            std::strcmp(env, "false") != 0 &&
            std::strcmp(env, "off") != 0;
-}
-
-static int64_t openpangu_env_i64_value(const char * name, const char * env, int64_t default_value) {
-    if (env == nullptr || env[0] == '\0') {
-        return default_value;
-    }
-
-    errno = 0;
-    char * end = nullptr;
-    const long value = std::strtol(env, &end, 10);
-    if (errno != 0 || end == env || *end != '\0' || value <= 0) {
-        LLAMA_LOG_WARN("%s: ignoring invalid %s=%s\n", __func__, name, env);
-        return default_value;
-    }
-
-    return (int64_t) value;
 }
 
 static int64_t openpangu_env_i64_value_allow_zero(const char * name, const char * env, int64_t default_value) {
@@ -110,9 +89,6 @@ static const openpangu_dsa_gather_env & openpangu_dsa_gather_env_once() {
     static const openpangu_dsa_gather_env env = [] {
         openpangu_dsa_gather_env result;
         result.gather_enabled = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_DSA_GATHER"), true);
-        result.topk_override  = openpangu_env_i64_value("LLAMA_OPENPANGU_DSA_TOPK",
-                std::getenv("LLAMA_OPENPANGU_DSA_TOPK"), -1);
-        result.trace          = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_DSA_GATHER_TRACE"), false);
         return result;
     }();
     return env;
@@ -123,7 +99,6 @@ static const openpangu_idx_score_env & openpangu_idx_score_env_once() {
         openpangu_idx_score_env result;
         result.chunk = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_IDX_CHUNK",
                 std::getenv("LLAMA_OPENPANGU_IDX_CHUNK"), OPENPANGU_IDX_SCORE_CHUNK);
-        result.trace = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_IDX_CHUNK_TRACE"), false);
         return result;
     }();
     return env;
@@ -136,7 +111,6 @@ static const openpangu_att_score_env & openpangu_att_score_env_once() {
                 std::getenv("LLAMA_OPENPANGU_ATT_CHUNK"), OPENPANGU_ATT_SCORE_CHUNK);
         result.cap_mib = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_ATT_KQ_MAX_MIB",
                 std::getenv("LLAMA_OPENPANGU_ATT_KQ_MAX_MIB"), OPENPANGU_ATT_FULL_KQ_MAX_MIB);
-        result.trace = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_ATT_CHUNK_TRACE"), false);
         return result;
     }();
     return env;
@@ -146,7 +120,6 @@ static const openpangu_prefill_gather_env & openpangu_prefill_gather_env_once() 
     static const openpangu_prefill_gather_env env = [] {
         openpangu_prefill_gather_env result;
         result.gather_enabled = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_PREFILL_GATHER"), true);
-        result.trace          = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_PREFILL_GATHER_TRACE"), false);
         return result;
     }();
     return env;
@@ -237,12 +210,6 @@ static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm,
     const uint32_t pad = openpangu_kv_cache_pad(llm.cparams);
     const llama_openpangu_swa_window_view view =
         llama_openpangu_calc_swa_window_view(llm.n_kv, llm.n_tokens, window, pad);
-
-    if (std::getenv("LLAMA_OPENPANGU_SWA_WINDOW_TRACE")) {
-        LLAMA_LOG_INFO("%s: openPangu SWA window %s n_kv=%d n_tokens=%d window=%u pad=%u W_view=%d win_off=%d\n",
-                __func__, view.engaged ? "engaged" : "not-engaged",
-                (int) llm.n_kv, (int) llm.n_tokens, window, pad, (int) view.w_view, (int) view.win_off);
-    }
 
     if (!view.engaged) {
         return llm.build_inp_KQ_mask_swa();
@@ -496,23 +463,14 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
             topk = lctx.cparams.dsa_top_k;
         }
         const openpangu_dsa_gather_env & dsa_env = openpangu_dsa_gather_env_once();
-        if (dsa_env.topk_override > 0) {
-            topk = dsa_env.topk_override;
-        }
         GGML_ASSERT(topk > 0 && topk <= INT_MAX);
         dsa_topk = topk;
 
         const uint32_t pad = openpangu_kv_cache_pad(cparams);
-        const int64_t dsa_gather_threshold = OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad + n_tokens;
         const bool is_base_graph = cparams.mtp_op_type == MTP_OP_NONE;
         const bool dsa_gather_predicate =
             openpangu_dsa_gather_should_engage(n_kv, n_tokens, topk, pad);
         const bool dsa_gather_allowed = is_base_graph && dsa_env.gather_enabled && dsa_gather_predicate;
-        if (dsa_env.trace) {
-            LLAMA_LOG_INFO("%s: openPangu DSA gather n_kv=%d T=%d topk=%d pad=%u threshold=%d engaged=%d il=%d base=%d enabled=%d\n",
-                    __func__, (int) n_kv, (int) n_tokens, (int) topk, pad, (int) dsa_gather_threshold,
-                    dsa_gather_allowed ? 1 : 0, il, is_base_graph ? 1 : 0, dsa_env.gather_enabled ? 1 : 0);
-        }
 
         // indexer keys for this batch -> position-indexed cache (write-before-read holds by
         // graph order, same as the kv store; committed columns never change -> rollback-safe)
@@ -556,13 +514,6 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 !dsa_gather_allowed &&
                 openpangu_att_score_should_chunk(n_kv, hparams.param_sink_number, n_head, n_tokens,
                         att_env.chunk, att_env.cap_mib);
-            if (idx_env.trace) {
-                const int64_t n_chunks = chunk_scores ? (n_tokens + idx_env.chunk - 1)/idx_env.chunk : 0;
-                LLAMA_LOG_INFO("%s: openPangu idx chunk n_kv=%d T=%d chunk=%d chunks=%d engaged=%d il=%d defer_sel_mask=%d\n",
-                        __func__, (int) n_kv, (int) n_tokens, (int) idx_env.chunk, (int) n_chunks,
-                        chunk_scores ? 1 : 0, il, defer_sel_mask_to_att_chunks ? 1 : 0);
-            }
-
             if (chunk_scores) {
                 ggml_tensor * sel_mask_parts = nullptr;
                 for (int64_t c0 = 0; c0 < n_tokens; c0 += idx_env.chunk) {
@@ -739,17 +690,6 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         const bool chunk_att = openpangu_att_score_should_chunk(n_kv_attn, NS, n_head, n_tokens,
                 att_env.chunk, att_env.cap_mib);
         const openpangu_prefill_gather_env & prefill_gather_env = openpangu_prefill_gather_env_once();
-        if (att_env.trace) {
-            const int64_t n_chunks = chunk_att ? (n_tokens + att_env.chunk - 1)/att_env.chunk : 0;
-            const double full_kq_mib =
-                (double) (n_kv_attn + NS) * (double) n_head * (double) n_tokens *
-                (double) sizeof(float) / (1024.0 * 1024.0);
-            LLAMA_LOG_INFO("%s: openPangu att chunk n_kv_eff=%d sinks=%d T=%d heads=%d chunk=%d cap_mib=%d full_kq_mib=%.2f chunks=%d engaged=%d il=%d swa=%d sel_mask=%d\n",
-                    __func__, (int) n_kv_attn, (int) NS, (int) n_tokens, (int) n_head,
-                    (int) att_env.chunk, (int) att_env.cap_mib, full_kq_mib, (int) n_chunks,
-                    chunk_att ? 1 : 0, il, use_swa_window ? 1 : 0, sel_mask ? 1 : 0);
-        }
-
         const bool use_dsa_sel_idx_mask = sel_idx != nullptr && dsa_topk > 0;
         ggml_tensor * kqv = nullptr;
         if (chunk_att) {
@@ -775,15 +715,6 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                     can_prefill_gather &&
                     openpangu_dsa_prefill_gather_should_engage(n_kv, n_tokens, c0, tc, dsa_topk,
                                                                openpangu_kv_cache_pad(cparams));
-                if (prefill_gather_env.trace && use_dsa_sel_idx_mask) {
-                    const int64_t min_causal_kv = n_kv >= n_tokens ? n_kv - n_tokens + c0 : -1;
-                    LLAMA_LOG_INFO("%s: openPangu prefill gather n_kv=%d T=%d c0=%d Tc=%d topk=%d pad=%u min_causal=%d threshold=%d engaged=%d il=%d enabled=%d\n",
-                            __func__, (int) n_kv, (int) n_tokens, (int) c0, (int) tc, (int) dsa_topk,
-                            openpangu_kv_cache_pad(cparams), (int) min_causal_kv,
-                            (int) (OPENPANGU_DSA_GATHER_MIN_RATIO*dsa_topk + openpangu_kv_cache_pad(cparams)),
-                            prefill_gather_chunk ? 1 : 0, il, prefill_gather_env.gather_enabled ? 1 : 0);
-                }
-
                 ggml_tensor * kqv_c = nullptr;
                 if (prefill_gather_chunk) {
                     ggml_tensor * sel_idx_c = ggml_view_2d(ctx0, sel_idx, dsa_topk, tc,
