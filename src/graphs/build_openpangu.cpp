@@ -61,6 +61,11 @@ struct openpangu_att_score_env {
     bool    trace   = false;
 };
 
+struct openpangu_prefill_gather_env {
+    bool gather_enabled = true;
+    bool trace          = false;
+};
+
 static bool openpangu_env_flag_value(const char * env, bool default_value) {
     if (env == nullptr || env[0] == '\0') {
         return default_value;
@@ -138,6 +143,16 @@ static const openpangu_att_score_env & openpangu_att_score_env_once() {
     return env;
 }
 
+static const openpangu_prefill_gather_env & openpangu_prefill_gather_env_once() {
+    static const openpangu_prefill_gather_env env = [] {
+        openpangu_prefill_gather_env result;
+        result.gather_enabled = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_PREFILL_GATHER"), true);
+        result.trace          = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_PREFILL_GATHER_TRACE"), false);
+        return result;
+    }();
+    return env;
+}
+
 static bool openpangu_idx_score_should_chunk(int64_t n_tokens, int64_t chunk) {
     return chunk > 0 && n_tokens > 14 && n_tokens > chunk;
 }
@@ -159,6 +174,17 @@ static bool openpangu_dsa_gather_should_engage(int64_t n_kv, int64_t n_tokens, i
     // Gather must prune at least half the cache to beat get_rows/cast/cont-transpose copy
     // overhead; measured 2K regression at ratio ~1 where top_k covers nearly all cache rows.
     return n_tokens <= 14 && n_kv >= OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad + n_tokens;
+}
+
+static bool openpangu_dsa_prefill_gather_should_engage(
+        int64_t n_kv, int64_t n_tokens, int64_t chunk_start, int64_t chunk_size, int64_t topk, int64_t pad) {
+    GGML_UNUSED(chunk_size);
+    if (n_tokens <= 14 || topk <= 0 || chunk_start < 0 || chunk_start >= n_tokens || n_kv < n_tokens) {
+        return false;
+    }
+
+    const int64_t min_causal_kv = n_kv - n_tokens + chunk_start;
+    return min_causal_kv >= OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad;
 }
 
 static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm, uint32_t window, bool * windowed) {
@@ -672,6 +698,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         const openpangu_att_score_env & att_env = openpangu_att_score_env_once();
         const bool chunk_att = openpangu_att_score_should_chunk(n_kv_attn, NS, n_head, n_tokens,
                 att_env.chunk, att_env.cap_mib);
+        const openpangu_prefill_gather_env & prefill_gather_env = openpangu_prefill_gather_env_once();
         if (att_env.trace) {
             const int64_t n_chunks = chunk_att ? (n_tokens + att_env.chunk - 1)/att_env.chunk : 0;
             const double full_kq_mib =
@@ -686,6 +713,15 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         const bool use_dsa_sel_idx_mask = sel_idx != nullptr && dsa_topk > 0;
         ggml_tensor * kqv = nullptr;
         if (chunk_att) {
+            const bool can_prefill_gather =
+                prefill_gather_env.gather_enabled && use_dsa_sel_idx_mask && !use_swa_window &&
+                hparams.f_max_alibi_bias == 0.0f;
+            ggml_tensor * kl_full = nullptr;
+            if (can_prefill_gather) {
+                kl_full = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv,
+                                       kv_self.k_l[il]->nb[1], 0);
+            }
+
             for (int64_t c0 = 0; c0 < n_tokens; c0 += att_env.chunk) {
                 const int64_t tc = std::min<int64_t>(att_env.chunk, n_tokens - c0);
                 ggml_tensor * q_all_c = ggml_view_3d(ctx0, q_all, kv_lora_rank + n_embd_head_qk_rope,
@@ -694,44 +730,91 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 q_all_c = ggml_cont(ctx0, q_all_c);
 
                 ggml_tensor * kq_sinks_c = ggml_mul_mat(ctx0, sink_blk, q_all_c);            // [NS, Tc, H]
-                ggml_tensor * kq_cache_c = ggml_mul_mat(ctx0, kl_all, q_all_c);              // [n_kv_attn, Tc, H]
-                ggml_tensor * kq_c_all = ggml_concat(ctx0, kq_sinks_c, kq_cache_c, 0);       // [NS+n_kv_attn, Tc, H]
 
-                ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, tc,
-                                                         KQ_mask->nb[1], (size_t) c0*KQ_mask->nb[1]);
-                if (sel_mask) {
-                    ggml_tensor * sel_mask_c = ggml_view_2d(ctx0, sel_mask, n_kv_attn, tc,
-                                                            sel_mask->nb[1], (size_t) c0*sel_mask->nb[1]);
-                    kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask_c);
-                } else if (use_dsa_sel_idx_mask) {
+                const bool prefill_gather_chunk =
+                    can_prefill_gather &&
+                    openpangu_dsa_prefill_gather_should_engage(n_kv, n_tokens, c0, tc, dsa_topk,
+                                                               openpangu_kv_cache_pad(cparams));
+                if (prefill_gather_env.trace && use_dsa_sel_idx_mask) {
+                    const int64_t min_causal_kv = n_kv >= n_tokens ? n_kv - n_tokens + c0 : -1;
+                    LLAMA_LOG_INFO("%s: openPangu prefill gather n_kv=%d T=%d c0=%d Tc=%d topk=%d pad=%u min_causal=%d threshold=%d engaged=%d il=%d enabled=%d\n",
+                            __func__, (int) n_kv, (int) n_tokens, (int) c0, (int) tc, (int) dsa_topk,
+                            openpangu_kv_cache_pad(cparams), (int) min_causal_kv,
+                            (int) (OPENPANGU_DSA_GATHER_MIN_RATIO*dsa_topk + openpangu_kv_cache_pad(cparams)),
+                            prefill_gather_chunk ? 1 : 0, il, prefill_gather_env.gather_enabled ? 1 : 0);
+                }
+
+                ggml_tensor * kqv_c = nullptr;
+                if (prefill_gather_chunk) {
                     ggml_tensor * sel_idx_c = ggml_view_2d(ctx0, sel_idx, dsa_topk, tc,
                                                            sel_idx->nb[1], (size_t) c0*sel_idx->nb[1]);
-                    ggml_tensor * base_src_c = ggml_view_2d(ctx0, kq_cache_c, n_kv_attn, tc, kq_cache_c->nb[1], 0);
-                    ggml_tensor * base_c = ggml_scale_bias(ctx0, base_src_c, 0.0f, -1e30f);
-                    base_c = ggml_reshape_3d(ctx0, base_c, 1, n_kv_attn, tc);
-                    ggml_tensor * zeros_src_c = ggml_view_2d(ctx0, kq_cache_c, dsa_topk, tc,
-                                                             dsa_topk*ggml_element_size(kq_cache_c), 0);
-                    ggml_tensor * zeros_c = ggml_scale(ctx0, zeros_src_c, 0.0f);
-                    zeros_c = ggml_reshape_3d(ctx0, zeros_c, 1, dsa_topk, tc);
-                    ggml_tensor * sel_mask_c = ggml_set_rows(ctx0, base_c, zeros_c, sel_idx_c);
-                    sel_mask_c = ggml_reshape_2d(ctx0, sel_mask_c, n_kv_attn, tc);
-                    kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask_c);
-                }
-                kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
-                ggml_tensor * s_mask0 = ggml_scale(ctx0,
-                        ggml_view_2d(ctx0, kq_c_all, NS, tc, NS*ggml_element_size(kq_c_all), 0), 0.0f);
-                ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);         // [NS+n_kv_attn, Tc]
-                kq_c_all = ggml_soft_max_ext(ctx0, kq_c_all, mask_all, kq_scale, hparams.f_max_alibi_bias);
+                    ggml_tensor * sel_idx_flat_c = ggml_cont_2d(ctx0, sel_idx_c, dsa_topk*tc, 1);
+                    ggml_tensor * k_gath_c = ggml_get_rows(ctx0, kl_full, sel_idx_flat_c);        // [576, topk*Tc]
+                    if (k_gath_c->type != kv_self.k_l[il]->type) {
+                        k_gath_c = ggml_cast(ctx0, k_gath_c, kv_self.k_l[il]->type);
+                    }
+                    k_gath_c = ggml_reshape_3d(ctx0, k_gath_c, kv_lora_rank + n_embd_head_qk_rope,
+                                               dsa_topk, tc);                                    // [576, topk, Tc]
+                    ggml_tensor * q_gath_c = ggml_cont(ctx0, ggml_permute(ctx0, q_all_c, 0, 2, 1, 3)); // [576, H, Tc]
+                    ggml_tensor * kq_cache_c = ggml_mul_mat(ctx0, k_gath_c, q_gath_c);           // [topk, H, Tc]
+                    kq_cache_c = ggml_cont(ctx0, ggml_permute(ctx0, kq_cache_c, 0, 2, 1, 3));    // [topk, Tc, H]
+                    ggml_tensor * kq_c_all = ggml_concat(ctx0, kq_sinks_c, kq_cache_c, 0);       // [NS+topk, Tc, H]
+                    kq_c_all = ggml_soft_max_ext(ctx0, kq_c_all, nullptr, kq_scale, hparams.f_max_alibi_bias);
 
-                ggml_tensor * kq_s_c = ggml_view_3d(ctx0, kq_c_all, NS, tc, n_head,
-                                                    kq_c_all->nb[1], kq_c_all->nb[2], 0);
-                ggml_tensor * kq_cache_soft_c = ggml_view_3d(ctx0, kq_c_all, n_kv_attn, tc, n_head,
-                                                             kq_c_all->nb[1], kq_c_all->nb[2],
-                                                             NS*ggml_element_size(kq_c_all));
-                ggml_tensor * kqv_cache_c = ggml_mul_mat(ctx0, vl_all, kq_cache_soft_c);     // [512, Tc, H]
-                ggml_tensor * kqv_c = ggml_add(ctx0,
-                        ggml_mul_mat(ctx0, s_lat_t, kq_s_c),
-                        kqv_cache_c);                                                       // [512, Tc, H]
+                    ggml_tensor * kq_s_c = ggml_view_3d(ctx0, kq_c_all, NS, tc, n_head,
+                                                        kq_c_all->nb[1], kq_c_all->nb[2], 0);
+                    ggml_tensor * kq_cache_soft_c = ggml_view_3d(ctx0, kq_c_all, dsa_topk, tc, n_head,
+                                                                 kq_c_all->nb[1], kq_c_all->nb[2],
+                                                                 NS*ggml_element_size(kq_c_all));
+                    ggml_tensor * v_gath_c = ggml_view_3d(ctx0, k_gath_c, kv_lora_rank, dsa_topk, tc,
+                                                          k_gath_c->nb[1], k_gath_c->nb[2], 0);
+                    ggml_tensor * v_gath_t_c = ggml_cont(ctx0, ggml_permute(ctx0, v_gath_c, 1, 0, 2, 3)); // [topk, 512, Tc]
+                    ggml_tensor * kq_cache_gath_c = ggml_cont(ctx0, ggml_permute(ctx0, kq_cache_soft_c, 0, 2, 1, 3)); // [topk, H, Tc]
+                    ggml_tensor * kqv_cache_c = ggml_mul_mat(ctx0, v_gath_t_c, kq_cache_gath_c); // [512, H, Tc]
+                    kqv_cache_c = ggml_cont(ctx0, ggml_permute(ctx0, kqv_cache_c, 0, 2, 1, 3));  // [512, Tc, H]
+                    kqv_c = ggml_add(ctx0,
+                            ggml_mul_mat(ctx0, s_lat_t, kq_s_c),
+                            kqv_cache_c);                                                       // [512, Tc, H]
+                } else {
+                    ggml_tensor * kq_cache_c = ggml_mul_mat(ctx0, kl_all, q_all_c);              // [n_kv_attn, Tc, H]
+                    ggml_tensor * kq_c_all = ggml_concat(ctx0, kq_sinks_c, kq_cache_c, 0);       // [NS+n_kv_attn, Tc, H]
+
+                    ggml_tensor * kq_mask_eff = ggml_view_2d(ctx0, KQ_mask, n_kv_attn, tc,
+                                                             KQ_mask->nb[1], (size_t) c0*KQ_mask->nb[1]);
+                    if (sel_mask) {
+                        ggml_tensor * sel_mask_c = ggml_view_2d(ctx0, sel_mask, n_kv_attn, tc,
+                                                                sel_mask->nb[1], (size_t) c0*sel_mask->nb[1]);
+                        kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask_c);
+                    } else if (use_dsa_sel_idx_mask) {
+                        ggml_tensor * sel_idx_c = ggml_view_2d(ctx0, sel_idx, dsa_topk, tc,
+                                                               sel_idx->nb[1], (size_t) c0*sel_idx->nb[1]);
+                        ggml_tensor * base_src_c = ggml_view_2d(ctx0, kq_cache_c, n_kv_attn, tc, kq_cache_c->nb[1], 0);
+                        ggml_tensor * base_c = ggml_scale_bias(ctx0, base_src_c, 0.0f, -1e30f);
+                        base_c = ggml_reshape_3d(ctx0, base_c, 1, n_kv_attn, tc);
+                        ggml_tensor * zeros_src_c = ggml_view_2d(ctx0, kq_cache_c, dsa_topk, tc,
+                                                                 dsa_topk*ggml_element_size(kq_cache_c), 0);
+                        ggml_tensor * zeros_c = ggml_scale(ctx0, zeros_src_c, 0.0f);
+                        zeros_c = ggml_reshape_3d(ctx0, zeros_c, 1, dsa_topk, tc);
+                        ggml_tensor * sel_mask_c = ggml_set_rows(ctx0, base_c, zeros_c, sel_idx_c);
+                        sel_mask_c = ggml_reshape_2d(ctx0, sel_mask_c, n_kv_attn, tc);
+                        kq_mask_eff = ggml_add(ctx0, kq_mask_eff, sel_mask_c);
+                    }
+                    kq_mask_eff = ggml_cont(ctx0, kq_mask_eff);
+                    ggml_tensor * s_mask0 = ggml_scale(ctx0,
+                            ggml_view_2d(ctx0, kq_c_all, NS, tc, NS*ggml_element_size(kq_c_all), 0), 0.0f);
+                    ggml_tensor * mask_all = ggml_concat(ctx0, s_mask0, kq_mask_eff, 0);         // [NS+n_kv_attn, Tc]
+                    kq_c_all = ggml_soft_max_ext(ctx0, kq_c_all, mask_all, kq_scale, hparams.f_max_alibi_bias);
+
+                    ggml_tensor * kq_s_c = ggml_view_3d(ctx0, kq_c_all, NS, tc, n_head,
+                                                        kq_c_all->nb[1], kq_c_all->nb[2], 0);
+                    ggml_tensor * kq_cache_soft_c = ggml_view_3d(ctx0, kq_c_all, n_kv_attn, tc, n_head,
+                                                                 kq_c_all->nb[1], kq_c_all->nb[2],
+                                                                 NS*ggml_element_size(kq_c_all));
+                    ggml_tensor * kqv_cache_c = ggml_mul_mat(ctx0, vl_all, kq_cache_soft_c);     // [512, Tc, H]
+                    kqv_c = ggml_add(ctx0,
+                            ggml_mul_mat(ctx0, s_lat_t, kq_s_c),
+                            kqv_cache_c);                                                       // [512, Tc, H]
+                }
                 kqv = kqv == nullptr ? kqv_c : ggml_concat(ctx0, kqv, kqv_c, 1);
             }
         } else {
