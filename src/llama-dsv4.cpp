@@ -80,12 +80,18 @@ void dsv4_json_append_array(std::ostringstream & out, const std::vector<T> & val
     out << ']';
 }
 
-void dsv4_trace_emit_tokens(const llama_context & lctx, const llama_batch & batch, const std::vector<int64_t> & raw_k_idxs) {
+void dsv4_trace_emit_tokens(
+        const llama_context & lctx,
+        const llama_batch & batch,
+        const std::vector<int32_t> & raw_k_write_idxs,
+        const std::vector<int32_t> & raw_k_read_idxs) {
     std::ostringstream out;
     out << "{\"event\":\"tokens\",\"n_tokens\":" << batch.n_tokens
         << ",\"kv_head\":" << lctx.kv_self.head
-        << ",\"raw_k_idxs\":";
-    dsv4_json_append_array(out, raw_k_idxs);
+        << ",\"raw_k_write_idxs\":";
+    dsv4_json_append_array(out, raw_k_write_idxs);
+    out << ",\"raw_k_read_idxs\":";
+    dsv4_json_append_array(out, raw_k_read_idxs);
     out << ",\"positions\":[";
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
         if (i != 0) {
@@ -290,6 +296,149 @@ static void dsv4_batch_shape(
     n_seq_tokens = std::max<uint32_t>(1, seq_tokens);
 }
 
+static bool dsv4_batch_single_stream_compatible(const llama_batch & batch) {
+    if (batch.n_tokens <= 0 || batch.n_seq_id == nullptr || batch.seq_id == nullptr) {
+        return true;
+    }
+
+    llama_seq_id seq0 = -1;
+    bool seen = false;
+
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] != 1 || batch.seq_id[i] == nullptr) {
+            return false;
+        }
+
+        const llama_seq_id seq_id = batch.seq_id[i][0];
+        if (!seen) {
+            seq0 = seq_id;
+            seen = true;
+        } else if (seq_id != seq0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static llama_seq_id dsv4_batch_single_stream_seq_id(const llama_batch & batch) {
+    if (batch.n_tokens <= 0 || batch.n_seq_id == nullptr || batch.seq_id == nullptr) {
+        return 0;
+    }
+
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] > 0 && batch.seq_id[i] != nullptr) {
+            return batch.seq_id[i][0];
+        }
+    }
+
+    return 0;
+}
+
+static bool dsv4_validate_single_stream_raw_layout(
+        const llama_context & lctx,
+        const llama_batch   & batch) {
+    const llama_kv_cache & kv = lctx.kv_self;
+    const llama_seq_id seq_id = dsv4_batch_single_stream_seq_id(batch);
+
+    uint32_t live_prefix = 0;
+    while (live_prefix < kv.size) {
+        const llama_kv_cell & cell = kv.cells[live_prefix];
+        if (cell.pos < 0 || cell.is_empty()) {
+            break;
+        }
+        ++live_prefix;
+    }
+
+    if (live_prefix != kv.used) {
+        LLAMA_LOG_ERROR("%s: DSV4 single-stream path requires a contiguous live raw-K prefix, but live_prefix=%u while kv.used=%u\n",
+                __func__, live_prefix, kv.used);
+        return false;
+    }
+
+    if (kv.n < live_prefix) {
+        LLAMA_LOG_ERROR("%s: DSV4 raw read span %u is smaller than live raw prefix %u\n",
+                __func__, kv.n, live_prefix);
+        return false;
+    }
+
+    for (uint32_t i = 0; i < live_prefix; ++i) {
+        const llama_kv_cell & cell = kv.cells[i];
+        if (!cell.has_seq_id(seq_id)) {
+            LLAMA_LOG_ERROR("%s: DSV4 raw prefix cell %u is missing active seq_id %d\n",
+                    __func__, i, seq_id);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool dsv4_build_raw_write_idxs(
+        const llama_context & lctx,
+        const llama_batch   & batch,
+        std::vector<int32_t> & raw_k_write_idxs) {
+    raw_k_write_idxs.clear();
+    raw_k_write_idxs.reserve((size_t) std::max(0, batch.n_tokens));
+
+    if (batch.n_tokens <= 0) {
+        return true;
+    }
+
+    const llama_kv_cache & kv = lctx.kv_self;
+    if (kv.head < 0 || kv.head + batch.n_tokens > (int32_t) kv.size) {
+        LLAMA_LOG_ERROR("%s: DSV4 raw write slots [%d, %d) are outside kv cache size %u\n",
+                __func__, kv.head, kv.head + batch.n_tokens, kv.size);
+        return false;
+    }
+
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        const int32_t slot = kv.head + i;
+        const llama_kv_cell & cell = kv.cells[(size_t) slot];
+
+        if (cell.pos != batch.pos[i]) {
+            LLAMA_LOG_ERROR("%s: DSV4 raw write slot %d pos mismatch: cell=%d batch=%d\n",
+                    __func__, slot, cell.pos, batch.pos[i]);
+            return false;
+        }
+
+        if (batch.n_seq_id != nullptr && batch.seq_id != nullptr && batch.n_seq_id[i] > 0 && batch.seq_id[i] != nullptr) {
+            for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id = batch.seq_id[i][s];
+                if (!cell.has_seq_id(seq_id)) {
+                    LLAMA_LOG_ERROR("%s: DSV4 raw write slot %d is missing seq_id %d\n",
+                            __func__, slot, seq_id);
+                    return false;
+                }
+            }
+        }
+
+        raw_k_write_idxs.push_back(slot);
+    }
+
+    return true;
+}
+
+static bool dsv4_build_raw_read_idxs(
+        const llama_context & lctx,
+        std::vector<int32_t> & raw_k_read_idxs) {
+    raw_k_read_idxs.clear();
+
+    const int64_t n_raw_read = lctx.kv_self.n;
+    if (n_raw_read < 0 || n_raw_read > (int64_t) lctx.kv_self.size) {
+        LLAMA_LOG_ERROR("%s: DSV4 raw read span %lld is outside kv cache size %u\n",
+                __func__, (long long) n_raw_read, lctx.kv_self.size);
+        return false;
+    }
+
+    raw_k_read_idxs.reserve((size_t) n_raw_read);
+    for (int64_t i = 0; i < n_raw_read; ++i) {
+        raw_k_read_idxs.push_back((int32_t) i);
+    }
+
+    return true;
+}
+
 static int64_t dsv4_graph_n_stream(const llama_batch & batch) {
     GGML_UNUSED(batch);
     return 1;
@@ -352,6 +501,106 @@ static uint32_t dsv4_cache_state_size(const std::vector<ggml_tensor *> & tensors
     return 0;
 }
 
+static bool dsv4_validate_comp_plan(
+        const char * tag,
+        const llama_batch & batch,
+        const llama_context::dsv4_runtime::comp_plan & plan,
+        uint32_t ratio,
+        bool overlap,
+        uint32_t state_size,
+        uint32_t kv_size) {
+    const int64_t max_state_read_idx = (int64_t) state_size + batch.n_tokens + (overlap ? 0 : -1);
+
+    if (plan.n_stream != 1) {
+        LLAMA_LOG_ERROR("%s: DSV4 %s plan expected single-stream branch path, got n_stream=%lld\n",
+                __func__, tag, (long long) plan.n_stream);
+        return false;
+    }
+
+    if (plan.n_visible.size() != (size_t) std::max(0, batch.n_tokens)) {
+        LLAMA_LOG_ERROR("%s: DSV4 %s plan n_visible size mismatch: got=%zu expected=%d\n",
+                __func__, tag, plan.n_visible.size(), std::max(0, batch.n_tokens));
+        return false;
+    }
+
+    if (plan.state_pos.size() > (size_t) std::max(0, batch.n_tokens)) {
+        LLAMA_LOG_ERROR("%s: DSV4 %s plan has too many state_pos rows: %zu > %d\n",
+                __func__, tag, plan.state_pos.size(), std::max(0, batch.n_tokens));
+        return false;
+    }
+
+    if (plan.state_persist_src_idxs.size() != plan.state_persist_dst_idxs.size()) {
+        LLAMA_LOG_ERROR("%s: DSV4 %s persist idx size mismatch: src=%zu dst=%zu\n",
+                __func__, tag, plan.state_persist_src_idxs.size(), plan.state_persist_dst_idxs.size());
+        return false;
+    }
+
+    if (plan.state_write_idxs.size() != plan.state_write_pos.size()) {
+        LLAMA_LOG_ERROR("%s: DSV4 %s write idx size mismatch: idxs=%zu pos=%zu\n",
+                __func__, tag, plan.state_write_idxs.size(), plan.state_write_pos.size());
+        return false;
+    }
+
+    for (size_t i = 0; i < plan.n_visible.size(); ++i) {
+        const int32_t n_visible = plan.n_visible[i];
+        if (n_visible < 0 || (uint32_t) n_visible > kv_size) {
+            LLAMA_LOG_ERROR("%s: DSV4 %s n_visible[%zu]=%d exceeds kv_size=%u\n",
+                    __func__, tag, i, n_visible, kv_size);
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < plan.state_pos.size(); ++i) {
+        const int64_t pos = plan.state_pos[i];
+        if (pos < 0 || pos >= (int64_t) ratio) {
+            LLAMA_LOG_ERROR("%s: DSV4 %s state_pos[%zu]=%lld outside ratio=%u\n",
+                    __func__, tag, i, (long long) pos, ratio);
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < plan.state_persist_src_idxs.size(); ++i) {
+        const int64_t src = plan.state_persist_src_idxs[i];
+        const int64_t dst = plan.state_persist_dst_idxs[i];
+        if (src < 0 || src >= batch.n_tokens) {
+            LLAMA_LOG_ERROR("%s: DSV4 %s persist src[%zu]=%lld outside current batch rows=%d\n",
+                    __func__, tag, i, (long long) src, batch.n_tokens);
+            return false;
+        }
+        if (dst < 0 || (uint32_t) dst >= state_size) {
+            LLAMA_LOG_ERROR("%s: DSV4 %s persist dst[%zu]=%lld outside state_size=%u\n",
+                    __func__, tag, i, (long long) dst, state_size);
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < plan.state_read_idxs.size(); ++i) {
+        const int64_t idx = plan.state_read_idxs[i];
+        if (idx < 0 || idx > max_state_read_idx) {
+            LLAMA_LOG_ERROR("%s: DSV4 %s read idx[%zu]=%lld outside max source row=%lld\n",
+                    __func__, tag, i, (long long) idx, (long long) max_state_read_idx);
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < plan.state_write_idxs.size(); ++i) {
+        const int64_t idx = plan.state_write_idxs[i];
+        if (idx < 0 || (uint32_t) idx >= kv_size) {
+            LLAMA_LOG_ERROR("%s: DSV4 %s write idx[%zu]=%lld outside kv_size=%u\n",
+                    __func__, tag, i, (long long) idx, kv_size);
+            return false;
+        }
+    }
+
+    if (plan.n_kv == 0 || (uint32_t) plan.n_kv > kv_size) {
+        LLAMA_LOG_ERROR("%s: DSV4 %s plan n_kv=%lld outside kv_size=%u\n",
+                __func__, tag, (long long) plan.n_kv, kv_size);
+        return false;
+    }
+
+    return true;
+}
+
 static llama_context::dsv4_runtime::comp_plan dsv4_build_comp_plan(
         const llama_batch & batch,
         uint32_t ratio,
@@ -373,18 +622,22 @@ static llama_context::dsv4_runtime::comp_plan dsv4_build_comp_plan(
     std::vector<persist_row> persist_rows;
     std::vector<int32_t> overlap_prev_reads;
     std::vector<int32_t> overlap_cur_reads;
-    std::map<llama_pos, int32_t> curr_token_idx_map;
+    std::map<std::pair<llama_seq_id, llama_pos>, int32_t> curr_token_idx_map;
 
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
-        curr_token_idx_map[batch.pos[i]] = i;
+        const llama_seq_id seq_id =
+                batch.n_seq_id != nullptr && batch.seq_id != nullptr && batch.n_seq_id[i] > 0 && batch.seq_id[i] != nullptr
+                ? batch.seq_id[i][0]
+                : 0;
+        curr_token_idx_map[std::make_pair(seq_id, batch.pos[i])] = i;
     }
 
-    const auto state_source_idx = [&](llama_pos pos) -> int32_t {
+    const auto state_source_idx = [&](llama_seq_id seq_id, llama_pos pos) -> int32_t {
         if (pos < 0) {
             return (int32_t) (state_rows + batch.n_tokens);
         }
 
-        const auto it = curr_token_idx_map.find(pos);
+        const auto it = curr_token_idx_map.find(std::make_pair(seq_id, pos));
         if (it != curr_token_idx_map.end()) {
             return (int32_t) (state_rows + it->second);
         }
@@ -394,6 +647,10 @@ static llama_context::dsv4_runtime::comp_plan dsv4_build_comp_plan(
 
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
         const llama_pos pos = batch.pos[i];
+        const llama_seq_id seq_id =
+                batch.n_seq_id != nullptr && batch.seq_id != nullptr && batch.n_seq_id[i] > 0 && batch.seq_id[i] != nullptr
+                ? batch.seq_id[i][0]
+                : 0;
         if (pos < 0) {
             continue;
         }
@@ -426,20 +683,24 @@ static llama_context::dsv4_runtime::comp_plan dsv4_build_comp_plan(
         if (overlap) {
             const llama_pos prev_start = source_start - ratio;
             for (uint32_t j = 0; j < ratio; ++j) {
-                overlap_prev_reads.push_back(state_source_idx(prev_start + j));
+                overlap_prev_reads.push_back(state_source_idx(seq_id, prev_start + j));
             }
             for (uint32_t j = 0; j < ratio; ++j) {
-                overlap_cur_reads.push_back(state_source_idx(source_start + j));
+                overlap_cur_reads.push_back(state_source_idx(seq_id, source_start + j));
             }
         } else {
             for (uint32_t j = 0; j < ratio; ++j) {
-                plan.state_read_idxs.push_back(state_source_idx(source_start + j));
+                plan.state_read_idxs.push_back(state_source_idx(seq_id, source_start + j));
             }
         }
     }
 
     if (ratio == llama_context::dsv4_runtime::CSA_RATIO && plan.state_write_idxs.empty() && !plan.state_pos.empty()) {
-        const uint32_t source_idx = (uint32_t) state_source_idx(batch.pos[0]);
+        const llama_seq_id seq_id0 =
+                batch.n_seq_id != nullptr && batch.seq_id != nullptr && batch.n_seq_id[0] > 0 && batch.seq_id[0] != nullptr
+                ? batch.seq_id[0][0]
+                : 0;
+        const uint32_t source_idx = (uint32_t) state_source_idx(seq_id0, batch.pos[0]);
         plan.state_write_idxs.push_back((int64_t) kv_size - 1);
         plan.state_write_pos.push_back(0);
 
@@ -646,6 +907,15 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
         return true;
     }
 
+    if (!dsv4_batch_single_stream_compatible(batch)) {
+        LLAMA_LOG_ERROR("%s: DeepSeek-V4 branch path does not yet support multi-sequence or coupled-sequence batches in its fork-native planner\n", __func__);
+        return false;
+    }
+
+    if (!dsv4_validate_single_stream_raw_layout(lctx, batch)) {
+        return false;
+    }
+
     if (!lctx.ensure_dsv4_cache_tensors()) {
         return false;
     }
@@ -667,17 +937,22 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     lctx.dsv4.hca_plan = build_plan(llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size);
     lctx.dsv4.lid_plan = build_plan(llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size);
 
-    std::vector<int64_t> raw_k_idxs((size_t) batch.n_tokens);
-    for (int32_t i = 0; i < batch.n_tokens; ++i) {
-        raw_k_idxs[(size_t) i] = lctx.kv_self.head + i;
-    }
-
-    if (llama_dsv4_trace_enabled()) {
-        dsv4_trace_emit_tokens(lctx, batch, raw_k_idxs);
+    if (!dsv4_validate_comp_plan("csa", batch, lctx.dsv4.csa_plan, llama_context::dsv4_runtime::CSA_RATIO, true, csa_state_size, csa_kv_size) ||
+        !dsv4_validate_comp_plan("hca", batch, lctx.dsv4.hca_plan, llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size) ||
+        !dsv4_validate_comp_plan("lid", batch, lctx.dsv4.lid_plan, llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size)) {
+        return false;
     }
 
     if (!set_tensors) {
         if (llama_dsv4_trace_enabled()) {
+            if (!reserve_plan) {
+                std::vector<int32_t> raw_k_write_idxs;
+                std::vector<int32_t> raw_k_read_idxs;
+                if (dsv4_build_raw_write_idxs(lctx, batch, raw_k_write_idxs) &&
+                    dsv4_build_raw_read_idxs(lctx, raw_k_read_idxs)) {
+                    dsv4_trace_emit_tokens(lctx, batch, raw_k_write_idxs, raw_k_read_idxs);
+                }
+            }
             dsv4_trace_emit_plan("csa", llama_context::dsv4_runtime::CSA_RATIO, true, csa_state_size, csa_kv_size, lctx.dsv4.csa_plan);
             dsv4_trace_emit_plan("hca", llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size, lctx.dsv4.hca_plan);
             dsv4_trace_emit_plan("lid", llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size, lctx.dsv4.lid_plan);
@@ -685,7 +960,22 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
         return true;
     }
 
-    dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_idxs, raw_k_idxs);
+    std::vector<int32_t> raw_k_write_idxs;
+    if (!dsv4_build_raw_write_idxs(lctx, batch, raw_k_write_idxs)) {
+        return false;
+    }
+
+    std::vector<int32_t> raw_k_read_idxs;
+    if (!dsv4_build_raw_read_idxs(lctx, raw_k_read_idxs)) {
+        return false;
+    }
+
+    if (llama_dsv4_trace_enabled()) {
+        dsv4_trace_emit_tokens(lctx, batch, raw_k_write_idxs, raw_k_read_idxs);
+    }
+
+    dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_write_idxs, raw_k_write_idxs);
+    dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_read_idxs, raw_k_read_idxs);
 
     auto set_comp = [&](llama_context::dsv4_runtime::comp_inputs & inputs, llama_context::dsv4_runtime::comp_plan & plan, std::vector<float> & mask_data) {
         dsv4_set_input_tensor(inputs.state_pos, plan.state_pos);

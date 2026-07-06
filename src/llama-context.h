@@ -403,7 +403,8 @@ struct llama_context {
         };
 
         struct input_state {
-            struct ggml_tensor * raw_k_idxs = nullptr;
+            struct ggml_tensor * raw_k_write_idxs = nullptr;
+            struct ggml_tensor * raw_k_read_idxs = nullptr;
             comp_inputs csa;
             comp_inputs hca;
             comp_inputs lid;

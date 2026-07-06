@@ -2860,7 +2860,6 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
         }
     }
 
-    use_mmap_buffer = false;
     return use_mmap_buffer;
 }
 
