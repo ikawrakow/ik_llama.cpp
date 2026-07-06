@@ -1030,7 +1030,7 @@ static bool llama_kv_cache_init(
             cache.k_l.push_back(kv);
             // DSA lightning-indexer key cache (MQA, single head). Store the Hadamard-rotated
             // indexer keys in F16 so a decoded token can score against ALL past keys.
-            if (has_dsa_indexer && model.layers[i].indexer_attn_k && !is_mtp_tail_layer) {
+            if (has_dsa_indexer && model.layers[i].indexer_attn_k && hparams.indexer_is_full[i] && !is_mtp_tail_layer) {
                 ggml_tensor * kr = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, kv_size);
                 ggml_format_name(kr, "cache_kr_l%d", i);
                 cache.kr_l[i] = kr;
