@@ -190,9 +190,40 @@ static ggml_tensor * openpangu_build_v_latent_from_k(
         ggml_context * ctx, const llama_kv_cache & kv_self, int il,
         int64_t kv_lora_rank, int64_t n_kv_view, int64_t win_off) {
     ggml_tensor * kl = kv_self.k_l[il];
+    if (ggml_is_quantized(kl->type)) {
+        ggml_tensor * full_view = ggml_view_2d(ctx, kl, kl->ne[0], n_kv_view,
+                                               kl->nb[1], (size_t) win_off*kl->nb[1]);
+        ggml_tensor * full_f32 = ggml_cpy(ctx, full_view,
+                ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kl->ne[0], n_kv_view));
+        ggml_tensor * v_src = ggml_view_2d(ctx, full_f32, kv_lora_rank, n_kv_view,
+                                           full_f32->nb[1], 0);
+        return ggml_cont(ctx, ggml_transpose(ctx, v_src));
+    }
+
     ggml_tensor * v_src = ggml_view_2d(ctx, kl, kv_lora_rank, n_kv_view,
                                        kl->nb[1], (size_t) win_off*kl->nb[1]);
     return ggml_cont(ctx, ggml_transpose(ctx, v_src));
+}
+
+static ggml_tensor * openpangu_build_k_latent_for_read(
+        ggml_context * ctx, const llama_kv_cache & kv_self, int il,
+        int64_t n_kv_view, int64_t win_off) {
+    ggml_tensor * kl = kv_self.k_l[il];
+    ggml_tensor * k_view = ggml_view_2d(ctx, kl, kl->ne[0], n_kv_view,
+                                        kl->nb[1], (size_t) win_off*kl->nb[1]);
+    if (!ggml_is_quantized(kl->type)) {
+        return k_view;
+    }
+
+    return ggml_cpy(ctx, k_view, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kl->ne[0], n_kv_view));
+}
+
+static ggml_tensor * openpangu_cast_for_latent_cache_write(ggml_context * ctx, ggml_tensor * src, ggml_tensor * kl) {
+    return ggml_is_quantized(kl->type) && src->type != GGML_TYPE_F32 ? ggml_cast(ctx, src, GGML_TYPE_F32) : src;
+}
+
+static ggml_tensor * openpangu_cast_gathered_latent_for_cache_type(ggml_context * ctx, ggml_tensor * src, ggml_tensor * kl) {
+    return !ggml_is_quantized(kl->type) && src->type != kl->type ? ggml_cast(ctx, src, kl->type) : src;
 }
 
 static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm, uint32_t window, bool * windowed) {
@@ -422,16 +453,27 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     // The value-side latent is rebuilt from k_l per graph; per-head K/V are never materialized.
     {
         ggml_tensor * kl = kv_self.k_l[il];
-        ggml_tensor * kl_ckv = ggml_view_2d(ctx0, kl, kv_lora_rank, n_tokens, kl->nb[1], kv_head*kl->nb[1]);
-        ggml_tensor * kl_kpe = ggml_view_2d(ctx0, kl, n_embd_head_qk_rope, n_tokens, kl->nb[1],
-                                            kv_head*kl->nb[1] + kv_lora_rank*ggml_element_size(kl));
-        ggml_tensor * cpy_kl_ckv = ggml_cpy(ctx0, ckv, kl_ckv);
-        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_CKV, cpy_kl_ckv, kl->nb[1]);
-        ggml_build_forward_expand(gf, cpy_kl_ckv);
-        ggml_tensor * cpy_kl_kpe = ggml_cpy(ctx0, k_pe2d, kl_kpe);
-        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_KPE, cpy_kl_kpe, kl->nb[1],
-                                      kv_lora_rank*ggml_element_size(kl));
-        ggml_build_forward_expand(gf, cpy_kl_kpe);
+        if (ggml_is_quantized(kl->type)) {
+            ckv = openpangu_cast_for_latent_cache_write(ctx0, ckv, kl);
+            k_pe2d = openpangu_cast_for_latent_cache_write(ctx0, k_pe2d, kl);
+            ggml_tensor * k_latent = ggml_concat(ctx0, ckv, k_pe2d, 0);
+            ggml_tensor * kl_full = ggml_view_2d(ctx0, kl, kv_lora_rank + n_embd_head_qk_rope,
+                                                 n_tokens, kl->nb[1], kv_head*kl->nb[1]);
+            ggml_tensor * cpy_kl = ggml_cpy(ctx0, k_latent, kl_full);
+            openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_CKV, cpy_kl, kl->nb[1]);
+            ggml_build_forward_expand(gf, cpy_kl);
+        } else {
+            ggml_tensor * kl_ckv = ggml_view_2d(ctx0, kl, kv_lora_rank, n_tokens, kl->nb[1], kv_head*kl->nb[1]);
+            ggml_tensor * kl_kpe = ggml_view_2d(ctx0, kl, n_embd_head_qk_rope, n_tokens, kl->nb[1],
+                                                kv_head*kl->nb[1] + kv_lora_rank*ggml_element_size(kl));
+            ggml_tensor * cpy_kl_ckv = ggml_cpy(ctx0, ckv, kl_ckv);
+            openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_CKV, cpy_kl_ckv, kl->nb[1]);
+            ggml_build_forward_expand(gf, cpy_kl_ckv);
+            ggml_tensor * cpy_kl_kpe = ggml_cpy(ctx0, k_pe2d, kl_kpe);
+            openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_KPE, cpy_kl_kpe, kl->nb[1],
+                                          kv_lora_rank*ggml_element_size(kl));
+            ggml_build_forward_expand(gf, cpy_kl_kpe);
+        }
     }
 
     // ---- DSA lightning indexer: per-query top-k selection mask (DSA layers only) ----
@@ -626,8 +668,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_tensor * kl_all = nullptr;
     ggml_tensor * vl_all = nullptr;
     if (!use_dsa_gather) {
-        kl_all = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank + n_embd_head_qk_rope, n_kv_attn,
-                              kv_self.k_l[il]->nb[1], (size_t) win_off*kv_self.k_l[il]->nb[1]);
+        kl_all = openpangu_build_k_latent_for_read(ctx0, kv_self, il, n_kv_attn, win_off);
     }
     auto get_vl_all = [&]() -> ggml_tensor * {
         if (vl_all == nullptr) {
@@ -645,9 +686,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                                                  kv_self.k_l[il]->nb[1], 0);
             ggml_tensor * sel_idx_flat = ggml_cont_2d(ctx0, sel_idx, dsa_topk, 1);            // [topk] i32
             k_gath = ggml_get_rows(ctx0, kl_full, sel_idx_flat);                              // [576, topk] f32
-            if (k_gath->type != kv_self.k_l[il]->type) {
-                k_gath = ggml_cast(ctx0, k_gath, kv_self.k_l[il]->type);
-            }
+            k_gath = openpangu_cast_gathered_latent_for_cache_type(ctx0, k_gath, kv_self.k_l[il]);
             k_gath = ggml_reshape_3d(ctx0, k_gath, kv_lora_rank + n_embd_head_qk_rope, dsa_topk, 1);
             kq_cache = ggml_mul_mat(ctx0,
                     ggml_reshape_2d(ctx0, k_gath, kv_lora_rank + n_embd_head_qk_rope, dsa_topk),
@@ -658,9 +697,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                                                  kv_self.k_l[il]->nb[1], 0);
             ggml_tensor * sel_idx_flat = ggml_cont_2d(ctx0, sel_idx, dsa_topk*n_tokens, 1);   // [topk*T] i32
             k_gath = ggml_get_rows(ctx0, kl_full, sel_idx_flat);                              // [576, topk*T] f32
-            if (k_gath->type != kv_self.k_l[il]->type) {
-                k_gath = ggml_cast(ctx0, k_gath, kv_self.k_l[il]->type);
-            }
+            k_gath = openpangu_cast_gathered_latent_for_cache_type(ctx0, k_gath, kv_self.k_l[il]);
             k_gath = ggml_reshape_3d(ctx0, k_gath, kv_lora_rank + n_embd_head_qk_rope,
                                      dsa_topk, n_tokens);                                    // [576, topk, T]
             ggml_tensor * q_gath = ggml_cont(ctx0, ggml_permute(ctx0, q_all, 0, 2, 1, 3));   // [576, H, T]
@@ -753,9 +790,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                                                            sel_idx->nb[1], (size_t) c0*sel_idx->nb[1]);
                     ggml_tensor * sel_idx_flat_c = ggml_cont_2d(ctx0, sel_idx_c, dsa_topk*tc, 1);
                     ggml_tensor * k_gath_c = ggml_get_rows(ctx0, kl_full, sel_idx_flat_c);        // [576, topk*Tc]
-                    if (k_gath_c->type != kv_self.k_l[il]->type) {
-                        k_gath_c = ggml_cast(ctx0, k_gath_c, kv_self.k_l[il]->type);
-                    }
+                    k_gath_c = openpangu_cast_gathered_latent_for_cache_type(ctx0, k_gath_c, kv_self.k_l[il]);
                     k_gath_c = ggml_reshape_3d(ctx0, k_gath_c, kv_lora_rank + n_embd_head_qk_rope,
                                                dsa_topk, tc);                                    // [576, topk, Tc]
                     ggml_tensor * q_gath_c = ggml_cont(ctx0, ggml_permute(ctx0, q_all_c, 0, 2, 1, 3)); // [576, H, Tc]

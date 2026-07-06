@@ -867,12 +867,16 @@ static inline uint32_t llama_kv_k_row_embd(
     return hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
 }
 
-static inline bool llama_openpangu_latent_cache_type_supported(ggml_type type) {
+static inline bool llama_openpangu_latent_k_cache_type_supported(ggml_type type) {
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0;
+}
+
+static inline bool llama_openpangu_latent_v_cache_type_supported(ggml_type type) {
     return type == GGML_TYPE_F32 || type == GGML_TYPE_F16;
 }
 
 static std::string llama_openpangu_latent_cache_type_error(ggml_type type_k, ggml_type type_v) {
-    return format("OpenPangu latent KV cache supports only f32 and f16 (requested %s/%s); use -ctk f16 -ctv f16",
+    return format("OpenPangu latent K cache supports only f32, f16, and q8_0; latent V cache supports only f32 and f16 (requested %s/%s); use -ctk q8_0 -ctv f16",
             ggml_type_name(type_k), ggml_type_name(type_v));
 }
 
@@ -889,12 +893,10 @@ static bool llama_openpangu_resolve_latent_cache_types(
         type_v = GGML_TYPE_F16;
     }
 
-    const bool type_k_unsupported = type_k_explicit && !llama_openpangu_latent_cache_type_supported(type_k);
-    const bool type_v_unsupported = type_v_explicit && !llama_openpangu_latent_cache_type_supported(type_v);
+    const bool type_k_unsupported = type_k_explicit && !llama_openpangu_latent_k_cache_type_supported(type_k);
+    const bool type_v_unsupported = type_v_explicit && !llama_openpangu_latent_v_cache_type_supported(type_v);
 
     if (type_k_unsupported || type_v_unsupported) {
-        // Quantized latent cache is planned as a follow-up; this refusal can relax once
-        // those cache types are real for OpenPangu.
         if (error_msg) {
             *error_msg = llama_openpangu_latent_cache_type_error(type_k, type_v);
         }
