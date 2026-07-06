@@ -1,4 +1,5 @@
 #include "common.h"
+#include "speculative.h"
 #include "chat.h"
 #include "console.h"
 #include "llama.h"
@@ -10,6 +11,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -135,6 +137,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    common_speculative_prepare_startup(params);
+
     common_params_sampling & sparams = params.sparams;
 
 #ifndef LOG_DISABLE_LOGS
@@ -199,6 +203,8 @@ int main(int argc, char ** argv) {
     llama_model * model;
     llama_context * ctx;
     llama_context * ctx_guidance = NULL;
+    common_speculative * spec = nullptr;
+    common_sampler * ctx_sampling = nullptr;
     std::vector<common_chat_msg> chat_msgs;
     g_model = &model;
     g_ctx = &ctx;
@@ -218,7 +224,99 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: error: unable to load model\n", __func__);
         return 1;
     }
+
+    const bool requested_spec_user = params.speculative.has_stage_chain();
+
+    if (!common_speculative_finalize_startup(params, model)) {
+        if (ctx_guidance) {
+            llama_free(ctx_guidance);
+        }
+        params.speculative.clear_dft();
+        llama_free(ctx);
+        llama_free_model(model);
+        llama_backend_free();
+        return 1;
+    }
+
+    const bool requested_spec = params.speculative.has_stage_chain();
+    if (requested_spec_user && !requested_spec) {
+        LOG_TEE("%s: error: requested speculative decoding is not runnable with the finalized model/runtime configuration\n", __func__);
+        if (ctx_guidance) {
+            llama_free(ctx_guidance);
+        }
+        params.speculative.clear_dft();
+        llama_free(ctx);
+        llama_free_model(model);
+        llama_backend_free();
+        return 1;
+    }
+
+    auto fail_spec = [&](const char * reason) {
+        LOG_TEE("%s: error: speculative decoding is not supported with %s in llama-cli yet\n", __func__, reason);
+        if (ctx_guidance) {
+            llama_free(ctx_guidance);
+        }
+        if (spec) {
+            common_speculative_free(spec);
+        }
+        params.speculative.clear_dft();
+        llama_free(ctx);
+        llama_free_model(model);
+        llama_backend_free();
+        return 1;
+    };
+
+    if (requested_spec) {
+        if (params.interactive || params.interactive_first || params.conversation) {
+            return fail_spec("interactive or conversation mode");
+        }
+        if (sparams.cfg_scale > 1.f) {
+            return fail_spec("CFG guidance");
+        }
+        if (params.grp_attn_n != 1) {
+            return fail_spec("self-extend");
+        }
+        if (!params.path_prompt_cache.empty()) {
+            return fail_spec("prompt-cache save/load");
+        }
+        if (llama_model_has_encoder(model)) {
+            return fail_spec("encoder-decoder models");
+        }
+    }
+
     auto chat_templates = common_chat_templates_init(model, params.chat_template);
+
+    if (params.has_mtp) {
+        llama_set_embeddings(ctx, true);
+    }
+
+    if (requested_spec) {
+        if (!common_speculative_is_compat(ctx)) {
+            LOG_TEE("%s: error: speculative decoding is not supported by this context\n", __func__);
+            if (ctx_guidance) {
+                llama_free(ctx_guidance);
+            }
+            params.speculative.clear_dft();
+            llama_free(ctx);
+            llama_free_model(model);
+            llama_backend_free();
+            return 1;
+        }
+
+        switch (common_speculative_try_init(params.speculative, ctx, &spec)) {
+        case COMMON_SPECULATIVE_INIT_READY:
+            LOG_TEE("%s: speculative decoding context initialized\n", __func__);
+            break;
+        case COMMON_SPECULATIVE_INIT_ERR_RECURRENT:
+            return fail_spec("recurrent speculative context initialization failure");
+        case COMMON_SPECULATIVE_INIT_ERR_MTP:
+            return fail_spec("MTP speculative context initialization failure");
+        case COMMON_SPECULATIVE_INIT_ERR_GENERIC:
+            return fail_spec("speculative context initialization failure");
+        case COMMON_SPECULATIVE_INIT_SKIPPED:
+            break;
+        }
+    }
 
     const int n_ctx_train = llama_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
@@ -306,6 +404,7 @@ int main(int argc, char ** argv) {
 
         LOG("prompt: \"%s\"\n", log_tostr(prompt));
         LOG("tokens: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, embd_inp).c_str());
+
     }
 
     // Should not run without any tokens
@@ -533,6 +632,13 @@ int main(int argc, char ** argv) {
     std::ostringstream output_ss;     g_output_ss     = &output_ss;
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
+    const int64_t t_start_process_prompt_us = ggml_time_us();
+    int64_t t_start_generation_us = 0;
+    double t_prompt_processing_ms = 0.0;
+    double t_token_generation_ms = 0.0;
+    int n_prompt_tokens_processed = 0;
+    int n_decoded = 0;
+
     // the first thing we will do is to output the prompt, so set color accordingly
     console::set_display(console::prompt);
     display = params.display_prompt;
@@ -548,7 +654,7 @@ int main(int argc, char ** argv) {
         antiprompt_ids.emplace_back(::common_tokenize(ctx, antiprompt, false, true));
     }
 
-    common_sampler * ctx_sampling = common_sampler_init(model, sparams);
+    ctx_sampling = common_sampler_init(model, sparams);
     if (!ctx_sampling) {
         fprintf(stderr, "%s: failed to initialize sampling subsystem\n", __func__);
         exit(1);
@@ -571,6 +677,17 @@ int main(int argc, char ** argv) {
         embd_inp.clear();
         embd_inp.push_back(decoder_start_token_id);
     }
+
+    bool embd_is_prompt = false;
+    bool emitted_generated = false;
+    std::vector<llama_token> emitted;
+    llama_tokens speculative_tokens = embd_inp;
+    bool emitted_hit_eog = false;
+    bool speculative_started = false;
+    int32_t final_prompt_output_index = -1;
+    llama_pos final_prompt_hidden_pos = -1;
+    bool have_speculative_sampled = false;
+    llama_token speculative_sampled = LLAMA_TOKEN_NULL;
 
     while ((n_remain != 0 && !is_antiprompt) || params.interactive) {
         // predict
@@ -609,6 +726,14 @@ int main(int argc, char ** argv) {
 
                     llama_kv_cache_seq_rm (ctx, 0, params.n_keep            , params.n_keep + n_discard);
                     llama_kv_cache_seq_add(ctx, 0, params.n_keep + n_discard, n_past, -n_discard);
+                    if (spec != nullptr) {
+                        common_speculative_context_shift(spec, 0, params.n_keep, n_discard, n_past);
+                        if ((int) speculative_tokens.size() > params.n_keep) {
+                            const size_t erase_begin = (size_t) params.n_keep;
+                            const size_t erase_end = std::min(speculative_tokens.size(), erase_begin + (size_t) n_discard);
+                            speculative_tokens.erase(speculative_tokens.begin() + erase_begin, speculative_tokens.begin() + erase_end);
+                        }
+                    }
 
                     n_past -= n_discard;
 
@@ -717,9 +842,50 @@ int main(int argc, char ** argv) {
 
                 LOG("eval: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, embd).c_str());
 
-                if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval, n_past, 0))) {
+                const bool need_prompt_target_features =
+                    embd_is_prompt &&
+                    spec != nullptr &&
+                    (params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) ||
+                     params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH));
+
+                llama_batch batch = {};
+                if (need_prompt_target_features) {
+                    batch = llama_batch_init(n_eval, 0, 1);
+                    for (int j = 0; j < n_eval; ++j) {
+                        common_batch_add(batch, embd[i + j], n_past + j, { 0 }, true);
+                    }
+                } else {
+                    batch = llama_batch_get_one(&embd[i], n_eval, n_past, 0);
+                }
+
+                if (llama_decode(ctx, batch)) {
+                    if (need_prompt_target_features) {
+                        llama_batch_free(batch);
+                    }
                     LOG_TEE("%s : failed to eval\n", __func__);
                     return 1;
+                }
+
+                if (spec != nullptr) {
+                    if (need_prompt_target_features) {
+                        if (common_speculative_on_target_seq_batch(spec, ctx, batch, 0, true) != 0) {
+                            llama_batch_free(batch);
+                            LOG_TEE("%s : failed to warm speculative target state\n", __func__);
+                            return 1;
+                        }
+                        final_prompt_output_index = n_eval - 1;
+                        final_prompt_hidden_pos = n_past + n_eval - 1;
+                    } else if (!embd_is_prompt) {
+                        speculative_tokens.insert(speculative_tokens.end(), embd.begin() + i, embd.begin() + i + n_eval);
+                    }
+                }
+
+                if (need_prompt_target_features) {
+                    llama_batch_free(batch);
+                }
+
+                if (embd_is_prompt) {
+                    n_prompt_tokens_processed += n_eval;
                 }
 
                 n_past += n_eval;
@@ -737,10 +903,34 @@ int main(int argc, char ** argv) {
             }
         }
 
+        emitted.clear();
         embd.clear();
         embd_guidance.clear();
 
         if ((int) embd_inp.size() <= n_consumed && !is_interacting) {
+            if (!speculative_started) {
+                if (spec != nullptr) {
+                    static const llama_tokens empty_speculative_prompt;
+                    const llama_tokens & speculative_prompt =
+                        params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+                        !params.speculative.has_composite_stage_chain()
+                            ? empty_speculative_prompt
+                            : speculative_tokens;
+                    common_speculative_begin(spec, speculative_prompt);
+                    if (params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+                        final_prompt_output_index >= 0 &&
+                        final_prompt_hidden_pos >= 0 &&
+                        !common_speculative_capture_output_hidden(spec, ctx, final_prompt_output_index, 0, final_prompt_hidden_pos)) {
+                        LOG_TEE("%s: failed to capture final prompt hidden state for speculative init (output_index=%d, pos=%d)\n",
+                                __func__, final_prompt_output_index, final_prompt_hidden_pos);
+                    }
+                }
+                if (params.has_mtp) {
+                    llama_set_embeddings(ctx, false);
+                }
+                speculative_started = true;
+            }
+
             // optionally save the session on first sample (for faster prompt loading next time)
             if (!path_session.empty() && need_to_save_session && !params.prompt_cache_ro) {
                 need_to_save_session = false;
@@ -749,21 +939,153 @@ int main(int argc, char ** argv) {
                 LOG("saved session to %s\n", path_session.c_str());
             }
 
-            const llama_token id = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
+            const int n_predict_budget = n_remain < 0 ? std::numeric_limits<int>::max() : n_remain;
+            bool used_speculative = false;
 
-            common_sampler_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
+            if (spec != nullptr && n_predict_budget != 1) {
+                const bool sampled_before_from_carry = have_speculative_sampled;
+                llama_token sampled_before = LLAMA_TOKEN_NULL;
+                if (sampled_before_from_carry) {
+                    sampled_before = speculative_sampled;
+                    have_speculative_sampled = false;
+                    speculative_sampled = LLAMA_TOKEN_NULL;
+                } else {
+                    sampled_before = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
+                    common_sampler_accept(ctx_sampling, ctx, sampled_before, /* apply_grammar= */ true);
+                }
+                static const llama_tokens empty_speculative_tokens;
+                const llama_tokens & draft_history =
+                    params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+                    !params.speculative.has_composite_stage_chain()
+                        ? empty_speculative_tokens
+                        : speculative_tokens;
+                auto draft_result = common_speculative_draft_ex(
+                    spec,
+                    ctx,
+                    params.speculative,
+                    draft_history,
+                    sampled_before,
+                    n_past,
+                    0);
 
-            LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, ctx_sampling->prev).c_str());
+                auto & draft = draft_result.tokens;
+                int max_usable_draft = (int) draft.size();
+                if (n_predict_budget >= 0 && n_predict_budget != std::numeric_limits<int>::max()) {
+                    max_usable_draft = std::min(max_usable_draft, std::max(0, n_predict_budget - 2));
+                }
+                max_usable_draft = std::min(max_usable_draft, std::max(0, n_ctx - n_past - 2));
+                max_usable_draft = std::min(max_usable_draft, std::max(0, (int) llama_n_batch(ctx) - 1));
+                if ((int) draft.size() > max_usable_draft) {
+                    draft.resize(max_usable_draft);
+                }
 
-            embd.push_back(id);
+                const int min_usable_draft = params.speculative.get_min_usable_stage_n_min();
+                if ((int) draft.size() >= min_usable_draft && (!draft.empty() || n_predict_budget > 1)) {
+                    if (llama_model_has_recurrent(model)) {
+                        if (!common_speculative_before_draft(
+                            spec,
+                            model,
+                            ctx,
+                            ctx_sampling,
+                            sparams,
+                            0,
+                            n_past,
+                            sampled_before,
+                            (int) draft.size() + 1,
+                            params.speculative.recurrent_ckpt_mode)) {
+                            LOG_TEE("%s: speculative checkpoint setup failed, falling back to one-token decode\n", __func__);
+                            draft.clear();
+                        }
+                    }
 
-            // echo this to console
-            input_echo = true;
+                    if (!draft.empty()) {
+                        llama_batch verify_batch = llama_batch_init((int) draft.size() + 1, 0, 1);
+                        std::vector<int> verify_indices;
+                        verify_indices.reserve(draft.size() + 1);
 
-            // decrement remaining sampling budget
-            --n_remain;
+                        common_batch_add(verify_batch, sampled_before, n_past, { 0 }, true);
+                        verify_indices.push_back(0);
+                        for (size_t i = 0; i < draft.size(); ++i) {
+                            common_batch_add(verify_batch, draft[i], n_past + 1 + (llama_pos) i, { 0 }, true);
+                            verify_indices.push_back((int) i + 1);
+                        }
 
-            LOG("n_remain: %d\n", n_remain);
+                        if (llama_decode(ctx, verify_batch)) {
+                            llama_batch_free(verify_batch);
+                            LOG_TEE("%s : failed to eval speculative batch\n", __func__);
+                            return 1;
+                        }
+
+                        std::vector<llama_token> ids;
+                        try {
+                            ids = common_sampler_sample_and_accept_n(ctx_sampling, ctx, verify_indices, draft);
+                        } catch (const std::exception & e) {
+                            llama_batch_free(verify_batch);
+                            LOG_TEE("%s: speculative sampling failed: %s\n", __func__, e.what());
+                            return 1;
+                        }
+
+                        std::vector<int32_t> accepted_output_indices;
+                        if (!ids.empty()) {
+                            accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
+                        }
+
+                        common_speculative_commit(
+                            spec,
+                            ctx,
+                            ctx_sampling,
+                            0,
+                            sampled_before,
+                            ids,
+                            (int) draft.size(),
+                            n_past + 1,
+                            accepted_output_indices);
+
+                        llama_batch_free(verify_batch);
+
+                        if (!ids.empty()) {
+                            have_speculative_sampled = true;
+                            speculative_sampled = ids.back();
+                            if (!sampled_before_from_carry) {
+                                emitted.push_back(sampled_before);
+                            }
+                            emitted.insert(emitted.end(), ids.begin(), ids.end());
+                            embd_is_prompt = false;
+                            emitted_generated = true;
+                            used_speculative = true;
+                            speculative_tokens.push_back(sampled_before);
+                            if (ids.size() > 1) {
+                                speculative_tokens.insert(speculative_tokens.end(), ids.begin(), ids.end() - 1);
+                            }
+                            n_past += (int) ids.size();
+                            n_remain -= (int) emitted.size();
+                            LOG("n_remain: %d\n", n_remain);
+                        }
+                    }
+                }
+            }
+
+            if (!used_speculative) {
+                const llama_token id = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
+                common_sampler_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
+
+                LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, ctx_sampling->prev).c_str());
+
+                embd.push_back(id);
+                emitted = embd;
+                embd_is_prompt = false;
+                emitted_generated = true;
+
+                // echo this to console
+                input_echo = true;
+
+                // decrement remaining sampling budget
+                --n_remain;
+
+                LOG("n_remain: %d\n", n_remain);
+            } else {
+                input_echo = true;
+            }
         } else {
             // some user input remains from prompt or interaction, forward it to processing
             LOG("embd_inp.size(): %d, n_consumed: %d\n", (int) embd_inp.size(), n_consumed);
@@ -779,25 +1101,92 @@ int main(int argc, char ** argv) {
                     break;
                 }
             }
+
+            emitted = embd;
+            embd_is_prompt = true;
+            emitted_generated = false;
+        }
+
+        emitted_hit_eog = false;
+
+        if (emitted_generated && !emitted.empty()) {
+            std::string generated_text = output_ss.str();
+            std::vector<llama_token> emitted_visible;
+            emitted_visible.reserve(emitted.size());
+            is_antiprompt = false;
+
+            for (llama_token id : emitted) {
+                emitted_visible.push_back(id);
+                generated_text += common_token_to_piece(ctx, id, params.special);
+
+                if (llama_token_is_eog(model, id)) {
+                    emitted_hit_eog = true;
+                    break;
+                }
+
+                if (!params.antiprompt.empty()) {
+                    for (std::string & antiprompt : params.antiprompt) {
+                        size_t extra_padding = params.interactive ? 0 : 2;
+                        size_t search_start_pos = generated_text.length() > static_cast<size_t>(antiprompt.length() + extra_padding)
+                            ? generated_text.length() - static_cast<size_t>(antiprompt.length() + extra_padding)
+                            : 0;
+
+                        if (generated_text.find(antiprompt, search_start_pos) != std::string::npos) {
+                            if (params.interactive) {
+                                is_interacting = true;
+                            }
+                            is_antiprompt = true;
+                            break;
+                        }
+                    }
+
+                    if (!is_antiprompt) {
+                        for (const std::vector<llama_token> & ids : antiprompt_ids) {
+                            if (ids.size() == 1 && id == ids[0]) {
+                                if (params.interactive) {
+                                    is_interacting = true;
+                                }
+                                is_antiprompt = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (is_antiprompt) {
+                    LOG("found antiprompt: %s\n", generated_text.c_str());
+                    break;
+                }
+            }
+
+            emitted.swap(emitted_visible);
+
+            if (emitted_generated && !emitted.empty()) {
+                n_decoded += (int) emitted.size();
+                const int64_t t_current_us = ggml_time_us();
+                if (n_decoded == (int) emitted.size()) {
+                    t_start_generation_us = t_current_us;
+                    t_prompt_processing_ms = (t_start_generation_us - t_start_process_prompt_us) / 1e3;
+                }
+                t_token_generation_ms = std::max<int64_t>(1, t_current_us - t_start_generation_us) / 1e3;
+            }
+
         }
 
         // display text
         if (input_echo && display) {
-            for (auto id : embd) {
+            for (auto id : emitted) {
                 const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
                 // Console/Stream Output
                 fprintf(stdout, "%s", token_str.c_str());
 
                 // Record Displayed Tokens To Log
-                // Note: Generated tokens are created one by one hence this check
-                if (embd.size() > 1) {
-                    // Incoming Requested Tokens
-                    input_tokens.push_back(id);
-                } else {
-                    // Outgoing Generated Tokens
+                if (emitted_generated) {
                     output_tokens.push_back(id);
                     output_ss << token_str;
+                } else {
+                    input_tokens.push_back(id);
                 }
 
                 fflush(stdout);
@@ -812,49 +1201,8 @@ int main(int argc, char ** argv) {
 
         // if not currently processing queued inputs;
         if ((int) embd_inp.size() <= n_consumed) {
-            // check for reverse prompt in the last n_prev tokens
-            if (!params.antiprompt.empty()) {
-                const int n_prev = 32;
-                const std::string last_output = llama_sampling_prev_str(ctx_sampling, ctx, n_prev);
-
-                is_antiprompt = false;
-                // Check if each of the reverse prompts appears at the end of the output.
-                // If we're not running interactively, the reverse prompt might be tokenized with some following characters
-                // so we'll compensate for that by widening the search window a bit.
-                for (std::string & antiprompt : params.antiprompt) {
-                    size_t extra_padding = params.interactive ? 0 : 2;
-                    size_t search_start_pos = last_output.length() > static_cast<size_t>(antiprompt.length() + extra_padding)
-                        ? last_output.length() - static_cast<size_t>(antiprompt.length() + extra_padding)
-                        : 0;
-
-                    if (last_output.find(antiprompt, search_start_pos) != std::string::npos) {
-                        if (params.interactive) {
-                            is_interacting = true;
-                        }
-                        is_antiprompt = true;
-                        break;
-                    }
-                }
-
-                // check for reverse prompt using special tokens
-                llama_token last_token = llama_sampling_last(ctx_sampling);
-                for (std::vector<llama_token> ids : antiprompt_ids) {
-                    if (ids.size() == 1 && last_token == ids[0]) {
-                        if (params.interactive) {
-                            is_interacting = true;
-                        }
-                        is_antiprompt = true;
-                        break;
-                    }
-                }
-
-                if (is_antiprompt) {
-                    LOG("found antiprompt: %s\n", last_output.c_str());
-                }
-            }
-
             // deal with end of generation tokens in interactive mode
-            if (!waiting_for_first_input && llama_token_is_eog(model, llama_sampling_last(ctx_sampling))) {
+            if (!waiting_for_first_input && emitted_hit_eog) {
                 LOG("found an EOG token\n");
 
                 if (params.interactive) {
@@ -875,8 +1223,11 @@ int main(int argc, char ** argv) {
 
             // if current token is not EOG, we add it to current assistant message
             if (params.conversation && !waiting_for_first_input) {
-                auto id = llama_sampling_last(ctx_sampling);
-                assistant_ss << common_token_to_piece(ctx, id, false);
+                for (llama_token id : emitted) {
+                    if (!llama_token_is_eog(model, id)) {
+                        assistant_ss << common_token_to_piece(ctx, id, false);
+                    }
+                }
             }
 
             if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
@@ -980,7 +1331,7 @@ int main(int argc, char ** argv) {
         }
 
         // end of generation
-        if (!embd.empty() && llama_token_is_eog(model, embd.back()) && !(params.interactive)) {
+        if (emitted_hit_eog && !(params.interactive)) {
             LOG_TEE(" [end of text]\n");
             break;
         }
@@ -998,10 +1349,33 @@ int main(int argc, char ** argv) {
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
     }
 
-    llama_print_timings(ctx);
+    if (n_decoded > 0) {
+        const double t_prompt = n_prompt_tokens_processed > 0 ? t_prompt_processing_ms / n_prompt_tokens_processed : 0.0;
+        const double n_prompt_second = (t_prompt_processing_ms > 0 && n_prompt_tokens_processed > 0)
+            ? 1e3 / t_prompt_processing_ms * n_prompt_tokens_processed
+            : 0.0;
+
+        const double t_gen = t_token_generation_ms / n_decoded;
+        const double n_gen_second = 1e3 / t_token_generation_ms * n_decoded;
+
+        LOG_TEE("\n");
+        LOG_TEE("main: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+                t_prompt_processing_ms, n_prompt_tokens_processed, t_prompt, n_prompt_second);
+        LOG_TEE("main:        eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+                t_token_generation_ms, n_decoded, t_gen, n_gen_second);
+        LOG_TEE("main:       total time = %10.2f ms / %5d tokens\n",
+                t_prompt_processing_ms + t_token_generation_ms, n_prompt_tokens_processed + n_decoded);
+
+        common_speculative_print_stats(spec, n_gen_second, n_decoded, n_past, &params.speculative);
+    } else {
+        llama_print_timings(ctx);
+        common_speculative_print_stats(spec);
+    }
     write_logfile(ctx, params, model, input_tokens, output_ss.str(), output_tokens);
 
     if (ctx_guidance) { llama_free(ctx_guidance); }
+    if (spec) { common_speculative_free(spec); }
+    params.speculative.clear_dft();
     llama_free(ctx);
     llama_free_model(model);
 
