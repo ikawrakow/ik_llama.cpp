@@ -78,6 +78,9 @@ IQK_API bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int r
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
         const float * state_in, float * out_data, float * state_out, float * saved_steps, int state_step_stride, int ith, int nth);
 
+IQK_API bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t barrier, void * barrier_data, int ith, int nth);
+IQK_API size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread);
+
 #ifdef __cplusplus
 }
 #endif
