@@ -466,7 +466,7 @@ static __global__ void init_indices(int * indices, const int ncols, const int nr
     }
 }
 
-void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
+static void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                               const float *    x,
                               int *            dst,
                               const int        ncols,

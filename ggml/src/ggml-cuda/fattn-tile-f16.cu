@@ -68,7 +68,12 @@ static __global__ void flash_attn_tile_ext_f16(
     const float2 * Q_f2  = (const float2 *) (Q    + nb02* blockIdx.y              + nb01*ic0);
     const half2  * K_h2  = (const half2  *) (K    + nb12*(blockIdx.y / gqa_ratio));
     const half2  * V_h2  = (const half2  *) (V    + nb12*(blockIdx.y / gqa_ratio)); // K and V have same shape
-    const half   * maskh = (const half   *)  mask + ne11*ic0;
+    // Mask row stride must come from the mask tensor (nb31), not ne11 (= K->ne[1]). For SWA models the
+    // fattn.cu n_swa windowing re-points K/V/mask to the last nton tokens (ne11 = nton) while the mask keeps
+    // its original row stride, so indexing the mask by ne11 reads garbage and yields NaN on the tile kernels.
+    const int    stride_mask = nb31 / sizeof(half);
+    const half   * maskh  = (const half   *)  mask + stride_mask*ic0;
+    const float  * sinksf = (const float  *)  sinks;
 
     const int stride_KV2 = nb11 / sizeof(half2);
 
@@ -176,7 +181,7 @@ static __global__ void flash_attn_tile_ext_f16(
                 } else {
                     sum = __low2half(sum2[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]) + __high2half(sum2[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]);
                 }
-                sum += mask ? slopeh*maskh[j_KQ*ne11 + k_VKQ_0 + i_KQ] : __float2half(0.0f);
+                sum += mask ? slopeh*maskh[j_KQ*stride_mask + k_VKQ_0 + i_KQ] : __float2half(0.0f);
 
                 kqmax_new[j_KQ_0/nwarps] = ggml_cuda_hmax(kqmax_new[j_KQ_0/nwarps], sum);
 
@@ -256,6 +261,33 @@ static __global__ void flash_attn_tile_ext_f16(
         }
 
         __syncthreads();
+    }
+
+    // Apply attention sinks (e.g. gpt-oss): the sink is a per-head extra softmax logit whose value
+    // contribution is zero, so it only joins the running max and rescales the denominator/value
+    // accumulator. Only ip==0 adds the sink term so it is counted exactly once across the
+    // parallel_blocks KV split. Ported from fattn-vec-f16.cuh. kqmax is warp-uniform here (already
+    // warp_reduce_max'd in the KV loop), so no shared-mem reduction is needed.
+    if (sinksf && ip == 0) {
+        const half sink = __float2half(sinksf[blockIdx.y]);
+
+#pragma unroll
+        for (int j0 = 0; j0 < ncols; j0 += nwarps) {
+            const half kqmax_new_j = ggml_cuda_hmax(kqmax[j0/nwarps], sink);
+            const half2 KQ_max_scale = __half2half2(hexp(kqmax[j0/nwarps] - kqmax_new_j));
+            kqmax[j0/nwarps] = kqmax_new_j;
+
+            kqsum[j0/nwarps] = kqsum[j0/nwarps]*KQ_max_scale;
+            if (threadIdx.x == 0) {
+                // Add the sink term to only the low half; the epilogue sums low+high once per lane.
+                kqsum[j0/nwarps].x += hexp(sink - kqmax[j0/nwarps]);
+            }
+
+#pragma unroll
+            for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
+                VKQ[j0/nwarps][i0/WARP_SIZE] *= KQ_max_scale;
+            }
+        }
     }
 
 #pragma unroll

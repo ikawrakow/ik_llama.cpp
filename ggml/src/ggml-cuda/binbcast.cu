@@ -434,6 +434,7 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
     if (ggml_nrows(dst->src[1]) == 1 && dst->src[0]->ne[0] == dst->src[1]->ne[0] &&
         dst->type == GGML_TYPE_F32 && dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(dst->src[0]) && ggml_is_contiguous(dst->src[1]) &&
         ggml_are_same_shape(dst, dst->src[0]) && ggml_is_contiguous(dst)) {
         constexpr int kBlockSize = 256;
         auto nelem = ggml_nelements(dst);
@@ -442,7 +443,8 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
         return;
     }
-    if (ggml_is_contiguous(dst->src[0]) && ggml_are_same_shape(dst->src[0], dst->src[1]) && ggml_is_contiguous(dst)) {
+    if (ggml_is_contiguous(dst->src[0]) && ggml_is_contiguous(dst->src[1]) &&
+        ggml_are_same_shape(dst->src[0], dst->src[1]) && ggml_is_contiguous(dst)) {
         constexpr int kBlockSize = 256;
         auto nelem = ggml_nelements(dst);
         int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
@@ -585,7 +587,8 @@ void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
     auto src0 = dst->src[0];
     auto src1 = dst->src[1];
-    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+        src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
         src1->ne[0] == 1 && src0->ne[1] == src1->ne[1] && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3]) {
         constexpr int kBlockSize = 256;
         int nelem = ggml_nelements(src0);

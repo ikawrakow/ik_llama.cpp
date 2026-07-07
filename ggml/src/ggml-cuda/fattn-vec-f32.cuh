@@ -115,7 +115,7 @@ static __global__ void flash_attn_vec_ext_f32(
 
     // Convert Q to float2 (f16 K) or q8_1 (quantized K) and store in registers:
     float2  Q_f2[ncols][Dk/(2*WARP_SIZE)];
-    int    Q_i32[ncols][Dk/(sizeof(int)*QK8_1) == 0 ? 1 : Dk/(sizeof(int)*QK8_1)];
+    int    Q_i32[ncols][(Dk/(int)sizeof(int) + WARP_SIZE - 1)/WARP_SIZE];
     float2  Q_ds[ncols][Dk/QK8_1 == 0 ? 1 : Dk/QK8_1];
     if (Q_q8_1) {
 #pragma unroll
@@ -145,9 +145,21 @@ static __global__ void flash_attn_vec_ext_f32(
             }
 
             const float * Q_f = (const float *) (Q + j*nb01);
+            // Full WARP_SIZE-wide int32 chunks: ni == WARP_SIZE so quantize_q8_1_to_shared's lane
+            // guards fold away -> byte-identical to the original unguarded loop for aligned Dk.
+            constexpr int Dk_i32  = Dk/(int)sizeof(int);
+            constexpr int Dk_full = (Dk_i32/WARP_SIZE)*WARP_SIZE;
 #pragma unroll
-            for (int i0 = 0; i0 < Dk/sizeof(int); i0 += WARP_SIZE) {
-                quantize_q8_1_to_shared<float2>(Q_f + 4*i0, scale, tmp_q_i32 + i0, tmp_q_ds + i0/QI8_1);
+            for (int i0 = 0; i0 < Dk_full; i0 += WARP_SIZE) {
+                quantize_q8_1_to_shared<float2, WARP_SIZE>(Q_f + 4*i0, scale, tmp_q_i32 + i0, tmp_q_ds + i0/QI8_1);
+            }
+            // Ragged tail: only compiled for Dk whose int32 count is not a multiple of WARP_SIZE
+            // (Dk=576 -> 16 valid lanes, Dk=192 -> 16 valid lanes). `if constexpr` drops this
+            // entirely for aligned Dk (128/256), so the aligned path stays byte-identical.
+            if constexpr (Dk_i32 % WARP_SIZE != 0) {
+                constexpr int i0 = Dk_full;
+                constexpr int ni = Dk_i32 - Dk_full;
+                quantize_q8_1_to_shared<float2, ni>(Q_f + 4*i0, scale, tmp_q_i32 + i0, tmp_q_ds + i0/QI8_1);
             }
         }
 
@@ -162,8 +174,17 @@ static __global__ void flash_attn_vec_ext_f32(
             for (int i0 = 0; i0 < Dk/sizeof(int); i0 += WARP_SIZE) {
                 const int i = i0 + threadIdx.x;
 
-                Q_i32[j][i0/WARP_SIZE] = tmp_q_i32[i];
-                Q_ds[j][i0/WARP_SIZE]  = tmp_q_ds[i/QI8_1];
+                // Ragged-tail guard (mirrors mainline fattn-vec.cuh:169). Aligned Dk: predicate
+                // folds to always-true -> byte-identical. Dk=576 ragged tail: OOB lanes (i >= 144)
+                // load 0 rather than reading the trailing shared region (tmp_q_i32[144..159] is now
+                // never written by the guarded quantize, so it is stale) and feed 0 to the dot.
+                if (i0 + WARP_SIZE <= Dk/(int)sizeof(int) || i < Dk/(int)sizeof(int)) {
+                    Q_i32[j][i0/WARP_SIZE] = tmp_q_i32[i];
+                    Q_ds[j][i0/WARP_SIZE]  = tmp_q_ds[i/QI8_1];
+                } else {
+                    Q_i32[j][i0/WARP_SIZE] = 0;
+                    Q_ds[j][i0/WARP_SIZE]  = make_float2(0.0f, 0.0f);
+                }
             }
         }
 
@@ -257,7 +278,7 @@ static __global__ void flash_attn_vec_ext_f32(
             const float KQ_max_scale = expf(kqmax[j] - kqmax_new_j);
             kqmax[j] = kqmax_new_j;
 
-            const float val = expf(KQ[j*Dk + tid] - kqmax[j]);
+            const float val = (FATTN_KQ_STRIDE % Dk != 0 && k_VKQ_0 + tid >= ne11) ? 0.0f : expf(KQ[j*Dk + tid] - kqmax[j]);
             kqsum[j] = kqsum[j]*KQ_max_scale + val;
             KQ[j*Dk + tid] = val;
 
@@ -344,7 +365,9 @@ static __global__ void flash_attn_vec_ext_f32(
         if (gridDim.y == 1) {
             dst_val /= kqsum[j_VKQ];
         }
-        dst[(((sequence*ne01 + ic0 + j_VKQ)*ne02 + head)*gridDim.y + blockIdx.y)*Dv + tid] = dst_val;
+        if (tid < Dv) {
+            dst[(((sequence*ne01 + ic0 + j_VKQ)*ne02 + head)*gridDim.y + blockIdx.y)*Dv + tid] = dst_val;
+        }
     }
 
     if (gridDim.y != 1 && tid < ncols && (ncols <= 2 || ic0 + tid < ne01)) {
@@ -359,10 +382,13 @@ template <int Dk, int Dv, int cols_per_block, ggml_type type_K, ggml_type type_V
 void ggml_cuda_flash_attn_ext_vec_f32_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     constexpr int nwarps = Dk/WARP_SIZE;
     fattn_kernel_t fattn_kernel = flash_attn_vec_ext_f32<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap>;
-    constexpr bool need_f16_K = Dk != 128 && Dk != 256;
-    constexpr bool need_f16_V = Dv != 64 && Dv != 128 && Dv != 256;
+    constexpr bool need_f16_K = (Dk != 128 && Dk != 256) && type_K == GGML_TYPE_F16;
+    constexpr bool need_f16_V = (Dv != 64 && Dv != 128 && Dv != 256) && type_V == GGML_TYPE_F16;
     constexpr size_t nbytes_shared = 0;
-    launch_fattn<Dv, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, Dv, need_f16_K, need_f16_V);
+    // MLA (Dv=512): the KV cache is padded to FATTN_KQ_STRIDE (256), not to Dv, so use 256 as the KQ-row
+    // granularity. Passing Dv=512 asserts n_kv % 512 == 0, which fails for odd multiples of 256.
+    constexpr int kq_row_granularity = (Dv == 512) ? FATTN_KQ_STRIDE : Dv;
+    launch_fattn<Dv, cols_per_block, 1>(ctx, dst, fattn_kernel, nwarps, nbytes_shared, kq_row_granularity, need_f16_K, need_f16_V);
 }
 
 template <int Dk, int Dv, ggml_type type_K, ggml_type type_V>
@@ -488,3 +514,6 @@ extern DECL_FATTN_VEC_F32_CASE(256, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0);
 
 extern DECL_FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_F16, GGML_TYPE_F16);
 extern DECL_FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0);
+
+extern DECL_FATTN_VEC_F32_CASE_DKDV(576, 512, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_VEC_F32_CASE_DKDV(576, 512, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0);

@@ -452,6 +452,7 @@ struct gpt_params {
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
+    std::string indexer_cache_type_k = "f16"; // indexer K-cache data type
 
     std::string reduce_type = "f16";
     std::string graph_attn_precision = "f16";

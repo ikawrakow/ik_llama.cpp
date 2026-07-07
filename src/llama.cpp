@@ -840,6 +840,7 @@ static bool llama_kv_cache_init(
                const llama_context * ctx,
                          ggml_type   type_k,
                          ggml_type   type_v,
+                         ggml_type   idx_type_k,
                           uint32_t   kv_size,
                               bool   offload,
                           ggml_type  type_k_first,
@@ -1030,7 +1031,7 @@ static bool llama_kv_cache_init(
             // DSA lightning-indexer key cache (MQA, single head). Store the Hadamard-rotated
             // indexer keys in F16 so a decoded token can score against ALL past keys.
             if (has_dsa_indexer && model.layers[i].indexer_attn_k && !is_mtp_tail_layer) {
-                ggml_tensor * kr = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, hparams.indexer_head_size, kv_size);
+                ggml_tensor * kr = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, kv_size);
                 ggml_format_name(kr, "cache_kr_l%d", i);
                 cache.kr_l[i] = kr;
             }
@@ -6543,6 +6544,7 @@ struct llama_model_params llama_model_default_params() {
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.idx_type_k                  =*/ GGML_TYPE_F16,
         /*.max_ctx_size                =*/ 0,
         /*.n_seq_max                   =*/ 1,
         /*.n_ubatch                    =*/ 512,
@@ -6615,6 +6617,7 @@ struct llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.idx_type_k                  =*/ GGML_TYPE_F16,
         /*.type_reduce                 =*/ GGML_TYPE_F16,
         /*.type_graph_attn             =*/ GGML_TYPE_F16,
         /*.type_first_k                =*/ GGML_TYPE_F16,
@@ -7411,7 +7414,7 @@ struct llama_context * llama_init_from_model(
         }
         ctx->backends.push_back(ctx->backend_cpu);
 
-        if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, kv_size, cparams.offload_kqv,
+        if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, params.idx_type_k, kv_size, cparams.offload_kqv,
                     params.type_k_first, params.type_k_last, params.type_v_first, params.type_v_last,
                     params.n_k_first, params.n_k_last, params.n_v_first, params.n_v_last)) {
             LLAMA_LOG_ERROR("%s: llama_kv_cache_init() failed for self-attention cache\n", __func__);
@@ -7459,7 +7462,8 @@ struct llama_context * llama_init_from_model(
                 }
             }
             if (memory_size_k_indexer > 0) {
-                LLAMA_LOG_INFO("%s: KV self indexer size = %7.2f MiB\n", __func__, memory_size_k_indexer/1024./1024.);
+                LLAMA_LOG_INFO("%s: KV self indexer size = %7.2f MiB (%s)\n", __func__, memory_size_k_indexer/1024./1024.,
+                        ggml_type_name(params.idx_type_k));
             }
         }
 

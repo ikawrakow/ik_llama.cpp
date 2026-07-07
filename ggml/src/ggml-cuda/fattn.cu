@@ -23,6 +23,14 @@ static inline bool mma_better_than_turing(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) > CC_TURING;
 }
 
+// On GPUs without fp16 MMA (Pascal/sm_60), the MLA absorbed head sizes 576/512 are asymmetric, so the f16
+// vector kernel (which requires K==V) rejects them and decode falls back to the CPU. Route MLA decode
+// (batch <= 8) to the f32 vector kernel to keep it on the GPU. Single-sourced so the dispatch and the
+// is_supported check cannot drift.
+static inline bool is_pascal_mla_absorbed_decode(const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V) {
+    return Q->ne[1] <= 8 && K->ne[0] == 576 && V->ne[0] == 512;
+}
+
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV  = dst;
     const ggml_tensor * Q    = dst->src[0];
@@ -76,6 +84,10 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     }
 
     if (!fp16_mma_available(cc)) {
+        if (is_pascal_mla_absorbed_decode(Q, K, V)) {
+            ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+            return;
+        }
         if (precision == GGML_PREC_DEFAULT) {
             if (Q->ne[1] <= 8 || Q->ne[0] == 256) {
                 ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
@@ -171,6 +183,9 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
     }
 
     if (!fp16_mma_available(cc)) {
+        if (is_pascal_mla_absorbed_decode(Q, K, V)) {
+            return ggml_cuda_fattn_vec_f32_is_supported(ctx, dst);
+        }
         if (precision == GGML_PREC_DEFAULT) {
             if (Q->ne[1] <= 8 || Q->ne[0] == 256) {
                 return ggml_cuda_fattn_vec_f16_is_supported(ctx, dst);

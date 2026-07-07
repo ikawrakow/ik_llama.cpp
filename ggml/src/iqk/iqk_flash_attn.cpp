@@ -51,6 +51,14 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
     auto Q = dst->src[0];
     auto K = dst->src[1];
     auto V = dst->src[2];
+    auto indexer = dst->src[5];
+    if (indexer && indexer->type == GGML_TYPE_I32 && indexer->ne[0] < K->ne[1] && Q->ne[1] >= nth &&
+        Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && K->ne[2] == 1) {
+        auto row_size_k = ggml_row_size(K->type, K->ne[0]);
+        auto row_size_v = ggml_row_size(V->type, V->ne[0]);
+        auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
+        return work_size * nth;
+    }
     int rk2 = Q->ne[2]/K->ne[2];
     size_t size = 0;
     if (Q->ne[1] >= 8 && K->type == GGML_TYPE_Q8_0) {
@@ -163,9 +171,53 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                             float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv,      // v*softmax(scale*(k*q))
                             [[maybe_unused]] void * work_buffer_in, [[maybe_unused]] barrier_t barrier, [[maybe_unused]] void * barrier_data,
-                            int ith, int nth, int n_swa) {
+                            int ith, int nth, int n_swa, [[maybe_unused]] ggml_tensor * indexer) {
 
     if (type_q != 0 || type_mask != 1 || max_bias > 0) return false;
+
+    if (indexer && indexer->type == GGML_TYPE_I32) {
+        if (indexer->ne[0] < nek1 && neq1 >= nth && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 == 1) {
+            int npt = (neq1 + nth - 1)/nth;
+            int ith_mid = nth;
+            int neq1_this_thread = npt;
+            int first = ith*npt;
+            if (npt*nth > neq1) {
+                ith_mid = neq1 - nth*(npt - 1);
+                if (ith >= ith_mid) {
+                    --neq1_this_thread;
+                    first = ith_mid*npt + (ith - ith_mid)*neq1_this_thread;
+                }
+            }
+            // Workbuffer: we need
+            // * indexer->ne[0] * sizeof(ggml_half) to extract the mask for a row
+            // * indexer->ne[0] * ggml_row_size(int_type_k_in, Dk) to extract the selected K cache entries
+            // * indexer->ne[0] * ggml_row_size(int_type_v, Dv) to extract the selected V cache entries
+            auto row_size_k = ggml_row_size(ggml_type(int_type_k_in), Dk);
+            auto row_size_v = ggml_row_size(ggml_type(int_type_v   ), Dv);
+            auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
+            auto work_k = (char *)work_buffer_in + ith*work_size;
+            auto work_v = work_k + row_size_k*indexer->ne[0];
+            auto work_m = (uint16_t *)(work_v + row_size_v*indexer->ne[0]);
+            int  nkv = indexer->ne[0];
+            for (int iq = first; iq < first + neq1_this_thread; ++iq) {
+                auto idx = (const int *)((const char *)indexer->data + iq*indexer->nb[1]);
+                auto M = (const uint16_t *)((const char *)mask + iq*stride_m);
+                for (int j = 0; j < nkv; ++j) {
+                    std::memcpy(work_k + row_size_k*j, ((const char *)k + idx[j]*stride_k), row_size_k);
+                    std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
+                    work_m[j] = M[idx[j]];
+                }
+                auto this_q = (const char *)q + iq*stride_q;
+                auto this_qkv = qkv + iq*ne1*nb1/sizeof(float);
+                if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
+                         Dk, Dv, neq2, nkv, nbq2, row_size_k, row_size_v, 0, Dv,
+                         (const float *)this_q, work_k, work_v, work_m, nullptr, 0,
+                         scale, softcap,
+                         this_qkv, nullptr, nullptr)) return false;
+            }
+            return true;
+        }
+    }
 
     if (auto type_k = ggml_type(int_type_k_in), type_v = ggml_type(int_type_v); !are_kv_types_supported(type_k, type_v)) {
         if (ith == 0) {
@@ -520,7 +572,7 @@ bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int ty
                             [[maybe_unused]] float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             [[maybe_unused]] float       * qkv,      // v*softmax(scale*(k*q))
                             [[maybe_unused]] void * work_buffer, [[maybe_unused]] barrier_t barrier, [[maybe_unused]] void * barrier_data,
-                            [[maybe_unused]] int ith, [[maybe_unused]] int nth, [[maybe_unused]] int n_swa) {
+                            [[maybe_unused]] int ith, [[maybe_unused]] int nth, [[maybe_unused]] int n_swa, [[maybe_unused]] ggml_tensor * indexer) {
     return false;
 }
 
