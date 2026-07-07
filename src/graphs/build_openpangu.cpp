@@ -3,10 +3,7 @@
 #include "../llama-context.h"
 
 #include <algorithm>
-#include <cerrno>
 #include <climits>
-#include <cstdlib>
-#include <cstring>
 #include <vector>
 
 static constexpr int64_t OPENPANGU_CONV_RING = 16;
@@ -15,6 +12,8 @@ static constexpr int OPENPANGU_COPY_K_CKV = 0;
 static constexpr int OPENPANGU_COPY_K_KPE = 1;
 static constexpr int OPENPANGU_COPY_IDX = 2;
 static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
+// Keep these fixed constants in sync with llama_openpangu_chunked_graph_nodes()
+// in llama.cpp; the scheduler budget mirrors the chunk loops below.
 static constexpr int64_t OPENPANGU_IDX_SCORE_CHUNK = 256;
 static constexpr int64_t OPENPANGU_ATT_SCORE_CHUNK = 256;
 static constexpr int64_t OPENPANGU_ATT_FULL_KQ_MAX_MIB = 1024;
@@ -61,35 +60,10 @@ struct openpangu_prefill_gather_env {
     bool gather_enabled = true;
 };
 
-static bool openpangu_env_flag_value(const char * env, bool default_value) {
-    if (env == nullptr || env[0] == '\0') {
-        return default_value;
-    }
-    return std::strcmp(env, "0") != 0 &&
-           std::strcmp(env, "false") != 0 &&
-           std::strcmp(env, "off") != 0;
-}
-
-static int64_t openpangu_env_i64_value_allow_zero(const char * name, const char * env, int64_t default_value) {
-    if (env == nullptr || env[0] == '\0') {
-        return default_value;
-    }
-
-    errno = 0;
-    char * end = nullptr;
-    const long value = std::strtol(env, &end, 10);
-    if (errno != 0 || end == env || *end != '\0' || value < 0) {
-        LLAMA_LOG_WARN("%s: ignoring invalid %s=%s\n", __func__, name, env);
-        return default_value;
-    }
-
-    return (int64_t) value;
-}
-
 static const openpangu_dsa_gather_env & openpangu_dsa_gather_env_once() {
     static const openpangu_dsa_gather_env env = [] {
         openpangu_dsa_gather_env result;
-        result.gather_enabled = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_DSA_GATHER"), true);
+        result.gather_enabled = true;
         return result;
     }();
     return env;
@@ -98,8 +72,7 @@ static const openpangu_dsa_gather_env & openpangu_dsa_gather_env_once() {
 static const openpangu_idx_score_env & openpangu_idx_score_env_once() {
     static const openpangu_idx_score_env env = [] {
         openpangu_idx_score_env result;
-        result.chunk = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_IDX_CHUNK",
-                std::getenv("LLAMA_OPENPANGU_IDX_CHUNK"), OPENPANGU_IDX_SCORE_CHUNK);
+        result.chunk = OPENPANGU_IDX_SCORE_CHUNK;
         return result;
     }();
     return env;
@@ -108,10 +81,8 @@ static const openpangu_idx_score_env & openpangu_idx_score_env_once() {
 static const openpangu_att_score_env & openpangu_att_score_env_once() {
     static const openpangu_att_score_env env = [] {
         openpangu_att_score_env result;
-        result.chunk = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_ATT_CHUNK",
-                std::getenv("LLAMA_OPENPANGU_ATT_CHUNK"), OPENPANGU_ATT_SCORE_CHUNK);
-        result.cap_mib = openpangu_env_i64_value_allow_zero("LLAMA_OPENPANGU_ATT_KQ_MAX_MIB",
-                std::getenv("LLAMA_OPENPANGU_ATT_KQ_MAX_MIB"), OPENPANGU_ATT_FULL_KQ_MAX_MIB);
+        result.chunk   = OPENPANGU_ATT_SCORE_CHUNK;
+        result.cap_mib = OPENPANGU_ATT_FULL_KQ_MAX_MIB;
         return result;
     }();
     return env;
@@ -120,7 +91,7 @@ static const openpangu_att_score_env & openpangu_att_score_env_once() {
 static const openpangu_prefill_gather_env & openpangu_prefill_gather_env_once() {
     static const openpangu_prefill_gather_env env = [] {
         openpangu_prefill_gather_env result;
-        result.gather_enabled = openpangu_env_flag_value(std::getenv("LLAMA_OPENPANGU_PREFILL_GATHER"), true);
+        result.gather_enabled = true;
         return result;
     }();
     return env;

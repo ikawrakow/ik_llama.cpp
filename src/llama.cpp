@@ -100,6 +100,7 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -798,8 +799,11 @@ llama_context::~llama_context() {
     }
 }
 
+static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const llama_cparams & cparams, int n_tokens, int n_kv);
+
 int llama_context::max_nodes(int n_tokens, int n_kv) const {
     int max_nodes = model.max_nodes(n_tokens);
+    max_nodes += llama_openpangu_chunked_graph_nodes(model, cparams, n_tokens, n_kv);
     if (model.is_mla_model() &&
         cparams.mla_attn > 1 &&
         n_tokens >= 128 &&
@@ -865,6 +869,96 @@ static inline uint32_t llama_kv_k_row_embd(
         return hparams.n_lora_kv + hparams.n_rot;
     }
     return hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+}
+
+static int64_t llama_div_ceil_i64(int64_t num, int64_t denom) {
+    GGML_ASSERT(num >= 0);
+    GGML_ASSERT(denom > 0);
+    return (num + denom - 1) / denom;
+}
+
+static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const llama_cparams & cparams, int n_tokens, int n_kv) {
+    const llama_hparams & hparams = model.hparams;
+    if (model.arch != LLM_ARCH_OPENPANGU || n_tokens <= 14 || n_kv <= 0) {
+        return 0;
+    }
+
+    // Keep these fixed constants in sync with build_openpangu.cpp. This budget
+    // estimator mirrors that file's chunk loops exactly, plus a small fixed
+    // margin below for graph-node bookkeeping drift.
+    static constexpr int64_t OPENPANGU_IDX_SCORE_CHUNK = 256;
+    static constexpr int64_t OPENPANGU_ATT_SCORE_CHUNK = 256;
+    static constexpr int64_t OPENPANGU_ATT_FULL_KQ_MAX_MIB = 1024;
+    static constexpr int64_t OPENPANGU_CUDA_GET_ROWS_GRID_Y_MAX = 65535;
+    static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
+
+    const int64_t idx_chunk   = OPENPANGU_IDX_SCORE_CHUNK;
+    const int64_t att_chunk   = OPENPANGU_ATT_SCORE_CHUNK;
+    const int64_t att_cap_mib = OPENPANGU_ATT_FULL_KQ_MAX_MIB;
+
+    const int64_t topk = cparams.dsa_top_k > 0 ? cparams.dsa_top_k : hparams.indexer_top_k;
+    if (topk <= 0 || hparams.indexer_head_size == 0 || hparams.n_swa == 0) {
+        return 0;
+    }
+
+    const int64_t n_layer_base = hparams.n_layer > hparams.nextn_predict_layers ?
+        hparams.n_layer - hparams.nextn_predict_layers : hparams.n_layer;
+    const int64_t n_heads = hparams.n_head(0);
+    const int64_t n_sinks = hparams.param_sink_number;
+    const int64_t pad = cparams.flash_attn ? 256 : 32;
+    const int64_t idx_chunks = idx_chunk > 0 && n_tokens > idx_chunk ? llama_div_ceil_i64(n_tokens, idx_chunk) : 0;
+
+    int64_t extra_nodes = 0;
+    for (int64_t il = 0; il < n_layer_base; ++il) {
+        const bool is_dsa_layer = hparams.openpangu_window[il] == 0;
+        const int64_t n_kv_eff = is_dsa_layer ? n_kv :
+            llama_openpangu_calc_swa_window_view(n_kv, n_tokens, hparams.openpangu_window[il], pad).w_view;
+        const double full_kq_bytes =
+            (double) (n_kv_eff + n_sinks) * (double) n_heads * (double) n_tokens * (double) sizeof(float);
+        const bool att_chunks =
+            att_chunk > 0 && att_cap_mib > 0 && n_tokens > att_chunk &&
+            full_kq_bytes > (double) att_cap_mib * 1024.0 * 1024.0;
+
+        if (!is_dsa_layer) {
+            // SWA layers only use the outer attention chunk loop when the full score tensor
+            // would exceed the cap; there is no top-k gather subchunk loop for them.
+            if (att_chunks) {
+                extra_nodes += llama_div_ceil_i64(n_tokens, att_chunk) * 32;
+            }
+            continue;
+        }
+
+        // DSA layers build one top-k indexer chain per token chunk. In the deep prefill
+        // path, attention then adds an outer attention chunk loop plus a CUDA-grid-safe
+        // get_rows subchunk loop where topk * subchunk_tokens <= 65535.
+        extra_nodes += idx_chunks * 24;
+        if (att_chunks) {
+            const bool can_prefill_gather =
+                hparams.f_max_alibi_bias == 0.0f &&
+                topk <= OPENPANGU_CUDA_GET_ROWS_GRID_Y_MAX;
+            const int64_t gather_tokens = can_prefill_gather ?
+                std::max<int64_t>(1, OPENPANGU_CUDA_GET_ROWS_GRID_Y_MAX / topk) : 1;
+
+            for (int64_t c0 = 0; c0 < n_tokens; c0 += att_chunk) {
+                const int64_t tc = std::min<int64_t>(att_chunk, n_tokens - c0);
+                const bool prefill_gather =
+                    can_prefill_gather &&
+                    n_kv >= n_tokens &&
+                    n_kv - n_tokens + c0 >= OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad;
+                if (prefill_gather) {
+                    extra_nodes += 32 + llama_div_ceil_i64(tc, gather_tokens) * 32;
+                } else {
+                    extra_nodes += 48;
+                }
+            }
+        }
+    }
+
+    if (extra_nodes > 0) {
+        extra_nodes += 64 + extra_nodes / 20;
+    }
+
+    return extra_nodes > (int64_t) INT_MAX ? INT_MAX : (int) extra_nodes;
 }
 
 static inline bool llama_openpangu_latent_k_cache_type_supported(ggml_type type) {
