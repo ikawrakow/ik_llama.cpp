@@ -1258,6 +1258,9 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
         if (GGML_SVE)
             list(APPEND ARCH_FLAGS -march=armv8.6-a+sve)
         endif()
+        if (GGML_NATIVE)
+            list(APPEND ARCH_FLAGS -march=native)
+        endif()
         if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
             # else we fail on Gravitons and such
             list(APPEND ARCH_FLAGS -flax-vector-conversions)
