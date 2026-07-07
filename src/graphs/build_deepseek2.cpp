@@ -331,9 +331,6 @@ static inline int dsa_n_top_k(const llama_context & lctx) {
 static inline bool dsa_should_use(const llama_context & lctx) {
     return lctx.cparams.mtp_op_type == MTP_OP_NONE && lctx.cparams.dsa && lctx.model.arch == LLM_ARCH_GLM_DSA && !lctx.kv_self.kr_l.empty();
 }
-static inline bool dsa_should_use(const llama_context & lctx, int il) {
-    return dsa_should_use(lctx) && lctx.model.layers[il].indexer_attn_q_b && lctx.kv_self.kr_l.size() > (size_t) il && lctx.kv_self.kr_l[il];
-}
 static inline bool dsa_can_use_fast_path(const llama_context & lctx, int n_tokens, int n_kv) {
     auto n_top_k = dsa_n_top_k(lctx);
     if (n_tokens == 1 && n_top_k < n_kv && n_top_k%256 == 0 && lctx.cparams.flash_attn && (lctx.cparams.mla_attn == 1 || lctx.cparams.mla_attn == 3)) {
@@ -754,7 +751,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     ggml_tensor * sparse_mask    = KQ_mask;
     ggml_tensor * sparse_mask_fa = KQ_mask;
 
-    bool use_dsa       = dsa_should_use(lctx, il);
+    bool use_dsa       = dsa_should_use(lctx);
     bool dsa_fast_path = use_dsa && dsa_can_use_fast_path(lctx, n_tokens, n_kv);
 
     // self_attention
