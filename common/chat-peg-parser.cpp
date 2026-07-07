@@ -249,6 +249,17 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
     }
 }
 
+void common_chat_peg_minimax_m3_mapper::from_ast(const common_peg_ast_arena &    arena,
+                                                 const common_peg_parse_result & parse_result) {
+    common_chat_peg_mapper::from_ast(arena, parse_result);
+
+    // MiniMax-M3 tool calls are emitted from the thinking/action phase.
+    if (!result.tool_calls.empty() && !result.content.empty()) {
+        result.reasoning_content += result.content;
+        result.content.clear();
+    }
+}
+
 void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     // Handle reasoning/content tags
     bool is_reasoning = node.tag == common_chat_peg_builder::REASONING;
