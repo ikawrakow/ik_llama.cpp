@@ -1139,8 +1139,15 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
         elseif (GGML_AVX2)
             list(APPEND ARCH_FLAGS /arch:AVX2)
             if (GGML_AVXVNNI)
-                add_compile_definitions($<$<COMPILE_LANGUAGE:C>:__AVXVNNI__>)
-                add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVXVNNI__>)
+                # clang-cl supports -m flags alongside /arch: flags.
+                # Using -mavxvnni enables the actual target feature for clang,
+                # which is required for intrinsic functions like _mm256_dpbusd_avx_epi32.
+                if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+                    list(APPEND ARCH_FLAGS -mavxvnni)
+                else()
+                    add_compile_definitions($<$<COMPILE_LANGUAGE:C>:__AVXVNNI__>)
+                    add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVXVNNI__>)
+                endif()
             endif()
         elseif (GGML_AVX)
             list(APPEND ARCH_FLAGS /arch:AVX)
@@ -1160,6 +1167,9 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
         endif()
         if (GGML_AVX2)
             list(APPEND ARCH_FLAGS -mavx2)
+        endif()
+        if (GGML_AVXVNNI)
+            list(APPEND ARCH_FLAGS -mavxvnni)
         endif()
         if (GGML_AVX512)
             list(APPEND ARCH_FLAGS -mavx512f)
