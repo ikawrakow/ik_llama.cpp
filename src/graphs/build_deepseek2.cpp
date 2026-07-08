@@ -396,7 +396,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
                 ggml_row_size(indexer_q->type, rope_dim));
 
         indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
-                LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+                rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
 
         // {head_size, n_ihead, n_tokens}
@@ -419,7 +419,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             ggml_row_size(indexer_k->type, rope_dim));
 
     indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot,
-            LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+            rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
 
     // {head_size, 1, n_tokens}
