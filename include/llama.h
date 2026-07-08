@@ -378,10 +378,7 @@ extern "C" {
 
         enum ggml_type type_k;
         enum ggml_type type_v;
-        bool type_k_explicit; // true when caller explicitly requested type_k
-        bool type_v_explicit; // true when caller explicitly requested type_v
         enum ggml_type idx_type_k;
-        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
         uint32_t max_ctx_size;
         int32_t  n_seq_max;
         int32_t  n_ubatch;
@@ -435,6 +432,10 @@ extern "C" {
         bool dry_run;       // skip loading tensors
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
+
+        bool type_k_explicit;     // true when caller explicitly requested type_k
+        bool type_v_explicit;     // true when caller explicitly requested type_v
+        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -469,10 +470,7 @@ extern "C" {
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
-        bool type_k_explicit; // true when caller explicitly requested type_k
-        bool type_v_explicit; // true when caller explicitly requested type_v
         enum ggml_type idx_type_k; // data type for indexer K cache [EXPERIMENTAL]
-        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
         enum ggml_type type_reduce; // data type for reduce operations
         enum ggml_type type_graph_attn; // flash-attn precision under -sm graph
         enum ggml_type type_k_first;
@@ -517,6 +515,10 @@ extern "C" {
         void *              abort_callback_data;
         void *              offload_policy;
         void *              cuda_params;
+
+        bool type_k_explicit;     // true when caller explicitly requested type_k
+        bool type_v_explicit;     // true when caller explicitly requested type_v
+        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
     };
 
     // model quantization parameters

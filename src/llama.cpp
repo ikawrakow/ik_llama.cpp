@@ -770,14 +770,6 @@ void llama_context::set_mtp_n_heads(int32_t value) {
 }
 
 llama_context::~llama_context() {
-    const uint64_t graph_reuse_total = graph_reuse_hits + graph_reuse_misses;
-    if (graph_reuse_total > 0) {
-        LLAMA_LOG_INFO("%s: graph reuse hits = %llu / %llu (%.2f%%)\n", __func__,
-                (unsigned long long) graph_reuse_hits,
-                (unsigned long long) graph_reuse_total,
-                100.0 * (double) graph_reuse_hits / (double) graph_reuse_total);
-    }
-
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }
@@ -884,8 +876,9 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
     }
 
     // Keep these fixed constants in sync with build_openpangu.cpp. This budget
-    // estimator mirrors that file's chunk loops exactly, plus a small fixed
-    // margin below for graph-node bookkeeping drift.
+    // estimator mirrors that file's chunk loops, including dense-fallback attention
+    // chunks when the DSA schedule/indexer is absent, plus a small fixed margin below
+    // for graph-node bookkeeping drift.
     static constexpr int64_t OPENPANGU_IDX_SCORE_CHUNK = 256;
     static constexpr int64_t OPENPANGU_ATT_SCORE_CHUNK = 256;
     static constexpr int64_t OPENPANGU_ATT_FULL_KQ_MAX_MIB = 1024;
@@ -897,9 +890,7 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
     const int64_t att_cap_mib = OPENPANGU_ATT_FULL_KQ_MAX_MIB;
 
     const int64_t topk = cparams.dsa_top_k > 0 ? cparams.dsa_top_k : hparams.indexer_top_k;
-    if (topk <= 0 || hparams.indexer_head_size == 0 || hparams.n_swa == 0) {
-        return 0;
-    }
+    const bool has_dsa_indexer = topk > 0 && hparams.indexer_head_size > 0 && hparams.n_swa > 0;
 
     const int64_t n_layer_base = hparams.n_layer > hparams.nextn_predict_layers ?
         hparams.n_layer - hparams.nextn_predict_layers : hparams.n_layer;
@@ -910,8 +901,9 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
 
     int64_t extra_nodes = 0;
     for (int64_t il = 0; il < n_layer_base; ++il) {
-        const bool is_dsa_layer = hparams.openpangu_window[il] == 0;
-        const int64_t n_kv_eff = is_dsa_layer ? n_kv :
+        const bool is_swa_layer = hparams.n_swa > 0 && hparams.openpangu_window[il] > 0;
+        const bool is_dsa_layer = has_dsa_indexer && hparams.openpangu_window[il] == 0;
+        const int64_t n_kv_eff = !is_swa_layer ? n_kv :
             llama_openpangu_calc_swa_window_view(n_kv, n_tokens, hparams.openpangu_window[il], pad).w_view;
         const double full_kq_bytes =
             (double) (n_kv_eff + n_sinks) * (double) n_heads * (double) n_tokens * (double) sizeof(float);
@@ -920,8 +912,8 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
             full_kq_bytes > (double) att_cap_mib * 1024.0 * 1024.0;
 
         if (!is_dsa_layer) {
-            // SWA layers only use the outer attention chunk loop when the full score tensor
-            // would exceed the cap; there is no top-k gather subchunk loop for them.
+            // SWA and dense-fallback layers only use the outer attention chunk loop when
+            // the full score tensor would exceed the cap; there is no top-k gather subchunk loop.
             if (att_chunks) {
                 extra_nodes += llama_div_ceil_i64(n_tokens, att_chunk) * 32;
             }
@@ -1414,12 +1406,6 @@ static bool llama_kv_cache_init(
                 }
             }
 
-            if (split_cache_i) {
-                if (model.arch == LLM_ARCH_OPENPANGU) {
-                    ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-                    split_cache_i = false;
-                }
-            }
             if (split_cache_i) {
                 bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
                 auto extra_K = (const ggml_split_tensor_t *)K->extra;
@@ -5942,15 +5928,7 @@ static int llama_decode_internal(
 #endif
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
-        const bool track_graph_reuse = lctx.cparams.graph_reuse && u_batch.embd == nullptr;
         if (!lctx.can_reuse_graph(u_batch)) {
-            if (track_graph_reuse) {
-                lctx.graph_reuse_misses++;
-                if (getenv("LLAMA_GRAPH_REUSE_TRACE")) {
-                    LLAMA_LOG_INFO("%s: graph reuse miss type=%d n_tokens=%d\n", __func__,
-                            (int) cparams.mtp_op_type, (int) u_batch.n_tokens);
-                }
-            }
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
@@ -5985,13 +5963,6 @@ static int llama_decode_internal(
                         cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads, gf});
             }
         } else {
-            if (track_graph_reuse) {
-                lctx.graph_reuse_hits++;
-                if (getenv("LLAMA_GRAPH_REUSE_TRACE")) {
-                    LLAMA_LOG_INFO("%s: graph reuse hit type=%d n_kv=%d n_tokens=%d\n", __func__,
-                            (int) cparams.mtp_op_type, prev ? (int) prev->n_kv : -1, (int) u_batch.n_tokens);
-                }
-            }
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
             gf = prev->graph;
         }
@@ -7010,10 +6981,7 @@ struct llama_model_params llama_model_default_params() {
         /*.ncmoe                       =*/ 0,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
-        /*.type_k_explicit             =*/ false,
-        /*.type_v_explicit             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
-        /*.idx_type_k_explicit         =*/ false,
         /*.max_ctx_size                =*/ 0,
         /*.n_seq_max                   =*/ 1,
         /*.n_ubatch                    =*/ 512,
@@ -7050,6 +7018,9 @@ struct llama_model_params llama_model_default_params() {
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
+        /*.type_k_explicit             =*/ false,
+        /*.type_v_explicit             =*/ false,
+        /*.idx_type_k_explicit         =*/ false,
     };
 
 #ifdef GGML_USE_METAL
@@ -7086,10 +7057,7 @@ struct llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
-        /*.type_k_explicit             =*/ false,
-        /*.type_v_explicit             =*/ false,
         /*.idx_type_k                  =*/ GGML_TYPE_F16,
-        /*.idx_type_k_explicit         =*/ false,
         /*.type_reduce                 =*/ GGML_TYPE_F16,
         /*.type_graph_attn             =*/ GGML_TYPE_F16,
         /*.type_first_k                =*/ GGML_TYPE_F16,
@@ -7128,6 +7096,9 @@ struct llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
         /*.cuda_params                 =*/ nullptr,
+        /*.type_k_explicit             =*/ false,
+        /*.type_v_explicit             =*/ false,
+        /*.idx_type_k_explicit         =*/ false,
     };
 
     return result;

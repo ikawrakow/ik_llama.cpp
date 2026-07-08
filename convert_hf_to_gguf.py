@@ -4574,6 +4574,7 @@ class DeepseekV2Model(Model):
             v_b = v_b.reshape(n_head_kv * v_head_dim, data_torch.shape[-1])
 
             return [
+                (self.map_tensor_name(name),    data_torch),
                 (self.map_tensor_name(name_kb), k_b),
                 (self.map_tensor_name(name_vb), v_b)
             ]

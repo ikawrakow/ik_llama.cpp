@@ -442,8 +442,6 @@ struct llama_context {
     struct Prev;
     std::unique_ptr<Prev> prev;
     std::unique_ptr<Prev> prev_mtp;
-    uint64_t graph_reuse_hits = 0;
-    uint64_t graph_reuse_misses = 0;
     int32_t mtp_step_idx = 0;
     int32_t mtp_n_heads = 0;
 
