@@ -465,9 +465,6 @@ extern "C" GGML_CALL ggml_backend_buffer_type_t ggml_backend_metal_buffer_type(v
 #ifdef GGML_USE_VULKAN
 extern "C" GGML_CALL int ggml_backend_vk_reg_devices(void);
 #endif
-#ifdef GGML_USE_KOMPUTE
-extern "C" GGML_CALL void ggml_backend_kompute_reg_devices(void);
-#endif
 #ifdef GGML_USE_CANN
 extern "C" GGML_CALL int ggml_backend_cann_reg_devices(void);
 #endif
@@ -501,10 +498,6 @@ GGML_CALL static void ggml_backend_registry_init(void) {
 
 #ifdef GGML_USE_VULKAN
     ggml_backend_vk_reg_devices();
-#endif
-
-#ifdef GGML_USE_KOMPUTE
-    ggml_backend_kompute_reg_devices();
 #endif
 
 #ifdef GGML_USE_CANN
