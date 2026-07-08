@@ -363,6 +363,54 @@ struct llama_context {
         static constexpr uint32_t CSA_RATIO = 4;
         static constexpr uint32_t HCA_RATIO = 128;
 
+        struct slot_info {
+            int32_t s0 = 0;
+            int32_t s1 = 0;
+            std::vector<llama_seq_id> strm;
+            std::vector<std::vector<uint32_t>> idxs;
+
+            void resize(size_t n) {
+                strm.resize(n);
+                idxs.resize(n);
+            }
+
+            size_t size() const {
+                GGML_ASSERT(strm.size() == idxs.size());
+                if (idxs.empty()) {
+                    return 0;
+                }
+
+                return idxs[0].size();
+            }
+
+            size_t n_stream() const {
+                GGML_ASSERT(strm.size() == idxs.size());
+                return strm.size();
+            }
+
+            bool empty() const {
+                return idxs.empty();
+            }
+        };
+
+        struct raw_context {
+            std::vector<int32_t> write_src_idxs;
+            std::vector<int32_t> write_dst_idxs;
+            std::vector<int32_t> read_dst_idxs;
+            std::vector<int32_t> write_counts;
+            std::vector<int32_t> read_counts;
+            slot_info sinfo_write;
+            slot_info sinfo_read;
+            int64_t graph_n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
+        struct comp_context {
+            slot_info sinfo;
+            int64_t graph_n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
         struct comp_plan {
             std::vector<int32_t> state_pos;
             std::vector<int32_t> state_persist_src_idxs;
@@ -400,9 +448,11 @@ struct llama_context {
 
             struct ggml_context * cache_ctx = nullptr;
             std::vector<ggml_backend_buffer_t> cache_bufs;
+            uint32_t n_stream = 1;
         };
 
         struct input_state {
+            struct ggml_tensor * raw_k_write_src_idxs = nullptr;
             struct ggml_tensor * raw_k_write_idxs = nullptr;
             struct ggml_tensor * raw_k_read_idxs = nullptr;
             comp_inputs csa;
@@ -412,6 +462,10 @@ struct llama_context {
 
         storage cache;
         input_state inputs;
+        raw_context raw;
+        comp_context csa_ctx;
+        comp_context hca_ctx;
+        comp_context lid_ctx;
         comp_plan csa_plan;
         comp_plan hca_plan;
         comp_plan lid_plan;

@@ -119,6 +119,7 @@ void llm_build_context::init() {
         lctx.dflash.inputs.target_features = nullptr;
         lctx.dflash.inputs.pos_ctx = nullptr;
         lctx.dflash.inputs.kq_mask = nullptr;
+        lctx.dsv4.inputs.raw_k_write_src_idxs = nullptr;
         lctx.dsv4.inputs.raw_k_write_idxs = nullptr;
         lctx.dsv4.inputs.raw_k_read_idxs = nullptr;
         lctx.dsv4.inputs.csa = {};
