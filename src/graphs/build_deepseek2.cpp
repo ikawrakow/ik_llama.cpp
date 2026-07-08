@@ -490,7 +490,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         cb(indexer_score, "indexer_score_f32", il);
     }
 
-    if (cparams.flash_attn) {
+    if (cparams.flash_attn && cparams.fused_idx_topk) {
         if (lctx.inp_dsa_sink) {
             indexer_score = ggml_add(ctx0, indexer_score, lctx.inp_dsa_sink);
             cb(indexer_score, "dsa_indexer_score_sink", il);
