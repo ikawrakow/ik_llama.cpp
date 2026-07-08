@@ -4,8 +4,8 @@
 #include "convert.cuh"
 #include "argsort.cuh"
 
-template <typename mask_t>
-static __global__ void k_fused_relu_mul_sum_rows(const float * __restrict__ kq, const float * __restrict__ w, const mask_t * __restrict__ m, float * __restrict__ dst, const int ncols, const int nhead, size_t nbm) {
+template <typename kq_t, typename mask_t>
+static __global__ void k_fused_relu_mul_sum_rows(const kq_t * __restrict__ kq, const float * __restrict__ w, const mask_t * __restrict__ m, float * __restrict__ dst, const int ncols, const int nhead, size_t nbm) {
     const int row = blockIdx.x;
     const int col = threadIdx.x;
 
@@ -17,7 +17,7 @@ static __global__ void k_fused_relu_mul_sum_rows(const float * __restrict__ kq, 
         float sum = (float)this_m[i];
         auto this_kq = kq + blockIdx.x * step;
         for (int head = 0; head < nhead; ++head) {
-            float relu = this_kq[i];
+            float relu = (float)this_kq[i];
             relu = relu > 0.0f ? relu : 0.0f;
             sum += relu * this_w[head];
             this_kq += ncols;
@@ -134,7 +134,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
     constexpr int k_block_size = 256;
 
-    if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32) {
+    if (false && k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32) {
         printf("%s: using alternative\n", __func__);
         ggml_cuda_pool_alloc<float> score (ctx.pool(), q->ne[2] * n_kv);
         ggml_cuda_pool_alloc<int>   sorted(ctx.pool(), q->ne[2] * n_kv);
@@ -155,6 +155,44 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         CUDA_CHECK(cudaGetLastError());
 
         return;
+    }
+
+    if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && q->ne[2] <= 16) {
+        ggml_cuda_pool_alloc<half>  kq(ctx.pool(), int64_t(n_kv)*q->ne[2]*q->ne[1]);
+        ggml_cuda_pool_alloc<float> score(ctx.pool(), int64_t(n_kv)*q->ne[2]);
+        ggml_cuda_pool_alloc<int>   sorted(ctx.pool(), int64_t(n_kv)*q->ne[2]);
+        ggml_cuda_pool_alloc<half>  q_f16(ctx.pool(), q->ne[0]*q->ne[1]*q->ne[2]);
+
+        auto to_fp16_cuda = ggml_get_to_fp16_cuda(q->type);
+        to_fp16_cuda((const float *)q->data, q_f16.get(), q->ne[0]*q->ne[1]*q->ne[2], 1, ctx.stream());
+        CUDA_CHECK(cudaGetLastError());
+
+        const half alpha = 1.0f;
+        const half beta = 0.0f;
+        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+        CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
+                    k->ne[1], q->ne[1]*q->ne[2], q->ne[0],
+                    &alpha, (const half *)k->data,       CUDA_R_16F, k->ne[0],
+                             q_f16.get(),       CUDA_R_16F, q->ne[0],
+                    &beta,   kq.get(), CUDA_R_16F, k->ne[1],
+                    CUBLAS_COMPUTE_16F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+        if (m->type == GGML_TYPE_F32) {
+            k_fused_relu_mul_sum_rows<<<q->ne[2], k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const float *)m->data, score.get(), k->ne[1], q->ne[1], m->nb[1]);
+        } else {
+            k_fused_relu_mul_sum_rows<<<q->ne[2], k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const half  *)m->data, score.get(), k->ne[1], q->ne[1], m->nb[1]);
+        }
+        CUDA_CHECK(cudaGetLastError());
+
+        argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), k->ne[1], q->ne[2], GGML_SORT_ORDER_DESC, ctx.stream());
+        CUDA_CHECK(cudaGetLastError());
+
+        k_copy_topk<<<q->ne[2], k_block_size, 0, ctx.stream()>>>(sorted.get(), (int *)dst->data, k->ne[1], dst->ne[0]);
+        CUDA_CHECK(cudaGetLastError());
+
+        return;
+
     }
 
     constexpr int64_t k_max_work_buffer_elements = 1 << 28;
