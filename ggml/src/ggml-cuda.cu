@@ -4421,6 +4421,10 @@ static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_p
     }
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         graph_node_properties->src_address[i] = node->src[i] ? node->src[i]->data : nullptr;
+        for (int j = 0; j < GGML_MAX_DIMS; j++) {
+            graph_node_properties->src_ne[i][j] = node->src[i] ? node->src[i]->ne[j] : 0;
+            graph_node_properties->src_nb[i][j] = node->src[i] ? node->src[i]->nb[j] : 0;
+        }
     }
     memcpy(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
@@ -4453,10 +4457,25 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
         ) {
             return false;
         }
+        // A source's data address can legitimately stay the same across tokens while its
+        // shape/strides change (e.g. the KV-cache views feeding the attention matmuls as
+        // n_kv grows). The consuming node's own ne/nb may be n_kv-independent (the V*softmax
+        // "kqv" matmul is the canonical case), so relying on the node's own ne/nb is not
+        // enough: we must also detect changes in each source's ne/nb, otherwise a stale
+        // captured kernel (with the old n_kv baked in) gets replayed and produces garbage.
+        if (node->src[i]) {
+            for (int j = 0; j < GGML_MAX_DIMS; j++) {
+                if (node->src[i]->ne[j] != graph_node_properties->src_ne[i][j] ||
+                    node->src[i]->nb[j] != graph_node_properties->src_nb[i][j]) {
+                    return false;
+                }
+            }
+        }
     }
 
-    if (node->op == GGML_OP_SCALE &&
-        memcmp(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
+    // Compare op_params for every op (not just SCALE): a change in op_params means a
+    // different computation and must force a graph update.
+    if (memcmp(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
         return false;
     }
 
