@@ -1287,6 +1287,8 @@ add_library(ggml
             ggml.c
             ggml-alloc.c
             ggml-backend.cpp
+            ggml-moe-prefetch.cpp
+            ../include/ggml-moe-prefetch.h
             ggml-quants.c
             ggml-quants.h
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}

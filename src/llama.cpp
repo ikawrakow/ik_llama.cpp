@@ -26,6 +26,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-moe-prefetch.h"
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 
@@ -5137,6 +5138,8 @@ static void llama_graph_compute(
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+        // per-context toggle; carried into the cplan so concurrent contexts don't crosstalk
+        ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
 
     ggml_backend_sched_graph_compute_async(lctx.sched, gf);
@@ -5158,6 +5161,7 @@ static void llama_graph_compute_sched(
     if (lctx.backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+        ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
 
     ggml_backend_sched_graph_compute_async(sched, gf);
@@ -6623,6 +6627,7 @@ struct llama_context_params llama_context_default_params() {
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
+        /*.prefetch_experts            =*/ false,
         /*.k_cache_hadamard            =*/ false,
         /*.v_cache_hadamard            =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
@@ -7045,6 +7050,7 @@ struct llama_context * llama_init_from_model(
     if (cparams.dsa && (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN)) {
         LLAMA_LOG_WARN("%s: --dsa is not active under -sm graph/attn (tensor-parallel attention has no indexer); running dense MLA\n", __func__);
     }
+    cparams.prefetch_experts = params.prefetch_experts;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.v_cache_hadamard = params.v_cache_hadamard;
     // Folding H into wv_b/wk_b_pp permanently mutates the model; a later context
@@ -7542,6 +7548,13 @@ struct llama_context * llama_init_from_model(
     if (params.only_active_experts) {
         LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
+    }
+    if (params.prefetch_experts) {
+        const unsigned hw = std::thread::hardware_concurrency();
+        const int n_prefetch_threads = hw > 0 ? std::min(8, (int) hw) : 4;
+        ggml_moe_prefetch_set_n_threads(n_prefetch_threads);
+        LLAMA_LOG_INFO("%s: enabling MoE expert read-ahead (prefetch_experts), %s\n", __func__,
+                ggml_moe_prefetch_enabled() ? "threaded pread engine" : "madvise fallback");
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);

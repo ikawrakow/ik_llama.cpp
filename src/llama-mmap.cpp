@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 
 #include "ggml.h"
+#include "ggml-moe-prefetch.h"
 
 #include <cstring>
 #include <climits>
@@ -341,6 +342,16 @@ struct llama_mmap::impl {
         }
 
         mapped_fragments.emplace_back(0, file->size());
+
+#ifdef __linux__
+        // register with the MoE expert prefetch engine, which needs (fd, offset)
+        // to stream expert weights into the page cache with pread() workers.
+        // The mapping starts at file offset 0, so VA -> offset is direct.
+        prefetch_fd = dup(fd);
+        if (prefetch_fd >= 0) {
+            ggml_moe_prefetch_register_mapping(addr, file->size(), prefetch_fd);
+        }
+#endif
     }
 
 #ifdef __linux__
@@ -435,6 +446,10 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
+        if (prefetch_fd >= 0) {
+            ggml_moe_prefetch_unregister_mapping(addr);
+            close(prefetch_fd);
+        }
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
                 LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
@@ -529,6 +544,7 @@ struct llama_mmap::impl {
     void * addr;
     size_t size;
     size_t mapped_page_size = 0;
+    int    prefetch_fd = -1;
 };
 
 llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa, bool use_thp) :
