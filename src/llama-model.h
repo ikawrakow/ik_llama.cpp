@@ -394,6 +394,8 @@ struct llama_layer {
     struct ggml_tensor * o_conv           = nullptr;
     struct ggml_tensor * param_sink_kv    = nullptr;
     struct ggml_tensor * param_sink_k_pe  = nullptr;
+    struct ggml_tensor * param_sink_blk   = nullptr;
+    struct ggml_tensor * param_sink_lat_t = nullptr;
     struct ggml_tensor * block_post_norm  = nullptr;
     struct ggml_tensor * mhc_attn_phi     = nullptr;
     struct ggml_tensor * mhc_attn_alpha   = nullptr;
@@ -408,6 +410,8 @@ struct llama_layer {
     std::unique_ptr<ggml_tensor> computed_wk_b_pp;
     std::unique_ptr<ggml_tensor> computed_wv_b;
     std::unique_ptr<ggml_tensor> computed_wkv_b;
+    std::unique_ptr<ggml_tensor> computed_param_sink_blk;
+    std::unique_ptr<ggml_tensor> computed_param_sink_lat_t;
 
     // Per-device replicas of computed wk_b/wv_b (-sm graph). Buffers owned via model.bufs.
     std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_replicas;

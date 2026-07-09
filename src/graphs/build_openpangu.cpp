@@ -515,13 +515,9 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     // The sinks are native latent-space entries: kv_a_norm of the learned latent IS the
     // key/value latent; sink_k_pe is used rope-free. Sinks are visible to every query.
     const int64_t NS = hparams.param_sink_number;
-    ggml_tensor * s_ckv = llm_build_norm(ctx0, layer.param_sink_kv, hparams,
-                                         layer.attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il); // [512, NS]
-    ggml_tensor * s_kpe = layer.param_sink_k_pe->type == GGML_TYPE_F32
-        ? layer.param_sink_k_pe
-        : ggml_cast(ctx0, layer.param_sink_k_pe, GGML_TYPE_F32);                            // [64, NS]
-    ggml_tensor * sink_blk = ggml_concat(ctx0, s_ckv, s_kpe, 0);                            // [576, NS]
-    ggml_tensor * s_lat_t = ggml_cont(ctx0, ggml_transpose(ctx0, s_ckv));                   // [NS, 512]
+    GGML_ASSERT(layer.param_sink_blk && layer.param_sink_lat_t);
+    ggml_tensor * sink_blk = layer.param_sink_blk;                                          // [576, NS]
+    ggml_tensor * s_lat_t = layer.param_sink_lat_t;                                        // [NS, 512]
 
     // ---- latent attention over [sinks ++ cached tokens] (flash_attn is forced off) ----
     // Keep sinks and cached tokens separate until after KQ so f16 latent caches do not need

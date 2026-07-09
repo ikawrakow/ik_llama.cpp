@@ -3194,6 +3194,156 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     ggml_free(ctx);
 }
 
+static void llm_prepare_openpangu_param_sinks(llama_model & model) {
+    if (model.arch != LLM_ARCH_OPENPANGU) return;
+
+    const auto & hparams = model.hparams;
+    const int n_layer = model.layers.size();
+    const int64_t n_sink = hparams.param_sink_number;
+    if (n_sink <= 0) return;
+
+    int n_to_compute = 0;
+    size_t max_kv_size = 0;
+    size_t max_kpe_size = 0;
+    size_t max_norm_size = 0;
+    size_t max_tensor_data = 0;
+
+    for (auto & l : model.layers) {
+        if (l.param_sink_blk && l.param_sink_lat_t) continue;
+        if (!l.param_sink_kv || !l.param_sink_k_pe || !l.attn_kv_a_norm) continue;
+
+        ++n_to_compute;
+        max_kv_size   = std::max(max_kv_size,   ggml_nbytes(l.param_sink_kv));
+        max_kpe_size  = std::max(max_kpe_size,  ggml_nbytes(l.param_sink_k_pe));
+        max_norm_size = std::max(max_norm_size, ggml_nbytes(l.attn_kv_a_norm));
+
+        const int64_t n_kv = l.param_sink_kv->ne[0];
+        const int64_t n_kpe = l.param_sink_k_pe->ne[0];
+        const size_t s_ckv_size   = n_kv*n_sink*sizeof(float);
+        const size_t s_kpe_size   = n_kpe*n_sink*sizeof(float);
+        const size_t sink_blk_size = (n_kv + n_kpe)*n_sink*sizeof(float);
+        const size_t s_lat_t_size  = n_kv*n_sink*sizeof(float);
+        max_tensor_data = std::max(max_tensor_data, s_ckv_size + s_kpe_size + sink_blk_size + s_lat_t_size);
+    }
+    if (n_to_compute == 0) return;
+
+    LLAMA_LOG_INFO("============ %s: need to compute %d openPangu param_sink tensors\n", __func__, 2*n_to_compute);
+
+    const size_t context_size = ggml_tensor_overhead()*32*n_layer + 4*MiB;
+    ggml_init_params params{context_size, nullptr, true};
+    auto ctx = ggml_init(params);
+    auto graph = ggml_new_graph_custom(ctx, 16, false);
+
+    std::vector<uint8_t> work_data;
+    std::vector<char> kv_buffer(max_kv_size);
+    std::vector<char> kpe_buffer(max_kpe_size);
+    std::vector<char> norm_buffer(max_norm_size);
+    std::vector<char> tensor_data(max_tensor_data);
+
+    auto make_host_tensor = [](ggml_tensor * source, std::vector<char> & buffer) {
+        ggml_tensor result = *source;
+        if (source->buffer && !ggml_backend_buffer_is_host(source->buffer)) {
+            const size_t nbytes = ggml_nbytes(source);
+            GGML_ASSERT(buffer.size() >= nbytes);
+            ggml_backend_tensor_get(source, buffer.data(), 0, nbytes);
+            result.data = buffer.data();
+        }
+        return result;
+    };
+
+    auto materialize = [&model](ggml_tensor * source,
+                                std::unique_ptr<ggml_tensor> & computed,
+                                ggml_backend_buffer_type_t buft,
+                                const std::string & name) -> ggml_tensor * {
+        computed = std::make_unique<ggml_tensor>(*source);
+        computed->buffer = ggml_backend_buft_alloc_buffer(buft, ggml_nbytes(source));
+        if (!computed->buffer) {
+            throw std::runtime_error("Failed to allocate buffer for " + name);
+        }
+        model.bufs.push_back(computed->buffer);
+        computed->data = ggml_backend_buffer_get_base(computed->buffer);
+        computed->op = GGML_OP_NONE;
+        for (int j = 0; j < GGML_MAX_SRC; ++j) computed->src[j] = nullptr;
+        computed->view_src = nullptr;
+        computed->view_offs = 0;
+        computed->extra = nullptr;
+        ggml_set_name(computed.get(), name.c_str());
+        ggml_backend_buffer_set_usage(computed->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ggml_backend_tensor_set(computed.get(), source->data, 0, ggml_nbytes(source));
+        if (ggml_backend_buffer_is_host(computed->buffer)) {
+            iqk_modify_tensor(computed.get());
+        }
+        model.tensors_by_name.push_back(std::make_pair(name, computed.get()));
+        return computed.get();
+    };
+
+    for (int il = 0; il < n_layer; ++il) {
+        auto & l = model.layers[il];
+        if (l.param_sink_blk && l.param_sink_lat_t) continue;
+        if (!l.param_sink_kv || !l.param_sink_k_pe || !l.attn_kv_a_norm) continue;
+
+        GGML_ASSERT(l.param_sink_kv->ne[1] == n_sink);
+        GGML_ASSERT(l.param_sink_k_pe->ne[1] == n_sink);
+        GGML_ASSERT(l.attn_kv_a_norm->ne[0] == l.param_sink_kv->ne[0]);
+
+        auto param_sink_kv = make_host_tensor(l.param_sink_kv, kv_buffer);
+        auto param_sink_k_pe = make_host_tensor(l.param_sink_k_pe, kpe_buffer);
+        auto attn_kv_a_norm = make_host_tensor(l.attn_kv_a_norm, norm_buffer);
+
+        char * ptr = tensor_data.data();
+        char * const end = tensor_data.data() + tensor_data.size();
+
+        ggml_tensor * s_ckv = ggml_fused_rms_norm(ctx, &param_sink_kv, &attn_kv_a_norm, hparams.f_norm_rms_eps);
+        s_ckv->data = ptr;
+        ptr += ggml_nbytes(s_ckv);
+
+        ggml_tensor * s_kpe = &param_sink_k_pe;
+        if (param_sink_k_pe.type != GGML_TYPE_F32) {
+            s_kpe = ggml_cast(ctx, &param_sink_k_pe, GGML_TYPE_F32);
+            s_kpe->data = ptr;
+            ptr += ggml_nbytes(s_kpe);
+        }
+
+        ggml_tensor * sink_blk = ggml_concat(ctx, s_ckv, s_kpe, 0);
+        sink_blk->data = ptr;
+        ptr += ggml_nbytes(sink_blk);
+
+        ggml_tensor * s_lat_t = ggml_cont(ctx, ggml_transpose(ctx, s_ckv));
+        s_lat_t->data = ptr;
+        ptr += ggml_nbytes(s_lat_t);
+
+        GGML_ASSERT(ptr <= end);
+
+        ggml_build_forward_expand(graph, sink_blk);
+        ggml_build_forward_expand(graph, s_lat_t);
+
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+        plan.work_data = work_data.data();
+
+        auto status = ggml_graph_compute(graph, &plan);
+        if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute openPangu param_sink tensors");
+
+        auto buft = ggml_backend_buffer_get_type(l.param_sink_kv->buffer);
+        auto sink_blk_name = std::string{"blk."} + std::to_string(il) + ".attn_param_sink_blk";
+        auto s_lat_t_name  = std::string{"blk."} + std::to_string(il) + ".attn_param_sink_lat_t";
+
+        l.param_sink_blk = materialize(sink_blk, l.computed_param_sink_blk, buft, sink_blk_name);
+        l.param_sink_lat_t = materialize(s_lat_t, l.computed_param_sink_lat_t, buft, s_lat_t_name);
+
+        LLAMA_LOG_INFO("Computed %s as %d x %d of type %s and stored in buffer %s\n",
+                sink_blk_name.c_str(), (int)sink_blk->ne[0], (int)sink_blk->ne[1],
+                ggml_type_name(sink_blk->type), ggml_backend_buffer_name(l.param_sink_blk->buffer));
+        LLAMA_LOG_INFO("Computed %s as %d x %d of type %s and stored in buffer %s\n",
+                s_lat_t_name.c_str(), (int)s_lat_t->ne[0], (int)s_lat_t->ne[1],
+                ggml_type_name(s_lat_t->type), ggml_backend_buffer_name(l.param_sink_lat_t->buffer));
+
+        ggml_graph_clear(graph);
+    }
+
+    ggml_free(ctx);
+}
+
 // Fold the 64-block Hadamard into wv_b/wk_b_pp at init; build_deepseek2.cpp then
 // skips the runtime cache_nope un-Hadamard. Math identity by H^T H = I.
 static void llm_apply_khad_pretransform(llama_model & model) {
@@ -4357,6 +4507,9 @@ static bool llm_load_tensors(
         if (!dry_run || graph_mode) {
             llm_prepare_mla(model, mla_attn);
         }
+    }
+    if (!dry_run && model.arch == LLM_ARCH_OPENPANGU) {
+        llm_prepare_openpangu_param_sinks(model);
     }
     if (model.arch == LLM_ARCH_GEMMA4) {
         llm_scale_gate_inp_s(model, use_mmap_buffer);
