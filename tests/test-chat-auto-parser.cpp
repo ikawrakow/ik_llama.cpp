@@ -2070,6 +2070,38 @@ static void test_minimax_m3_partial_reasoning_parser(testing & t) {
         t.assert_equal("tool call args", json({{"command", command}}).dump(), tool_msg.tool_calls[0].arguments);
     }
 
+    const std::string cmux_command =
+        "cmux rpc surface.scrollback '{\"surface_id\":\"20CD49E8-A0FA-42E3-B349-7CCCC1075425\","
+        "\"workspace_id\":\"826FA4BA-01E5-4D84-893A-D70B0DAF9970\"}' 2>&1 | head -3";
+    const std::string malformed_nested_tool_output =
+        "]<]minimax[>[<tool_call>\n"
+        "]<]minimax[>[<invoke name=\"bash\">"
+        "]<]minimax[>[<command>" + cmux_command +
+        "]<]minimax[>[<tool_call>\n"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>老实\n"
+        "</command>]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>\n"
+        "]<]minimax[>[<tool_call>\n"
+        "bash\n"
+        "</parameter>]<]minimax[>[</command>"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>";
+
+    auto malformed_nested_tool_msg = common_chat_parse(malformed_nested_tool_output,
+                                                       /* is_partial = */ false,
+                                                       parser_params);
+    t.assert_equal("malformed nested tool call count", 1u, malformed_nested_tool_msg.tool_calls.size());
+    if (malformed_nested_tool_msg.tool_calls.size() == 1) {
+        t.assert_equal("malformed nested tool call name", std::string("bash"), malformed_nested_tool_msg.tool_calls[0].name);
+        t.assert_equal(
+            "malformed nested tool args truncate namespace leak",
+            json({{"command", cmux_command}}).dump(),
+            malformed_nested_tool_msg.tool_calls[0].arguments);
+        t.assert_true("malformed nested tool args contain no minimax marker",
+            malformed_nested_tool_msg.tool_calls[0].arguments.find("]<]minimax[>[") == std::string::npos);
+    }
+
     inputs.enable_thinking = false;
     auto params_thinking_off = common_chat_templates_apply(tmpls.get(), inputs);
 
