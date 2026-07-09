@@ -26,6 +26,29 @@ static __global__ void k_fused_relu_mul_sum_rows(const kq_t * __restrict__ kq, c
     }
 }
 
+template <typename kq_t, typename mask_t>
+static __global__ void k_fused_relu_mul_sum_rows_2(const kq_t * __restrict__ kq, const float * __restrict__ w, const mask_t * __restrict__ m, float * __restrict__ dst, const int ncols, const int nhead, size_t nbm) {
+    const int row = blockIdx.x;
+    const int col = blockIdx.y*blockDim.x + threadIdx.x;
+    if (col >= ncols) {
+        return;
+    }
+
+    int64_t step = ncols*nhead;
+    auto this_w  = w + blockIdx.x*nhead;
+    auto this_m  = (const mask_t *)((const char *)m + nbm*row);
+
+    float sum = (float)this_m[col];
+    auto this_kq = kq + row * step;
+    for (int head = 0; head < nhead; ++head) {
+        float relu = (float)this_kq[col];
+        relu = relu > 0.0f ? relu : 0.0f;
+        sum += relu * this_w[head];
+        this_kq += ncols;
+    }
+    dst[ncols*row + col] = sum;
+}
+
 static __global__ void k_copy_topk(const int * __restrict__ sorted, int * dst, const int ncols, const int n_top_k) {
     const int row = blockIdx.x;
     const int col = threadIdx.x;
@@ -178,11 +201,20 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                     CUBLAS_COMPUTE_16F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
+        int nblocks = (k->ne[1] + k_block_size - 1)/k_block_size;
+        dim3 grid(q->ne[2], nblocks, 1);
         if (m->type == GGML_TYPE_F32) {
-            k_fused_relu_mul_sum_rows<<<q->ne[2], k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const float *)m->data, score.get(), k->ne[1], q->ne[1], m->nb[1]);
+            k_fused_relu_mul_sum_rows_2<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const float *)m->data,
+                    score.get(), k->ne[1], q->ne[1], m->nb[1]);
         } else {
-            k_fused_relu_mul_sum_rows<<<q->ne[2], k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const half  *)m->data, score.get(), k->ne[1], q->ne[1], m->nb[1]);
+            k_fused_relu_mul_sum_rows_2<<<grid, k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const half  *)m->data,
+                    score.get(), k->ne[1], q->ne[1], m->nb[1]);
         }
+        //if (m->type == GGML_TYPE_F32) {
+        //    k_fused_relu_mul_sum_rows<<<q->ne[2], k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const float *)m->data, score.get(), k->ne[1], q->ne[1], m->nb[1]);
+        //} else {
+        //    k_fused_relu_mul_sum_rows<<<q->ne[2], k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const half  *)m->data, score.get(), k->ne[1], q->ne[1], m->nb[1]);
+        //}
         CUDA_CHECK(cudaGetLastError());
 
         argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), k->ne[1], q->ne[2], GGML_SORT_ORDER_DESC, ctx.stream());
