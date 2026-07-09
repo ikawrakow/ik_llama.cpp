@@ -633,7 +633,7 @@ bool llama_context::update_cache_copies() {
             if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src == nullptr || c.cpy->src[1] == nullptr) {
                 return false;
             }
-            c.cpy->view_offs = kv_self.head*c.step + c.base_offset;
+            c.cpy->view_offs = kv_self.head*c.step;
             c.cpy->src[1]->data = (char *)c.cpy->view_src->data + c.cpy->view_offs;
             c.cpy->data = c.cpy->src[1]->data;
         }
@@ -746,8 +746,8 @@ llama_context::llama_context(const llama_model & model)
     // GLM-DSA lightning indexer: one indexer-key (kr_l) cache copy per layer. Entries stay null
     // for non-DSA models / non-indexer layers, so update_cache_copies() is a no-op when DSA is off.
     dsa_cache_copies.resize(hparams.n_layer);
-    openpangu_cache_copies.resize(3*hparams.n_layer);
-    openpangu_cache_copies_mtp.resize(3*hparams.n_layer);
+    openpangu_cache_copies.resize(2*hparams.n_layer);
+    openpangu_cache_copies_mtp.resize(2*hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 

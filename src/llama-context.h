@@ -448,7 +448,6 @@ struct llama_context {
     struct CacheCopy {
         ggml_tensor * cpy = nullptr;
         size_t        step = 0;
-        size_t        base_offset = 0;
     };
     std::vector<CacheCopy> cache_copies;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that

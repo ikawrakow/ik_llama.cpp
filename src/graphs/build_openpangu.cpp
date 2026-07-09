@@ -6,10 +6,9 @@
 #include <climits>
 #include <vector>
 
-static constexpr int OPENPANGU_CACHE_COPIES_PER_LAYER = 3;
+static constexpr int OPENPANGU_CACHE_COPIES_PER_LAYER = 2;
 static constexpr int OPENPANGU_COPY_K_CKV = 0;
-static constexpr int OPENPANGU_COPY_K_KPE = 1;
-static constexpr int OPENPANGU_COPY_IDX = 2;
+static constexpr int OPENPANGU_COPY_IDX = 1;
 static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
 // Keep these fixed constants in sync with llama_openpangu_chunked_graph_nodes()
 // in llama.cpp; the scheduler budget mirrors the chunk loops below.
@@ -28,14 +27,13 @@ static void openpangu_clear_cache_copies(llama_context & lctx) {
 }
 
 static void openpangu_register_cache_copy(
-        llama_context & lctx, int il, int slot, ggml_tensor * cpy, size_t step, size_t base_offset = 0) {
+        llama_context & lctx, int il, int slot, ggml_tensor * cpy, size_t step) {
     GGML_ASSERT(slot >= 0 && slot < OPENPANGU_CACHE_COPIES_PER_LAYER);
     auto & copies = openpangu_cache_copies(lctx);
     const size_t idx = (size_t) OPENPANGU_CACHE_COPIES_PER_LAYER*il + slot;
     GGML_ASSERT(idx < copies.size());
     copies[idx].cpy = cpy;
     copies[idx].step = step;
-    copies[idx].base_offset = base_offset;
 }
 
 static uint32_t openpangu_kv_cache_pad(const llama_cparams & cparams) {
@@ -322,27 +320,18 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     // The value-side latent is rebuilt from k_l per graph; per-head K/V are never materialized.
     {
         ggml_tensor * kl = kv_self.k_l[il];
+        ggml_tensor * ckv_store = ckv;
+        ggml_tensor * kpe_store = k_pe2d;
         if (ggml_is_quantized(kl->type)) {
-            ckv = openpangu_cast_for_latent_cache_write(ctx0, ckv, kl);
-            k_pe2d = openpangu_cast_for_latent_cache_write(ctx0, k_pe2d, kl);
-            ggml_tensor * k_latent = ggml_concat(ctx0, ckv, k_pe2d, 0);
-            ggml_tensor * kl_full = ggml_view_2d(ctx0, kl, kv_lora_rank + n_embd_head_qk_rope,
-                                                 n_tokens, kl->nb[1], kv_head*kl->nb[1]);
-            ggml_tensor * cpy_kl = ggml_cpy(ctx0, k_latent, kl_full);
-            openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_CKV, cpy_kl, kl->nb[1]);
-            ggml_build_forward_expand(gf, cpy_kl);
-        } else {
-            ggml_tensor * kl_ckv = ggml_view_2d(ctx0, kl, kv_lora_rank, n_tokens, kl->nb[1], kv_head*kl->nb[1]);
-            ggml_tensor * kl_kpe = ggml_view_2d(ctx0, kl, n_embd_head_qk_rope, n_tokens, kl->nb[1],
-                                                kv_head*kl->nb[1] + kv_lora_rank*ggml_element_size(kl));
-            ggml_tensor * cpy_kl_ckv = ggml_cpy(ctx0, ckv, kl_ckv);
-            openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_CKV, cpy_kl_ckv, kl->nb[1]);
-            ggml_build_forward_expand(gf, cpy_kl_ckv);
-            ggml_tensor * cpy_kl_kpe = ggml_cpy(ctx0, k_pe2d, kl_kpe);
-            openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_KPE, cpy_kl_kpe, kl->nb[1],
-                                          kv_lora_rank*ggml_element_size(kl));
-            ggml_build_forward_expand(gf, cpy_kl_kpe);
+            ckv_store = openpangu_cast_for_latent_cache_write(ctx0, ckv_store, kl);
+            kpe_store = openpangu_cast_for_latent_cache_write(ctx0, kpe_store, kl);
         }
+        ggml_tensor * k_latent = ggml_concat(ctx0, ckv_store, kpe_store, 0);
+        ggml_tensor * kl_full = ggml_view_2d(ctx0, kl, kv_lora_rank + n_embd_head_qk_rope,
+                                             n_tokens, kl->nb[1], kv_head*kl->nb[1]);
+        ggml_tensor * cpy_kl = ggml_cpy(ctx0, k_latent, kl_full);
+        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_K_CKV, cpy_kl, kl->nb[1]);
+        ggml_build_forward_expand(gf, cpy_kl);
     }
 
     // ---- DSA lightning indexer: per-query top-k selection mask (DSA layers only) ----
