@@ -432,10 +432,6 @@ extern "C" {
         bool dry_run;       // skip loading tensors
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
-
-        bool type_k_explicit;     // true when caller explicitly requested type_k
-        bool type_v_explicit;     // true when caller explicitly requested type_v
-        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -515,10 +511,6 @@ extern "C" {
         void *              abort_callback_data;
         void *              offload_policy;
         void *              cuda_params;
-
-        bool type_k_explicit;     // true when caller explicitly requested type_k
-        bool type_v_explicit;     // true when caller explicitly requested type_v
-        bool idx_type_k_explicit; // true when caller explicitly requested idx_type_k
     };
 
     // model quantization parameters

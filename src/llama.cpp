@@ -969,23 +969,12 @@ static std::string llama_openpangu_latent_cache_type_error(ggml_type type_k, ggm
             ggml_type_name(type_k), ggml_type_name(type_v));
 }
 
-static bool llama_openpangu_resolve_latent_cache_types(
-        ggml_type &   type_k,
-        ggml_type &   type_v,
-        bool          type_k_explicit,
-        bool          type_v_explicit,
+static bool llama_openpangu_validate_latent_cache_types(
+        ggml_type     type_k,
+        ggml_type     type_v,
         std::string * error_msg) {
-    if (!type_k_explicit) {
-        type_k = GGML_TYPE_F16;
-    }
-    if (!type_v_explicit) {
-        type_v = GGML_TYPE_F16;
-    }
-
-    const bool type_k_unsupported = type_k_explicit && !llama_openpangu_latent_k_cache_type_supported(type_k);
-    const bool type_v_unsupported = type_v_explicit && !llama_openpangu_latent_v_cache_type_supported(type_v);
-
-    if (type_k_unsupported || type_v_unsupported) {
+    if (!llama_openpangu_latent_k_cache_type_supported(type_k) ||
+        !llama_openpangu_latent_v_cache_type_supported(type_v)) {
         if (error_msg) {
             *error_msg = llama_openpangu_latent_cache_type_error(type_k, type_v);
         }
@@ -1004,14 +993,9 @@ static std::string llama_openpangu_indexer_cache_type_error(ggml_type type) {
             ggml_type_name(type));
 }
 
-static bool llama_openpangu_resolve_indexer_cache_type(
-        ggml_type &   idx_type_k,
-        bool          idx_type_k_explicit,
+static bool llama_openpangu_validate_indexer_cache_type(
+        ggml_type     idx_type_k,
         std::string * error_msg) {
-    if (!idx_type_k_explicit) {
-        idx_type_k = GGML_TYPE_F32;
-    }
-
     if (!llama_openpangu_indexer_cache_type_supported(idx_type_k)) {
         if (error_msg) {
             *error_msg = llama_openpangu_indexer_cache_type_error(idx_type_k);
@@ -4631,12 +4615,10 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         }
         if (model.arch == LLM_ARCH_OPENPANGU) {
             std::string error_msg;
-            if (!llama_openpangu_resolve_latent_cache_types(
-                        params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit, &error_msg)) {
+            if (!llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
                 throw std::runtime_error(error_msg);
             }
-            if (!llama_openpangu_resolve_indexer_cache_type(
-                        params.idx_type_k, params.idx_type_k_explicit, &error_msg)) {
+            if (!llama_openpangu_validate_indexer_cache_type(params.idx_type_k, &error_msg)) {
                 throw std::runtime_error(error_msg);
             }
         }
@@ -7140,9 +7122,6 @@ struct llama_model_params llama_model_default_params() {
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
-        /*.type_k_explicit             =*/ false,
-        /*.type_v_explicit             =*/ false,
-        /*.idx_type_k_explicit         =*/ false,
     };
 
 #ifdef GGML_USE_METAL
@@ -7218,9 +7197,6 @@ struct llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
         /*.cuda_params                 =*/ nullptr,
-        /*.type_k_explicit             =*/ false,
-        /*.type_v_explicit             =*/ false,
-        /*.idx_type_k_explicit         =*/ false,
     };
 
     return result;
@@ -7568,13 +7544,11 @@ struct llama_context * llama_init_from_model(
 
     if (model->arch == LLM_ARCH_OPENPANGU) {
         std::string error_msg;
-        if (!llama_openpangu_resolve_latent_cache_types(
-                    params.type_k, params.type_v, params.type_k_explicit, params.type_v_explicit, &error_msg)) {
+        if (!llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
             LLAMA_LOG_ERROR("%s: %s\n", __func__, error_msg.c_str());
             return nullptr;
         }
-        if (!llama_openpangu_resolve_indexer_cache_type(
-                    params.idx_type_k, params.idx_type_k_explicit, &error_msg)) {
+        if (!llama_openpangu_validate_indexer_cache_type(params.idx_type_k, &error_msg)) {
             LLAMA_LOG_ERROR("%s: %s\n", __func__, error_msg.c_str());
             return nullptr;
         }
