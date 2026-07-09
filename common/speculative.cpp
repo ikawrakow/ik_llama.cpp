@@ -1351,7 +1351,8 @@ common_speculative * common_speculative_init(
         configs.push_back(common_speculative_config(stage, stage_params));
     }
 
-    if (!configs.empty() && llama_model_has_recurrent(llama_get_model(ctx_tgt))) {
+    if (!configs.empty() && (llama_model_has_recurrent(llama_get_model(ctx_tgt)) ||
+                             llama_model_is_openpangu(llama_get_model(ctx_tgt)))) {
         const int ckpt_tokens = std::max(1, params.get_max_stage_n_max() + 1);
         const int actual_mode = llama_spec_ckpt_init(ctx_tgt, params.recurrent_ckpt_mode, ckpt_tokens);
         if (actual_mode == LLAMA_SPEC_CKPT_NONE) {

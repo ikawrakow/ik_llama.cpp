@@ -1043,8 +1043,8 @@ static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) 
 }
 
 static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
-    // openPangu stores a position-indexed conv ring in s_l; it is not per-sequence
-    // recurrent state and none of the qnext handling applies to it
+    // openPangu keeps this flag true until Phase 2 checkpoint wiring, so its s_l conv
+    // slot is not handled by qnext seq-copy or state serialization paths.
     if (cache.s_l_position_ring) {
         return false;
     }
@@ -1379,19 +1379,14 @@ static bool llama_kv_cache_init(
             }
 
             if (model.arch == LLM_ARCH_OPENPANGU) {
-                // MoME conv-state ring: one column per absolute token position (mod ring size),
-                // each holding that position's pre-conv latents for the three conv sites,
-                // packed [qa n_lora_q | compresskv n_lora_kv | o n_head*v_dim].
-                // Position-indexed so speculative-decoding rollbacks are safe: latents at
-                // accepted positions depend only on the committed prefix and stay valid, and
-                // rejected columns are never read again before being overwritten. The ring must
-                // hold at least n_draft_max+3 columns; 16 covers any practical draft length.
-                // Also allocated for the NextN/MTP layers so the draft head chains conv state
-                // across draft steps (single sequence; the graph zero-fills at pos < 2).
-                const int64_t conv_ring = 16;
+                // MoME conv state for ggml_ssm_conv. Each qnext-style slot packs the three
+                // conv sites as two tap-contiguous floats per channel:
+                // [qa 2*n_lora_q | compresskv 2*n_lora_kv | o 2*n_head*v_dim].
+                // Phase 1 keeps s_l_position_ring true so speculative rollback/checkpoint
+                // paths continue to skip this slot until the dedicated Phase 2 wiring.
                 const int64_t conv_col_ne = hparams.n_lora_q + hparams.n_lora_kv
                                             + (int64_t) hparams.n_head(i)*hparams.n_embd_head_v(i);
-                ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, conv_col_ne, conv_ring);
+                ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2*conv_col_ne, qnext_state_slots);
                 ggml_format_name(s_conv, "cache_s_l%d", i);
                 cache.s_l[i] = s_conv;
                 cache.s_l_position_ring = true;
@@ -2230,7 +2225,7 @@ static void llama_kv_cache_seq_add(
                     llama_pos   p0,
                     llama_pos   p1,
                     llama_pos   delta) {
-    // position-strict caches (openPangu latent + conv ring + indexer keys) cannot be
+    // position-strict caches (openPangu latent rows and indexer keys) cannot be
     // re-positioned: rope is baked into the cached k_pe rows and the side state is keyed
     // by absolute position. Fail loudly instead of corrupting.
     GGML_ASSERT(!cache.s_l_position_ring && "K-shift/context shift is not supported for this model's position-indexed KV cache");
@@ -4859,37 +4854,6 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #endif
     }
 
-    if (lctx.inp_openpangu_conv_hist || lctx.inp_openpangu_conv_write) {
-        const llama_pos pos0 = batch.pos ? batch.pos[0] : batch.all_pos_0;
-        constexpr int64_t ring = 16;
-        auto ring_row = [](llama_pos pos) {
-            constexpr int64_t ring = 16;
-            int64_t row = pos % ring;
-            if (row < 0) row += ring;
-            return (int32_t) row;
-        };
-
-        if (lctx.inp_openpangu_conv_hist) {
-            int32_t hist[2] = {
-                pos0 >= 2 ? ring_row(pos0 - 2) + 1 : 0,
-                pos0 >= 1 ? ring_row(pos0 - 1) + 1 : 0,
-            };
-            ggml_backend_tensor_set(lctx.inp_openpangu_conv_hist, hist, 0, sizeof(hist));
-        }
-
-        if (lctx.inp_openpangu_conv_write) {
-            const int64_t n_write = lctx.inp_openpangu_conv_write->ne[0];
-            GGML_ASSERT(n_write > 0 && n_write <= ring);
-            GGML_ASSERT(n_write <= batch.n_tokens);
-            int32_t write_idx[ring];
-            const int64_t t0 = batch.n_tokens - n_write;
-            for (int64_t i = 0; i < n_write; ++i) {
-                write_idx[i] = ring_row(pos0 + t0 + i);
-            }
-            ggml_backend_tensor_set(lctx.inp_openpangu_conv_write, write_idx, 0, n_write*sizeof(write_idx[0]));
-        }
-    }
-
     if (lctx.inp_mtp_carry) {
         const size_t n_floats = (size_t) ggml_nelements(lctx.inp_mtp_carry);
         if (lctx.mtp_carry_pending) {
@@ -5546,7 +5510,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         int32_t * data = (int32_t *) lctx.inp_s_seq_qnext->data;
 
         for (int64_t j = 0; j < n_tokens; ++j) {
-            // qwen3next linear-attention path uses a single local recurrent state slot.
+            // qwen3next and openPangu Phase 1 use a single local recurrent state slot.
             data[j] = 0;
         }
     }
@@ -7590,7 +7554,7 @@ struct llama_context * llama_init_from_model(
     }
 
     if (params.n_seq_max > 1 && model->arch == LLM_ARCH_OPENPANGU) {
-        // The conv-state ring and the DSA indexer cache are single-sequence (one position
+        // The MoME conv slot and the DSA indexer cache are single-sequence (one position
         // stream); parallel sequences would silently share and corrupt them.
         LLAMA_LOG_ERROR("%s: OpenPangu supports a single sequence only (requested n_seq_max = %u); run with -np 1\n",
                 __func__, params.n_seq_max);
@@ -8747,6 +8711,15 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 
 // Unified speculative-checkpoint
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, int max_tokens) {
+    // openPangu carries only a conv state (no SSM recurrent term), so the per-step
+    // path - which sizes itself from the ssm_* hparams (ssm_dt_rank etc, all zero
+    // here) - does not apply. Decline it so the checkpoint resolves to the whole-slot
+    // shadow (gpu-fallback), which is arch-agnostic.
+    if (model.arch == LLM_ARCH_OPENPANGU) {
+        kv.save_per_step_ssm = false;
+        return false;
+    }
+
     // Split recurrent tensors are supported as long as each layer exposes
     // concrete backend buffers for the per-step tensors. CPU-only and mixed
     // CPU/GPU recurrent placement are also allowed.
@@ -10135,13 +10108,13 @@ struct llama_data_read_file : llama_data_read {
     }
 };
 
-// openPangu: refuse state I/O outright until the position-indexed side state is part of
-// the format. K/V rows alone are not a complete snapshot — the MoME conv ring (s_l) and
-// the DSA indexer-key cache (idx_l) are needed to resume a sequence, and restoring
+// openPangu: refuse state I/O outright until the side state is part of the format. K/V
+// rows alone are not a complete snapshot; the MoME conv slot (s_l) and the DSA
+// indexer-key cache (idx_l) are needed to resume a sequence, and restoring
 // without them diverges silently instead of failing.
 static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
     if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
-        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (conv ring and indexer cache are not serialized)\n", func);
+        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (conv slot and indexer cache are not serialized)\n", func);
         return false;
     }
     return true;

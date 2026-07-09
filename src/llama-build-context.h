@@ -129,10 +129,6 @@ struct llm_build_context {
 
     ggml_tensor * build_inp_pos();
 
-    ggml_tensor * build_inp_openpangu_conv_hist();
-
-    ggml_tensor * build_inp_openpangu_conv_write(int64_t n_write);
-
     ggml_tensor * build_input_scale(int n_tokens);
 
     ggml_tensor * build_rope_factors(int il);
@@ -291,8 +287,7 @@ struct llm_build_context {
         ggml_tensor * KQ_mask,
         ggml_tensor * inp_pos,
         ggml_tensor * conv_state,
-        ggml_tensor * conv_hist_idx,
-        ggml_tensor * conv_write_idx,
+        ggml_tensor * seq_qnext,
         float kq_scale,
         bool KQ_mask_swa_windowed = false);
 
@@ -307,8 +302,7 @@ struct llm_build_context {
         ggml_tensor * KQ_mask,
         ggml_tensor * inp_out_ids,
         ggml_tensor * inp_tokens,
-        ggml_tensor * conv_hist_idx,
-        ggml_tensor * conv_write_idx,
+        ggml_tensor * seq_qnext,
         ggml_tensor ** full_hidden_out = nullptr,
         bool select_outputs = true,
         bool build_logits = true,
