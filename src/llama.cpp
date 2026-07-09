@@ -4882,7 +4882,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 GGML_ASSERT(built.active && view.engaged &&
                         "openPangu SWA window view must be engaged when KQ_mask_swa_win is present");
                 GGML_ASSERT(built.n_kv == n_kv && built.n_tokens == n_tokens &&
-                        built.pad == (int64_t) pad && built.w_view == view.w_view &&
+                        built.pad == pad && built.w_view == view.w_view &&
                         built.win_off == view.win_off &&
                         "openPangu SWA window view reuse-key mismatch");
 

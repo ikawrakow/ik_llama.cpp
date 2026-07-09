@@ -421,10 +421,10 @@ struct llama_context {
 
     struct openpangu_swa_window_view_state {
         bool active       = false;
-        int64_t n_kv      = 0;
-        int64_t n_tokens  = 0;
-        int64_t window    = 0;
-        int64_t pad       = 0;
+        int32_t n_kv      = 0;
+        int32_t n_tokens  = 0;
+        uint32_t window   = 0;
+        uint32_t pad      = 0;
         int64_t w_view    = 0;
         int64_t win_off   = 0;
     } openpangu_swa_window_view;
