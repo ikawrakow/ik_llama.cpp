@@ -449,8 +449,8 @@ void server_slot::prompt_save(server_prompt_cache& prompt_cache) const {
     llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0);
 }
 
-void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens) {
-    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id);
+void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction) {
+    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id, min_reusable_fraction);
     if (!res) {
         LLAMA_LOG_INFO("failed to load prompt from cache\n");
     }
@@ -1010,7 +1010,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
-            ret->prompt_load(*prompt_cache, task.tokens);
+            ret->prompt_load(*prompt_cache, task.tokens, cache_ram_similarity);
             prompt_cache->update();
 
             ret->cache_tokens = ret->server_cached_prompt.tokens.clone(); // recover cache tokens
@@ -3816,7 +3816,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             GGML_ASSERT(slot.ga_n == 1);
 
                             // reuse any previously computed tokens that are common with the new prompt
-                            common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, false);
+                            common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens);
                             LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past =  %d, n_past_prompt = %d\n", (int32_t)slot.cache_tokens.size(),  (int32_t)prefix.first, (int32_t)prefix.second);
                             int32_t size_threshold = 20;
                             slot.n_past = prefix.first;

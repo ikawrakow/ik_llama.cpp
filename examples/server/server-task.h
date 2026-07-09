@@ -446,7 +446,7 @@ struct server_prompt_cache {
 
     server_prompt* alloc(const server_prompt& prompt, size_t state_size);
 
-    bool load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot);
+    bool load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot, float min_reusable_fraction);
 
     void update();
 };

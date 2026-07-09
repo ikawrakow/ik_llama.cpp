@@ -116,7 +116,7 @@ struct server_slot {
 
     void prompt_save(server_prompt_cache& prompt_cache) const;
 
-    void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens);
+    void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction);
 
     size_t checkpoint_pos = 0;
     bool do_checkpoint = false;
