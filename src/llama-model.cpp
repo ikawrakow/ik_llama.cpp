@@ -2151,16 +2151,9 @@ bool llama_model_supports_ctx_shift(const struct llama_model * model) {
 }
 
 bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {
-    // openPangu's MoME conv-state ring keeps only the most recent 16 positions, so a
-    // sequence can be extended or reset, but not rewound into its decoded middle.
+    // openPangu keeps only the current MoME conv state, so a sequence can be extended or
+    // reset, but rewinding into its decoded middle cannot reconstruct the state at that point.
     return model && model->arch != LLM_ARCH_OPENPANGU;
-}
-
-int32_t llama_model_max_draft_tokens(const struct llama_model * model) {
-    // openPangu: a rejected draft must not overwrite the ring columns the next decode
-    // reads (positions P-1 and P-2). With a 16-column ring the verify batch of
-    // n_draft+1 tokens is safe up to n_draft = 13.
-    return model && model->arch == LLM_ARCH_OPENPANGU ? 13 : 0;
 }
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
@@ -2203,7 +2196,7 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
     if (arch == LLM_ARCH_OPENPANGU) {
         // MLA-latent cache: K row [ckv | roped k_pe]. The value-side latent is
         // rederived from K per graph. DSA layers also cache one indexer key per
-        // position; the 16-column conv ring is constant-size and negligible here.
+        // position. The recurrent conv slot is constant-size and negligible here.
         size_t size = ggml_row_size(type_k, hparams.n_lora_kv + hparams.n_rot) * kv_size;
         if (hparams.indexer_head_size > 0 && hparams.n_swa > 0 &&
             il < (int) hparams.n_layer - (int) hparams.nextn_predict_layers &&

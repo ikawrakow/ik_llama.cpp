@@ -1032,7 +1032,7 @@ static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) 
 static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
     // openPangu s_l is position-strict conv state, not qnext per-sequence state; keep it
     // out of qnext seq-copy and state serialization (rollback rides the spec checkpoint).
-    if (cache.s_l_position_ring) {
+    if (cache.s_l_position_strict) {
         return false;
     }
     return llama_kv_qnext_state_slots(cache) > 0;
@@ -1370,7 +1370,7 @@ static bool llama_kv_cache_init(
                 // MoME conv state for ggml_ssm_conv. Each qnext-style slot packs the three
                 // conv sites as two tap-contiguous floats per channel:
                 // [qa 2*n_lora_q | compresskv 2*n_lora_kv | o 2*n_head*v_dim].
-                // s_l_position_ring stays true so qnext seq ops and state serialization
+                // s_l_position_strict stays true so qnext seq ops and state serialization
                 // skip this slot; speculative rollback snapshots/restores it via the
                 // whole-slot spec checkpoint.
                 const int64_t conv_col_ne = hparams.n_lora_q + hparams.n_lora_kv
@@ -1378,7 +1378,7 @@ static bool llama_kv_cache_init(
                 ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2*conv_col_ne, qnext_state_slots);
                 ggml_format_name(s_conv, "cache_s_l%d", i);
                 cache.s_l[i] = s_conv;
-                cache.s_l_position_ring = true;
+                cache.s_l_position_strict = true;
 
                 // DSA layers (window == 0, indexer present) also cache the per-position
                 // 128-d indexer key. Position-indexed like everything else in the cache, so
@@ -2217,7 +2217,7 @@ static void llama_kv_cache_seq_add(
     // position-strict caches (openPangu latent rows and indexer keys) cannot be
     // re-positioned: rope is baked into the cached k_pe rows and the side state is keyed
     // by absolute position. Fail loudly instead of corrupting.
-    GGML_ASSERT(!cache.s_l_position_ring && "K-shift/context shift is not supported for this model's position-indexed KV cache");
+    GGML_ASSERT(!cache.s_l_position_strict && "K-shift/context shift is not supported for this model's position-indexed KV cache");
 
     uint32_t new_head = cache.size;
 
@@ -2268,7 +2268,7 @@ static void llama_kv_cache_seq_div(
                     llama_pos   p1,
                           int   d) {
     // see llama_kv_cache_seq_add: position-strict caches cannot be re-positioned
-    GGML_ASSERT(!cache.s_l_position_ring && "self-extend/position division is not supported for this model's position-indexed KV cache");
+    GGML_ASSERT(!cache.s_l_position_strict && "self-extend/position division is not supported for this model's position-indexed KV cache");
 
     if (p0 < 0) p0 = 0;
     if (p1 < 0) p1 = std::numeric_limits<llama_pos>::max();
@@ -2325,7 +2325,7 @@ static llama_pos llama_kv_cache_seq_pos_min(struct llama_kv_cache & cache, llama
 }
 
 static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
-    if (cache.s_l_position_ring) {
+    if (cache.s_l_position_strict) {
         // defrag moves cells, which would break the cell-index == position mapping the
         // openPangu indexer cache relies on; skipping is safe (defrag is an optimization)
         LLAMA_LOG_WARN("%s: defrag is not supported for this model's position-indexed KV cache - skipping\n", __func__);
@@ -6310,10 +6310,9 @@ static int llama_decode_internal(
         n_outputs_prev_embd += (has_mtp && embd) ? embd->ne[1] : lctx.n_outputs;
         cur_token += n_tokens;
         if (reset_previous) {
-            // We need to discard this graph. Otherwise, iwith CUDA graphs enabled, the graph will get resused and this will reset the
-            // recurrent state for each new token. This is probably not very relevant in practice because we basically never run TG with
-            // empty context, but for the sake of correctness let's just do it.
-            lctx.prev.reset();
+            // The graph was built with a position-zero state reset. Reusing it at later
+            // positions would reset the recurrent state again, so discard the active slot.
+            prev.reset();
         }
         if (stop_internal_decode) {
             return -3;

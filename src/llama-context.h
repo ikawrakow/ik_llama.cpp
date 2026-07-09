@@ -67,7 +67,7 @@ struct llama_kv_cache {
     // openPangu s_l holds position-strict MoME conv state, not per-sequence recurrent
     // slots; Qwen3Next-style s_l handling (seq ops, state serialization, s_copy) must
     // skip it. Speculative rollback snapshots/restores it via the whole-slot spec checkpoint.
-    bool s_l_position_ring = false;
+    bool s_l_position_strict = false;
 
     // Note: The value of head isn't only used to optimize searching
     // for a free KV slot. llama_decode_internal also uses it, so it
