@@ -181,10 +181,11 @@ static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm,
 // perturbation on top of the identity, not a standalone filter.
 //
 // Conv state: `state_all` is this layer's cache_s_l recurrent slot table
-// [2*col_ne, qnext_state_slots]. Slot 0 holds the non-spec decode state used in Phase 1,
-// with this site's two taps packed at float offset 2*site_off. The buffer is zeroed at
-// cache allocation and reset at pos 0, preserving zero history at sequence start.
-// Speculative checkpoint and rollback wiring stays out of this Phase 1 graph change.
+// [2*col_ne, qnext_state_slots]. Slot 0 holds the single-sequence decode state, with
+// this site's two taps packed at float offset 2*site_off. The buffer is zeroed at cache
+// allocation and reset at pos 0, preserving zero history at sequence start (pos-0 graphs
+// are discarded from reuse via reset_previous, so the baked reset never runs at pos > 0).
+// Speculative rollback snapshots/restores the whole slot via the spec checkpoint.
 static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
                                            ggml_tensor * x, ggml_tensor * w,
                                            ggml_tensor * state_all, int64_t site_off,

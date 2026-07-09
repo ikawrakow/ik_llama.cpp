@@ -1046,8 +1046,8 @@ static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) 
 }
 
 static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
-    // openPangu keeps this flag true until Phase 2 checkpoint wiring, so its s_l conv
-    // slot is not handled by qnext seq-copy or state serialization paths.
+    // openPangu s_l is position-strict conv state, not qnext per-sequence state; keep it
+    // out of qnext seq-copy and state serialization (rollback rides the spec checkpoint).
     if (cache.s_l_position_ring) {
         return false;
     }
@@ -1386,8 +1386,9 @@ static bool llama_kv_cache_init(
                 // MoME conv state for ggml_ssm_conv. Each qnext-style slot packs the three
                 // conv sites as two tap-contiguous floats per channel:
                 // [qa 2*n_lora_q | compresskv 2*n_lora_kv | o 2*n_head*v_dim].
-                // Phase 1 keeps s_l_position_ring true so speculative rollback/checkpoint
-                // paths continue to skip this slot until the dedicated Phase 2 wiring.
+                // s_l_position_ring stays true so qnext seq ops and state serialization
+                // skip this slot; speculative rollback snapshots/restores it via the
+                // whole-slot spec checkpoint.
                 const int64_t conv_col_ne = hparams.n_lora_q + hparams.n_lora_kv
                                             + (int64_t) hparams.n_head(i)*hparams.n_embd_head_v(i);
                 ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2*conv_col_ne, qnext_state_slots);
@@ -5514,7 +5515,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         int32_t * data = (int32_t *) lctx.inp_s_seq_qnext->data;
 
         for (int64_t j = 0; j < n_tokens; ++j) {
-            // qwen3next and openPangu Phase 1 use a single local recurrent state slot.
+            // qwen3next and openPangu use a single local recurrent state slot.
             data[j] = 0;
         }
     }
@@ -6172,7 +6173,7 @@ static int llama_decode_internal(
         bool reset_previous = false;
         // update the kv ring buffer
         {
-            if (llama_model_has_recurrent(&lctx.model) && kv_self.head == 0) {
+            if ((llama_model_has_recurrent(&lctx.model) || llama_model_is_openpangu(&lctx.model)) && kv_self.head == 0) {
                 reset_previous = true;
             }
             kv_self.head += n_tokens;
