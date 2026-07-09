@@ -24,12 +24,19 @@ static constexpr size_t GGML_MOE_PREFETCH_CHUNK = 2u*1024u*1024u;
 // cannot accumulate unbounded work.
 static constexpr size_t GGML_MOE_PREFETCH_MAX_QUEUE = 65536;
 
+// experts are faulted in with MADV_POPULATE_READ, which brings pages into the
+// page cache AND this mm's page tables, so consumers take no minor faults.
+// Unsupported kernels leave the engine off (the callers fall back to
+// madvise(MADV_WILLNEED) hints)
+#ifndef MADV_POPULATE_READ
+#define MADV_POPULATE_READ 22
+#endif
+
 namespace {
 
 struct mapping_entry {
     uintptr_t base;
     size_t    size;
-    int       fd;
 };
 
 struct ticket {
@@ -43,10 +50,8 @@ struct ticket {
 };
 
 struct job {
-    int       fd;
-    uint64_t  off;   // file offset
+    uintptr_t addr;
     uint32_t  len;
-    uintptr_t addr;  // VA of the same bytes (for mincore residency check)
     std::shared_ptr<ticket> tk;
 };
 
@@ -63,7 +68,7 @@ struct prefetch_pool {
     // cumulative observability counters (GGML_MOE_PREFETCH_DEBUG)
     std::atomic<uint64_t> n_jobs{0};
     std::atomic<uint64_t> n_skipped{0};
-    std::atomic<uint64_t> bytes_read{0};
+    std::atomic<uint64_t> bytes_populated{0};
     std::atomic<uint64_t> n_colded{0};
 
     ~prefetch_pool() { stop(); }
@@ -87,9 +92,9 @@ struct prefetch_pool {
         }
         workers.clear();
         if (getenv("GGML_MOE_PREFETCH_DEBUG") && n_jobs.load() > 0) {
-            fprintf(stderr, "%s: jobs=%llu skipped_resident=%llu bytes_read=%.2f GiB colded=%llu\n", __func__,
+            fprintf(stderr, "%s: jobs=%llu skipped_resident=%llu bytes_populated=%.2f GiB colded=%llu\n", __func__,
                     (unsigned long long) n_jobs.load(), (unsigned long long) n_skipped.load(),
-                    (double) bytes_read.load()/(1024.0*1024.0*1024.0),
+                    (double) bytes_populated.load()/(1024.0*1024.0*1024.0),
                     (unsigned long long) n_colded.load());
         }
     }
@@ -123,7 +128,7 @@ struct prefetch_pool {
     }
 
     void run() {
-        std::vector<char> buf(GGML_MOE_PREFETCH_CHUNK);
+        const long page = sysconf(_SC_PAGESIZE);
         for (;;) {
             job j;
             {
@@ -140,16 +145,12 @@ struct prefetch_pool {
             if (chunk_resident(j.addr, j.len)) {
                 n_skipped.fetch_add(1, std::memory_order_relaxed);
             } else {
-                size_t done = 0;
-                while (done < j.len) {
-                    ssize_t n = pread(j.fd, buf.data(), std::min<size_t>(j.len - done, buf.size()), (off_t)(j.off + done));
-                    if (n <= 0) {
-                        break; // correctness does not depend on us; fault path takes over
-                    }
-                    done += (size_t)n;
-                }
-                bytes_read.fetch_add(done, std::memory_order_relaxed);
-                done_read = done > 0;
+                const uintptr_t astart = j.addr & ~(uintptr_t)(page - 1);
+                const size_t    alen   = ((j.addr + j.len + page - 1) & ~(uintptr_t)(page - 1)) - astart;
+                if (madvise((void *)astart, alen, MADV_POPULATE_READ) == 0) {
+                    bytes_populated.fetch_add(alen, std::memory_order_relaxed);
+                    done_read = true;
+                } // on failure the fault path takes over
             }
             if (j.tk) {
                 const int left = j.tk->pending.fetch_sub(1, std::memory_order_acq_rel);
@@ -180,17 +181,13 @@ static prefetch_state & state() {
     return s;
 }
 
-// resolve a VA range to (fd, file offset); mappings are registered at file offset 0
-static bool resolve(const void * p, size_t len, int & fd, uint64_t & off) {
+// true when [p, p+len) lies inside a registered mmap
+static bool is_mapped(const void * p, size_t len) {
     auto & s = state();
     std::lock_guard<std::mutex> lock(s.reg_mtx);
     const uintptr_t a = (uintptr_t)p;
     for (const auto & m : s.mappings) {
-        if (a >= m.base && a + len <= m.base + m.size) {
-            fd  = m.fd;
-            off = a - m.base;
-            return true;
-        }
+        if (a >= m.base && a + len <= m.base + m.size) return true;
     }
     return false;
 }
@@ -240,8 +237,7 @@ static bool enqueue_ranges(const ggml_tensor * w, const std::vector<std::pair<si
     }
     if (!pool_sp) return false;
 
-    int fd; uint64_t base_off;
-    if (!resolve(w->data, ggml_nbytes(w), fd, base_off)) return false;
+    if (!is_mapped(w->data, ggml_nbytes(w))) return false;
 
     const uint64_t cur_epoch = s.epoch.load(std::memory_order_relaxed);
 
@@ -265,7 +261,7 @@ static bool enqueue_ranges(const ggml_tensor * w, const std::vector<std::pair<si
     for (const auto & r : ranges) {
         for (size_t o = r.first; o < r.first + r.second; o += GGML_MOE_PREFETCH_CHUNK) {
             const size_t len = std::min(GGML_MOE_PREFETCH_CHUNK, r.first + r.second - o);
-            jobs.push_back({fd, base_off + o, (uint32_t)len, (uintptr_t)w->data + o, tk});
+            jobs.push_back({(uintptr_t)w->data + o, (uint32_t)len, tk});
         }
     }
     if (jobs.empty()) return true;
@@ -309,19 +305,33 @@ static void legacy_madvise(const ggml_tensor * w, const ggml_tensor * ids) {
 
 } // namespace
 
-void ggml_moe_prefetch_register_mapping(const void * base, size_t size, int fd) {
-    if (!base || size == 0 || fd < 0) return;
+void ggml_moe_prefetch_register_mapping(const void * base, size_t size) {
+    if (!base || size == 0) return;
     auto & s = state();
     std::lock_guard<std::mutex> lock(s.reg_mtx);
-    s.mappings.push_back({(uintptr_t)base, size, fd});
+    for (const auto & m : s.mappings) {
+        if (m.base == (uintptr_t)base) return; // contexts may re-register the same model
+    }
+    s.mappings.push_back({(uintptr_t)base, size});
 }
 
 void ggml_moe_prefetch_unregister_mapping(const void * base) {
     auto & s = state();
     std::lock_guard<std::mutex> lock(s.reg_mtx);
+    // a queued job may still point into this range; its madvise then fails
+    // (ENOMEM once unmapped) and the worker skips the chunk
     s.mappings.erase(std::remove_if(s.mappings.begin(), s.mappings.end(),
                 [base](const mapping_entry & m) { return m.base == (uintptr_t)base; }),
             s.mappings.end());
+}
+
+static bool populate_read_supported() {
+    const long page = sysconf(_SC_PAGESIZE);
+    void * p = mmap(nullptr, (size_t)page, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) return false;
+    const bool ok = madvise(p, (size_t)page, MADV_POPULATE_READ) == 0;
+    munmap(p, (size_t)page);
+    return ok;
 }
 
 void ggml_moe_prefetch_set_n_threads(int n_threads) {
@@ -331,6 +341,11 @@ void ggml_moe_prefetch_set_n_threads(int n_threads) {
     auto & s = state();
     std::lock_guard<std::mutex> lock(s.pool_mtx);
     if (n_threads <= 0) {
+        s.pool.reset();
+        return;
+    }
+    if (!populate_read_supported()) {
+        fprintf(stderr, "%s: MADV_POPULATE_READ not supported; MoE prefetch disabled\n", __func__);
         s.pool.reset();
         return;
     }
@@ -444,7 +459,7 @@ void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor * node, int ith) {
 
 #else // !__linux__
 
-void ggml_moe_prefetch_register_mapping(const void *, size_t, int) {}
+void ggml_moe_prefetch_register_mapping(const void *, size_t) {}
 void ggml_moe_prefetch_unregister_mapping(const void *) {}
 void ggml_moe_prefetch_set_n_threads(int) {}
 bool ggml_moe_prefetch_enabled(void) { return false; }

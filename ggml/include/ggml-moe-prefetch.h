@@ -9,10 +9,9 @@
 extern "C" {
 #endif
 
-// mapping registry, resolving VA ranges to (fd, file offset). The mapping must start at
-// file offset 0 (llama_mmap always maps this way). The caller retains
-// ownership of fd; it must stay open until unregister.
-GGML_API void ggml_moe_prefetch_register_mapping  (const void * base, size_t size, int fd);
+// mapping registry; a registered range marks tensors as mmap-backed and
+// eligible for prefetch. Nothing is opened or retained beyond (base, size).
+GGML_API void ggml_moe_prefetch_register_mapping  (const void * base, size_t size);
 GGML_API void ggml_moe_prefetch_unregister_mapping(const void * base);
 
 // worker pool control. n_threads > 0 (re)creates the pool, 0 shuts it down.
