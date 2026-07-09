@@ -93,8 +93,7 @@ static ggml_tensor * openpangu_build_v_latent_from_k(
     if (ggml_is_quantized(kl->type)) {
         ggml_tensor * full_view = ggml_view_2d(ctx, kl, kl->ne[0], n_kv_view,
                                                kl->nb[1], (size_t) win_off*kl->nb[1]);
-        ggml_tensor * full_f32 = ggml_cpy(ctx, full_view,
-                ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kl->ne[0], n_kv_view));
+        ggml_tensor * full_f32 = ggml_cast(ctx, full_view, GGML_TYPE_F32);
         ggml_tensor * v_src = ggml_view_2d(ctx, full_f32, kv_lora_rank, n_kv_view,
                                            full_f32->nb[1], 0);
         return ggml_cont(ctx, ggml_transpose(ctx, v_src));
@@ -115,7 +114,7 @@ static ggml_tensor * openpangu_build_k_latent_for_read(
         return k_view;
     }
 
-    return ggml_cpy(ctx, k_view, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kl->ne[0], n_kv_view));
+    return ggml_cast(ctx, k_view, GGML_TYPE_F32);
 }
 
 static ggml_tensor * openpangu_cast_for_latent_cache_write(ggml_context * ctx, ggml_tensor * src, ggml_tensor * kl) {
