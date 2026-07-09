@@ -162,12 +162,31 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
 
     // TODO: these can become expensive for long messages - how to optimize?
     if (msg_prv.reasoning_content != msg_new.reasoning_content) {
-        auto & diff                  = diffs.emplace_back();
-        diff.reasoning_content_delta = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
+        std::string reasoning_content_delta = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
+        // Partial parsing can reclassify bytes that were previously streamed as
+        // content into reasoning_content once more context arrives. Streaming
+        // deltas are append-only, so remove that already-streamed content prefix
+        // from the reasoning delta instead of emitting the same bytes twice.
+        if (!msg_prv.content.empty() &&
+            string_starts_with(reasoning_content_delta, msg_prv.content) &&
+            string_starts_with(msg_prv.content, msg_new.content)) {
+            reasoning_content_delta = reasoning_content_delta.substr(msg_prv.content.size());
+        }
+        // string_diff() can return an empty delta for shrink/reclassification
+        // cases. Do not emit empty append-only chunks.
+        if (!reasoning_content_delta.empty()) {
+            auto & diff                  = diffs.emplace_back();
+            diff.reasoning_content_delta = std::move(reasoning_content_delta);
+        }
     }
     if (msg_prv.content != msg_new.content) {
-        auto & diff        = diffs.emplace_back();
-        diff.content_delta = string_diff(msg_prv.content, msg_new.content);
+        std::string content_delta = string_diff(msg_prv.content, msg_new.content);
+        // Same empty-delta rule as above, without the reasoning/content overlap
+        // trim: there may be no new content bytes to append.
+        if (!content_delta.empty()) {
+            auto & diff        = diffs.emplace_back();
+            diff.content_delta = std::move(content_delta);
+        }
     }
 
     if (msg_new.tool_calls.size() < msg_prv.tool_calls.size()) {
@@ -680,6 +699,8 @@ const char * common_chat_format_name(common_chat_format format) {
             return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_GEMMA4:
             return "peg-gemma4";
+        case COMMON_CHAT_FORMAT_PEG_MINIMAX_M3:
+            return "peg-minimax-m3";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1938,7 +1959,7 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
     common_chat_params data;
 
     data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
-    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.format             = COMMON_CHAT_FORMAT_PEG_MINIMAX_M3;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<mm:think>";
     data.thinking_end_tag   = "</mm:think>";
@@ -1967,11 +1988,35 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
         auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
         auto end = p.end();
 
+        auto thinking_body = [&]() {
+            return has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE
+                ? p.until_one_of({ THINK_END, FC_START })
+                : p.until(THINK_END);
+        };
+
         auto reasoning = p.eps();
-        if (extract_reasoning && inputs.enable_thinking) {
-            reasoning = p.optional(p.optional(p.literal(THINK_START)) + p.reasoning(p.until(THINK_END)) + THINK_END);
-        } else if (extract_reasoning) {
-            reasoning = p.optional(p.optional(p.literal(THINK_START)) + p.until(THINK_END) + p.literal(THINK_END));
+        if (extract_reasoning) {
+            // The generation prompt usually opens <mm:think>, but MiniMax-M3 may
+            // also emit an unopened block ending in </mm:think>. Keep both forms
+            // quarantined as reasoning instead of leaking them into visible text.
+            auto opened = p.literal(THINK_START) +
+                          p.reasoning(thinking_body()) +
+                          p.optional(p.literal(THINK_END));
+            auto unopened = p.reasoning(thinking_body()) + p.literal(THINK_END);
+            reasoning = p.optional(p.choice({ opened, unopened }));
+
+            if (inputs.enable_thinking) {
+                // During streaming, the closing tag may not have arrived yet; if
+                // a tool call starts first, stop reasoning at the tool marker.
+                auto partial = p.reasoning(thinking_body());
+                reasoning = p.optional(p.choice({ opened, unopened, partial }));
+            }
+        } else if (inputs.enable_thinking) {
+            auto opened = p.content(p.literal(THINK_START) +
+                                    thinking_body() +
+                                    p.optional(p.literal(THINK_END)));
+            auto unopened = p.content(thinking_body()) + p.literal(THINK_END);
+            reasoning = p.optional(p.choice({ opened, unopened }));
         }
 
         if (has_response_format) {
@@ -2056,16 +2101,17 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
 
         auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
-        common_peg_parser tool_calls = p.eps();
+        common_peg_parser tool_call_envelope = p.eps();
         if (inputs.parallel_tool_calls) {
-            tool_calls = p.trigger_rule("tool-call",
+            tool_call_envelope = p.trigger_rule("tool-call",
                 p.literal(FC_START) + p.space() + tool_choice +
                 p.zero_or_more(p.space() + tool_choice) + p.space() + p.literal(FC_END));
         } else {
-            tool_calls = p.trigger_rule("tool-call",
+            tool_call_envelope = p.trigger_rule("tool-call",
                 p.literal(FC_START) + p.space() + tool_choice + p.space() + p.literal(FC_END));
         }
 
+        auto tool_calls = tool_call_envelope;
         if (!require_tools) {
             tool_calls = p.optional(tool_calls);
         }
@@ -2780,6 +2826,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             std::unique_ptr<common_chat_peg_mapper> mapper;
             if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
                 mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+            } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
+                mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
             } else {
                 mapper = std::make_unique<common_chat_peg_mapper>(msg);
             }
@@ -2801,6 +2849,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     std::unique_ptr<common_chat_peg_mapper> mapper;
     if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
         mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+    } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
+        mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
     } else {
         mapper = std::make_unique<common_chat_peg_mapper>(msg);
     }

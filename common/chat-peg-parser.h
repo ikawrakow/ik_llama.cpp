@@ -40,6 +40,12 @@ class common_chat_peg_gemma4_mapper : public common_chat_peg_mapper {
     void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
 };
 
+class common_chat_peg_minimax_m3_mapper : public common_chat_peg_mapper {
+  public:
+    common_chat_peg_minimax_m3_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
+    virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
+};
+
 struct content_structure;
 struct tool_call_structure;
 
@@ -195,4 +201,3 @@ struct tagged_peg_parser {
 
 tagged_peg_parser build_tagged_peg_parser(
     const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn);
-

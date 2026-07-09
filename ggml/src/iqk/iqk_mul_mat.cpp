@@ -1736,6 +1736,201 @@ bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_ty
     return true;
 }
 
+namespace {
+size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth) {
+    auto k = dst->src[0];
+    auto q = dst->src[1];
+    if (q->ne[2] >= nth) {
+        size_t size = 0;
+        auto tt = ggml_internal_get_type_traits(k->type);
+        if (tt.is_quantized && tt.vec_dot_type != q->type) {
+            auto row_size_q = ggml_row_size(tt.vec_dot_type, q->ne[0]);
+            size = row_size_q * q->ne[1];
+        }
+        size += k->ne[1] * q->ne[1] * sizeof(float);
+        size += k->ne[1] * sizeof(float);
+        size += k->ne[1] * sizeof(int32_t);
+        size = GGML_PAD(size, 128);
+        return size;
+    }
+    return 0;
+}
+// TODO: SIMDify
+inline void iqk_f16_to_f32(int n, const ggml_fp16_t * x, float * y) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = GGML_FP16_TO_FP32(x[i]);
+    }
+}
+}
+
+size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread) {
+    auto k = dst->src[0];
+    auto q = dst->src[1];
+    if (q->ne[2] >= nthread) {
+        return iqk_idx_topk_work_wbs_per_thread(dst, nthread) * nthread;
+    }
+    size_t size = 0;
+    auto tt = ggml_internal_get_type_traits(k->type);
+    if (tt.is_quantized && tt.vec_dot_type != q->type) {
+        auto row_size_q = ggml_row_size(tt.vec_dot_type, q->ne[0]);
+        size = row_size_q * q->ne[1] * q->ne[2];
+    }
+    size += k->ne[1] * q->ne[1] * sizeof(float);
+    size += k->ne[1] * sizeof(float);
+    size += k->ne[1] * sizeof(int32_t);
+    return size;
+}
+
+bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t barrier, void * barrier_data, int ith, int nth) {
+    if (dst->op != GGML_OP_INDEXER_TOPK) {
+        return false;
+    }
+    auto op = ggml_unary_op(dst->op_params[0]);
+    if (op != GGML_UNARY_OP_RELU) {
+        return false;
+    }
+    int n_top_k = dst->ne[0];
+    auto k = dst->src[0];
+    auto q = dst->src[1];
+    auto w = dst->src[2];
+    auto m = dst->src[3];
+    if (k->ne[2] != 1 || k->ne[3] != 1) return false;
+    if (k->ne[1] <= n_top_k ) return false;
+    if (k->ne[1] != m->ne[0]) return false;
+    if (k->ne[0] != q->ne[0]) return false;
+    if (q->ne[2] != m->ne[1]) return false;
+    if (q->ne[1] != w->ne[0]) return false;
+    if (q->ne[2] != w->ne[1]) return false;
+    if (q->type != GGML_TYPE_F32) return false;
+    if (m->type != GGML_TYPE_F32 && m->type != GGML_TYPE_F16) return false;
+
+    auto work_size = iqk_idx_topk_work_wbs_per_thread(dst, nth);
+    auto work = (char *)work_buffer + ith*work_size;
+    ggml_from_float_t from_float = nullptr;
+
+    auto tt = ggml_internal_get_type_traits(k->type);
+
+    size_t quantize_size = 0;
+    auto q_type = q->type;
+    auto row_size_q = q->nb[1];
+    if (tt.is_quantized && tt.vec_dot_type != q->type) {
+        auto ttq = ggml_internal_get_type_traits(tt.vec_dot_type);
+        from_float = ttq.from_float;
+        row_size_q = ggml_row_size(tt.vec_dot_type, q->ne[0]);
+        quantize_size = row_size_q * q->ne[1];
+        q_type = tt.vec_dot_type;
+    }
+
+    MulMat mm;
+    if (!MulMat::prepare(int(k->type), int(q_type), k->ne[0], mm, q->ne[1])) {
+        return false;
+    }
+
+    if (q->ne[2] >= nth) {
+        auto kq = (float *)(work + quantize_size);
+        auto score = kq + k->ne[1]*q->ne[1];
+        auto sorted = (int32_t *)(score + k->ne[1]);
+        for (int iq = ith; iq < q->ne[2]; iq += nth) {
+            auto this_q = (const char *)q->data + iq*q->nb[2];
+            auto this_m = (const char *)m->data + iq*m->nb[1];
+            auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
+            if (from_float) {
+                from_float((const float *)this_q, work, q->ne[0] * q->ne[1]);
+                this_q = work;
+            }
+            DataInfo info{kq, this_q, (size_t)k->ne[1], (size_t)row_size_q, 0, 1, nullptr, 0};
+            mm.mul_mat_NxM(k->ne[0], (const char *)k->data, k->nb[1], info, k->ne[1], q->ne[1]);
+            auto kq_i = kq;
+
+            if (m->type == GGML_TYPE_F32) {
+                std::memcpy(score, this_m, k->ne[1]*sizeof(float));
+            } else {
+                iqk_f16_to_f32(k->ne[1], (const ggml_fp16_t *)this_m, score);
+            }
+            for (int i = 0; i < int(q->ne[1]); ++i) {
+                float wi = this_w[i];
+                for (int j = 0; j < int(k->ne[1]); ++j) {
+                    float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
+                    score[j] += wi * relu;
+                }
+                kq_i += k->ne[1];
+            }
+            for (int j = 0; j < int(k->ne[1]); ++j) sorted[j] = j;
+            std::partial_sort(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
+            std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
+        }
+        return true;
+    }
+
+    if (k->ne[1] % 32 != 0) return false; // we can assume cache size is a multiple of at least 32
+
+    // We have more than 1 thread per q row
+    // To not make it too complicated, let's just have all threads process the same row
+    int n32 = k->ne[1] / 32;
+    int npt = (n32 + nth - 1)/nth;
+    int ith_mid = nth;
+    int n_this_thread = npt;
+    int first = ith*npt;
+    if (npt*nth > n32) {
+        ith_mid = n32 - nth*(npt - 1);
+        if (ith >= ith_mid) {
+            --n_this_thread;
+            first = ith_mid*npt + (ith - ith_mid)*n_this_thread;
+        }
+    }
+    n_this_thread *= 32;
+    first *= 32;
+    auto q_data = (const char *)q->data;
+    auto qnb2 = q->nb[2];
+    if (from_float) {
+        auto quantized = (char *)work_buffer;
+        if (ith < q->ne[2]) {
+            auto this_q = q_data + ith*q->nb[2];
+            from_float((const float *)this_q, quantized + quantize_size*ith, q->ne[0] * q->ne[1]);
+        }
+        qnb2 = quantize_size;
+        q_data = quantized;
+        work += quantize_size;
+
+        barrier(barrier_data);
+    }
+    auto kq = (float *)((char *)work_buffer + quantize_size*q->ne[2]);
+    auto kq_th = kq + first*q->ne[1];
+    auto score = kq + k->ne[1]*q->ne[1];
+    auto score_th = score + first;
+    auto sorted = (int32_t *)(score + k->ne[1]);
+    for (int iq = 0; iq < q->ne[2]; ++iq) {
+        auto this_q = q_data + iq*qnb2;
+        auto this_m = (const char *)m->data + iq*m->nb[1];
+        auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
+        DataInfo info{kq_th, this_q, (size_t)n_this_thread, (size_t)row_size_q, 0, 1, nullptr, 0};
+        mm.mul_mat_NxM(k->ne[0], (const char *)k->data + first*k->nb[1], k->nb[1], info, n_this_thread, q->ne[1]);
+        if (m->type == GGML_TYPE_F32) {
+            std::memcpy(score_th, this_m + first*sizeof(float), n_this_thread*sizeof(float));
+        } else {
+            iqk_f16_to_f32(n_this_thread, (const ggml_fp16_t *)this_m + first, score_th);
+        }
+        auto kq_i = kq_th;
+        for (int i = 0; i < int(q->ne[1]); ++i) {
+            float wi = this_w[i];
+            for (int j = 0; j < n_this_thread; ++j) {
+                float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
+                score_th[j] += wi * relu;
+            }
+            kq_i += n_this_thread;
+        }
+        barrier(barrier_data);
+        if (ith == 0) {
+            for (int j = 0; j < int(k->ne[1]); ++j) sorted[j] = j;
+            std::partial_sort(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
+            std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
+        }
+        barrier(barrier_data);
+    }
+
+    return true;
+}
+
 #else  // IQK_IMPLEMENT
 
 #include "ggml-impl.h"
@@ -1776,5 +1971,12 @@ bool iqk_fused_delta_net(int, int, int, int, int, int,
     return false;
 }
 
+bool iqk_indexer_topk(struct ggml_tensor *, void *, barrier_t, void *, int, int) {
+    return false;
+}
+
+size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor *, int) {
+    return 0;
+}
 
 #endif

@@ -1078,6 +1078,8 @@ bool llama_model_loader::load_all_data(
     std::vector<void*> host_ptrs;
     std::vector<ggml_backend_event_t> events;
 
+    std::vector<std::unique_ptr<llama_mmap>> split_mappings(files.size());
+
     ggml_backend_t cuda_backend = nullptr;
     if (!use_mmap && !check_tensors) {
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
@@ -1197,17 +1199,21 @@ bool llama_model_loader::load_all_data(
         const char * buffer_name = ggml_backend_buffer_name(cur->buffer);
         const bool   is_probably_split_mode_graph = std::strncmp(buffer_name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
         if (is_probably_split_mode_graph) {
-            auto & read_buf = read_bufs[thread_idx];
-            if (read_buf.capacity() > n_size) {
-                read_buf = std::vector<no_init<uint8_t>>();
+            llama_mmap * mapping;
+            {
+                std::lock_guard<std::mutex> lock(load_mutex);
+                auto & m = split_mappings[weight->idx];
+                if (!m) {
+                    m.reset(new llama_mmap(files.at(weight->idx).get(), 0, ggml_is_numa()));
+                }
+                mapping = m.get();
             }
-            read_buf.resize(n_size);
-            file->seek(weight->offs, SEEK_SET);
-            file->read_raw(read_buf.data(), n_size);
-            ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
-            if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+            uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
+            ggml_backend_tensor_set(cur, data, 0, n_size);
+            if (check_tensors && !ggml_validate_row_data(cur->type, data, n_size)) {
                 throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
             }
+            mapping->dontneed_fragment(weight->offs, weight->offs + n_size);
             return n_size;
         }
 #endif
