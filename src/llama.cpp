@@ -622,6 +622,28 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
 
 bool llama_context::update_cache_copies() {
     if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) return true;
+    auto patch_dsa_cache_copies = [&]() -> bool {
+        // DSA indexer-key cache: patch the kr_l write offset for reused graphs. Each
+        // registered cpy writes this ubatch's index keys into kr_l at the kv_head slot;
+        // like the K/V copies, its baked view_offs must be re-pointed to the current
+        // kv_head or reused graphs keep writing to the first ubatch's slot.
+        // step = kr_l->nb[1]. No-op when DSA is off or entries are null.
+        for (size_t il = 0; il < dsa_cache_copies.size(); ++il) {
+            auto & c = dsa_cache_copies[il];
+            if (!c.cpy) continue;
+            // The registered cpy must still be rooted at this layer's kr_l cache. If
+            // the graph was rebuilt with a different shape, refuse reuse and rebuild.
+            if (c.cpy->op != GGML_OP_CPY ||
+                il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr ||
+                c.cpy->view_src != kv_self.kr_l[il]) {
+                return false;
+            }
+            c.cpy->view_offs    = kv_self.head * c.step;
+            c.cpy->src[1]->data = (char *) kv_self.kr_l[il]->data + c.cpy->view_offs;
+            c.cpy->data         = c.cpy->src[1]->data;
+        }
+        return true;
+    };
     if (model.arch == LLM_ARCH_OPENPANGU) {
         auto & copies = cparams.mtp_op_type == MTP_OP_NONE ? openpangu_cache_copies : openpangu_cache_copies_mtp;
         bool any = false;
@@ -636,6 +658,9 @@ bool llama_context::update_cache_copies() {
             c.cpy->view_offs = kv_self.head*c.step;
             c.cpy->src[1]->data = (char *)c.cpy->view_src->data + c.cpy->view_offs;
             c.cpy->data = c.cpy->src[1]->data;
+        }
+        if (!patch_dsa_cache_copies()) {
+            return false;
         }
         return any;
     }
@@ -705,29 +730,7 @@ bool llama_context::update_cache_copies() {
             }
         }
     }
-    // GLM-DSA lightning indexer: patch the indexer-key (kr_l) cache write offset for the reused
-    // graph. Each registered cpy writes this ubatch's index keys into kr_l at the kv_head slot;
-    // like the K/V copies above, its baked view_offs must be re-pointed to the CURRENT kv_head,
-    // else a reused graph (FA pad-256, constant n_kv) keeps writing to the first ubatch's slot and
-    // the recent indexer-key cells read uninitialized (scattered selection -> degraded/NaN decode).
-    // step = kr_l->nb[1] (one index-key row = head_size * F16). No-op when DSA is off (entries null).
-    for (size_t il = 0; il < dsa_cache_copies.size(); ++il) {
-        auto & c = dsa_cache_copies[il];
-        if (!c.cpy) continue;
-        // Sanity guard (the MSA fix omitted this): the registered cpy must still be a CPY whose
-        // destination view is rooted at this layer's kr_l cache (mirrors the K/V guard above,
-        // which checks c.cpy->view_src). If the graph was rebuilt with a different shape these no
-        // longer match, so refuse reuse and force a rebuild.
-        if (c.cpy->op != GGML_OP_CPY ||
-            il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr ||
-            c.cpy->view_src != kv_self.kr_l[il]) {
-            return false;
-        }
-        c.cpy->view_offs    = kv_self.head * c.step;
-        c.cpy->src[1]->data = (char *) kv_self.kr_l[il]->data + c.cpy->view_offs;
-        c.cpy->data         = c.cpy->src[1]->data;
-    }
-    return true;
+    return patch_dsa_cache_copies();
 }
 
 static std::vector<llama_context *> & llama_all_contexts() {
@@ -743,11 +746,11 @@ llama_context::llama_context(const llama_model & model)
     } else {
         cache_copies.resize(2*hparams.n_layer);
     }
-    // GLM-DSA lightning indexer: one indexer-key (kr_l) cache copy per layer. Entries stay null
-    // for non-DSA models / non-indexer layers, so update_cache_copies() is a no-op when DSA is off.
+    // DSA indexer-key cache copy. Entries stay null for non-DSA models and non-indexer layers,
+    // so update_cache_copies() is a no-op when DSA is off.
     dsa_cache_copies.resize(hparams.n_layer);
-    openpangu_cache_copies.resize(2*hparams.n_layer);
-    openpangu_cache_copies_mtp.resize(2*hparams.n_layer);
+    openpangu_cache_copies.resize(hparams.n_layer);
+    openpangu_cache_copies_mtp.resize(hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 
@@ -1196,12 +1199,13 @@ static bool llama_kv_cache_init(
     }
     if (needs_v_cache) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
-    cache.idx_l.resize(n_layer, nullptr);
 
-    // DSA lightning-indexer key cache: one [indexer_head_size, kv_size] tensor per layer.
-    // Allocated below (in the MLA branch) only when the model carries the indexer tensors.
-    const bool has_dsa_indexer = model.arch == LLM_ARCH_GLM_DSA && hparams.indexer_head_size > 0;
-    if (has_dsa_indexer) {
+    // DSA indexer-key cache: one [indexer_head_size, kv_size] tensor per indexer layer.
+    // Allocated below only when the model carries persistent DSA indexer tensors.
+    const bool has_glm_dsa_indexer = model.arch == LLM_ARCH_GLM_DSA && hparams.indexer_head_size > 0;
+    const bool has_openpangu_dsa_indexer =
+        model.arch == LLM_ARCH_OPENPANGU && hparams.indexer_head_size > 0 && hparams.n_swa > 0;
+    if (has_glm_dsa_indexer || has_openpangu_dsa_indexer) {
         cache.kr_l.resize(n_layer, nullptr);
     }
 
@@ -1253,7 +1257,7 @@ static bool llama_kv_cache_init(
             cache.k_l.push_back(kv);
             // DSA lightning-indexer key cache (MQA, single head). Store the Hadamard-rotated
             // indexer keys in F16 so a decoded token can score against ALL past keys.
-            if (has_dsa_indexer && model.layers[i].indexer_attn_k && hparams.indexer_is_full[i] && !is_mtp_tail_layer) {
+            if (has_glm_dsa_indexer && model.layers[i].indexer_attn_k && hparams.indexer_is_full[i] && !is_mtp_tail_layer) {
                 ggml_tensor * kr = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, kv_size);
                 ggml_format_name(kr, "cache_kr_l%d", i);
                 cache.kr_l[i] = kr;
@@ -1394,10 +1398,10 @@ static bool llama_kv_cache_init(
                 // DSA layers (window == 0, indexer present) also cache the per-position
                 // 128-d indexer key. Position-indexed like everything else in the cache, so
                 // the same rollback invariant applies: committed columns never change.
-                if (hparams.indexer_head_size > 0 && i < n_mtp_first_layer && hparams.openpangu_window[i] == 0 && hparams.n_swa > 0) {
+                if (has_openpangu_dsa_indexer && i < n_mtp_first_layer && hparams.openpangu_window[i] == 0) {
                     ggml_tensor * idxk = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, kv_size);
-                    ggml_format_name(idxk, "cache_idx_l%d", i);
-                    cache.idx_l[i] = idxk;
+                    ggml_format_name(idxk, "cache_kr_l%d", i);
+                    cache.kr_l[i] = idxk;
                 }
             }
 
@@ -8028,12 +8032,6 @@ struct llama_context * llama_init_from_model(
                     memory_size_k_indexer += ggml_nbytes(k);
                 }
             }
-            for (auto & k : ctx->kv_self.idx_l) {
-                if (k) {
-                    memory_size_k_indexer += ggml_nbytes(k);
-                }
-            }
-
             for (auto & v : ctx->kv_self.v_l) {
                 if (v) {
                     memory_size_v += ggml_nbytes(v);
@@ -10110,8 +10108,8 @@ struct llama_data_read_file : llama_data_read {
 
 // openPangu: refuse state I/O outright until the side state is part of the format. K/V
 // rows alone are not a complete snapshot; the MoME conv slot (s_l) and the DSA
-// indexer-key cache (idx_l) are needed to resume a sequence, and restoring
-// without them diverges silently instead of failing.
+// indexer cache are needed to resume a sequence, and restoring without them diverges
+// silently instead of failing.
 static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
     if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
         LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (conv slot and indexer cache are not serialized)\n", func);

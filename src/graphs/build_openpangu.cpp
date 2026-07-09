@@ -6,9 +6,8 @@
 #include <climits>
 #include <vector>
 
-static constexpr int OPENPANGU_CACHE_COPIES_PER_LAYER = 2;
+static constexpr int OPENPANGU_CACHE_COPIES_PER_LAYER = 1;
 static constexpr int OPENPANGU_COPY_K_CKV = 0;
-static constexpr int OPENPANGU_COPY_IDX = 1;
 static constexpr int64_t OPENPANGU_DSA_GATHER_MIN_RATIO = 2;
 // Keep these fixed constants in sync with llama_openpangu_chunked_graph_nodes()
 // in llama.cpp; the scheduler budget mirrors the chunk loops below.
@@ -24,6 +23,7 @@ static std::vector<llama_context::CacheCopy> & openpangu_cache_copies(llama_cont
 static void openpangu_clear_cache_copies(llama_context & lctx) {
     auto & copies = openpangu_cache_copies(lctx);
     std::fill(copies.begin(), copies.end(), llama_context::CacheCopy{});
+    std::fill(lctx.dsa_cache_copies.begin(), lctx.dsa_cache_copies.end(), llama_context::CacheCopy{});
 }
 
 static void openpangu_register_cache_copy(
@@ -167,7 +167,7 @@ static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm,
 //   - param_sink: 128 learned latent-space KV entries per layer, prepended to every query's
 //     attention span outside the causal/window/top-k masks.
 //   - DSA + SWA schedule: windowed base layers use the SWA mask; windowless base layers run
-//     the lightning indexer over a per-position indexer-key cache (idx_l) and restrict
+//     the lightning indexer over a per-position indexer-key cache and restrict
 //     attention to the top-k scored positions plus the sinks. Schedule-less GGUFs run dense.
 //     For prompts <= 512 tokens both mechanisms are inert and output is bit-exact to dense.
 //   - sandwich norms (post_attention / pre_mlp / post_mlp) + block_post on a layer subset.
@@ -345,7 +345,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
     ggml_tensor * sel_idx  = nullptr;   // [topk, T] per-token top-k rows, reused by gathered DSA
     bool dsa_gather_engaged = false;
     int64_t dsa_topk = 0;
-    ggml_tensor * idx_cache = (size_t) il < kv_self.idx_l.size() ? kv_self.idx_l[il] : nullptr;
+    ggml_tensor * idx_cache = (size_t) il < kv_self.kr_l.size() ? kv_self.kr_l[il] : nullptr;
     if (idx_cache && layer.indexer_attn_q_b) {
         const int64_t n_ihead = hparams.indexer_n_head;    // 24
         const int64_t d_idx   = hparams.indexer_head_size; // 128
@@ -380,7 +380,10 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
         if (il == 0) ggml_set_name(k_idx, "opg0_idx_k");
         ggml_tensor * idx_w = ggml_view_2d(ctx0, idx_cache, d_idx, n_tokens, idx_cache->nb[1], kv_head*idx_cache->nb[1]);
         ggml_tensor * cpy_idx = ggml_cpy(ctx0, k_idx, idx_w);
-        openpangu_register_cache_copy(lctx, il, OPENPANGU_COPY_IDX, cpy_idx, idx_cache->nb[1]);
+        if ((size_t) il < lctx.dsa_cache_copies.size()) {
+            lctx.dsa_cache_copies[il].cpy  = cpy_idx;
+            lctx.dsa_cache_copies[il].step = idx_cache->nb[1];
+        }
         ggml_build_forward_expand(gf, cpy_idx);
 
         if (n_kv > topk) {
