@@ -2759,6 +2759,16 @@ static int32_t mtp_accept_batch(
         return -1;
     }
 
+    if (llama_model_is_openpangu(llama_get_model(state.ctx_mtp))) {
+        // The one-token draft shortcut re-seeded below would skip re-decoding the last
+        // sampled token next round, leaving a hole at its position. openPangu's KV cache
+        // is position-addressed append-only (cell == position), so draft decodes must be
+        // position-contiguous; decline the shortcut and let the next round decode the
+        // sampled token normally.
+        mtp_invalidate_cached_draft(state, seq_id);
+        return 0;
+    }
+
     auto & last = mtp_get_last_embd(state, seq_id);
     const float * embd = llama_get_embeddings_ith(state.ctx_mtp, accepted_batch.n_tokens - 1);
     if (embd != nullptr) {
@@ -2940,6 +2950,14 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     }
 
     common_sampler_reset(smpl);
+
+    if (llama_model_is_openpangu(llama_get_model(ctx)) &&
+        llama_kv_cache_seq_pos_max(ctx, seq_id) >= n_past) {
+        // Position-addressed cache: drafting restarts at n_past, so any rows at or beyond
+        // it (the accepted-update writes one row past the accepted prefix) must be dropped
+        // first to keep the draft decode position-contiguous with the cache head.
+        llama_kv_cache_seq_rm(ctx, seq_id, n_past, -1);
+    }
 
     const int n_embd = llama_mtp_state_n_embd(ctx);
     const int n_mtp_heads_model = std::max(1, llama_model_n_nextn_layer(llama_get_model(ctx)));
