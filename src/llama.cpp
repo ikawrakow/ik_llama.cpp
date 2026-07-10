@@ -5134,6 +5134,8 @@ static int llama_dsv4_trace_eval_callback(struct ggml_tensor * tensor, bool ask,
             std::strstr(name, "raw_k") != nullptr ||
             std::strstr(name, "csa_k") != nullptr ||
             std::strstr(name, "hca_k") != nullptr ||
+            std::strstr(name, "state_persist") != nullptr ||
+            std::strstr(name, "k_write") != nullptr ||
             std::strstr(name, "mask") != nullptr ||
             std::strstr(name, "ffn_moe_weights") != nullptr ||
             std::strstr(name, "ffn_moe_out") != nullptr);
