@@ -216,6 +216,11 @@ extern "C" {
     GGML_API void                 ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool on_or_off, bool async);
     GGML_API void                 ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB);
 
+    // prefetch mmap'd MoE expert weights into the page cache
+    GGML_API bool                 ggml_backend_prefetch_init(int n_threads);
+    GGML_API void                 ggml_backend_prefetch_register_mapping(const void * addr, size_t size);
+    GGML_API void                 ggml_backend_prefetch_unregister_mapping(const void * addr);
+
     //
     // Utils
     //

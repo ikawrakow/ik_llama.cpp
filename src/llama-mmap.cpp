@@ -3,7 +3,7 @@
 #include "llama-impl.h"
 
 #include "ggml.h"
-#include "ggml-moe-prefetch.h"
+#include "ggml-backend.h"
 
 #include <cstring>
 #include <climits>
@@ -436,9 +436,7 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
-#ifdef __linux__
-        ggml_moe_prefetch_unregister_mapping(addr);
-#endif
+        ggml_backend_prefetch_unregister_mapping(addr);
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
                 LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));

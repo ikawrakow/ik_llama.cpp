@@ -26,7 +26,6 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-moe-prefetch.h"
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 
@@ -7550,14 +7549,11 @@ struct llama_context * llama_init_from_model(
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
     if (params.prefetch_experts) {
-        for (const auto & mapping : model->mappings) {
-            ggml_moe_prefetch_register_mapping(mapping->addr(), mapping->size());
-        }
-        const unsigned hw = std::thread::hardware_concurrency();
-        const int n_prefetch_threads = hw > 0 ? std::min(8, (int) hw) : 4;
-        ggml_moe_prefetch_set_n_threads(n_prefetch_threads);
         LLAMA_LOG_INFO("%s: enabling MoE expert read-ahead (prefetch_experts), %s\n", __func__,
-                ggml_moe_prefetch_enabled() ? "threaded populate engine" : "madvise fallback");
+                ggml_backend_prefetch_init(0) ? "threaded populate engine" : "madvise fallback");
+        for (const auto & mapping : model->mappings) {
+            ggml_backend_prefetch_register_mapping(mapping->addr(), mapping->size());
+        }
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);

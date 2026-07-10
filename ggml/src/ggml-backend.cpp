@@ -1229,6 +1229,22 @@ void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extr
     }
 }
 
+bool ggml_backend_prefetch_init(int n_threads) {
+    if (n_threads <= 0) {
+        n_threads = std::min(8, (int) std::thread::hardware_concurrency());
+    }
+    ggml_moe_prefetch_set_n_threads(n_threads);
+    return ggml_moe_prefetch_enabled();
+}
+
+void ggml_backend_prefetch_register_mapping(const void * addr, size_t size) {
+    ggml_moe_prefetch_register_mapping(addr, size);
+}
+
+void ggml_backend_prefetch_unregister_mapping(const void * addr) {
+    ggml_moe_prefetch_unregister_mapping(addr);
+}
+
 static inline bool ggml_backend_sched_offload_enabled(ggml_backend_sched_t sched, enum ggml_op op) {
     int int_op = (int)op;
     if (!sched || op < 0 || op >= GGML_OP_COUNT) return false;
