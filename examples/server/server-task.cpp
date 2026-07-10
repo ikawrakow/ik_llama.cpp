@@ -1073,7 +1073,7 @@ size_t server_prompt_cache::n_tokens() const {
 
 }
 
-bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot, float min_reusable_fraction) {
     thinking_tokens think_tokens;
     for (auto it = states.begin(); it != states.end(); ++it) {
         think_tokens = it->think_tokens;
@@ -1107,6 +1107,9 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
         }
         const auto lcp_cur = tokens.get_common_prefix(ctx, tokens_new_ex);
         const float f_keep_cur = float(lcp_cur.first) / tokens.size();
+        if (f_keep_cur < min_reusable_fraction) {
+            continue;
+        }
         const float sim_cur = tokens.get_tokens_similarity(ctx, tokens_new_ex, it->n_kept_prompt, it->n_discarded_prompt);
         if (sim_best < sim_cur) {
             f_keep_best = f_keep_cur;

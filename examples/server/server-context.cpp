@@ -449,8 +449,8 @@ void server_slot::prompt_save(server_prompt_cache& prompt_cache) const {
     llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0);
 }
 
-void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens) {
-    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id);
+void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction) {
+    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id, min_reusable_fraction);
     if (!res) {
         LLAMA_LOG_INFO("failed to load prompt from cache\n");
     }
@@ -1010,7 +1010,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
-            ret->prompt_load(*prompt_cache, task.tokens);
+            ret->prompt_load(*prompt_cache, task.tokens, cache_ram_similarity);
             prompt_cache->update();
 
             ret->cache_tokens = ret->server_cached_prompt.tokens.clone(); // recover cache tokens
@@ -3816,25 +3816,14 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             GGML_ASSERT(slot.ga_n == 1);
 
                             // reuse any previously computed tokens that are common with the new prompt
-                            common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, true); // string level match
-                            common_prefix prefix_nonexact = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, false);
-                            auto n_past0 = slot.cache_tokens.get_common_prefix_exact(prompt_tokens); // token level match
-                            LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past0 =  %d, n_past1 =  %d, n_past_prompt1 = %d,  n_past2 =  %d, n_past_prompt2 =  %d\n", (int32_t)slot.cache_tokens.size(), (int32_t)n_past0, (int32_t)prefix.first, (int32_t)prefix.second, (int32_t)prefix_nonexact.first, (int32_t)prefix_nonexact.second);
+                            common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens);
+                            LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past =  %d, n_past_prompt = %d\n", (int32_t)slot.cache_tokens.size(),  (int32_t)prefix.first, (int32_t)prefix.second);
                             int32_t size_threshold = 20;
-                            if (prefix.first + size_threshold < prefix_nonexact.first) {
-                                // LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
-                                prefix = prefix_nonexact;
-                            }
                             slot.n_past = prefix.first;
                             slot.n_past_prompt = prefix.second;
                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
-
-                            //if (slot.n_past != slot.n_past_prompt) {
-                            //    LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
-                            //}
                             if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
                             {
-                                LLAMA_LOG_WARN("Common part does not match fully\n");
                                 int32_t back = 4;
                                 if (prefix.second >= back && prefix.first >= back) {
                                     print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
@@ -3847,7 +3836,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             }
                         }
                     }
-                    apply_checkpoint(slot);
                     if (slot.n_past_prompt == slot.n_prompt_tokens && slot.n_past_prompt > 0) {
                         // we have to evaluate at least 1 token to generate logits.
                         LOG_INFO("we have to evaluate at least 1 token to generate logits", {
@@ -3861,6 +3849,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             slot.n_past_se--;
                         }
                     }
+                    apply_checkpoint(slot);
                     slot.n_prompt_tokens_cache = slot.n_past_prompt;
                     slot.n_prompt_tokens_processed = 0;
                 }
