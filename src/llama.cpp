@@ -28,6 +28,8 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
+#include <cmath>
+
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx);
 
 // TODO: fix these includes
@@ -5121,6 +5123,57 @@ static int llama_dsv4_trace_eval_callback(struct ggml_tensor * tensor, bool ask,
         << "\",\"type\":\"" << ggml_type_name(tensor->type)
         << "\",\"shape\":[" << tensor->ne[0] << ',' << tensor->ne[1] << ','
         << tensor->ne[2] << ',' << tensor->ne[3] << "]}";
+
+    const char * name = tensor->name;
+    const bool summarize = name != nullptr && (
+            std::strstr(name, "attn_raw") != nullptr ||
+            std::strstr(name, "attn_csa") != nullptr ||
+            std::strstr(name, "attn_hca") != nullptr ||
+            std::strstr(name, "attn_norm-2") != nullptr ||
+            std::strstr(name, "lid_score") != nullptr ||
+            std::strstr(name, "raw_k") != nullptr ||
+            std::strstr(name, "csa_k") != nullptr ||
+            std::strstr(name, "hca_k") != nullptr ||
+            std::strstr(name, "mask") != nullptr ||
+            std::strstr(name, "ffn_moe_weights") != nullptr ||
+            std::strstr(name, "ffn_moe_out") != nullptr);
+    if (summarize && tensor->data && ggml_is_contiguous(tensor) &&
+            (tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16 || tensor->type == GGML_TYPE_BF16)) {
+        const int64_t n = ggml_nelements(tensor);
+        int64_t finite = 0;
+        int64_t nan = 0;
+        int64_t inf = 0;
+        double sum = 0.0;
+        double min = INFINITY;
+        double max = -INFINITY;
+        for (int64_t i = 0; i < n; ++i) {
+            float value = 0.0f;
+            if (tensor->type == GGML_TYPE_F32) {
+                value = static_cast<const float *>(tensor->data)[i];
+            } else if (tensor->type == GGML_TYPE_F16) {
+                value = ggml_fp16_to_fp32(static_cast<const ggml_fp16_t *>(tensor->data)[i]);
+            } else {
+                value = ggml_bf16_to_fp32(static_cast<const ggml_bf16_t *>(tensor->data)[i]);
+            }
+            if (std::isfinite(value)) {
+                ++finite;
+                sum += value;
+                min = std::min(min, (double) value);
+                max = std::max(max, (double) value);
+            } else if (std::isnan(value)) {
+                ++nan;
+            } else {
+                ++inf;
+            }
+        }
+        out.seekp(-1, std::ios_base::end);
+        out << ",\"finite\":" << finite
+            << ",\"nan\":" << nan
+            << ",\"inf\":" << inf
+            << ",\"sum\":" << sum
+            << ",\"min\":" << min
+            << ",\"max\":" << max << "}";
+    }
     llama_dsv4_trace_jsonl(out.str());
     return 2;
 }

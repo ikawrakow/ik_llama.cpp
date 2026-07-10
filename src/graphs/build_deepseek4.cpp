@@ -220,9 +220,24 @@ static ggml_tensor * dsv4_pad_raw_mask_to(
     }
 
     const int64_t n_pad = n_kv_target - n_kv_cur;
-    ggml_tensor * pad = ggml_new_tensor_2d(ctx, raw_mask->type, n_pad, n_tokens);
+    GGML_UNUSED(n_tokens);
+    ggml_tensor * pad = ggml_new_tensor_2d(ctx, raw_mask->type, n_pad, raw_mask->ne[1]);
     pad = ggml_fill(ctx, pad, -INFINITY);
-    return ggml_concat(ctx, raw_mask, pad, 0);
+    return dsv4_concat_named(ctx, raw_mask, pad, 0, "dsv4_raw_mask_pad", -1);
+}
+
+static ggml_tensor * dsv4_pad_mask_tokens(
+        ggml_context * ctx,
+        ggml_tensor  * mask,
+        int64_t        n_tokens) {
+    const int64_t n_tokens_pad = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+    if (mask->ne[1] >= n_tokens_pad) {
+        return mask;
+    }
+
+    ggml_tensor * pad = ggml_new_tensor_2d(ctx, mask->type, mask->ne[0], n_tokens_pad - mask->ne[1]);
+    pad = ggml_fill(ctx, pad, -INFINITY);
+    return dsv4_concat_named(ctx, mask, pad, 1, "dsv4_mask_tokens_pad", -1);
 }
 
 static ggml_tensor * dsv4_cache_view_3d(
@@ -235,6 +250,25 @@ static ggml_tensor * dsv4_cache_view_3d(
             ggml_row_size(cache->type, n_embd_head),
             ggml_row_size(cache->type, n_embd_head),
             0);
+}
+
+// Keep DSV4 normalization graph semantics aligned with mainline. The fork's
+// generic helper may fuse RMS normalization with its scale, which changes the
+// operation boundary and the CPU accumulation path used by parity probes.
+static ggml_tensor * dsv4_build_norm_mainline(
+        ggml_context * ctx,
+        ggml_tensor  * cur,
+        ggml_tensor  * mw,
+        ggml_tensor  * mb,
+        float          eps) {
+    cur = ggml_rms_norm(ctx, cur, eps);
+    if (mw != nullptr) {
+        cur = ggml_mul(ctx, cur, mw);
+    }
+    if (mb != nullptr) {
+        cur = ggml_add(ctx, cur, mb);
+    }
+    return cur;
 }
 
 static ggml_tensor * dsv4_build_raw_k_from_idxs(
@@ -474,9 +508,8 @@ static ggml_tensor * dsv4_build_kq_zero_bias(
         return nullptr;
     }
 
-    // Mainline uses this to keep unified multi-stream DSV4 on the explicit
-    // attention path. This fork keeps DSV4 stores non-unified, so there is no
-    // direct kv_unified equivalent to trigger here yet.
+    // Mainline only needs the zero-bias fallback for unified multi-stream KV.
+    // This fork's DSV4 cache/controller is non-unified, so keep the direct FA path.
     return nullptr;
 }
 
@@ -512,7 +545,28 @@ static ggml_tensor * dsv4_build_attn(
         llama_dsv4_trace_jsonl(out.str());
     }
 
-    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    // This fork's DSV4 cache/controller is non-unified. Keep the mainline
+    // eligibility contract explicit so a future unified cache cannot silently
+    // route multi-stream masks through Flash Attention.
+    constexpr bool kv_unified = false;
+    const bool use_flash_attn = cparams.flash_attn &&
+            (!kv_unified || kq_mask->ne[3] == 1) &&
+            kq_b == nullptr;
+    if (llama_dsv4_trace_enabled()) {
+        std::ostringstream out;
+        out << "{\"event\":\"dsv4_fa_decision\""
+            << ",\"layer\":" << il
+            << ",\"enabled\":" << (use_flash_attn ? 1 : 0)
+            << ",\"flash_attn\":" << (cparams.flash_attn ? 1 : 0)
+            << ",\"kv_unified\":" << (kv_unified ? 1 : 0)
+            << ",\"mask_ne3\":" << kq_mask->ne[3]
+            << ",\"has_kq_b\":" << (kq_b != nullptr ? 1 : 0);
+        dsv4_trace_tensor_shape(out, "q", q);
+        dsv4_trace_tensor_shape(out, "k", k);
+        dsv4_trace_tensor_shape(out, "mask", kq_mask);
+        out << "}";
+        llama_dsv4_trace_jsonl(out.str());
+    }
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
@@ -756,7 +810,7 @@ static ggml_tensor * build_hca_compressed_kv_from_state(
     comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
     llm.cb(comp, "hca_comp_merge", il);
 
-    comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
+    comp = dsv4_build_norm_mainline(ctx0, comp, norm, nullptr, llm.hparams.f_norm_rms_eps);
     llm.cb(comp, "hca_comp_norm", il);
 
     ggml_tensor * comp_nope = ggml_view_3d(ctx0, comp, n_embd_head_nope, 1, n_blocks,
@@ -830,7 +884,7 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
     llm.cb(comp, tag, il);
 
-    comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
+    comp = dsv4_build_norm_mainline(ctx0, comp, norm, nullptr, llm.hparams.f_norm_rms_eps);
     llm.cb(comp, tag, il);
 
     ggml_tensor * comp_nope = ggml_view_3d(ctx0, comp, n_embd_head_nope, 1, n_blocks,
@@ -864,17 +918,19 @@ static ggml_tensor * build_top_k_mask(
     }
 
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
-    kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], 1,
+    kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3],
             kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
 
-    ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], 1, 1,
-            top_k->nb[1], top_k->nb[2], top_k->nb[3], 0);
+    ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1,
+            top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
 
-    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], 1);
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
     zeros = ggml_fill(ctx0, zeros, 0.0f);
 
     ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
-    kq_mask_top_k = ggml_view_2d(ctx0, kq_mask_top_k, kq_mask->ne[0], kq_mask->ne[1], kq_mask->nb[1], 0);
+    kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k,
+            kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3],
+            kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
     return ggml_add(ctx0, kq_mask_top_k, kq_mask);
 }
 
@@ -1020,13 +1076,13 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 &post, &comb);
         cb(cur, "hc_attn_pre", il);
 
-        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cur = dsv4_build_norm_mainline(ctx0, cur, model.layers[il].attn_norm, nullptr, hparams.f_norm_rms_eps);
         cb(cur, "attn_norm", il);
 
         ggml_tensor * qr = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq_a, cur);
         cb(qr, "qr", il);
 
-        qr = llm_build_norm(ctx0, qr, hparams, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, cb, il);
+        qr = dsv4_build_norm_mainline(ctx0, qr, model.layers[il].attn_q_a_norm, nullptr, hparams.f_norm_rms_eps);
         cb(qr, "qr_norm", il);
 
         const int64_t ratio = hparams.dsv4_compress_ratios[(size_t) il];
@@ -1059,7 +1115,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         cb(q, "q", il);
 
         ggml_tensor * kv = llm_build_lora_mm(lctx, ctx0, model.layers[il].wkv_latent, cur);
-        kv = llm_build_norm(ctx0, kv, hparams, model.layers[il].attn_kv_norm, nullptr, LLM_NORM_RMS, cb, il);
+        kv = dsv4_build_norm_mainline(ctx0, kv, model.layers[il].attn_kv_norm, nullptr, hparams.f_norm_rms_eps);
         kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
         cb(kv, "kv_norm", il);
 
@@ -1228,6 +1284,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             raw_k = dsv4_pad_raw_k_to(ctx0, raw_k, raw_attn_n_kv);
         }
         ggml_tensor * raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask, raw_kq_n_kv, n_tokens);
+        raw_mask = dsv4_pad_mask_tokens(ctx0, raw_mask, n_tokens);
         raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
         ggml_tensor * attn = nullptr;
         const char * attn_path = "raw";
@@ -1248,8 +1305,15 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             ggml_tensor * csa_mask = build_top_k_mask(ctx0,
                     dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, lctx.dsv4.csa_plan.n_kv, n_tokens),
                     top_k);
+            const bool use_fattn = cparams.flash_attn;
+            if (use_fattn) {
+                csa_mask = dsv4_pad_mask_tokens(ctx0, csa_mask, n_tokens);
+            }
             raw_k = dsv4_repeat_streams(ctx0, raw_k, csa_k->ne[3]);
-            const bool use_fattn = cparams.flash_attn && csa_mask->ne[3] == 1;
+            if (!use_fattn) {
+                raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask, raw_kq_n_kv, n_tokens);
+                raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
+            }
             if (use_fattn && csa_mask->type != GGML_TYPE_F16) {
                 csa_mask = ggml_cast(ctx0, csa_mask, GGML_TYPE_F16);
             }
@@ -1257,16 +1321,20 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 raw_mask = ggml_cast(ctx0, raw_mask, csa_mask->type);
             }
             ggml_tensor * k_all = dsv4_concat_named(ctx0, raw_k, csa_k, 2, "dsv4_raw_plus_csa_k", il);
-            ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
+            ggml_tensor * kq_mask = dsv4_concat_named(ctx0, raw_mask, csa_mask, 0, "dsv4_raw_plus_csa_mask", il);
             ggml_tensor * kq_b = dsv4_build_kq_zero_bias(ctx0, cparams, kq_mask, q->ne[1]);
+            llama_cparams csa_cparams = cparams;
+            csa_cparams.flash_attn = cparams.flash_attn;
             cb(csa_k, "csa_k", il);
             cb(k_all, "csa_k_all", il);
             cb(kq_mask, "csa_kq_mask", il);
-            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, il);
+            attn = dsv4_build_attn(ctx0, hparams, csa_cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, il);
             cb(attn, "attn_csa", il);
         } else if (ratio == llama_context::dsv4_runtime::HCA_RATIO &&
                 lctx.dsv4.inputs.hca.kq_mask != nullptr &&
                 lctx.dsv4.hca_plan.n_kv > 0 &&
+                std::any_of(lctx.dsv4.hca_plan.n_visible.begin(), lctx.dsv4.hca_plan.n_visible.end(),
+                        [](int32_t n_visible) { return n_visible > 0; }) &&
                 !cparams.k_cache_hadamard) {
             attn_path = "hca";
             ggml_tensor * hca_k = dsv4_comp_get_k(ctx0,
@@ -1275,21 +1343,20 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                     n_embd_head,
                     lctx.dsv4.cache.hca_k[(size_t) il]->ne[1]/std::max<uint32_t>(1, lctx.dsv4.cache.n_stream));
             ggml_tensor * hca_mask = dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.hca.kq_mask, lctx.dsv4.hca_plan.n_kv, n_tokens);
+            hca_mask = dsv4_pad_mask_tokens(ctx0, hca_mask, n_tokens);
             raw_k = dsv4_repeat_streams(ctx0, raw_k, hca_k->ne[3]);
-            const bool use_fattn = cparams.flash_attn && hca_mask->ne[3] == 1;
-            if (use_fattn && hca_mask->type != GGML_TYPE_F16) {
-                hca_mask = ggml_cast(ctx0, hca_mask, GGML_TYPE_F16);
-            }
             if (raw_mask->type != hca_mask->type) {
                 raw_mask = ggml_cast(ctx0, raw_mask, hca_mask->type);
             }
             ggml_tensor * k_all = dsv4_concat_named(ctx0, raw_k, hca_k, 2, "dsv4_raw_plus_hca_k", il);
-            ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
+            ggml_tensor * kq_mask = dsv4_concat_named(ctx0, raw_mask, hca_mask, 0, "dsv4_raw_plus_hca_mask", il);
             ggml_tensor * kq_b = dsv4_build_kq_zero_bias(ctx0, cparams, kq_mask, q->ne[1]);
+            llama_cparams hca_cparams = cparams;
+            hca_cparams.flash_attn = cparams.flash_attn;
             cb(hca_k, "hca_k", il);
             cb(k_all, "hca_k_all", il);
             cb(kq_mask, "hca_kq_mask", il);
-            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, il);
+            attn = dsv4_build_attn(ctx0, hparams, hca_cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, il);
             cb(attn, "attn_hca", il);
         } else {
             ggml_tensor * kq_b = dsv4_build_kq_zero_bias(ctx0, cparams, raw_mask, q->ne[1]);
@@ -1379,7 +1446,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 &post, &comb);
         cb(cur, "hc_ffn_pre", il);
 
-        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cur = dsv4_build_norm_mainline(ctx0, cur, model.layers[il].ffn_norm, nullptr, hparams.f_norm_rms_eps);
         cb(cur, "ffn_norm", il);
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
@@ -1446,7 +1513,15 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             model.hc_head_base);
     cb(out, "hc_head", -1);
 
-    out = build_output(lctx, ctx0, out, model.output, model.output_norm, cb);
+    // Match mainline DSV4's explicit final RMS norm + weight multiply rather
+    // than routing this boundary through the fork's fused generic output norm.
+    if (model.output_norm != nullptr) {
+        out = dsv4_build_norm_mainline(ctx0, out, model.output_norm, nullptr, hparams.f_norm_rms_eps);
+        cb(out, "result_norm", -1);
+        out = build_output(lctx, ctx0, out, model.output, nullptr, cb);
+    } else {
+        out = build_output(lctx, ctx0, out, model.output, nullptr, cb);
+    }
     cb(out, "result_output", -1);
 
     ggml_build_forward_expand(gf, out);
