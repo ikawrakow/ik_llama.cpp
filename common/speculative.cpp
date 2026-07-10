@@ -272,8 +272,8 @@ struct common_speculative_state_mtp : public common_speculative_state {
         LOG_INF("%s: MTP context ready (n_ctx=%d, constant_draft_positions=%s)\n", __func__,
                 llama_n_ctx(ctx_mtp), constant_draft_positions ? "true" : "false");
         if (n_heads_model > 1) {
-            LOG_INF("%s: model carries %d NextN/MTP heads; drafting defaults to a single head "
-                    "(request more per stage with heads=N, or heads=0 for all)\n",
+            LOG_INF("%s: model carries %d NextN/MTP heads; heads=1 is the default, while "
+                    "heads>1 and heads=0 (all model heads) are experimental\n",
                     __func__, n_heads_model);
         }
     }

@@ -3314,7 +3314,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  cpu          serialise state via llama_state_seq; re-decode on rejection" });
     options.push_back({ "*", "--spec-type SPEC[:k=v,...]",      "canonical speculative stage entry; repeat for a supported two-stage chain.\n"
                                                               "types: none, draft, dflash, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
-                                                              "canonical keys: n_max,n_min,p_min,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
+                                                              "canonical keys: n_max,n_min,p_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
+                                                              "MTP heads: heads=1 is the default; heads>1 and heads=0 (all model heads) are experimental\n"
                                                               "for comma-bearing string values, quote the value inside the stage payload for normal shell use\n"
                                                               "if argv is passed directly without shell unescaping, the parser also accepts escaped commas as \\,\n"
                                                               "examples: --spec-type mtp:n_max=1,p_min=0.0\n"
