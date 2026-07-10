@@ -396,7 +396,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
                 ggml_row_size(indexer_q->type, rope_dim));
 
         indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
-                LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+                rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
 
         // {head_size, n_ihead, n_tokens}
@@ -419,7 +419,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             ggml_row_size(indexer_k->type, rope_dim));
 
     indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot,
-            LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+            rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
 
     // {head_size, 1, n_tokens}
@@ -489,6 +489,16 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         indexer_score = ggml_cast(ctx0, indexer_score, GGML_TYPE_F32);
         cb(indexer_score, "indexer_score_f32", il);
     }
+
+    if (cparams.flash_attn && cparams.fused_idx_topk) {
+        if (lctx.inp_dsa_sink) {
+            indexer_score = ggml_add(ctx0, indexer_score, lctx.inp_dsa_sink);
+            cb(indexer_score, "dsa_indexer_score_sink", il);
+            ggml_build_forward_expand(gf, indexer_score);
+        }
+        return ggml_indexer_topk(ctx0, indexer_k_b, indexer_q, indexer_weights, indexer_score, GGML_UNARY_OP_RELU, n_top_k);
+    }
+
     if (indexer_q->ne[2] <= 8) {
         // This covers TG and small batches (as needed for instance for speculative decoding). It is quite a bit faster than
         // the loop over attention heads in the other branch. We limit it to a maximum of 8 tokens to limit compute buffer size.

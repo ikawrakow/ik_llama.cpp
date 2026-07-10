@@ -704,6 +704,7 @@ extern "C" {
         GGML_OP_FUSED_NORM,
         GGML_OP_FUSED_RMS_RMS_ADD,
         GGML_OP_BLEND,
+        GGML_OP_INDEXER_TOPK,
 
         GGML_OP_COUNT,
     };
@@ -2565,6 +2566,15 @@ extern "C" {
             struct ggml_tensor  * state,
             struct ggml_tensor  * saved_steps);
 
+    GGML_API struct ggml_tensor * ggml_indexer_topk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * w,
+            struct ggml_tensor  * mask,
+            enum ggml_unary_op    op,
+            int                   n_top_k);
+
     // custom operators
 
     typedef void (*ggml_unary_op_f32_t) (const int, float *, const float *);
@@ -3135,7 +3145,6 @@ extern "C" {
     GGML_API int ggml_cpu_has_blas       (void);
     GGML_API int ggml_cpu_has_cuda       (void);
     GGML_API int ggml_cpu_has_vulkan     (void);
-    GGML_API int ggml_cpu_has_kompute    (void);
     GGML_API int ggml_cpu_has_gpublas    (void);
     GGML_API int ggml_cpu_has_sse3       (void);
     GGML_API int ggml_cpu_has_ssse3      (void);
