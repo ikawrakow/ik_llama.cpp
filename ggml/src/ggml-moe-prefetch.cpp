@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-// chunk granularity for reads; big enough to amortize syscall + seek cost,
+// chunk granularity; big enough to amortize syscall cost,
 // small enough to spread one expert (~MBs) across several workers.
 static constexpr size_t GGML_MOE_PREFETCH_CHUNK = 2u*1024u*1024u;
 // lookahead jobs are dropped beyond this queue depth so a stalled consumer
@@ -452,7 +452,7 @@ void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor * node, int ith) {
     // fire-and-forget enqueue, idempotent within the current epoch; a no-op
     // when the scheduler hook already covered this node (the self-enqueue
     // handles pure-CPU graphs). We deliberately do not wait; the compute
-    // threads' demand faults overlap with the worker preads, which run ahead
+    // threads' demand faults overlap with the workers' populates, which run ahead
     // in the same expert-index order.
     ggml_moe_prefetch_node(node);
 }

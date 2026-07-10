@@ -9,9 +9,6 @@
 extern "C" {
 #endif
 
-// Internal to ggml; the public entry points are the ggml_backend_prefetch_*
-// wrappers in ggml-backend.h.
-
 // mapping registry; a registered range marks tensors as mmap-backed and
 // eligible for prefetch. Nothing is opened or retained beyond (base, size).
 void ggml_moe_prefetch_register_mapping  (const void * base, size_t size);
