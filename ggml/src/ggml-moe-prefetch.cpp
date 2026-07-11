@@ -335,9 +335,6 @@ static bool populate_read_supported() {
 }
 
 void ggml_moe_prefetch_set_n_threads(int n_threads) {
-    if (const char * env = getenv("GGML_MOE_PREFETCH_THREADS")) {
-        n_threads = atoi(env);
-    }
     auto & s = state();
     std::lock_guard<std::mutex> lock(s.pool_mtx);
     if (n_threads <= 0) {

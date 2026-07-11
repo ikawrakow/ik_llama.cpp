@@ -497,6 +497,7 @@ extern "C" {
         float thresh_experts;
         bool only_active_experts;
         bool prefetch_experts;  // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
+        int  prefetch_experts_threads; // number of expert prefetch workers (<=0 = auto)
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
         bool v_cache_hadamard;  // if true, apply Hadamard transfrom to V-cache (needs FA)
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling

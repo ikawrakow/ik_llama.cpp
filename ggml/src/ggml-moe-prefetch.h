@@ -14,8 +14,7 @@ extern "C" {
 void ggml_moe_prefetch_register_mapping  (const void * base, size_t size);
 void ggml_moe_prefetch_unregister_mapping(const void * base);
 
-// worker pool control. n_threads > 0 (re)creates the pool, 0 shuts it down.
-// Overridden by env GGML_MOE_PREFETCH_THREADS when set.
+// worker pool control; n_threads > 0 (re)creates the pool, <= 0 shuts it down
 void ggml_moe_prefetch_set_n_threads(int n_threads);
 bool ggml_moe_prefetch_enabled(void);
 

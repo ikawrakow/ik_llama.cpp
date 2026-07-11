@@ -6626,6 +6626,7 @@ struct llama_context_params llama_context_default_params() {
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
         /*.prefetch_experts            =*/ false,
+        /*.prefetch_experts_threads    =*/ 0,
         /*.k_cache_hadamard            =*/ false,
         /*.v_cache_hadamard            =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
@@ -7549,7 +7550,7 @@ struct llama_context * llama_init_from_model(
     }
     if (params.prefetch_experts) {
         LLAMA_LOG_INFO("%s: enabling MoE expert read-ahead (prefetch_experts), %s\n", __func__,
-                ggml_backend_prefetch_init(0) ? "threaded populate engine" : "madvise fallback");
+                ggml_backend_prefetch_init(params.prefetch_experts_threads) ? "threaded populate engine" : "madvise fallback");
         for (const auto & mapping : model->mappings) {
             ggml_backend_prefetch_register_mapping(mapping->addr(), mapping->size());
         }

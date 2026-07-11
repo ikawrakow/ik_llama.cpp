@@ -1231,7 +1231,7 @@ void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extr
 
 bool ggml_backend_prefetch_init(int n_threads) {
     if (n_threads <= 0) {
-        n_threads = std::min(8, (int) std::thread::hardware_concurrency());
+        n_threads = std::max(1, std::min(8, (int) std::thread::hardware_concurrency()));
     }
     ggml_moe_prefetch_set_n_threads(n_threads);
     return ggml_moe_prefetch_enabled();
