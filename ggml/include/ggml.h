@@ -2467,6 +2467,10 @@ extern "C" {
             float                 max_bias,
             float                 softcap);
 
+    // Backend hint stored in ggml_flash_attn_ext op_params slot 4.
+    // Negative values request the generic implementation instead of IQK FA.
+    #define GGML_FLASH_ATTN_EXT_IQK_DISABLED (-1)
+
     GGML_API void ggml_flash_attn_ext_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec);

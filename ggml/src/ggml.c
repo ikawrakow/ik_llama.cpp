@@ -15013,8 +15013,8 @@ static void ggml_compute_forward_concat_any(
 
     const char * x;
 
-    // Keep the reference stride-aware behavior here. DSV4 naturally concatenates
-    // along dim 1/2, and assuming contiguous slices causes backend-only failures.
+    // Preserve arbitrary strides because DSV4 concatenates views along dim 1/2;
+    // treating those views as contiguous produces backend-only failures.
     for (int64_t i3 = 0; i3 < ne3; ++i3) {
         for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
             for (int64_t i1 = 0; i1 < ne1; ++i1) {
@@ -21923,7 +21923,9 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
 #if GGML_USE_IQK_MULMAT
     // For now we do not implement sinks in the iqk FA implementation
-    if (iqk_flash_attn_noalibi(q->type, mask ? mask->type : GGML_TYPE_F16, max_bias,
+    // DSV4 marks its FA nodes with the shared generic-FA backend hint.
+    const bool use_iqk_fa = dst->op_params[4] != GGML_FLASH_ATTN_EXT_IQK_DISABLED;
+    if (use_iqk_fa && iqk_flash_attn_noalibi(q->type, mask ? mask->type : GGML_TYPE_F16, max_bias,
                 q->ne[3], q->ne[2], q->nb[3], q->nb[2],
                 k->ne[3], k->ne[2], k->nb[3], k->nb[2],
                 v->ne[3], v->ne[2], v->nb[3], v->nb[2],

@@ -1595,7 +1595,9 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
 
-                // deepseek MLA parameters
+                // Shared latent-attention ranks used by common hparams and
+                // cache helpers. DSV4 has its own CSA/HCA execution graph;
+                // this does not select the DeepSeek V3 MLA path.
                 ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,      hparams.n_lora_q);
                 ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv, false);
                 if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_lora_kv == 0) {

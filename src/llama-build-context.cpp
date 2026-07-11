@@ -2299,6 +2299,12 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             }
         }
 
+        // DSV4's residual/hyperconnection boundary must stay on the CPU until
+        // CUDA execution of the mixed HC post path has been parity-validated.
+        if (model.arch == LLM_ARCH_DEEPSEEK4 && strcmp(name, "l_out") == 0) {
+            ggml_backend_sched_set_tensor_backend(lctx.sched, cur, lctx.backend_cpu);
+        }
+
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
         // FIXME: fix in ggml_backend_sched
         const bool full_offload = lctx.model.n_gpu_layers > (int)lctx.model.hparams.n_layer;

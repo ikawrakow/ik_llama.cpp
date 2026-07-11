@@ -90,7 +90,6 @@ void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_conte
 //#endif
 #define LU8(x) (const char*)(u8##x)
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <cctype>
 #include <cfloat>
@@ -5061,190 +5060,6 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     return n_outputs_max;
 }
 
-static void llama_dsv4_trace_decode_stage(
-        const llama_context & lctx,
-        const char * stage,
-        const llama_batch * ubatch = nullptr,
-        const ggml_cgraph * gf = nullptr,
-        const ggml_tensor * tensor = nullptr) {
-    if (lctx.model.arch != LLM_ARCH_DEEPSEEK4 || !llama_dsv4_trace_enabled()) {
-        return;
-    }
-
-    std::ostringstream out;
-    out << "{\"event\":\"decode_stage\",\"stage\":\"" << stage << "\"";
-
-    if (ubatch != nullptr) {
-        out << ",\"n_tokens\":" << ubatch->n_tokens
-            << ",\"all_seq_id\":" << ubatch->all_seq_id;
-    }
-
-    out << ",\"kv_head\":" << lctx.kv_self.head
-        << ",\"kv_n\":" << lctx.kv_self.n
-        << ",\"n_outputs\":" << lctx.n_outputs;
-
-    if (gf != nullptr) {
-        out << ",\"graph_nodes\":" << gf->n_nodes
-            << ",\"graph_leafs\":" << gf->n_leafs;
-    }
-
-    if (tensor != nullptr) {
-        out << ",\"tensor\":\"" << tensor->name << "\""
-            << ",\"type\":\"" << ggml_type_name(tensor->type) << "\""
-            << ",\"shape\":[" << tensor->ne[0] << ',' << tensor->ne[1] << ','
-            << tensor->ne[2] << ',' << tensor->ne[3] << "]";
-    }
-
-    out << "}";
-    llama_dsv4_trace_jsonl(out.str());
-}
-
-static bool llama_dsv4_trace_eval_enabled() {
-    const char * env = std::getenv("LLAMA_DSV4_TRACE_EVAL");
-    return env != nullptr && *env != '\0' &&
-            std::strcmp(env, "0") != 0 &&
-            std::strcmp(env, "false") != 0 &&
-            std::strcmp(env, "off") != 0;
-}
-
-static int llama_dsv4_trace_eval_callback(struct ggml_tensor * tensor, bool ask, void * user_data) {
-    auto * lctx = static_cast<llama_context *>(user_data);
-    if (lctx == nullptr || lctx->model.arch != LLM_ARCH_DEEPSEEK4 || !llama_dsv4_trace_enabled()) {
-        return 0;
-    }
-
-    if (ask) {
-        return 2;
-    }
-
-    std::ostringstream out;
-    out << "{\"event\":\"eval_node\",\"name\":\"" << tensor->name
-        << "\",\"op\":\"" << ggml_op_name(tensor->op)
-        << "\",\"type\":\"" << ggml_type_name(tensor->type)
-        << "\",\"shape\":[" << tensor->ne[0] << ',' << tensor->ne[1] << ','
-        << tensor->ne[2] << ',' << tensor->ne[3] << "]}";
-
-    const char * name = tensor->name;
-    const bool summarize = name != nullptr && (
-            std::strstr(name, "attn_raw") != nullptr ||
-            std::strstr(name, "attn_csa") != nullptr ||
-            std::strstr(name, "attn_hca") != nullptr ||
-            std::strstr(name, "attn_norm-2") != nullptr ||
-            std::strstr(name, "lid_score") != nullptr ||
-            std::strstr(name, "raw_k") != nullptr ||
-            std::strstr(name, "csa_k") != nullptr ||
-            std::strstr(name, "hca_k") != nullptr ||
-            std::strstr(name, "state_persist") != nullptr ||
-            std::strstr(name, "k_write") != nullptr ||
-            std::strstr(name, "mask") != nullptr ||
-            std::strstr(name, "ffn_moe_weights") != nullptr ||
-            std::strstr(name, "ffn_moe_out") != nullptr);
-    if (summarize && tensor->data && ggml_is_contiguous(tensor) &&
-            (tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16 || tensor->type == GGML_TYPE_BF16)) {
-        const int64_t n = ggml_nelements(tensor);
-        int64_t finite = 0;
-        int64_t nan = 0;
-        int64_t inf = 0;
-        double sum = 0.0;
-        double min = INFINITY;
-        double max = -INFINITY;
-        for (int64_t i = 0; i < n; ++i) {
-            float value = 0.0f;
-            if (tensor->type == GGML_TYPE_F32) {
-                value = static_cast<const float *>(tensor->data)[i];
-            } else if (tensor->type == GGML_TYPE_F16) {
-                value = ggml_fp16_to_fp32(static_cast<const ggml_fp16_t *>(tensor->data)[i]);
-            } else {
-                value = ggml_bf16_to_fp32(static_cast<const ggml_bf16_t *>(tensor->data)[i]);
-            }
-            if (std::isfinite(value)) {
-                ++finite;
-                sum += value;
-                min = std::min(min, (double) value);
-                max = std::max(max, (double) value);
-            } else if (std::isnan(value)) {
-                ++nan;
-            } else {
-                ++inf;
-            }
-        }
-        out.seekp(-1, std::ios_base::end);
-        out << ",\"finite\":" << finite
-            << ",\"nan\":" << nan
-            << ",\"inf\":" << inf
-            << ",\"sum\":" << sum
-            << ",\"min\":" << min
-            << ",\"max\":" << max << "}";
-    }
-    llama_dsv4_trace_jsonl(out.str());
-    return 2;
-}
-
-static void llama_dsv4_trace_logits_summary(
-        ggml_backend_t backend,
-        const float * logits,
-        int32_t n_vocab,
-        int32_t n_outputs) {
-    if (!backend || logits == nullptr || n_vocab <= 0 || n_outputs <= 0 || !llama_dsv4_trace_enabled()) {
-        return;
-    }
-
-    ggml_backend_synchronize(backend);
-
-    const float * row = logits + (size_t) (n_outputs - 1) * (size_t) n_vocab;
-    int32_t finite_count = 0;
-    int32_t nan_count = 0;
-    int32_t inf_count = 0;
-    float min_val = 0.0f;
-    float max_val = 0.0f;
-    bool have_finite = false;
-    std::array<int32_t, 5> top_ids = { -1, -1, -1, -1, -1 };
-    std::array<float,   5> top_vals = { -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY };
-
-    for (int32_t i = 0; i < n_vocab; ++i) {
-        const float v = row[i];
-        if (std::isnan(v)) {
-            ++nan_count;
-            continue;
-        }
-        if (!std::isfinite(v)) {
-            ++inf_count;
-            continue;
-        }
-
-        ++finite_count;
-        if (!have_finite) {
-            min_val = max_val = v;
-            have_finite = true;
-        } else {
-            min_val = std::min(min_val, v);
-            max_val = std::max(max_val, v);
-        }
-
-        for (int k = 0; k < 5; ++k) {
-            if (v > top_vals[(size_t) k]) {
-                for (int s = 4; s > k; --s) {
-                    top_vals[(size_t) s] = top_vals[(size_t) (s - 1)];
-                    top_ids[(size_t) s] = top_ids[(size_t) (s - 1)];
-                }
-                top_vals[(size_t) k] = v;
-                top_ids[(size_t) k] = i;
-                break;
-            }
-        }
-    }
-
-    std::ostringstream out;
-    out << "{\"event\":\"logits_summary\",\"finite_count\":" << finite_count
-        << ",\"nan_count\":" << nan_count
-        << ",\"inf_count\":" << inf_count
-        << ",\"min\":" << (have_finite ? min_val : 0.0f)
-        << ",\"max\":" << (have_finite ? max_val : 0.0f)
-        << ",\"top_ids\":[" << top_ids[0] << ',' << top_ids[1] << ',' << top_ids[2] << ',' << top_ids[3] << ',' << top_ids[4] << "]"
-        << ",\"top_vals\":[" << top_vals[0] << ',' << top_vals[1] << ',' << top_vals[2] << ',' << top_vals[3] << ',' << top_vals[4] << "]}";
-    llama_dsv4_trace_jsonl(out.str());
-}
-
 
 static void llama_graph_compute(
         llama_context & lctx,
@@ -5630,7 +5445,6 @@ static int llama_decode_internal(
             }
 
             gf = llm_build_context::llama_build_graph(lctx, u_batch, false);
-            llama_dsv4_trace_decode_stage(lctx, "graph_built", &u_batch, gf);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("build_graph(...): %d us\n", int(tim2-tim1));
@@ -5640,7 +5454,6 @@ static int llama_decode_internal(
             tim1 = ggml_time_us();
 #endif
             ggml_backend_sched_alloc_graph(lctx.sched, gf);
-            llama_dsv4_trace_decode_stage(lctx, "graph_allocated", &u_batch, gf);
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
@@ -5657,7 +5470,6 @@ static int llama_decode_internal(
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
             gf = prev->graph;
-            llama_dsv4_trace_decode_stage(lctx, "graph_reused", &u_batch, gf);
         }
 
         if (cparams.mtp_op_type != MTP_OP_NONE) {
@@ -5673,7 +5485,6 @@ static int llama_decode_internal(
             if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, true, false)) {
                 return GGML_STATUS_FAILED;
             }
-        llama_dsv4_trace_decode_stage(lctx, "inputs_ready", &u_batch, gf);
 
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
@@ -5727,13 +5538,11 @@ static int llama_decode_internal(
                 }
             }
         }
-        llama_dsv4_trace_decode_stage(lctx, "result_selected", &u_batch, gf, res);
         // LLAMA_LOG_INFO("graph build time: %.3f ms (%d nodes, %d leafs)\n", (ggml_time_us() - t_start_us)/1000.0, gf->n_nodes, gf->n_leafs);
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
         llama_set_inputs(lctx, u_batch);
-        llama_dsv4_trace_decode_stage(lctx, "inputs_set", &u_batch, gf);
 #if IK_PRINT_TIMING == 1
         tim2 = ggml_time_us();
         printf("set_inputs(...): %d us\n", int(tim2-tim1));
@@ -5741,27 +5550,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
-        llama_dsv4_trace_decode_stage(lctx, "compute_submit", &u_batch, gf);
-        ggml_backend_sched_eval_callback prev_eval_cb = nullptr;
-        void * prev_eval_cb_user_data = nullptr;
-        const bool install_dsv4_eval_trace =
-                lctx.model.arch == LLM_ARCH_DEEPSEEK4 &&
-                llama_dsv4_trace_eval_enabled() &&
-                lctx.cparams.cb_eval == nullptr;
-        if (install_dsv4_eval_trace) {
-            prev_eval_cb = lctx.cparams.cb_eval;
-            prev_eval_cb_user_data = lctx.cparams.cb_eval_user_data;
-            lctx.cparams.cb_eval = llama_dsv4_trace_eval_callback;
-            lctx.cparams.cb_eval_user_data = &lctx;
-            ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
-        }
         llama_graph_compute(lctx, gf, n_threads);
-        if (install_dsv4_eval_trace) {
-            lctx.cparams.cb_eval = prev_eval_cb;
-            lctx.cparams.cb_eval_user_data = prev_eval_cb_user_data;
-            ggml_backend_sched_set_eval_callback(lctx.sched, prev_eval_cb, prev_eval_cb_user_data);
-        }
-        llama_dsv4_trace_decode_stage(lctx, "compute_returned", &u_batch, gf);
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
         tim2 = ggml_time_us();
@@ -5818,7 +5607,6 @@ static int llama_decode_internal(
                 ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(lctx.sched, res);
                 GGML_ASSERT(backend_res != nullptr);
                 GGML_ASSERT(lctx.logits != nullptr);
-                llama_dsv4_trace_decode_stage(lctx, "logits_backend_ready", &u_batch, gf, res);
 
                 float * logits_out = lctx.logits + n_outputs_prev*n_vocab;
                 const int32_t n_outputs_new = lctx.n_outputs;
@@ -5841,10 +5629,6 @@ static int llama_decode_internal(
                         }
                     } else {
                         ggml_backend_tensor_get_async(backend_res, res, logits_out, 0, n_outputs_new*n_vocab*sizeof(float));
-                    }
-                    llama_dsv4_trace_decode_stage(lctx, "logits_copy_queued", &u_batch, gf, res);
-                    if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && llama_dsv4_trace_enabled()) {
-                        llama_dsv4_trace_logits_summary(backend_res, logits_out, n_vocab, n_outputs_new);
                     }
                 }
             }
@@ -6363,6 +6147,7 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
 
 static bool get_can_shift(struct llama_context & lctx) {
     bool no_shift = lctx.model.is_mla_model();
+    no_shift = no_shift || lctx.model.arch == LLM_ARCH_DEEPSEEK4;
     no_shift = no_shift || lctx.model.hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE;
     return !no_shift;
 }
@@ -6373,6 +6158,10 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
     // apply K-shift if needed
     if (lctx.model.hparams.rope_type != LLAMA_ROPE_TYPE_NONE && lctx.kv_self.has_shift) {
         if (!get_can_shift(lctx)) {
+            if (lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
+                LLAMA_LOG_WARN("%s: DeepSeek4 does not support context shifting; use --no-context-shift or increase context size\n",
+                               __func__);
+            }
             return 1;
         }
 
@@ -7127,6 +6916,13 @@ struct llama_context * llama_init_from_model(
 
     if (params.type_v != GGML_TYPE_F16 && params.type_v != GGML_TYPE_BF16 && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
+        return nullptr;
+    }
+
+    if (model->arch == LLM_ARCH_DEEPSEEK4 &&
+            (ggml_is_quantized(params.type_k) || params.k_cache_hadamard)) {
+        LLAMA_LOG_ERROR("%s: DeepSeek4 compressed attention currently supports only F16/BF16 K-cache; quantized K-cache and K-cache Hadamard are not implemented\n",
+                        __func__);
         return nullptr;
     }
 
