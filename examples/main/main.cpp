@@ -941,17 +941,20 @@ int main(int argc, char ** argv) {
 
             const int n_predict_budget = n_remain < 0 ? std::numeric_limits<int>::max() : n_remain;
             bool used_speculative = false;
+            const bool sampled_before_from_carry = have_speculative_sampled;
+            llama_token sampled_before = LLAMA_TOKEN_NULL;
+            if (sampled_before_from_carry) {
+                sampled_before = speculative_sampled;
+                have_speculative_sampled = false;
+                speculative_sampled = LLAMA_TOKEN_NULL;
+            }
+            bool sampled_before_ready = sampled_before_from_carry;
 
             if (spec != nullptr && n_predict_budget != 1) {
-                const bool sampled_before_from_carry = have_speculative_sampled;
-                llama_token sampled_before = LLAMA_TOKEN_NULL;
-                if (sampled_before_from_carry) {
-                    sampled_before = speculative_sampled;
-                    have_speculative_sampled = false;
-                    speculative_sampled = LLAMA_TOKEN_NULL;
-                } else {
+                if (!sampled_before_ready) {
                     sampled_before = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
                     common_sampler_accept(ctx_sampling, ctx, sampled_before, /* apply_grammar= */ true);
+                    sampled_before_ready = true;
                 }
                 static const llama_tokens empty_speculative_tokens;
                 const llama_tokens & draft_history =
@@ -981,7 +984,7 @@ int main(int argc, char ** argv) {
 
                 const int min_usable_draft = params.speculative.get_min_usable_stage_n_min();
                 if ((int) draft.size() >= min_usable_draft && (!draft.empty() || n_predict_budget > 1)) {
-                    if (llama_model_has_recurrent(model)) {
+                    if (llama_model_has_recurrent(model) || llama_model_is_openpangu(model)) {
                         if (!common_speculative_before_draft(
                             spec,
                             model,
@@ -1066,23 +1069,42 @@ int main(int argc, char ** argv) {
             }
 
             if (!used_speculative) {
-                const llama_token id = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
-                common_sampler_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
+                if (sampled_before_ready) {
+                    // A carried token was already displayed by the previous speculative step but
+                    // still needs to be decoded. If a new draft is unusable, stage that token instead
+                    // of sampling the unchanged logits again and emitting it twice.
+                    embd.push_back(sampled_before);
+                    embd_is_prompt = false;
+                    input_echo = true;
 
-                LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, ctx_sampling->prev).c_str());
+                    if (sampled_before_from_carry) {
+                        emitted_generated = false;
+                    } else {
+                        emitted = embd;
+                        emitted_generated = true;
+                        --n_remain;
+                    }
 
-                embd.push_back(id);
-                emitted = embd;
-                embd_is_prompt = false;
-                emitted_generated = true;
+                    LOG("n_remain: %d\n", n_remain);
+                } else {
+                    const llama_token id = common_sampler_sample_legacy(ctx_sampling, ctx, ctx_guidance);
+                    common_sampler_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
 
-                // echo this to console
-                input_echo = true;
+                    LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, ctx_sampling->prev).c_str());
 
-                // decrement remaining sampling budget
-                --n_remain;
+                    embd.push_back(id);
+                    emitted = embd;
+                    embd_is_prompt = false;
+                    emitted_generated = true;
 
-                LOG("n_remain: %d\n", n_remain);
+                    // echo this to console
+                    input_echo = true;
+
+                    // decrement remaining sampling budget
+                    --n_remain;
+
+                    LOG("n_remain: %d\n", n_remain);
+                }
             } else {
                 input_echo = true;
             }

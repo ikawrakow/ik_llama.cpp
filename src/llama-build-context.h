@@ -139,6 +139,8 @@ struct llm_build_context {
 
     ggml_tensor * build_inp_KQ_mask_swa(bool causal = true);
 
+    ggml_tensor * build_inp_KQ_mask_swa_win(int64_t n_kv_win, bool causal = true);
+
     ggml_tensor * build_inp_mean();
 
     ggml_tensor * build_inp_cls();
@@ -273,6 +275,39 @@ struct llm_build_context {
     ggml_cgraph * build_arctic();
 
     ggml_cgraph * build_deepseek2();
+    ggml_cgraph * build_openpangu();
+
+    // openPangu attention sublayer body (shared by base layers and the NextN/MTP head):
+    // input is the already-input-normed hidden; returns the post-o_proj attention output.
+    ggml_tensor * build_openpangu_attention(
+        ggml_cgraph * gf,
+        const struct llama_layer & layer,
+        int il,
+        ggml_tensor * x_normed,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_pos,
+        ggml_tensor * conv_state,
+        ggml_tensor * seq_qnext,
+        float kq_scale,
+        bool KQ_mask_swa_windowed = false);
+
+    // openPangu NextN/MTP head (plain-residual block, no mHC): eh_proj stitching ->
+    // attention -> MoE -> shared head. Returns the draft logits tensor.
+    ggml_tensor * build_openpangu_mtp(
+        const struct llama_layer & mtp_layer,
+        ggml_tensor * prev_embeddings,
+        ggml_cgraph * gf,
+        int il,
+        ggml_tensor * inp_pos,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_out_ids,
+        ggml_tensor * inp_tokens,
+        ggml_tensor * seq_qnext,
+        ggml_tensor ** full_hidden_out = nullptr,
+        bool select_outputs = true,
+        bool build_logits = true,
+        bool cache_writes_only = false,
+        bool KQ_mask_swa_windowed = false);
 
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,

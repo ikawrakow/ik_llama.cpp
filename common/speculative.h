@@ -82,6 +82,13 @@ void common_speculative_free(common_speculative * spec);
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt);
 
+// apply per-request runtime parameters before prompt warmup can touch companion state
+void common_speculative_prepare_request(common_speculative * spec, common_params_speculative & params);
+
+// true when the active request drafts with more MTP heads than the cached prefix was
+// warmed with; the caller must then reprocess the prompt from position 0
+bool common_speculative_mtp_requires_fresh_warmup(const common_speculative * spec);
+
 // sample up to n_draft tokens and add them to the batch using the draft model
 // draft_base_pos/draft_seq_id override the MTP position for id_last
 llama_tokens common_speculative_draft(

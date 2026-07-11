@@ -157,6 +157,9 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     if (stage.has_p_min_override()) {
         result.p_min = stage.p_min;
     }
+    if (stage.has_mtp_heads_override()) {
+        result.mtp_heads = stage.mtp_heads;
+    }
     if (stage.has_dflash_cross_ctx_override()) {
         result.dflash_cross_ctx = stage.dflash_cross_ctx;
     }
@@ -182,6 +185,7 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
 
     result.n_max = std::max(result.n_max, 0);
     result.n_min = std::max(0, std::min(result.n_min, result.n_max));
+    result.mtp_heads = std::max(result.mtp_heads, 0);
     result.stages.clear();
 
     return result;
@@ -792,8 +796,8 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CONT_BATCHING",    params.cont_batching);
     get_env("LLAMA_ARG_HOST",             params.hostname);
     get_env("LLAMA_ARG_PORT",             params.port);
-    get_env("LLAMA_ARG_CACHE_TYPE_K",     params.cache_type_k);
-    get_env("LLAMA_ARG_CACHE_TYPE_V",     params.cache_type_v);
+    get_env("LLAMA_ARG_CACHE_TYPE_K", params.cache_type_k);
+    get_env("LLAMA_ARG_CACHE_TYPE_V", params.cache_type_v);
     get_env("LLAMA_ARG_MLOCK",            params.use_mlock);
     get_env("LLAMA_ARG_K_CACHE_HADAMARD", params.k_cache_hadamard);
     get_env("LLAMA_ARG_V_CACHE_HADAMARD", params.v_cache_hadamard);
@@ -923,6 +927,13 @@ static void common_speculative_stage_apply_kv(
         stage.p_min = std::stof(value_raw);
         if (stage.p_min < 0.0f) {
             throw std::invalid_argument("speculative stage p_min must be >= 0");
+        }
+        return;
+    }
+    if (key == "heads" || key == "mtp_heads") {
+        stage.mtp_heads = std::stoi(value_raw);
+        if (stage.mtp_heads < 0) {
+            throw std::invalid_argument("speculative stage mtp_heads must be >= 0");
         }
         return;
     }
@@ -2141,6 +2152,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "--prefetch-experts") {
+        params.prefetch_experts = true;
+        return true;
+    }
+    if (arg == "--prefetch-experts-threads") {
+        CHECK_ARG;
+        params.prefetch_experts_threads = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--fit-margin") {
         CHECK_ARG;
         int32_t margin = std::stoi(argv[i]);
@@ -3247,6 +3267,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
+    options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
+    options.push_back({ "*",           "       --prefetch-experts-threads N",
+                                                                        "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-wgt, --worst-graph-tokens N",  "number of tokens to use for worst-case graph"});
     options.push_back({ "*",           "       --fit",                  "automatically determine which tensors to offload to the GPU(s)"});
@@ -3308,7 +3331,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  cpu          serialise state via llama_state_seq; re-decode on rejection" });
     options.push_back({ "*", "--spec-type SPEC[:k=v,...]",      "canonical speculative stage entry; repeat for a supported two-stage chain.\n"
                                                               "types: none, draft, dflash, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
-                                                              "canonical keys: n_max,n_min,p_min,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
+                                                              "canonical keys: n_max,n_min,p_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
+                                                              "MTP heads: heads=1 is the default; heads>1 and heads=0 (all model heads) are experimental\n"
                                                               "for comma-bearing string values, quote the value inside the stage payload for normal shell use\n"
                                                               "if argv is passed directly without shell unescaping, the parser also accepts escaped commas as \\,\n"
                                                               "examples: --spec-type mtp:n_max=1,p_min=0.0\n"
@@ -4289,6 +4313,8 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
     cparams.only_active_experts = params.only_active_exps;
+    cparams.prefetch_experts  = params.prefetch_experts;
+    cparams.prefetch_experts_threads = params.prefetch_experts_threads;
     cparams.max_extra_alloc   = params.max_extra_alloc_MiB;
     cparams.mtp               = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     cparams.mtp_op_type      = MTP_OP_NONE;
@@ -5286,6 +5312,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
     fprintf(stream, "merge_up_gate_exps: %s # default: false\n", params.merge_up_gate_exps ? "true" : "false");
     fprintf(stream, "defer_experts: %s # default: false\n", params.defer_experts ? "true" : "false");
+    fprintf(stream, "prefetch_experts: %s # default: false\n", params.prefetch_experts ? "true" : "false");
+    fprintf(stream, "prefetch_experts_threads: %d # default: 0 (auto)\n", params.prefetch_experts_threads);
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);

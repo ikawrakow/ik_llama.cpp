@@ -11,6 +11,7 @@
 #include "ggml-quants.h"
 #include "ggml.h"
 #include "ggml-aarch64.h"
+#include "ggml-moe-prefetch.h"
 #include "iqk/iqk_quantize.h"
 #include "iqk/iqk_cpu_ops.h"
 #if GGML_USE_IQK_MULMAT
@@ -17354,6 +17355,11 @@ static void ggml_compute_forward_mul_mat_id(
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
 
+    // kick off read-ahead of the selected experts before src1 quantization, so storage reads overlap that work
+    if (params->shared->cplan && params->shared->cplan->moe_expert_prefetch) {
+        ggml_moe_prefetch_kernel_hook(dst, ith);
+    }
+
     char * wdata_src1_end = (src1->type == vec_dot_type) ?
             (char *) params->wdata :
             (char *) params->wdata + GGML_PAD(ggml_row_size(vec_dot_type, src1->ne[0])*ggml_nrows(src1), sizeof(int64_t));
@@ -17620,6 +17626,12 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     // row groups
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
+
+    // read-ahead of the selected experts for both the up and gate weight tensors
+    // (gate is null when up/gate are merged into a single tensor)
+    if (params->shared->cplan && params->shared->cplan->moe_expert_prefetch) {
+        ggml_moe_prefetch_kernel_hook(dst, ith);
+    }
 
     char * wdata_src1_end = (src1->type == vec_dot_type) ?
             (char *) params->wdata :

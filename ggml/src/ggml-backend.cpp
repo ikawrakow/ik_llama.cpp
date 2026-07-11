@@ -2,6 +2,7 @@
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
 #include "ggml-rpc.h"
+#include "ggml-moe-prefetch.h"
 
 #include <cassert>
 #include <climits>
@@ -803,6 +804,8 @@ struct ggml_backend_cpu_context {
 
     ggml_abort_callback abort_callback;
     void *              abort_callback_data;
+
+    bool moe_expert_prefetch;
 };
 
 GGML_CALL static const char * ggml_backend_cpu_name(ggml_backend_t backend) {
@@ -847,6 +850,7 @@ GGML_CALL static ggml_backend_graph_plan_t ggml_backend_cpu_graph_plan_create(gg
 
     cpu_plan->cplan.abort_callback      = cpu_ctx->abort_callback;
     cpu_plan->cplan.abort_callback_data = cpu_ctx->abort_callback_data;
+    cpu_plan->cplan.moe_expert_prefetch = cpu_ctx->moe_expert_prefetch;
 
     return cpu_plan;
 }
@@ -886,6 +890,7 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t 
 
     cplan.abort_callback      = cpu_ctx->abort_callback;
     cplan.abort_callback_data = cpu_ctx->abort_callback_data;
+    cplan.moe_expert_prefetch = cpu_ctx->moe_expert_prefetch;
 
     return ggml_graph_compute(cgraph, &cplan);
 }
@@ -953,6 +958,7 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->work_size           = 0;
     ctx->abort_callback      = NULL;
     ctx->abort_callback_data = NULL;
+    ctx->moe_expert_prefetch = false;
 
     ggml_backend_t cpu_backend = (ggml_backend_t)malloc(sizeof(struct ggml_backend));
     if (cpu_backend == NULL) {
@@ -977,6 +983,13 @@ void ggml_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads) {
 
     struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
     ctx->n_threads = n_threads;
+}
+
+void ggml_backend_cpu_set_moe_expert_prefetch(ggml_backend_t backend_cpu, bool enable) {
+    GGML_ASSERT(ggml_backend_is_cpu(backend_cpu));
+
+    struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
+    ctx->moe_expert_prefetch = enable;
 }
 
 void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_callback abort_callback, void * abort_callback_data) {
@@ -1214,6 +1227,22 @@ void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extr
     if (extra_alloc_MiB >= 0) {
         sched->max_extra_alloc = size_t(extra_alloc_MiB)*1024*1024;
     }
+}
+
+bool ggml_backend_prefetch_init(int n_threads) {
+    if (n_threads <= 0) {
+        n_threads = std::max(1, std::min(8, (int) std::thread::hardware_concurrency()));
+    }
+    ggml_moe_prefetch_set_n_threads(n_threads);
+    return ggml_moe_prefetch_enabled();
+}
+
+void ggml_backend_prefetch_register_mapping(const void * addr, size_t size) {
+    ggml_moe_prefetch_register_mapping(addr, size);
+}
+
+void ggml_backend_prefetch_unregister_mapping(const void * addr) {
+    ggml_moe_prefetch_unregister_mapping(addr);
 }
 
 static inline bool ggml_backend_sched_offload_enabled(ggml_backend_sched_t sched, enum ggml_op op) {
@@ -2049,6 +2078,11 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     last_ids_tensor = ids_tensor;
                 }
 
+                // when the expert prefetch engine streamed this tensor ahead
+                // (see the lookahead in compute_splits), wait for it so the
+                // host-side reads below hit warm page cache instead of faulting
+                ggml_moe_prefetch_wait(input);
+
                 const size_t expert_size = input->ne[2] > 1 ? input->nb[2] : input->nb[1];
 
                 if (input->ne[2] > 1) {
@@ -2365,6 +2399,67 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<uint32_t> unique_ids;
     ggml_tensor * last_ids_tensor = nullptr;
 
+    // MoE expert prefetch; pre-scan the splits for expert-weight matmuls whose
+    // weights live in a host mmap. Two behaviors, both page-cache warmers.
+    //  - lookahead streams the next splits' expert tensors in full while split
+    //    i computes (batch/PP graphs only, where most experts are hit)
+    //  - selective enqueues just the selected expert slices of a split's
+    //    up/gate/down tensors once its ids have been copied to the host
+    struct moe_split_info {
+        int split;
+        int64_t n_tokens;
+        std::vector<ggml_tensor *> host_weights; // originals (host mmap)
+        std::vector<ggml_tensor *> nodes;        // MoE nodes computed on a host buffer
+    };
+    std::vector<moe_split_info> moe_infos;
+    const bool moe_prefetch = ggml_moe_prefetch_enabled();
+    static const size_t moe_ahead = [] {
+        const char * env = getenv("GGML_MOE_PREFETCH_AHEAD");
+        return env ? (size_t) std::max(0, atoi(env)) : (size_t) 3;
+    }();
+    if (moe_prefetch) {
+        ggml_moe_prefetch_new_epoch();
+        for (int i = 0; i < sched->n_splits; i++) {
+            moe_split_info info;
+            info.split = i;
+            info.n_tokens = 0;
+            for (int n = 0; n < splits[i].graph.n_nodes; ++n) {
+                ggml_tensor * node = splits[i].graph.nodes[n];
+                if (node->op != GGML_OP_MUL_MAT_ID && node->op != GGML_OP_MOE_FUSED_UP_GATE) {
+                    continue;
+                }
+                ggml_tensor * node_ids = node->op == GGML_OP_MUL_MAT_ID ? node->src[2] : node->src[3];
+                info.n_tokens = std::max(info.n_tokens, node_ids ? node_ids->ne[1] : 0);
+                ggml_tensor * ws[2] = { node->src[0], node->op == GGML_OP_MOE_FUSED_UP_GATE ? node->src[1] : nullptr };
+                bool node_on_host = false;
+                for (ggml_tensor * w : ws) {
+                    if (w && w->buffer && ggml_backend_buffer_is_host(w->buffer) &&
+                            ggml_backend_buffer_get_usage(w->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                        info.host_weights.push_back(w);
+                        node_on_host = true;
+                    }
+                }
+                if (node_on_host) {
+                    info.nodes.push_back(node);
+                }
+            }
+            // in the offloaded case the node's weight srcs were rewritten to
+            // device copies; the host originals arrive as split inputs
+            for (int j = 0; j < splits[i].n_inputs; ++j) {
+                ggml_tensor * input = splits[i].inputs[j];
+                if (input->ne[2] > 1 && input->buffer && ggml_backend_buffer_is_host(input->buffer) &&
+                        ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                    info.host_weights.push_back(input);
+                }
+            }
+            if (!info.host_weights.empty()) {
+                moe_infos.push_back(std::move(info));
+            }
+        }
+    }
+    size_t moe_next  = 0; // first moe_infos entry with split >= current split
+    size_t moe_enq   = 0; // moe_infos entries already enqueued for lookahead
+
     for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
@@ -2373,8 +2468,33 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
+        if (moe_prefetch && !moe_infos.empty()) {
+            while (moe_next < moe_infos.size() && moe_infos[moe_next].split < i) {
+                moe_next++;
+            }
+            // keep the next `moe_ahead` MoE-bearing splits streaming in
+            const size_t want_end = std::min(moe_next + moe_ahead, moe_infos.size());
+            for (size_t k = std::max(moe_enq, moe_next); k < want_end; ++k) {
+                if (moe_infos[k].n_tokens >= 32) { // batch graphs touch most experts (min batch offload)
+                    for (ggml_tensor * w : moe_infos[k].host_weights) {
+                        ggml_moe_prefetch_tensor(w);
+                    }
+                }
+                moe_enq = k + 1;
+            }
+        }
+
         // copy the input tensors to the split backend
         ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+
+        // ids are now final and host-visible; enqueue the selected expert
+        // slices of this split's host-computed MoE matmuls (up/gate and down
+        // share one ids tensor, so the down weights stream in during up/gate)
+        if (moe_prefetch && moe_next < moe_infos.size() && moe_infos[moe_next].split == i) {
+            for (ggml_tensor * node : moe_infos[moe_next].nodes) {
+                ggml_moe_prefetch_node(node);
+            }
+        }
 
         if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
             sched->needs_sync[split_backend_id] = true;
@@ -2388,6 +2508,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         auto ec = ggml_backend_sched_eval(sched, split_backend, split);
         if (ec != GGML_STATUS_SUCCESS) {
             return ec;
+        }
+
+        // the pages the lookahead streamer just read for this split are one-shot
+        // streaming traffic; MADV_COLD them so the decode working set survives
+        if (moe_prefetch && moe_next < moe_infos.size() && moe_infos[moe_next].split == i &&
+                moe_infos[moe_next].n_tokens >= 32) {
+            for (ggml_tensor * w : moe_infos[moe_next].host_weights) {
+                ggml_moe_prefetch_cold(w);
+            }
         }
 
         // record the event of this copy

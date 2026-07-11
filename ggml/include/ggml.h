@@ -831,6 +831,9 @@ extern "C" {
         // abort ggml_graph_compute when true
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
+
+        // read-ahead selected MoE expert weights in the CPU matmul-id kernels
+        bool moe_expert_prefetch;
     };
 
     enum ggml_cgraph_eval_order {

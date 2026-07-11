@@ -781,6 +781,13 @@ static std::string common_chat_template_direct_apply_impl(
         {"eos_token", tmpl.eos_token()},
         {"enable_thinking", inputs.enable_thinking},
     };
+    // openPangu's chat template gates reasoning on a `thinking` variable rather than the
+    // ecosystem-standard `enable_thinking`, so the normal toggle never reaches it. Bridge the
+    // standard control to it here so reasoning works on and off through `enable_thinking`. An
+    // explicit `thinking` chat_template_kwarg still wins (merged via extra_context below).
+    if (tmpl.source().find("<|pangu_text_start|>") != std::string::npos) {
+        inp["thinking"] = inputs.enable_thinking;
+    }
     if (tools_override.has_value() || !inputs.tools.empty()) {
         inp["tools"] = tools_override.has_value() ? *tools_override : inputs.tools;
     }

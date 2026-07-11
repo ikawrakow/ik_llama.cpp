@@ -20,6 +20,24 @@ json result_timings::to_json() const {
     if (draft_n > 0) {
         base["draft_n"] = draft_n;
         base["draft_n_accepted"] = draft_n_accepted;
+        if (!draft_n_by_depth.empty()) {
+            json by_depth = json::array();
+            for (size_t i = 0; i < draft_n_by_depth.size(); ++i) {
+                if (draft_n_by_depth[i] <= 0) {
+                    continue;
+                }
+                const int32_t accepted = i < draft_n_accepted_by_depth.size()
+                    ? draft_n_accepted_by_depth[i] : 0;
+                by_depth.push_back({
+                    {"depth",              (int32_t) i + 1},
+                    {"draft_n",            draft_n_by_depth[i]},
+                    {"draft_n_accepted",   accepted},
+                });
+            }
+            if (!by_depth.empty()) {
+                base["draft_by_depth"] = by_depth;
+            }
+        }
     }
 
     return base;
