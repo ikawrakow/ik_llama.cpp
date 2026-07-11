@@ -133,10 +133,10 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             }
             CUDA_CHECK(cudaGetLastError());
 
-            argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), k->ne[1], max_rows, GGML_SORT_ORDER_DESC, ctx.stream());
+            argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), k->ne[1], nrows, GGML_SORT_ORDER_DESC, ctx.stream());
             CUDA_CHECK(cudaGetLastError());
 
-            k_copy_topk<<<max_rows, k_block_size, 0, ctx.stream()>>>(sorted.get(),
+            k_copy_topk<<<nrows, k_block_size, 0, ctx.stream()>>>(sorted.get(),
                     (int *)((char *)dst->data + first_row*dst->nb[1]), k->ne[1], dst->ne[0]);
             CUDA_CHECK(cudaGetLastError());
         }
