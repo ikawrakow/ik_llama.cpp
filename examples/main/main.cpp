@@ -1001,7 +1001,7 @@ int main(int argc, char ** argv) {
                         }
                     }
 
-                    if (!draft.empty()) {
+                    if (!draft.empty() || draft_result.target_only) {
                         llama_batch verify_batch = llama_batch_init((int) draft.size() + 1, 0, 1);
                         std::vector<int> verify_indices;
                         verify_indices.reserve(draft.size() + 1);
