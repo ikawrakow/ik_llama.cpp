@@ -56,6 +56,7 @@
 #include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/delta-net.cuh"
+#include "ggml-cuda/sinkhorn.cuh"
 #include "ggml-cuda/blend.cuh"
 #include "ggml-cuda/indexer_topk.cuh"
 
@@ -4127,6 +4128,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_DELTA_NET:
             ggml_cuda_op_delta_net(ctx, dst);
             break;
+        case GGML_OP_SINKHORN:
+            ggml_cuda_op_sinkhorn(ctx, dst);
+            break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
             break;
@@ -5038,6 +5042,11 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
             return true;
+        case GGML_OP_SINKHORN: {
+            const int sink_s = op->op_params[0];
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                   sink_s >= 1 && sink_s <= 8 && op->src[0]->ne[0] == (int64_t) sink_s*sink_s;
+        }
         case GGML_OP_FLASH_ATTN_EXT:
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;

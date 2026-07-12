@@ -705,6 +705,7 @@ extern "C" {
         GGML_OP_FUSED_RMS_RMS_ADD,
         GGML_OP_BLEND,
         GGML_OP_INDEXER_TOPK,
+        GGML_OP_SINKHORN,
 
         GGML_OP_COUNT,
     };
@@ -2577,6 +2578,22 @@ extern "C" {
             struct ggml_tensor  * mask,
             enum ggml_unary_op    op,
             int                   n_top_k);
+
+    // Sinkhorn normalization of a flat [S*S, T] batch of S x S matrices into
+    // doubly-stochastic form: softmax over columns, then column normalization,
+    // then (n_iters - 1) rounds of row + column normalization (ends on columns).
+    // The flat input is row-major (column index fastest). eps, when non-zero, is
+    // added to the softmax output and to every normalization sum before dividing.
+    // With output_transposed the result is [S, S, T] with ne0 = row, ne1 = column
+    // (ready for out[c] = sum_r m[r,c] * residual[r] consumers); otherwise the
+    // bare input layout (ne0 = column) is kept.
+    GGML_API struct ggml_tensor * ggml_sinkhorn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   S,
+            int                   n_iters,
+            float                 eps,
+            bool                  output_transposed);
 
     // custom operators
 
