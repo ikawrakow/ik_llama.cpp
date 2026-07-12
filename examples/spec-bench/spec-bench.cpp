@@ -20,8 +20,7 @@
 using json = nlohmann::ordered_json;
 
 struct spec_bench_options {
-    std::string dataset_path;
-    std::string output_path;
+    std::string prompts_path;
     std::vector<std::string> task_names;
     int repeat = 1;
     int retry = 0;
@@ -47,6 +46,8 @@ struct spec_bench_stage_delta {
     uint64_t accepted_drafts = 0;
     uint64_t draft_tokens = 0;
     uint64_t accepted_tokens = 0;
+    std::vector<uint64_t> drafted_by_position;
+    std::vector<uint64_t> accepted_by_position;
     int64_t t_begin_us = 0;
     int64_t t_draft_us = 0;
     int64_t t_accept_us = 0;
@@ -139,30 +140,55 @@ static spec_bench_git_info spec_bench_get_git_info() {
     return info;
 }
 
+static std::string spec_bench_read_fixture(const char * name) {
+#if defined(SPEC_BENCH_FIXTURE_DIR)
+    const std::string path = std::string(SPEC_BENCH_FIXTURE_DIR) + "/" + name;
+#else
+    const std::string path = std::string("examples/spec-bench/fixtures/") + name;
+#endif
+
+    std::ifstream in(path);
+    if (!in) {
+        throw std::runtime_error("failed to open benchmark fixture: " + path);
+    }
+
+    std::ostringstream contents;
+    contents << in.rdbuf();
+    const std::string result = contents.str();
+    if (string_strip(result).empty()) {
+        throw std::runtime_error("benchmark fixture is empty: " + path);
+    }
+    return result;
+}
+
 static std::vector<spec_bench_task> spec_bench_builtin_tasks() {
+    const std::string extract_prompt =
+        "Extract all core events with their exact dates into a bulleted list from the following text\n\n" +
+        spec_bench_read_fixture("youtube-extract.txt");
+
     return {
         {
             /* .id = */ "builtin-code",
             /* .name = */ "code",
             /* .category = */ "code",
-            /* .prompt = */ "Write a compact C++ function that returns the Fibonacci sequence up to n as a vector. Add a short explanation after the code.",
-            /* .max_tokens = */ 192,
+            /* .prompt = */ "Write a quick sort implementation in python",
+            /* .max_tokens = */ -1,
             /* .builtin = */ true,
         },
         {
             /* .id = */ "builtin-extract",
             /* .name = */ "extract",
             /* .category = */ "extraction",
-            /* .prompt = */ "Extract the fields name, company, city, and order_id from this text and answer as plain JSON only: Maria Silva from Orbit Labs in Recife confirmed order ZX-4912 after a phone call.",
-            /* .max_tokens = */ 96,
+            /* .prompt = */ extract_prompt,
+            /* .max_tokens = */ -1,
             /* .builtin = */ true,
         },
         {
             /* .id = */ "builtin-story",
             /* .name = */ "story",
-            /* .category = */ "creative",
-            /* .prompt = */ "Write a vivid short story in three paragraphs about a maintenance robot repairing a weather station during a dust storm on Mars.",
-            /* .max_tokens = */ 256,
+            /* .category = */ "long-form-summary",
+            /* .prompt = */ "Give me an extended summary of the history of Bulgaria",
+            /* .max_tokens = */ -1,
             /* .builtin = */ true,
         },
     };
@@ -172,11 +198,11 @@ static void spec_bench_print_usage(const char * argv0) {
     LOG_TEE("usage: %s [benchmark options] [normal llama args]\n", argv0);
     LOG_TEE("\n");
     LOG_TEE("benchmark options:\n");
-    LOG_TEE("  --dataset PATH        optional JSONL dataset override\n");
+    LOG_TEE("  --prompts PATH        optional strict JSONL prompt-file override\n");
     LOG_TEE("  --task LIST           built-in tasks to run, e.g. code,extract,story\n");
     LOG_TEE("  --repeat N            repeat each task N times (default: 1)\n");
     LOG_TEE("  --retry N             retry each failed task up to N times (default: 0)\n");
-    LOG_TEE("  --output PATH         write JSONL output to a file\n");
+    LOG_TEE("  --output-format jsonl emit comparable JSONL rows (default)\n");
     LOG_TEE("\n");
 }
 
@@ -199,13 +225,17 @@ static bool spec_bench_parse_args(
             return argv[++i];
         };
 
-        if (arg == "--dataset") {
-            const char * value = require_value("--dataset");
+        if (arg == "--prompts") {
+            const char * value = require_value("--prompts");
             if (!value) {
                 return false;
             }
-            opts.dataset_path = value;
+            opts.prompts_path = value;
             continue;
+        }
+        if (arg == "--dataset") {
+            LOG_TEE("--dataset is no longer supported; use --prompts PATH\n");
+            return false;
         }
         if (arg == "--task") {
             const char * value = require_value("--task");
@@ -237,12 +267,8 @@ static bool spec_bench_parse_args(
             continue;
         }
         if (arg == "--output") {
-            const char * value = require_value("--output");
-            if (!value) {
-                return false;
-            }
-            opts.output_path = value;
-            continue;
+            LOG_TEE("--output is not a benchmark destination; use --output-format jsonl and redirect stdout\n");
+            return false;
         }
 
         passthrough.push_back(arg);
@@ -260,6 +286,19 @@ static std::vector<char *> spec_bench_make_argv(std::vector<std::string> & args)
     return out;
 }
 
+static bool spec_bench_validate_output_format(const std::vector<std::string> & args) {
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] != "--output-format") {
+            continue;
+        }
+        if (i + 1 >= args.size() || args[i + 1] != "jsonl") {
+            LOG_TEE("llama-spec-bench only supports --output-format jsonl\n");
+            return false;
+        }
+    }
+    return true;
+}
+
 static std::vector<spec_bench_task> spec_bench_load_dataset(const std::string & path) {
     std::ifstream in(path);
     if (!in) {
@@ -267,35 +306,76 @@ static std::vector<spec_bench_task> spec_bench_load_dataset(const std::string & 
     }
 
     std::vector<spec_bench_task> tasks;
+    std::set<std::string> ids;
+    const std::set<std::string> allowed_fields = {"id", "name", "category", "prompt", "max_tokens"};
     std::string line;
     int line_no = 0;
     while (std::getline(in, line)) {
         ++line_no;
         if (string_strip(line).empty()) {
-            continue;
+            throw std::runtime_error("prompt file line " + std::to_string(line_no) + " is empty");
         }
 
-        const json row = json::parse(line);
-        if (!row.contains("prompt") && !row.contains("input")) {
-            throw std::runtime_error("dataset line " + std::to_string(line_no) + " must contain prompt or input");
+        json row;
+        try {
+            row = json::parse(line);
+        } catch (const std::exception & e) {
+            throw std::runtime_error("prompt file line " + std::to_string(line_no) + " is invalid JSON: " + e.what());
+        }
+        if (!row.is_object()) {
+            throw std::runtime_error("prompt file line " + std::to_string(line_no) + " must be a JSON object");
+        }
+
+        for (const auto & item : row.items()) {
+            if (allowed_fields.count(item.key()) == 0) {
+                throw std::runtime_error("prompt file line " + std::to_string(line_no) + " has unknown field: " + item.key());
+            }
+        }
+        if (!row.contains("prompt") || !row.at("prompt").is_string()) {
+            throw std::runtime_error("prompt file line " + std::to_string(line_no) + " must contain a string prompt");
         }
 
         spec_bench_task task;
-        task.id = row.value("id", "dataset-" + std::to_string(line_no));
-        task.name = row.value("name", row.value("task", task.id));
-        task.category = row.value("category", "dataset");
-        task.prompt = row.contains("prompt") ? row.at("prompt").get<std::string>() : row.at("input").get<std::string>();
-        task.max_tokens = row.value("max_tokens", -1);
+        task.id = row.contains("id") ? row.at("id").get<std::string>() : std::to_string(line_no);
+        task.name = row.contains("name") ? row.at("name").get<std::string>() : task.id;
+        task.category = row.contains("category") ? row.at("category").get<std::string>() : "dataset";
+        task.prompt = row.at("prompt").get<std::string>();
+        if (string_strip(task.id).empty() || string_strip(task.name).empty() || string_strip(task.category).empty()) {
+            throw std::runtime_error("prompt file line " + std::to_string(line_no) + " has an empty id, name, or category");
+        }
+        if (string_strip(task.prompt).empty()) {
+            throw std::runtime_error("prompt file line " + std::to_string(line_no) + " has an empty prompt");
+        }
+        if (!ids.insert(task.id).second) {
+            throw std::runtime_error("prompt file line " + std::to_string(line_no) + " duplicates id: " + task.id);
+        }
+
+        task.max_tokens = -1;
+        if (row.contains("max_tokens")) {
+            const auto & max_tokens = row.at("max_tokens");
+            if (!max_tokens.is_number_integer()) {
+                throw std::runtime_error("prompt file line " + std::to_string(line_no) + " max_tokens must be a positive integer");
+            }
+            const int64_t value = max_tokens.get<int64_t>();
+            if (value <= 0 || value > std::numeric_limits<int>::max()) {
+                throw std::runtime_error("prompt file line " + std::to_string(line_no) + " max_tokens must be a positive integer");
+            }
+            task.max_tokens = (int) value;
+        }
         task.builtin = false;
         tasks.push_back(std::move(task));
+    }
+
+    if (tasks.empty()) {
+        throw std::runtime_error("prompt file contains no rows: " + path);
     }
 
     return tasks;
 }
 
 static std::vector<spec_bench_task> spec_bench_select_tasks(const spec_bench_options & opts) {
-    if (!opts.dataset_path.empty()) {
-        return spec_bench_load_dataset(opts.dataset_path);
+    if (!opts.prompts_path.empty()) {
+        return spec_bench_load_dataset(opts.prompts_path);
     }
 
     std::vector<spec_bench_task> builtin = spec_bench_builtin_tasks();
@@ -347,6 +427,20 @@ static spec_bench_metrics_delta spec_bench_snapshot_delta(
         stage.accepted_drafts = rhs.n_acc_drafts - lhs.n_acc_drafts;
         stage.draft_tokens = rhs.n_gen_tokens - lhs.n_gen_tokens;
         stage.accepted_tokens = rhs.n_acc_tokens - lhs.n_acc_tokens;
+        const size_t n_drafted_positions = std::max(lhs.drafted_by_position.size(), rhs.drafted_by_position.size());
+        const size_t n_accepted_positions = std::max(lhs.accepted_by_position.size(), rhs.accepted_by_position.size());
+        stage.drafted_by_position.resize(n_drafted_positions);
+        stage.accepted_by_position.resize(n_accepted_positions);
+        for (size_t position = 0; position < n_drafted_positions; ++position) {
+            const uint64_t before_value = position < lhs.drafted_by_position.size() ? lhs.drafted_by_position[position] : 0;
+            const uint64_t after_value = position < rhs.drafted_by_position.size() ? rhs.drafted_by_position[position] : 0;
+            stage.drafted_by_position[position] = after_value >= before_value ? after_value - before_value : 0;
+        }
+        for (size_t position = 0; position < n_accepted_positions; ++position) {
+            const uint64_t before_value = position < lhs.accepted_by_position.size() ? lhs.accepted_by_position[position] : 0;
+            const uint64_t after_value = position < rhs.accepted_by_position.size() ? rhs.accepted_by_position[position] : 0;
+            stage.accepted_by_position[position] = after_value >= before_value ? after_value - before_value : 0;
+        }
         stage.t_begin_us = rhs.t_begin_us - lhs.t_begin_us;
         stage.t_draft_us = rhs.t_draft_us - lhs.t_draft_us;
         stage.t_accept_us = rhs.t_accept_us - lhs.t_accept_us;
@@ -393,6 +487,18 @@ static void spec_bench_accumulate(spec_bench_summary & summary, const spec_bench
         dst.accepted_drafts += src.accepted_drafts;
         dst.draft_tokens += src.draft_tokens;
         dst.accepted_tokens += src.accepted_tokens;
+        if (dst.drafted_by_position.size() < src.drafted_by_position.size()) {
+            dst.drafted_by_position.resize(src.drafted_by_position.size());
+        }
+        if (dst.accepted_by_position.size() < src.accepted_by_position.size()) {
+            dst.accepted_by_position.resize(src.accepted_by_position.size());
+        }
+        for (size_t position = 0; position < src.drafted_by_position.size(); ++position) {
+            dst.drafted_by_position[position] += src.drafted_by_position[position];
+        }
+        for (size_t position = 0; position < src.accepted_by_position.size(); ++position) {
+            dst.accepted_by_position[position] += src.accepted_by_position[position];
+        }
         dst.t_begin_us += src.t_begin_us;
         dst.t_draft_us += src.t_draft_us;
         dst.t_accept_us += src.t_accept_us;
@@ -407,6 +513,30 @@ static json spec_bench_stage_json(const spec_bench_stage_delta & stage) {
         ? 1.0 + (double) stage.accepted_tokens / (double) stage.num_drafts
         : 0.0;
 
+    json drafted_by_position = json::array();
+    json accepted_by_position = json::array();
+    json acceptance_rate_by_position = json::array();
+    json conditional_acceptance_rate = json::array();
+    for (size_t position = 0; position < stage.drafted_by_position.size(); ++position) {
+        const uint64_t drafted = stage.drafted_by_position[position];
+        const uint64_t accepted = position < stage.accepted_by_position.size()
+            ? stage.accepted_by_position[position]
+            : 0;
+        drafted_by_position.push_back(drafted);
+        accepted_by_position.push_back(accepted);
+        acceptance_rate_by_position.push_back(drafted > 0 ? (double) accepted / (double) drafted : 0.0);
+        if (position == 0) {
+            conditional_acceptance_rate.push_back(nullptr);
+        } else {
+            const uint64_t previous_accepted = position - 1 < stage.accepted_by_position.size()
+                ? stage.accepted_by_position[position - 1]
+                : 0;
+            conditional_acceptance_rate.push_back(previous_accepted > 0
+                ? json((double) accepted / (double) previous_accepted)
+                : json(nullptr));
+        }
+    }
+
     return json{
         {"type", common_speculative_type_to_str(stage.type)},
         {"num_drafts", stage.num_drafts},
@@ -415,6 +545,10 @@ static json spec_bench_stage_json(const spec_bench_stage_delta & stage) {
         {"accepted_tokens", stage.accepted_tokens},
         {"acceptance_rate", acceptance_rate},
         {"acceptance_length", acceptance_length},
+        {"drafted_by_position", drafted_by_position},
+        {"accepted_by_position", accepted_by_position},
+        {"acceptance_rate_by_position", acceptance_rate_by_position},
+        {"conditional_acceptance_rate", conditional_acceptance_rate},
         {"t_begin_s", stage.t_begin_us / 1e6},
         {"t_draft_s", stage.t_draft_us / 1e6},
         {"t_accept_s", stage.t_accept_us / 1e6},
@@ -503,6 +637,10 @@ static json spec_bench_runtime_json(const gpt_params & params) {
     };
 }
 
+static int spec_bench_resolve_max_tokens(const spec_bench_task & task, const gpt_params & params) {
+    return task.max_tokens > 0 ? task.max_tokens : (params.n_predict > 0 ? params.n_predict : 256);
+}
+
 static std::string spec_bench_decode_tokens(
         const llama_context * ctx,
         const llama_tokens & tokens,
@@ -528,9 +666,7 @@ static spec_bench_attempt_result spec_bench_run_attempt(
         return result;
     }
 
-    const int task_max_tokens = task.max_tokens > 0
-        ? task.max_tokens
-        : (params.n_predict >= 0 ? params.n_predict : 256);
+    const int task_max_tokens = spec_bench_resolve_max_tokens(task, params);
     if (task_max_tokens <= 0) {
         result.error = "max token budget resolved to zero";
         return result;
@@ -776,6 +912,7 @@ static json spec_bench_attempt_json(
         {"task_id", task.id},
         {"task_name", task.name},
         {"task_category", task.category},
+        {"max_tokens", spec_bench_resolve_max_tokens(task, params)},
         {"repeat_index", repeat_index},
         {"builtin", task.builtin},
         {"git", {
@@ -783,7 +920,7 @@ static json spec_bench_attempt_json(
             {"commit", git_info.commit},
             {"build_commit", LLAMA_COMMIT},
         }},
-        {"dataset", opts.dataset_path.empty() ? "builtin-default" : opts.dataset_path},
+        {"prompts", opts.prompts_path.empty() ? "builtin-default" : opts.prompts_path},
         {"runtime", spec_bench_runtime_json(params)},
         {"variant", {
             {"is_baseline", is_baseline},
@@ -831,11 +968,12 @@ static json spec_bench_summary_json(
             {"commit", git_info.commit},
             {"build_commit", LLAMA_COMMIT},
         }},
-        {"dataset", opts.dataset_path.empty() ? "builtin-default" : opts.dataset_path},
+        {"prompts", opts.prompts_path.empty() ? "builtin-default" : opts.prompts_path},
         {"requested_tasks", json(opts.task_names)},
         {"selected_tasks", spec_bench_task_names_json(tasks)},
         {"repeat", opts.repeat},
         {"retry", opts.retry},
+        {"default_max_tokens", params.n_predict > 0 ? params.n_predict : 256},
         {"runtime", spec_bench_runtime_json(params)},
         {"variant", {
             {"is_baseline", is_baseline},
@@ -923,6 +1061,10 @@ int main(int argc, char ** argv) {
 
     auto argv_storage = spec_bench_make_argv(passthrough);
 
+    if (!spec_bench_validate_output_format(passthrough)) {
+        return 1;
+    }
+
     gpt_params params;
     if (!gpt_params_parse((int) argv_storage.size(), argv_storage.data(), params)) {
         spec_bench_print_usage(argv[0]);
@@ -945,16 +1087,7 @@ int main(int argc, char ** argv) {
     }
     const spec_bench_git_info git_info = spec_bench_get_git_info();
 
-    std::ofstream out_file;
     std::ostream * out = &std::cout;
-    if (!bench_opts.output_path.empty()) {
-        out_file.open(bench_opts.output_path, std::ios::out | std::ios::trunc);
-        if (!out_file) {
-            LOG_TEE("%s: failed to open output file %s\n", __func__, bench_opts.output_path.c_str());
-            return 1;
-        }
-        out = &out_file;
-    }
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -994,7 +1127,6 @@ int main(int argc, char ** argv) {
     }
 
     spec_bench_summary summary;
-    int task_counter = 0;
     for (const auto & task : tasks) {
         for (int repeat_index = 0; repeat_index < bench_opts.repeat; ++repeat_index) {
             spec_bench_attempt_result best_result;
@@ -1013,7 +1145,6 @@ int main(int argc, char ** argv) {
             best_result.retries_used = success ? best_result.retries_used : bench_opts.retry;
             spec_bench_accumulate(summary, best_result);
             *out << spec_bench_attempt_json(git_info, params, bench_opts, task, best_result, repeat_index).dump() << '\n';
-            ++task_counter;
         }
     }
 

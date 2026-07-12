@@ -50,6 +50,10 @@ struct common_speculative_metrics_stage_snapshot {
     uint64_t n_gen_tokens = 0;
     uint64_t n_acc_tokens = 0;
 
+    // Position zero represents speculative position 1.
+    std::vector<uint64_t> drafted_by_position;
+    std::vector<uint64_t> accepted_by_position;
+
     int64_t t_begin_us = 0;
     int64_t t_draft_us = 0;
     int64_t t_accept_us = 0;
