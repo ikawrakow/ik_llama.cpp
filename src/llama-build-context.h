@@ -310,6 +310,21 @@ struct llm_build_context {
         bool cache_writes_only = false,
         bool KQ_mask_swa_windowed = false);
 
+    ggml_tensor * build_mhc_post(
+        ggml_tensor * x,
+        ggml_tensor * post,
+        ggml_tensor * residual,
+        ggml_tensor * comb,
+        int64_t n_embd,
+        int64_t n_stream,
+        bool comb_output_dim0);
+
+    ggml_tensor * build_mhc_weighted_sum(
+        ggml_tensor * x,
+        ggml_tensor * weights,
+        int64_t n_embd,
+        int64_t n_stream);
+
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,
             ggml_tensor * inpL,

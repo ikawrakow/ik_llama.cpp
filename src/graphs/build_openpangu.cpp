@@ -1044,11 +1044,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         h_pre = ggml_add(ctx0, ggml_mul(ctx0, ggml_cont(ctx0, h_pre), a_pre), b_pre);  // broadcast scalar + [S]
         h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+eps omitted, inert)
 
-        // combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
-        ggml_tensor * hpre3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, h_pre), 1, S, n_tokens);
-        ggml_tensor * weighted = ggml_mul(ctx0, Rin, hpre3);          // [H,S,T]
-        ggml_tensor * wperm = ggml_cont(ctx0, ggml_permute(ctx0, weighted, 1, 0, 2, 3)); // [S,H,T]
-        ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, wperm), n_embd, n_tokens); // sum over S
+        ggml_tensor * x = build_mhc_weighted_sum(Rin, h_pre, n_embd, S);
 
         *h_post_out = ggml_cont(ctx0, h_post);
         *h_res_out  = ggml_cont(ctx0, h_res);
@@ -1069,28 +1065,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_tensor * m = ggml_add(ctx0, ggml_mul(ctx0, h_res, a_res), b_res); // [S*S,T]
         m = ggml_sinkhorn(ctx0, m, (int) S, sink_iters, 0.0f, /*output_transposed=*/true); // [row S, col S, T]
 
-        // term1: h_post[s,t]*y[h,t] -> [H,S,T]
-        ggml_tensor * y3 = ggml_reshape_3d(ctx0, y, n_embd, 1, n_tokens);
-        ggml_tensor * hpost3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, h_post), 1, S, n_tokens);
-        ggml_tensor * term1 = ggml_mul(ctx0, ggml_repeat(ctx0, y3,
-                                 ggml_new_tensor_3d(ctx0, y->type, n_embd, S, n_tokens)), hpost3);
-
-        // term2: sum_j m[s,j,t]*R[h,j,t]. For each out-stream s, weight over input streams j.
-        // Build via: for stream axis, matmul R[H, j, t] with m[j, s, t] batched over t.
-        // R_perm [j(S), H, T] ; m as [j(S), s(S), T]; batched mul_mat over T -> [H? ] messy.
-        // Simpler explicit loop over S output streams (S=4, cheap):
-        ggml_tensor * term2 = nullptr;
-        for (int64_t s = 0; s < S; ++s) {
-            // m_s = m[:, s, :] -> weights over input streams j: [S, T]
-            ggml_tensor * m_s = ggml_cont(ctx0, ggml_view_2d(ctx0, m, S, n_tokens, m->nb[2], s*m->nb[1]));
-            ggml_tensor * m_s3 = ggml_reshape_3d(ctx0, m_s, 1, S, n_tokens);      // [1,S,T]
-            ggml_tensor * acc = ggml_mul(ctx0, Rin, m_s3);                        // [H,S,T]
-            ggml_tensor * accp = ggml_cont(ctx0, ggml_permute(ctx0, acc, 1, 0, 2, 3)); // [S,H,T]
-            ggml_tensor * summed = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, accp), n_embd, n_tokens); // [H,T]
-            summed = ggml_reshape_3d(ctx0, summed, n_embd, 1, n_tokens);
-            term2 = term2 ? ggml_concat(ctx0, term2, summed, 1) : summed;         // -> [H,S,T]
-        }
-        return ggml_add(ctx0, term1, term2); // [H,S,T]
+        return build_mhc_post(y, h_post, Rin, m, n_embd, S, false);
     };
 
     // Base generation uses only the transformer layers; the trailing NextN/MTP layers are skipped.

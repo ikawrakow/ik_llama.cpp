@@ -577,27 +577,6 @@ static ggml_tensor * dsv4_build_attn(
     return ggml_cont_2d(ctx, cur, cur->ne[0] * cur->ne[1], cur->ne[2] * cur->ne[3]);
 }
 
-static ggml_tensor * build_hc_weighted_sum(
-        ggml_context * ctx0,
-        const llama_hparams & hparams,
-        int64_t n_embd,
-        ggml_tensor * x,
-        ggml_tensor * weights) {
-    const int64_t hc = hparams.dsv4_hc_mult;
-    const int64_t nt = x->ne[2];
-
-    ggml_tensor * acc = nullptr;
-    for (int64_t ih = 0; ih < hc; ++ih) {
-        // Materialize strided slices before broadcast operations.
-        ggml_tensor * xh = ggml_cont(ctx0, ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], ih*x->nb[1]));
-        ggml_tensor * wh = ggml_cont(ctx0, ggml_view_2d(ctx0, weights, 1, nt, weights->nb[1], ih*weights->nb[0]));
-        ggml_tensor * cur = ggml_mul(ctx0, xh, wh);
-        acc = acc ? ggml_add(ctx0, acc, cur) : cur;
-    }
-
-    return acc;
-}
-
 static ggml_tensor * build_hc_sinkhorn(
         ggml_context * ctx0,
         const llama_hparams & hparams,
@@ -633,6 +612,7 @@ static ggml_tensor * build_hc_sinkhorn(
 
 static ggml_tensor * build_hc_pre(
         ggml_context * ctx0,
+        llm_build_context & llm,
         const llama_hparams & hparams,
         int64_t n_embd,
         float norm_rms_eps,
@@ -674,40 +654,12 @@ static ggml_tensor * build_hc_pre(
     *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
     *comb = build_hc_sinkhorn(ctx0, hparams, *comb);
 
-    return build_hc_weighted_sum(ctx0, hparams, n_embd, x, pre);
-}
-
-static ggml_tensor * build_hc_post(
-        ggml_context * ctx0,
-        const llama_hparams & hparams,
-        int64_t n_embd,
-        ggml_tensor * x,
-        ggml_tensor * residual,
-        ggml_tensor * post,
-        ggml_tensor * comb) {
-    const int64_t hc = hparams.dsv4_hc_mult;
-    const int64_t nt = x->ne[1];
-
-    ggml_tensor * out = nullptr;
-    for (int64_t dst = 0; dst < hc; ++dst) {
-        ggml_tensor * post_dst = ggml_cont(ctx0, ggml_view_2d(ctx0, post, 1, nt, post->nb[1], dst*post->nb[0]));
-        ggml_tensor * cur = ggml_mul(ctx0, x, post_dst);
-
-        for (int64_t src = 0; src < hc; ++src) {
-            ggml_tensor * res_src = ggml_cont(ctx0, ggml_view_2d(ctx0, residual, n_embd, nt, residual->nb[2], src*residual->nb[1]));
-            ggml_tensor * comb_src_dst = ggml_cont(ctx0, ggml_view_2d(ctx0, comb, 1, nt, comb->nb[2], dst*comb->nb[0] + src*comb->nb[1]));
-            cur = ggml_add(ctx0, cur, ggml_mul(ctx0, res_src, comb_src_dst));
-        }
-
-        cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, nt);
-        out = out ? dsv4_concat_named(ctx0, out, cur, 1, "dsv4_hc_weighted_sum") : cur;
-    }
-
-    return out;
+    return llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
 }
 
 static ggml_tensor * build_hc_head(
         ggml_context * ctx0,
+        llm_build_context & llm,
         const llama_hparams & hparams,
         int64_t n_embd,
         float norm_rms_eps,
@@ -726,7 +678,7 @@ static ggml_tensor * build_hc_head(
     pre = ggml_sigmoid(ctx0, pre);
     pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
 
-    return build_hc_weighted_sum(ctx0, hparams, n_embd, x, pre);
+    return llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
 }
 
 static ggml_tensor * build_hca_compressed_kv_from_state(
@@ -972,9 +924,6 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         GGML_ABORT("DeepSeek4 MTP execution is not implemented");
     }
 
-    // Exclude the optional NextN tail from ordinary generation.
-    const int64_t n_base_layers = std::max<int64_t>(0, n_layer - hparams.nextn_predict_layers);
-
     const int64_t n_embd_head = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_rope = hparams.n_rot;
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
@@ -997,12 +946,12 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
     cb(inpL, "hc_init", -1);
 
-    for (int il = 0; il < n_base_layers; ++il) {
+    for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * residual = inpL;
         ggml_tensor * post = nullptr;
         ggml_tensor * comb = nullptr;
 
-        ggml_tensor * cur = build_hc_pre(ctx0, hparams, n_embd, hparams.f_norm_rms_eps,
+        ggml_tensor * cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
                 inpL,
                 model.layers[il].hc_attn_fn,
                 model.layers[il].hc_attn_scale,
@@ -1353,11 +1302,11 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo_b, oa);
         cb(cur, "attn_out", il);
 
-        inpL = build_hc_post(ctx0, hparams, n_embd, cur, residual, post, comb);
+        inpL = build_mhc_post(cur, post, residual, comb, n_embd, hc, true);
         cb(inpL, "hc_attn_post", il);
 
         residual = inpL;
-        cur = build_hc_pre(ctx0, hparams, n_embd, hparams.f_norm_rms_eps,
+        cur = build_hc_pre(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
                 inpL,
                 model.layers[il].hc_ffn_fn,
                 model.layers[il].hc_ffn_scale,
@@ -1424,7 +1373,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
 
         cb(cur, "ffn_out", il);
 
-        inpL = build_hc_post(ctx0, hparams, n_embd, cur, residual, post, comb);
+        inpL = build_mhc_post(cur, post, residual, comb, n_embd, hc, true);
         inpL = lctx.cvec.apply_to(ctx0, inpL, il);
         cb(inpL, "l_out", il);
     }
@@ -1436,7 +1385,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         inpL = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_outputs);
     }
 
-    ggml_tensor * out = build_hc_head(ctx0, hparams, n_embd, hparams.f_norm_rms_eps,
+    ggml_tensor * out = build_hc_head(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
             inpL,
             model.hc_head_fn,
             model.hc_head_scale,

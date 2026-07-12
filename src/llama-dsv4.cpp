@@ -810,9 +810,7 @@ static void dsv4_set_mask_tensor(
 }
 
 bool llama_context::ensure_dsv4_cache_tensors() {
-    // Allocate cache state only for base-generation layers.
-    const int32_t n_layer = std::max<int32_t>(
-            0, model.hparams.n_layer - (int32_t) model.hparams.nextn_predict_layers);
+    const int32_t n_layer = model.hparams.n_layer;
     const int64_t n_embd_head = model.hparams.n_embd_head_k(0);
     const int64_t n_indexer_head = model.hparams.indexer_head_size;
     const uint32_t n_stream = std::max<uint32_t>(1, cparams.n_seq_max);

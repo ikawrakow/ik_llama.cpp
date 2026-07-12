@@ -549,6 +549,63 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, boo
     return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa_win, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa_win;
 }
 
+ggml_tensor * llm_build_context::build_mhc_post(
+        ggml_tensor * x,
+        ggml_tensor * post,
+        ggml_tensor * residual,
+        ggml_tensor * comb,
+        int64_t n_embd,
+        int64_t n_stream,
+        bool comb_output_dim0) {
+    const int64_t n_tokens = x->ne[1];
+    ggml_tensor * out = nullptr;
+
+    for (int64_t dst = 0; dst < n_stream; ++dst) {
+        ggml_tensor * post_dst = ggml_cont(ctx0,
+                ggml_view_2d(ctx0, post, 1, n_tokens, post->nb[1], dst*post->nb[0]));
+        ggml_tensor * cur = ggml_mul(ctx0, x, post_dst);
+
+        for (int64_t src = 0; src < n_stream; ++src) {
+            ggml_tensor * res_src = ggml_cont(ctx0,
+                    ggml_view_2d(ctx0, residual, n_embd, n_tokens,
+                            residual->nb[2], src*residual->nb[1]));
+            const size_t comb_offset = comb_output_dim0
+                    ? dst*comb->nb[0] + src*comb->nb[1]
+                    : src*comb->nb[0] + dst*comb->nb[1];
+            ggml_tensor * comb_dst_src = ggml_cont(ctx0,
+                    ggml_view_2d(ctx0, comb, 1, n_tokens, comb->nb[2], comb_offset));
+            cur = ggml_add(ctx0, cur, ggml_mul(ctx0, res_src, comb_dst_src));
+        }
+
+        cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
+        out = out ? ggml_concat(ctx0, out, cur, 1) : cur;
+    }
+
+    return out;
+}
+
+ggml_tensor * llm_build_context::build_mhc_weighted_sum(
+        ggml_tensor * x,
+        ggml_tensor * weights,
+        int64_t n_embd,
+        int64_t n_stream) {
+    const int64_t n_tokens = x->ne[2];
+    ggml_tensor * out = nullptr;
+
+    for (int64_t stream = 0; stream < n_stream; ++stream) {
+        ggml_tensor * x_stream = ggml_cont(ctx0,
+                ggml_view_2d(ctx0, x, n_embd, n_tokens,
+                        x->nb[2], stream*x->nb[1]));
+        ggml_tensor * weight = ggml_cont(ctx0,
+                ggml_view_2d(ctx0, weights, 1, n_tokens,
+                        weights->nb[1], stream*weights->nb[0]));
+        ggml_tensor * cur = ggml_mul(ctx0, x_stream, weight);
+        out = out ? ggml_add(ctx0, out, cur) : cur;
+    }
+
+    return out;
+}
+
 ggml_tensor * llm_build_context::build_inp_mean() {
     lctx.inp_mean = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens);
     cb(lctx.inp_mean, "inp_mean", -1);

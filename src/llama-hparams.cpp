@@ -1815,14 +1815,13 @@ void llm_load_hparams(
                     throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
                 }
 
-                // NextN/MTP parameters
-                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
-
-                if (model.mtp) {
+                if (model.arch == LLM_ARCH_DEEPSEEK4) {
                     hparams.n_layer_kv_from_start = hparams.n_layer;
-                }
-                else {
-                    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                } else {
+                    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                    hparams.n_layer_kv_from_start = model.mtp
+                        ? hparams.n_layer
+                        : hparams.n_layer - hparams.nextn_predict_layers;
                 }
 
                 switch (hparams.n_layer) {

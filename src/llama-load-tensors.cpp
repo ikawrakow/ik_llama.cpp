@@ -2737,11 +2737,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    // Apply the per-layer MTP tail policy to metadata-based tensors.
-    int layer_flags = 0;
-
     auto create_tensor_from_meta = [&](ggml_context * ctx, const std::string & name, int flags = 0) -> ggml_tensor * {
-        flags |= layer_flags;
         ggml_tensor * meta = (flags & (llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP))
             ? ml.get_tensor_meta(name.c_str())
             : ml.require_tensor_meta(name.c_str());
@@ -2781,15 +2777,6 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
     model.hc_head_scale = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_scale.weight", "output_hc_scale.weight"}), llama_model_loader::TENSOR_NOT_REQUIRED);
 
     for (int i = 0; i < n_layer; ++i) {
-        const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
-                                  static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
-
-        layer_flags = 0;
-        if (!model.mtp && is_mtp_layer) {
-            // Skip the MTP tail when ordinary execution is selected.
-            layer_flags = llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED;
-        }
-
         ggml_context * ctx_split = ctx_for_layer_split(i);
         auto & layer = model.layers[i];
 
@@ -2873,27 +2860,6 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
             }), llama_model_loader::TENSOR_NOT_REQUIRED);
         }
 
-        if (is_mtp_layer) {
-            const int nextn_flags = llama_model_loader::TENSOR_NOT_REQUIRED;
-            layer.nextn.eh_proj = create_tensor(ctx_split,
-                    tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i),
-                    { 2 * n_embd, n_embd }, layer_flags | nextn_flags);
-            layer.nextn.embed_tokens = create_tensor(ctx_input,
-                    tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i),
-                    { n_embd, n_vocab }, layer_flags | nextn_flags);
-            layer.nextn.enorm = create_tensor(ctx_split,
-                    tn(LLM_TENSOR_NEXTN_ENORM, "weight", i),
-                    { n_embd }, layer_flags | nextn_flags);
-            layer.nextn.hnorm = create_tensor(ctx_split,
-                    tn(LLM_TENSOR_NEXTN_HNORM, "weight", i),
-                    { n_embd }, layer_flags | nextn_flags);
-            layer.nextn.shared_head_head = create_tensor(ctx_output,
-                    tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i),
-                    { n_embd, n_vocab }, layer_flags | nextn_flags);
-            layer.nextn.shared_head_norm = create_tensor(ctx_output,
-                    tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i),
-                    { n_embd }, layer_flags | nextn_flags);
-        }
     }
 
     return use_mmap_buffer;
