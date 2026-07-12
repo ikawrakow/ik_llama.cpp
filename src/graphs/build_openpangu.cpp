@@ -225,34 +225,13 @@ static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
 // --- mHC Sinkhorn: h_res [S*S, T] -> doubly-stochastic per token, 20 iters (ends on col norm) ---
 static ggml_tensor * openpangu_sinkhorn(ggml_context * ctx, ggml_tensor * h_res_flat,
                                         int64_t S, int64_t T, int iters, float hc_eps) {
-    // The flat h_res is torch [r,c] row-major (c fastest), so a bare reshape gives ne0=col.
-    // Transpose once so ne0=row(S), ne1=col(S): every axis op below then matches the
-    // reference _mhc_sinkhorn_naive (softmax over col, first norm over row, end on col-sum=1)
-    // and mhc_post's out[c] = sum_r m[r,c]*residual[r].
-    (void) hc_eps; // softmax outputs are strictly positive, so the eps is numerically inert here
-    ggml_tensor * m = ggml_reshape_3d(ctx, h_res_flat, S, S, T);   // ne0=col (bare reshape)
-    // ref softmaxes h_res over columns; a bare reshape already has ne0=col, so soft_max
-    // (over ne0) hits the column axis directly -- no pre-permute round-trip needed.
-    m = ggml_soft_max(ctx, m);                                 // softmax over col
-    m = ggml_cont(ctx, ggml_permute(ctx, m, 1, 0, 2, 3));      // transpose once -> [row, col, T]
-
-    auto col_norm = [&](ggml_tensor * a) {
-        ggml_tensor * col_sum = ggml_sum_rows(ctx, a);          // sums ne0(row) -> [1, col, T]
-        return ggml_div(ctx, a, col_sum);                       // broadcast [1,col,T] over rows
-    };
-    auto row_norm = [&](ggml_tensor * a) {
-        ggml_tensor * ap = ggml_cont(ctx, ggml_permute(ctx, a, 1, 0, 2, 3)); // [col,row,T]
-        ggml_tensor * row_sum = ggml_sum_rows(ctx, ap);         // [1, row, T]
-        ggml_tensor * out = ggml_div(ctx, ap, row_sum);
-        return ggml_cont(ctx, ggml_permute(ctx, out, 1, 0, 2, 3)); // back [row,col,T]
-    };
-
-    m = col_norm(m);
-    for (int i = 0; i < iters - 1; ++i) {
-        m = row_norm(m);
-        m = col_norm(m);
-    }
-    return m; // [row(S), col(S), T]
+    // Fused op: the softmax + alternating row/column normalization chain in a single
+    // node (previously ~6 compute nodes per iteration, ~120 per mHC site, two sites
+    // per layer). Semantics and the [row(S), col(S), T] output layout are unchanged;
+    // see ggml_sinkhorn in ggml.h.
+    (void) hc_eps; // eps=0 reproduces the merged graph chain, which did not apply hc_eps
+    (void) T;
+    return ggml_sinkhorn(ctx, h_res_flat, (int) S, iters, 0.0f, /*output_transposed=*/true);
 }
 
 // Attention sublayer body, shared by the base layers and the NextN/MTP head.
