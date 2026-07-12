@@ -13,7 +13,7 @@
 #include "fattn-mma-f16-interface.cuh"
 #include "fattn-new-mma.cuh"
 #include "fattn.cuh"
-#include "convert.cuh"
+#include "dsa_attn.cuh"
 
 #include <cstdint>
 
@@ -42,6 +42,12 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int32_t precision = KQV->op_params[3];
     const int32_t n_swa = KQV->op_params[4];
+
+    if (dst->src[5]) {
+        if (ggml_cuda_dsa_attn_ext(ctx, dst)) {
+            return;
+        }
+    }
 
     ggml_tensor local_dst, Kl, Vl, Ml;
     if (n_swa > 0) {
