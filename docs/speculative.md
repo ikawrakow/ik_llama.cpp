@@ -128,6 +128,7 @@ Canonical stage keys:
 | `n_max` | Maximum drafted tokens for that stage |
 | `n_min` | Minimum usable drafted tokens for that stage |
 | `p_min` | Minimum speculative probability threshold |
+| `heads` | MTP heads to use; `1` is the default, while values above `1` and `0` (all model heads) are experimental |
 | `ngram_size_n` | Lookup n-gram size |
 | `ngram_size_m` | Draft m-gram size |
 | `ngram_min_hits` | Minimum matching hits for n-gram map stages |

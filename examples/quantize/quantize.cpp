@@ -396,6 +396,12 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--per-layer-token-embedding-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.per_layer_token_embedding_type = parse_ggml_type(argv[++arg_idx]);
+            } else {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--ffn-gate-inp-type") == 0) {
             if (arg_idx < argc-1) {
                 params.ffn_gate_inp_type = parse_ggml_type(argv[++arg_idx]);

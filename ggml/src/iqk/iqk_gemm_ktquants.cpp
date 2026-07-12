@@ -220,13 +220,13 @@ struct Trellis3 {
         tmp[1] = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(val, 1));
         for (int k = 0; k < 2; ++k) {
             auto vl = _mm256_castsi256_si128(tmp[k]);
-            auto v  = MM256_SET_M128I(vl, vl);
+            auto v  = MM256_SET1_M128I(vl);
             aux[8*k+0] = _mm256_shuffle_epi32(v, 0x00);
             aux[8*k+1] = _mm256_shuffle_epi32(v, 0x55);
             aux[8*k+2] = _mm256_shuffle_epi32(v, 0xaa);
             aux[8*k+3] = _mm256_shuffle_epi32(v, 0xff);
             auto vh = _mm256_extracti128_si256(tmp[k], 1);
-            v  = MM256_SET_M128I(vh, vh);
+            v  = MM256_SET1_M128I(vh);
             aux[8*k+4] = _mm256_shuffle_epi32(v, 0x00);
             aux[8*k+5] = _mm256_shuffle_epi32(v, 0x55);
             aux[8*k+6] = _mm256_shuffle_epi32(v, 0xaa);
@@ -267,7 +267,7 @@ struct Trellis3 {
         __m256i aux[16];
         for (int k = 0; k < 4; ++k) {
             auto v128 = _mm_add_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)(val + 4*k))), _mm_set1_epi32(v0));
-            auto v = MM256_SET_M128I(v128, v128);
+            auto v = MM256_SET1_M128I(v128);
             aux[4*k+0] = _mm256_shuffle_epi32(v, 0x00);
             aux[4*k+1] = _mm256_shuffle_epi32(v, 0x55);
             aux[4*k+2] = _mm256_shuffle_epi32(v, 0xaa);

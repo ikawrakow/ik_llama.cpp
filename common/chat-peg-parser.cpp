@@ -75,6 +75,29 @@ static std::string escape_json_string_inner(const std::string & s) {
     return escaped;
 }
 
+static bool truncate_json_strings_at_marker(ordered_json & value, const std::string & marker) {
+    bool changed = false;
+
+    if (value.is_string()) {
+        std::string s = value.get<std::string>();
+        size_t      p = s.find(marker);
+        if (p != std::string::npos) {
+            value   = s.substr(0, p);
+            changed = true;
+        }
+    } else if (value.is_array()) {
+        for (auto & item : value) {
+            changed = truncate_json_strings_at_marker(item, marker) || changed;
+        }
+    } else if (value.is_object()) {
+        for (auto & item : value.items()) {
+            changed = truncate_json_strings_at_marker(item.value(), marker) || changed;
+        }
+    }
+
+    return changed;
+}
+
 // Convert Python-style single-quoted strings to JSON double-quoted strings
 // Only converts outer string delimiters, properly handling escape sequences:
 // - {'key': 'value'} -> {"key": "value"}
@@ -245,6 +268,35 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
         }
         if (all_whitespace) {
             result.reasoning_content.clear();
+        }
+    }
+}
+
+void common_chat_peg_minimax_m3_mapper::from_ast(const common_peg_ast_arena &    arena,
+                                                 const common_peg_parse_result & parse_result) {
+    common_chat_peg_mapper::from_ast(arena, parse_result);
+
+    // MiniMax-M3 tool calls are emitted from the thinking/action phase.
+    if (!result.tool_calls.empty() && !result.content.empty()) {
+        result.reasoning_content += result.content;
+        result.content.clear();
+    }
+
+    // MiniMax-M3 sometimes starts emitting a new namespaced tool marker before
+    // closing a string argument. Keep that marker out of executable tool text.
+    static const std::string ns_marker = "]<]minimax[>[";
+    for (auto & tool_call : result.tool_calls) {
+        if (tool_call.arguments.find(ns_marker) == std::string::npos) {
+            continue;
+        }
+
+        try {
+            ordered_json args = ordered_json::parse(tool_call.arguments);
+            if (truncate_json_strings_at_marker(args, ns_marker)) {
+                tool_call.arguments = args.dump();
+            }
+        } catch (const ordered_json::exception &) {
+            // Leave malformed JSON to existing downstream validation.
         }
     }
 }

@@ -97,6 +97,13 @@ struct llm_build_context {
 
     struct ggml_context * ctx0 = nullptr;
 
+    // GLM-5.2 IndexShare: the most-recent "full" indexer layer's top-k selection (argsort indices).
+    // "shared" layers reuse this instead of computing their own. Reset to nullptr at each graph build.
+    struct ggml_tensor * dsa_last_full_sorted = nullptr;
+    struct ggml_tensor * last_sparse_mask_fa  = nullptr;
+    struct ggml_tensor * last_sparse_mask     = nullptr;
+    struct ggml_tensor * dsa_tg_fast_mask     = nullptr;
+
     // TODO: consider making the entire interface noexcept
     llm_build_context(
         llama_context  & lctx,
@@ -131,6 +138,8 @@ struct llm_build_context {
     ggml_tensor * build_inp_KQ_mask(bool causal = true);
 
     ggml_tensor * build_inp_KQ_mask_swa(bool causal = true);
+
+    ggml_tensor * build_inp_KQ_mask_swa_win(int64_t n_kv_win, bool causal = true);
 
     ggml_tensor * build_inp_mean();
 
@@ -267,6 +276,39 @@ struct llm_build_context {
 
     ggml_cgraph * build_deepseek2();
     ggml_cgraph * build_deepseek4();
+    ggml_cgraph * build_openpangu();
+
+    // openPangu attention sublayer body (shared by base layers and the NextN/MTP head):
+    // input is the already-input-normed hidden; returns the post-o_proj attention output.
+    ggml_tensor * build_openpangu_attention(
+        ggml_cgraph * gf,
+        const struct llama_layer & layer,
+        int il,
+        ggml_tensor * x_normed,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_pos,
+        ggml_tensor * conv_state,
+        ggml_tensor * seq_qnext,
+        float kq_scale,
+        bool KQ_mask_swa_windowed = false);
+
+    // openPangu NextN/MTP head (plain-residual block, no mHC): eh_proj stitching ->
+    // attention -> MoE -> shared head. Returns the draft logits tensor.
+    ggml_tensor * build_openpangu_mtp(
+        const struct llama_layer & mtp_layer,
+        ggml_tensor * prev_embeddings,
+        ggml_cgraph * gf,
+        int il,
+        ggml_tensor * inp_pos,
+        ggml_tensor * KQ_mask,
+        ggml_tensor * inp_out_ids,
+        ggml_tensor * inp_tokens,
+        ggml_tensor * seq_qnext,
+        ggml_tensor ** full_hidden_out = nullptr,
+        bool select_outputs = true,
+        bool build_logits = true,
+        bool cache_writes_only = false,
+        bool KQ_mask_swa_windowed = false);
 
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,
@@ -287,6 +329,27 @@ struct llm_build_context {
             bool use_f32_attn_precision,
             bool is_lite,
             bool pp_opt);
+
+    // DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). Cache-backed (persistent indexer-key cache).
+    // Returns the FULL descending argsort of the per-query indexer scores [n_kv, n_tokens] (I32).
+    ggml_tensor * build_deepseek2_dsa_indexer(
+            ggml_cgraph * gf,
+            int il,
+            ggml_tensor * qr,       // q_lora latent [q_lora_rank, n_tokens] (after attn_q_a_norm)
+            ggml_tensor * cur,      // attn_norm output [n_embd, n_tokens]
+            ggml_tensor * KQ_mask,  // F32 causal mask [n_kv, n_tokens_pad]
+            ggml_tensor * inp_pos);
+
+    // Build the additive sparse causal mask from the full score ranking + the base causal KQ_mask.
+    ggml_tensor * build_deepseek2_dsa_sparse_mask(
+            ggml_tensor * sorted,   // [n_kv, n_tokens] (I32) full descending argsort of scores
+            ggml_tensor * KQ_mask); // F32 causal mask [n_kv, n_tokens_pad]
+
+    // Adapt the (F32, unpadded) sparse mask to the shape/dtype ggml_flash_attn_ext requires on this
+    // fork: F16, contiguous, ne[1] padded to GGML_KQ_MASK_PAD (== the dense KQ_mask's padded shape).
+    ggml_tensor * build_deepseek2_dsa_fa_mask(
+            ggml_tensor * sparse,   // [n_kv, n_tokens] (F32) additive sparse causal mask
+            ggml_tensor * KQ_mask); // FA dense mask [n_kv, n_tokens_pad] (F16 when -fa 1)
 
     ggml_cgraph * build_glm4_moe();
 

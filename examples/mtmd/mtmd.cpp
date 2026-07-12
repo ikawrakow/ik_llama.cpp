@@ -283,6 +283,11 @@ struct mtmd_context {
             img_beg = "<|vision_start|>";
             img_end = "<|vision_end|>";
 
+        } else if (proj == PROJECTOR_TYPE_MINIMAX_M3_VL) {
+            // ]<]start of image[>[ ... (image embeddings) ... ]<]end of image[>[
+            img_beg = "]<]start of image[>[";
+            img_end = "]<]end of image[>[";
+
         } else if (proj == PROJECTOR_TYPE_LLAMA4) {
             // (more details in mtmd_context constructor)
             img_beg = "<|image_start|>";
@@ -1204,7 +1209,6 @@ void mtmd_input_chunk_to_json(mtmd_input_chunk * chunk, json & j) {
         }
     }
 }
-
 
 
 

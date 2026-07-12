@@ -68,7 +68,12 @@ static __global__ void flash_attn_tile_ext_f32(
     const float2 * Q_f2  = (const float2 *) (Q    + nb02* blockIdx.y              + nb01*ic0);
     const half2  * K_h2  = (const half2  *) (K    + nb12*(blockIdx.y / gqa_ratio));
     const half2  * V_h2  = (const half2  *) (V    + nb12*(blockIdx.y / gqa_ratio)); // K and V have same shape
-    const half   * maskh = (const half   *)  mask + ne11*ic0;
+    // Mask row stride must come from the mask tensor (nb31), not ne11 (= K->ne[1]). For SWA models the
+    // fattn.cu n_swa windowing re-points K/V/mask to the last nton tokens (ne11 = nton) while the mask keeps
+    // its original row stride, so indexing the mask by ne11 reads garbage and yields NaN on the tile kernels.
+    const int    stride_mask = nb31 / sizeof(half);
+    const half   * maskh  = (const half   *)  mask + stride_mask*ic0;
+    const float  * sinksf = (const float  *)  sinks;
 
     const int stride_KV2 = nb11 / sizeof(half2);
 
@@ -171,7 +176,7 @@ static __global__ void flash_attn_tile_ext_f32(
                     sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps] = softcap * tanhf(sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]);
                 }
 
-                sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps] += mask ? slope*__half2float(maskh[j_KQ*ne11 + k_VKQ_0 + i_KQ]) : 0.0f;
+                sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps] += mask ? slope*__half2float(maskh[j_KQ*stride_mask + k_VKQ_0 + i_KQ]) : 0.0f;
 
                 kqmax_new[j_KQ_0/nwarps] = fmaxf(kqmax_new[j_KQ_0/nwarps], sum[i_KQ_0/WARP_SIZE][j_KQ_0/nwarps]);
 
@@ -254,6 +259,34 @@ static __global__ void flash_attn_tile_ext_f32(
         }
 
         __syncthreads();
+    }
+
+    // Apply attention sinks (e.g. gpt-oss): the sink is a per-head extra softmax logit whose value
+    // contribution is zero, so it only joins the running max and rescales the denominator/value
+    // accumulator. Only ip==0 adds the sink term so it is counted exactly once across the
+    // parallel_blocks KV split. Ported from fattn-vec-f16.cuh. kqmax is warp-uniform here (already
+    // warp_reduce_max'd in the KV loop); kqsum holds per-lane partials reduced in the epilogue, so
+    // the sink term is added on a single lane.
+    if (sinksf && ip == 0) {
+        const float sink = sinksf[blockIdx.y];
+
+#pragma unroll
+        for (int j0 = 0; j0 < ncols; j0 += nwarps) {
+            const float kqmax_new_j = fmaxf(kqmax[j0/nwarps], sink);
+            const float KQ_max_scale = expf(kqmax[j0/nwarps] - kqmax_new_j);
+            kqmax[j0/nwarps] = kqmax_new_j;
+
+            kqsum[j0/nwarps] = kqsum[j0/nwarps]*KQ_max_scale;
+            if (threadIdx.x == 0) {
+                kqsum[j0/nwarps] += expf(sink - kqmax[j0/nwarps]);
+            }
+
+#pragma unroll
+            for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
+                VKQ[j0/nwarps][i0/WARP_SIZE].x *= KQ_max_scale;
+                VKQ[j0/nwarps][i0/WARP_SIZE].y *= KQ_max_scale;
+            }
+        }
     }
 
 #pragma unroll

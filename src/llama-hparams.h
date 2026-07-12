@@ -127,6 +127,20 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    // GLM-5.2 IndexShare: per-layer full/shared indexer map. "full" layers compute their own lightning-
+    // indexer top-k; "shared" layers reuse the previous full layer's top-k. Populated from GGUF
+    // indexer_types metadata if present, else derived from the GLM-5.2 config rule at load time.
+    std::array<bool, LLAMA_MAX_LAYERS> indexer_is_full = {};
+
+    // openPangu-2.0 (mHC / Hyper-Connections + learned param sink)
+    uint32_t mhc_num_stream    = 1;
+    uint32_t mhc_recur_norm    = 0;
+    uint32_t param_sink_number = 0;
+    // openPangu DSA/SWA schedule: per-layer sliding window (0 = DSA layer, full causal
+    // attention over the indexer's top-k selection). The NextN/MTP layers carry their own
+    // (larger) window, applied when the graph is built with an MTP op type.
+    uint32_t n_swa_mtp = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> openpangu_window = {};
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count     = 0;

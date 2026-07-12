@@ -8353,10 +8353,7 @@ const Modify * get_modify_info(ggml_type type) {
     return it != k_mod_map.end() ? &it->second : nullptr;
 }
 bool is_forbidden_tensor(const std::string& name) {
-    static const std::string kTokenEmbd{"token_embd.weight"};
-    if (name == kTokenEmbd) return true;
-    //if (auto pos = name.find("attn_kv_b.weight"); pos != std::string::npos) return true;
-    return false;
+    return (name == "token_embd.weight" || name == "per_layer_token_embd.weight");
 }
 }
 
