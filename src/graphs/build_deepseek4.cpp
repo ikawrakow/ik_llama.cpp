@@ -323,8 +323,6 @@ static ggml_tensor * dsv4_raw_get_k(
         ggml_tensor   * raw_k_read_idxs,
         int64_t         n_embd_head,
         ggml_tensor   * dep) {
-    GGML_UNUSED(raw_k_read_idxs);
-
     if (cache == nullptr) {
         return nullptr;
     }
@@ -350,17 +348,19 @@ static ggml_tensor * dsv4_raw_get_k(
     GGML_ASSERT(n_embd_gqa % n_embd_head == 0);
 
     const int64_t n_head_kv = n_embd_gqa/n_embd_head;
-    const size_t row_size_head = ggml_row_size(cache->type, n_embd_head);
-    const size_t row_size_gqa  = ggml_row_size(cache->type, n_embd_gqa);
-    const int64_t kv_size = cache->ne[1];
-    const size_t offset = row_size_gqa*(size_t) sinfo.s0*(size_t) kv_size;
+    GGML_ASSERT(raw_k_read_idxs != nullptr);
+    GGML_ASSERT(raw_k_read_idxs->ne[0] >= n_kv*n_stream);
 
-    ggml_tensor * raw_k = ggml_view_4d(ctx, cache,
-            n_embd_head, n_head_kv, n_kv, n_stream,
-            row_size_head,
-            row_size_gqa,
-            row_size_gqa*(size_t) kv_size,
-            offset);
+    // Gather controller-owned slots into the attention layout.
+    ggml_tensor * cache_2d = dsv4_cache_view_2d(ctx, cache, n_embd_gqa, cache->ne[1]);
+    ggml_tensor * idxs = raw_k_read_idxs->type == GGML_TYPE_I32
+            ? raw_k_read_idxs : ggml_cast(ctx, raw_k_read_idxs, GGML_TYPE_I32);
+    ggml_tensor * rows = ggml_get_rows(ctx, cache_2d, idxs);
+    if (rows->type != cache->type && !ggml_is_quantized(cache->type)) {
+        rows = ggml_cast(ctx, rows, cache->type);
+    }
+
+    ggml_tensor * raw_k = ggml_reshape_4d(ctx, rows, n_embd_head, n_head_kv, n_kv, n_stream);
 
     GGML_UNUSED(dep);
     return raw_k;
@@ -388,7 +388,7 @@ static ggml_tensor * dsv4_raw_cpy_k(
     ggml_tensor * write = nullptr;
 
     const auto & sinfo = lctx->dsv4.raw.sinfo_write;
-    if (cur_2d->ne[1] == raw_k_write_idxs->ne[0]) {
+    if (sinfo.n_stream() <= 1 && cur_2d->ne[1] == raw_k_write_idxs->ne[0]) {
         cur_2d = dsv4_require_f32_rows(ctx, cur_2d);
         write = ggml_set_rows(ctx, cache_2d, cur_2d, raw_k_write_idxs);
     } else if (sinfo.n_stream() <= 1) {
@@ -400,13 +400,15 @@ static ggml_tensor * dsv4_raw_cpy_k(
         const int64_t n_fanout = (int64_t) sinfo.size()*(int64_t) sinfo.n_stream();
 
         GGML_ASSERT(sinfo.n_stream() > 1);
-        GGML_ASSERT(cur_2d->ne[1] == (int64_t) sinfo.size());
         GGML_ASSERT(raw_k_write_idxs->ne[0] == n_fanout);
-        GGML_UNUSED(raw_k_write_src_idxs);
+        GGML_ASSERT(raw_k_write_src_idxs->ne[0] == n_fanout);
 
         for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+            ggml_tensor * src_idxs_s = ggml_view_1d(ctx, raw_k_write_src_idxs, sinfo.size(),
+                    s*sinfo.size()*ggml_element_size(raw_k_write_src_idxs));
             ggml_tensor * k_idxs_s = ggml_view_1d(ctx, raw_k_write_idxs, sinfo.size(), s*sinfo.size()*ggml_element_size(raw_k_write_idxs));
-            ggml_tensor * cur_f32 = dsv4_require_f32_rows(ctx, cur_2d);
+            ggml_tensor * cur_sel = ggml_get_rows(ctx, cur_2d, src_idxs_s);
+            ggml_tensor * cur_f32 = dsv4_require_f32_rows(ctx, cur_sel);
             ggml_tensor * cur = ggml_set_rows(ctx, cache_2d, cur_f32, k_idxs_s);
             if (write == nullptr) {
                 write = cur;
@@ -586,8 +588,9 @@ static ggml_tensor * build_hc_weighted_sum(
 
     ggml_tensor * acc = nullptr;
     for (int64_t ih = 0; ih < hc; ++ih) {
-        ggml_tensor * xh = ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], ih*x->nb[1]);
-        ggml_tensor * wh = ggml_view_2d(ctx0, weights, 1, nt, weights->nb[1], ih*weights->nb[0]);
+        // Materialize strided slices before broadcast operations.
+        ggml_tensor * xh = ggml_cont(ctx0, ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], ih*x->nb[1]));
+        ggml_tensor * wh = ggml_cont(ctx0, ggml_view_2d(ctx0, weights, 1, nt, weights->nb[1], ih*weights->nb[0]));
         ggml_tensor * cur = ggml_mul(ctx0, xh, wh);
         acc = acc ? ggml_add(ctx0, acc, cur) : cur;
     }
@@ -603,7 +606,6 @@ static ggml_tensor * build_hc_sinkhorn(
 
     ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
     eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
-
     comb = ggml_add(ctx0, comb, eps);
 
     auto norm_cols = [&]() {
@@ -657,17 +659,17 @@ static ggml_tensor * build_hc_pre(
     ggml_tensor * base_post = dsv4_view_1d(ctx0, hc_base, hc, hc);
     ggml_tensor * base_comb = dsv4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
 
-    ggml_tensor * pre = dsv4_view_2d(ctx0, mixes, hc, nt, 0);
+    ggml_tensor * pre = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc, nt, 0));
     pre = dsv4_hc_affine(ctx0, pre, scale_pre, base_pre);
     pre = ggml_sigmoid(ctx0, pre);
     pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
 
-    *post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
+    *post = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc, nt, hc));
     *post = dsv4_hc_affine(ctx0, *post, scale_post, base_post);
     *post = ggml_sigmoid(ctx0, *post);
     *post = ggml_scale(ctx0, *post, 2.0f);
 
-    *comb = dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
+    *comb = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc));
     *comb = dsv4_hc_affine(ctx0, *comb, scale_comb, base_comb);
     *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
     *comb = build_hc_sinkhorn(ctx0, hparams, *comb);
@@ -688,12 +690,12 @@ static ggml_tensor * build_hc_post(
 
     ggml_tensor * out = nullptr;
     for (int64_t dst = 0; dst < hc; ++dst) {
-        ggml_tensor * post_dst = ggml_view_2d(ctx0, post, 1, nt, post->nb[1], dst*post->nb[0]);
+        ggml_tensor * post_dst = ggml_cont(ctx0, ggml_view_2d(ctx0, post, 1, nt, post->nb[1], dst*post->nb[0]));
         ggml_tensor * cur = ggml_mul(ctx0, x, post_dst);
 
         for (int64_t src = 0; src < hc; ++src) {
-            ggml_tensor * res_src = ggml_view_2d(ctx0, residual, n_embd, nt, residual->nb[2], src*residual->nb[1]);
-            ggml_tensor * comb_src_dst = ggml_view_2d(ctx0, comb, 1, nt, comb->nb[2], dst*comb->nb[0] + src*comb->nb[1]);
+            ggml_tensor * res_src = ggml_cont(ctx0, ggml_view_2d(ctx0, residual, n_embd, nt, residual->nb[2], src*residual->nb[1]));
+            ggml_tensor * comb_src_dst = ggml_cont(ctx0, ggml_view_2d(ctx0, comb, 1, nt, comb->nb[2], dst*comb->nb[0] + src*comb->nb[1]));
             cur = ggml_add(ctx0, cur, ggml_mul(ctx0, res_src, comb_src_dst));
         }
 
@@ -966,6 +968,13 @@ static ggml_tensor * dsv4_build_lid_top_k(
 ggml_cgraph * llm_build_context::build_deepseek4() {
     ggml_cgraph * gf = new_graph_custom();
 
+    if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
+        GGML_ABORT("DeepSeek4 MTP execution is not implemented");
+    }
+
+    // Exclude the optional NextN tail from ordinary generation.
+    const int64_t n_base_layers = std::max<int64_t>(0, n_layer - hparams.nextn_predict_layers);
+
     const int64_t n_embd_head = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_rope = hparams.n_rot;
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
@@ -988,7 +997,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
     cb(inpL, "hc_init", -1);
 
-    for (int il = 0; il < n_layer; ++il) {
+    for (int il = 0; il < n_base_layers; ++il) {
         ggml_tensor * residual = inpL;
         ggml_tensor * post = nullptr;
         ggml_tensor * comb = nullptr;

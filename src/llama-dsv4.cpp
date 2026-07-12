@@ -373,6 +373,7 @@ static bool dsv4_build_raw_context(
 
     for (size_t s = 0; s < raw.sinfo_read.n_stream(); ++s) {
         const llama_seq_id seq_id = read_seq_ids[s];
+        raw.sinfo_read.idxs[s].clear();
         int32_t count = 0;
         for (uint32_t slot = 0; slot < kv.size; ++slot) {
             const llama_kv_cell & cell = kv.cells[slot];
@@ -402,6 +403,51 @@ static bool dsv4_build_raw_context(
                 continue;
             }
             raw.sinfo_write.idxs[s].push_back((uint32_t) (kv.head + i));
+        }
+    }
+
+    if (raw.sinfo_write.n_stream() > 1) {
+        std::vector<int32_t> write_src_idxs;
+        std::vector<int32_t> write_dst_idxs;
+        const size_t rows_per_stream = raw.sinfo_write.size();
+        for (size_t s = 0; s < raw.sinfo_write.n_stream(); ++s) {
+            if (raw.sinfo_write.idxs[s].size() != rows_per_stream) {
+                LLAMA_LOG_ERROR("%s: DSV4 packed batch has unequal raw-write rows per stream\n", __func__);
+                return false;
+            }
+
+            for (int32_t i = 0; i < batch.n_tokens; ++i) {
+                if (dsv4_token_has_seq(batch, i, write_seq_ids[s])) {
+                    write_src_idxs.push_back(i);
+                }
+            }
+
+            for (uint32_t slot : raw.sinfo_write.idxs[s]) {
+                write_dst_idxs.push_back((int32_t) slot);
+            }
+        }
+
+        raw.write_src_idxs = std::move(write_src_idxs);
+        raw.write_dst_idxs = std::move(write_dst_idxs);
+    }
+
+    // The graph exposes a rectangular raw-key view. Repeat the last valid row
+    // for shorter streams; the corresponding mask entries remain -INFINITY.
+    // This preserves the logical visibility while allowing one get_rows op to
+    // serve all streams.
+    if (raw.n_kv > 0) {
+        raw.read_dst_idxs.clear();
+        const size_t read_rows = GGML_PAD((size_t) raw.n_kv, 256u);
+        for (size_t s = 0; s < raw.sinfo_read.n_stream(); ++s) {
+            const auto & rows = raw.sinfo_read.idxs[s];
+            for (uint32_t slot : rows) {
+                raw.read_dst_idxs.push_back((int32_t) slot);
+            }
+
+            const int32_t pad = rows.empty() ? 0 : (int32_t) rows.back();
+            for (size_t i = rows.size(); i < read_rows; ++i) {
+                raw.read_dst_idxs.push_back(pad);
+            }
         }
     }
 
@@ -764,7 +810,9 @@ static void dsv4_set_mask_tensor(
 }
 
 bool llama_context::ensure_dsv4_cache_tensors() {
-    const int32_t n_layer = model.hparams.n_layer;
+    // Allocate cache state only for base-generation layers.
+    const int32_t n_layer = std::max<int32_t>(
+            0, model.hparams.n_layer - (int32_t) model.hparams.nextn_predict_layers);
     const int64_t n_embd_head = model.hparams.n_embd_head_k(0);
     const int64_t n_indexer_head = model.hparams.indexer_head_size;
     const uint32_t n_stream = std::max<uint32_t>(1, cparams.n_seq_max);
