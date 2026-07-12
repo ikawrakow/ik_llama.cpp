@@ -7772,6 +7772,12 @@ struct llama_context * llama_init_from_model(
             LLAMA_LOG_INFO("%s: dsa_top_k     = %d\n",     __func__, cparams.dsa_top_k);
         }
     }
+    if (model->arch == LLM_ARCH_OPENPANGU) {
+        LLAMA_LOG_INFO("%s: dsa_idx_topk  = %d\n",     __func__, cparams.fused_idx_topk);
+        if (cparams.dsa_top_k > 0) {
+            LLAMA_LOG_INFO("%s: dsa_top_k     = %d\n",     __func__, cparams.dsa_top_k);
+        }
+    }
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: v_cache_hadam = %d\n",     __func__, cparams.v_cache_hadamard);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);

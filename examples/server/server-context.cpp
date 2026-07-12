@@ -481,6 +481,7 @@ void server_slot::reset() {
     prompt_batch_i1 = -1;
     n_sent_text = 0;
     drafted.clear();
+    spec_target_only = false;
     i_batch_dft.clear();
     spec_prompt_warmup_failed = false;
     n_sent_token_probs = 0;
@@ -587,6 +588,10 @@ int server_slot::get_n_draft_max() const {
 
     // determine the max draft that fits the current slot state
     int n_draft_max = params.speculative.get_max_stage_n_max();
+    const int configured_dflash_n_max = common_speculative_get_configured_n_max(spec);
+    if (configured_dflash_n_max > 0) {
+        n_draft_max = configured_dflash_n_max;
+    }
 
     // note: slot.prompt is not yet expanded with the `id` token sampled above
     //       also, need to leave space for 1 extra token to allow context shifts
@@ -613,6 +618,7 @@ void server_slot::release() {
         state = SLOT_STATE_IDLE;
         task.reset();
     }
+    spec_target_only = false;
     llama_decode_reset();
 }
 
@@ -3476,6 +3482,7 @@ void server_context::add_sampled_tokens() {
         if (slot.state == SLOT_STATE_IDLE) {
             continue;
         }
+        slot.spec_target_only = false;
 
         // generate draft tokens in speculative decoding mode
         // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
@@ -3503,6 +3510,7 @@ void server_context::add_sampled_tokens() {
                 draft_base_pos,
                 slot.id);
             llama_tokens & draft = draft_result.tokens;
+            slot.spec_target_only = draft_result.target_only;
 
             const int n_draft_max = slot.get_n_draft_max();
 
@@ -3522,13 +3530,16 @@ void server_context::add_sampled_tokens() {
             slot.cache_tokens.push_back(slot.sampled);
 
             const int min_usable_draft = slot.params.speculative.get_min_usable_stage_n_min();
-            if (min_usable_draft > (int)draft.size()) {
+            if (!slot.spec_target_only && min_usable_draft > (int)draft.size()) {
                 SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft.size(), min_usable_draft);
                 // fallback to normal decoding
                 slot.i_batch = slot.i_batch_dft[0];
                 slot.drafted.clear();
                 slot.i_batch_dft.clear();
             } else {
+                if (slot.spec_target_only) {
+                    SLT_DBG(slot, "%s\n", "selected DFlash target-only arm: root-only target batch");
+                }
                 // keep track of total number of drafted tokens tested
                 slot.n_draft_total += draft.size();
                 if (slot.n_draft_by_depth.size() < draft.size()) {
@@ -4221,6 +4232,7 @@ void server_context::speculative_decoding_accept() {
             n_draft,
             spec_pos_base,
             accepted_output_indices);
+        slot.spec_target_only = false;
 
         for (size_t i = 0; i < ids.size(); ++i) {
             completion_token_output result;

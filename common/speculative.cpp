@@ -1067,6 +1067,7 @@ struct common_speculative {
     std::unique_ptr<spec_tuner> tuner;
     int last_n_drafted = 0;
     int64_t t_step_start_us = 0;
+    bool last_step_target_only = false;
 };
 
 static bool common_speculative_stage_chain_matches(
@@ -1474,7 +1475,7 @@ common_speculative * common_speculative_init(
         if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
             actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
             result->tuner = std::make_unique<spec_tuner>();
-            result->tuner->init(actual_type, params, llama_get_model(ctx_tgt));
+            result->tuner->init(actual_type, result->configs[0].params, llama_get_model(ctx_tgt));
             LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
                     common_speculative_type_to_str(actual_type).c_str(),
                     result->tuner->coords.size());
@@ -1518,6 +1519,7 @@ llama_tokens common_speculative_draft(
     llama_tokens result;
 
     spec->t_step_start_us = ggml_time_us();
+    spec->last_step_target_only = false;
 
     // apply autotune proposal if enabled
     if (spec->tuner && spec->tuner->enabled) {
@@ -1533,7 +1535,18 @@ llama_tokens common_speculative_draft(
         auto & impl = spec->impls[i];
         const auto & runtime_stage = use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
         common_params_speculative impl_params = common_speculative_get_runtime_params(spec->configs[i], params, runtime_stage);
+        if (spec->tuner && spec->tuner->enabled && impl->type == COMMON_SPECULATIVE_TYPE_DFLASH) {
+            impl_params.n_max = params.n_max;
+        }
         result.clear();
+
+        if (spec->tuner && spec->tuner->has_dflash_target_only_arm() &&
+                impl->type == COMMON_SPECULATIVE_TYPE_DFLASH && impl_params.n_max == 0) {
+            spec->curr_impl = impl.get();
+            spec->last_step_target_only = true;
+            LOG_DBG("%s: selected DFlash target-only arm\n", __func__);
+            break;
+        }
 
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
@@ -1847,8 +1860,16 @@ common_speculative_draft_result common_speculative_draft_ex(
     result.type = spec != nullptr && spec->curr_impl != nullptr
         ? spec->curr_impl->type
         : COMMON_SPECULATIVE_TYPE_NONE;
+    result.target_only = spec != nullptr && spec->last_step_target_only;
 
     return result;
+}
+
+int common_speculative_get_configured_n_max(const common_speculative * spec) {
+    if (spec == nullptr || spec->tuner == nullptr || !spec->tuner->has_dflash_target_only_arm()) {
+        return 0;
+    }
+    return spec->tuner->configured_n_max;
 }
 
 static bool common_speculative_has_target_features(const common_speculative * spec) {
@@ -2681,6 +2702,7 @@ void common_speculative_clear_sequence(
         spec->curr_impl = nullptr;
         spec->last_n_drafted = 0;
         spec->t_step_start_us = 0;
+        spec->last_step_target_only = false;
     }
 
     common_speculative_clear_sequence_hidden(spec, seq_id);
@@ -2903,6 +2925,10 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past) {
+    if (spec != nullptr) {
+        spec->last_step_target_only = false;
+        spec->t_step_start_us = 0;
+    }
     if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
         llama_kv_cache_seq_rm (ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
         llama_kv_cache_seq_add(ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);

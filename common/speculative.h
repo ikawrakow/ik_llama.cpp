@@ -35,6 +35,7 @@ struct common_speculative_checkpoint {
 struct common_speculative_draft_result {
     llama_tokens tokens;
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+    bool target_only = false;
 };
 
 // comma separated list of all types
@@ -107,6 +108,8 @@ common_speculative_draft_result common_speculative_draft_ex(
                             llama_token   id_last,
                             llama_pos     draft_base_pos = -1,
                             llama_seq_id  draft_seq_id = 0);
+
+int common_speculative_get_configured_n_max(const common_speculative * spec);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);

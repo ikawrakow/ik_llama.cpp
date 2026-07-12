@@ -80,6 +80,7 @@ struct Perf {
 
 #ifdef __AVX2__
 #define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
+#define MM256_SET1_M128I(x)   _mm256_broadcastsi128_si256(x)
 #endif
 
 typedef struct {
@@ -281,7 +282,7 @@ static inline __m128i load_iq4nl_values_128() {
 
 static inline __m256i load_iq4nl_values_256() {
     auto val128 = load_iq4nl_values_128();
-    return MM256_SET_M128I(val128, val128);
+    return MM256_SET1_M128I(val128);
 }
 
 #ifdef HAVE_FANCY_SIMD
@@ -297,7 +298,7 @@ static inline __m128i load_iq4k_values_128() {
 
 static inline __m256i load_iq4k_values_256() {
     auto val128 = load_iq4k_values_128();
-    return MM256_SET_M128I(val128, val128);
+    return MM256_SET1_M128I(val128);
 }
 
 template <int nrc, typename block_q8 = block_q8_K> struct Q8 {

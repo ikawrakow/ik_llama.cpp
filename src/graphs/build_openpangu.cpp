@@ -408,7 +408,31 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 !dsa_gather_allowed &&
                 openpangu_att_score_should_chunk(n_kv, hparams.param_sink_number, n_head, n_tokens,
                         OPENPANGU_ATT_SCORE_CHUNK, OPENPANGU_ATT_FULL_KQ_MAX_MIB);
-            if (chunk_scores) {
+            if (lctx.cparams.fused_idx_topk) {
+                // Fused indexer top-k (CPU-only op): one op computes sum_g w * relu(q.k) + causal
+                // mask -> top-k without materializing the [n_kv, n_ihead, T] score tensor, so no
+                // score chunking is needed. CUDA backends do not implement GGML_OP_INDEXER_TOPK;
+                // the scheduler runs it on CPU and copies the operands across the backend boundary.
+                // The op reads the mask row-strided, so the raw view suffices.
+                ggml_tensor * idx_mask = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens,
+                                                      KQ_mask->nb[1], 0);
+                sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask,
+                                            GGML_UNARY_OP_RELU, (int) topk);          // [topk, T] i32
+                if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
+                dsa_gather_engaged = dsa_gather_allowed;
+                if (dsa_gather_engaged) {
+                    GGML_ASSERT(n_kv >= topk + (int64_t) pad + n_tokens);
+                } else if (defer_sel_mask_to_att_chunks) {
+                    sel_mask = nullptr;
+                } else {
+                    ggml_tensor * base = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_kv, n_tokens);
+                    base = ggml_fill(ctx0, base, -1e30f);
+                    ggml_tensor * zeros = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, topk, n_tokens);
+                    zeros = ggml_fill(ctx0, zeros, 0.0f);
+                    sel_mask = ggml_set_rows(ctx0, base, zeros, sel_idx);
+                    sel_mask = ggml_reshape_2d(ctx0, sel_mask, n_kv, n_tokens);
+                }
+            } else if (chunk_scores) {
                 ggml_tensor * sel_mask_parts = nullptr;
                 for (int64_t c0 = 0; c0 < n_tokens; c0 += OPENPANGU_IDX_SCORE_CHUNK) {
                     const int64_t tc = std::min<int64_t>(OPENPANGU_IDX_SCORE_CHUNK, n_tokens - c0);
