@@ -222,18 +222,6 @@ static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
     return out;
 }
 
-// --- mHC Sinkhorn: h_res [S*S, T] -> doubly-stochastic per token, 20 iters (ends on col norm) ---
-static ggml_tensor * openpangu_sinkhorn(ggml_context * ctx, ggml_tensor * h_res_flat,
-                                        int64_t S, int64_t T, int iters, float hc_eps) {
-    // Fused op: the softmax + alternating row/column normalization chain in a single
-    // node (previously ~6 compute nodes per iteration, ~120 per mHC site, two sites
-    // per layer). Semantics and the [row(S), col(S), T] output layout are unchanged;
-    // see ggml_sinkhorn in ggml.h.
-    (void) hc_eps; // eps=0 reproduces the merged graph chain, which did not apply hc_eps
-    (void) T;
-    return ggml_sinkhorn(ctx, h_res_flat, (int) S, iters, 0.0f, /*output_transposed=*/true);
-}
-
 // Attention sublayer body, shared by the base layers and the NextN/MTP head.
 // x_normed = input-layernormed hidden [n_embd, T]; returns post-o_proj output [n_embd, T].
 // conv_state is the recurrent MoME state slot. seq_qnext is the [1, T] sequence-id input
@@ -831,7 +819,6 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);                // 192
     const int64_t S             = hparams.mhc_num_stream;                  // 4
     const int    sink_iters     = (int) hparams.mhc_recur_norm;            // 20
-    const float  hc_eps         = 1e-6f;
     const float  kq_scale       = 1.0f / sqrtf(float(n_embd_head_k));
 
 
@@ -1031,7 +1018,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         // cont is required: the CUDA broadcast-mul path misreads strided views (h_pre is a
         // row-slice of mixes), while CPU handles the strides — token 0 right, tokens 1+ garbage
         h_pre = ggml_add(ctx0, ggml_mul(ctx0, ggml_cont(ctx0, h_pre), a_pre), b_pre);  // broadcast scalar + [S]
-        h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+hc_eps omitted, inert)
+        h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+eps omitted, inert)
 
         // combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
         ggml_tensor * hpre3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, h_pre), 1, S, n_tokens);
@@ -1056,7 +1043,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         h_post = ggml_scale(ctx0, ggml_sigmoid(ctx0, h_post), 2.0f);  // 2*sigmoid, [S,T]
 
         ggml_tensor * m = ggml_add(ctx0, ggml_mul(ctx0, h_res, a_res), b_res); // [S*S,T]
-        m = openpangu_sinkhorn(ctx0, m, S, n_tokens, sink_iters, hc_eps);      // [row S, col S, T]
+        m = ggml_sinkhorn(ctx0, m, (int) S, sink_iters, 0.0f, /*output_transposed=*/true); // [row S, col S, T]
 
         // term1: h_post[s,t]*y[h,t] -> [H,S,T]
         ggml_tensor * y3 = ggml_reshape_3d(ctx0, y, n_embd, 1, n_tokens);
