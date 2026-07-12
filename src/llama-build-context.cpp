@@ -606,6 +606,27 @@ ggml_tensor * llm_build_context::build_mhc_weighted_sum(
     return out;
 }
 
+ggml_tensor * llm_build_context::build_mhc_pre_projection(
+        ggml_tensor * x,
+        ggml_tensor * fn,
+        ggml_tensor * gamma,
+        int64_t n_embd,
+        int64_t n_stream,
+        float norm_rms_eps,
+        bool force_contiguous) {
+    if (force_contiguous) {
+        x = ggml_cont(ctx0, x);
+    }
+
+    ggml_tensor * flat = ggml_reshape_2d(ctx0, x, n_embd*n_stream, x->ne[2]);
+    ggml_tensor * normed = ggml_rms_norm(ctx0, flat, norm_rms_eps);
+    if (gamma != nullptr) {
+        normed = ggml_mul(ctx0, normed, gamma);
+    }
+
+    return ggml_mul_mat(ctx0, fn, normed);
+}
+
 ggml_tensor * llm_build_context::build_inp_mean() {
     lctx.inp_mean = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens);
     cb(lctx.inp_mean, "inp_mean", -1);

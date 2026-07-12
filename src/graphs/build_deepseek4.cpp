@@ -413,7 +413,7 @@ static ggml_tensor * dsv4_raw_cpy_k(
             if (write == nullptr) {
                 write = cur;
             } else {
-                write = ggml_add(ctx, write, ggml_sub(ctx, cur, cur));
+                ggml_build_forward_expand(gf, cur);
             }
         }
     }
@@ -623,13 +623,11 @@ static ggml_tensor * build_hc_pre(
         ggml_tensor ** post,
         ggml_tensor ** comb) {
     const int64_t hc         = hparams.dsv4_hc_mult;
-    const int64_t hc_dim     = hc*n_embd;
     const int64_t hc_mix_dim = (2 + hc)*hc;
     const int64_t nt         = x->ne[2];
 
-    ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
-    ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = llm.build_mhc_pre_projection(x, hc_fn, nullptr,
+            n_embd, hc, norm_rms_eps, false);
 
     ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
     ggml_tensor * scale_post = dsv4_view_1d(ctx0, hc_scale, 1, 1);
@@ -668,12 +666,10 @@ static ggml_tensor * build_hc_head(
         ggml_tensor * hc_scale,
         ggml_tensor * hc_base) {
     const int64_t hc     = hparams.dsv4_hc_mult;
-    const int64_t hc_dim = hc*n_embd;
     const int64_t nt     = x->ne[2];
 
-    ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
-    ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = llm.build_mhc_pre_projection(x, hc_fn, nullptr,
+            n_embd, hc, norm_rms_eps, false);
     ggml_tensor * pre = dsv4_hc_affine(ctx0, mixes, hc_scale, hc_base);
     pre = ggml_sigmoid(ctx0, pre);
     pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);

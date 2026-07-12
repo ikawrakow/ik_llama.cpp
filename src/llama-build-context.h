@@ -325,6 +325,15 @@ struct llm_build_context {
         int64_t n_embd,
         int64_t n_stream);
 
+    ggml_tensor * build_mhc_pre_projection(
+        ggml_tensor * x,
+        ggml_tensor * fn,
+        ggml_tensor * gamma,
+        int64_t n_embd,
+        int64_t n_stream,
+        float norm_rms_eps,
+        bool force_contiguous);
+
     ggml_tensor * build_deepseek2_tp_attention(
             ggml_cgraph * gf, int il,
             ggml_tensor * inpL,

@@ -1028,10 +1028,8 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     auto mhc_pre = [&](ggml_tensor * Rin, ggml_tensor * phi, ggml_tensor * alpha,
                        ggml_tensor * beta, ggml_tensor * gamma,
                        ggml_tensor ** h_post_out, ggml_tensor ** h_res_out) {
-        ggml_tensor * flat = ggml_reshape_2d(ctx0, ggml_cont(ctx0, Rin), n_embd * S, n_tokens);
-        ggml_tensor * normed = ggml_rms_norm(ctx0, flat, hparams.f_norm_rms_eps);
-        normed = ggml_mul(ctx0, normed, gamma);                       // [S*H, T]
-        ggml_tensor * mixes = ggml_mul_mat(ctx0, phi, normed);        // [(S+2)*S, T]
+        ggml_tensor * mixes = build_mhc_pre_projection(Rin, phi, gamma,
+                n_embd, S, hparams.f_norm_rms_eps, true);             // [(S+2)*S, T]
         ggml_tensor * h_pre  = ggml_view_2d(ctx0, mixes, S, n_tokens, mixes->nb[1], 0);
         ggml_tensor * h_post = ggml_view_2d(ctx0, mixes, S, n_tokens, mixes->nb[1], S*ggml_element_size(mixes));
         ggml_tensor * h_res  = ggml_view_2d(ctx0, mixes, S*S, n_tokens, mixes->nb[1], 2*S*ggml_element_size(mixes));
