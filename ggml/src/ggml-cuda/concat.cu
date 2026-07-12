@@ -154,10 +154,20 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src1 = dst->src[1];
     const int32_t dim = ((int32_t *) dst->op_params)[0];
 
+    GGML_ASSERT(dim >= 0 && dim < GGML_MAX_DIMS);
     GGML_ASSERT(src0->type == src1->type);
     GGML_ASSERT(dst->type == src0->type);
     GGML_ASSERT(!ggml_is_quantized(src0->type));
     GGML_ASSERT(ggml_blck_size(src0->type) == 1);
+
+    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+        if (d == dim) {
+            GGML_ASSERT(dst->ne[d] == src0->ne[d] + src1->ne[d]);
+        } else {
+            GGML_ASSERT(src0->ne[d] == src1->ne[d]);
+            GGML_ASSERT(dst->ne[d] == src0->ne[d]);
+        }
+    }
 
     switch (ggml_type_size(src0->type)) {
         case 1: concat_cuda<uint8_t>(src0, src1, dst, dim, ctx.stream()); break;

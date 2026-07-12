@@ -825,6 +825,45 @@ static ggml_tensor * build_top_k_mask(
     return ggml_add(ctx0, kq_mask_top_k, kq_mask);
 }
 
+static ggml_tensor * dsv4_build_lid_top_k_shared(
+        ggml_context * ctx0,
+        ggml_tensor * indexer_k,
+        ggml_tensor * indexer_q,
+        ggml_tensor * indexer_weights,
+        ggml_tensor * indexer_mask,
+        int n_top_k) {
+    const int64_t n_stream = indexer_k->ne[3];
+    const int64_t n_tokens = indexer_q->ne[1];
+
+    if (n_stream <= 0 || indexer_k->ne[2] != 1 || indexer_q->ne[3] != n_stream ||
+            indexer_weights->ne[3] != n_stream || indexer_mask->ne[1] < n_stream*n_tokens) {
+        return nullptr;
+    }
+
+    ggml_tensor * selected = nullptr;
+    for (int64_t s = 0; s < n_stream; ++s) {
+        ggml_tensor * k = ggml_view_2d(ctx0, indexer_k,
+                indexer_k->ne[0], indexer_k->ne[1], indexer_k->nb[1], s*indexer_k->nb[3]);
+        ggml_tensor * q = ggml_view_3d(ctx0, indexer_q,
+                indexer_q->ne[0], indexer_q->ne[1], indexer_q->ne[2],
+                indexer_q->nb[1], indexer_q->nb[2], s*indexer_q->nb[3]);
+        q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+
+        ggml_tensor * w = ggml_view_2d(ctx0, indexer_weights,
+                indexer_weights->ne[0], indexer_weights->ne[1], indexer_weights->nb[1],
+                s*indexer_weights->nb[3]);
+        ggml_tensor * mask = ggml_view_2d(ctx0, indexer_mask,
+                indexer_mask->ne[0], n_tokens, indexer_mask->nb[1],
+                s*n_tokens*indexer_mask->nb[1]);
+
+        ggml_tensor * cur = ggml_indexer_topk(ctx0, k, q, w, mask,
+                GGML_UNARY_OP_RELU, n_top_k);
+        selected = selected == nullptr ? cur : ggml_concat(ctx0, selected, cur, 1);
+    }
+
+    return selected == nullptr ? nullptr : ggml_cont(ctx0, selected);
+}
+
 static ggml_tensor * dsv4_build_lid_top_k(
         ggml_context * ctx0,
         llm_build_context & llm,
@@ -890,6 +929,17 @@ static ggml_tensor * dsv4_build_lid_top_k(
     indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
     llm.cb(indexer_k, "lid_k_stream", il);
 
+    ggml_tensor * lid_mask = dsv4_build_raw_mask_view(ctx0,
+            llm.lctx.dsv4.inputs.lid.kq_mask, n_lid, n_tokens);
+    const uint32_t n_top_k = (uint32_t) std::min<int64_t>(n_lid, hparams.indexer_top_k);
+    if (llm.cparams.fused_idx_topk && n_lid > n_top_k) {
+        if (ggml_tensor * selected = dsv4_build_lid_top_k_shared(ctx0,
+                    indexer_k, indexer_q, indexer_weights, lid_mask, (int) n_top_k)) {
+            llm.cb(selected, "lid_top_k", il);
+            return selected;
+        }
+    }
+
     ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
     llm.cb(indexer_kq, "lid_kq", il);
 
@@ -903,10 +953,9 @@ static ggml_tensor * dsv4_build_lid_top_k(
     indexer_score = ggml_view_2d(ctx0, indexer_score, n_lid, n_tokens, indexer_score->nb[2], 0);
     llm.cb(indexer_score, "lid_score", il);
 
-    indexer_score = ggml_add(ctx0, indexer_score, dsv4_build_raw_mask_view(ctx0, llm.lctx.dsv4.inputs.lid.kq_mask, n_lid, n_tokens));
+    indexer_score = ggml_add(ctx0, indexer_score, lid_mask);
     llm.cb(indexer_score, "lid_score_masked", il);
 
-    const uint32_t n_top_k = (uint32_t) std::min<int64_t>(indexer_score->ne[0], hparams.indexer_top_k);
     ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
     llm.cb(top_k, "lid_top_k", il);
 

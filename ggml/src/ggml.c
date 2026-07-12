@@ -10197,12 +10197,18 @@ static struct ggml_tensor * ggml_fill_impl(
     GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
     GGML_ASSERT(ggml_is_contiguous(a));
 
+    bool is_node = false;
+    if (!inplace && a->grad) {
+        GGML_ABORT("fatal error"); // TODO: implement backward
+        is_node = true;
+    }
+
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_f32(result, 0, c);
 
     result->op   = GGML_OP_FILL;
-    result->grad = NULL;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = a;
 
     return result;
@@ -22209,9 +22215,6 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             kq_vec_dot(Dk, &s, 0, k_data, 0, Q_q, 0, 1);
 
             s = softcap == 0.0f ? s*scale + mv : softcap*tanhf(s*scale) + mv; // scale KQ value and apply mask
-            if (!isfinite(s)) {
-                continue;
-            }
 
             const float Mold = M;
 
@@ -22280,9 +22283,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         }
 
         // V /= S
-        // A fully masked query row has no active keys. Match mainline by
-        // returning a zero attention vector instead of propagating NaNs.
-        const float S_inv = isfinite(S) && S > 0.0f ? 1.0f/S : 0.0f;
+        const float S_inv = S == 0.0f ? 0.0f : 1.0f/S;
         ggml_vec_scale_f32(Dv, VKQ32, S_inv);
 
         // dst indices
