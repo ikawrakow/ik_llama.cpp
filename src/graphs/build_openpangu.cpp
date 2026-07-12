@@ -376,10 +376,10 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 openpangu_att_score_should_chunk(n_kv, hparams.param_sink_number, n_head, n_tokens,
                         OPENPANGU_ATT_SCORE_CHUNK, OPENPANGU_ATT_FULL_KQ_MAX_MIB);
             if (lctx.cparams.fused_idx_topk) {
-                // Fused indexer top-k (CPU-only op): one op computes sum_g w * relu(q.k) + causal
+                // Fused indexer top-k: one op computes sum_g w * relu(q.k) + causal
                 // mask -> top-k without materializing the [n_kv, n_ihead, T] score tensor, so no
-                // score chunking is needed. CUDA backends do not implement GGML_OP_INDEXER_TOPK;
-                // the scheduler runs it on CPU and copies the operands across the backend boundary.
+                // score chunking is needed. The CUDA op handles f16/quantized k; other indexer
+                // cache types fall back to the CPU op through the scheduler.
                 // The op reads the mask row-strided, so the raw view suffices.
                 ggml_tensor * idx_mask = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens,
                                                       KQ_mask->nb[1], 0);

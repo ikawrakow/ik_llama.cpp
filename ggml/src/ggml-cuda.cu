@@ -5040,8 +5040,15 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[1]->ne[0] == op->src[0]->ne[1] &&
                    op->src[3]->ne[0] == op->src[0]->ne[2];
         case GGML_OP_DELTA_NET:
-        case GGML_OP_INDEXER_TOPK:
             return true;
+        case GGML_OP_INDEXER_TOPK:
+            // f16 k goes through cuBLAS; quantized k needs an MMQ kernel for the type on
+            // this device. Anything else falls back to the CPU op via the scheduler.
+            return (op->src[0]->type == GGML_TYPE_F16 ||
+                    (ggml_is_quantized(op->src[0]->type) &&
+                     ggml_cuda_should_use_mmq(op->src[0]->type, ggml_cuda_info().devices[cuda_ctx->device].cc, 8))) &&
+                   op->src[1]->type == GGML_TYPE_F32 && op->src[2]->type == GGML_TYPE_F32 &&
+                   (op->src[3]->type == GGML_TYPE_F32 || op->src[3]->type == GGML_TYPE_F16);
         case GGML_OP_SINKHORN: {
             const int sink_s = op->op_params[0];
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
