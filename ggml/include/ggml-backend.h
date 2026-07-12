@@ -102,6 +102,7 @@ extern "C" {
 
     GGML_API GGML_CALL bool ggml_backend_is_cpu                (ggml_backend_t backend);
     GGML_API           void ggml_backend_cpu_set_n_threads     (ggml_backend_t backend_cpu, int n_threads);
+    GGML_API           void ggml_backend_cpu_set_moe_expert_prefetch(ggml_backend_t backend_cpu, bool enable);
     GGML_API           void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_callback abort_callback, void * abort_callback_data);
 
     // Create a backend buffer from an existing pointer
@@ -214,6 +215,11 @@ extern "C" {
     GGML_API void                 ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off);
     GGML_API void                 ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool on_or_off, bool async);
     GGML_API void                 ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB);
+
+    // prefetch mmap'd MoE expert weights into the page cache
+    GGML_API bool                 ggml_backend_prefetch_init(int n_threads);
+    GGML_API void                 ggml_backend_prefetch_register_mapping(const void * addr, size_t size);
+    GGML_API void                 ggml_backend_prefetch_unregister_mapping(const void * addr);
 
     //
     // Utils

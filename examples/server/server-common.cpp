@@ -1199,7 +1199,9 @@ size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
 
     size_t idx = 0;
     llama_pos pos = 0;
-
+    if (pos >= max_pos) {
+        return idx;
+    }
     while (idx < tokens.size()) {
         const auto media_it = map_idx_to_media.find(idx);
         if (media_it != map_idx_to_media.end()) {

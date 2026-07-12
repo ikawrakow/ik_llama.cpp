@@ -65,6 +65,9 @@ static void test_cohere_analysis(testing & t);
 // End-to-end Cohere2MoE (North Code) dedicated PEG parser coverage.
 static void test_cohere2moe_parser(testing & t);
 
+// End-to-end MiniMax-M3 dedicated PEG parser coverage.
+static void test_minimax_m3_partial_reasoning_parser(testing & t);
+
 // SmolLM3 template analysis tests
 static void test_smollm3_analysis(testing & t);
 
@@ -102,6 +105,7 @@ int main(int argc, char * argv[]) {
     t.test("seed_oss_diffs", test_seed_oss_tool_analysis);
     t.test("cohere", test_cohere_analysis);
     t.test("cohere2moe_parser", test_cohere2moe_parser);
+    t.test("minimax_m3_partial_reasoning_parser", test_minimax_m3_partial_reasoning_parser);
     t.test("nemotron", test_nemotron_analysis);
     t.test("smollm3", test_smollm3_analysis);
     t.test("standard_json_tools", test_standard_json_tools_formats);
@@ -1969,6 +1973,191 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
             t.assert_true(std::string("arguments should be valid JSON: ") + e.what(), false);
         }
     }
+}
+
+// End-to-end coverage for MiniMax-M3 partial reasoning streams:
+// template apply -> PEG parse -> assert message and streaming diff. The partial
+// case mirrors a real leaked <mm:think> stream where </mm:think> had not arrived.
+static void test_minimax_m3_partial_reasoning_parser(testing & t) {
+    const std::string template_str = R"(
+{%- set ns_token = ']<]minimax[>[' -%}
+{%- set toolcall_begin_token = ns_token ~ '<tool_call>' -%}
+{%- set toolcall_end_token = ns_token ~ '</tool_call>' -%}
+{%- for message in messages -%}
+{{- message.role ~ ': ' ~ message.content ~ '\n' -}}
+{%- endfor -%}
+{%- if tools -%}
+{{- toolcall_begin_token ~ ns_token ~ '<invoke name="example">' ~ ns_token ~ '</invoke>' ~ toolcall_end_token -}}
+{%- endif -%}
+{%- if add_generation_prompt -%}
+{{- '<mm:think>' -}}
+{%- endif -%}
+)";
+
+    common_chat_templates_inputs inputs;
+    common_chat_msg user;
+    user.role    = "user";
+    user.content = "Please inspect the extension state.";
+
+    inputs.messages              = { user };
+    inputs.add_generation_prompt = true;
+    inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
+    inputs.enable_thinking       = true;
+    inputs.tools                 = {
+        common_chat_tool{
+            /* .name        = */ "example",
+            /* .description = */ "Example tool",
+            /* .parameters  = */ R"({"type":"object","properties":{}})",
+        },
+        common_chat_tool{
+            /* .name        = */ "bash",
+            /* .description = */ "Run shell commands",
+            /* .parameters  = */ R"({"type":"object","properties":{"command":{"type":"string"}},"required":["command"]})",
+        },
+    };
+
+    common_chat_templates_ptr tmpls(common_chat_templates_init(/* model = */ nullptr, template_str));
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+    t.assert_equal("MiniMax-M3 parser selected", COMMON_CHAT_FORMAT_PEG_MINIMAX_M3, params.format);
+    t.assert_true("MiniMax-M3 parser generated", !params.parser.empty());
+
+    common_peg_arena arena;
+    arena.load(params.parser);
+
+    common_chat_parser_params parser_params(params);
+    parser_params.parser = arena;
+
+    const std::string partial_reasoning =
+        "The user is asking why I'm implementing F3 directly. Looking at the context:\n\n"
+        "1. The user said earlier: \"yes we do F3 manually, by";
+
+    auto partial_msg = common_chat_parse(partial_reasoning, /* is_partial = */ true, parser_params);
+    t.assert_equal("partial reasoning", partial_reasoning, partial_msg.reasoning_content);
+    t.assert_equal("partial visible content", std::string(), partial_msg.content);
+    t.assert_true("partial has no tool calls", partial_msg.tool_calls.empty());
+
+    auto diffs = common_chat_msg_diff::compute_diffs(common_chat_msg{}, partial_msg);
+    t.assert_equal("partial emits one diff", 1u, diffs.size());
+    if (diffs.size() == 1) {
+        t.assert_equal("partial diff is reasoning", partial_reasoning, diffs[0].reasoning_content_delta);
+        t.assert_equal("partial diff has no visible content", std::string(), diffs[0].content_delta);
+        t.assert_equal("partial diff has no tool index", std::string::npos, diffs[0].tool_call_index);
+    }
+
+    const std::string closed_output = partial_reasoning + "</mm:think>You're right to question.";
+    auto closed_msg = common_chat_parse(closed_output, /* is_partial = */ false, parser_params);
+    t.assert_equal("closed reasoning", partial_reasoning, closed_msg.reasoning_content);
+    t.assert_equal("closed visible content", std::string("You're right to question."), closed_msg.content);
+    t.assert_true("closed has no tool calls", closed_msg.tool_calls.empty());
+
+    const std::string command =
+        "# Deploy to electra and erabus\n"
+        "SSH_AUTH_SOCK=/run/user/1001/ssh-agent.socket scp index.ts electra:/tmp/index.ts";
+    const std::string tool_output =
+        "Let me do that."
+        "]<]minimax[>[<tool_call>\n"
+        "]<]minimax[>[<invoke name=\"bash\">"
+        "]<]minimax[>[<command>" + command + "]<]minimax[>[</command>"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>";
+
+    auto tool_msg = common_chat_parse(tool_output, /* is_partial = */ false, parser_params);
+    t.assert_equal("tool reasoning excludes markers", std::string("Let me do that."), tool_msg.reasoning_content);
+    t.assert_equal("tool visible content", std::string(), tool_msg.content);
+    t.assert_equal("tool call count", 1u, tool_msg.tool_calls.size());
+    if (tool_msg.tool_calls.size() == 1) {
+        t.assert_equal("tool call name", std::string("bash"), tool_msg.tool_calls[0].name);
+        t.assert_equal("tool call args", json({{"command", command}}).dump(), tool_msg.tool_calls[0].arguments);
+    }
+
+    const std::string cmux_command =
+        "cmux rpc surface.scrollback '{\"surface_id\":\"20CD49E8-A0FA-42E3-B349-7CCCC1075425\","
+        "\"workspace_id\":\"826FA4BA-01E5-4D84-893A-D70B0DAF9970\"}' 2>&1 | head -3";
+    const std::string malformed_nested_tool_output =
+        "]<]minimax[>[<tool_call>\n"
+        "]<]minimax[>[<invoke name=\"bash\">"
+        "]<]minimax[>[<command>" + cmux_command +
+        "]<]minimax[>[<tool_call>\n"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>老实\n"
+        "</command>]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>\n"
+        "]<]minimax[>[<tool_call>\n"
+        "bash\n"
+        "</parameter>]<]minimax[>[</command>"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>";
+
+    auto malformed_nested_tool_msg = common_chat_parse(malformed_nested_tool_output,
+                                                       /* is_partial = */ false,
+                                                       parser_params);
+    t.assert_equal("malformed nested tool call count", 1u, malformed_nested_tool_msg.tool_calls.size());
+    if (malformed_nested_tool_msg.tool_calls.size() == 1) {
+        t.assert_equal("malformed nested tool call name", std::string("bash"), malformed_nested_tool_msg.tool_calls[0].name);
+        t.assert_equal(
+            "malformed nested tool args truncate namespace leak",
+            json({{"command", cmux_command}}).dump(),
+            malformed_nested_tool_msg.tool_calls[0].arguments);
+        t.assert_true("malformed nested tool args contain no minimax marker",
+            malformed_nested_tool_msg.tool_calls[0].arguments.find("]<]minimax[>[") == std::string::npos);
+    }
+
+    inputs.enable_thinking = false;
+    auto params_thinking_off = common_chat_templates_apply(tmpls.get(), inputs);
+
+    common_peg_arena thinking_off_arena;
+    thinking_off_arena.load(params_thinking_off.parser);
+
+    common_chat_parser_params thinking_off_parser_params(params_thinking_off);
+    thinking_off_parser_params.parser = thinking_off_arena;
+
+    const std::string leaked_reasoning =
+        "Right pane is up. Now let me think about the workflow lessons and update "
+        "kickass + smartass to include them explicitly.\n\n"
+        "Looking at kickass.md:\n"
+        "- Rule 4 covers L7 partially\n"
+        "- Rule 2 covers L15\n\n"
+        "Let me update kickass and smartass.";
+    const std::string tool_prelude =
+        "Let me update kickass and smartass with the workflow lessons explicitly. "
+        "First check what's there:";
+    const std::string unopened_closed_tool_output =
+        leaked_reasoning + "</mm:think>" + tool_prelude +
+        "]<]minimax[>[<tool_call>\n"
+        "]<]minimax[>[<invoke name=\"bash\">"
+        "]<]minimax[>[<command>cat /home/leaf/.pi/agent/agents/kickass.md 2>&1]<]minimax[>[</command>"
+        "]<]minimax[>[</invoke>\n"
+        "]<]minimax[>[</tool_call>";
+
+    auto unopened_closed_tool_msg = common_chat_parse(unopened_closed_tool_output, /* is_partial = */ false, thinking_off_parser_params);
+    t.assert_equal("unopened closed tool reasoning", leaked_reasoning + tool_prelude, unopened_closed_tool_msg.reasoning_content);
+    t.assert_equal("unopened closed tool visible content", std::string(), unopened_closed_tool_msg.content);
+    t.assert_equal("unopened closed tool call count", 1u, unopened_closed_tool_msg.tool_calls.size());
+    if (unopened_closed_tool_msg.tool_calls.size() == 1) {
+        t.assert_equal("unopened closed tool name", std::string("bash"), unopened_closed_tool_msg.tool_calls[0].name);
+        t.assert_equal(
+            "unopened closed tool args",
+            json({{"command", "cat /home/leaf/.pi/agent/agents/kickass.md 2>&1"}}).dump(),
+            unopened_closed_tool_msg.tool_calls[0].arguments);
+    }
+
+    const std::string migrated_prefix =
+        "Chain 6 started. JakASS is reading the prompt. Now sleeping 1 hour:";
+    auto migrated_content_msg = common_chat_parse(migrated_prefix, /* is_partial = */ true, thinking_off_parser_params);
+    t.assert_equal("migrated prefix parser treats as reasoning", migrated_prefix, migrated_content_msg.reasoning_content);
+    t.assert_equal("migrated prefix parser has no visible content", std::string(), migrated_content_msg.content);
+
+    auto migrated_reasoning_msg = common_chat_parse(migrated_prefix + "</mm:think>",
+                                                    /* is_partial = */ true,
+                                                    thinking_off_parser_params);
+    t.assert_equal("migrated prefix later reasoning", migrated_prefix, migrated_reasoning_msg.reasoning_content);
+    t.assert_equal("migrated prefix later not visible", std::string(), migrated_reasoning_msg.content);
+
+    common_chat_msg streamed_as_content;
+    streamed_as_content.role    = "assistant";
+    streamed_as_content.content = migrated_prefix;
+    auto migrated_diffs = common_chat_msg_diff::compute_diffs(streamed_as_content, migrated_reasoning_msg);
+    t.assert_equal("migrated prefix emits no duplicate diff", 0u, migrated_diffs.size());
 }
 
 // End-to-end coverage for the dedicated Cohere2MoE (North Code) parser:

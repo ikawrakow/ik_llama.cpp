@@ -497,6 +497,8 @@ extern "C" {
         int  min_experts;
         float thresh_experts;
         bool only_active_experts;
+        bool prefetch_experts;  // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
+        int  prefetch_experts_threads; // number of expert prefetch workers (<=0 = auto)
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
         bool v_cache_hadamard;  // if true, apply Hadamard transfrom to V-cache (needs FA)
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
@@ -696,12 +698,24 @@ extern "C" {
 
     LLAMA_API bool llama_model_has_recurrent(const struct llama_model * model);
 
+    // Returns true if the model is openPangu (conv-only recurrent state that rides the spec-rollback checkpoint)
+    LLAMA_API bool llama_model_is_openpangu(const struct llama_model * model);
+
     // Returns true if the model is a Gemma 4 MTP assistant (external frozen-KV speculative drafter)
     LLAMA_API bool llama_model_is_gemma4_mtp_assistant(const struct llama_model * model);
 
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
     LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
+
+    // Returns false for models whose KV cache cannot be re-positioned after the fact
+    // (K-shift / context shift / self-extend), e.g. openPangu's latent cache.
+    LLAMA_API bool llama_model_supports_ctx_shift(const struct llama_model * model);
+
+    // Returns false for models that can only reuse a cached sequence as a pure extension:
+    // rewinding into the middle of a decoded sequence loses per-position side state
+    // (e.g. openPangu keeps only the current recurrent conv state).
+    LLAMA_API bool llama_model_supports_partial_kv_reuse(const struct llama_model * model);
 
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 

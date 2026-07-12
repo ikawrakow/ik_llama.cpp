@@ -131,6 +131,16 @@ struct llama_hparams {
     // indexer_types metadata if present, else derived from the GLM-5.2 config rule at load time.
     std::array<bool, LLAMA_MAX_LAYERS> indexer_is_full = {};
 
+    // openPangu-2.0 (mHC / Hyper-Connections + learned param sink)
+    uint32_t mhc_num_stream    = 1;
+    uint32_t mhc_recur_norm    = 0;
+    uint32_t param_sink_number = 0;
+    // openPangu DSA/SWA schedule: per-layer sliding window (0 = DSA layer, full causal
+    // attention over the indexer's top-k selection). The NextN/MTP layers carry their own
+    // (larger) window, applied when the graph is built with an MTP op type.
+    uint32_t n_swa_mtp = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> openpangu_window = {};
+
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 

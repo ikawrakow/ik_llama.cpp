@@ -294,7 +294,7 @@ static void test_minimax_m3_native_tool_parser(void) {
     common_chat_templates_ptr tmpls(common_chat_templates_init(/* model= */ nullptr, template_str));
     auto params = common_chat_templates_apply(tmpls.get(), inputs);
 
-    assert(params.format == COMMON_CHAT_FORMAT_PEG_NATIVE);
+    assert(params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3);
     assert(!params.parser.empty());
 
     common_peg_arena arena;

@@ -164,7 +164,15 @@ static common_speculative_stage_params server_parse_speculative_stage_json(const
             continue;
         }
 
-        throw std::runtime_error("Error: per-request speculative.stages only support type, n_max, n_min, and p_min; structural stage overrides are startup-only");
+        if (item.key() == "heads" || item.key() == "mtp_heads") {
+            stage.mtp_heads = item.value().get<int32_t>();
+            if (stage.mtp_heads < 0) {
+                throw std::runtime_error("Error: speculative.stages[].heads must be >= 0");
+            }
+            continue;
+        }
+
+        throw std::runtime_error("Error: per-request speculative.stages only support type, n_max, n_min, p_min, and heads; structural stage overrides are startup-only");
     }
 
     return stage;
@@ -449,8 +457,8 @@ void server_slot::prompt_save(server_prompt_cache& prompt_cache) const {
     llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0);
 }
 
-void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens) {
-    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id);
+void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction) {
+    bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id, min_reusable_fraction);
     if (!res) {
         LLAMA_LOG_INFO("failed to load prompt from cache\n");
     }
@@ -473,6 +481,7 @@ void server_slot::reset() {
     prompt_batch_i1 = -1;
     n_sent_text = 0;
     drafted.clear();
+    spec_target_only = false;
     i_batch_dft.clear();
     spec_prompt_warmup_failed = false;
     n_sent_token_probs = 0;
@@ -509,6 +518,8 @@ void server_slot::reset() {
     // Reset speculative decoding stats
     n_draft_total = 0;
     n_draft_accepted = 0;
+    n_draft_by_depth.clear();
+    n_draft_accepted_by_depth.clear();
     chat_msg = {};
     json_schema = json();
     generated_tool_call_ids.clear();
@@ -577,6 +588,10 @@ int server_slot::get_n_draft_max() const {
 
     // determine the max draft that fits the current slot state
     int n_draft_max = params.speculative.get_max_stage_n_max();
+    const int configured_dflash_n_max = common_speculative_get_configured_n_max(spec);
+    if (configured_dflash_n_max > 0) {
+        n_draft_max = configured_dflash_n_max;
+    }
 
     // note: slot.prompt is not yet expanded with the `id` token sampled above
     //       also, need to leave space for 1 extra token to allow context shifts
@@ -603,12 +618,13 @@ void server_slot::release() {
         state = SLOT_STATE_IDLE;
         task.reset();
     }
+    spec_target_only = false;
     llama_decode_reset();
 }
 
 
 json server_slot::get_formated_timings() const {
-    return json{
+    json timings = json{
         {"prompt_n",               n_prompt_tokens_processed},
         {"prompt_ms",              t_prompt_processing},
         {"prompt_per_token_ms",    t_prompt_processing / n_prompt_tokens_processed},
@@ -622,6 +638,27 @@ json server_slot::get_formated_timings() const {
         {"n_ctx",           n_ctx},
         {"n_past",           n_past},
     };
+    if (n_draft_total > 0) {
+        timings["draft_n"]          = n_draft_total;
+        timings["draft_n_accepted"] = n_draft_accepted;
+        json by_depth = json::array();
+        for (size_t i = 0; i < n_draft_by_depth.size(); ++i) {
+            if (n_draft_by_depth[i] <= 0) {
+                continue;
+            }
+            const int32_t accepted = i < n_draft_accepted_by_depth.size()
+                ? n_draft_accepted_by_depth[i] : 0;
+            by_depth.push_back({
+                {"depth",            (int32_t) i + 1},
+                {"draft_n",          n_draft_by_depth[i]},
+                {"draft_n_accepted", accepted},
+            });
+        }
+        if (!by_depth.empty()) {
+            timings["draft_by_depth"] = by_depth;
+        }
+    }
+    return timings;
 }
 
 result_timings server_slot::get_timings() const {
@@ -644,6 +681,8 @@ result_timings server_slot::get_timings() const {
     if (n_draft_total > 0) {
         timings.draft_n = n_draft_total;
         timings.draft_n_accepted = n_draft_accepted;
+        timings.draft_n_by_depth = n_draft_by_depth;
+        timings.draft_n_accepted_by_depth = n_draft_accepted_by_depth;
     }
 
     return timings;
@@ -1010,7 +1049,7 @@ server_slot* server_context::get_available_slot(const server_task& task) {
             const int64_t t_start = ggml_time_us();
             copy_data_to_cached_prompt(tokens, *ret);
 
-            ret->prompt_load(*prompt_cache, task.tokens);
+            ret->prompt_load(*prompt_cache, task.tokens, cache_ram_similarity);
             prompt_cache->update();
 
             ret->cache_tokens = ret->server_cached_prompt.tokens.clone(); // recover cache tokens
@@ -1158,6 +1197,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 if (stage_override.has_p_min_override()) {
                     slot.params.speculative.stages[i].p_min = stage_override.p_min;
                 }
+                if (stage_override.has_mtp_heads_override()) {
+                    slot.params.speculative.stages[i].mtp_heads = stage_override.mtp_heads;
+                }
             }
 
             const auto resolved = slot.params.speculative.get_resolved_stages();
@@ -1195,6 +1237,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (!common_speculative_validate_chain(slot.params.speculative, &spec_error)) {
             throw std::runtime_error("Error: invalid speculative request configuration: " + spec_error);
         }
+        common_speculative_prepare_request(slot.spec, slot.params.speculative);
     } catch (const std::exception & e) {
         send_error(task, e.what(), ERROR_TYPE_INVALID_REQUEST);
         return false;
@@ -1760,6 +1803,12 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
             LOG_WARNING("%s\n", "ctx_shift is not implemented for split mode graph, it will be disabled");
+        }
+    }
+    if (!llama_model_supports_ctx_shift(llama_get_model(slot.ctx))) {
+        if (params_base.ctx_shift) {
+            params_base.ctx_shift = false;
+            LOG_WARNING("%s\n", "ctx_shift is not supported by this model's KV cache, it will be disabled");
         }
     }
     {
@@ -3433,6 +3482,7 @@ void server_context::add_sampled_tokens() {
         if (slot.state == SLOT_STATE_IDLE) {
             continue;
         }
+        slot.spec_target_only = false;
 
         // generate draft tokens in speculative decoding mode
         // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
@@ -3460,6 +3510,7 @@ void server_context::add_sampled_tokens() {
                 draft_base_pos,
                 slot.id);
             llama_tokens & draft = draft_result.tokens;
+            slot.spec_target_only = draft_result.target_only;
 
             const int n_draft_max = slot.get_n_draft_max();
 
@@ -3479,15 +3530,24 @@ void server_context::add_sampled_tokens() {
             slot.cache_tokens.push_back(slot.sampled);
 
             const int min_usable_draft = slot.params.speculative.get_min_usable_stage_n_min();
-            if (min_usable_draft > (int)draft.size()) {
+            if (!slot.spec_target_only && min_usable_draft > (int)draft.size()) {
                 SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft.size(), min_usable_draft);
                 // fallback to normal decoding
                 slot.i_batch = slot.i_batch_dft[0];
                 slot.drafted.clear();
                 slot.i_batch_dft.clear();
             } else {
+                if (slot.spec_target_only) {
+                    SLT_DBG(slot, "%s\n", "selected DFlash target-only arm: root-only target batch");
+                }
                 // keep track of total number of drafted tokens tested
                 slot.n_draft_total += draft.size();
+                if (slot.n_draft_by_depth.size() < draft.size()) {
+                    slot.n_draft_by_depth.resize(draft.size(), 0);
+                }
+                for (size_t i = 0; i < draft.size(); ++i) {
+                    slot.n_draft_by_depth[i]++;
+                }
 
                 // add all drafted tokens to the batch
                 for (size_t i = 0; i < draft.size(); i++) {
@@ -3816,25 +3876,38 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             GGML_ASSERT(slot.ga_n == 1);
 
                             // reuse any previously computed tokens that are common with the new prompt
-                            common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, true); // string level match
-                            common_prefix prefix_nonexact = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, false);
-                            auto n_past0 = slot.cache_tokens.get_common_prefix_exact(prompt_tokens); // token level match
-                            LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past0 =  %d, n_past1 =  %d, n_past_prompt1 = %d,  n_past2 =  %d, n_past_prompt2 =  %d\n", (int32_t)slot.cache_tokens.size(), (int32_t)n_past0, (int32_t)prefix.first, (int32_t)prefix.second, (int32_t)prefix_nonexact.first, (int32_t)prefix_nonexact.second);
+                            common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens);
+                            LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past =  %d, n_past_prompt = %d\n", (int32_t)slot.cache_tokens.size(),  (int32_t)prefix.first, (int32_t)prefix.second);
                             int32_t size_threshold = 20;
-                            if (prefix.first + size_threshold < prefix_nonexact.first) {
-                                // LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
-                                prefix = prefix_nonexact;
-                            }
                             slot.n_past = prefix.first;
                             slot.n_past_prompt = prefix.second;
                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
+                            if (!llama_model_supports_partial_kv_reuse(model) &&
+                                slot.n_past < (int32_t) slot.cache_tokens.size()) {
+                                // the cache diverges from the new prompt mid-sequence; this
+                                // model can only extend or reset a cached sequence (per-position
+                                // side state past the divergence point is already lost)
+                                LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
+                                        __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
+                                slot.n_past = 0;
+                                slot.n_past_prompt = 0;
+                                slot.n_past_offset = 0;
+                            }
 
-                            //if (slot.n_past != slot.n_past_prompt) {
-                            //    LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
-                            //}
+                            if (slot.n_past > 0 && slot.spec != nullptr &&
+                                common_speculative_mtp_requires_fresh_warmup(slot.spec)) {
+                                // the request drafts with more MTP heads than the cached
+                                // prefix was warmed with; deeper-head cache rows for the
+                                // reused span were never written
+                                LLAMA_LOG_INFO("%s: request drafts with more MTP heads than the cached prefix was warmed with - reprocessing from scratch\n",
+                                        __func__);
+                                slot.n_past = 0;
+                                slot.n_past_prompt = 0;
+                                slot.n_past_offset = 0;
+                            }
+
                             if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
                             {
-                                LLAMA_LOG_WARN("Common part does not match fully\n");
                                 int32_t back = 4;
                                 if (prefix.second >= back && prefix.first >= back) {
                                     print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 30);
@@ -3847,7 +3920,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             }
                         }
                     }
-                    apply_checkpoint(slot);
                     if (slot.n_past_prompt == slot.n_prompt_tokens && slot.n_past_prompt > 0) {
                         // we have to evaluate at least 1 token to generate logits.
                         LOG_INFO("we have to evaluate at least 1 token to generate logits", {
@@ -3861,6 +3933,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             slot.n_past_se--;
                         }
                     }
+                    apply_checkpoint(slot);
                     slot.n_prompt_tokens_cache = slot.n_past_prompt;
                     slot.n_prompt_tokens_processed = 0;
                 }
@@ -4129,7 +4202,14 @@ void server_context::speculative_decoding_accept() {
         slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
 
         // update how many tokens out of those tested were accepted
-        slot.n_draft_accepted += ids.size() - 1;
+        const size_t n_draft_accepted = ids.size() - 1;
+        slot.n_draft_accepted += n_draft_accepted;
+        if (slot.n_draft_accepted_by_depth.size() < n_draft_accepted) {
+            slot.n_draft_accepted_by_depth.resize(n_draft_accepted, 0);
+        }
+        for (size_t i = 0; i < n_draft_accepted; ++i) {
+            slot.n_draft_accepted_by_depth[i]++;
+        }
 
         // rollback to the state before sampling the draft tokens
         slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - n_draft);
@@ -4152,6 +4232,7 @@ void server_context::speculative_decoding_accept() {
             n_draft,
             spec_pos_base,
             accepted_output_indices);
+        slot.spec_target_only = false;
 
         for (size_t i = 0; i < ids.size(); ++i) {
             completion_token_output result;
@@ -4733,7 +4814,7 @@ void server_context::update_slots() {
     // make sure we're in the right embedding mode
     llama_set_embeddings(ctx, batch_type == 1);
 
-    if (llama_model_has_recurrent(model)) {
+    if (llama_model_has_recurrent(model) || llama_model_is_openpangu(model)) {
         const int ckpt_mode = params_base.speculative.recurrent_ckpt_mode;
 
         for (auto & slot : slots) {

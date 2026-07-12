@@ -172,6 +172,7 @@ struct common_speculative_stage_params {
     int32_t n_max = -1;
     int32_t n_min = -1;
     float   p_min = -1.0f;
+    int32_t mtp_heads = -1;
     int32_t dflash_cross_ctx = -1;
 
     uint16_t ngram_size_n = 0;
@@ -185,6 +186,7 @@ struct common_speculative_stage_params {
     bool has_n_max_override() const { return n_max >= 0; }
     bool has_n_min_override() const { return n_min >= 0; }
     bool has_p_min_override() const { return p_min >= 0.0f; }
+    bool has_mtp_heads_override() const { return mtp_heads >= 0; }
     bool has_dflash_cross_ctx_override() const { return dflash_cross_ctx >= 0; }
     bool has_ngram_size_n_override() const { return ngram_size_n > 0; }
     bool has_ngram_size_m_override() const { return ngram_size_m > 0; }
@@ -218,6 +220,7 @@ struct common_params_speculative {
     int32_t n_max = 16; // number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of tokens to draft during speculative decoding
     std::vector<common_speculative_stage_params> stages; // explicit stage chain for single-spec or self-spec + model fallback
+    int32_t mtp_heads = 1; // MTP heads to use; 1 is the default, while >1 and 0 (all model heads) are experimental
     int32_t dflash_cross_ctx = 512; // target-feature context window for DFlash
 
     float   p_split = 0.1f; // speculative decoding split probability
@@ -443,6 +446,8 @@ struct gpt_params {
     bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
     bool merge_up_gate_exps= false; // if true, merge ffn_up_exps and ffn_gate_exps into a single, contiguous tensor
     bool defer_experts     = false; // if true, defer expert mmap residency to speed up model loading (Linux only)
+    bool prefetch_experts  = false; // if true, stream mmap'd MoE expert weights into the page cache (Linux only)
+    int  prefetch_experts_threads = 0; // number of expert prefetch workers (<=0 = auto)
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
     bool v_cache_hadamard  = false; // if true, use Hadamard transform for the V-cache (only makes sense with quantized cache, which requires FA)
     bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling

@@ -130,6 +130,27 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.tools.function.close        = "```";
               LOG_DBG(ANSI_ORANGE "[Patch: DeepSeek-R1-Distill-Qwen]\n" ANSI_RESET);
           }
+      },
+      // openPangu-2.0 - prefills <think> in the generation prompt (like the Laguna case above),
+      // so the generated reasoning starts immediately and is delimited only by </think>. The
+      // <think> is concatenated into a larger literal ('...assistant\n<think>'), so the
+      // standalone-literal reasoning detector does not pick it up; set the markers explicitly.
+      // Tool calls (<|tool_call_start|>[{...}]<|tool_call_end|>) are already handled by the auto-parser.
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("<|pangu_text_start|>") != std::string::npos) {
+              // Force-set (do not gate on mode==NONE): the differential detector sees the
+              // assistant-history form <think>reasoning</think> and sets start="<think>", but at
+              // generation time <think> is prompt-prefilled, so the output is delimited only by
+              // </think> (start=""). Same shape as the Laguna patch above.
+              analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
+              analysis.reasoning.start = "";
+              analysis.reasoning.end   = "</think>";
+              if (std::find(analysis.preserved_tokens.begin(), analysis.preserved_tokens.end(), "</think>") ==
+                  analysis.preserved_tokens.end()) {
+                  analysis.preserved_tokens.push_back("</think>");
+              }
+              LOG_DBG(ANSI_ORANGE "[Patch: openPangu-2.0 thinking template]\n" ANSI_RESET);
+          }
       }
     });
 
