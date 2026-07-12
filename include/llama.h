@@ -523,6 +523,7 @@ extern "C" {
         enum llama_ftype ftype;              // quantize to this llama_ftype
         enum ggml_type output_tensor_type;   // output tensor type
         enum ggml_type token_embedding_type; // token embeddings tensor type
+        enum ggml_type per_layer_token_embedding_type; // token embeddings tensor type
         enum ggml_type attn_q_type;          // attention query tensor type
         enum ggml_type attn_k_type;          // attention key tensor type
         enum ggml_type attn_v_type;          // attention value tensor type
