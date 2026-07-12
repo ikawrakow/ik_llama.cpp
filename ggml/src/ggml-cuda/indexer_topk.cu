@@ -214,3 +214,64 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     }
 
 }
+
+template <typename mask_t>
+static __global__ void k_indexer_mask(int ne0, int ne1, int ne2, int ntopk, int ne11,
+        size_t nb01, size_t nb02, size_t nb03,
+        size_t nb11, size_t nb12, size_t nb13,
+        size_t nb1,  size_t nb2,  size_t nb3,
+        const mask_t * mask, const int * idx, mask_t * dst) {
+    int i1 = blockIdx.x;
+    int i3 = i1 / (ne1*ne2); i1 -= i3*ne1*ne2;
+    int i2 = i1 / (ne1);     i1 -= i2*ne1;
+
+    auto m = (const mask_t *)((const char *)mask + i1*nb01 + i2*nb02 + i3*nb03);
+    auto i = (const int *)((const char *)idx + i1*nb11 + i2*nb12 + i3*nb13);
+    auto d = (mask_t *)((char *)dst + i1*nb1 + i2*nb2 + i3*nb3);
+
+    mask_t inf, zero;
+    if constexpr (std::is_same_v<mask_t, half>) {
+        inf  = __float2half(-INFINITY);
+        zero = __float2half(0.0f);
+    } else {
+        inf  = -INFINITY;
+        zero = 0.0f;
+    }
+
+    if (i1 < ne11) {
+        for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] = inf;
+        for (int j = threadIdx.x; j < ntopk; j += blockDim.x) d[i[j]] = zero;
+        for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] += m[j];
+    } else {
+        for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] = m[j];
+    }
+
+}
+
+void ggml_cuda_op_indexer_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    auto mask = dst->src[0];
+    auto topk = dst->src[1];
+    GGML_ASSERT(mask->ne[0] >= topk->ne[1]);
+    GGML_ASSERT(mask->ne[1] >= topk->ne[1] && mask->ne[2] == topk->ne[2] && mask->ne[3] == topk->ne[3]);
+    GGML_ASSERT(ggml_are_same_shape(mask, dst));
+    GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
+    GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    GGML_ASSERT(mask->type == dst->type);
+
+    int nrows = ggml_nrows(dst);
+
+    if (dst->type == GGML_TYPE_F16) {
+        k_indexer_mask<<<nrows, 256, 0, ctx.stream()>>>(dst->ne[0], dst->ne[1], dst->ne[2], topk->ne[0], topk->ne[1],
+                mask->nb[1], mask->nb[2], mask->nb[3],
+                topk->nb[1], topk->nb[2], topk->nb[3],
+                dst->nb[1],  dst->nb[2],  dst->nb[3],
+                (const half *)mask->data, (const int *)topk->data, (half *)dst->data);
+    } else {
+        k_indexer_mask<<<nrows, 256, 0, ctx.stream()>>>(dst->ne[0], dst->ne[1], dst->ne[2], topk->ne[0], topk->ne[1],
+                mask->nb[1], mask->nb[2], mask->nb[3],
+                topk->nb[1], topk->nb[2], topk->nb[3],
+                dst->nb[1],  dst->nb[2],  dst->nb[3],
+                (const float *)mask->data, (const int *)topk->data, (float *)dst->data);
+    }
+
+}

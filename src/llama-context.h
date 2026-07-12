@@ -414,7 +414,6 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
-    struct ggml_tensor * inp_mask_inf = nullptr;
 
     struct openpangu_swa_window_view_state {
         bool active       = false;

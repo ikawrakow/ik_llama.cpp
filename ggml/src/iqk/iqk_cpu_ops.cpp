@@ -1044,3 +1044,71 @@ void iqk_blend(struct ggml_tensor * dst, int ith, int nth) {
         }
     }
 }
+
+namespace {
+inline void iqk_add_f16(int n, const ggml_half * x, ggml_half * y) {
+    int i = 0;
+#if defined __AVX2__ && defined __F16C__
+    for ( ; i + 7 < n; i += 8) {
+        auto vx32 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i)));
+        auto vy32 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(y + i)));
+        vy32 = _mm256_add_ps(vy32, vx32);
+        _mm_storeu_si128((__m128i *)(y + i), _mm256_cvtps_ph(vy32, _MM_FROUND_TO_NEAREST_INT));
+    }
+#endif
+    for (; i < n; ++i) {
+        float y32 = GGML_FP16_TO_FP32(y[i]) + GGML_FP16_TO_FP32(x[i]);
+        y[i] = GGML_FP32_TO_FP16(y32);
+    }
+}
+}
+
+void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
+    auto mask = dst->src[0];
+    auto topk = dst->src[1];
+    GGML_ASSERT(mask->ne[0] >= topk->ne[1]);
+    GGML_ASSERT(mask->ne[1] >= topk->ne[1] && mask->ne[2] == topk->ne[2] && mask->ne[3] == topk->ne[3]);
+    GGML_ASSERT(ggml_are_same_shape(mask, dst));
+    GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
+    GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    GGML_ASSERT(mask->type == dst->type);
+
+    int nrows = ggml_nrows(dst);
+    int npt = (nrows + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = std::min(first + npt, nrows);
+
+    auto hinf  = GGML_FP32_TO_FP16(-INFINITY);
+    auto hzero = GGML_FP32_TO_FP16(0.0f);
+
+    int n = dst->ne[0];
+    int nidx = topk->ne[0];
+
+    for (int ir = first; ir < last; ++ir) {
+        int i3 = ir/(dst->ne[1]*dst->ne[2]);
+        int i2 = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+        int i1 = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+        auto idx = (const int *)((const char *)topk->data + topk->nb[1]*i1 + topk->nb[2]*i2 + topk->nb[3]*i3);
+        if (dst->type == GGML_TYPE_F16) {
+            auto x = (const ggml_half *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
+            auto y = (ggml_half *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+            if (i1 < topk->ne[1]) {
+                for (int j = 0; j < n; ++j) y[j] = hinf;
+                for (int j = 0; j < nidx; ++j) y[idx[j]] = hzero;
+                iqk_add_f16(n, x, y);
+            } else {
+                for (int j = 0; j < n; ++j) y[j] = x[j];
+            }
+        } else {
+            auto x = (const float *)((const char *)mask->data + mask->nb[1]*i1 + mask->nb[2]*i2 + mask->nb[3]*i3);
+            auto y = (float *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+            if (i1 < topk->ne[1]) {
+                for (int j = 0; j < n; ++j) y[j] = -INFINITY;
+                for (int j = 0; j < nidx; ++j) y[idx[j]] = 0.0f;
+                for (int j = 0; j < n; ++j) y[j] += x[j];
+            } else {
+                for (int j = 0; j < n; ++j) y[j] = x[j];
+            }
+        }
+    }
+}
