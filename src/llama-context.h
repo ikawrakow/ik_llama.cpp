@@ -464,7 +464,6 @@ struct llama_context {
             struct ggml_tensor * state_write_idxs = nullptr;
             struct ggml_tensor * state_write_pos = nullptr;
             struct ggml_tensor * kq_mask = nullptr;
-            struct ggml_tensor * k_rot = nullptr;
         };
 
         struct storage {
@@ -506,7 +505,6 @@ struct llama_context {
         std::vector<float> csa_mask_data;
         std::vector<float> hca_mask_data;
         std::vector<float> lid_mask_data;
-        std::vector<float> lid_k_rot_data;
     };
     dsv4_runtime dsv4;
 

@@ -75,29 +75,8 @@ static ggml_tensor * dsv4_new_mask_input(ggml_context * ctx, ggml_tensor ** dst,
     return *dst;
 }
 
-static ggml_tensor * dsv4_new_f32_mat_input(ggml_context * ctx, ggml_tensor ** dst, int64_t n, const char * name) {
-    *dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, std::max<int64_t>(1, n), std::max<int64_t>(1, n));
-    ggml_set_input(*dst);
-    ggml_set_name(*dst, name);
-    return *dst;
-}
-
-static int64_t dsv4_k_rot_size(int64_t n_embd) {
-    if (n_embd < 64 || n_embd % 64 != 0) {
-        return 0;
-    }
-
-    int64_t n_rot = 64;
-    do {
-        n_rot *= 2;
-    } while (n_embd % n_rot == 0);
-
-    return n_rot / 2;
-}
-
 static void dsv4_build_plan_inputs(
         ggml_context * ctx,
-        llama_context & lctx,
         llama_context::dsv4_runtime::comp_inputs & inputs,
         const llama_context::dsv4_runtime::comp_plan & plan,
         const char * tag,
@@ -109,13 +88,6 @@ static void dsv4_build_plan_inputs(
     dsv4_new_i64_input(ctx, &inputs.state_write_idxs, (int64_t) plan.state_write_idxs.size(), (std::string(tag) + "_state_write").c_str());
     dsv4_new_i32_input(ctx, &inputs.state_write_pos, (int64_t) plan.state_write_pos.size(), (std::string(tag) + "_write_pos").c_str());
     dsv4_new_mask_input(ctx, &inputs.kq_mask, std::max<int64_t>(1, plan.n_kv), n_tokens, (std::string(tag) + "_kq_mask").c_str());
-    if (std::strcmp(tag, "dsv4_lid") == 0) {
-        const int64_t n_rot = dsv4_k_rot_size(lctx.model.hparams.indexer_head_size);
-        if (n_rot > 0) {
-            dsv4_new_f32_mat_input(ctx, &inputs.k_rot, n_rot, (std::string(tag) + "_k_rot").c_str());
-        }
-    }
-    GGML_UNUSED(lctx);
 }
 
 static ggml_tensor * dsv4_append_zero_row(ggml_context * ctx, ggml_tensor * t, bool neg_inf) {
@@ -836,11 +808,12 @@ static ggml_tensor * dsv4_build_lid_top_k(
     const int64_t n_indexer_head = hparams.indexer_n_head;
     const int64_t n_tokens = cur->ne[1];
     const int64_t n_lid = llm.lctx.dsv4.lid_plan.n_kv;
-    ggml_tensor * k_rot = llm.lctx.dsv4.inputs.lid.k_rot;
+    const int hadamard_block = llama_model::hadamard_size((int) n_embd_indexer_head);
 
     GGML_ASSERT(n_embd_indexer_head >= n_embd_indexer_head_rope);
     GGML_ASSERT(n_lid > 0);
-    GGML_ASSERT(k_rot != nullptr);
+    GGML_ASSERT(hadamard_block > 0);
+    GGML_ASSERT(n_embd_indexer_head % hadamard_block == 0);
 
     ggml_tensor * indexer_q = llm.llm_build_lora_mm(llm.lctx, ctx0, layer.indexer_attn_q_b, qr);
     indexer_q = ggml_reshape_3d(ctx0, indexer_q, n_embd_indexer_head, n_indexer_head, n_tokens);
@@ -859,8 +832,9 @@ static ggml_tensor * dsv4_build_lid_top_k(
             hparams.dsv4_compress_rope_base, llm.freq_scale,
             llm.ext_factor, dsv4_rope_attn_factor(llm.freq_scale, llm.ext_factor), llm.beta_fast, llm.beta_slow);
     indexer_q = ggml_concat(ctx0, indexer_q_nope, indexer_q_pe, 0);
-    indexer_q = ggml_mul_mat(ctx0, k_rot, indexer_q);
-    llm.cb(indexer_q, "lid_q_rot", il);
+    GGML_ASSERT(indexer_q->ne[0] % hadamard_block == 0);
+    indexer_q = ggml_hadamard(ctx0, indexer_q, hadamard_block);
+    llm.cb(indexer_q, "lid_q_hadamard", il);
 
     ggml_tensor * indexer_weights = llm.llm_build_lora_mm(llm.lctx, ctx0, layer.indexer_proj, cur);
     indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / std::sqrt(float(n_embd_indexer_head * n_indexer_head)));
@@ -936,9 +910,9 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_write_src_idxs, (int64_t) lctx.dsv4.raw.write_src_idxs.size(), "dsv4_raw_k_write_src_idxs");
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_write_idxs, (int64_t) lctx.dsv4.raw.write_dst_idxs.size(), "dsv4_raw_k_write_idxs");
     dsv4_new_i32_input(ctx0, &lctx.dsv4.inputs.raw_k_read_idxs, (int64_t) lctx.dsv4.raw.read_dst_idxs.size(), "dsv4_raw_k_read_idxs");
-    dsv4_build_plan_inputs(ctx0, lctx, lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, "dsv4_csa", n_tokens);
-    dsv4_build_plan_inputs(ctx0, lctx, lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, "dsv4_hca", n_tokens);
-    dsv4_build_plan_inputs(ctx0, lctx, lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, "dsv4_lid", n_tokens);
+    dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, "dsv4_csa", n_tokens);
+    dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, "dsv4_hca", n_tokens);
+    dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, "dsv4_lid", n_tokens);
 
     ggml_tensor * inp = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
@@ -1092,10 +1066,11 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                         hparams.indexer_head_size,
                         il,
                         "lid_state_compress");
-                if (lctx.dsv4.inputs.lid.k_rot != nullptr) {
-                    lid_comp = ggml_mul_mat(ctx0, lctx.dsv4.inputs.lid.k_rot, lid_comp);
-                    cb(lid_comp, "lid_state_compress_rot", il);
-                }
+                const int hadamard_block = llama_model::hadamard_size((int) hparams.indexer_head_size);
+                GGML_ASSERT(hadamard_block > 0);
+                GGML_ASSERT(lid_comp->ne[0] % hadamard_block == 0);
+                lid_comp = ggml_hadamard(ctx0, lid_comp, hadamard_block);
+                cb(lid_comp, "lid_state_compress_hadamard", il);
                 ggml_tensor * lid_comp_2d = ggml_reshape_2d(ctx0, lid_comp, hparams.indexer_head_size, lctx.dsv4.inputs.lid.state_write_idxs->ne[0]);
                 ggml_tensor * lid_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.lid_k[(size_t) il], lid_comp_2d, lctx.dsv4.inputs.lid.state_write_idxs, hparams.indexer_head_size);
                 ggml_build_forward_expand(gf, lid_write);
