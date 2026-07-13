@@ -86,7 +86,7 @@ ENTRYPOINT [ "/app/llama-server" ]
 # Stage 5: Swap
 FROM server AS swap
 ARG LS_REPO=mostlygeek/llama-swap
-ARG LS_VER=199
+ARG LS_VER=239
 RUN curl -sSL "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     | tar -xz
 
