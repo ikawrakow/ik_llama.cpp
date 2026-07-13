@@ -36,6 +36,32 @@ static uint32_t dsv4_comp_size(uint32_t kv_size, uint32_t ratio) {
     return std::max<uint32_t>(1, (kv_size + ratio - 1)/ratio);
 }
 
+static bool dsv4_validate_csa_lid_visibility(
+        const llama_context & lctx,
+        uint32_t csa_kv_size,
+        uint32_t lid_kv_size) {
+    const auto & csa_plan = lctx.dsv4.csa_plan;
+    const auto & lid_plan = lctx.dsv4.lid_plan;
+    const auto & csa_ctx = lctx.dsv4.csa_ctx;
+    const auto & lid_ctx = lctx.dsv4.lid_ctx;
+
+    if (csa_kv_size != lid_kv_size ||
+            csa_plan.n_stream != lid_plan.n_stream ||
+            csa_plan.n_kv != lid_plan.n_kv ||
+            csa_plan.n_visible != lid_plan.n_visible ||
+            csa_ctx.graph_n_stream != lid_ctx.graph_n_stream ||
+            csa_ctx.n_kv != lid_ctx.n_kv ||
+            csa_ctx.sinfo.strm != lid_ctx.sinfo.strm ||
+            csa_ctx.sinfo.idxs != lid_ctx.sinfo.idxs ||
+            csa_ctx.sinfo.s0 != lid_ctx.sinfo.s0 ||
+            csa_ctx.sinfo.s1 != lid_ctx.sinfo.s1) {
+        LLAMA_LOG_ERROR("%s: DSV4 CSA/LID visibility contracts differ\n", __func__);
+        return false;
+    }
+
+    return true;
+}
+
 static void dsv4_batch_shape(
         const llama_batch & batch,
         uint32_t & n_seqs,
@@ -932,7 +958,8 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
 
     if (!dsv4_validate_comp_plan("csa", batch, lctx.dsv4.csa_plan, llama_context::dsv4_runtime::CSA_RATIO, true, csa_state_size, csa_kv_size, cache_n_stream) ||
         !dsv4_validate_comp_plan("hca", batch, lctx.dsv4.hca_plan, llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size, cache_n_stream) ||
-        !dsv4_validate_comp_plan("lid", batch, lctx.dsv4.lid_plan, llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size, cache_n_stream)) {
+        !dsv4_validate_comp_plan("lid", batch, lctx.dsv4.lid_plan, llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size, cache_n_stream) ||
+        !dsv4_validate_csa_lid_visibility(lctx, csa_kv_size, lid_kv_size)) {
         return false;
     }
 
@@ -944,19 +971,21 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_write_idxs, lctx.dsv4.raw.write_dst_idxs);
     dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_read_idxs, lctx.dsv4.raw.read_dst_idxs);
 
-    auto set_comp = [&](llama_context::dsv4_runtime::comp_inputs & inputs, llama_context::dsv4_runtime::comp_plan & plan, std::vector<float> & mask_data) {
+    auto set_comp = [&](llama_context::dsv4_runtime::comp_inputs & inputs, llama_context::dsv4_runtime::comp_plan & plan, std::vector<float> * mask_data) {
         dsv4_set_input_tensor(inputs.state_pos, plan.state_pos);
         dsv4_set_input_tensor(inputs.state_persist_src_idxs, plan.state_persist_src_idxs);
         dsv4_set_input_tensor(inputs.state_persist_dst_idxs, plan.state_persist_dst_idxs);
         dsv4_set_input_tensor(inputs.state_read_idxs, plan.state_read_idxs);
         dsv4_set_input_tensor(inputs.state_write_idxs, plan.state_write_idxs);
         dsv4_set_input_tensor(inputs.state_write_pos, plan.state_write_pos);
-        dsv4_set_mask_tensor(inputs.kq_mask, mask_data, plan, batch.n_tokens);
+        if (mask_data != nullptr) {
+            dsv4_set_mask_tensor(inputs.kq_mask, *mask_data, plan, batch.n_tokens);
+        }
     };
 
-    set_comp(lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, lctx.dsv4.csa_mask_data);
-    set_comp(lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, lctx.dsv4.hca_mask_data);
-    set_comp(lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, lctx.dsv4.lid_mask_data);
+    set_comp(lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, &lctx.dsv4.csa_mask_data);
+    set_comp(lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, &lctx.dsv4.hca_mask_data);
+    set_comp(lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, nullptr);
 
     return true;
 }

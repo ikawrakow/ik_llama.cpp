@@ -504,7 +504,6 @@ struct llama_context {
 
         std::vector<float> csa_mask_data;
         std::vector<float> hca_mask_data;
-        std::vector<float> lid_mask_data;
     };
     dsv4_runtime dsv4;
 
