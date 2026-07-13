@@ -454,6 +454,7 @@ struct llama_model {
     struct ggml_tensor * mtp_centroids = nullptr;
     struct ggml_tensor * dflash_fc = nullptr;
     struct ggml_tensor * dflash_hidden_norm = nullptr;
+    std::vector<struct ggml_tensor *> dflash_aux_hidden_norms;
 
     struct ggml_tensor * output_norm;
     struct ggml_tensor * output_norm_b;

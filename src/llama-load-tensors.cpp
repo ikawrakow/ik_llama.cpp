@@ -2301,6 +2301,20 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
     model.output_mtp = model.output;
     model.dflash_fc = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "weight"), {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
     model.dflash_hidden_norm = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_HIDDEN_NORM, "weight"), {n_embd}, 0);
+    model.dflash_aux_hidden_norms.clear();
+    if (hparams.dflash_laguna) {
+        GGML_ASSERT(hparams.dflash_n_target_layers > 0);
+        GGML_ASSERT(hparams.dflash_n_target_features % hparams.dflash_n_target_layers == 0);
+        const int64_t aux_width = hparams.dflash_n_target_features / hparams.dflash_n_target_layers;
+        model.dflash_aux_hidden_norms.reserve(hparams.dflash_n_target_layers);
+        for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+            model.dflash_aux_hidden_norms.push_back(create_tensor(
+                    ctx_output,
+                    tn(LLM_TENSOR_DFLASH_AUX_HIDDEN_NORM, "weight", i),
+                    {aux_width},
+                    0));
+        }
+    }
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = use_split_ctx ? ctx_for_layer_split(i) : ctx_for_layer(i);
@@ -2313,6 +2327,9 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
         layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_gqa}, 0);
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd_gqa}, 0);
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head, n_embd}, 0);
+        if (hparams.dflash_laguna) {
+            layer.wqkv_gate = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_head}, 0);
+        }
 
         layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
         layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);

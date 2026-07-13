@@ -3640,7 +3640,8 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             name == "rope_freqs.weight") {
             continue;
         }
-        if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight") {
+        if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight" ||
+                name.rfind("dflash_aux_hidden_norm.", 0) == 0) {
             output_misc_size += size;
             continue;
         }
