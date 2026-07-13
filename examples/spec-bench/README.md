@@ -34,10 +34,10 @@ IDs default to the one-based input line number and must be unique. Unknown field
 duplicate IDs, empty prompts, malformed JSON, and invalid `max_tokens` values are rejected.
 The file replaces the built-in task set for that invocation.
 
-The built-in extraction task uses the versioned
-`fixtures/youtube-extract.txt` snapshot. Its source URL, retrieval date, and Wikipedia
-revision ID are recorded in `fixtures/youtube-extract.meta.json`; no network request is
-made during a benchmark.
+The built-in extraction task uses the pinned `fixtures/youtube-extract.txt` snapshot
+from the introduction of <https://en.wikipedia.org/wiki/YouTube>, stopping before the
+`History` section. The fixture is stored directly in the repository and no network
+request is made during a benchmark.
 
 Speculative output includes `drafted_by_position`, `accepted_by_position`,
 `acceptance_rate_by_position`, and `conditional_acceptance_rate` arrays for every stage.

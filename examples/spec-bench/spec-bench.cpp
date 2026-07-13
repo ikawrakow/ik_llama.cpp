@@ -652,6 +652,36 @@ static std::string spec_bench_decode_tokens(
     return text;
 }
 
+static llama_batch spec_bench_make_batch(
+        const llama_tokens & tokens,
+        int                  offset,
+        int                  n_tokens,
+        int                  n_past) {
+    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    for (int i = 0; i < n_tokens; ++i) {
+        // Keep positions and sequence ids available for MTP/DFlash feature capture.
+        common_batch_add(batch, tokens[offset + i], n_past + i, { 0 }, true);
+    }
+    return batch;
+}
+
+static void spec_bench_limit_speculative_params(
+        common_params_speculative & params,
+        int                        max_draft_tokens) {
+    params.n_max = std::min(params.n_max, max_draft_tokens);
+    params.n_min = std::min(params.n_min, params.n_max);
+
+    for (auto & stage : params.stages) {
+        if (stage.has_n_max_override()) {
+            stage.n_max = std::min(stage.n_max, max_draft_tokens);
+        }
+        if (stage.has_n_min_override()) {
+            const int stage_max = stage.has_n_max_override() ? stage.n_max : params.n_max;
+            stage.n_min = std::min(stage.n_min, stage_max);
+        }
+    }
+}
+
 static spec_bench_attempt_result spec_bench_run_attempt(
         const spec_bench_task & task,
         const gpt_params & params,
@@ -708,17 +738,21 @@ static spec_bench_attempt_result spec_bench_run_attempt(
     while (!embd.empty()) {
         for (int i = 0; i < (int) embd.size(); i += params.n_batch) {
             int n_eval = std::min(params.n_batch, (int) embd.size() - i);
-            llama_batch batch = llama_batch_get_one(embd.data() + i, n_eval, n_past, 0);
-            if (llama_decode(ctx, batch) != 0) {
+            llama_batch batch = spec_bench_make_batch(embd, i, n_eval, n_past);
+            const int decode_result = llama_decode(ctx, batch);
+            if (decode_result != 0) {
+                llama_batch_free(batch);
                 result.error = "prompt decode failed";
                 return result;
             }
             if (spec != nullptr && embd_is_prompt) {
                 if (common_speculative_on_target_seq_batch(spec, ctx, batch, 0, true) != 0) {
+                    llama_batch_free(batch);
                     result.error = "speculative prompt warmup failed";
                     return result;
                 }
             }
+            llama_batch_free(batch);
             n_past += n_eval;
         }
         embd.clear();
@@ -733,105 +767,105 @@ static spec_bench_attempt_result spec_bench_run_attempt(
         bool have_fallback_sampled = false;
         llama_token fallback_sampled = LLAMA_TOKEN_NULL;
 
-        if (spec != nullptr && n_remain != 1) {
-            common_params_speculative speculative_params = params.speculative;
-            const llama_token sampled_before = common_sampler_sample_legacy(sampler, ctx, nullptr);
-            have_fallback_sampled = true;
-            fallback_sampled = sampled_before;
-            common_sampler_accept(sampler, ctx, sampled_before, true);
+        if (spec != nullptr && n_remain >= 3) {
+            int max_usable_draft = std::min(n_remain - 2, n_ctx - n_past - 2);
+            max_usable_draft = std::min(max_usable_draft, (int) llama_n_batch(ctx) - 1);
+            max_usable_draft = std::max(max_usable_draft, 0);
 
-            auto draft_result = common_speculative_draft_ex(
-                spec,
-                ctx,
-                speculative_params,
-                speculative_tokens,
-                sampled_before,
-                n_past,
-                0);
+            if (max_usable_draft > 0) {
+                common_params_speculative speculative_params = params.speculative;
+                spec_bench_limit_speculative_params(speculative_params, max_usable_draft);
+                const llama_token sampled_before = common_sampler_sample_legacy(sampler, ctx, nullptr);
+                have_fallback_sampled = true;
+                fallback_sampled = sampled_before;
+                common_sampler_accept(sampler, ctx, sampled_before, true);
 
-            auto & draft = draft_result.tokens;
-            int max_usable_draft = (int) draft.size();
-            max_usable_draft = std::min(max_usable_draft, std::max(0, n_remain - 2));
-            max_usable_draft = std::min(max_usable_draft, std::max(0, n_ctx - n_past - 2));
-            max_usable_draft = std::min(max_usable_draft, std::max(0, (int) llama_n_batch(ctx) - 1));
-            if ((int) draft.size() > max_usable_draft) {
-                draft.resize(max_usable_draft);
-            }
+                auto draft_result = common_speculative_draft_ex(
+                    spec,
+                    ctx,
+                    speculative_params,
+                    speculative_tokens,
+                    sampled_before,
+                    n_past,
+                    0);
 
-            const int min_usable_draft = params.speculative.get_min_usable_stage_n_min();
-            if ((int) draft.size() >= min_usable_draft && !draft.empty()) {
-                if (llama_model_has_recurrent(model)) {
-                    if (!common_speculative_before_draft(
+                auto & draft = draft_result.tokens;
+
+                const int min_usable_draft = speculative_params.get_min_usable_stage_n_min();
+                if ((int) draft.size() >= min_usable_draft && !draft.empty()) {
+                    if (llama_model_has_recurrent(model)) {
+                        if (!common_speculative_before_draft(
+                                spec,
+                                model,
+                                ctx,
+                                sampler,
+                                params.sparams,
+                                0,
+                                n_past,
+                                sampled_before,
+                                (int) draft.size() + 1,
+                                params.speculative.recurrent_ckpt_mode)) {
+                            draft.clear();
+                        }
+                    }
+
+                    if (!draft.empty()) {
+                        llama_batch verify_batch = llama_batch_init((int) draft.size() + 1, 0, 1);
+                        std::vector<int> verify_indices;
+                        verify_indices.reserve(draft.size() + 1);
+
+                        common_batch_add(verify_batch, sampled_before, n_past, {0}, true);
+                        verify_indices.push_back(0);
+                        for (size_t i = 0; i < draft.size(); ++i) {
+                            common_batch_add(verify_batch, draft[i], n_past + 1 + (llama_pos) i, {0}, true);
+                            verify_indices.push_back((int) i + 1);
+                        }
+
+                        if (llama_decode(ctx, verify_batch) != 0) {
+                            llama_batch_free(verify_batch);
+                            result.error = "speculative verify decode failed";
+                            return result;
+                        }
+
+                        llama_tokens ids;
+                        try {
+                            ids = common_sampler_sample_and_accept_n(sampler, ctx, verify_indices, draft);
+                        } catch (const std::exception & e) {
+                            llama_batch_free(verify_batch);
+                            result.error = e.what();
+                            return result;
+                        }
+
+                        std::vector<int32_t> accepted_output_indices;
+                        if (!ids.empty()) {
+                            accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
+                        }
+
+                        common_speculative_commit(
                             spec,
-                            model,
                             ctx,
                             sampler,
-                            params.sparams,
                             0,
-                            n_past,
                             sampled_before,
-                            (int) draft.size() + 1,
-                            params.speculative.recurrent_ckpt_mode)) {
-                        draft.clear();
-                    }
-                }
+                            ids,
+                            (int) draft.size(),
+                            n_past + 1,
+                            accepted_output_indices);
 
-                if (!draft.empty()) {
-                    llama_batch verify_batch = llama_batch_init((int) draft.size() + 1, 0, 1);
-                    std::vector<int> verify_indices;
-                    verify_indices.reserve(draft.size() + 1);
-
-                    common_batch_add(verify_batch, sampled_before, n_past, {0}, true);
-                    verify_indices.push_back(0);
-                    for (size_t i = 0; i < draft.size(); ++i) {
-                        common_batch_add(verify_batch, draft[i], n_past + 1 + (llama_pos) i, {0}, true);
-                        verify_indices.push_back((int) i + 1);
-                    }
-
-                    if (llama_decode(ctx, verify_batch) != 0) {
                         llama_batch_free(verify_batch);
-                        result.error = "speculative verify decode failed";
-                        return result;
-                    }
 
-                    llama_tokens ids;
-                    try {
-                        ids = common_sampler_sample_and_accept_n(sampler, ctx, verify_indices, draft);
-                    } catch (const std::exception & e) {
-                        llama_batch_free(verify_batch);
-                        result.error = e.what();
-                        return result;
-                    }
-
-                    std::vector<int32_t> accepted_output_indices;
-                    if (!ids.empty()) {
-                        accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
-                    }
-
-                    common_speculative_commit(
-                        spec,
-                        ctx,
-                        sampler,
-                        0,
-                        sampled_before,
-                        ids,
-                        (int) draft.size(),
-                        n_past + 1,
-                        accepted_output_indices);
-
-                    llama_batch_free(verify_batch);
-
-                    if (!ids.empty()) {
-                        result.output_tokens.push_back(sampled_before);
-                        result.output_tokens.insert(result.output_tokens.end(), ids.begin(), ids.end());
-                        next_embd.push_back(ids.back());
-                        speculative_tokens.push_back(sampled_before);
-                        if (ids.size() > 1) {
-                            speculative_tokens.insert(speculative_tokens.end(), ids.begin(), ids.end() - 1);
+                        if (!ids.empty()) {
+                            result.output_tokens.push_back(sampled_before);
+                            result.output_tokens.insert(result.output_tokens.end(), ids.begin(), ids.end());
+                            next_embd.push_back(ids.back());
+                            speculative_tokens.push_back(sampled_before);
+                            if (ids.size() > 1) {
+                                speculative_tokens.insert(speculative_tokens.end(), ids.begin(), ids.end() - 1);
+                            }
+                            n_past += (int) ids.size();
+                            n_remain -= (int) (ids.size() + 1);
+                            used_speculative = true;
                         }
-                        n_past += (int) ids.size();
-                        n_remain -= (int) (ids.size() + 1);
-                        used_speculative = true;
                     }
                 }
             }
@@ -864,11 +898,14 @@ static spec_bench_attempt_result spec_bench_run_attempt(
 
         for (int i = 0; i < (int) embd.size(); i += params.n_batch) {
             int n_eval = std::min(params.n_batch, (int) embd.size() - i);
-            llama_batch batch = llama_batch_get_one(embd.data() + i, n_eval, n_past, 0);
-            if (llama_decode(ctx, batch) != 0) {
+            llama_batch batch = spec_bench_make_batch(embd, i, n_eval, n_past);
+            const int decode_result = llama_decode(ctx, batch);
+            if (decode_result != 0) {
+                llama_batch_free(batch);
                 result.error = "decode failed";
                 return result;
             }
+            llama_batch_free(batch);
             if (spec != nullptr) {
                 speculative_tokens.insert(speculative_tokens.end(), embd.begin() + i, embd.begin() + i + n_eval);
             }
