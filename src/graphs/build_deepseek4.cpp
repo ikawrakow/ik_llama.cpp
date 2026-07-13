@@ -222,49 +222,6 @@ static ggml_tensor * dsv4_cache_view_3d(
             0);
 }
 
-// Keep DSV4 normalization explicit. The generic helper may fuse RMS
-// normalization with its scale, changing the operation boundary and CPU
-// accumulation path used by the DSV4 graph.
-static ggml_tensor * dsv4_build_norm(
-        ggml_context * ctx,
-        ggml_tensor  * cur,
-        ggml_tensor  * mw,
-        ggml_tensor  * mb,
-        float          eps) {
-    cur = ggml_rms_norm(ctx, cur, eps);
-    if (mw != nullptr) {
-        cur = ggml_mul(ctx, cur, mw);
-    }
-    if (mb != nullptr) {
-        cur = ggml_add(ctx, cur, mb);
-    }
-    return cur;
-}
-
-static ggml_tensor * dsv4_build_raw_k_from_idxs(
-        ggml_context * ctx,
-        ggml_tensor  * cache,
-        ggml_tensor  * raw_k_idxs,
-        int64_t        n_embd_head,
-        ggml_tensor  * dep) {
-    if (raw_k_idxs == nullptr) {
-        return nullptr;
-    }
-
-    ggml_tensor * cache_2d = dsv4_cache_view_2d(ctx, cache, n_embd_head, cache->ne[1]);
-    ggml_tensor * idxs_i32 = raw_k_idxs->type == GGML_TYPE_I32 ? raw_k_idxs : ggml_cast(ctx, raw_k_idxs, GGML_TYPE_I32);
-    ggml_tensor * rows = ggml_get_rows(ctx, cache_2d, idxs_i32);
-
-    // get_rows currently materializes plain types as F32. Cast back so the
-    // local DSV4 attention path keeps closer dtype/layout expectations.
-    if (cache->type != rows->type && !ggml_is_quantized(cache->type)) {
-        rows = ggml_cast(ctx, rows, cache->type);
-    }
-
-    rows = ggml_reshape_3d(ctx, rows, n_embd_head, 1, raw_k_idxs->ne[0]);
-    return dsv4_with_zero_dep(ctx, rows, dep);
-}
-
 static ggml_tensor * dsv4_slice_1d(
         ggml_context * ctx,
         ggml_tensor  * t,
@@ -710,7 +667,7 @@ static ggml_tensor * build_hca_compressed_kv_from_state(
     comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
     llm.cb(comp, "hca_comp_merge", il);
 
-    comp = dsv4_build_norm(ctx0, comp, norm, nullptr, llm.hparams.f_norm_rms_eps);
+    comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
     llm.cb(comp, "hca_comp_norm", il);
 
     ggml_tensor * comp_nope = ggml_view_3d(ctx0, comp, n_embd_head_nope, 1, n_blocks,
@@ -784,7 +741,7 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
     llm.cb(comp, tag, il);
 
-    comp = dsv4_build_norm(ctx0, comp, norm, nullptr, llm.hparams.f_norm_rms_eps);
+    comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
     llm.cb(comp, tag, il);
 
     ggml_tensor * comp_nope = ggml_view_3d(ctx0, comp, n_embd_head_nope, 1, n_blocks,
@@ -1003,13 +960,13 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 &post, &comb);
         cb(cur, "hc_attn_pre", il);
 
-        cur = dsv4_build_norm(ctx0, cur, model.layers[il].attn_norm, nullptr, hparams.f_norm_rms_eps);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         ggml_tensor * qr = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq_a, cur);
         cb(qr, "qr", il);
 
-        qr = dsv4_build_norm(ctx0, qr, model.layers[il].attn_q_a_norm, nullptr, hparams.f_norm_rms_eps);
+        qr = llm_build_norm(ctx0, qr, hparams, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(qr, "qr_norm", il);
 
         const int64_t ratio = hparams.dsv4_compress_ratios[(size_t) il];
@@ -1041,7 +998,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         cb(q, "q", il);
 
         ggml_tensor * kv = llm_build_lora_mm(lctx, ctx0, model.layers[il].wkv_latent, cur);
-        kv = dsv4_build_norm(ctx0, kv, model.layers[il].attn_kv_norm, nullptr, hparams.f_norm_rms_eps);
+        kv = llm_build_norm(ctx0, kv, hparams, model.layers[il].attn_kv_norm, nullptr, LLM_NORM_RMS, cb, il);
         kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
         cb(kv, "kv_norm", il);
 
@@ -1358,7 +1315,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 &post, &comb);
         cb(cur, "hc_ffn_pre", il);
 
-        cur = dsv4_build_norm(ctx0, cur, model.layers[il].ffn_norm, nullptr, hparams.f_norm_rms_eps);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
@@ -1436,10 +1393,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             model.hc_head_base);
     cb(out, "hc_head", -1);
 
-    // Keep the final norm as an explicit RMS norm followed by its weight
-    // multiply rather than routing this boundary through the fused helper.
     if (model.output_norm != nullptr) {
-        out = dsv4_build_norm(ctx0, out, model.output_norm, nullptr, hparams.f_norm_rms_eps);
+        out = llm_build_norm(ctx0, out, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
         cb(out, "result_norm", -1);
         out = build_output(lctx, ctx0, out, model.output, nullptr, cb);
     } else {
