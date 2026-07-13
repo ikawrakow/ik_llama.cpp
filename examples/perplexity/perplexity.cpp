@@ -36,8 +36,7 @@ extern "C" bool llama_reload_changed_tensors(struct llama_context * ctx);
 // Hot-swap signal mode: file-based signalling so an external driver can
 // swap GGUF shards on disk and ask this process to reload + recompute
 // without ever restarting it. Plain files are used instead of POSIX
-// signals so the exact same protocol works on Windows (including a
-// native binary driven from Cygwin), macOS and Linux.
+// signals so the exact same protocol works on Windows, macOS and Linux.
 //
 // Protocol:
 //   - status file (written by us, read by the driver), single line:

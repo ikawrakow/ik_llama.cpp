@@ -154,7 +154,7 @@ When `LLAMA_HOTSWAP_ENABLED` is set (and `LLAMA_HOTSWAP_CONTROL_FILE` is not), t
 
 ### `examples/perplexity/perplexity.cpp` (signal mode)
 
-When both `LLAMA_HOTSWAP_ENABLED` and `LLAMA_HOTSWAP_CONTROL_FILE` are set (the latter requires `LLAMA_HOTSWAP_STATUS_FILE` too), the tool **never terminates on its own**. Instead, an external driver (e.g. `benchmark_each_tensor.sh --hotswap` from Thireus' GGUF Tool Suite) swaps GGUF shards on disk and steers the process through two plain files. Files are used instead of POSIX signals so the exact same protocol works for a native Windows binary driven from Cygwin, as well as on macOS and Linux.
+When both `LLAMA_HOTSWAP_ENABLED` and `LLAMA_HOTSWAP_CONTROL_FILE` are set (the latter requires `LLAMA_HOTSWAP_STATUS_FILE` too), the tool **never terminates on its own**. Instead, an external driver (e.g. `benchmark_each_tensor.sh --hotswap` from Thireus' GGUF Tool Suite) swaps GGUF shards on disk and steers the process through two plain files. Files are used instead of POSIX signals so the exact same protocol works on Windows, macOS and Linux.
 
 **Status file** (written atomically by `perplexity` via tmp-file + rename, single line):
 
