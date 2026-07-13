@@ -950,7 +950,6 @@ static ggml_tensor * dsv4_build_lid_top_k(
     indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
     indexer_score = ggml_sum_rows(ctx0, indexer_score);
     indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
-    indexer_score = ggml_view_2d(ctx0, indexer_score, n_lid, n_tokens, indexer_score->nb[2], 0);
     llm.cb(indexer_score, "lid_score", il);
 
     indexer_score = ggml_add(ctx0, indexer_score, lid_mask);
