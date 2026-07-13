@@ -77,10 +77,23 @@ Start the server with one of the commands (CPU or GPU):
 ./build/bin/llama-server --model /my_local_files/gguf/Qwen_Qwen3-0.6B-IQ4_NL.gguf --ctx-size 4096 -ngl 999
 ```
 
-That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser start chatting.
+That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser and start chatting, or use the available API endpoins in your program/harness.
 
+### Run in Docker or Podman
 
-### [Step by step guide](./docker/README.md) for ik_llama.cpp in podman/docker container including llama-swap
+Pull one of the available images from `ghcr.io`. [View all tags](https://github.com/ikawrakow/ik_llama.cpp/pkgs/container/ik-llama-cpp/versions?filters%5Bversion_type%5D=tagged)
+
+```bash
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cpu-swap
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cpu-server
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cpu-full
+
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-swap
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-server
+docker pull ghcr.io/ikawrakow/ik-llama-cpp:cu12-full
+```
+
+Check [Step by step guide](./docker/README.md) for image customization and other details.
 
 ### [Common parameters and options](./docs/parameters.md)
 
