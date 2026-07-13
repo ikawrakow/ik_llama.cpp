@@ -4333,10 +4333,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FUSED_RMS_RMS_ADD",
     "BLEND",
     "INDEXER_TOPK",
+    "MASK_TOPK",
     "SINKHORN",
 };
 
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4456,11 +4457,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rms(x1)+rms(x2)",
     "blend(a,b,c)",
     "indexer_topk(k, q, w, mask)",
+    "mask_topk(mask, topk)",
     "sinkhorn(x)",
 
 };
 
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -10229,6 +10231,29 @@ struct ggml_tensor * ggml_blend(
 
     return result;
 }
+
+struct ggml_tensor * ggml_indexer_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk) {
+    GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
+    GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    // The mask may be padded along dim 1, so topk->ne[1] must be <= mask->ne[1]
+    if (topk->ne[1] > mask->ne[1] || topk->ne[2] != mask->ne[2] || topk->ne[3] != mask->ne[3]) {
+        printf("%s: Oops. topk is %ld x %ld x %ld x %ld, mask is %ld x %ld x %ld x %ld\n", __func__,
+                topk->ne[0], topk->ne[1], topk->ne[2], topk->ne[3],
+                mask->ne[0], mask->ne[1], mask->ne[2], mask->ne[3]);
+    }
+    GGML_ASSERT(topk->ne[1] <= mask->ne[1] && topk->ne[2] == mask->ne[2] && topk->ne[3] == mask->ne[3]);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, mask);
+    result->src[0] = mask;
+    result->src[1] = topk;
+    result->op = GGML_OP_MASK_TOPK;
+
+    return result;
+}
+
 
 // ggml_argsort
 
@@ -24943,6 +24968,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     GGML_ABORT("Fatal error");
                 }
             } break;
+        case GGML_OP_MASK_TOPK:
+            {
+                iqk_mask_topk(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_WIN_PART:
             {
                 ggml_compute_forward_win_part(params, tensor);
@@ -26005,6 +26034,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
+        case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
@@ -26743,6 +26773,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
+        case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
             {
                 n_tasks = n_threads;

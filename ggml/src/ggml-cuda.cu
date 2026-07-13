@@ -4137,6 +4137,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_INDEXER_TOPK:
             ggml_cuda_op_indexer_topk(ctx, dst);
             break;
+        case GGML_OP_MASK_TOPK:
+            ggml_cuda_op_indexer_mask(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -5041,6 +5044,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[3]->ne[0] == op->src[0]->ne[2];
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
+        case GGML_OP_MASK_TOPK:
             return true;
         case GGML_OP_SINKHORN: {
             const int sink_s = op->op_params[0];

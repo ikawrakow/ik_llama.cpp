@@ -705,6 +705,7 @@ extern "C" {
         GGML_OP_FUSED_RMS_RMS_ADD,
         GGML_OP_BLEND,
         GGML_OP_INDEXER_TOPK,
+        GGML_OP_MASK_TOPK,
         GGML_OP_SINKHORN,
 
         GGML_OP_COUNT,
@@ -2405,6 +2406,11 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             float                 c);
+
+    GGML_API struct ggml_tensor * ggml_indexer_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk);
 
 
     // sort rows
