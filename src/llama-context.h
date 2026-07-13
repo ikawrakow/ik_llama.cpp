@@ -362,10 +362,14 @@ struct llama_context {
         struct capture_state {
             std::vector<int32_t> layer_ids;
             std::vector<std::vector<float>> layer_rows;
+            std::vector<int32_t> layer_rows_written;
             int32_t row_count = 0;
             int32_t row_width = 0;
+            int32_t expected_rows = 0;
             uint64_t capture_batch_id = 0;
             std::vector<uint64_t> layer_seen_batch_id;
+            bool readback_pending = false;
+            bool invalid = false;
             ggml_backend_sched_eval_callback prev_cb_eval = nullptr;
             void * prev_cb_eval_user_data = nullptr;
         };
