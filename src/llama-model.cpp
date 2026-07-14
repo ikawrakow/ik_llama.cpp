@@ -2280,6 +2280,31 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         }
         return size;
     }
+    if (arch == LLM_ARCH_DEEPSEEK4) {
+        constexpr uint32_t csa_ratio = 4;
+        constexpr uint32_t hca_ratio = 128;
+        constexpr uint32_t cache_pad = 256;
+
+        const uint32_t n_stream = std::max<uint32_t>(1, n_seq_max);
+        const uint32_t csa_kv = GGML_PAD(std::max<uint32_t>(1, (kv_size + csa_ratio - 1)/csa_ratio), cache_pad);
+        const uint32_t hca_kv = GGML_PAD(std::max<uint32_t>(1, (kv_size + hca_ratio - 1)/hca_ratio), cache_pad);
+        const uint32_t ratio = hparams.dsv4_compress_ratios[(size_t) il];
+        const int64_t n_embd_head = hparams.n_embd_head_k(il);
+        const int64_t n_indexer_head = hparams.indexer_head_size;
+
+        size_t size = ggml_row_size(type_k, n_embd_head) * hparams.n_head_kv(il) * kv_size;
+        if (ratio == csa_ratio) {
+            size += ggml_row_size(type_k, n_embd_head) * csa_kv * n_stream;
+            size += ggml_row_size(idx_type_k, n_indexer_head) * csa_kv * n_stream;
+            size += (size_t) 2 * n_embd_head * 2 * csa_ratio * n_stream * sizeof(float) * 2;
+            size += (size_t) 2 * n_indexer_head * 2 * csa_ratio * n_stream * sizeof(float) * 2;
+        } else if (ratio == hca_ratio) {
+            size += ggml_row_size(type_k, n_embd_head) * hca_kv * n_stream;
+            size += (size_t) n_embd_head * hca_ratio * n_stream * sizeof(float) * 2;
+        }
+        return size;
+    }
+
     auto n_head_kv = hparams.n_head_kv(il);
     auto k_size = ggml_row_size(type_k, hparams.n_embd_head_k(il)) * n_head_kv*kv_size;
     auto v_size = ggml_row_size(type_v, hparams.n_embd_v_gqa(il)) * kv_size;

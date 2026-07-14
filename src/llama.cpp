@@ -1092,11 +1092,12 @@ static bool llama_kv_cache_init(
         }
     }
 
+    const bool is_dsv4_k_only = model.arch == LLM_ARCH_DEEPSEEK4;
     bool is_mla_attn = model.is_mla_model();
 
     bool split_cache   = false;
     bool replicate_mla = false;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && !is_mla_attn && offload && !is_dsv4_k_only) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
         if (llama_model_has_recurrent(&model)) {
@@ -1180,7 +1181,7 @@ static bool llama_kv_cache_init(
     if (is_mla_attn && cparams.mla_attn) {
         needs_v_cache = cparams.mla_attn == 1 && !cparams.flash_attn;
     }
-    if (needs_v_cache) cache.v_l.reserve(n_layer);
+    if (needs_v_cache && !is_dsv4_k_only) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
 
     // DSA indexer-key cache: one [indexer_head_size, kv_size] tensor per indexer layer.
@@ -1207,7 +1208,7 @@ static bool llama_kv_cache_init(
         // For MTP-only context, skip KV allocation for non-MTP layers
         if (cparams.mtp_op_type != MTP_OP_NONE && i < n_mtp_first_layer) {
             cache.k_l.push_back(nullptr);
-            if (model.arch != LLM_ARCH_OPENPANGU &&
+            if (!is_dsv4_k_only && model.arch != LLM_ARCH_OPENPANGU &&
                     (!is_mla_attn || !cparams.mla_attn || (cparams.mla_attn == 1 && !cparams.flash_attn))) {
                 cache.v_l.push_back(nullptr);
             }
@@ -1278,7 +1279,9 @@ static bool llama_kv_cache_init(
             const bool is_mtp_layer = (cparams.mtp_op_type != MTP_OP_NONE && i >= (int)n_mtp_first_layer);
             if (!hparams.has_kv(i) && !is_mtp_layer) {
                 cache.k_l.push_back(nullptr);
-                cache.v_l.push_back(nullptr);
+                if (!is_dsv4_k_only) {
+                    cache.v_l.push_back(nullptr);
+                }
                 continue;
             }
             if (qnext_recurrent) {
@@ -1353,6 +1356,8 @@ static bool llama_kv_cache_init(
                 // The value-side latent is rederived from k_l per graph; no persistent V store.
                 const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, kv_size);
+            } else if (is_dsv4_k_only) {
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
@@ -1428,7 +1433,7 @@ static bool llama_kv_cache_init(
                 v->extra = (void *)&split_v_l.ggml;
             }
             cache.k_l.push_back(k);
-            if (model.arch != LLM_ARCH_OPENPANGU) {
+            if (!is_dsv4_k_only && model.arch != LLM_ARCH_OPENPANGU) {
                 cache.v_l.push_back(v);
             }
         }
@@ -7566,17 +7571,34 @@ struct llama_context * llama_init_from_model(
     //    params.flash_attn = false;
     //}
 
+    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.type_v != GGML_TYPE_F16) {
+        LLAMA_LOG_WARN("%s: DeepSeek4 has no independent V-cache; ignoring requested V-cache type %s\n",
+                __func__, ggml_type_name(params.type_v));
+        params.type_v = GGML_TYPE_F16;
+    }
+
     if (model->arch != LLM_ARCH_OPENPANGU &&
         params.type_v != GGML_TYPE_F16 && params.type_v != GGML_TYPE_BF16 && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
     }
 
-    if (model->arch == LLM_ARCH_DEEPSEEK4 &&
-            (ggml_is_quantized(params.type_k) || params.k_cache_hadamard)) {
-        LLAMA_LOG_ERROR("%s: DeepSeek4 compressed attention currently supports only F16/BF16 K-cache; quantized K-cache and K-cache Hadamard are not implemented\n",
+    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.k_cache_hadamard) {
+        LLAMA_LOG_ERROR("%s: DeepSeek4 K-cache Hadamard is not supported; use an untransformed K-cache\n",
                         __func__);
         return nullptr;
+    }
+
+    if (model->arch == LLM_ARCH_DEEPSEEK4 &&
+            params.type_k != GGML_TYPE_F16 && params.type_k != GGML_TYPE_BF16 && params.type_k != GGML_TYPE_Q8_0) {
+        LLAMA_LOG_ERROR("%s: DeepSeek4 K-cache supports only F16, BF16, and Q8_0 (requested %s)\n",
+                        __func__, ggml_type_name(params.type_k));
+        return nullptr;
+    }
+
+    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.v_cache_hadamard) {
+        LLAMA_LOG_WARN("%s: DeepSeek4 has no independent V-cache; ignoring -vhad\n", __func__);
+        params.v_cache_hadamard = false;
     }
 
     if (params.k_cache_hadamard && !ggml_is_quantized(params.type_k)) {
@@ -7676,6 +7698,7 @@ struct llama_context * llama_init_from_model(
 
     cparams.reduce_type      = params.type_reduce;
     cparams.graph_attn_precision = params.type_graph_attn;
+    cparams.idx_type_k       = params.idx_type_k;
     if (cparams.graph_attn_precision != GGML_TYPE_F16 && cparams.graph_attn_precision != GGML_TYPE_F32) {
         throw std::runtime_error(format("--graph-attn-precision must be f16 or f32, got %s",
                                         ggml_type_name(cparams.graph_attn_precision)));
@@ -8043,6 +8066,10 @@ struct llama_context * llama_init_from_model(
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T: not used\n", __func__,
                             (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f));
+                } else if (model->arch == LLM_ARCH_DEEPSEEK4) {
+                    LLAMA_LOG_INFO("%s: KV self size = %7.2f MiB, K-only (%s): %7.2f MiB; independent V-cache: not used\n", __func__,
+                            (float) memory_size_k / (1024.0f * 1024.0f),
+                            ggml_type_name(type_k), (float) memory_size_k / (1024.0f * 1024.0f));
                 } else {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
                             (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
