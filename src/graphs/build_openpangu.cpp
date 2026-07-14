@@ -1057,6 +1057,9 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         return x;
     };
 
+    ggml_tensor repeater;
+    repeater.ne[0] = n_embd; repeater.ne[1] = S; repeater.ne[2] = n_tokens; repeater.ne[3] = 1;
+
     // mHC post: R_new[h,s,t] = h_post[s,t]*y[h,t] + sum_j m[s,j,t]*R[h,j,t]
     auto mhc_post = [&](ggml_tensor * y, ggml_tensor * h_post, ggml_tensor * Rin,
                         ggml_tensor * alpha, ggml_tensor * beta, ggml_tensor * h_res) {
@@ -1074,8 +1077,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         // term1: h_post[s,t]*y[h,t] -> [H,S,T]
         ggml_tensor * y3 = ggml_reshape_3d(ctx0, y, n_embd, 1, n_tokens);
         ggml_tensor * hpost3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, h_post), 1, S, n_tokens);
-        ggml_tensor * term1 = ggml_mul(ctx0, ggml_repeat(ctx0, y3,
-                                 ggml_new_tensor_3d(ctx0, y->type, n_embd, S, n_tokens)), hpost3);
+        ggml_tensor * term1 = ggml_mul(ctx0, ggml_repeat(ctx0, y3, &repeater), hpost3);
 
         // term2: sum_j m[s,j,t]*R[h,j,t]. For each out-stream s, weight over input streams j.
         // Build via: for stream axis, matmul R[H, j, t] with m[j, s, t] batched over t.
@@ -1087,9 +1089,10 @@ ggml_cgraph * llm_build_context::build_openpangu() {
             ggml_tensor * m_s = ggml_cont(ctx0, ggml_view_2d(ctx0, m, S, n_tokens, m->nb[2], s*m->nb[1]));
             ggml_tensor * m_s3 = ggml_reshape_3d(ctx0, m_s, 1, S, n_tokens);      // [1,S,T]
             ggml_tensor * acc = ggml_mul(ctx0, Rin, m_s3);                        // [H,S,T]
-            ggml_tensor * accp = ggml_cont(ctx0, ggml_permute(ctx0, acc, 1, 0, 2, 3)); // [S,H,T]
-            ggml_tensor * summed = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, accp), n_embd, n_tokens); // [H,T]
-            summed = ggml_reshape_3d(ctx0, summed, n_embd, 1, n_tokens);
+            ggml_tensor * summed = ggml_sum_rows_ext(ctx0, acc, 1);               // [H,1,T]
+            //ggml_tensor * accp = ggml_cont(ctx0, ggml_permute(ctx0, acc, 1, 0, 2, 3)); // [S,H,T]
+            //ggml_tensor * summed = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, accp), n_embd, n_tokens); // [H,T]
+            //summed = ggml_reshape_3d(ctx0, summed, n_embd, 1, n_tokens);
             term2 = term2 ? ggml_concat(ctx0, term2, summed, 1) : summed;         // -> [H,S,T]
         }
         return ggml_add(ctx0, term1, term2); // [H,S,T]
