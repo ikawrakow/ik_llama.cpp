@@ -79,6 +79,9 @@ void ggml_cuda_flash_attn_ext_vec_f32(ggml_backend_cuda_context & ctx, ggml_tens
 
     FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_F16, GGML_TYPE_F16)
     FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
+
+    FATTN_VEC_F32_CASE_DKDV(576, 512, GGML_TYPE_F16, GGML_TYPE_F16)
+    FATTN_VEC_F32_CASE_DKDV(576, 512, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
 #else
     FATTN_VEC_F32_CASE(128, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
 
@@ -97,6 +100,9 @@ void ggml_cuda_flash_attn_ext_vec_f32(ggml_backend_cuda_context & ctx, ggml_tens
     FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_F16, GGML_TYPE_F16)
     FATTN_VEC_F32_CASE_DKDV(192, 128, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
 
+    FATTN_VEC_F32_CASE_DKDV(576, 512, GGML_TYPE_F16, GGML_TYPE_F16)
+    FATTN_VEC_F32_CASE_DKDV(576, 512, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
+
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     on_no_fattn_vec_case(Q->ne[0], V->ne[0]);
@@ -106,8 +112,17 @@ bool ggml_cuda_fattn_vec_f32_is_supported([[maybe_unused]] ggml_backend_cuda_con
     auto K = dst->src[1];
     auto V = dst->src[2];
     if (K->ne[0] != V->ne[0]) {
-        if (K->ne[0] != 192 || V->ne[2] != 128) return false;
+        const bool is_192_128 = K->ne[0] == 192 && V->ne[0] == 128;
+        const bool is_576_512 = K->ne[0] == 576 && V->ne[0] == 512;
+        if (!is_192_128 && !is_576_512) return false;
         if (K->type != V->type) return false;
+        // Asymmetric (Dk != Dv) vec_f32 path. F16 KV is always fine (its dot loops stride Dk/2,
+        // a clean multiple of 32). Q8_0 KV is now supported: the per-warp Q->q8_1 quantization,
+        // the shared->register load, and the quantized-K dot all carry a compile-time-gated
+        // per-lane bounds guard (mirroring mainline llama.cpp's fattn-vec ragged-tail idiom) so
+        // the ragged final warp iteration for Dk=576 (144 int32 = 4.5*WARP_SIZE) and Dk=192
+        // (48 int32 = 1.5*WARP_SIZE) no longer reads Q/K out of bounds. The guard folds to a
+        // no-op for aligned Dk (128/256), keeping those instances byte-identical.
         return K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0;
     }
 #ifdef GGML_CUDA_FA_ALL_QUANTS

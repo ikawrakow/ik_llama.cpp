@@ -126,7 +126,7 @@ struct SignHelper {
         values[3] = _mm256_mask_sub_epi8(values[3], mask[3], _mm256_setzero_si256(), values[3]);
 #else
         auto s128 = _mm_loadu_si128((const __m128i *)sign_bits);
-        auto s256 = MM256_SET_M128I(s128, s128);
+        auto s256 = MM256_SET1_M128I(s128);
         __m256i aux256;
         auto shuffle = mask1;
         auto step = _mm256_set1_epi8(4);
@@ -164,7 +164,7 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
 
     inline void new_block(int i, __m256i * scales) {
         auto sc16 = load_scales(i);
-        scales[0] = MM256_SET_M128I(sc16, sc16);
+        scales[0] = MM256_SET1_M128I(sc16);
     }
     inline void new_block_f(int i, __m256 * scales) {
         auto sc16 = load_scales(i);
@@ -179,7 +179,7 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
     inline float new_block(int i, __m256i * scales, __m256i& mins) {
         auto sc16 = load_scales(i);
         mins = scb.shuffle(sc16);
-        scales[0] = MM256_SET_M128I(sc16, sc16);
+        scales[0] = MM256_SET1_M128I(sc16);
         return -d*minv;
     }
 
@@ -252,8 +252,8 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
     inline static void prepare_scales(const __m256i& all, __m256i * scales) {
         auto scales_l = _mm256_castsi256_si128(all);
         auto scales_h = _mm256_extractf128_si256(all, 1);
-        scales[0] = MM256_SET_M128I(scales_l, scales_l);
-        scales[1] = MM256_SET_M128I(scales_h, scales_h);
+        scales[0] = MM256_SET1_M128I(scales_l);
+        scales[1] = MM256_SET1_M128I(scales_h);
     }
 
     inline void new_block(int i, __m256i * scales) {
@@ -321,8 +321,8 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         auto full = _mm256_or_si256(psb1, oddb);
         auto full_l = _mm256_castsi256_si128(full);
         auto full_h = _mm256_extractf128_si256(full, 1);
-        auto full_1 = MM256_SET_M128I(full_l, full_l);
-        auto full_2 = MM256_SET_M128I(full_h, full_h);
+        auto full_1 = MM256_SET1_M128I(full_l);
+        auto full_2 = MM256_SET1_M128I(full_h);
         sign_value(full_1, helper.shuff1, helper.mask, helper.mone, values[0]);
         sign_value(full_1, helper.shuff2, helper.mask, helper.mone, values[1]);
         sign_value(full_2, helper.shuff1, helper.mask, helper.mone, values[2]);
@@ -397,8 +397,8 @@ struct DequantizerIQ2S final : public BaseDequantizer<block_iq2_s> {
     inline static void prepare_scales(const __m256i& all, __m256i * scales) {
         auto scales_l = _mm256_castsi256_si128(all);
         auto scales_h = _mm256_extractf128_si256(all, 1);
-        scales[0] = MM256_SET_M128I(scales_l, scales_l);
-        scales[1] = MM256_SET_M128I(scales_h, scales_h);
+        scales[0] = MM256_SET1_M128I(scales_l);
+        scales[1] = MM256_SET1_M128I(scales_h);
     }
 
     inline void new_block(int i, __m256i * scales) {
@@ -506,7 +506,7 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
 
     inline void new_block(int i, __m256i * scales) {
         auto scales16 = prepare_scales(i);
-        scales[0] = MM256_SET_M128I(scales16, scales16);
+        scales[0] = MM256_SET1_M128I(scales16);
     }
     inline void new_block_f(int i, __m256 * scales) {
         auto sc16 = prepare_scales(i);
@@ -520,7 +520,7 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
     inline float new_block(int i, __m256i * scales, __m256i& mins) {
         auto scales16 = prepare_scales(i);
         mins = scb.shuffle(scales16);
-        scales[0] = MM256_SET_M128I(scales16, scales16);
+        scales[0] = MM256_SET1_M128I(scales16);
         return -d*minv;
     }
 
@@ -638,7 +638,7 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
     }
     inline void new_block(int i, __m256i * scales) {
         auto scales16 = make_scales(i, d);
-        scales[0] = MM256_SET_M128I(scales16, scales16);
+        scales[0] = MM256_SET1_M128I(scales16);
     }
     inline void new_block_f(int i, __m256 * scales) {
         auto sc16 = make_scales(i, d);
@@ -652,7 +652,7 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
     inline float new_block(int i, __m256i * scales, __m256i& mins) {
         auto scales16 = make_scales(i, d);
         mins = scb.shuffle(scales16);
-        scales[0] = MM256_SET_M128I(scales16, scales16);
+        scales[0] = MM256_SET1_M128I(scales16);
         return -minv*d;
     }
 
@@ -1056,7 +1056,7 @@ static void mul_mat_iq2_xxs_r4_q8_k(int n, const void * vx, size_t bx, const Dat
                 scales = _mm_maddubs_epi16(scales, _mm_set1_epi32(0x10080402));
                 scales = _mm_add_epi32(_mm_madd_epi16(_mm_set1_epi16(1), scales), _mm_set1_epi32(1));
 #endif
-                auto scales32 = MM256_SET_M128I(scales, scales);
+                auto scales32 = MM256_SET1_M128I(scales);
                 auto signs128 = _mm_and_si128(sas, _mm_set1_epi8(-2)); // 0xfe = -2 as signed. Needed to shutup compiler warning.
                 signs128 = _mm_xor_si128(signs128, _mm_srli_epi16(signs128, 1));
 #ifdef HAVE_FANCY_SIMD
@@ -1073,7 +1073,7 @@ static void mul_mat_iq2_xxs_r4_q8_k(int n, const void * vx, size_t bx, const Dat
                     isum[iy] = _mm256_add_epi32(isum[iy], _mm256_mullo_epi32(scales32, sumi));
                 }
 #else
-                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto signs = MM256_SET1_M128I(signs128);
                 auto shuffle = sign_shuffle;
                 auto s1 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
                 shuffle = _mm256_add_epi8(shuffle, m4);
@@ -1173,7 +1173,7 @@ static void mul_mat_iq2_xs_r4_q8_k(int n, const void * vx, size_t bx, const Data
                     isum[2*iy+1] = _mm256_add_epi32(isum[2*iy+1], _mm256_madd_epi16(scs[1], s34));
                 }
 #else
-                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto signs = MM256_SET1_M128I(signs128);
                 auto shuffle = sign_shuffle;
                 auto s1 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
                 shuffle = _mm256_add_epi8(shuffle, m4);
@@ -1335,7 +1335,7 @@ static void mul_mat_iq2_xs_r4_q8_k_16(int n, const void * vx, size_t bx, const D
                     isum[2*iy+1] = _mm256_add_epi32(isum[2*iy+1], _mm256_madd_epi16(scs[1], s34));
                 }
 #else
-                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto signs = MM256_SET1_M128I(signs128);
                 auto shuffle = sign_shuffle;
                 auto s = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
                 shuffle = _mm256_add_epi8(shuffle, m4);
@@ -1454,7 +1454,7 @@ static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
                     isum[2*iy+1] = _mm256_add_epi32(isum[2*iy+1], _mm256_madd_epi16(scs[1], s34));
                 }
 #else
-                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto signs = MM256_SET1_M128I(signs128);
                 auto shuffle = sign_shuffle;
                 auto s1 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
                 shuffle = _mm256_add_epi8(shuffle, m4);
@@ -1613,7 +1613,7 @@ static void mul_mat_iq2_s_r4_q8_k_16(int n, const void * vx, size_t bx, const Da
                     isum[2*iy+1] = _mm256_add_epi32(isum[2*iy+1], _mm256_madd_epi16(scs[1], s34));
                 }
 #else
-                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto signs = MM256_SET1_M128I(signs128);
                 auto shuffle = sign_shuffle;
                 auto s = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
                 shuffle = _mm256_add_epi8(shuffle, m4);
@@ -1703,7 +1703,7 @@ static void mul_mat_iq3_xxs_r4_q8_k(int n, const void * vx, size_t bx, const Dat
                 //auto t2 = _mm_or_si128(_mm_srli_epi32(_mm_and_si128(scales, _mm_set1_epi32(0x00010000)), 14), _mm_srli_epi32(_mm_and_si128(scales, _mm_set1_epi32(0x01000000)), 21));
                 //scales = _mm_or_si128(_mm_slli_epi32(_mm_or_si128(t1, t2), 1), _mm_set1_epi32(1));
 #endif
-                auto scales32 = MM256_SET_M128I(scales, scales);
+                auto scales32 = MM256_SET1_M128I(scales);
                 auto signs128 = _mm_and_si128(sas, _mm_set1_epi8(-2)); // 0xfe = -2 as signed. Needed to shutup compiler warning.
                 signs128 = _mm_xor_si128(signs128, _mm_srli_epi16(signs128, 1));
 #ifdef HAVE_FANCY_SIMD
@@ -1720,7 +1720,7 @@ static void mul_mat_iq3_xxs_r4_q8_k(int n, const void * vx, size_t bx, const Dat
                     isum[iy] = _mm256_add_epi32(isum[iy], _mm256_mullo_epi32(scales32, sumi));
                 }
 #else
-                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto signs = MM256_SET1_M128I(signs128);
                 auto shuffle = sign_shuffle;
                 auto s1 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
                 shuffle = _mm256_add_epi8(shuffle, m4);

@@ -409,6 +409,29 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 new_type = GGML_TYPE_IQ4_NL;
             }
         }
+    } else if (name == "per_layer_token_embd.weight") {
+        if (qs.params->per_layer_token_embedding_type < GGML_TYPE_COUNT) {
+            new_type = qs.params->per_layer_token_embedding_type;
+        } else {
+            if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS ||
+                ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M  ||
+                ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS_R4 ||
+                ftype == LLAMA_FTYPE_MOSTLY_IQ1_S_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M_R4) {
+                new_type = GGML_TYPE_Q2_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M_R4) {
+                new_type = GGML_TYPE_IQ3_S;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_KT) {
+                new_type = GGML_TYPE_IQ3_S;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS_R4) {
+                new_type = GGML_TYPE_IQ3_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_BN || ftype == LLAMA_FTYPE_MOSTLY_IQ2_BN || ftype == LLAMA_FTYPE_MOSTLY_IQ2_BN_R4) {
+                new_type = GGML_TYPE_IQ4_NL;
+            }
+        }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M_R4) {
         if (name.find("attn_v.weight") != std::string::npos) {
             if (qs.model.hparams.n_expert >= 4 || qs.model.hparams.n_gqa() >= 4) new_type = GGML_TYPE_IQ4_K_R4;
@@ -825,6 +848,15 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         auto working_type = interleaved_properties(new_type).first;
         if (working_type != new_type) {
             printf("\n============ Token embeddings cannot be quantized with row-interleaved quants\n");
+            printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
+            new_type = working_type;
+        }
+    }
+
+    if (name == "per_layer_token_embd.weight") {
+        auto working_type = interleaved_properties(new_type).first;
+        if (working_type != new_type) {
+            printf("\n============ Per-layer Token embeddings cannot be quantized with row-interleaved quants\n");
             printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
             new_type = working_type;
         }
@@ -1521,6 +1553,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
             if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
                 new_type = params->token_embedding_type;
+            }
+            if (params->per_layer_token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "per_layer_token_embd.weight") == 0) {
+                new_type = params->per_layer_token_embedding_type;
             }
             if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
                 new_type = params->output_tensor_type;

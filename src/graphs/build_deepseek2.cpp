@@ -323,6 +323,26 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
     return combined;
 }
 
+static inline int dsa_n_top_k(const llama_context & lctx) {
+    int n_top_k = lctx.model.hparams.indexer_top_k;
+    if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
+    return n_top_k;
+}
+static inline bool dsa_should_use(const llama_context & lctx) {
+    return lctx.cparams.mtp_op_type == MTP_OP_NONE && lctx.cparams.dsa && lctx.model.arch == LLM_ARCH_GLM_DSA && !lctx.kv_self.kr_l.empty();
+}
+static inline bool dsa_can_use_fast_path(const llama_context & lctx, int n_tokens, int n_kv) {
+    auto n_top_k = dsa_n_top_k(lctx);
+    if (n_tokens == 1 && n_top_k < n_kv && n_top_k%256 == 0 && lctx.cparams.flash_attn && (lctx.cparams.mla_attn == 1 || lctx.cparams.mla_attn == 3)) {
+        // We need this check because we need to pretend that the KV cache is F32 so we can use ggml_get_rows to extract
+        // the rows selected by the indexer. In order this to work, the KV cache row size must be a multiple of sizeof(float).
+        auto k = lctx.kv_self.k_l[0];
+        auto row_size = ggml_row_size(k->type, k->ne[0]);
+        return row_size % sizeof(float) == 0;
+    }
+    return false;
+}
+
 // DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). CACHE-BACKED: the batch's indexer keys are
 // (Hadamard-rotated and) written to a persistent per-layer indexer-key cache (kv_self.kr_l[il]) at
 // kv_head, then the FULL [head_size, n_kv] cached key set is read back and scored against the current
@@ -358,26 +378,31 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     const int64_t rope_dim  = n_rot;              // n_embd_head_qk_rope
     const int64_t nope_dim  = head_size - rope_dim;
 
+    int n_top_k = dsa_n_top_k(lctx);
+
     // ---- indexer_q : {head_size * n_ihead, n_tokens} ----
-    ggml_tensor * indexer_q = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, qr);
-    cb(indexer_q, "dsa_indexer_q", il);
+    ggml_tensor * indexer_q = nullptr;
+    if (n_top_k < n_kv) {
+        indexer_q = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, qr);
+        cb(indexer_q, "dsa_indexer_q", il);
 
-    // split rope/nope along dim0, per head
-    ggml_tensor * indexer_q_pe = ggml_view_3d(ctx0, indexer_q, rope_dim, n_ihead, n_tokens,
-            ggml_row_size(indexer_q->type, head_size),
-            ggml_row_size(indexer_q->type, head_size) * n_ihead, 0);
-    ggml_tensor * indexer_q_nope = ggml_view_3d(ctx0, indexer_q, nope_dim, n_ihead, n_tokens,
-            ggml_row_size(indexer_q->type, head_size),
-            ggml_row_size(indexer_q->type, head_size) * n_ihead,
-            ggml_row_size(indexer_q->type, rope_dim));
+        // split rope/nope along dim0, per head
+        ggml_tensor * indexer_q_pe = ggml_view_3d(ctx0, indexer_q, rope_dim, n_ihead, n_tokens,
+                ggml_row_size(indexer_q->type, head_size),
+                ggml_row_size(indexer_q->type, head_size) * n_ihead, 0);
+        ggml_tensor * indexer_q_nope = ggml_view_3d(ctx0, indexer_q, nope_dim, n_ihead, n_tokens,
+                ggml_row_size(indexer_q->type, head_size),
+                ggml_row_size(indexer_q->type, head_size) * n_ihead,
+                ggml_row_size(indexer_q->type, rope_dim));
 
-    indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
-            LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+        indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
+                rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
 
-    // {head_size, n_ihead, n_tokens}
-    indexer_q = ggml_concat(ctx0, indexer_q_pe, indexer_q_nope, 0);
-    cb(indexer_q, "dsa_indexer_q_cat", il);
+        // {head_size, n_ihead, n_tokens}
+        indexer_q = ggml_concat(ctx0, indexer_q_pe, indexer_q_nope, 0);
+        cb(indexer_q, "dsa_indexer_q_cat", il);
+    }
 
     // ---- indexer_k : {head_size, n_tokens} (single key head, MQA) ----
     ggml_tensor * indexer_k = ggml_mul_mat(ctx0, layer.indexer_attn_k, cur);
@@ -394,7 +419,7 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             ggml_row_size(indexer_k->type, rope_dim));
 
     indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot,
-            LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+            rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
 
     // {head_size, 1, n_tokens}
@@ -407,7 +432,9 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     static const bool dsa_had_disable = getenv("DSA_HADAMARD_DISABLE") != nullptr;
     if (lctx.cparams.dsa_indexer_hadamard && !dsa_had_disable) {
         GGML_ASSERT((head_size & ~(head_size - 1)) == head_size);
-        indexer_q = ggml_hadamard(ctx0, indexer_q, head_size);
+        if (indexer_q) {
+            indexer_q = ggml_hadamard(ctx0, indexer_q, head_size);
+        }
         indexer_k = ggml_hadamard(ctx0, indexer_k, head_size);
     }
 
@@ -438,6 +465,10 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         ggml_build_forward_expand(gf, kr_cpy);
     }
 
+    if (!indexer_q) {
+        return nullptr;
+    }
+
     // ---- read back the full cached key set: {head_size, n_kv} ----
     ggml_tensor * cached_k = ggml_view_2d(ctx0, kr_cache, head_size, n_kv,
             ggml_row_size(kr_cache->type, head_size), 0);
@@ -458,6 +489,18 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
         indexer_score = ggml_cast(ctx0, indexer_score, GGML_TYPE_F32);
         cb(indexer_score, "indexer_score_f32", il);
     }
+
+    if (cparams.flash_attn && cparams.fused_idx_topk) {
+        if (lctx.inp_dsa_sink) {
+            indexer_score = ggml_add(ctx0, indexer_score, lctx.inp_dsa_sink);
+            cb(indexer_score, "dsa_indexer_score_sink", il);
+            ggml_build_forward_expand(gf, indexer_score);
+        }
+        auto topk = ggml_indexer_topk(ctx0, indexer_k_b, indexer_q, indexer_weights, indexer_score, GGML_UNARY_OP_RELU, n_top_k);
+        ggml_build_forward_expand(gf, topk);
+        return topk;
+    }
+
     if (indexer_q->ne[2] <= 8) {
         // This covers TG and small batches (as needed for instance for speculative decoding). It is quite a bit faster than
         // the loop over attention heads in the other branch. We limit it to a maximum of 8 tokens to limit compute buffer size.
@@ -551,8 +594,6 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
     //ggml_tensor * sorted = ggml_argsort(ctx0, indexer_score, GGML_SORT_ORDER_DESC);
     ggml_tensor * sorted;
     if (cparams.flash_attn) {
-        int64_t n_top_k = (int64_t) hparams.indexer_top_k;
-        if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
         if (n_top_k > indexer_score->ne[0]) n_top_k = indexer_score->ne[0];
         sorted = ggml_top_k(ctx0, indexer_score, n_top_k);
         sorted = ggml_cont(ctx0, sorted);
@@ -629,34 +670,6 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     return sparse;
 }
 
-static ggml_tensor * build_deepseek2_dsa_fa_mask(const llama_context & lctx, ggml_context * ctx0, ggml_tensor * KQ_mask, ggml_tensor * sorted) {
-    GGML_ASSERT(KQ_mask && KQ_mask->type == GGML_TYPE_F16);
-    GGML_ASSERT(sorted && sorted->type == GGML_TYPE_I32);
-    GGML_ASSERT(KQ_mask->ne[1] >= sorted->ne[1]);
-
-    int n_top_k = (int64_t) lctx.model.hparams.indexer_top_k;
-    if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
-
-    int n_kv_local = KQ_mask->ne[0];
-    if (n_top_k >= n_kv_local) {
-        return KQ_mask;
-    }
-
-    GGML_ASSERT(sorted->ne[1] == lctx.inp_mask_inf->ne[1]);
-    auto top_k = ggml_view_2d(ctx0, sorted, n_top_k, sorted->ne[1], sorted->nb[1], 0);
-    auto mask32 = ggml_blend(ctx0, lctx.inp_mask_inf, top_k, 0.0f);
-    if (KQ_mask->ne[1] == mask32->ne[1]) {
-        auto mask16 = ggml_add(ctx0, KQ_mask, mask32);
-        return mask16;
-    }
-    auto kq1 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], mask32->ne[1], KQ_mask->nb[1], 0);
-    auto kq2 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], KQ_mask->ne[1] - mask32->ne[1], KQ_mask->nb[1], mask32->ne[1]*KQ_mask->nb[1]);
-    kq1 = ggml_add(ctx0, kq1, mask32);
-    auto mask16 = ggml_concat(ctx0, kq1, kq2, 1);
-    return mask16;
-}
-
-
 // Adapt the (F32, unpadded {n_kv, n_tokens}) sparse mask for ggml_flash_attn_ext, which on this fork
 // requires the mask to be F16, contiguous, and padded in ne[1] to GGML_PAD(n_queries, GGML_KQ_MASK_PAD)
 // (build_inp_KQ_mask creates the dense -fa 1 mask exactly that way). We:
@@ -722,6 +735,9 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     ggml_tensor * sparse_mask    = KQ_mask;
     ggml_tensor * sparse_mask_fa = KQ_mask;
 
+    bool use_dsa       = dsa_should_use(lctx);
+    bool dsa_fast_path = use_dsa && dsa_can_use_fast_path(lctx, n_tokens, n_kv);
+
     // self_attention
     {
         ggml_tensor * q = nullptr;
@@ -775,27 +791,30 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                 // for prefill AND decode (single sequence). Gate: --dsa opt-in (off by default) +
                 // GLM_DSA arch + indexer tensors + cache. When off, the model runs the dense MLA path,
                 // byte-identical to a build without this feature.
-                if (lctx.cparams.dsa && model.arch == LLM_ARCH_GLM_DSA && model.layers[il].indexer_attn_q_b
-                        && kv_self.kr_l.size() > (size_t) il && kv_self.kr_l[il]) {
+                if (use_dsa) {
                     // GLM-5.2 IndexShare: "full" layers compute their own lightning-indexer top-k;
                     // "shared" layers reuse the previous full layer's top-k (transformers reference:
                     // shared layer indexer=None, topk_indices=prev_topk_indices). The full/shared map is
                     // hparams.indexer_is_full (GGUF metadata or derived config rule). At a given step all
                     // layers share the same n_kv/n_tokens, so a full layer's argsort is valid to reuse.
                     if (hparams.indexer_is_full[il]) {
-                        auto sorted = build_deepseek2_dsa_indexer(gf, il, q, cur, KQ_mask, inp_pos);
-                        if (lctx.cparams.flash_attn) {
-                            last_sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, sorted);
-                        } else {
-                            last_sparse_mask = build_deepseek2_dsa_sparse_mask(sorted, KQ_mask);
+                        dsa_last_full_sorted = build_deepseek2_dsa_indexer(gf, il, q, cur, KQ_mask, inp_pos);
+                        if (dsa_last_full_sorted && !dsa_fast_path) {
+                            if (lctx.cparams.flash_attn) {
+                                last_sparse_mask_fa = ggml_indexer_mask(ctx0, KQ_mask, dsa_last_full_sorted);
+                            } else {
+                                last_sparse_mask = build_deepseek2_dsa_sparse_mask(dsa_last_full_sorted, KQ_mask);
+                            }
                         }
                     }
-                    if (lctx.cparams.flash_attn) {
-                        GGML_ASSERT(last_sparse_mask_fa);
-                        sparse_mask_fa = last_sparse_mask_fa;
-                    } else {
-                        GGML_ASSERT(last_sparse_mask);
-                        sparse_mask = last_sparse_mask;
+                    if (dsa_last_full_sorted && !dsa_fast_path) {
+                        if (lctx.cparams.flash_attn) {
+                            GGML_ASSERT(last_sparse_mask_fa);
+                            sparse_mask_fa = last_sparse_mask_fa;
+                        } else {
+                            GGML_ASSERT(last_sparse_mask);
+                            sparse_mask = last_sparse_mask;
+                        }
                     }
                 }
 
@@ -978,6 +997,9 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                     if (use_f32_attn_precision || q->ne[1] <= 8) {
                         ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
                     }
+                    if (use_dsa && dsa_last_full_sorted) {
+                        kqv->src[5] = dsa_last_full_sorted;
+                    }
                     cb(kqv, "kqv", il);
 
                     if (iter == 0) {
@@ -1009,17 +1031,34 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                 cb(q, "q", il);
 
                 if (lctx.cparams.flash_attn && (lctx.cparams.mla_attn == 1 || lctx.cparams.mla_attn == 3)) {
-                    ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.k_l[il],
-                            kv_lora_rank, n_kv,
-                            ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
-                            ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
-                    cb(kv_cache_lora, "kv_cache_lora", il);
 
-                    kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, sparse_mask_fa, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                    if (dsa_last_full_sorted && dsa_fast_path) {
+                        auto row_size = ggml_row_size(kv_self.k_l[il]->type, kv_self.k_l[il]->ne[0]);
+                        GGML_ASSERT(row_size % sizeof(float) == 0);
+                        GGML_ASSERT(dsa_last_full_sorted);
+                        GGML_ASSERT(ggml_nrows(dsa_last_full_sorted) == 1);
+                        auto k32 = ggml_reshape_4d_ext(ctx0, kv_self.k_l[il], GGML_TYPE_F32, row_size/sizeof(float),
+                                kv_self.k_l[il]->ne[1], kv_self.k_l[il]->ne[2], kv_self.k_l[il]->ne[3]);
+                        k32 = ggml_get_rows(ctx0, k32, dsa_last_full_sorted);
+                        auto k = ggml_reshape_4d_ext(ctx0, k32, kv_self.k_l[il]->type, kv_self.k_l[il]->ne[0], k32->ne[1], k32->ne[2], k32->ne[3]);
+                        auto v = ggml_view_2d(ctx0, k, kv_lora_rank, k->ne[1], k->nb[1], ggml_row_size(k->type, n_embd_head_qk_rope));
+                        kqv_compressed = ggml_flash_attn_ext(ctx0, q, k, v, dsa_tg_fast_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                    } else {
+                        ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.k_l[il],
+                                kv_lora_rank, n_kv,
+                                ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
+                                ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
+                        cb(kv_cache_lora, "kv_cache_lora", il);
+
+                        kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, sparse_mask_fa, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                    }
                     cb(kqv_compressed, "kqv_compressed", il);
 
                     if (use_f32_attn_precision) {
                         ggml_flash_attn_ext_set_prec(kqv_compressed, GGML_PREC_F32);
+                    }
+                    if (use_dsa && dsa_last_full_sorted) {
+                        kqv_compressed->src[5] = dsa_last_full_sorted;
                     }
 
                     kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
@@ -1202,7 +1241,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    if (lctx.cparams.dsa && model.arch == LLM_ARCH_GLM_DSA) {
+    if (dsa_should_use(lctx)) {
         static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
         if (n_sink > 0 && n_sink < (int) n_kv) {
             lctx.inp_dsa_sink = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
@@ -1210,13 +1249,26 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             ggml_set_input(lctx.inp_dsa_sink);
             ggml_build_forward_expand(gf, lctx.inp_dsa_sink);
         }
-        auto minus_inf = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, KQ_mask->ne[0], n_tokens);
-        minus_inf = ggml_fill_inplace(ctx0, minus_inf, -INFINITY);
-        ggml_build_forward_expand(gf, minus_inf);
-        lctx.inp_mask_inf = minus_inf;
+        if (dsa_can_use_fast_path(lctx, n_tokens, n_kv)) {
+            // For DSA token generation (i.e., n_tokens = 1), when we have more than n_top_k entries in the KV cache,
+            // we can simply pick the selected n_top_k entries from the cache via ggml_get_rows, so the mask we
+            // require is all ON (ideally we shouldn't require a mask, but I think we have places in the FA
+            // implementation which assume that there is a mask).
+            int n_top_k = dsa_n_top_k(lctx);
+            int n_padded = GGML_PAD(n_top_k, 256);
+            auto minus_inf = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_padded*KQ_mask->ne[1] - n_top_k);
+            minus_inf = ggml_fill_inplace(ctx0, minus_inf, -INFINITY);
+            auto zero = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_top_k);
+            zero = ggml_fill_inplace(ctx0, zero, 0.0f);
+            auto mask = ggml_concat(ctx0, zero, minus_inf, 0);
+            mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
+            mask = ggml_reshape_2d(ctx0, mask, n_padded, KQ_mask->ne[1]);
+            ggml_build_forward_expand(gf, mask);
+            dsa_tg_fast_mask = mask;
+        }
     }
 
-    last_sparse_mask = last_sparse_mask_fa = nullptr;
+    last_sparse_mask = last_sparse_mask_fa = dsa_last_full_sorted = nullptr;
 
     // whether to use n_tokens as the matrix dimension during multiplication or n_head
     // n_tokens is higher during prompt processing, this allows to optimize for this case

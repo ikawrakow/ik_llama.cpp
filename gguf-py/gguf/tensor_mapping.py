@@ -87,6 +87,20 @@ class TensorNameMap:
 
         MODEL_TENSOR.ROPE_FACTORS_LONG: (),
         MODEL_TENSOR.ROPE_FACTORS_SHORT: (),
+
+        # openPangu-2.0 global mHC stream-merge module (non-block)
+        MODEL_TENSOR.MHC_MERGE_PHI: (
+            "model.merge_mhc_module.phi",
+        ),
+        MODEL_TENSOR.MHC_MERGE_ALPHA: (
+            "model.merge_mhc_module.branch_alpha_pre",
+        ),
+        MODEL_TENSOR.MHC_MERGE_BETA: (
+            "model.merge_mhc_module.branch_beta_pre",
+        ),
+        MODEL_TENSOR.MHC_MERGE_GAMMA: (
+            "model.merge_mhc_module.norm_gamma",
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -695,6 +709,80 @@ class TensorNameMap:
             ),
             MODEL_TENSOR.FFN_NORM_EXP: (
                 "model.layers.{bid}.post_attention_layernorm",
+            ),
+        },
+        # openPangu-2.0: disambiguate the sandwich norms (post_attention/pre_mlp/post_mlp)
+        # from the generic collisions, and pin all Pangu-only block tensors.
+        MODEL_ARCH.OPENPANGU: {
+            MODEL_TENSOR.ATTN_POST_NORM: (
+                "model.layers.{bid}.post_attention_layernorm",
+            ),
+            MODEL_TENSOR.FFN_NORM: (
+                "model.layers.{bid}.pre_mlp_layernorm",
+            ),
+            MODEL_TENSOR.FFN_POST_NORM: (
+                "model.layers.{bid}.post_mlp_layernorm",
+            ),
+            MODEL_TENSOR.BLOCK_POST_NORM: (
+                "model.layers.{bid}.block_post_layernorm",
+            ),
+            MODEL_TENSOR.FFN_EXP_PROBS_B: (
+                "model.layers.{bid}.mlp.e_score_correction",
+            ),
+            # DSA lightning indexer
+            MODEL_TENSOR.INDEXER_K_NORM: (
+                "model.layers.{bid}.self_attn.indexer.k_norm",
+            ),
+            MODEL_TENSOR.INDEXER_PROJ: (
+                "model.layers.{bid}.self_attn.indexer.weights_proj",
+            ),
+            MODEL_TENSOR.INDEXER_ATTN_K: (
+                "model.layers.{bid}.self_attn.indexer.wk",
+            ),
+            MODEL_TENSOR.INDEXER_ATTN_Q_B: (
+                "model.layers.{bid}.self_attn.indexer.wq_b",
+            ),
+            # MoME causal convs
+            MODEL_TENSOR.ATTN_QA_CONV: (
+                "model.layers.{bid}.self_attn.qa_conv",
+            ),
+            MODEL_TENSOR.ATTN_KV_CONV: (
+                "model.layers.{bid}.self_attn.compresskv_conv",
+            ),
+            MODEL_TENSOR.ATTN_O_CONV: (
+                "model.layers.{bid}.self_attn.o_conv",
+            ),
+            # learned static param sink
+            MODEL_TENSOR.ATTN_PARAM_SINK_KV: (
+                "model.layers.{bid}.self_attn.param_sink_compressed_kv",
+            ),
+            MODEL_TENSOR.ATTN_PARAM_SINK_K_PE: (
+                "model.layers.{bid}.self_attn.param_sink_k_pe",
+            ),
+            # mHC / Hyper-Connections (per attn + per mlp)
+            MODEL_TENSOR.MHC_ATTN_PHI: (
+                "model.layers.{bid}.attn_mhc_module.phi",
+            ),
+            MODEL_TENSOR.MHC_ATTN_ALPHA: (
+                "model.layers.{bid}.attn_mhc_module.branch_alpha",
+            ),
+            MODEL_TENSOR.MHC_ATTN_BETA: (
+                "model.layers.{bid}.attn_mhc_module.branch_beta",
+            ),
+            MODEL_TENSOR.MHC_ATTN_GAMMA: (
+                "model.layers.{bid}.attn_mhc_module.norm_gamma",
+            ),
+            MODEL_TENSOR.MHC_MLP_PHI: (
+                "model.layers.{bid}.mlp_mhc_module.phi",
+            ),
+            MODEL_TENSOR.MHC_MLP_ALPHA: (
+                "model.layers.{bid}.mlp_mhc_module.branch_alpha",
+            ),
+            MODEL_TENSOR.MHC_MLP_BETA: (
+                "model.layers.{bid}.mlp_mhc_module.branch_beta",
+            ),
+            MODEL_TENSOR.MHC_MLP_GAMMA: (
+                "model.layers.{bid}.mlp_mhc_module.norm_gamma",
             ),
         },
     }

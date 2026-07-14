@@ -35,6 +35,7 @@ struct common_speculative_checkpoint {
 struct common_speculative_draft_result {
     llama_tokens tokens;
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+    bool target_only = false;
 };
 
 // comma separated list of all types
@@ -82,6 +83,13 @@ void common_speculative_free(common_speculative * spec);
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt);
 
+// apply per-request runtime parameters before prompt warmup can touch companion state
+void common_speculative_prepare_request(common_speculative * spec, common_params_speculative & params);
+
+// true when the active request drafts with more MTP heads than the cached prefix was
+// warmed with; the caller must then reprocess the prompt from position 0
+bool common_speculative_mtp_requires_fresh_warmup(const common_speculative * spec);
+
 // sample up to n_draft tokens and add them to the batch using the draft model
 // draft_base_pos/draft_seq_id override the MTP position for id_last
 llama_tokens common_speculative_draft(
@@ -100,6 +108,8 @@ common_speculative_draft_result common_speculative_draft_ex(
                             llama_token   id_last,
                             llama_pos     draft_base_pos = -1,
                             llama_seq_id  draft_seq_id = 0);
+
+int common_speculative_get_configured_n_max(const common_speculative * spec);
 
 // informs the speculative decoder that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, uint16_t n_accepted);

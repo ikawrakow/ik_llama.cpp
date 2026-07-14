@@ -20,6 +20,24 @@ json result_timings::to_json() const {
     if (draft_n > 0) {
         base["draft_n"] = draft_n;
         base["draft_n_accepted"] = draft_n_accepted;
+        if (!draft_n_by_depth.empty()) {
+            json by_depth = json::array();
+            for (size_t i = 0; i < draft_n_by_depth.size(); ++i) {
+                if (draft_n_by_depth[i] <= 0) {
+                    continue;
+                }
+                const int32_t accepted = i < draft_n_accepted_by_depth.size()
+                    ? draft_n_accepted_by_depth[i] : 0;
+                by_depth.push_back({
+                    {"depth",              (int32_t) i + 1},
+                    {"draft_n",            draft_n_by_depth[i]},
+                    {"draft_n_accepted",   accepted},
+                });
+            }
+            if (!by_depth.empty()) {
+                base["draft_by_depth"] = by_depth;
+            }
+        }
     }
 
     return base;
@@ -1073,7 +1091,7 @@ size_t server_prompt_cache::n_tokens() const {
 
 }
 
-bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot, float min_reusable_fraction) {
     thinking_tokens think_tokens;
     for (auto it = states.begin(); it != states.end(); ++it) {
         think_tokens = it->think_tokens;
@@ -1107,6 +1125,9 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
         }
         const auto lcp_cur = tokens.get_common_prefix(ctx, tokens_new_ex);
         const float f_keep_cur = float(lcp_cur.first) / tokens.size();
+        if (f_keep_cur < min_reusable_fraction) {
+            continue;
+        }
         const float sim_cur = tokens.get_tokens_similarity(ctx, tokens_new_ex, it->n_kept_prompt, it->n_discarded_prompt);
         if (sim_best < sim_cur) {
             f_keep_best = f_keep_cur;

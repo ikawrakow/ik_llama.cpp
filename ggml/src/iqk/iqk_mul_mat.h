@@ -68,7 +68,7 @@ IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv,      // v*softmax(scale*(k*q))
                             void * work_buffer, barrier_t barrier, void * barrier_data,
-                            int ith, int nth, int n_swa);
+                            int ith, int nth, int n_swa, struct ggml_tensor * indexer);
 
 IQK_API void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
         float * weights, int32_t * ids, int ith, int nth);
@@ -77,6 +77,9 @@ IQK_API bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int r
         size_t vnb1, size_t vnb2, size_t vnb3,
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
         const float * state_in, float * out_data, float * state_out, float * saved_steps, int state_step_stride, int ith, int nth);
+
+IQK_API bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t barrier, void * barrier_data, int ith, int nth);
+IQK_API size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread);
 
 #ifdef __cplusplus
 }

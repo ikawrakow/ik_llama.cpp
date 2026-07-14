@@ -817,7 +817,7 @@ void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
             auto deltas_l = _mm_unpacklo_epi16(deltas128, deltas128);
             auto deltas_h = _mm_unpackhi_epi16(deltas128, deltas128);
             auto deltas = MM256_SET_M128I(deltas_h, deltas_l); // blocks 0,0, 1,1, 2,2, ..., 7,7
-            auto all_scales = MM256_SET_M128I(scales128, scales128);
+            auto all_scales = MM256_SET1_M128I(scales128);
             auto shuffle = shuffle0;
             for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
                 scales[ib64] = _mm256_shuffle_epi8(all_scales, shuffle);
@@ -883,7 +883,7 @@ void mul_mat_iq1_m_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
             auto qs = iq1m[ibl].qs;
             auto qh = iq1m[ibl].qh;
             auto aux = _mm_loadl_epi64((const __m128i *)iq1m[ibl].scales);
-            auto sc16 = _mm256_shuffle_epi8(MM256_SET_M128I(aux, aux), scale_shuffle);
+            auto sc16 = _mm256_shuffle_epi8(MM256_SET1_M128I(aux), scale_shuffle);
             sc16 = _mm256_and_si256(sc16, _mm256_set1_epi64x(0x0e0001c000380007));
             sc16 = _mm256_mullo_epi16(sc16, _mm256_set1_epi64x(0x0001000800400200));
             helper.vec = _mm256_add_epi8(_mm256_srli_epi16(sc16, 8), _mm256_set1_epi16(1));
@@ -1036,7 +1036,7 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                 auto delta4 = _mm_mul_ps(_mm_set1_ps(0.0625f), _mm_cvtepi32_ps(_mm_cvtepi16_epi32(signs)));
                 auto delta = _mm256_set_m128(delta4, delta4);
                 scales4 = _mm_unpacklo_epi16(scales4, scales4); // 0,0, 1,1, 2,2, 3,3
-                auto scales = MM256_SET_M128I(scales4, scales4);
+                auto scales = MM256_SET1_M128I(scales4);
                 auto idxl = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)x[4*ib+k].qs));
                 idxh = _mm256_sllv_epi64(idxh, _mm256_set_epi64x(0, 2, 5, 8));
                 idxh = _mm256_srlv_epi64(idxh, _mm256_set_epi64x(1, 0, 0, 0));
@@ -1118,7 +1118,7 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
 
                 auto signs128 = _mm_or_si128(_mm_cmpeq_epi8(_mm_and_si128(idxh, ms), ms), _mm_set1_epi8(1));
                 signs128 = _mm_add_epi8(_mm_set1_epi8(-8), signs128);
-                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto signs = MM256_SET1_M128I(signs128);
                 auto idxl = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)x[4*ib+k].qs));
                 idxh = _mm_and_si128(idxh, _mm_set1_epi8(0x07));
                 helper.vec = _mm256_or_si256(idxl, _mm256_slli_epi16(_mm256_cvtepu8_epi16(idxh), 8));
@@ -1228,7 +1228,7 @@ struct DequantizerIQ1BN {
 
     IQK_ALWAYS_INLINE void prepare_iq1bn_quants(const block_iq1_bn * x, __m256i& v1, __m256i& v2) const {
         auto data128 = _mm_loadu_si128((const __m128i *)x);  // Note: we load 16 instead of 13 bytes!
-        auto data = MM256_SET_M128I(data128, data128);
+        auto data = MM256_SET1_M128I(data128);
         auto val1 = _mm256_mulhi_epu16(_mm256_mullo_epi16(_mm256_shuffle_epi8(data, shuff[0]), mult[0]), m3);
         auto val2 = _mm256_mulhi_epu16(_mm256_mullo_epi16(_mm256_shuffle_epi8(data, shuff[1]), mult[1]), m3);
         auto val3 = _mm256_mulhi_epu16(_mm256_mullo_epi16(_mm256_shuffle_epi8(data, shuff[2]), mult[2]), m3);
@@ -1476,7 +1476,7 @@ static void mul_mat_q1_0_g128_q8_0(int n, const void * vx, size_t bx, const Data
             }
 #else
             auto bits128 = _mm_loadu_si128((const __m128i *)x[ib].qs);
-            auto bits = MM256_SET_M128I(bits128, bits128);
+            auto bits = MM256_SET1_M128I(bits128);
             for (int k = 0; k < 4; ++k) {
                 qx[k] = _mm256_shuffle_epi8(bits, shuffle[k]);
                 qx[k] = _mm256_cmpeq_epi8(_mm256_and_si256(qx[k], mask), mask);

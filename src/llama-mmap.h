@@ -31,6 +31,8 @@ struct llama_file {
     void write_u32(uint32_t val) const;
     const std::string & get_path() const;
 
+    std::unique_ptr<llama_file> clone() const;
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

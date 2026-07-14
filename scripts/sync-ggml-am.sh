@@ -115,7 +115,6 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
     # src/ggml-cuda/*         -> ggml/src/ggml-cuda/
     # src/ggml-cuda.cu        -> ggml/src/ggml-cuda.cu
     # src/ggml-impl.h         -> ggml/src/ggml-impl.h
-    # src/ggml-kompute.cpp    -> ggml/src/ggml-kompute.cpp
     # src/ggml-metal.m        -> ggml/src/ggml-metal.m
     # src/ggml-quants.c       -> ggml/src/ggml-quants.c
     # src/ggml-quants.h       -> ggml/src/ggml-quants.h
@@ -131,7 +130,6 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
     # include/ggml-blas.h    -> ggml/include/ggml-blas.h
     # include/ggml-cann.h    -> ggml/include/ggml-cann.h
     # include/ggml-cuda.h    -> ggml/include/ggml-cuda.h
-    # include/ggml-kompute.h -> ggml/include/ggml-kompute.h
     # include/ggml-metal.h   -> ggml/include/ggml-metal.h
     # include/ggml-rpc.h     -> ggml/include/ggml-rpc.h
     # include/ggml-sycl.h    -> ggml/include/ggml-sycl.h
@@ -162,7 +160,6 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
         -e 's/([[:space:]]|[ab]\/)src\/ggml-cuda\//\1ggml\/src\/ggml-cuda\//g' \
         -e 's/([[:space:]]|[ab]\/)src\/ggml-cuda\.cu/\1ggml\/src\/ggml-cuda.cu/g' \
         -e 's/([[:space:]]|[ab]\/)src\/ggml-impl\.h/\1ggml\/src\/ggml-impl.h/g' \
-        -e 's/([[:space:]]|[ab]\/)src\/ggml-kompute\.cpp/\1ggml\/src\/ggml-kompute.cpp/g' \
         -e 's/([[:space:]]|[ab]\/)src\/ggml-metal\.m/\1ggml\/src\/ggml-metal.m/g' \
         -e 's/([[:space:]]|[ab]\/)src\/ggml-quants\.c/\1ggml\/src\/ggml-quants.c/g' \
         -e 's/([[:space:]]|[ab]\/)src\/ggml-quants\.h/\1ggml\/src\/ggml-quants.h/g' \
@@ -177,7 +174,6 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
         -e 's/([[:space:]]|[ab]\/)include\/ggml-blas\.h/\1ggml\/include\/ggml-blas.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-cann\.h/\1ggml\/include\/ggml-cann.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-cuda\.h/\1ggml\/include\/ggml-cuda.h/g' \
-        -e 's/([[:space:]]|[ab]\/)include\/ggml-kompute\.h/\1ggml\/include\/ggml-kompute.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-metal\.h/\1ggml\/include\/ggml-metal.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-rpc\.h/\1ggml\/include\/ggml-rpc.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-sycl\.h/\1ggml\/include\/ggml-sycl.h/g' \

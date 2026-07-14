@@ -326,21 +326,28 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q8_0(
     for (int k_KQ_0 = 0; k_KQ_0 < Dk/sizeof(int); k_KQ_0 += WARP_SIZE) {
         const int k_KQ = k_KQ_0 + threadIdx.x;
 
-        const int ib  = k_KQ / QI8_0;
-        const int iqs = k_KQ % QI8_0;
+        // Ragged-tail guard (mirrors mainline llama.cpp fattn-vec.cuh:169). For a chunk that fully
+        // fits (k_KQ_0 + WARP_SIZE <= Dk/sizeof(int)) the predicate is a compile-time constant true
+        // and folds away -> byte-identical for aligned Dk (128/256). For the ragged tail of Dk=576
+        // (144 int32 = 4.5*WARP_SIZE) the out-of-bounds lanes (k_KQ >= 144) skip the K-block read
+        // (ib would be 18/19 > last valid block 17 -> OOB -> NaN) and contribute 0 to the warp sum.
+        if (k_KQ_0 + WARP_SIZE <= Dk/(int)sizeof(int) || k_KQ < Dk/(int)sizeof(int)) {
+            const int ib  = k_KQ / QI8_0;
+            const int iqs = k_KQ % QI8_0;
 
-        const int v = get_int_b2(K_q8_0[ib].qs, iqs);
+            const int v = get_int_b2(K_q8_0[ib].qs, iqs);
 
-        T Q_d;
-        if (std::is_same<T, half>::value) {
-            const half2  * Q_ds = (const half2  *) Q_ds_v;
-            Q_d = __low2half(Q_ds[k_KQ_0/WARP_SIZE]);
-        } else {
-            const float2 * Q_ds = (const float2 *) Q_ds_v;
-            Q_d = Q_ds[k_KQ_0/WARP_SIZE].x;
+            T Q_d;
+            if (std::is_same<T, half>::value) {
+                const half2  * Q_ds = (const half2  *) Q_ds_v;
+                Q_d = __low2half(Q_ds[k_KQ_0/WARP_SIZE]);
+            } else {
+                const float2 * Q_ds = (const float2 *) Q_ds_v;
+                Q_d = Q_ds[k_KQ_0/WARP_SIZE].x;
+            }
+
+            sum += vec_dot_q8_0_q8_1_impl<T, 1>(&v, &Q_q8[k_KQ_0/WARP_SIZE], K_q8_0[ib].d, Q_d);
         }
-
-        sum += vec_dot_q8_0_q8_1_impl<T, 1>(&v, &Q_q8[k_KQ_0/WARP_SIZE], K_q8_0[ib].d, Q_d);
     }
 
     return sum;
@@ -388,14 +395,21 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_f16(
     return sum;
 }
 
-template <typename Tds>
+// ni = number of valid lanes for this chunk (compile-time). For a chunk that fully covers
+// WARP_SIZE int32 words ni == WARP_SIZE and every guard below is provably always-true, so the
+// compiler eliminates it (byte-identical to the unguarded version). For a ragged tail chunk
+// (e.g. Dk=576 -> the i0=128 chunk has only 144-128=16 valid int32 words) ni < WARP_SIZE and the
+// guards engage: the out-of-bounds lanes read 0 (no OOB Q load), and skip the yq32 / yds writes
+// (no clobber of the trailing q8_1 scale region / no OOB scale write). Mirrors mainline
+// llama.cpp fattn-common.cuh quantize_q8_1_to_shared<Tds, ni> (lane guards :338 / :366).
+template <typename Tds, int ni = WARP_SIZE>
 static __device__ __forceinline__ void quantize_q8_1_to_shared(
     const float * __restrict__ x, const float scale, int * __restrict__ yq32, void * __restrict__ yds) {
 
     float vals[sizeof(int)] = {0.0f};
 #pragma unroll
     for (int l = 0; l < sizeof(int); ++l) {
-        vals[l] = scale * x[4*threadIdx.x + l];
+        vals[l] = (ni == WARP_SIZE || threadIdx.x < ni) ? scale * x[4*threadIdx.x + l] : 0.0f;
     }
 
     float amax = fabsf(vals[0]);
@@ -422,8 +436,10 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
         }
     }
 
-    yq32[threadIdx.x] = q32;
-    if (threadIdx.x % QI8_1 == 0) {
+    if (ni == WARP_SIZE || threadIdx.x < ni) {
+        yq32[threadIdx.x] = q32;
+    }
+    if (threadIdx.x % QI8_1 == 0 && (ni == WARP_SIZE || threadIdx.x < ni)) {
         if (std::is_same<Tds, half2>::value) {
             ((half2  *) yds)[threadIdx.x/QI8_1] =  make_half2(d, sum);
         } else {

@@ -388,10 +388,30 @@ struct llama_layer {
 
     struct llama_layer_nextn nextn;
 
+    // openPangu-2.0: MoME causal convs + learned static param sink + mHC + block post-norm
+    struct ggml_tensor * qa_conv          = nullptr;
+    struct ggml_tensor * kv_conv          = nullptr; // compresskv_conv
+    struct ggml_tensor * o_conv           = nullptr;
+    struct ggml_tensor * param_sink_kv    = nullptr;
+    struct ggml_tensor * param_sink_k_pe  = nullptr;
+    struct ggml_tensor * param_sink_blk   = nullptr;
+    struct ggml_tensor * param_sink_lat_t = nullptr;
+    struct ggml_tensor * block_post_norm  = nullptr;
+    struct ggml_tensor * mhc_attn_phi     = nullptr;
+    struct ggml_tensor * mhc_attn_alpha   = nullptr;
+    struct ggml_tensor * mhc_attn_beta    = nullptr;
+    struct ggml_tensor * mhc_attn_gamma   = nullptr;
+    struct ggml_tensor * mhc_mlp_phi      = nullptr;
+    struct ggml_tensor * mhc_mlp_alpha    = nullptr;
+    struct ggml_tensor * mhc_mlp_beta     = nullptr;
+    struct ggml_tensor * mhc_mlp_gamma    = nullptr;
+
     std::unique_ptr<ggml_tensor> computed_wk_b;
     std::unique_ptr<ggml_tensor> computed_wk_b_pp;
     std::unique_ptr<ggml_tensor> computed_wv_b;
     std::unique_ptr<ggml_tensor> computed_wkv_b;
+    std::unique_ptr<ggml_tensor> computed_param_sink_blk;
+    std::unique_ptr<ggml_tensor> computed_param_sink_lat_t;
 
     // Per-device replicas of computed wk_b/wv_b (-sm graph). Buffers owned via model.bufs.
     std::vector<std::unique_ptr<ggml_tensor>> computed_wk_b_replicas;
@@ -441,6 +461,12 @@ struct llama_model {
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
     struct ggml_tensor * output_mtp = nullptr;
+
+    // openPangu-2.0: global mHC stream-merge module (non-block)
+    struct ggml_tensor * mhc_merge_phi   = nullptr;
+    struct ggml_tensor * mhc_merge_alpha = nullptr;
+    struct ggml_tensor * mhc_merge_beta  = nullptr;
+    struct ggml_tensor * mhc_merge_gamma = nullptr;
 
     std::unique_ptr<ggml_tensor> output_mtp_ptr;
 
@@ -545,7 +571,7 @@ struct llama_model {
         return hadamard_size(hparams.n_embd_head_v(il));
     }
 
-    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const;
+    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const;
 
     void set_tensor_overrides(const llama_model_params& params);
 
