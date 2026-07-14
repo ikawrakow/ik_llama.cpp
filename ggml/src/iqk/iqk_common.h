@@ -11,12 +11,15 @@
 
 #include "iqk_config.h"
 
+// needed by the popcount() helpers below, which live outside the
+// IQK_IMPLEMENT block
+#include <cstdint>
+
 #if defined IQK_IMPLEMENT
 
 #include <cstring>
 #include <type_traits>
 #include <vector>
-#include <cstdint>
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"

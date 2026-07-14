@@ -619,10 +619,10 @@ float iqk_exp_with_thresh(int n, float * logits, float max, float min) {
     //return result[0] + result[1];
 }
 
-bool iqk_ssm_conv4(int nr, int nc, int nt,
-        uint64_t nb01, uint64_t nb10, uint64_t nb11, uint64_t nb21,
-        const float * x0_in, const float * s0_in, const float * c_in,
-        float * dst, float * dst_silu, int ith, int nth) {
+bool iqk_ssm_conv4([[maybe_unused]] int nr, [[maybe_unused]] int nc, [[maybe_unused]] int nt,
+        [[maybe_unused]] uint64_t nb01, [[maybe_unused]] uint64_t nb10, [[maybe_unused]] uint64_t nb11, [[maybe_unused]] uint64_t nb21,
+        [[maybe_unused]] const float * x0_in, [[maybe_unused]] const float * s0_in, [[maybe_unused]] const float * c_in,
+        [[maybe_unused]] float * dst, [[maybe_unused]] float * dst_silu, [[maybe_unused]] int ith, [[maybe_unused]] int nth) {
 #if defined __AVX2__
     if (nt <= 32 || nc != 4 || nr%16 != 0) {
         return false;
