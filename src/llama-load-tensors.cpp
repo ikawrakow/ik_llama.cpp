@@ -4179,6 +4179,24 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
     }
 }
 
+// GGUF may store attn_k_b/attn_v_b as a 2D tensor [head_dim, n_head*inner] (the ik DSV2-Lite
+// converter folds all heads into ne[1]) instead of the 3D per-head form [head_dim, inner, n_head]
+// used by the non-lite / GLM-DSA create paths. The MLA distribution below splits these per head
+// (split_dim=2), which requires the head count to live in ne[2]. If it is left folded into ne[1],
+// prepare_split_tensors builds [head_dim, n_head*inner, split_heads] split shapes — n_head times
+// too large — and the split_dim==2 set_tensor loop reads n_head*ggml_nbytes(tensor) bytes off the
+// host source, running past the end of the loaded tensor (host OOB -> SIGSEGV during model load).
+// Reinterpret the contiguous 2D layout as 3D in place: heads are the outermost stride of the folded
+// ne[1], so this is a pure metadata reshape and ggml_nbytes is unchanged.
+static void reshape_folded_heads_to_3d(ggml_tensor * t, int n_head) {
+    if (!t || t->ne[2] != 1 || t->ne[3] != 1) return;   // already 3D (non-lite path) or N/A
+    GGML_ASSERT(n_head > 0 && t->ne[1] % n_head == 0);
+    t->ne[1] /= n_head;
+    t->ne[2]  = n_head;
+    t->nb[2]  = t->nb[1] * t->ne[1];
+    t->nb[3]  = t->nb[2] * t->ne[2];
+}
+
 // MLA tensor distribution for -sm graph / -sm attn.
 // q_a/wkv_a_mqa/norms replicated; q_b row-split by Q head; wo row-split.
 // wk_b/wv_b are per-head split (split_dim=2) — loaded directly when present
@@ -4231,14 +4249,17 @@ static void distribute_mla_tensors_for_split_mode_graph(
         prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_wq_cols, mem_used);
     }
 
-    // wkv_a_mqa, wk_b, wv_b replicated: the per-head 3D batched mul_mat can't read a split src0.
+    // wkv_a_mqa is replicated (mirror): its per-head 3D batched mul_mat can't read a split src0.
+    // wk_b/wv_b are split per head (split_dim=2); reshape a 2D folded-head GGUF layout to 3D first.
     if (layer.wkv_a_mqa) {
         prepare_split_tensors(-1, ctx_split, layer.wkv_a_mqa, layer.split_wkv_a_mqa, mirror, mem_used);
     }
     if (layer.wk_b) {
+        reshape_folded_heads_to_3d(layer.wk_b, n_head);
         prepare_split_tensors( 2, ctx_split, layer.wk_b, layer.split_wk_b, split_heads, mem_used);
     }
     if (layer.wv_b) {
+        reshape_folded_heads_to_3d(layer.wv_b, n_head);
         prepare_split_tensors( 2, ctx_split, layer.wv_b, layer.split_wv_b, split_heads, mem_used);
     }
 
