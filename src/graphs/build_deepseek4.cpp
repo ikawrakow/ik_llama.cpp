@@ -248,10 +248,6 @@ static ggml_tensor * dsv4_require_f32_rows(
     return ggml_cast(ctx, t, GGML_TYPE_F32);
 }
 
-static ggml_tensor * dsv4_cache_read_f32(ggml_context * ctx, ggml_tensor * t) {
-    return t != nullptr && ggml_is_quantized(t->type) ? ggml_cast(ctx, t, GGML_TYPE_F32) : t;
-}
-
 static ggml_tensor * dsv4_cache_stream_view_3d(
         ggml_context * ctx,
         ggml_tensor  * cache,
@@ -324,9 +320,7 @@ static ggml_tensor * dsv4_raw_get_k(
     ggml_tensor * idxs = raw_k_read_idxs->type == GGML_TYPE_I32
             ? raw_k_read_idxs : ggml_cast(ctx, raw_k_read_idxs, GGML_TYPE_I32);
     ggml_tensor * rows = ggml_get_rows(ctx, cache_2d, idxs);
-    if (ggml_is_quantized(cache->type)) {
-        rows = ggml_cast(ctx, rows, GGML_TYPE_F32);
-    } else if (rows->type != cache->type) {
+    if (rows->type != cache->type && !ggml_is_quantized(cache->type)) {
         rows = ggml_cast(ctx, rows, cache->type);
     }
 
@@ -406,10 +400,10 @@ static ggml_tensor * dsv4_comp_get_k(
     }
 
     if (comp.sinfo.n_stream() == 0) {
-        return dsv4_cache_read_f32(ctx, ggml_reshape_4d(ctx, dsv4_cache_view_3d(ctx, cache, n_embd_head, n_kv), n_embd_head, 1, n_kv, 1));
+        return ggml_reshape_4d(ctx, dsv4_cache_view_3d(ctx, cache, n_embd_head, n_kv), n_embd_head, 1, n_kv, 1);
     }
 
-    return dsv4_cache_read_f32(ctx, dsv4_cache_stream_view_4d(ctx, cache, n_embd_head, n_kv, kv_size, comp.sinfo.s0, (int64_t) comp.sinfo.n_stream()));
+    return dsv4_cache_stream_view_4d(ctx, cache, n_embd_head, n_kv, kv_size, comp.sinfo.s0, (int64_t) comp.sinfo.n_stream());
 }
 
 static ggml_tensor * dsv4_comp_cpy_k(
@@ -1208,9 +1202,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         if (raw_k_write == nullptr) {
             llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, kv, nullptr, n_tokens, kv_head, cb, il);
         }
-        if (model.arch != LLM_ARCH_DEEPSEEK4) {
-            llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, nullptr, kv, n_tokens, kv_head, cb, il);
-        }
+        llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, nullptr, kv, n_tokens, kv_head, cb, il);
 
         ggml_tensor * raw_k = nullptr;
         if (hparams.n_head_kv(il) == 1 && lctx.dsv4.inputs.raw_k_read_idxs != nullptr) {

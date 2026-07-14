@@ -14,23 +14,6 @@
 #include <type_traits>
 #include <unordered_set>
 
-static bool dsv4_cache_type_supported(ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
-}
-
-static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char * name) {
-    if (!dsv4_cache_type_supported(type)) {
-        LLAMA_LOG_ERROR("%s: unsupported DSV4 %s cache type %s\n", __func__, name, ggml_type_name(type));
-        return false;
-    }
-    if (ggml_is_quantized(type) && width % ggml_blck_size(type) != 0) {
-        LLAMA_LOG_ERROR("%s: DSV4 %s cache width %lld is not aligned to %d elements for %s\n",
-                __func__, name, (long long) width, ggml_blck_size(type), ggml_type_name(type));
-        return false;
-    }
-    return true;
-}
-
 static ggml_backend_buffer_type_t llama_dsv4_layer_buft(const llama_context & lctx, int32_t il) {
     if (il >= 0 && il < (int32_t) lctx.model.buft_layer.size() && lctx.model.buft_layer[il].buft != nullptr) {
         return lctx.model.buft_layer[il].buft;
@@ -811,11 +794,6 @@ bool llama_context::ensure_dsv4_cache_tensors() {
     const uint32_t csa_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, dsv4_runtime::CSA_RATIO), 256u);
     const uint32_t hca_kv = GGML_PAD(dsv4_comp_size(cparams.n_ctx, dsv4_runtime::HCA_RATIO), 256u);
 
-    if (!dsv4_validate_cache_type(kv_self.type_k, n_embd_head, "raw/CSA/HCA") ||
-        !dsv4_validate_cache_type(cparams.idx_type_k, n_indexer_head, "LID")) {
-        return false;
-    }
-
     if (dsv4.cache.cache_ctx != nullptr &&
         (int32_t) dsv4.cache.csa_k.size() == n_layer &&
         dsv4.cache.n_stream == n_stream) {
@@ -867,7 +845,7 @@ bool llama_context::ensure_dsv4_cache_tensors() {
 
         if (ratio == dsv4_runtime::CSA_RATIO) {
             cache.csa_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_embd_head, csa_kv*n_stream, 1);
-            cache.lid_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, cparams.idx_type_k, n_indexer_head, csa_kv*n_stream, 1);
+            cache.lid_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_indexer_head, csa_kv*n_stream, 1);
             cache.csa_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_embd_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
             cache.csa_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_embd_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
             cache.lid_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
@@ -897,32 +875,6 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             }
         }
     }
-
-    auto bytes = [](const auto & tensors) {
-        size_t total = 0;
-        for (const ggml_tensor * tensor : tensors) {
-            if (tensor != nullptr) {
-                total += ggml_nbytes(tensor);
-            }
-        }
-        return total;
-    };
-
-    const size_t csa_k_bytes = bytes(cache.csa_k);
-    const size_t hca_k_bytes = bytes(cache.hca_k);
-    const size_t lid_k_bytes = bytes(cache.lid_k);
-    const size_t csa_state_bytes = bytes(cache.csa_state_kv) + bytes(cache.csa_state_score);
-    const size_t hca_state_bytes = bytes(cache.hca_state_kv) + bytes(cache.hca_state_score);
-    const size_t lid_state_bytes = bytes(cache.lid_state_kv) + bytes(cache.lid_state_score);
-
-    LLAMA_LOG_INFO("%s: DSV4 cache: CSA K=%7.2f MiB (%s), HCA K=%7.2f MiB (%s), LID K=%7.2f MiB (%s), states=%7.2f MiB, total=%7.2f MiB, streams=%u\n",
-            __func__,
-            (float) csa_k_bytes / (1024.0f * 1024.0f), ggml_type_name(kv_self.type_k),
-            (float) hca_k_bytes / (1024.0f * 1024.0f), ggml_type_name(kv_self.type_k),
-            (float) lid_k_bytes / (1024.0f * 1024.0f), ggml_type_name(cparams.idx_type_k),
-            (float) (csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
-            (float) (csa_k_bytes + hca_k_bytes + lid_k_bytes + csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
-            n_stream);
 
     return true;
 }

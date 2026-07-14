@@ -2266,9 +2266,6 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         }
         return size;
     }
-    if (arch == LLM_ARCH_DEEPSEEK4) {
-        return ggml_row_size(type_k, hparams.n_embd_head_k(il)) * hparams.n_head_kv(il) * kv_size;
-    }
     bool is_mla_attn = arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
     if (is_mla_attn && mla_attn) {
         auto n_embd_head_qk_rope = hparams.n_rot;
