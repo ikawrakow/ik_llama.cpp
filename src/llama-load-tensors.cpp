@@ -2734,7 +2734,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN &) {
     LOADING_PRELUDE
 
     auto create_tensor_from_meta = [&](ggml_context * ctx, const std::string & name, int flags = 0) -> ggml_tensor * {

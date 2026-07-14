@@ -8713,6 +8713,7 @@ int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx) {
 
 void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
+    llama_reset_dsv4_state(ctx);
 }
 
 // Unified speculative-checkpoint

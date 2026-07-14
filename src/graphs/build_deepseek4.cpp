@@ -103,6 +103,10 @@ static ggml_tensor * dsv4_append_zero_row(ggml_context * ctx, ggml_tensor * t, b
 }
 
 static ggml_tensor * dsv4_with_zero_dep(ggml_context * ctx, ggml_tensor * t, ggml_tensor * dep) {
+    // Consumers of t must depend on dep so compression/current-cache work completes
+    // before state persistence or dependent cache reads, graph expansion order alone
+    // is not a scheduler data dependency. Keep the typed scalar/add1 form because
+    // the F16 raw-K path requires it.
     if (dep == nullptr) {
         return t;
     }
@@ -557,7 +561,6 @@ static ggml_tensor * build_hc_pre(
         ggml_tensor ** post,
         ggml_tensor ** comb) {
     const int64_t hc         = hparams.dsv4_hc_mult;
-    const int64_t hc_mix_dim = (2 + hc)*hc;
     const int64_t nt         = x->ne[2];
 
     ggml_tensor * mixes = llm.build_mhc_pre_projection(x, hc_fn, nullptr,
@@ -600,7 +603,6 @@ static ggml_tensor * build_hc_head(
         ggml_tensor * hc_scale,
         ggml_tensor * hc_base) {
     const int64_t hc     = hparams.dsv4_hc_mult;
-    const int64_t nt     = x->ne[2];
 
     ggml_tensor * mixes = llm.build_mhc_pre_projection(x, hc_fn, nullptr,
             n_embd, hc, norm_rms_eps, false);
@@ -1167,14 +1169,12 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
         cb(raw_mask, "dsv4_raw_mask_padded", il);
         ggml_tensor * attn = nullptr;
-        const char * attn_path = "raw";
 
         if (ratio == llama_context::dsv4_runtime::CSA_RATIO &&
                 lctx.dsv4.inputs.csa.kq_mask != nullptr &&
                 lctx.dsv4.csa_plan.n_kv > 0 &&
                 lctx.dsv4.lid_plan.n_kv > 0 &&
                 !cparams.k_cache_hadamard) {
-            attn_path = "csa";
             ggml_tensor * csa_k = dsv4_comp_get_k(ctx0,
                     lctx.dsv4.cache.csa_k[(size_t) il],
                     lctx.dsv4.csa_ctx,
@@ -1215,7 +1215,6 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 std::any_of(lctx.dsv4.hca_plan.n_visible.begin(), lctx.dsv4.hca_plan.n_visible.end(),
                         [](int32_t n_visible) { return n_visible > 0; }) &&
                 !cparams.k_cache_hadamard) {
-            attn_path = "hca";
             ggml_tensor * hca_k = dsv4_comp_get_k(ctx0,
                     lctx.dsv4.cache.hca_k[(size_t) il],
                     lctx.dsv4.hca_ctx,

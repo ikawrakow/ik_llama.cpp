@@ -325,7 +325,7 @@ static bool dsv4_build_raw_context(
     }
 
     const llama_kv_cache & kv = lctx.kv_self;
-    if (kv.head < 0 || kv.head + batch.n_tokens > (int32_t) kv.size) {
+    if (kv.head + batch.n_tokens > (int32_t) kv.size) {
         LLAMA_LOG_ERROR("%s: DSV4 raw write slots [%d, %d) are outside kv cache size %u\n",
                 __func__, kv.head, kv.head + batch.n_tokens, kv.size);
         return false;
