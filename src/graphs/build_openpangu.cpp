@@ -1170,8 +1170,6 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_tensor * w3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, w), 1, S, n_tokens);
         ggml_tensor * weighted = ggml_mul(ctx0, R, w3);                            // [H,S,T]
         cur = ggml_reshape_2d(ctx0, ggml_sum_rows_ext(ctx0, weighted, 1), n_embd, n_tokens);
-        //ggml_tensor * wperm = ggml_cont(ctx0, ggml_permute(ctx0, weighted, 1, 0, 2, 3)); // [S,H,T]
-        //cur = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, wperm), n_embd, n_tokens);
     }
 
     // select only the output tokens (the framework binds n_outputs rows, not all n_tokens).
