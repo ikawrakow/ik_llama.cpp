@@ -1028,9 +1028,11 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     auto mhc_pre = [&](ggml_tensor * Rin, ggml_tensor * phi, ggml_tensor * alpha,
                        ggml_tensor * beta, ggml_tensor * gamma,
                        ggml_tensor ** h_post_out, ggml_tensor ** h_res_out) {
-        ggml_tensor * flat = ggml_reshape_2d(ctx0, ggml_cont(ctx0, Rin), n_embd * S, n_tokens);
-        ggml_tensor * normed = ggml_rms_norm(ctx0, flat, hparams.f_norm_rms_eps);
-        normed = ggml_mul(ctx0, normed, gamma);                       // [S*H, T]
+        if (!ggml_is_contiguous(Rin)) {
+            Rin = ggml_cont(ctx0, Rin);
+        }
+        ggml_tensor * flat = ggml_reshape_2d(ctx0, Rin, n_embd * S, n_tokens);
+        ggml_tensor * normed = ggml_fused_rms_norm(ctx0, flat, gamma, hparams.f_norm_rms_eps);
         ggml_tensor * mixes = ggml_mul_mat(ctx0, phi, normed);        // [(S+2)*S, T]
         ggml_tensor * h_pre  = ggml_view_2d(ctx0, mixes, S, n_tokens, mixes->nb[1], 0);
         ggml_tensor * h_post = ggml_view_2d(ctx0, mixes, S, n_tokens, mixes->nb[1], S*ggml_element_size(mixes));
@@ -1045,10 +1047,10 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+eps omitted, inert)
 
         // combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
-        ggml_tensor * hpre3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, h_pre), 1, S, n_tokens);
+        ggml_tensor * hpre3 = ggml_reshape_3d(ctx0, h_pre, 1, S, n_tokens);
         ggml_tensor * weighted = ggml_mul(ctx0, Rin, hpre3);          // [H,S,T]
-        ggml_tensor * wperm = ggml_cont(ctx0, ggml_permute(ctx0, weighted, 1, 0, 2, 3)); // [S,H,T]
-        ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, wperm), n_embd, n_tokens); // sum over S
+        ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows_ext(ctx0, weighted, 1), n_embd, n_tokens);
+        ggml_build_forward_expand(gf, x);
 
         *h_post_out = ggml_cont(ctx0, h_post);
         *h_res_out  = ggml_cont(ctx0, h_res);
