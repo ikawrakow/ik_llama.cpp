@@ -518,6 +518,11 @@ static ggml_tensor * dsv4_build_attn(
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
+        if (kq_mask->type != GGML_TYPE_F16) {
+            kq_mask = ggml_cast(ctx, kq_mask, GGML_TYPE_F16);
+        }
+        kq_mask = ggml_cont(ctx, kq_mask);
+
         if (v_trans) {
             v = ggml_transpose(ctx, v);
         }
