@@ -2721,12 +2721,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--skip-chat-parsing") {
-        CHECK_ARG
         params.force_pure_content_parser = true;
         return true;
     }
     if (arg == "--no-prefill-assistant") {
-        CHECK_ARG
         params.prefill_assistant = false;
         return true;
     }
