@@ -9507,26 +9507,6 @@ struct ggml_tensor * ggml_rope_back(
     return result;
 }
 
-struct ggml_tensor * ggml_rope_ext_back(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        struct ggml_tensor  * c,
-        int                   n_dims,
-        int                   mode,
-        int                   n_ctx_orig,
-        float                 freq_base,
-        float                 freq_scale,
-        float                 ext_factor,
-        float                 attn_factor,
-        float                 beta_fast,
-        float                 beta_slow) {
-    struct ggml_tensor * result = ggml_rope_ext(
-        ctx, a, b, c, n_dims, mode, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-    result->op = GGML_OP_ROPE_BACK;
-    return result;
-}
-
 // ggml_clamp
 
 struct ggml_tensor * ggml_clamp(

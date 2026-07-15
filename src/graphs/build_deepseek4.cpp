@@ -1335,7 +1335,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 ggml_row_size(attn->type, n_embd_head),
                 ggml_row_size(attn->type, n_embd_head) * n_head,
                 ggml_row_size(attn->type, n_embd_head_nope));
-        attn_pe = ggml_rope_ext_back(ctx0, attn_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
+        attn_pe = ggml_rope_back(ctx0, attn_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
                 freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
         cb(attn_pe, "attn_derope", il);
         attn = ggml_concat(ctx0, attn_nope, attn_pe, 0);
