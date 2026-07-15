@@ -3566,7 +3566,6 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_GEMMA4_MTP,
         LLM_ARCH_GEMMA4_ASSISTANT,
         LLM_ARCH_DEEPSEEK2,
-        LLM_ARCH_DEEPSEEK4,
         LLM_ARCH_GLM_DSA,
         LLM_ARCH_MISTRAL4,
         LLM_ARCH_MELLUM,
@@ -9021,7 +9020,11 @@ void llama_spec_ckpt_discard(struct llama_context * ctx) {
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    return llama_kv_cache_seq_rm(ctx->kv_self, seq_id, p0, p1);
+    const bool result = llama_kv_cache_seq_rm(ctx->kv_self, seq_id, p0, p1);
+    if (result && ctx->model.arch == LLM_ARCH_DEEPSEEK4 && p0 <= 0 && p1 < 0) {
+        llama_reset_dsv4_state(ctx, seq_id);
+    }
+    return result;
 }
 
 void llama_kv_cache_seq_cp(struct llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
@@ -10142,13 +10145,11 @@ struct llama_data_read_file : llama_data_read {
     }
 };
 
-// openPangu: refuse state I/O outright until the side state is part of the format. K/V
-// rows alone are not a complete snapshot; the MoME conv slot (s_l) and the DSA
-// indexer cache are needed to resume a sequence, and restoring without them diverges
-// silently instead of failing.
+// Refuse state I/O when private per-position state is not part of the format.
 static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
-    if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
-        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (conv slot and indexer cache are not serialized)\n", func);
+    if (ctx->model.arch == LLM_ARCH_OPENPANGU || ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+        const char * arch = ctx->model.arch == LLM_ARCH_OPENPANGU ? "openPangu" : "DeepSeek4";
+        LLAMA_LOG_ERROR("%s: state save/restore is not supported for %s (private cache and side state are not serialized)\n", func, arch);
         return false;
     }
     return true;
@@ -10310,7 +10311,9 @@ static bool llama_state_save_file_internal(struct llama_context * ctx, const cha
 
     // save the context state using stream saving
     llama_data_write_file data_ctx(&file, ctx->model);
-    llama_state_get_data_internal(ctx, data_ctx);
+    if (llama_state_get_data_internal(ctx, data_ctx) == 0) {
+        return false;
+    }
 
     return true;
 }
@@ -10386,7 +10389,9 @@ static size_t llama_state_seq_save_file_internal(struct llama_context * ctx, con
 
     // save the context state using stream saving
     llama_data_write_file data_ctx(&file, ctx->model);
-    llama_state_seq_get_data_internal(ctx, data_ctx, seq_id, 0);
+    if (llama_state_seq_get_data_internal(ctx, data_ctx, seq_id, 0) == 0) {
+        return 0;
+    }
 
     const size_t res = file.tell();
     GGML_ASSERT(res == sizeof(uint32_t) * 3 + sizeof(llama_token) * n_token_count + data_ctx.get_size_written());

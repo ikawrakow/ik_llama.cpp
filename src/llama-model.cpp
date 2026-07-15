@@ -2206,15 +2206,13 @@ bool llama_model_is_split_mode_graph(const struct llama_model * model) {
 }
 
 bool llama_model_supports_ctx_shift(const struct llama_model * model) {
-    // openPangu's latent K rows carry baked-in rope (k_pe) and the DSA indexer cache is
-    // keyed by absolute position; neither survives K-shift/defrag-style repositioning.
-    return model && model->arch != LLM_ARCH_OPENPANGU;
+    // openPangu and DeepSeek4 keep position-dependent private state outside the generic KV cache.
+    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4;
 }
 
 bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {
-    // openPangu keeps only the current MoME conv state, so a sequence can be extended or
-    // reset, but rewinding into its decoded middle cannot reconstruct the state at that point.
-    return model && model->arch != LLM_ARCH_OPENPANGU;
+    // These architectures cannot reconstruct their private per-position state after a mid-sequence rewind.
+    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4;
 }
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {

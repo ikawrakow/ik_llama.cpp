@@ -955,14 +955,47 @@ void llama_context::free_dsv4_cache_tensors() {
     }
 }
 
-void llama_reset_dsv4_state(llama_context * ctx) {
+void llama_reset_dsv4_state(llama_context * ctx, int32_t seq_id) {
     if (ctx == nullptr) {
         return;
     }
 
-    for (ggml_backend_buffer_t buf : ctx->dsv4.cache.cache_bufs) {
-        ggml_backend_buffer_clear(buf, 0);
+    const uint32_t n_stream = std::max<uint32_t>(1, ctx->dsv4.cache.n_stream);
+    if (seq_id >= (llama_seq_id) n_stream) {
+        LLAMA_LOG_ERROR("%s: DSV4 seq_id %d is outside stream range %u\n", __func__, seq_id, n_stream);
+        return;
     }
+
+    if (seq_id < 0) {
+        for (ggml_backend_buffer_t buf : ctx->dsv4.cache.cache_bufs) {
+            ggml_backend_buffer_clear(buf, 0);
+        }
+        return;
+    }
+
+    auto clear_tensor = [seq_id, n_stream](ggml_tensor * tensor) {
+        if (tensor == nullptr) {
+            return;
+        }
+
+        GGML_ASSERT(tensor->ne[1] % n_stream == 0);
+        const size_t row_bytes = tensor->nb[1];
+        const size_t rows_per_stream = (size_t) tensor->ne[1] / n_stream;
+        const size_t offset = (size_t) seq_id * rows_per_stream * row_bytes;
+        const size_t bytes = rows_per_stream * row_bytes;
+        std::vector<uint8_t> zeros(bytes, 0);
+        ggml_backend_tensor_set(tensor, zeros.data(), offset, bytes);
+    };
+
+    for (ggml_tensor * tensor : ctx->dsv4.cache.csa_k) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.hca_k) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.lid_k) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.csa_state_kv) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.csa_state_score) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.hca_state_kv) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.hca_state_score) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.lid_state_kv) clear_tensor(tensor);
+    for (ggml_tensor * tensor : ctx->dsv4.cache.lid_state_score) clear_tensor(tensor);
 }
 
 bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & batch, bool set_tensors, bool reserve_plan) {

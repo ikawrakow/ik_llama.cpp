@@ -281,6 +281,10 @@ bool server_context::load_model(const gpt_params& params_) {
 void server_context::init() {
     const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
 
+    if (!system_prompt.empty() && std::strcmp(llama_model_arch_string(model), "deepseek4") == 0) {
+        throw std::runtime_error("DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state");
+    }
+
     LOG_INFO("initializing slots", { {"n_slots", params_base.n_parallel} });
 
     if (params_base.has_mtp) {
@@ -383,7 +387,7 @@ void server_context::init() {
 
     metrics.init();
 
-    if (params_base.cache_ram_mib != 0) {
+    if (params_base.cache_ram_mib != 0 && llama_model_supports_partial_kv_reuse(model)) {
         if (params_base.cache_ram_mib < 0) {
             LLAMA_LOG_INFO("prompt cache is enabled, size limit: %s\n", "no limit");
         }
@@ -395,7 +399,11 @@ void server_context::init() {
         prompt_cache = std::make_unique<server_prompt_cache>(ctx, params_base.cache_ram_mib, 0);
     }
     else {
-        LLAMA_LOG_INFO("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+        if (params_base.cache_ram_mib != 0) {
+            LLAMA_LOG_WARN("prompt cache is disabled because this model has private state outside the generic KV cache\n");
+        } else {
+            LLAMA_LOG_INFO("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+        }
     }
 
     // populate chat template params
@@ -2073,6 +2081,11 @@ void server_context::system_prompt_update() {
 }
 
 bool server_context::system_prompt_set(const std::string& sys_prompt) {
+    if (!sys_prompt.empty() && model != nullptr && std::strcmp(llama_model_arch_string(model), "deepseek4") == 0) {
+        LOG_ERROR("DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state", {});
+        return false;
+    }
+
     system_prompt = sys_prompt;
 
     LOG_VERBOSE("system prompt process", {
@@ -2799,7 +2812,10 @@ void server_context::process_single_task(server_task&& task) {
 
         if (task.data.contains("system_prompt")) {
             std::string sys_prompt = json_value(task.data, "system_prompt", std::string());
-            system_prompt_set(sys_prompt);
+            if (!system_prompt_set(sys_prompt)) {
+                send_error(task, "DeepSeek4 server system prompts are unsupported", ERROR_TYPE_INVALID_REQUEST);
+                break;
+            }
 
             for (server_slot& slot : slots) {
                 slot.n_past = 0;
