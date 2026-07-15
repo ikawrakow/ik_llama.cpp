@@ -4333,10 +4333,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FUSED_RMS_RMS_ADD",
     "BLEND",
     "INDEXER_TOPK",
+    "MASK_TOPK",
     "SINKHORN",
 };
 
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4456,11 +4457,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rms(x1)+rms(x2)",
     "blend(a,b,c)",
     "indexer_topk(k, q, w, mask)",
+    "mask_topk(mask, topk)",
     "sinkhorn(x)",
 
 };
 
-static_assert(GGML_OP_COUNT == 105, "GGML_OP_COUNT != 105");
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6783,6 +6785,26 @@ struct ggml_tensor * ggml_sum_rows(
     result->op   = GGML_OP_SUM_ROWS;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_sum_rows_ext(
+        struct ggml_context * ctx,
+        struct  ggml_tensor * a,
+                        int   dim) {
+    GGML_ASSERT(dim >= 0 && dim < GGML_MAX_DIMS);
+    if (dim == 0) return ggml_sum_rows(ctx, a);
+
+    int64_t ne[GGML_MAX_DIMS];
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) ne[i] = a->ne[i];
+    ne[dim] = 1;
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, ne);
+
+    result->op   = GGML_OP_SUM_ROWS;
+    result->src[0] = a;
+    result->op_params[0] = dim;
 
     return result;
 }
@@ -10249,6 +10271,29 @@ struct ggml_tensor * ggml_blend(
 
     return result;
 }
+
+struct ggml_tensor * ggml_indexer_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk) {
+    GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
+    GGML_ASSERT(topk->type == GGML_TYPE_I32);
+    // The mask may be padded along dim 1, so topk->ne[1] must be <= mask->ne[1]
+    if (topk->ne[1] > mask->ne[1] || topk->ne[2] != mask->ne[2] || topk->ne[3] != mask->ne[3]) {
+        printf("%s: Oops. topk is %ld x %ld x %ld x %ld, mask is %ld x %ld x %ld x %ld\n", __func__,
+                topk->ne[0], topk->ne[1], topk->ne[2], topk->ne[3],
+                mask->ne[0], mask->ne[1], mask->ne[2], mask->ne[3]);
+    }
+    GGML_ASSERT(topk->ne[1] <= mask->ne[1] && topk->ne[2] == mask->ne[2] && topk->ne[3] == mask->ne[3]);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, mask);
+    result->src[0] = mask;
+    result->src[1] = topk;
+    result->op = GGML_OP_MASK_TOPK;
+
+    return result;
+}
+
 
 // ggml_argsort
 
@@ -14496,37 +14541,103 @@ static void ggml_compute_forward_sum_rows_f32(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    GGML_ASSERT(ne0 == 1);
-    GGML_ASSERT(ne1 == ne01);
-    GGML_ASSERT(ne2 == ne02);
-    GGML_ASSERT(ne3 == ne03);
-
     int ith = params->ith;
     int nth = params->nth;
 
-    //if (params->ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld\n", __func__, dst->name, ne00, ne1, ne2, ne3);
+    int dim = dst->op_params[0];
 
-    int nrows = ggml_nrows(src0);
-    int nrows_per_thread = (nrows + nth - 1)/nth;
-    int first_row = nrows_per_thread*ith;
-    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+    if (dim == 0) {
+        GGML_ASSERT(ne0 == 1);
+        GGML_ASSERT(ne1 == ne01);
+        GGML_ASSERT(ne2 == ne02);
+        GGML_ASSERT(ne3 == ne03);
+        int nrows = ggml_nrows(src0);
+        int nrows_per_thread = (nrows + nth - 1)/nth;
+        int first_row = nrows_per_thread*ith;
+        int last_row  = MIN(first_row + nrows_per_thread, nrows);
 
-    for (int ir = first_row; ir < last_row; ++ir) {
-        int i3 = ir / (ne01*ne02);
-        int i2 = (ir - i3*ne01*ne02)/ne01;
-        int i1 = ir - i3*ne01*ne02 - i2*ne01;
-        const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
-              float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
-        float row_sum = 0;
-        ggml_vec_sum_f32(ne00, &row_sum, src_row);
-        if (!isfinite(row_sum)) {
-            fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
-                    (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
-            GGML_ABORT("Fatal error");
+        for (int ir = first_row; ir < last_row; ++ir) {
+            int i3 = ir / (ne01*ne02);
+            int i2 = (ir - i3*ne01*ne02)/ne01;
+            int i1 = ir - i3*ne01*ne02 - i2*ne01;
+            const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+            float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+            float row_sum = 0;
+            ggml_vec_sum_f32(ne00, &row_sum, src_row);
+            if (!isfinite(row_sum)) {
+                fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                        (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+                GGML_ABORT("Fatal error");
+            }
+            dst_row[0] = row_sum;
         }
-        dst_row[0] = row_sum;
+    } else {
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (i == dim) {
+                GGML_ASSERT(dst->ne[i] == 1);
+            } else {
+                GGML_ASSERT(dst->ne[i] == src0->ne[i]);
+            }
+        }
+        int n = dst->ne[0];
+        if (dim == 1) {
+            int nrows = src0->ne[2]*src0->ne[3];
+            int nrows_per_thread = (nrows + nth - 1)/nth;
+            int first_row = nrows_per_thread*ith;
+            int last_row  = MIN(first_row + nrows_per_thread, nrows);
+            for (int ir = first_row; ir < last_row; ++ir) {
+                int i3 = ir/src0->ne[2];
+                int i2 = ir - i3*src0->ne[2];
+                const char * csrc = (const char *)src0->data + i2*nb02 + i3*nb03;
+                char * cdst = (char *)dst->data + i2*nb2 + i3*nb3;
+                memcpy(cdst, csrc, n*sizeof(float));
+                float * y = (float *)cdst;
+                for (int i1 = 1; i1 < src0->ne[1]; ++i1) {
+                    csrc += src0->nb[1];
+                    const float * x = (const float *)csrc;
+                    for (int j = 0; j < n; ++j) y[j] += x[j];
+                }
+            }
+        }
+        else if (dim == 2) {
+            int nrows = src0->ne[1]*src0->ne[3];
+            int nrows_per_thread = (nrows + nth - 1)/nth;
+            int first_row = nrows_per_thread*ith;
+            int last_row  = MIN(first_row + nrows_per_thread, nrows);
+            for (int ir = first_row; ir < last_row; ++ir) {
+                int i3 = ir/src0->ne[1];
+                int i1 = ir - i3*src0->ne[1];
+                const char * csrc = (const char *)src0->data + i1*nb01 + i3*nb03;
+                char * cdst = (char *)dst->data + i1*nb1 + i3*nb3;
+                memcpy(cdst, csrc, n*sizeof(float));
+                float * y = (float *)cdst;
+                for (int i2 = 1; i2 < src0->ne[2]; ++i2) {
+                    csrc += src0->nb[2];
+                    const float * x = (const float *)csrc;
+                    for (int j = 0; j < n; ++j) y[j] += x[j];
+                }
+            }
+        }
+        else {
+            int nrows = src0->ne[1]*src0->ne[2];
+            int nrows_per_thread = (nrows + nth - 1)/nth;
+            int first_row = nrows_per_thread*ith;
+            int last_row  = MIN(first_row + nrows_per_thread, nrows);
+            for (int ir = first_row; ir < last_row; ++ir) {
+                int i2 = ir/src0->ne[1];
+                int i1 = ir - i2*src0->ne[1];
+                const char * csrc = (const char *)src0->data + i1*nb01 + i2*nb02;
+                char * cdst = (char *)dst->data + i1*nb1 + i2*nb2;
+                memcpy(cdst, csrc, n*sizeof(float));
+                float * y = (float *)cdst;
+                for (int i3 = 1; i3 < src0->ne[3]; ++i3) {
+                    csrc += src0->nb[3];
+                    const float * x = (const float *)csrc;
+                    for (int j = 0; j < n; ++j) y[j] += x[j];
+                }
+            }
+        }
     }
-
 }
 
 static void ggml_compute_forward_sum_rows(
@@ -24987,6 +25098,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     GGML_ABORT("Fatal error");
                 }
             } break;
+        case GGML_OP_MASK_TOPK:
+            {
+                iqk_mask_topk(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_WIN_PART:
             {
                 ggml_compute_forward_win_part(params, tensor);
@@ -26049,6 +26164,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
+        case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
@@ -26787,6 +26903,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
+        case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
             {
                 n_tasks = n_threads;
