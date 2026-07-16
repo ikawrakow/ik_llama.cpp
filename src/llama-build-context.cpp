@@ -620,7 +620,8 @@ ggml_tensor * llm_build_context::build_mhc_weighted_sum(
     GGML_ASSERT(weights->ne[0] == n_stream);
     GGML_ASSERT(weights->ne[1] == n_tokens);
 
-    ggml_tensor * weights3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, weights), 1, n_stream, n_tokens);
+    GGML_ASSERT(ggml_is_contiguous(weights));
+    ggml_tensor * weights3 = ggml_reshape_3d(ctx0, weights, 1, n_stream, n_tokens);
     return ggml_mul_multi_add(ctx0, x, weights3);
 }
 
