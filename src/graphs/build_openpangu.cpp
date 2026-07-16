@@ -1063,7 +1063,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         ggml_tensor * m = ggml_add(ctx0, ggml_mul(ctx0, h_res, a_res), b_res); // [S*S,T]
         m = ggml_sinkhorn(ctx0, m, (int) S, sink_iters, 0.0f, /*output_transposed=*/true); // [row S, col S, T]
 
-        return build_mhc_post(y, h_post, Rin, m, n_embd, S, false);
+        return build_mhc_post(y, h_post, Rin, m, n_embd, S, false, true);
     };
 
     // Base generation uses only the transformer layers; the trailing NextN/MTP layers are skipped.

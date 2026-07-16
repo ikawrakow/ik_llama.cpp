@@ -317,7 +317,8 @@ struct llm_build_context {
         ggml_tensor * comb,
         int64_t n_embd,
         int64_t n_stream,
-        bool comb_output_dim0);
+        bool comb_output_dim0,
+        bool use_sum_rows = false);
 
     ggml_tensor * build_mhc_weighted_sum(
         ggml_tensor * x,

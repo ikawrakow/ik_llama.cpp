@@ -556,8 +556,30 @@ ggml_tensor * llm_build_context::build_mhc_post(
         ggml_tensor * comb,
         int64_t n_embd,
         int64_t n_stream,
-        bool comb_output_dim0) {
+        bool comb_output_dim0,
+        bool use_sum_rows) {
     const int64_t n_tokens = x->ne[1];
+    if (use_sum_rows) {
+        GGML_ASSERT(!comb_output_dim0);
+        ggml_tensor repeater;
+        repeater.ne[0] = n_embd; repeater.ne[1] = n_stream; repeater.ne[2] = n_tokens; repeater.ne[3] = 1;
+
+        ggml_tensor * x3 = ggml_reshape_3d(ctx0, x, n_embd, 1, n_tokens);
+        ggml_tensor * post3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, post), 1, n_stream, n_tokens);
+        ggml_tensor * term1 = ggml_mul(ctx0, ggml_repeat(ctx0, x3, &repeater), post3);
+
+        ggml_tensor * term2 = nullptr;
+        for (int64_t dst = 0; dst < n_stream; ++dst) {
+            ggml_tensor * comb_dst = ggml_cont(ctx0, ggml_view_2d(ctx0, comb, n_stream, n_tokens, comb->nb[2], dst*comb->nb[1]));
+            ggml_tensor * comb_dst3 = ggml_reshape_3d(ctx0, comb_dst, 1, n_stream, n_tokens);
+            ggml_tensor * acc = ggml_mul(ctx0, residual, comb_dst3);
+            ggml_tensor * summed = ggml_sum_rows_ext(ctx0, acc, 1);
+            term2 = term2 ? ggml_concat(ctx0, term2, summed, 1) : summed;
+        }
+
+        return ggml_add(ctx0, term1, term2);
+    }
+
     ggml_tensor * out = nullptr;
 
     for (int64_t dst = 0; dst < n_stream; ++dst) {
