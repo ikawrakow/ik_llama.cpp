@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <cinttypes>
 #include <clocale>
@@ -1343,6 +1344,9 @@ struct test {
     bool use_mmap;
     bool embeddings;
     bool repack = false;
+    bool repack_auto = false;
+    bool repack_effective = false;
+    std::string repack_status;
     bool fmoe = false;
     bool ger = false;
     bool no_fug = false;
@@ -1391,6 +1395,27 @@ struct test {
         use_mmap = inst.use_mmap;
         embeddings = inst.embeddings;
         repack = inst.repack;
+        repack_auto = inst.repack_auto;
+        switch (llama_model_rtr_status(lmodel)) {
+            case LLAMA_RTR_STATUS_ENABLED:
+                repack_effective = true;
+                repack_status = "enabled";
+                break;
+            case LLAMA_RTR_STATUS_AUTO_KEEP:
+                repack_effective = true;
+                repack_status = "auto_keep";
+                break;
+            case LLAMA_RTR_STATUS_AUTO_DISABLE:
+                repack_status = "auto_disable";
+                break;
+            case LLAMA_RTR_STATUS_AUTO_UNKNOWN:
+                repack_status = "auto_unknown";
+                break;
+            case LLAMA_RTR_STATUS_DISABLED:
+            default:
+                repack_status = "disabled";
+                break;
+        }
         mqkv = inst.mqkv;
         muge = inst.muge;
         defer_experts = inst.defer_experts;
@@ -1507,7 +1532,8 @@ struct test {
         }
         if (field == "cuda" || field == "vulkan" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
-            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
+            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" ||
+            field == "repack_auto" || field == "repack_effective" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse" || field == "muge" || field == "defer_experts" || field == "sas") {
             return BOOL;
@@ -1552,7 +1578,8 @@ struct test {
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
+            std::to_string(repack), std::to_string(repack_auto), std::to_string(repack_effective), repack_status,
+            std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             std::to_string(max_gpu),
             cuda_params, override_tensor,
@@ -1574,7 +1601,8 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
-            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
+            "tensor_split", "use_mmap", "embeddings", "repack", "repack_auto", "repack_effective", "repack_status",
+            "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
             "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
@@ -1755,6 +1783,15 @@ struct markdown_printer : public printer {
         if (field == "repack") {
             return 3;
         }
+        if (field == "repack_auto") {
+            return 8;
+        }
+        if (field == "repack_effective") {
+            return 7;
+        }
+        if (field == "repack_status") {
+            return -12;
+        }
         if (field == "mqkv") {
             return 4;
         }
@@ -1833,6 +1870,15 @@ struct markdown_printer : public printer {
         }
         if (field == "repack") {
             return "rtr";
+        }
+        if (field == "repack_auto") {
+            return "rtr_auto";
+        }
+        if (field == "repack_effective") {
+            return "rtr_eff";
+        }
+        if (field == "repack_status") {
+            return "rtr_status";
         }
         if (field == "mqkv") {
             return "mqkv";
@@ -1952,6 +1998,9 @@ struct markdown_printer : public printer {
         }
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
+            fields.emplace_back("repack_auto");
+            fields.emplace_back("repack_effective");
+            fields.emplace_back("repack_status");
         }
         if (params.mqkv != cmd_params_defaults.mqkv) {
             fields.emplace_back("mqkv");

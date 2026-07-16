@@ -522,6 +522,7 @@ struct llama_model {
 
     int64_t t_load_us = 0;
     int64_t t_start_us = 0;
+    llama_rtr_status rtr_status = LLAMA_RTR_STATUS_DISABLED;
 
     // keep track of loaded lora adapters
     std::set<llama_lora_adapter *> lora_adapters;
