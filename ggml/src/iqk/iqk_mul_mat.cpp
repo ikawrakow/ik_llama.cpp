@@ -1232,7 +1232,7 @@ void iqk_topk_moe(int n_experts, int n_experts_used, const float * logits,
 }
 }
 
-void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
+extern "C" IQK_API void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
         float * weights, int32_t * ids, int ith, int nth) {
 
     int npt = (nrows + nth - 1)/nth;
@@ -1739,9 +1739,13 @@ bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_ty
 #else  // IQK_IMPLEMENT
 
 #include "ggml-impl.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
 extern "C" IQK_API bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
-    GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }
 
@@ -1751,13 +1755,11 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
         int /*typeA*/, const void * /*A*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*stride_C*/, int /*ith*/, int /*nth*/) {
-    GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }
 
 extern "C" IQK_API bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
         const void *, int, int) {
-    GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }
 
@@ -1765,11 +1767,43 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*n
         int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, float, int /*ith*/, int /*nth*/) {
-    GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }
 
-bool iqk_fused_delta_net(int, int, int, int, int, int,
+extern "C" IQK_API void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
+        float * weights, int32_t * ids, int ith, int nth) {
+    const int npt = (nrows + nth - 1)/nth;
+    const int first = ith*npt;
+    const int last  = std::min(nrows, first + npt);
+
+    std::vector<int32_t> sorted(n_experts);
+    for (int row = first; row < last; ++row) {
+        const float * row_logits = logits + row*n_experts;
+        float * row_weights = weights + row*n_experts_used;
+        int32_t * row_ids = ids + row*n_experts;
+
+        for (int i = 0; i < n_experts; ++i) {
+            sorted[i] = i;
+        }
+        std::partial_sort(sorted.begin(), sorted.begin() + n_experts_used, sorted.end(),
+                [row_logits](int32_t a, int32_t b) {
+                    return row_logits[a] > row_logits[b];
+                });
+
+        const float max_logit = row_logits[sorted[0]];
+        float sum = 0.0f;
+        for (int i = 0; i < n_experts; ++i) {
+            sum += std::exp(row_logits[sorted[i]] - max_logit);
+        }
+        const float inv_sum = sum > 0.0f ? 1.0f/sum : 0.0f;
+        for (int i = 0; i < n_experts_used; ++i) {
+            row_ids[i] = sorted[i];
+            row_weights[i] = std::exp(row_logits[sorted[i]] - max_logit) * inv_sum;
+        }
+    }
+}
+
+extern "C" IQK_API bool iqk_fused_delta_net(int, int, int, int, int, int,
         size_t, size_t, size_t,
         const float *, const float *, const float *, const float *, const float *,
         const float *, float *, float *, float *, int, int, int) {

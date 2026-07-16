@@ -934,7 +934,7 @@ void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
             }
         }
     }
-#else
+#elif defined(__AVX2__)
     for (int i = 0; i < nb; i++) {
         int i4 = i/4, ir = i%4;
         // Load elements into 4 AVX vectors
@@ -1068,7 +1068,7 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
             }
         }
     }
-#else
+#elif defined(__AVX2__)
     for (int i = 0; i < nb; i++) {
         int i4 = i/4, ir = i%4;
         // Load elements into 4 AVX vectors
@@ -1162,6 +1162,59 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
             _mm256_storeu_si256((__m256i *)y4[i4].qs + ir, i0);
         } else {
             _mm256_storeu_si256((__m256i *)y[i].qs, i0);
+        }
+    }
+#else
+    for (int i = 0; i < nb; i++) {
+        const int i4 = i/4, ir = i%4;
+        const float * xi = x + i*QK8_1;
+
+        float max_abs = 0.0f;
+        for (int j = 0; j < QK8_1; ++j) {
+            max_abs = std::max(max_abs, std::fabs(xi[j]));
+        }
+
+        float d = max_abs / 127.0f;
+        if constexpr (std::is_same_v<Block, block_q8_1>) {
+            if (i < nb4) {
+                y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
+            } else {
+                y[i].d = GGML_FP32_TO_FP16(d);
+            }
+        } else {
+            auto t = ggml_fp32_to_bf16(d);
+            d = ggml_bf16_to_fp32(t);
+            if (i < nb4) {
+                y4[i4].d[ir] = t.bits;
+            } else {
+                y[i].d = t.bits;
+            }
+        }
+
+        const float id = d > 0.0f ? 1.0f/d : 0.0f;
+        int isum = 0;
+        for (int j = 0; j < QK8_1; ++j) {
+            const int q = nearest_int(xi[j] * id);
+            isum += q;
+            if (i < nb4) {
+                y4[i4].qs[QK8_1*ir + j] = q;
+            } else {
+                y[i].qs[j] = q;
+            }
+        }
+
+        if constexpr (std::is_same_v<Block, block_q8_1>) {
+            if (i < nb4) {
+                y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * isum);
+            } else {
+                y[i].s = GGML_FP32_TO_FP16(d * isum);
+            }
+        } else {
+            if (i < nb4) {
+                y4[i4].d[ir+4] = ggml_fp32_to_bf16(d * isum).bits;
+            } else {
+                y[i].s = ggml_fp32_to_bf16(d * isum).bits;
+            }
         }
     }
 #endif
@@ -7172,8 +7225,8 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
             // TODO
             for (int l = 0; l < 4; ++l) {
                 for (int k = 0; k < 8; ++k) for (int i = 0; i < 4; ++i) {
-                    y[ib].qs[32*l+4*k+i+  0] = x8[k][ib].qs[i+4*l+ 0];
-                    y[ib].qs[32*l+4*k+i+128] = x8[k][ib].qs[i+4*l+16];
+                    qy[128*ib + 32*l + 4*k + i +   0] = x8[k][16*ib + i + 4*l +  0];
+                    qy[128*ib + 32*l + 4*k + i + 128] = x8[k][16*ib + i + 4*l + 16];
                 }
             }
 #endif

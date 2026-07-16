@@ -9,6 +9,12 @@
 #include "iqk_cpu_ops.h"
 #include "iqk_utils.h"
 #include "iqk_common.h"
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
+
+#define GGML_COMMON_IMPL_C
+#include "ggml-impl.h"
+#include "ggml-common.h"
 #include "ggml.h"
 
 #include <cstdint>
@@ -986,7 +992,7 @@ inline void iqk_blend_row(int n, int nidx, const Data * x, const Idx * idx, Data
         b = GGML_FP32_TO_FP16(c);
     }
     else {
-        b = GGML_FP32_TO_BF16(c);
+        b = ggml_fp32_to_bf16(c);
     }
     if (y != x) {
         for (int j = 0; j < n; ++j) y[j] = x[j];

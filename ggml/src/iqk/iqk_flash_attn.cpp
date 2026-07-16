@@ -47,7 +47,7 @@ inline void accumulate_qkv(int Dv, float& M, float& S, float Mj, float Sj, float
 }
 }
 
-size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
+extern "C" IQK_API size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
     auto Q = dst->src[0];
     auto K = dst->src[1];
     auto V = dst->src[2];
@@ -549,7 +549,11 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
 
 #else
 
-bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int type_mask, [[maybe_unused]] float max_bias,
+extern "C" IQK_API size_t iqk_fa_work_buffer_size([[maybe_unused]] const struct ggml_tensor * dst, [[maybe_unused]] int nth) {
+    return 0;
+}
+
+extern "C" IQK_API bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int type_mask, [[maybe_unused]] float max_bias,
                             [[maybe_unused]] int neq3, [[maybe_unused]] int neq2, [[maybe_unused]] long nbq3, [[maybe_unused]] long nbq2,
                             [[maybe_unused]] int nek3, [[maybe_unused]] int nek2, [[maybe_unused]] long nbk3, [[maybe_unused]] long nbk2,
                             [[maybe_unused]] int nev3, [[maybe_unused]] int nev2, [[maybe_unused]] long nbv3, [[maybe_unused]] long nbv2,
@@ -568,6 +572,7 @@ bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int ty
                             [[maybe_unused]] const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
                             [[maybe_unused]] const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             [[maybe_unused]] const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
+                            [[maybe_unused]] const void  * sinks,    // sinks, if present
                             [[maybe_unused]] float         scale,    // scale applied before softmax
                             [[maybe_unused]] float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             [[maybe_unused]] float       * qkv,      // v*softmax(scale*(k*q))
@@ -577,4 +582,3 @@ bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int ty
 }
 
 #endif
-

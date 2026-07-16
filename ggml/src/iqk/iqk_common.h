@@ -11,6 +11,8 @@
 
 #include "iqk_config.h"
 
+#include <cstdint>
+
 #if defined IQK_IMPLEMENT
 
 #include <cstring>
@@ -22,6 +24,9 @@
 #include "ggml-quants.h"
 #include "iqk_mul_mat.h"
 #include "iqk_quantize.h"
+
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
@@ -288,6 +293,14 @@ static inline __m256i load_iq4nl_values_256() {
 static inline __m512i load_iq4nl_values_512() {
     auto val256 = load_iq4nl_values_256();
     return _mm512_inserti32x8(_mm512_castsi256_si512(val256), val256, 1);
+}
+#endif
+
+#if !defined(__AVX2__) && defined(__AVX__)
+static inline int hsum_i32_8(const __m256i a) {
+    alignas(32) int32_t tmp[8];
+    _mm256_storeu_si256((__m256i *) tmp, a);
+    return tmp[0] + tmp[1] + tmp[2] + tmp[3] + tmp[4] + tmp[5] + tmp[6] + tmp[7];
 }
 #endif
 
@@ -955,4 +968,3 @@ constexpr int popcount(uint16_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint32_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
 #endif
-
