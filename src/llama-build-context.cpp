@@ -612,20 +612,16 @@ ggml_tensor * llm_build_context::build_mhc_weighted_sum(
         int64_t n_embd,
         int64_t n_stream) {
     const int64_t n_tokens = x->ne[2];
-    ggml_tensor * out = nullptr;
+    GGML_ASSERT(x->type == GGML_TYPE_F32);
+    GGML_ASSERT(weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(x->ne[0] == n_embd);
+    GGML_ASSERT(x->ne[1] == n_stream);
+    GGML_ASSERT(x->ne[2] == n_tokens);
+    GGML_ASSERT(weights->ne[0] == n_stream);
+    GGML_ASSERT(weights->ne[1] == n_tokens);
 
-    for (int64_t stream = 0; stream < n_stream; ++stream) {
-        ggml_tensor * x_stream = ggml_cont(ctx0,
-                ggml_view_2d(ctx0, x, n_embd, n_tokens,
-                        x->nb[2], stream*x->nb[1]));
-        ggml_tensor * weight = ggml_cont(ctx0,
-                ggml_view_2d(ctx0, weights, 1, n_tokens,
-                        weights->nb[1], stream*weights->nb[0]));
-        ggml_tensor * cur = ggml_mul(ctx0, x_stream, weight);
-        out = out ? ggml_add(ctx0, out, cur) : cur;
-    }
-
-    return out;
+    ggml_tensor * weights3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, weights), 1, n_stream, n_tokens);
+    return ggml_mul_multi_add(ctx0, x, weights3);
 }
 
 ggml_tensor * llm_build_context::build_mhc_pre_projection(
