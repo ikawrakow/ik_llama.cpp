@@ -1275,6 +1275,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             if (raw_mask->type != csa_mask->type) {
                 raw_mask = ggml_cast(ctx0, raw_mask, csa_mask->type);
             }
+            // Attend over the exact SWA window plus indexer-selected compressed history.
             ggml_tensor * k_all = dsv4_concat_named(ctx0, raw_k, csa_k, 2, "dsv4_raw_plus_csa_k");
             ggml_tensor * kq_mask = dsv4_concat_named(ctx0, raw_mask, csa_mask, 0, "dsv4_raw_plus_csa_mask");
             ggml_tensor * kq_b = dsv4_build_kq_zero_bias(ctx0, cparams, kq_mask, q->ne[1]);
@@ -1307,6 +1308,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             if (raw_mask->type != hca_mask->type) {
                 raw_mask = ggml_cast(ctx0, raw_mask, hca_mask->type);
             }
+            // Attend over the exact SWA window plus hierarchical compressed history.
             ggml_tensor * k_all = dsv4_concat_named(ctx0, raw_k, hca_k, 2, "dsv4_raw_plus_hca_k");
             ggml_tensor * kq_mask = dsv4_concat_named(ctx0, raw_mask, hca_mask, 0, "dsv4_raw_plus_hca_mask");
             ggml_tensor * kq_b = dsv4_build_kq_zero_bias(ctx0, cparams, kq_mask, q->ne[1]);
