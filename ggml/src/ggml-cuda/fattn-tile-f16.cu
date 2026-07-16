@@ -37,11 +37,12 @@ static_assert(FABSUM_PV_BLOCK % 2 == 0 && FATTN_KQ_STRIDE_TILE_F16 % FABSUM_PV_B
 // chain then never exceeds QK_FLUSH_BLOCK fused-FMA roundings, independent of D; the fp32 seam adds
 // only (D/2)/QK_FLUSH_BLOCK exact promotions per score. An explicit value MUST evenly divide D/2 for
 // EVERY instantiated head size (D=64 and D=128 are both compiled, so it must divide 32: one of
-// {8, 16, 32}; enforced by a static_assert inside the kernel). Unset (default) it expands to D/2 ==
-// exactly one fold at the end of the chain: the flush compiles out and the kernel's arithmetic is
-// identical to the flush-less original.
-// Composition default 8 (pairs with FABSUM_PV_BLOCK=16 above): 8 divides D/2 for both compiled head
-// sizes (32 at D=64, 64 at D=128). Set to (D/2) for the flush-less, bitwise-base behavior.
+// {8, 16, 32}; enforced by a static_assert inside the kernel). The default is 8, the composition
+// operating point (pairs with FABSUM_PV_BLOCK=16). Setting it to (D/2) collapses the K.Q flush to a
+// single fold at the end of the chain, recovering the flush-less FABsum base. NOTE: that base is NOT
+// bit-identical to the upstream stock tile_f16 kernel -- the FABsum rewrite already keeps the softmax
+// max/sum and the P.V/K.Q reductions in float (float adds vs the stock fp16 half-adds), so "flush off"
+// restores the FABsum base, not the current upstream kernel.
 #ifndef QK_FLUSH_BLOCK
 #define QK_FLUSH_BLOCK 8
 #endif
