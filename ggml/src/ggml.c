@@ -6789,6 +6789,26 @@ struct ggml_tensor * ggml_sum_rows(
     return result;
 }
 
+struct ggml_tensor * ggml_sum_rows_ext(
+        struct ggml_context * ctx,
+        struct  ggml_tensor * a,
+                        int   dim) {
+    GGML_ASSERT(dim >= 0 && dim < GGML_MAX_DIMS);
+    if (dim == 0) return ggml_sum_rows(ctx, a);
+
+    int64_t ne[GGML_MAX_DIMS];
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) ne[i] = a->ne[i];
+    ne[dim] = 1;
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, ne);
+
+    result->op   = GGML_OP_SUM_ROWS;
+    result->src[0] = a;
+    result->op_params[0] = dim;
+
+    return result;
+}
+
 // ggml_cumsum
 
 struct ggml_tensor * ggml_cumsum(
@@ -14501,37 +14521,103 @@ static void ggml_compute_forward_sum_rows_f32(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    GGML_ASSERT(ne0 == 1);
-    GGML_ASSERT(ne1 == ne01);
-    GGML_ASSERT(ne2 == ne02);
-    GGML_ASSERT(ne3 == ne03);
-
     int ith = params->ith;
     int nth = params->nth;
 
-    //if (params->ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld\n", __func__, dst->name, ne00, ne1, ne2, ne3);
+    int dim = dst->op_params[0];
 
-    int nrows = ggml_nrows(src0);
-    int nrows_per_thread = (nrows + nth - 1)/nth;
-    int first_row = nrows_per_thread*ith;
-    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+    if (dim == 0) {
+        GGML_ASSERT(ne0 == 1);
+        GGML_ASSERT(ne1 == ne01);
+        GGML_ASSERT(ne2 == ne02);
+        GGML_ASSERT(ne3 == ne03);
+        int nrows = ggml_nrows(src0);
+        int nrows_per_thread = (nrows + nth - 1)/nth;
+        int first_row = nrows_per_thread*ith;
+        int last_row  = MIN(first_row + nrows_per_thread, nrows);
 
-    for (int ir = first_row; ir < last_row; ++ir) {
-        int i3 = ir / (ne01*ne02);
-        int i2 = (ir - i3*ne01*ne02)/ne01;
-        int i1 = ir - i3*ne01*ne02 - i2*ne01;
-        const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
-              float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
-        float row_sum = 0;
-        ggml_vec_sum_f32(ne00, &row_sum, src_row);
-        if (!isfinite(row_sum)) {
-            fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
-                    (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
-            GGML_ABORT("Fatal error");
+        for (int ir = first_row; ir < last_row; ++ir) {
+            int i3 = ir / (ne01*ne02);
+            int i2 = (ir - i3*ne01*ne02)/ne01;
+            int i1 = ir - i3*ne01*ne02 - i2*ne01;
+            const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+            float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+            float row_sum = 0;
+            ggml_vec_sum_f32(ne00, &row_sum, src_row);
+            if (!isfinite(row_sum)) {
+                fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                        (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+                GGML_ABORT("Fatal error");
+            }
+            dst_row[0] = row_sum;
         }
-        dst_row[0] = row_sum;
+    } else {
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (i == dim) {
+                GGML_ASSERT(dst->ne[i] == 1);
+            } else {
+                GGML_ASSERT(dst->ne[i] == src0->ne[i]);
+            }
+        }
+        int n = dst->ne[0];
+        if (dim == 1) {
+            int nrows = src0->ne[2]*src0->ne[3];
+            int nrows_per_thread = (nrows + nth - 1)/nth;
+            int first_row = nrows_per_thread*ith;
+            int last_row  = MIN(first_row + nrows_per_thread, nrows);
+            for (int ir = first_row; ir < last_row; ++ir) {
+                int i3 = ir/src0->ne[2];
+                int i2 = ir - i3*src0->ne[2];
+                const char * csrc = (const char *)src0->data + i2*nb02 + i3*nb03;
+                char * cdst = (char *)dst->data + i2*nb2 + i3*nb3;
+                memcpy(cdst, csrc, n*sizeof(float));
+                float * y = (float *)cdst;
+                for (int i1 = 1; i1 < src0->ne[1]; ++i1) {
+                    csrc += src0->nb[1];
+                    const float * x = (const float *)csrc;
+                    for (int j = 0; j < n; ++j) y[j] += x[j];
+                }
+            }
+        }
+        else if (dim == 2) {
+            int nrows = src0->ne[1]*src0->ne[3];
+            int nrows_per_thread = (nrows + nth - 1)/nth;
+            int first_row = nrows_per_thread*ith;
+            int last_row  = MIN(first_row + nrows_per_thread, nrows);
+            for (int ir = first_row; ir < last_row; ++ir) {
+                int i3 = ir/src0->ne[1];
+                int i1 = ir - i3*src0->ne[1];
+                const char * csrc = (const char *)src0->data + i1*nb01 + i3*nb03;
+                char * cdst = (char *)dst->data + i1*nb1 + i3*nb3;
+                memcpy(cdst, csrc, n*sizeof(float));
+                float * y = (float *)cdst;
+                for (int i2 = 1; i2 < src0->ne[2]; ++i2) {
+                    csrc += src0->nb[2];
+                    const float * x = (const float *)csrc;
+                    for (int j = 0; j < n; ++j) y[j] += x[j];
+                }
+            }
+        }
+        else {
+            int nrows = src0->ne[1]*src0->ne[2];
+            int nrows_per_thread = (nrows + nth - 1)/nth;
+            int first_row = nrows_per_thread*ith;
+            int last_row  = MIN(first_row + nrows_per_thread, nrows);
+            for (int ir = first_row; ir < last_row; ++ir) {
+                int i2 = ir/src0->ne[1];
+                int i1 = ir - i2*src0->ne[1];
+                const char * csrc = (const char *)src0->data + i1*nb01 + i2*nb02;
+                char * cdst = (char *)dst->data + i1*nb1 + i2*nb2;
+                memcpy(cdst, csrc, n*sizeof(float));
+                float * y = (float *)cdst;
+                for (int i3 = 1; i3 < src0->ne[3]; ++i3) {
+                    csrc += src0->nb[3];
+                    const float * x = (const float *)csrc;
+                    for (int j = 0; j < n; ++j) y[j] += x[j];
+                }
+            }
+        }
     }
-
 }
 
 static void ggml_compute_forward_sum_rows(

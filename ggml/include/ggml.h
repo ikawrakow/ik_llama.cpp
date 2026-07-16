@@ -1235,6 +1235,10 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_sum_rows(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+    GGML_API struct ggml_tensor * ggml_sum_rows_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   dim);
 
     GGML_API struct ggml_tensor * ggml_cumsum(
             struct ggml_context * ctx,
