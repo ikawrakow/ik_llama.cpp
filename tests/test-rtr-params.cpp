@@ -1,4 +1,5 @@
 #include "common.h"
+#include "llama.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -54,6 +55,23 @@ int main() {
         // The loader, not the parser, applies the legacy forced-repack coupling.
         assert(params.use_mmap);
     }
+    {
+        const gpt_params params = parse({ "-rtr" });
+        assert(params.repack_tensors);
+        assert(!params.repack_tensors_auto);
+        assert(params.use_mmap);
+    }
+    {
+        const gpt_params params = parse({ "-rtra" });
+        assert(params.repack_tensors);
+        assert(params.repack_tensors_auto);
+        assert(params.use_mmap);
+    }
+
+    assert(!llama_model_loader_mmap_enabled(nullptr));
+    assert(!llama_model_has_mmap_buffers(nullptr));
+    assert(!llama_model_repack_pass_executed(nullptr));
+    assert(llama_model_n_repacked(nullptr) == 0);
 
     return 0;
 }

@@ -1396,13 +1396,12 @@ struct test {
         embeddings = inst.embeddings;
         repack = inst.repack;
         repack_auto = inst.repack_auto;
+        repack_effective = llama_model_n_repacked(lmodel) > 0;
         switch (llama_model_rtr_status(lmodel)) {
             case LLAMA_RTR_STATUS_ENABLED:
-                repack_effective = true;
                 repack_status = "enabled";
                 break;
             case LLAMA_RTR_STATUS_AUTO_KEEP:
-                repack_effective = true;
                 repack_status = "auto_keep";
                 break;
             case LLAMA_RTR_STATUS_AUTO_DISABLE:

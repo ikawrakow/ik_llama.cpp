@@ -693,6 +693,18 @@ extern "C" {
     // Returns the effective run-time repack decision used for this model load.
     LLAMA_API enum llama_rtr_status llama_model_rtr_status(const struct llama_model * model);
 
+    // Returns the mmap setting used by the model loader after its own fallbacks.
+    LLAMA_API bool llama_model_loader_mmap_enabled(const struct llama_model * model);
+
+    // Returns true if at least one model buffer was created from a mmap region.
+    LLAMA_API bool llama_model_has_mmap_buffers(const struct llama_model * model);
+
+    // Returns true if the loader entered the run-time repack pass.
+    LLAMA_API bool llama_model_repack_pass_executed(const struct llama_model * model);
+
+    // Returns the number of tensors whose type changed in the run-time repack pass.
+    LLAMA_API uint64_t llama_model_n_repacked(const struct llama_model * model);
+
     // Get a llama model tensor
     LLAMA_API struct ggml_tensor * llama_get_model_tensor(struct llama_model * model, const char * name);
 

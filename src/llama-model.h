@@ -523,6 +523,11 @@ struct llama_model {
     int64_t t_load_us = 0;
     int64_t t_start_us = 0;
     llama_rtr_status rtr_status = LLAMA_RTR_STATUS_DISABLED;
+    bool     use_mmap_requested      = false;
+    bool     use_mmap_loader_enabled = false;
+    bool     has_mmap_backed_buffers = false;
+    bool     repack_pass_executed    = false;
+    uint64_t n_repacked              = 0;
 
     // keep track of loaded lora adapters
     std::set<llama_lora_adapter *> lora_adapters;
