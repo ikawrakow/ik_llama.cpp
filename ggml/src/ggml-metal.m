@@ -337,6 +337,8 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_ROPE_NORM_F16,
     GGML_METAL_KERNEL_TYPE_ROPE_NEOX_F32,
     GGML_METAL_KERNEL_TYPE_ROPE_NEOX_F16,
+    GGML_METAL_KERNEL_TYPE_ROPE_MULTI_F32,
+    GGML_METAL_KERNEL_TYPE_ROPE_MULTI_F16,
     GGML_METAL_KERNEL_TYPE_IM2COL_F16,
     GGML_METAL_KERNEL_TYPE_IM2COL_F32,
     GGML_METAL_KERNEL_TYPE_UPSCALE_F32,
@@ -1005,6 +1007,8 @@ static struct ggml_backend_metal_context * ggml_metal_init(int n_cb) {
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ROPE_NORM_F16,                 rope_norm_f16,                  true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ROPE_NEOX_F32,                 rope_neox_f32,                  true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ROPE_NEOX_F16,                 rope_neox_f16,                  true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ROPE_MULTI_F32,                rope_multi_f32,                 true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ROPE_MULTI_F16,                rope_multi_f16,                 true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_IM2COL_F16,                    im2col_f16,                     true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_IM2COL_F32,                    im2col_f32,                     true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_UPSCALE_F32,                   upscale_f32,                    true);
@@ -3279,8 +3283,6 @@ static void ggml_metal_encode_node(
             } break;
         case GGML_OP_ROPE:
             {
-                GGML_ASSERT(ne10 == ne02);
-
                 const int nth = MIN(1024, ne00);
 
                 const int n_past     = ((int32_t *) dst->op_params)[0];
@@ -3303,11 +3305,33 @@ static void ggml_metal_encode_node(
                 memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
                 memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
 
-                const bool is_neox = mode & 2;
+                const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
+                const bool is_mrope  = mode & GGML_ROPE_TYPE_MROPE;  // also true for imrope
+                const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+                const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+
+                GGML_ASSERT(!is_vision); // vision mrope not implemented in metal
+
+                int sections[4] = {0, 0, 0, 0};
+                memcpy(sections, (int32_t *) dst->op_params + 11, sizeof(sections));
+
+                if (is_mrope) {
+                    // mrope: 4 position ids per token (t/h/w/e blocks)
+                    GGML_ASSERT(ne10 == ne02*4);
+                    GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
+                } else {
+                    GGML_ASSERT(ne10 == ne02);
+                }
 
                 id<MTLComputePipelineState> pipeline = nil;
 
-                if (!is_neox) {
+                if (is_mrope) {
+                    switch (src0->type) {
+                        case GGML_TYPE_F32: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ROPE_MULTI_F32].pipeline; break;
+                        case GGML_TYPE_F16: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ROPE_MULTI_F16].pipeline; break;
+                        default: GGML_ABORT("fatal error");
+                    };
+                } else if (!is_neox) {
                     switch (src0->type) {
                         case GGML_TYPE_F32: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ROPE_NORM_F32].pipeline; break;
                         case GGML_TYPE_F16: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ROPE_NORM_F16].pipeline; break;
@@ -3355,6 +3379,16 @@ static void ggml_metal_encode_node(
                 [encoder setBytes:&attn_factor length:sizeof(   float) atIndex:26];
                 [encoder setBytes:&beta_fast   length:sizeof(   float) atIndex:27];
                 [encoder setBytes:&beta_slow   length:sizeof(   float) atIndex:28];
+                if (is_mrope) {
+                    // must match ggml_metal_mrope_args in ggml-metal.metal
+                    struct {
+                        int32_t sect[4];
+                        int32_t is_imrope;
+                    } margs;
+                    memcpy(margs.sect, sections, sizeof(sections));
+                    margs.is_imrope = is_imrope ? 1 : 0;
+                    [encoder setBytes:&margs length:sizeof(margs) atIndex:29];
+                }
 
                 [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
             } break;
