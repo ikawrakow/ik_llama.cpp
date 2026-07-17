@@ -24,8 +24,8 @@ static bool dsv4_validate_cache_type(ggml_type type, int64_t width, const char *
         return false;
     }
     if (ggml_is_quantized(type) && width % ggml_blck_size(type) != 0) {
-        LLAMA_LOG_ERROR("%s: DSV4 %s cache width %lld is not aligned to %d elements for %s\n",
-                __func__, name, (long long) width, ggml_blck_size(type), ggml_type_name(type));
+        LLAMA_LOG_ERROR("%s: DSV4 %s cache width %d is not aligned to %d elements for %s\n",
+                __func__, name, (int)width, (int)ggml_blck_size(type), ggml_type_name(type));
         return false;
     }
     return true;

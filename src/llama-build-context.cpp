@@ -592,6 +592,10 @@ ggml_tensor * llm_build_context::build_mhc_weighted_sum(
     const int64_t n_tokens = x->ne[2];
     ggml_tensor * out = nullptr;
 
+    if (weights->ne[3] == 1 && x->ne[3] == 1) {
+        auto w = ggml_reshape_4d(ctx0, weights, 1, weights->ne[0], weights->ne[1], weights->ne[2]);
+        return ggml_mul_multi_add(ctx0, x, w);
+    }
     for (int64_t stream = 0; stream < n_stream; ++stream) {
         ggml_tensor * x_stream = ggml_cont(ctx0,
                 ggml_view_2d(ctx0, x, n_embd, n_tokens,
@@ -614,15 +618,13 @@ ggml_tensor * llm_build_context::build_mhc_pre_projection(
         int64_t n_stream,
         float norm_rms_eps,
         bool force_contiguous) {
-    if (force_contiguous) {
+    if (force_contiguous && !ggml_is_contiguous(x)) {
         x = ggml_cont(ctx0, x);
     }
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, n_embd*n_stream, x->ne[2]);
-    ggml_tensor * normed = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    if (gamma != nullptr) {
-        normed = ggml_mul(ctx0, normed, gamma);
-    }
+    ggml_tensor * normed = gamma ? ggml_fused_rms_norm(ctx0, flat, gamma, hparams.f_norm_rms_eps) :
+                                   ggml_rms_norm(ctx0, flat, norm_rms_eps);
 
     return ggml_mul_mat(ctx0, fn, normed);
 }

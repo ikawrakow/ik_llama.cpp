@@ -530,6 +530,10 @@ static ggml_tensor * dsv4_build_attn(
             v = ggml_cast(ctx, v, GGML_TYPE_F16);
         }
 
+        if (kq_mask->type == GGML_TYPE_F32) {
+            kq_mask = ggml_cast(ctx, kq_mask, GGML_TYPE_F16);
+        }
+
         ggml_tensor * cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         // DSV4 uses the generic CPU FA path here for numerical correctness.
@@ -646,8 +650,9 @@ static ggml_tensor * build_hc_pre(
 
     *comb = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc));
     *comb = dsv4_hc_affine(ctx0, *comb, scale_comb, base_comb);
-    *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
-    *comb = build_hc_sinkhorn(ctx0, hparams, *comb);
+    *comb = ggml_sinkhorn(ctx0, *comb, hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps, false);
+    //*comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
+    //*comb = build_hc_sinkhorn(ctx0, hparams, *comb);
 
     return llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
 }
@@ -703,7 +708,8 @@ static ggml_tensor * build_hca_compressed_kv_from_state(
     ggml_tensor * weights = ggml_soft_max(ctx0, scores);
     ggml_tensor * comp = ggml_mul(ctx0, values, weights);
     comp = ggml_sum_rows(ctx0, comp);
-    comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
+    comp = ggml_reshape_4d(ctx0, comp, comp->ne[1], 1, comp->ne[2], comp->ne[3]);
+    //comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
     llm.cb(comp, "hca_comp_merge", il);
 
     comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
