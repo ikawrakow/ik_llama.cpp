@@ -4835,6 +4835,14 @@ struct llama_available_memory_result {
 // cgroup v2/v1 limits by taking min(MemAvailable, cgroup headroom).
 static llama_available_memory_result llama_get_available_ram_bytes() {
 #if defined(_WIN32)
+    // The public Job Object APIs cannot generally prove that every parent or
+    // nested memory limit is visible to this process. Treat any job membership
+    // as unknown rather than risking AUTO_KEEP from host-wide headroom.
+    BOOL in_job = FALSE;
+    if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job) || in_job) {
+        return { false, 0 };
+    }
+
     MEMORYSTATUSEX mem_info = {};
     mem_info.dwLength = sizeof(mem_info);
     if (GlobalMemoryStatusEx(&mem_info)) {
