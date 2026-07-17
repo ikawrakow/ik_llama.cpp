@@ -5953,9 +5953,22 @@ static int llama_decode_internal(
         // helpers for smoother batch API transition
         // after deprecating the llama_eval calls, these will be removed
         if (u_batch.pos == nullptr) {
-            pos.resize(n_tokens);
+            // MROPE/IMROPE models (e.g. Qwen3.5) read 4 position sections per token; the RoPE op indexes
+            // pos[i], pos[i+n], pos[i+2n], pos[i+3n]. Sizing this legacy fallback to only n_tokens (as for
+            // standard rope) made llama_set_inputs copy n_tokens*4 out of a n_tokens-sized vector -> an
+            // out-of-bounds read (UB) that fed garbage into the extra rope sections -> wrong, run-to-run
+            // non-deterministic RoPE. Build the 4 sections like the explicit-pos path above (text: t,t,t,0).
+            const int rope_pt = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
+                                 hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
+            pos.resize((size_t) n_tokens * rope_pt);
             for (uint32_t i = 0; i < n_tokens; i++) {
-                pos[i] = u_batch.all_pos_0 + i*u_batch.all_pos_1;
+                const int32_t p = u_batch.all_pos_0 + i*u_batch.all_pos_1;
+                pos[i] = p;
+                if (rope_pt == 4) {
+                    pos[    n_tokens + i] = p;
+                    pos[2 * n_tokens + i] = p;
+                    pos[3 * n_tokens + i] = 0;
+                }
             }
 
             u_batch.pos = pos.data();
