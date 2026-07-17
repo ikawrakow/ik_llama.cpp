@@ -90,6 +90,7 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #include <array>
 #include <cassert>
 #include <cctype>
+#include <cerrno>
 #include <cfloat>
 #include <cinttypes>
 #include <climits>
@@ -4646,12 +4647,14 @@ static bool llama_read_uint64_file(const std::string & path, uint64_t & out) {
 // path with a true return means that the requested controller is not present.
 static bool llama_resolve_cgroup_path(const std::string & controller, std::string & result) {
     result.clear();
-    FILE * f = std::fopen("/proc/self/cgroup", "r");
-    if (!f) return false;
-    char buf[512];
-    while (std::fgets(buf, sizeof(buf), f)) {
-        std::string line(buf);
-        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+    std::ifstream file("/proc/self/cgroup");
+    if (!file.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        while (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
         // Expected format: <hierarchy_id>:<controllers>:<path>
@@ -4680,8 +4683,7 @@ static bool llama_resolve_cgroup_path(const std::string & controller, std::strin
             if (!result.empty()) break;
         }
     }
-    std::fclose(f);
-    return true;
+    return !file.bad();
 }
 
 struct llama_cgroup_memory_result {
@@ -4694,49 +4696,79 @@ struct llama_cgroup_memory_result {
 // cgroup path upward to honor inherited limits. Inspection errors are reported
 // separately from an unlimited hierarchy so callers can remain safety-first.
 static llama_cgroup_memory_result llama_get_cgroup_available_bytes() {
+    std::string v2_cgpath;
+    std::string v1_cgpath;
+    if (!llama_resolve_cgroup_path("v2", v2_cgpath) ||
+        !llama_resolve_cgroup_path("memory", v1_cgpath)) {
+        return { false, false, 0 };
+    }
+
     // cgroup v2
     {
-        std::string cgpath;
-        if (!llama_resolve_cgroup_path("v2", cgpath)) {
-            return { false, false, 0 };
-        }
-        if (!cgpath.empty()) {
-            std::string cur = "/sys/fs/cgroup" + cgpath;
-            uint64_t headroom = UINT64_MAX;
-            while (true) {
-                uint64_t limit = 0;
-                uint64_t used  = 0;
-                if (!llama_read_uint64_file(cur + "/memory.max", limit) ||
-                    !llama_read_uint64_file(cur + "/memory.current", used)) {
-                    // This also catches non-standard/bind-mounted cgroup roots.
-                    // Falling back to host MemAvailable would be unsafe.
+        if (!v2_cgpath.empty()) {
+            std::string cur = "/sys/fs/cgroup" + v2_cgpath;
+            const std::string leaf_limit = cur + "/memory.max";
+            const std::string leaf_used  = cur + "/memory.current";
+            bool leaf_limit_exists = false;
+            bool leaf_used_exists  = false;
+            const auto check_exists = [](const std::string & path, bool & exists) {
+                errno = 0;
+                if (access(path.c_str(), F_OK) == 0) {
+                    exists = true;
+                    return true;
+                }
+                exists = false;
+                return errno == ENOENT || errno == ENOTDIR;
+            };
+            if (!check_exists(leaf_limit, leaf_limit_exists) ||
+                !check_exists(leaf_used,  leaf_used_exists)) {
+                return { false, false, 0 };
+            }
+            if (leaf_limit_exists != leaf_used_exists) {
+                return { false, false, 0 };
+            }
+
+            // On a hybrid hierarchy the process has a v2 membership even when
+            // the memory controller is still attached to v1. Only fall through
+            // when both v2 memory files are absent and a v1 memory membership
+            // was found.
+            if (!leaf_limit_exists) {
+                if (v1_cgpath.empty()) {
                     return { false, false, 0 };
                 }
-                if (limit != UINT64_MAX) {
-                    const uint64_t free_here = (limit > used) ? (limit - used) : 0;
-                    if (free_here < headroom) {
-                        headroom = free_here;
+            } else {
+                uint64_t headroom = UINT64_MAX;
+                while (true) {
+                    uint64_t limit = 0;
+                    uint64_t used  = 0;
+                    if (!llama_read_uint64_file(cur + "/memory.max", limit) ||
+                        !llama_read_uint64_file(cur + "/memory.current", used)) {
+                        // This also catches non-standard/bind-mounted cgroup roots.
+                        // Falling back to host MemAvailable would be unsafe.
+                        return { false, false, 0 };
                     }
+                    if (limit != UINT64_MAX) {
+                        const uint64_t free_here = (limit > used) ? (limit - used) : 0;
+                        if (free_here < headroom) {
+                            headroom = free_here;
+                        }
+                    }
+                    if (cur == "/sys/fs/cgroup" || cur.empty()) break;
+                    size_t slash = cur.find_last_of('/');
+                    if (slash == std::string::npos || slash < std::string{"/sys/fs/cgroup"}.size()) break;
+                    cur = cur.substr(0, slash);
                 }
-                if (cur == "/sys/fs/cgroup" || cur.empty()) break;
-                size_t slash = cur.find_last_of('/');
-                if (slash == std::string::npos || slash < std::string{"/sys/fs/cgroup"}.size()) break;
-                cur = cur.substr(0, slash);
+                if (headroom != UINT64_MAX) {
+                    return { true, true, headroom };
+                }
+                return { true, false, 0 };
             }
-            if (headroom != UINT64_MAX) {
-                return { true, true, headroom };
-            }
-            return { true, false, 0 };
         }
     }
     // cgroup v1 memory controller
     {
-        std::string cgpath;
-        if (!llama_resolve_cgroup_path("memory", cgpath)) {
-            return { false, false, 0 };
-        }
-        if (!cgpath.empty()) {
-            std::string cur = "/sys/fs/cgroup/memory" + cgpath;
+        if (!v1_cgpath.empty()) {
+            std::string cur = "/sys/fs/cgroup/memory" + v1_cgpath;
             uint64_t headroom = UINT64_MAX;
             while (true) {
                 uint64_t limit = 0;
@@ -4935,8 +4967,10 @@ static bool llama_rtr_auto_manual_override_cpu(
 static bool llama_rtr_auto_ncmoe_cpu_override(
         const std::string        & name,
         const llama_hparams      & hparams,
+        const llama_model        & model,
         const llama_model_params & params,
-        bool                     & cpu) {
+        bool                     & cpu,
+        std::string              & reason) {
     if (params.ncmoe <= 0 || !llama_rtr_auto_is_expert_tensor(name)) {
         return true;
     }
@@ -4947,8 +4981,16 @@ static bool llama_rtr_auto_ncmoe_cpu_override(
     }
 
     const int n_layer = (int) hparams.n_layer;
-    // The loader applies -ncmoe as a deterministic per-layer CPU override
-    // before distributing the remaining tensors across accelerator devices.
+    if (params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
+        params.ncmoe < n_layer &&
+        model.devices.size() >= 2) {
+        // The loader distributes the requested CPU-MoE layers proportionally
+        // across devices and then selects layers by walking backwards. A simple
+        // first-N rule can undercount models with dense leading layers.
+        reason = "-ncmoe with multi-device layer split needs loader placement";
+        return false;
+    }
+
     cpu = il < std::min(params.ncmoe, n_layer);
     return true;
 }
@@ -4966,7 +5008,7 @@ static bool llama_rtr_auto_tensor_is_cpu(
         return true;
     }
 
-    if (!llama_rtr_auto_ncmoe_cpu_override(name, hparams, params, cpu)) {
+    if (!llama_rtr_auto_ncmoe_cpu_override(name, hparams, model, params, cpu, reason)) {
         return false;
     }
     if (cpu) {
@@ -5130,13 +5172,14 @@ static llama_rtr_auto_decision llama_rtr_auto_should_disable(
                 return llama_rtr_auto_decision::UNKNOWN;
             }
             cpu_total_bytes += nbytes;
-            if ((ggml_type) iqk_repacked_type(tensor) != tensor->type) {
+            const uint64_t workspace_bytes = iqk_repack_workspace_size(tensor);
+            if (workspace_bytes > 0) {
                 if (nbytes > UINT64_MAX - cpu_repackable_bytes) {
                     reason = "CPU-resident repackable tensor byte count overflow";
                     return llama_rtr_auto_decision::UNKNOWN;
                 }
                 cpu_repackable_bytes += nbytes;
-                max_repack_temp_bytes = std::max(max_repack_temp_bytes, nbytes);
+                max_repack_temp_bytes = std::max(max_repack_temp_bytes, workspace_bytes);
             }
         }
 

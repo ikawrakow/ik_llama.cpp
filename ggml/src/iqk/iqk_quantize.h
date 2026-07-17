@@ -322,6 +322,7 @@ void iqk_repack_tensor(struct ggml_tensor * tensor);
 bool iqk_modify_tensor(struct ggml_tensor * tensor);
 
 int iqk_repacked_type(const struct ggml_tensor * tensor); // int instead of ggml_type so we don't need to include ggml.h
+uint64_t iqk_repack_workspace_size(const struct ggml_tensor * tensor);
 bool iqk_should_modify_tensor(const struct ggml_tensor * tensor);
 
 // So we can re-pack Microsoft's BitNet I2_S quants
