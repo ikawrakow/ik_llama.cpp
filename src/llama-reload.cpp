@@ -145,6 +145,22 @@ static bool is_original_snapshot_buffer(llama_model & model, ggml_backend_buffer
 }
 
 // ------------------------------------------------------------------
+// mmap guard: tensors whose data lives inside a (read-only) file mapping
+// must not be written to in place
+// ------------------------------------------------------------------
+static bool tensor_data_in_mmap(const llama_model & model, const void * data) {
+    if (!data) return false;
+    for (const auto & mapping : model.mappings) {
+        if (!mapping) continue;
+        const char * base = (const char *) mapping->addr();
+        if ((const char *) data >= base && (const char *) data < base + mapping->size()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ------------------------------------------------------------------
 // Final size estimator
 // ------------------------------------------------------------------
 static size_t llama_model_compute_final_nbytes(struct ggml_tensor * tensor, ggml_type new_type) {
@@ -633,6 +649,17 @@ static bool reload_tensor_split_path(
         for (const auto & sib : src.sibling_names) {
             reattach_split_tensor_to_shared(model, sib.c_str());
         }
+        // Refresh the data from the current file bytes: the file changed on
+        // disk even though its dtype matches the original snapshot. For a
+        // restored original file this copies identical bytes; for a same-dtype
+        // swap it loads the real new data instead of keeping stale weights.
+        if (!host_buf.empty()) {
+            if (tensor_data_in_mmap(model, tensor->data)) {
+                LLAMA_LOG_WARN("%s: tensor '%s' is mmap-backed; skipping in-place data refresh\n", __func__, name);
+            } else {
+                ggml_backend_tensor_set(tensor, host_buf.data(), 0, host_buf.size());
+            }
+        }
         return true;
     }
 
@@ -673,7 +700,6 @@ static bool reload_tensor_non_split_path(
         bool returning_to_original,
         ggml_backend_buffer_t old_buf)
 {
-		(void)model;
 		(void)curr_type;
 #ifndef NDEBUG
     const char * name = ggml_get_name(tensor);
@@ -689,6 +715,17 @@ static bool reload_tensor_non_split_path(
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             tensor->ne[i] = src.original_ne[i];
             tensor->nb[i] = src.original_nb[i];
+        }
+        // Refresh the data from the current file bytes: the file changed on
+        // disk even though its dtype matches the original snapshot. For a
+        // restored original file this copies identical bytes; for a same-dtype
+        // swap it loads the real new data instead of keeping stale weights.
+        if (!host_buf.empty()) {
+            if (tensor_data_in_mmap(model, tensor->data)) {
+                LLAMA_LOG_WARN("%s: tensor '%s' is mmap-backed; skipping in-place data refresh\n", __func__, ggml_get_name(tensor));
+            } else {
+                ggml_backend_tensor_set(tensor, host_buf.data(), 0, host_buf.size());
+            }
         }
         src.state = tensor_reload_source::reload_state::ON_ORIGINAL;
         return true;
@@ -857,6 +894,16 @@ bool reload_info::reload_tensor(const char * name, llama_model & model) {
             if (!apply_tensor_type_change(model, tensor, src, curr_type)) return false;
         }
         size_t need = ggml_nbytes(tensor);
+        if (file_nbytes < need) return false;
+        host_buf.resize(need);
+        file.read(host_buf.data(), (std::streamsize)need);
+        if (!file || (size_t)file.gcount() != need) return false;
+    } else {
+        // The on-disk dtype matches the original snapshot, but the bytes may
+        // still differ (the file did change on disk, e.g. a same-dtype tensor
+        // quantized with a different imatrix). Read them so the returning path
+        // can refresh the tensor data after reattaching the original buffers.
+        size_t need = src.original_nbytes;
         if (file_nbytes < need) return false;
         host_buf.resize(need);
         file.read(host_buf.data(), (std::streamsize)need);

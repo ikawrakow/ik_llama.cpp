@@ -670,34 +670,6 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_sparse_mask(
     return sparse;
 }
 
-static ggml_tensor * build_deepseek2_dsa_fa_mask(const llama_context & lctx, ggml_context * ctx0, ggml_tensor * KQ_mask, ggml_tensor * sorted) {
-    GGML_ASSERT(KQ_mask && KQ_mask->type == GGML_TYPE_F16);
-    GGML_ASSERT(sorted && sorted->type == GGML_TYPE_I32);
-    GGML_ASSERT(KQ_mask->ne[1] >= sorted->ne[1]);
-
-    int n_top_k = (int64_t) lctx.model.hparams.indexer_top_k;
-    if (lctx.cparams.dsa_top_k >= 0) n_top_k = lctx.cparams.dsa_top_k;
-
-    int n_kv_local = KQ_mask->ne[0];
-    if (n_top_k >= n_kv_local) {
-        return KQ_mask;
-    }
-
-    GGML_ASSERT(sorted->ne[1] == lctx.inp_mask_inf->ne[1]);
-    auto top_k = ggml_view_2d(ctx0, sorted, n_top_k, sorted->ne[1], sorted->nb[1], 0);
-    auto mask32 = ggml_blend(ctx0, lctx.inp_mask_inf, top_k, 0.0f);
-    if (KQ_mask->ne[1] == mask32->ne[1]) {
-        auto mask16 = ggml_add(ctx0, KQ_mask, mask32);
-        return mask16;
-    }
-    auto kq1 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], mask32->ne[1], KQ_mask->nb[1], 0);
-    auto kq2 = ggml_view_2d(ctx0, KQ_mask, KQ_mask->ne[0], KQ_mask->ne[1] - mask32->ne[1], KQ_mask->nb[1], mask32->ne[1]*KQ_mask->nb[1]);
-    kq1 = ggml_add(ctx0, kq1, mask32);
-    auto mask16 = ggml_concat(ctx0, kq1, kq2, 1);
-    return mask16;
-}
-
-
 // Adapt the (F32, unpadded {n_kv, n_tokens}) sparse mask for ggml_flash_attn_ext, which on this fork
 // requires the mask to be F16, contiguous, and padded in ne[1] to GGML_PAD(n_queries, GGML_KQ_MASK_PAD)
 // (build_inp_KQ_mask creates the dense -fa 1 mask exactly that way). We:
@@ -829,7 +801,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
                         dsa_last_full_sorted = build_deepseek2_dsa_indexer(gf, il, q, cur, KQ_mask, inp_pos);
                         if (dsa_last_full_sorted && !dsa_fast_path) {
                             if (lctx.cparams.flash_attn) {
-                                last_sparse_mask_fa = ::build_deepseek2_dsa_fa_mask(lctx, ctx0, KQ_mask, dsa_last_full_sorted);
+                                last_sparse_mask_fa = ggml_indexer_mask(ctx0, KQ_mask, dsa_last_full_sorted);
                             } else {
                                 last_sparse_mask = build_deepseek2_dsa_sparse_mask(dsa_last_full_sorted, KQ_mask);
                             }
@@ -1293,11 +1265,6 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             mask = ggml_reshape_2d(ctx0, mask, n_padded, KQ_mask->ne[1]);
             ggml_build_forward_expand(gf, mask);
             dsa_tg_fast_mask = mask;
-        } else {
-            auto minus_inf = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, KQ_mask->ne[0], n_tokens);
-            minus_inf = ggml_fill_inplace(ctx0, minus_inf, -INFINITY);
-            ggml_build_forward_expand(gf, minus_inf);
-            lctx.inp_mask_inf = minus_inf;
         }
     }
 
