@@ -106,6 +106,7 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #include <functional>
 #include <future>
 #include <initializer_list>
+#include <iterator>
 #include <locale>
 #include <map>
 #include <memory>
@@ -4644,184 +4645,129 @@ static bool llama_read_uint64_file(const std::string & path, uint64_t & out) {
     return true;
 }
 
-// Resolve the cgroup path for the current process from /proc/self/cgroup.
-// For cgroup v2 the line has the form "0::/path"; for v1 controllers it is
-// "<id>:<controllers>:/path" and we look for the "memory" controller.
-// Returns false when the membership file itself cannot be inspected. An empty
-// path with a true return means that the requested controller is not present.
-static bool llama_resolve_cgroup_path(const std::string & controller, std::string & result) {
-    result.clear();
-    std::ifstream file("/proc/self/cgroup");
-    if (!file.is_open()) {
-        return false;
-    }
-
-    std::string line;
-    while (std::getline(file, line)) {
-        while (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        // Expected format: <hierarchy_id>:<controllers>:<path>
-        size_t c1 = line.find(':');
-        if (c1 == std::string::npos) continue;
-        size_t c2 = line.find(':', c1 + 1);
-        if (c2 == std::string::npos) continue;
-        const std::string controllers = line.substr(c1 + 1, c2 - c1 - 1);
-        const std::string path        = line.substr(c2 + 1);
-        if (controller == "v2") {
-            // cgroup v2 unified hierarchy: "0::/path"
-            if (controllers.empty()) {
-                result = path;
-                break;
-            }
-        } else {
-            // cgroup v1: comma-separated controller list
-            std::string token;
-            std::stringstream ss(controllers);
-            while (std::getline(ss, token, ',')) {
-                if (token == controller) {
-                    result = path;
-                    break;
-                }
-            }
-            if (!result.empty()) break;
-        }
-    }
-    return !file.bad();
-}
-
+#include "llama-cgroup-resolver.h"
 struct llama_cgroup_memory_result {
     bool     ok;
     bool     limited;
     uint64_t bytes;
 };
 
-// Compute effective cgroup memory headroom for the current process. Walk the
-// cgroup path upward to honor inherited limits. Inspection errors are reported
-// separately from an unlimited hierarchy so callers can remain safety-first.
+
+static bool llama_cgroup_file_exists(const std::string & path, bool & exists) {
+    errno = 0;
+    if (access(path.c_str(), F_OK) == 0) {
+        exists = true;
+        return true;
+    }
+    exists = false;
+    return errno == ENOENT || errno == ENOTDIR;
+}
+
+static bool llama_read_cgroup_controllers(const std::string & mountpoint, bool & has_memory) {
+    std::ifstream file(mountpoint + "/cgroup.controllers");
+    if (!file.is_open()) return false;
+    std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (file.bad()) return false;
+    std::istringstream stream(contents);
+    std::string controller;
+    has_memory = false;
+    while (stream >> controller) {
+        if (controller == "memory") {
+            has_memory = true;
+            break;
+        }
+    }
+    return true;
+}
+
+static bool llama_get_v2_cgroup_headroom(const llama_resolved_cgroup_mount & resolved, bool & limited, uint64_t & bytes) {
+    uint64_t headroom = UINT64_MAX;
+    std::string cur = resolved.path;
+    while (true) {
+        uint64_t limit = 0;
+        uint64_t used = 0;
+        if (!llama_read_uint64_file(cur + "/memory.max", limit) ||
+            !llama_read_uint64_file(cur + "/memory.current", used)) return false;
+        if (limit != UINT64_MAX) headroom = std::min(headroom, limit > used ? limit - used : 0);
+        if (cur == resolved.mountpoint) break;
+        std::string parent;
+        if (!llama_cgroup_parent_path(cur, resolved.mountpoint, parent)) return false;
+        cur = parent;
+    }
+    limited = headroom != UINT64_MAX;
+    bytes = limited ? headroom : 0;
+    return true;
+}
+
+static bool llama_get_v1_cgroup_headroom(const llama_resolved_cgroup_mount & resolved, bool & limited, uint64_t & bytes) {
+    const uint64_t v1_unlimited_floor = 1ull << 62;
+    uint64_t headroom = UINT64_MAX;
+    std::string cur = resolved.path;
+    while (true) {
+        uint64_t limit = 0;
+        uint64_t used = 0;
+        if (!llama_read_uint64_file(cur + "/memory.limit_in_bytes", limit) ||
+            !llama_read_uint64_file(cur + "/memory.usage_in_bytes", used)) return false;
+        if (limit < v1_unlimited_floor) headroom = std::min(headroom, limit > used ? limit - used : 0);
+
+        const std::string memsw_limit_path = cur + "/memory.memsw.limit_in_bytes";
+        const std::string memsw_used_path = cur + "/memory.memsw.usage_in_bytes";
+        bool memsw_limit_exists = false;
+        bool memsw_used_exists = false;
+        if (!llama_cgroup_file_exists(memsw_limit_path, memsw_limit_exists) ||
+            !llama_cgroup_file_exists(memsw_used_path, memsw_used_exists) ||
+            memsw_limit_exists != memsw_used_exists) return false;
+        if (memsw_limit_exists) {
+            uint64_t memsw_limit = 0;
+            uint64_t memsw_used = 0;
+            if (!llama_read_uint64_file(memsw_limit_path, memsw_limit) ||
+                !llama_read_uint64_file(memsw_used_path, memsw_used)) return false;
+            if (memsw_limit < v1_unlimited_floor) headroom = std::min(headroom, memsw_limit > memsw_used ? memsw_limit - memsw_used : 0);
+        }
+        if (cur == resolved.mountpoint) break;
+        std::string parent;
+        if (!llama_cgroup_parent_path(cur, resolved.mountpoint, parent)) return false;
+        cur = parent;
+    }
+    limited = headroom != UINT64_MAX;
+    bytes = limited ? headroom : 0;
+    return true;
+}
+
+// Resolve membership through the actual mount namespace. A declared memory
+// hierarchy that cannot be mapped or read remains unknown (never host fallback).
 static llama_cgroup_memory_result llama_get_cgroup_available_bytes() {
-    std::string v2_cgpath;
-    std::string v1_cgpath;
-    if (!llama_resolve_cgroup_path("v2", v2_cgpath) ||
-        !llama_resolve_cgroup_path("memory", v1_cgpath)) {
+    std::vector<llama_cgroup_membership> memberships;
+    std::vector<llama_cgroup_mount> mounts;
+    if (!llama_read_cgroup_memberships(memberships) || !llama_read_cgroup_mounts(mounts)) {
         return { false, false, 0 };
     }
 
-    // cgroup v2
-    {
-        if (!v2_cgpath.empty()) {
-            std::string cur = "/sys/fs/cgroup" + v2_cgpath;
-            const std::string leaf_limit = cur + "/memory.max";
-            const std::string leaf_used  = cur + "/memory.current";
-            bool leaf_limit_exists = false;
-            bool leaf_used_exists  = false;
-            const auto check_exists = [](const std::string & path, bool & exists) {
-                errno = 0;
-                if (access(path.c_str(), F_OK) == 0) {
-                    exists = true;
-                    return true;
-                }
-                exists = false;
-                return errno == ENOENT || errno == ENOTDIR;
-            };
-            if (!check_exists(leaf_limit, leaf_limit_exists) ||
-                !check_exists(leaf_used,  leaf_used_exists)) {
+    bool limited = false;
+    uint64_t headroom = UINT64_MAX;
+    for (const llama_cgroup_membership & membership : memberships) {
+        std::vector<llama_resolved_cgroup_mount> resolved;
+        if (!llama_resolve_cgroup_mounts(membership, mounts, resolved)) return { false, false, 0 };
+        for (const llama_resolved_cgroup_mount & candidate : resolved) {
+            bool candidate_limited = false;
+            uint64_t candidate_headroom = 0;
+            if (membership.v2) {
+                bool has_memory = false;
+                if (!llama_read_cgroup_controllers(candidate.mountpoint, has_memory)) return { false, false, 0 };
+                // Unified hierarchy without the memory controller is not a
+                // memory constraint; a v1 membership may still constrain it.
+                if (!has_memory) continue;
+                if (!llama_get_v2_cgroup_headroom(candidate, candidate_limited, candidate_headroom)) return { false, false, 0 };
+            } else if (!llama_get_v1_cgroup_headroom(candidate, candidate_limited, candidate_headroom)) {
                 return { false, false, 0 };
             }
-            if (leaf_limit_exists != leaf_used_exists) {
-                return { false, false, 0 };
-            }
-
-            // On a hybrid hierarchy the process has a v2 membership even when
-            // the memory controller is still attached to v1. Only fall through
-            // when both v2 memory files are absent and a v1 memory membership
-            // was found.
-            if (!leaf_limit_exists) {
-                if (v1_cgpath.empty()) {
-                    return { false, false, 0 };
-                }
-            } else {
-                uint64_t headroom = UINT64_MAX;
-                while (true) {
-                    uint64_t limit = 0;
-                    uint64_t used  = 0;
-                    if (!llama_read_uint64_file(cur + "/memory.max", limit) ||
-                        !llama_read_uint64_file(cur + "/memory.current", used)) {
-                        // This also catches non-standard/bind-mounted cgroup roots.
-                        // Falling back to host MemAvailable would be unsafe.
-                        return { false, false, 0 };
-                    }
-                    if (limit != UINT64_MAX) {
-                        const uint64_t free_here = (limit > used) ? (limit - used) : 0;
-                        if (free_here < headroom) {
-                            headroom = free_here;
-                        }
-                    }
-                    if (cur == "/sys/fs/cgroup" || cur.empty()) break;
-                    size_t slash = cur.find_last_of('/');
-                    if (slash == std::string::npos || slash < std::string{"/sys/fs/cgroup"}.size()) break;
-                    cur = cur.substr(0, slash);
-                }
-                if (headroom != UINT64_MAX) {
-                    return { true, true, headroom };
-                }
-                return { true, false, 0 };
+            if (candidate_limited) {
+                limited = true;
+                headroom = std::min(headroom, candidate_headroom);
             }
         }
     }
-    // cgroup v1 memory controller
-    {
-        if (!v1_cgpath.empty()) {
-            std::string cur = "/sys/fs/cgroup/memory" + v1_cgpath;
-            uint64_t headroom = UINT64_MAX;
-            while (true) {
-                uint64_t limit = 0;
-                uint64_t used  = 0;
-                if (!llama_read_uint64_file(cur + "/memory.limit_in_bytes", limit) ||
-                    !llama_read_uint64_file(cur + "/memory.usage_in_bytes", used)) {
-                    return { false, false, 0 };
-                }
-                // Linux commonly reports an unlimited v1 controller as a
-                // page-aligned value close to INT64_MAX, not UINT64_MAX.
-                const uint64_t v1_unlimited_floor = 1ull << 62;
-                if (limit < v1_unlimited_floor) {
-                    const uint64_t free_here = (limit > used) ? (limit - used) : 0;
-                    if (free_here < headroom) {
-                        headroom = free_here;
-                    }
-                }
-
-                // When the optional mem+swap controller exists it can be more
-                // restrictive than the memory-only controller.
-                const std::string memsw_limit_path = cur + "/memory.memsw.limit_in_bytes";
-                const std::string memsw_used_path  = cur + "/memory.memsw.usage_in_bytes";
-                if (access(memsw_limit_path.c_str(), F_OK) == 0 ||
-                    access(memsw_used_path.c_str(),  F_OK) == 0) {
-                    uint64_t memsw_limit = 0;
-                    uint64_t memsw_used  = 0;
-                    if (!llama_read_uint64_file(memsw_limit_path, memsw_limit) ||
-                        !llama_read_uint64_file(memsw_used_path,  memsw_used)) {
-                        return { false, false, 0 };
-                    }
-                    if (memsw_limit < v1_unlimited_floor) {
-                        const uint64_t free_here = memsw_limit > memsw_used ? memsw_limit - memsw_used : 0;
-                        if (free_here < headroom) {
-                            headroom = free_here;
-                        }
-                    }
-                }
-                if (cur == "/sys/fs/cgroup/memory" || cur.empty()) break;
-                size_t slash = cur.find_last_of('/');
-                if (slash == std::string::npos || slash < std::string{"/sys/fs/cgroup/memory"}.size()) break;
-                cur = cur.substr(0, slash);
-            }
-            if (headroom != UINT64_MAX) {
-                return { true, true, headroom };
-            }
-            return { true, false, 0 };
-        }
-    }
-    return { true, false, 0 };
+    return { true, limited, limited ? headroom : 0 };
 }
 #endif // __linux__
 
