@@ -2294,14 +2294,141 @@ kernel void kernel_rope_neox(
     //}
 }
 
-typedef decltype(kernel_rope_norm<float>) kernel_rope_norm_t;
-typedef decltype(kernel_rope_neox<float>) kernel_rope_neox_t;
+// multi-section RoPE (mrope/imrope) — positions are laid out as 4 blocks of
+// ne02 entries (t/h/w/e), sector of each dim pair selects which block's
+// position drives theta; matches ggml_mrope_cache_init on the CPU side
+// packed into one struct: Metal caps kernels at 31 buffer slots
+typedef struct {
+    int32_t sect[4];
+    int32_t is_imrope;
+} ggml_metal_mrope_args;
+
+template<typename T>
+kernel void kernel_rope_multi(
+        device const    void * src0,
+        device const int32_t * src1,
+        device const   float * src2,
+        device         float * dst,
+        constant     int64_t & ne00,
+        constant     int64_t & ne01,
+        constant     int64_t & ne02,
+        constant     int64_t & ne03,
+        constant    uint64_t & nb00,
+        constant    uint64_t & nb01,
+        constant    uint64_t & nb02,
+        constant    uint64_t & nb03,
+        constant     int64_t & ne0,
+        constant     int64_t & ne1,
+        constant     int64_t & ne2,
+        constant     int64_t & ne3,
+        constant    uint64_t & nb0,
+        constant    uint64_t & nb1,
+        constant    uint64_t & nb2,
+        constant    uint64_t & nb3,
+        constant         int & n_past,
+        constant         int & n_dims,
+        constant         int & n_ctx_orig,
+        constant       float & freq_base,
+        constant       float & freq_scale,
+        constant       float & ext_factor,
+        constant       float & attn_factor,
+        constant       float & beta_fast,
+        constant       float & beta_slow,
+        constant ggml_metal_mrope_args & margs,
+        uint  tiitg[[thread_index_in_threadgroup]],
+        uint3 tptg[[threads_per_threadgroup]],
+        uint3 tgpig[[threadgroup_position_in_grid]]) {
+    const int64_t i3 = tgpig[2];
+    const int64_t i2 = tgpig[1];
+    const int64_t i1 = tgpig[0];
+
+    float corr_dims[2];
+    rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+
+    device const int32_t * pos = src1;
+
+    const float theta_base_t = (float) pos[i2 + ne02*0];
+    const float theta_base_h = (float) pos[i2 + ne02*1];
+    const float theta_base_w = (float) pos[i2 + ne02*2];
+    const float theta_base_e = (float) pos[i2 + ne02*3];
+
+    const int sect_0 = margs.sect[0];
+    const int sect_1 = margs.sect[1];
+    const int sect_2 = margs.sect[2];
+    const int is_imrope = margs.is_imrope;
+
+    const int sect_dims = sect_0 + sect_1 + sect_2 + margs.sect[3];
+    const int sec_w     = sect_1 + sect_0;
+    const float theta_scale = pow(freq_base, -2.0f/n_dims);
+
+    float cos_theta;
+    float sin_theta;
+
+    int64_t i0 = 2*tiitg;
+    for ( ; i0 < n_dims; i0 += 2*tptg.x) {
+        const int64_t ic = i0/2;
+
+        const int sector = ic % sect_dims;
+
+        float theta_base;
+        if (is_imrope) { // qwen3vl-style interleaved mrope
+            if (sector % 3 == 1 && sector < 3*sect_1) {
+                theta_base = theta_base_h;
+            } else if (sector % 3 == 2 && sector < 3*sect_2) {
+                theta_base = theta_base_w;
+            } else if (sector % 3 == 0 && sector < 3*sect_0) {
+                theta_base = theta_base_t;
+            } else {
+                theta_base = theta_base_e;
+            }
+        } else {
+            if (sector < sect_0) {
+                theta_base = theta_base_t;
+            } else if (sector < sec_w) {
+                theta_base = theta_base_h;
+            } else if (sector < sec_w + sect_2) {
+                theta_base = theta_base_w;
+            } else {
+                theta_base = theta_base_e;
+            }
+        }
+
+        const float theta = theta_base * pow(theta_scale, (float) ic);
+
+        const float freq_factor = src2 != src0 ? src2[ic] : 1.0f;
+
+        rope_yarn(theta/freq_factor, freq_scale, corr_dims, i0, ext_factor, attn_factor, &cos_theta, &sin_theta);
+
+        device const T * const src = (device T *)((device char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
+        device       T * dst_data  = (device T *)((device char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
+
+        const float x0 = src[0];
+        const float x1 = src[n_dims/2];
+
+        dst_data[0]        = x0*cos_theta - x1*sin_theta;
+        dst_data[n_dims/2] = x0*sin_theta + x1*cos_theta;
+    }
+    for ( ; i0 < ne0; i0 += 2*tptg.x) {
+        device const T * const src = (device T *)((device char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+        device       T * dst_data  = (device T *)((device char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+
+        dst_data[0] = src[0];
+        dst_data[1] = src[1];
+    }
+}
+
+typedef decltype(kernel_rope_norm<float>)  kernel_rope_norm_t;
+typedef decltype(kernel_rope_neox<float>)  kernel_rope_neox_t;
+typedef decltype(kernel_rope_multi<float>) kernel_rope_multi_t;
 
 template [[host_name("kernel_rope_norm_f32")]] kernel kernel_rope_norm_t kernel_rope_norm<float>;
 template [[host_name("kernel_rope_norm_f16")]] kernel kernel_rope_norm_t kernel_rope_norm<half>;
 
 template [[host_name("kernel_rope_neox_f32")]] kernel kernel_rope_neox_t kernel_rope_neox<float>;
 template [[host_name("kernel_rope_neox_f16")]] kernel kernel_rope_neox_t kernel_rope_neox<half>;
+
+template [[host_name("kernel_rope_multi_f32")]] kernel kernel_rope_multi_t kernel_rope_multi<float>;
+template [[host_name("kernel_rope_multi_f16")]] kernel kernel_rope_multi_t kernel_rope_multi<half>;
 
 typedef void (im2col_t)(
         device const float * x,
