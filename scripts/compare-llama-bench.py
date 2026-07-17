@@ -119,7 +119,54 @@ if input_file is None:
 
 connection = sqlite3.connect(input_file)
 cursor = connection.cursor()
-builds = cursor.execute("SELECT DISTINCT build_commit FROM test;").fetchall()
+
+# The SQL printer used to write `test`, and now writes the immutable versioned
+# table `test_v2`.  Keep the consumer compatible with both without mutating the
+# user's database or guessing arbitrary table names.
+BENCH_TABLE_NAMES = ("test", "test_v2")
+BENCH_SOURCE_COLUMNS = list(dict.fromkeys(
+    ["build_commit", "test_time", "avg_ts"] + KEY_PROPERTIES + ["n_prompt", "n_gen"]
+))
+
+
+def get_bench_source_query():
+    tables = cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        BENCH_TABLE_NAMES,
+    ).fetchall()
+    tables = {name for (name,) in tables}
+
+    if not tables:
+        logger.error("No compatible llama-bench table found; expected `test` or `test_v2`.")
+        sys.exit(1)
+
+    selects = []
+    for table in BENCH_TABLE_NAMES:
+        if table not in tables:
+            continue
+
+        columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+        missing = [column for column in BENCH_SOURCE_COLUMNS if column not in columns]
+        if missing:
+            logger.error(
+                "table %s is not compatible; missing required columns: %s",
+                table,
+                ", ".join(missing),
+            )
+            sys.exit(1)
+
+        # `table` is selected only from BENCH_TABLE_NAMES above.
+        selects.append(f"SELECT {', '.join(BENCH_SOURCE_COLUMNS)} FROM {table}")
+
+    # UNION ALL is safe while the writer emits into exactly one versioned table.
+    # Any future dual-write must replace this with run_id-based deduplication.
+    return " UNION ALL ".join(selects)
+
+
+bench_source_query = get_bench_source_query()
+builds = cursor.execute(
+    f"WITH bench AS ({bench_source_query}) SELECT DISTINCT build_commit FROM bench;"
+).fetchall()
 
 try:
     repo = git.Repo(".", search_parent_directories=True)
@@ -234,7 +281,8 @@ if known_args.compare is not None:
 elif repo is not None:
     hexsha8s_master = get_all_parent_hexsha8s(repo.heads.master.commit)
     builds_timestamp = cursor.execute(
-        "SELECT build_commit, test_time FROM test ORDER BY test_time;").fetchall()
+        f"WITH bench AS ({bench_source_query}) "
+        "SELECT build_commit, test_time FROM bench ORDER BY test_time;").fetchall()
     for (hexsha8, _) in reversed(builds_timestamp):
         if hexsha8 not in hexsha8s_master:
             hexsha8_compare = hexsha8
@@ -267,7 +315,8 @@ def get_rows(properties):
             f"tb.build_commit = '{hexsha8_baseline}'", f"tc.build_commit = '{hexsha8_compare}'"]
     )
     group_order_string = ", ".join([f"tb.{p}" for p in properties] + ["tb.n_gen", "tb.n_prompt"])
-    query = (f"SELECT {select_string} FROM test tb JOIN test tc ON {equal_string} "
+    query = (f"WITH bench AS ({bench_source_query}) "
+             f"SELECT {select_string} FROM bench tb JOIN bench tc ON {equal_string} "
              f"GROUP BY {group_order_string} ORDER BY {group_order_string};")
     return cursor.execute(query).fetchall()
 
