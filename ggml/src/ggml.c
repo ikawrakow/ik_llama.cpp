@@ -4335,9 +4335,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "INDEXER_TOPK",
     "MASK_TOPK",
     "SINKHORN",
+    "HC_PRE",
 };
 
-static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4459,10 +4460,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "indexer_topk(k, q, w, mask)",
     "mask_topk(mask, topk)",
     "sinkhorn(x)",
+    "hc_pre(x,s,b)",
 
 };
 
-static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -10188,6 +10190,34 @@ struct ggml_tensor * ggml_sinkhorn(
 
     return result;
 }
+
+struct ggml_tensor * ggml_hc_pre(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * bias,
+            int                   S,
+            int                   n_iters,
+            float                 eps) {
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32 && bias->type == GGML_TYPE_F32);
+    int ntot = S*S + 2*S;
+    GGML_ASSERT(scale->ne[0] == 3 && ggml_nrows(scale) == 1);
+    GGML_ASSERT(bias->ne[0] == ntot && ggml_nrows(bias) == 1);
+    GGML_ASSERT(ggml_is_contiguous(x));
+    GGML_ASSERT(x->ne[0] == ntot && x->ne[2] == 1 && x->ne[3] == 1);
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx,GGML_TYPE_F32, ntot*x->ne[1]);
+    result->op = GGML_OP_HC_PRE;
+    result->src[0] = x;
+    result->src[1] = scale;
+    result->src[2] = bias;
+    result->op_params[0] = S;
+    result->op_params[1] = n_iters;
+    memcpy(&result->op_params[2], &eps, sizeof(eps));
+
+    return result;
+}
+
 
 // ggml_fill
 
@@ -23326,6 +23356,114 @@ static void ggml_compute_forward_sinkhorn(
     }
 }
 
+// ggml_compute_forward_hc_pre
+
+static void ggml_compute_forward_hc_pre_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const struct ggml_tensor * src2 = dst->src[2];
+
+    const int S     = dst->op_params[0];
+    const int iters = dst->op_params[1];
+    float eps;
+    memcpy(&eps, &dst->op_params[2], sizeof(float));
+    const int64_t T = src0->ne[1];
+
+    GGML_ASSERT(S >= 1 && S <= 8);
+    GGML_ASSERT(src0->ne[0] == (int64_t) S * S + 2 * S);
+    GGML_ASSERT(iters > 1);
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int64_t npt = (T + nth - 1)/nth;
+
+    // one token is S*S floats (16 at S=4): parallelize over tokens only
+    const int64_t t0 = ith * npt;
+    const int64_t t1 = MIN(t0 + npt, T);
+
+    float m[64];
+
+    const float * scale = (const float *)src1->data;
+    const float * bias  = (const float *)src2->data;
+
+    for (int64_t t = t0; t < t1; ++t) {
+        const float * x_pre  = (const float *)((const char *)src0->data + t*src0->nb[1]);
+        const float * x_post = x_pre + S;
+        const float * x_comb = x_pre + 2*S;
+        float * y_pre  = (float *)dst->data + S*t;
+        float * y_post = (float *)dst->data + S*(T + t);
+        float * y_comb = (float *)dst->data + 2*S*T + S*S*t;
+
+        for (int i = 0; i < S; ++i) {
+            float val = x_pre[i] * scale[0] + bias[i];
+            val = 1.f / (1.f + expf(-val));
+            y_pre[i] = val + eps;
+
+            val = x_post[i] * scale[1] + bias[S + i];
+            val = 1.f / (1.f + expf(-val));
+            y_post[i] = 2.0f * val;
+        }
+
+        for (int i = 0; i < S*S; ++i) {
+            m[i] = x_comb[i] * scale[2] + bias[2*S + i];
+        }
+
+        for (int r = 0; r < S; ++r) {
+            float mx = m[r*S];
+            for (int c = 1; c < S; ++c) mx = MAX(mx, m[r*S + c]);
+            float sum = 0.0f;
+            for (int c = 0; c < S; ++c) { m[r*S + c] = expf(m[r*S + c] - mx); sum += m[r*S + c]; }
+            for (int c = 0; c < S; ++c) m[r*S + c] = m[r*S + c]/sum + eps;
+        }
+
+        for (int c = 0; c < S; ++c) {
+            float sum = eps;
+            for (int r = 0; r < S; ++r) sum += m[r*S + c];
+            for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
+        }
+
+        for (int i = 0; i < iters - 1; ++i) {
+            for (int r = 0; r < S; ++r) {
+                float sum = eps;
+                for (int c = 0; c < S; ++c) sum += m[r*S + c];
+                for (int c = 0; c < S; ++c) m[r*S + c] /= sum;
+            }
+            for (int c = 0; c < S; ++c) {
+                float sum = eps;
+                for (int r = 0; r < S; ++r) sum += m[r*S + c];
+                for (int r = 0; r < S; ++r) m[r*S + c] /= sum;
+            }
+        }
+        for (int i = 0; i < S*S; ++i) {
+            y_comb[i] = m[i];
+        }
+        //if (transposed) {
+        //    // dst is [row, col, T] (ne0 = row): transpose on write
+        //    for (int c = 0; c < S; ++c) {
+        //        for (int r = 0; r < S; ++r) y[c*S + r] = m[r*S + c];
+        //    }
+        //} else {
+        //    for (int k = 0; k < S*S; ++k) y[k] = m[k];
+        //}
+    }
+}
+
+static void ggml_compute_forward_hc_pre(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_hc_pre_f32(params, dst);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
+
 // ggml_compute_forward_win_part
 
 static void ggml_compute_forward_win_part_f32(
@@ -25072,6 +25210,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_sinkhorn(params, tensor);
             } break;
+        case GGML_OP_HC_PRE:
+            {
+                ggml_compute_forward_hc_pre(params, tensor);
+            } break;
         case GGML_OP_INDEXER_TOPK:
             {
                 if (!iqk_indexer_topk(tensor, params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, params->ith, params->nth)) {
@@ -26146,6 +26288,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
+        case GGML_OP_HC_PRE:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -26885,6 +27028,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
+        case GGML_OP_HC_PRE:
             {
                 n_tasks = n_threads;
             } break;

@@ -707,6 +707,7 @@ extern "C" {
         GGML_OP_INDEXER_TOPK,
         GGML_OP_MASK_TOPK,
         GGML_OP_SINKHORN,
+        GGML_OP_HC_PRE,
 
         GGML_OP_COUNT,
     };
@@ -2608,6 +2609,15 @@ extern "C" {
             int                   n_iters,
             float                 eps,
             bool                  output_transposed);
+
+    GGML_API struct ggml_tensor * ggml_hc_pre(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * bias,
+            int                   S,
+            int                   n_iters,
+            float                 eps);
 
     // custom operators
 

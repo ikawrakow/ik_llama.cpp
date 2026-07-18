@@ -624,37 +624,59 @@ static ggml_tensor * build_hc_pre(
         ggml_tensor * hc_fn,
         ggml_tensor * hc_scale,
         ggml_tensor * hc_base,
-        ggml_tensor ** post,
-        ggml_tensor ** comb) {
+        ggml_tensor ** post_out,
+        ggml_tensor ** comb_out) {
     const int64_t hc         = hparams.dsv4_hc_mult;
     const int64_t nt         = x->ne[2];
 
-    ggml_tensor * mixes = llm.build_mhc_pre_projection(x, hc_fn, nullptr,
-            n_embd, hc, norm_rms_eps, false);
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx0, x);
+    }
+    auto flat = ggml_reshape_2d(ctx0, x, n_embd * hc, nt);
+    auto normed = ggml_rms_norm(ctx0, flat, norm_rms_eps);
+    auto mixes  = ggml_mul_mat(ctx0, hc_fn, normed);
 
-    ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
-    ggml_tensor * scale_post = dsv4_view_1d(ctx0, hc_scale, 1, 1);
-    ggml_tensor * scale_comb = dsv4_view_1d(ctx0, hc_scale, 1, 2);
+    auto all = ggml_hc_pre(ctx0, mixes, hc_scale, hc_base, hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
 
-    ggml_tensor * base_pre  = dsv4_view_1d(ctx0, hc_base, hc, 0);
-    ggml_tensor * base_post = dsv4_view_1d(ctx0, hc_base, hc, hc);
-    ggml_tensor * base_comb = dsv4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
+    auto pre  = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), 0);
+    auto post = ggml_view_2d(ctx0, all, hc, nt, hc*sizeof(float), hc*nt*sizeof(float));
+    auto comb = ggml_view_3d(ctx0, all, hc, hc, nt, hc*sizeof(float), hc*hc*sizeof(float), 2*hc*nt*sizeof(float));
 
-    ggml_tensor * pre = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc, nt, 0));
-    pre = dsv4_hc_affine(ctx0, pre, scale_pre, base_pre);
-    pre = ggml_sigmoid(ctx0, pre);
-    pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
+    ////ggml_tensor * mixes = llm.build_mhc_pre_projection(x, hc_fn, nullptr,
+    ////        n_embd, hc, norm_rms_eps, false);
 
-    *post = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc, nt, hc));
-    *post = dsv4_hc_affine(ctx0, *post, scale_post, base_post);
-    *post = ggml_sigmoid(ctx0, *post);
-    *post = ggml_scale(ctx0, *post, 2.0f);
+    ////printf("hc_scale: %ld x %ld x %ld x %ld, hc_base: %ld x %ld x %ld x %ld\n",
+    ////        hc_scale->ne[0], hc_scale->ne[1], hc_scale->ne[2], hc_scale->ne[3],
+    ////        hc_base->ne[0], hc_base->ne[1], hc_base->ne[2], hc_base->ne[3]);
+    //ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
+    //ggml_tensor * scale_post = dsv4_view_1d(ctx0, hc_scale, 1, 1);
+    //ggml_tensor * scale_comb = dsv4_view_1d(ctx0, hc_scale, 1, 2);
 
-    *comb = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc));
-    *comb = dsv4_hc_affine(ctx0, *comb, scale_comb, base_comb);
-    *comb = ggml_sinkhorn(ctx0, *comb, hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps, false);
-    //*comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
-    //*comb = build_hc_sinkhorn(ctx0, hparams, *comb);
+    //ggml_tensor * base_pre  = dsv4_view_1d(ctx0, hc_base, hc, 0);
+    //ggml_tensor * base_post = dsv4_view_1d(ctx0, hc_base, hc, hc);
+    //ggml_tensor * base_comb = dsv4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
+
+    //ggml_tensor * pre = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc, nt, 0));
+    //pre = dsv4_hc_affine(ctx0, pre, scale_pre, base_pre);
+    //pre = ggml_sigmoid(ctx0, pre);
+    //pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
+
+    //auto post = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc, nt, hc));
+    //post = dsv4_hc_affine(ctx0, post, scale_post, base_post);
+    //post = ggml_sigmoid(ctx0, post);
+    //post = ggml_scale(ctx0, post, 2.0f);
+
+    //auto comb = ggml_cont(ctx0, dsv4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc));
+    //comb = dsv4_hc_affine(ctx0, comb, scale_comb, base_comb);
+    //comb = ggml_sinkhorn(ctx0, comb, hc, hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps, false);
+    ////*comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
+    ////*comb = build_hc_sinkhorn(ctx0, hparams, *comb);
+    //printf("pre: %ld x %ld x %ld x %ld, post: %ld x %ld x %ld x %ld, comb: %ld x %ld x %ld x %ld\n",
+    //        pre->ne[0], pre->ne[1], pre->ne[2], pre->ne[3], post->ne[0], post->ne[1], post->ne[2], post->ne[3],
+    //        comb->ne[0], comb->ne[1], comb->ne[2], comb->ne[3]);
+
+    *post_out = post;
+    *comb_out = comb;
 
     return llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
 }
