@@ -708,6 +708,7 @@ extern "C" {
         GGML_OP_MASK_TOPK,
         GGML_OP_SINKHORN,
         GGML_OP_HC_PRE,
+        GGML_OP_HC_POST,
 
         GGML_OP_COUNT,
     };
@@ -2618,6 +2619,13 @@ extern "C" {
             int                   S,
             int                   n_iters,
             float                 eps);
+
+    GGML_API struct ggml_tensor * ggml_hc_post(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * post,
+            struct ggml_tensor  * res,
+            struct ggml_tensor  * comb);
 
     // custom operators
 

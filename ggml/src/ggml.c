@@ -4336,9 +4336,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MASK_TOPK",
     "SINKHORN",
     "HC_PRE",
+    "HC_POST",
 };
 
-static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
+static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4461,10 +4462,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "mask_topk(mask, topk)",
     "sinkhorn(x)",
     "hc_pre(x,s,b)",
+    "hc_post(x,p,r,c)",
 
 };
 
-static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
+static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -10217,6 +10219,29 @@ struct ggml_tensor * ggml_hc_pre(
 
     return result;
 }
+
+struct ggml_tensor * ggml_hc_post(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * post,
+            struct ggml_tensor  * res,
+            struct ggml_tensor  * comb) {
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && post->type == GGML_TYPE_F32 && res->type == GGML_TYPE_F32 && comb->type == GGML_TYPE_F32);
+    GGML_ASSERT(x->ne[0] == res->ne[0]);
+    GGML_ASSERT(x->ne[1] == res->ne[2] && x->ne[1] == post->ne[1] && x->ne[1] == comb->ne[2]);
+    GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1 && post->ne[2] == 1 && post->ne[3] == 1 && res->ne[3] == 1 && comb->ne[3] == 1);
+    GGML_ASSERT(post->ne[0] == res->ne[1] && post->ne[0] == comb->ne[0] && post->ne[0] == comb->ne[1]);
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, x->ne[0], post->ne[0], x->ne[1]);
+    result->src[0] = x;
+    result->src[1] = post;
+    result->src[2] = res;
+    result->src[3] = comb;
+    result->op = GGML_OP_HC_POST;
+
+    return result;
+}
+
 
 
 // ggml_fill
@@ -23451,6 +23476,77 @@ static void ggml_compute_forward_hc_pre_f32(
     }
 }
 
+// ggml_compute_forward_hc_post
+
+//build_mhc_post: x = 4096 x 4096 x 1 x 1, post = 4 x 4096 x 1 x 1, residual = 4096 x 4 x 4096 x 1, comb = 4 x 4 x 4096 x 1
+//build_mhc_post: x = 4096 x 1 x 1 x 1,    post = 4 x 1 x 1 x 1,    residual = 4096 x 4 x 1 x 1,    comb = 4 x 4 x 1 x 1
+
+static void ggml_compute_forward_hc_post_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * x    = dst->src[0];
+    const struct ggml_tensor * post = dst->src[1];
+    const struct ggml_tensor * res  = dst->src[2];
+    const struct ggml_tensor * comb = dst->src[3];
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && post->type == GGML_TYPE_F32 && res->type == GGML_TYPE_F32 && comb->type == GGML_TYPE_F32);
+    GGML_ASSERT(x->ne[0] == res->ne[0]);
+    GGML_ASSERT(x->ne[1] == res->ne[2] && x->ne[1] == post->ne[1] && x->ne[1] == comb->ne[2]);
+    GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1 && post->ne[2] == 1 && post->ne[3] == 1 && res->ne[3] == 1 && comb->ne[3] == 1);
+    GGML_ASSERT(post->ne[0] == res->ne[1] && post->ne[0] == comb->ne[0] && post->ne[0] == comb->ne[1]);
+
+    int S = post->ne[0];
+    int T = x->ne[1];
+    int64_t npt = (T + nth - 1)/nth;
+
+    GGML_ASSERT(S <= 8);
+
+    // one token is S*S floats (16 at S=4): parallelize over tokens only
+    const int t0 = ith * npt;
+    const int t1 = MIN(t0 + npt, T);
+
+    float r[8];
+
+    int ne0 = x->ne[0];
+
+    for (int64_t t = t0; t < t1; ++t) {
+        const float * x_r    = (const float *)((const char *)x->data + t*x->nb[1]);
+        const float * post_r = (const float *)((const char *)post->data + t*post->nb[1]);
+        const float * comb_r = (const float *)((const char *)comb->data + t*comb->nb[2]);
+
+        for (int i0 = 0; i0 < ne0; ++i0) {
+            for (int j = 0; j < S; ++j) {
+                const float * res_r  = (const float *)((const char *)res->data + t*res->nb[2] + j*res->nb[1]);
+                r[j] = res_r[i0];
+            }
+            for (int i = 0; i < S; ++i) {
+                float sum = x_r[i0] * post_r[i];
+                for (int j = 0; j < S; ++j) {
+                    //sum += comb_r[i*S + j] * r[j];
+                    sum += comb_r[j*S + i] * r[j];
+                }
+                float * dst_r = (float *)((char *)dst->data + t*dst->nb[2] + i*dst->nb[1]);
+                dst_r[i0] = sum;
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_hc_post(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_hc_post_f32(params, dst);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
 static void ggml_compute_forward_hc_pre(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -25214,6 +25310,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_hc_pre(params, tensor);
             } break;
+        case GGML_OP_HC_POST:
+            {
+                ggml_compute_forward_hc_post(params, tensor);
+            } break;
         case GGML_OP_INDEXER_TOPK:
             {
                 if (!iqk_indexer_topk(tensor, params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, params->ith, params->nth)) {
@@ -26289,6 +26389,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
         case GGML_OP_HC_PRE:
+        case GGML_OP_HC_POST:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -27029,6 +27130,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MASK_TOPK:
         case GGML_OP_SINKHORN:
         case GGML_OP_HC_PRE:
+        case GGML_OP_HC_POST:
             {
                 n_tasks = n_threads;
             } break;

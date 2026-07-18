@@ -4134,6 +4134,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_HC_PRE:
             ggml_cuda_op_hc_pre(ctx, dst);
             break;
+        case GGML_OP_HC_POST:
+            ggml_cuda_op_hc_post(ctx, dst);
+            break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
             break;
@@ -5050,6 +5053,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_MASK_TOPK:
             return true;
         case GGML_OP_HC_PRE:
+        case GGML_OP_HC_POST:
             return true;
         case GGML_OP_SINKHORN: {
             const int sink_s = op->op_params[0];

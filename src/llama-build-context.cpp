@@ -550,7 +550,7 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, boo
 }
 
 //build_mhc_post: x = 4096 x 4096 x 1 x 1, post = 4 x 4096 x 1 x 1, residual = 4096 x 4 x 4096 x 1, comb = 4 x 4 x 4096 x 1
-//build_mhc_post: x = 4096 x 1 x 1 x 1, post = 4 x 1 x 1 x 1, residual = 4096 x 4 x 1 x 1, comb = 4 x 4 x 1 x 1
+//build_mhc_post: x = 4096 x 1 x 1 x 1,    post = 4 x 1 x 1 x 1,    residual = 4096 x 4 x 1 x 1,    comb = 4 x 4 x 1 x 1
 // x        = n_embd x n_tokens           <--- y in Pangu
 // post     = 4 x n_tokens                <--- h_post in Pangu
 // residual = n_embd x 4 x n_tokens       <--- Rin in Pangu
@@ -586,6 +586,8 @@ ggml_tensor * llm_build_context::build_mhc_post(
     //        __func__, x->ne[0], x->ne[1], x->ne[2], x->ne[3], post->ne[0], post->ne[1], post->ne[2], post->ne[3],
     //        residual->ne[0], residual->ne[1], residual->ne[2], residual->ne[3],
     //        comb->ne[0], comb->ne[1], comb->ne[2], comb->ne[3]);
+
+    return ggml_hc_post(ctx0, x, post, residual, comb);
 
     for (int64_t dst = 0; dst < n_stream; ++dst) {
         ggml_tensor * post_dst = ggml_cont(ctx0,
