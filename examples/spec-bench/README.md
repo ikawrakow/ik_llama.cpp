@@ -27,8 +27,7 @@ benchmarking through `llama-server`.
 
 ## Input modes
 
-Choose exactly one mode: built-ins (optionally narrowed with `--task`), one `-p` prompt, one `-f` file, or one `--prompts` JSONL dataset. Do not combine custom input with `--task`, and do not combine `-p` with `-f`. Custom prompts use category `custom`; file tasks use the file basename.
-
+Choose exactly one mode: built-ins (optionally narrowed with `--task`), one `-p` prompt, one `-f` file, or one `--prompts` JSONL dataset.
 Examples:
 
 ```bash
@@ -59,15 +58,6 @@ zero is speculative position one; the first conditional rate is `null` because i
 no preceding position.
 
 Acceptance length is defined consistently as `1 + accepted_tokens / num_drafts` in detailed JSON, compact JSON, Markdown, and repeat summaries.
-
-The common speculative-round helper is used by `llama-spec-bench`. CLI adoption is
-explicitly deferred: its interactive/session-aware loop also owns antiprompt,
-context-shift, EOG, and carry behavior, so extracting the contained boundary
-without changing those semantics would be invasive. Server migration remains out of scope.
-
-## Output and validation notes
-
-Backend initialization diagnostics may surround JSON result records. Select lines with `row_type` before parsing JSONL; spec-bench does not alter global CUDA logging streams. CLI parity is exact after normalizing its final display newline; proposal counters can differ at the final boundary. Server smoke is required to succeed, but server output parity is not claimed.
 
 ## Example
 

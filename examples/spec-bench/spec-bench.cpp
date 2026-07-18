@@ -9,13 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
-#include <map>
-#include <cinttypes>
-#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <limits>
-#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -693,23 +689,6 @@ static llama_batch spec_bench_make_batch(
     return batch;
 }
 
-static void spec_bench_limit_speculative_params(
-        common_params_speculative & params,
-        int                        max_draft_tokens) {
-    params.n_max = std::min(params.n_max, max_draft_tokens);
-    params.n_min = std::min(params.n_min, params.n_max);
-
-    for (auto & stage : params.stages) {
-        if (stage.has_n_max_override()) {
-            stage.n_max = std::min(stage.n_max, max_draft_tokens);
-        }
-        if (stage.has_n_min_override()) {
-            const int stage_max = stage.has_n_max_override() ? stage.n_max : params.n_max;
-            stage.n_min = std::min(stage.n_min, stage_max);
-        }
-    }
-}
-
 static spec_bench_attempt_result spec_bench_run_attempt(
         const spec_bench_task & task,
         const gpt_params & params,
@@ -1034,7 +1013,7 @@ static json spec_bench_compact_summary_json(const spec_bench_summary & summary) 
     return json{{"row_type", "summary"}, {"attempts", summary.attempts}, {"successes", summary.successes}, {"failures", summary.failures}, {"generated", summary.generated_tokens}, {"decode_s", summary.decode_s}, {"decode_tps", summary.decode_s > 0.0 ? summary.generated_tokens / summary.decode_s : 0.0}, {"speculative", spec_bench_metrics_json(summary.spec_delta)}};
 }
 
-static void spec_bench_print_markdown(const gpt_params & params, const spec_bench_options & opts, const std::vector<spec_bench_record> & records) {
+static void spec_bench_print_markdown(const spec_bench_options & opts, const std::vector<spec_bench_record> & records) {
     auto number = [](double value, int precision) {
         std::ostringstream out; out << std::fixed << std::setprecision(precision) << value; return out.str();
     };
@@ -1353,7 +1332,7 @@ int main(int argc, char ** argv) {
     }
 
     if (bench_opts.output_format == "md") {
-        spec_bench_print_markdown(params, bench_opts, records);
+        spec_bench_print_markdown(bench_opts, records);
     } else {
         *out << (bench_opts.output_details
             ? spec_bench_summary_json(params, bench_opts, tasks, summary)
