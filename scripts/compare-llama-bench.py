@@ -21,11 +21,17 @@ logger = logging.getLogger("compare-llama-bench")
 KEY_PROPERTIES = [
     "cpu_info", "gpu_info", "n_gpu_layers", "cuda", "vulkan", "metal", "sycl", "rpc", "gpu_blas",
     "blas", "model_filename", "model_type", "model_size", "model_n_params", "n_batch", "n_ubatch", "embeddings", "n_threads",
-    "type_k", "type_v", "use_mmap", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn", "n_prompt", "n_gen"
+    "type_k", "type_v", "use_mmap", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn",
+    "repack", "repack_auto", "repack_effective", "repack_status", "n_prompt", "n_gen"
 ]
 
+# These columns were introduced with the RTR metadata. Old `test` tables can
+# still be compared, but their RTR configuration is unknown rather than assumed
+# to match a newer run.
+OPTIONAL_SOURCE_COLUMNS = {"repack", "repack_auto", "repack_effective", "repack_status"}
+
 # Properties that are boolean and are converted to Yes/No for the table:
-BOOL_PROPERTIES = ["cuda", "vulkan", "metal", "sycl", "gpu_blas", "blas", "embeddings", "use_mmap", "no_kv_offload", "flash_attn"]
+BOOL_PROPERTIES = ["cuda", "vulkan", "metal", "sycl", "gpu_blas", "blas", "embeddings", "use_mmap", "no_kv_offload", "flash_attn", "repack", "repack_auto", "repack_effective"]
 
 # Header names for the table:
 PRETTY_NAMES = {
@@ -34,7 +40,8 @@ PRETTY_NAMES = {
     "model_size": "Model Size [GiB]", "model_n_params": "Num. of Par.", "n_batch": "Batch size", "n_ubatch": "Microbatch size",
     "n_threads": "Threads", "type_k": "K type", "type_v": "V type", "n_gpu_layers": "GPU layers", "split_mode": "Split mode",
     "main_gpu": "Main GPU", "no_kv_offload": "NKVO", "flash_attn": "FlashAttention", "tensor_split": "Tensor split",
-    "use_mmap": "Use mmap", "embeddings": "Embeddings",
+    "use_mmap": "Use mmap", "embeddings": "Embeddings", "repack": "RTR", "repack_auto": "RTR auto",
+    "repack_effective": "RTR effective", "repack_status": "RTR status",
 }
 
 DEFAULT_SHOW = ["model_type"]  # Always show these properties by default.
@@ -127,6 +134,9 @@ BENCH_TABLE_NAMES = ("test", "test_v2")
 BENCH_SOURCE_COLUMNS = list(dict.fromkeys(
     ["build_commit", "test_time", "avg_ts"] + KEY_PROPERTIES + ["n_prompt", "n_gen"]
 ))
+REQUIRED_BENCH_SOURCE_COLUMNS = [
+    column for column in BENCH_SOURCE_COLUMNS if column not in OPTIONAL_SOURCE_COLUMNS
+]
 
 
 def get_bench_source_query():
@@ -146,7 +156,7 @@ def get_bench_source_query():
             continue
 
         columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
-        missing = [column for column in BENCH_SOURCE_COLUMNS if column not in columns]
+        missing = [column for column in REQUIRED_BENCH_SOURCE_COLUMNS if column not in columns]
         if missing:
             logger.error(
                 "table %s is not compatible; missing required columns: %s",
@@ -155,8 +165,20 @@ def get_bench_source_query():
             )
             sys.exit(1)
 
-        # `table` is selected only from BENCH_TABLE_NAMES above.
-        selects.append(f"SELECT {', '.join(BENCH_SOURCE_COLUMNS)} FROM {table}")
+        # `table` and every selected column are from fixed local allowlists.
+        # NULL preserves the fact that an old table cannot report RTR settings.
+        projection = [
+            column if column in columns else f"NULL AS {column}"
+            for column in BENCH_SOURCE_COLUMNS
+        ]
+        unavailable_optional = OPTIONAL_SOURCE_COLUMNS - columns
+        if unavailable_optional:
+            logger.warning(
+                "table %s has no RTR metadata (%s); comparisons involving it cannot distinguish RTR settings",
+                table,
+                ", ".join(sorted(unavailable_optional)),
+            )
+        selects.append(f"SELECT {', '.join(projection)} FROM {table}")
 
     # UNION ALL is safe while the writer emits into exactly one versioned table.
     # Any future dual-write must replace this with run_id-based deduplication.
@@ -311,7 +333,11 @@ def get_rows(properties):
     select_string = ", ".join(
         [f"tb.{p}" for p in properties] + ["tb.n_prompt", "tb.n_gen", "AVG(tb.avg_ts)", "AVG(tc.avg_ts)"])
     equal_string = " AND ".join(
-        [f"tb.{p} = tc.{p}" for p in KEY_PROPERTIES] + [
+        [
+            (f"(tb.{p} IS tc.{p} OR tb.{p} IS NULL OR tc.{p} IS NULL)"
+             if p in OPTIONAL_SOURCE_COLUMNS else f"tb.{p} IS tc.{p}")
+            for p in KEY_PROPERTIES
+        ] + [
             f"tb.build_commit = '{hexsha8_baseline}'", f"tc.build_commit = '{hexsha8_compare}'"]
     )
     group_order_string = ", ".join([f"tb.{p}" for p in properties] + ["tb.n_gen", "tb.n_prompt"])
