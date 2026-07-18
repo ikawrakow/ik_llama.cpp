@@ -21,6 +21,11 @@ struct ggml_cuda_graph {
         if (graph != nullptr) {
             CUDA_CHECK(cudaGraphDestroy(graph));
         }
+        // The CPY/PACK write-indirection pointer table is cudaMalloc'd on demand and reused
+        // across replays; free it here so the device table is not leaked on graph destruction.
+        if (dest_ptrs_d != nullptr) {
+            CUDA_CHECK(cudaFree(dest_ptrs_d));
+        }
     }
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
@@ -32,13 +37,12 @@ struct ggml_cuda_graph {
     bool disable_due_to_failed_graph_capture = false;
     int number_consecutive_updates = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
-    bool use_cpy_indirection = false;
-    std::vector<char *> cpy_dest_ptrs;
-    char ** dest_ptrs_d;
+    // CPY and destination-rooted mutation ops share one graph-order pointer table.
+    bool use_write_indirection = false;
+    std::vector<char *> write_dest_ptrs;
+    char ** dest_ptrs_d = nullptr;
     int dest_ptrs_size = 0;
-    // Index to allow each cpy kernel to be aware of it's position within the graph
-    // relative to other cpy nodes.
-    int graph_cpynode_index = -1;
+    // Index of the next mutable write kernel, shared by CPY and PACK_CACHE_ROWS.
+    int graph_write_index = -1;
 #endif
 };
-

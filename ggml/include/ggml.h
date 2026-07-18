@@ -707,6 +707,11 @@ extern "C" {
         GGML_OP_INDEXER_TOPK,
         GGML_OP_MASK_TOPK,
         GGML_OP_SINKHORN,
+        GGML_OP_LATENT_ATTN,
+        GGML_OP_FUSED_RMS_NORM_ADD,
+        GGML_OP_ROPE_OFFSET,
+        GGML_OP_BATCHED_MIX,
+        GGML_OP_PACK_CACHE_ROWS,
 
         GGML_OP_COUNT,
     };
@@ -1556,6 +1561,26 @@ extern "C" {
             struct ggml_tensor  * b,
             float                 eps);
 
+    // Computes rms_norm(a, eps)*weight + residual. a and residual must be
+    // same-shape F32 tensors with contiguous row elements. Their effective data
+    // addresses and view offsets, plus the higher-dimensional strides for
+    // dimensions with more than one element, must be aligned to sizeof(float).
+    // weight may be NULL (unit weight) or a broadcastable F32/F16 tensor;
+    // noncanonical weights use a decomposed conversion/copy path instead of
+    // GGML_OP_FUSED_RMS_NORM_ADD. A canonical fused F32 weight must also have a
+    // float-aligned effective data address and view offset.
+    // All dimensions must be positive. All fused-path F32 tensor byte spans and
+    // the contiguous F32 result size must be representable by ptrdiff_t. CUDA
+    // also requires the logical row count to fit the device's grid-X limit.
+    // Automatic differentiation is not supported; gradient-bearing inputs are
+    // rejected at construction.
+    GGML_API struct ggml_tensor * ggml_fused_rms_norm_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * weight,
+            struct ggml_tensor  * residual,
+            float                 eps);
+
     GGML_API struct ggml_tensor * ggml_fused_norm(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1783,6 +1808,31 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // Pack two F32 channel regions directly into a row-strided persistent cache.
+    // Sources must use float-aligned effective addresses, view offsets, and row strides. The
+    // cache root, row stride, and dst_offset must be aligned for its F32, F16, or Q8_0 access.
+    // The returned tensor aliases cache at dst_offset and has shape [a.ne0+b.ne0, a.ne1].
+    GGML_API struct ggml_tensor * ggml_pack_cache_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * cache,
+            size_t                dst_offset);
+
+    // True iff ggml_pack_cache_rows would build without aborting; precheck to fall back to the
+    // legacy concat+cpy cache write on an unsupported layout instead of crashing.
+    GGML_API bool ggml_pack_cache_rows_valid(
+            const struct ggml_tensor * a,
+            const struct ggml_tensor * b,
+            const struct ggml_tensor * cache,
+            size_t                     dst_offset);
+
+    // Retarget an existing pack mutation to another in-bounds cache row. The new offset must
+    // preserve the destination type alignment required by ggml_pack_cache_rows().
+    GGML_API void ggml_pack_cache_rows_set_dst_offset(
+            struct ggml_tensor * pack,
+            size_t               dst_offset);
 
     GGML_API struct ggml_tensor * ggml_cast(
             struct ggml_context * ctx,
@@ -2046,6 +2096,36 @@ extern "C" {
             float                 attn_factor,
             float                 beta_fast,
             float                 beta_slow);
+
+    // F32 contiguous NeoX RoPE over [rot_off, rot_off + n_dims), copying all
+    // other channels. a must not carry a gradient and must have ne[3] == 1.
+    // b must be a packed contiguous I32 vector of length a->ne[2]. Frequency
+    // factors are not supported (c must be NULL).
+    GGML_API struct ggml_tensor * ggml_rope_ext_offset(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * c,
+            int                   n_dims,
+            int                   rot_off,
+            int                   mode,
+            int                   n_ctx_orig,
+            float                 freq_base,
+            float                 freq_scale,
+            float                 ext_factor,
+            float                 attn_factor,
+            float                 beta_fast,
+            float                 beta_slow);
+
+    // True iff ggml_rope_ext_offset would build without aborting; precheck to fall back to the
+    // legacy rope chain on an unsupported layout instead of crashing in the constructor.
+    GGML_API bool ggml_rope_ext_offset_valid(
+            const struct ggml_tensor * a,
+            const struct ggml_tensor * b,
+            const struct ggml_tensor * c,
+            int                        n_dims,
+            int                        rot_off,
+            int                        mode);
 
     GGML_API struct ggml_tensor * ggml_rope_multi(
             struct ggml_context * ctx,
@@ -2484,6 +2564,67 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // Latent attention over a packed K/V cache with an independently-visible K/V prefix.
+    // The value vector of cache row n is cache[dv_off .. dv_off+dv, n] (MLA "absorbed"
+    // layout: openPangu packs [ckv|k_pe] -> dv_off=0; DeepSeek/GLM_DSA packs [k_pe|ckv]
+    // rope-first -> dv_off=64). The prefix K/V rows are always visible (bias 0); the mask
+    // applies to the cache segment only.
+    //
+    // q:        [Dk, T, H]   F32, contiguous
+    // cache:    [Dk, N]      F32 / F16 / Q8_0; row stride nb[1] arbitrary (windowed views ok)
+    // prefix_k: [Dk, P]      F32 / F16, contiguous; NULL iff P == 0
+    // prefix_v: [P,  Dv]     F32 / F16, contiguous (value-transposed: ne0 = P); NULL iff P == 0
+    // mask:     [N,  >=T]    F32, additive, cache segment only; NULL = unmasked cache
+    // returns:  [Dv, T, H]   F32, contiguous
+    // Precondition: every query column must have at least one visible position (a prefix row,
+    // or a cache row not masked to -inf). Violating it is undefined: a fully-masked column with
+    // P == 0 yields NaN on CUDA and on the CPU dense path, and zeros on the CPU indexed path, so
+    // callers must not depend on the value. Inference-only: a gradient-bearing input is rejected.
+    GGML_API struct ggml_tensor * ggml_latent_attn_prefix_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * cache,
+            struct ggml_tensor  * prefix_k,
+            struct ggml_tensor  * prefix_v,
+            struct ggml_tensor  * mask,
+            int                   dv,
+            int                   dv_off,
+            float                 scale,
+            float                 max_bias);
+
+    // Indexed latent attention over absolute cache row ids shared across heads.
+    // indices: [topk, T] I32, contiguous; mask remains [N, >=T] and is gathered by index.
+    // Preconditions: each index must lie in [0, N); an out-of-range id aborts on CPU and is
+    // undefined behavior (an out-of-bounds device read) on CUDA. The visible-position and
+    // inference-only preconditions above apply here as well.
+    GGML_API struct ggml_tensor * ggml_latent_attn_indexed_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * cache,
+            struct ggml_tensor  * prefix_k,
+            struct ggml_tensor  * prefix_v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * indices,
+            int                   dv,
+            int                   dv_off,
+            float                 scale,
+            float                 max_bias);
+
+    // True iff the two constructors above would build the op without aborting (mode 0 = prefix,
+    // mode 1 = indexed). Precheck this to fall back to the legacy attention chain on a layout the
+    // fused op cannot represent, instead of crashing in the constructor.
+    GGML_API bool ggml_latent_attn_ext_valid(
+            const struct ggml_tensor * q,
+            const struct ggml_tensor * cache,
+            const struct ggml_tensor * prefix_k,
+            const struct ggml_tensor * prefix_v,
+            const struct ggml_tensor * mask,
+            const struct ggml_tensor * indices,
+            int                        dv,
+            int                        dv_off,
+            float                      max_bias,
+            int                        mode);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,
@@ -2604,6 +2745,29 @@ extern "C" {
             int                   n_iters,
             float                 eps,
             bool                  output_transposed);
+
+    // Strided token-batched contraction over a small non-leading axis.
+    //
+    // r:   [D, J, T] F32; nb[0] == sizeof(float), higher strides arbitrary
+    // mix: [J, O, T] F32; nb[0] == sizeof(float), higher strides arbitrary
+    // returns: [D, O, T] F32, contiguous
+    //
+    // Used higher strides, effective data addresses, and absolute view offsets
+    // must be float-aligned. Input byte spans must be ptrdiff_t-representable
+    // and contained by their root view sources.
+    //
+    // Computes out[d,o,t] = sum_j r[d,j,t] * mix[j,o,t]. Automatic
+    // differentiation is not supported; gradient-bearing inputs are rejected.
+    GGML_API struct ggml_tensor * ggml_batched_mix_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * r,
+            struct ggml_tensor  * mix);
+
+    // True iff ggml_batched_mix_ext would build without aborting; precheck to fall back to the
+    // legacy per-slot mix loop on an unsupported layout instead of crashing.
+    GGML_API bool ggml_batched_mix_ext_valid(
+            const struct ggml_tensor * r,
+            const struct ggml_tensor * mix);
 
     // custom operators
 

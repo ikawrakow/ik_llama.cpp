@@ -1,5 +1,7 @@
 #include "norm.cuh"
 
+#include <climits>
+
 template <int block_size, typename T>
 static __global__ void norm_f32(const T * x, float * dst, const int ncols, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
@@ -415,6 +417,95 @@ static __global__ void fused_rms_norm_f32_nc(
     }
 }
 
+template <int block_size>
+static __global__ void fused_rms_norm_add_f32(
+        const float * x, const float * weight, const float * residual, float * dst,
+        const int ncols, const int64_t ne1, const int64_t ne2,
+        const int64_t residual_stride_row, const int64_t residual_stride_channel,
+        const int64_t residual_stride_sample, const float eps) {
+    const int64_t row = (int64_t) blockIdx.x*blockDim.y + threadIdx.y;
+    const int tid = threadIdx.x;
+    const int64_t rows_per_sample = ne1*ne2;
+    const int64_t i3 = row/rows_per_sample;
+    const int64_t i2 = (row - i3*rows_per_sample)/ne1;
+    const int64_t i1 = row - i3*rows_per_sample - i2*ne1;
+    residual += i1*residual_stride_row + i2*residual_stride_channel + i3*residual_stride_sample;
+
+    float tmp = 0.0f;
+
+    for (int64_t col = tid; col < ncols; col += block_size) {
+        const float xi = x[row*ncols + col];
+        tmp += xi*xi;
+    }
+
+    tmp = warp_reduce_sum(tmp);
+    if (block_size > WARP_SIZE) {
+        __shared__ float s_sum[32];
+        const int warp_id = threadIdx.x/WARP_SIZE;
+        const int lane_id = threadIdx.x%WARP_SIZE;
+        if (lane_id == 0) {
+            s_sum[warp_id] = tmp;
+        }
+        __syncthreads();
+        tmp = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : 0.0f;
+        tmp = warp_reduce_sum(tmp);
+    }
+
+    const float scale = rsqrtf(tmp/ncols + eps);
+
+    for (int64_t col = tid; col < ncols; col += block_size) {
+        const float xi = x[row*ncols + col];
+        const float normalized = scale*weight[col]*xi;
+        dst[row*ncols + col] = __fadd_rn(normalized, residual[col]);
+    }
+}
+
+template <int block_size>
+static __global__ void fused_rms_norm_add_f32_nc(
+        const float * x, const float * weight, const float * residual, float * dst,
+        const int ncols, const int64_t nrows, const int64_t nchannels,
+        const int64_t stride_row, const int64_t stride_channel,
+        const int64_t stride_sample, const int64_t residual_stride_row,
+        const int64_t residual_stride_channel, const int64_t residual_stride_sample,
+        const float eps) {
+    const int64_t output_row = blockIdx.x;
+    const int64_t rows_per_sample = nrows * nchannels;
+    const int64_t sample  = output_row / rows_per_sample;
+    const int64_t channel = (output_row - sample * rows_per_sample) / nrows;
+    const int64_t row     = output_row - sample * rows_per_sample - channel * nrows;
+    const int tid = threadIdx.x;
+
+    x += sample*stride_sample + channel*stride_channel + row*stride_row;
+    residual += sample*residual_stride_sample + channel*residual_stride_channel + row*residual_stride_row;
+    dst      += output_row*ncols;
+
+    float tmp = 0.0f;
+    for (int64_t col = tid; col < ncols; col += block_size) {
+        const float xi = (float) x[col];
+        tmp += xi*xi;
+    }
+
+    tmp = warp_reduce_sum(tmp);
+    if constexpr (block_size > WARP_SIZE) {
+        static_assert(block_size == 1024, "unexpected block_size");
+        __shared__ float s_sum[32];
+        const int warp_id = threadIdx.x/WARP_SIZE;
+        const int lane_id = threadIdx.x%WARP_SIZE;
+        if (lane_id == 0) {
+            s_sum[warp_id] = tmp;
+        }
+        __syncthreads();
+        tmp = s_sum[lane_id];
+        tmp = warp_reduce_sum(tmp);
+    }
+
+    const float scale = rsqrtf(tmp/ncols + eps);
+    for (int64_t col = tid; col < ncols; col += block_size) {
+        const float normalized = scale*weight[col]*(float) x[col];
+        dst[col] = __fadd_rn(normalized, residual[col]);
+    }
+}
+
 template <typename T>
 static void norm_f32_cuda(const T * x, float * dst, const int ncols, const int nrows, const float eps, cudaStream_t stream) {
     GGML_ASSERT(ncols % WARP_SIZE == 0);
@@ -555,6 +646,51 @@ static void fused_rms_norm_f32_nc_cuda(
     } else {
         const dim3 block_dims(1024, 1, 1);
         fused_rms_norm_f32_nc<1024><<<blocks_num, block_dims, 0, stream>>>(x, y, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+    }
+}
+
+static void fused_rms_norm_add_f32_cuda(
+        const float * x, const float * weight, const float * residual, float * dst,
+        const int ncols, const int64_t nrows, const int64_t ne1, const int64_t ne2,
+        const int64_t residual_stride_row, const int64_t residual_stride_channel,
+        const int64_t residual_stride_sample, const float eps, cudaStream_t stream) {
+    const dim3 blocks_num((unsigned int) nrows, 1, 1);
+    if (ncols < 1024) {
+        constexpr int kBlockSize = 256;
+        const dim3 block_dims(kBlockSize, 1, 1);
+        fused_rms_norm_add_f32<kBlockSize><<<blocks_num, block_dims, 0, stream>>>(
+                x, weight, residual, dst, ncols, ne1, ne2, residual_stride_row,
+                residual_stride_channel, residual_stride_sample, eps);
+    } else {
+        const dim3 block_dims(1024, 1, 1);
+        fused_rms_norm_add_f32<1024><<<blocks_num, block_dims, 0, stream>>>(
+                x, weight, residual, dst, ncols, ne1, ne2, residual_stride_row,
+                residual_stride_channel, residual_stride_sample, eps);
+    }
+}
+
+static void fused_rms_norm_add_f32_nc_cuda(
+        const float * x, const float * weight, const float * residual, float * dst,
+        const int ncols, const int64_t nrows, const int64_t nchannels, const int64_t total_rows,
+        const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample,
+        const int64_t residual_stride_row, const int64_t residual_stride_channel,
+        const int64_t residual_stride_sample,
+        const float eps, cudaStream_t stream) {
+    // Flatten logical rows so valid higher-rank tensors do not depend on the
+    // CUDA grid Y/Z limits. The kernel reconstructs the original coordinates.
+    const dim3 blocks_num((unsigned int) total_rows, 1, 1);
+    if (ncols < 1024) {
+        const dim3 block_dims(WARP_SIZE, 1, 1);
+        fused_rms_norm_add_f32_nc<WARP_SIZE><<<blocks_num, block_dims, 0, stream>>>(
+                x, weight, residual, dst, ncols, nrows, nchannels,
+                stride_row, stride_channel, stride_sample,
+                residual_stride_row, residual_stride_channel, residual_stride_sample, eps);
+    } else {
+        const dim3 block_dims(1024, 1, 1);
+        fused_rms_norm_add_f32_nc<1024><<<blocks_num, block_dims, 0, stream>>>(
+                x, weight, residual, dst, ncols, nrows, nchannels,
+                stride_row, stride_channel, stride_sample,
+                residual_stride_row, residual_stride_channel, residual_stride_sample, eps);
     }
 }
 
@@ -705,6 +841,122 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
         } else {
             fused_rms_norm_f32_nc_cuda((const half *)src0_d, src1_d, dst_d, ne00, src0->ne[1], src0->ne[2], src0->ne[3], s01, s02, s03, eps, stream);
         }
+    }
+}
+
+static bool ggml_cuda_fused_rms_norm_add_f32_data_is_aligned(const ggml_tensor * tensor) {
+    return tensor->view_offs % sizeof(float) == 0 &&
+           (tensor->data == nullptr || (uintptr_t) tensor->data % sizeof(float) == 0);
+}
+
+static bool ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(const ggml_tensor * tensor) {
+    if (!ggml_cuda_fused_rms_norm_add_f32_data_is_aligned(tensor)) {
+        return false;
+    }
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+        if (tensor->ne[i] > 1 && tensor->nb[i] % sizeof(float) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ggml_cuda_fused_rms_norm_add_f32_layout_is_representable(
+        const ggml_tensor * tensor,
+        int64_t * nrows) {
+    const size_t max_span = (size_t) PTRDIFF_MAX;
+    size_t contiguous_bytes = sizeof(float);
+    size_t span_bytes = sizeof(float);
+    int64_t rows = 1;
+
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        const int64_t ne = tensor->ne[i];
+        if (ne <= 0 || (uint64_t) ne > (uint64_t) (max_span / contiguous_bytes)) {
+            return false;
+        }
+        contiguous_bytes *= (size_t) ne;
+
+        const size_t extent = (size_t) (ne - 1);
+        if (extent > 0 && tensor->nb[i] > (max_span - span_bytes) / extent) {
+            return false;
+        }
+        span_bytes += extent * tensor->nb[i];
+
+        if (i > 0) {
+            if (rows > INT64_MAX / ne) {
+                return false;
+            }
+            rows *= ne;
+        }
+    }
+
+    if (tensor->view_src != nullptr && tensor->view_offs > max_span - span_bytes) {
+        return false;
+    }
+
+    if (nrows != nullptr) {
+        *nrows = rows;
+    }
+    return true;
+}
+
+bool ggml_cuda_fused_rms_norm_add_shape_is_supported(const ggml_tensor * dst, int device) {
+    int64_t nrows;
+    return dst->src[0]->ne[0] <= INT_MAX &&
+           ggml_cuda_fused_rms_norm_add_f32_layout_is_representable(dst->src[0], &nrows) &&
+           ggml_cuda_fused_rms_norm_add_f32_layout_is_representable(dst->src[1], nullptr) &&
+           ggml_cuda_fused_rms_norm_add_f32_layout_is_representable(dst->src[2], nullptr) &&
+           ggml_cuda_fused_rms_norm_add_f32_layout_is_representable(dst, nullptr) &&
+           nrows <= ggml_cuda_info().devices[device].max_grid_x;
+}
+
+void ggml_cuda_op_fused_rms_norm_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src2 = dst->src[2];
+    const float * src0_d = (const float *) src0->data;
+    const float * src1_d = (const float *) src1->data;
+    const float * src2_d = (const float *) src2->data;
+    float * dst_d = (float *) dst->data;
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src2->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_cuda_fused_rms_norm_add_shape_is_supported(dst, ctx.device));
+    GGML_ASSERT(src0->ne[0] == src1->ne[0]);
+    GGML_ASSERT(src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
+    GGML_ASSERT(ggml_are_same_shape(src0, src2));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src2->nb[0] == sizeof(float));
+    GGML_ASSERT(ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(src0));
+    GGML_ASSERT(ggml_cuda_fused_rms_norm_add_f32_data_is_aligned(src1));
+    GGML_ASSERT(ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(src2));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+    GGML_ASSERT(eps > 0.0f);
+
+    const int ncols = (int) src0->ne[0];
+    int64_t total_rows;
+    GGML_ASSERT(ggml_cuda_fused_rms_norm_add_f32_layout_is_representable(src0, &total_rows));
+    const int64_t r01 = src2->nb[1]/sizeof(float);
+    const int64_t r02 = src2->nb[2]/sizeof(float);
+    const int64_t r03 = src2->nb[3]/sizeof(float);
+    if (ggml_is_contiguous(src0)) {
+        fused_rms_norm_add_f32_cuda(src0_d, src1_d, src2_d, dst_d, ncols, total_rows,
+                src0->ne[1], src0->ne[2], r01, r02, r03, eps, stream);
+    } else {
+        GGML_ASSERT(src0->nb[0] == sizeof(float));
+        const int64_t s01 = src0->nb[1]/sizeof(float);
+        const int64_t s02 = src0->nb[2]/sizeof(float);
+        const int64_t s03 = src0->nb[3]/sizeof(float);
+        fused_rms_norm_add_f32_nc_cuda(src0_d, src1_d, src2_d, dst_d, ncols,
+                src0->ne[1], src0->ne[2], total_rows, s01, s02, s03,
+                r01, r02, r03, eps, stream);
     }
 }
 

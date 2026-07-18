@@ -3,6 +3,7 @@
 #include "ggml-impl.h"
 #include "ggml-rpc.h"
 #include "ggml-moe-prefetch.h"
+#include "ggml-pack-cache-rows.h"
 #ifdef GGML_USE_IQK_MULMAT
 #include "iqk/iqk_mul_mat.h"
 #endif
@@ -911,6 +912,16 @@ GGML_CALL static bool ggml_backend_cpu_supports_op(ggml_backend_t backend, const
                 op->type != GGML_TYPE_IQ2_XS  &&
                 op->type != GGML_TYPE_IQ1_S   &&
                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
+        case GGML_OP_PACK_CACHE_ROWS:
+            return ggml_pack_cache_rows_op_is_valid(op);
+        case GGML_OP_LATENT_ATTN:
+            // The CPU LATENT_ATTN implementation is a scalar per-query-row reference kept for
+            // correctness/testing, not a throughput path. Report no CPU support so a capability
+            // gate anchored to a CPU-resident weight (a CPU-only or -ngl 0 run) keeps the
+            // vectorized legacy attention chain instead of silently adopting the reference op.
+            // Direct graph compute of a LATENT_ATTN node on the CPU backend still runs the
+            // reference; only scheduler auto-placement is declined here.
+            return false;
         case GGML_OP_MUL_MAT:
             return true;
             //return op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == ggml_internal_get_type_traits(op->src[0]->type).vec_dot_type;
@@ -1755,6 +1766,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             if (node->op == GGML_OP_REDUCE) {
                 sched->has_reduce = true;
             }
+            // The last op_params slot doubles as a force-new-split sentinel (== 0xff). Ops that
+            // store data there must keep it != 0xff: GGML_OP_ROPE_OFFSET stores an even rot_off
+            // (asserted rot_off % 2 == 0), so its value can never be 0xff (255, odd).
             if ((node->op == GGML_OP_ADD && node->op_params[0] == 0xff) ||
                  node->op == GGML_OP_REDUCE ||
                  node->op == GGML_OP_FAKE_CPY ||

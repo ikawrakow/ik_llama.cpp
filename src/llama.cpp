@@ -20,6 +20,7 @@
 #include "llama-spec-features.h"
 #include "llama-dflash.h"
 #include "llama-quantize.h"
+#include "graphs/openpangu-op-policy.h"
 
 #include "unicode.h"
 
@@ -638,24 +639,19 @@ bool llama_context::update_cache_copies() {
         return true;
     };
     if (model.arch == LLM_ARCH_OPENPANGU) {
-        auto & copies = cparams.mtp_op_type == MTP_OP_NONE ? openpangu_cache_copies : openpangu_cache_copies_mtp;
-        bool any = false;
-        for (auto & c : copies) {
-            if (!c.cpy) {
-                continue;
-            }
-            any = true;
-            if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src == nullptr || c.cpy->src[1] == nullptr) {
-                return false;
-            }
-            c.cpy->view_offs = kv_self.head*c.step;
-            c.cpy->src[1]->data = (char *)c.cpy->view_src->data + c.cpy->view_offs;
-            c.cpy->data = c.cpy->src[1]->data;
+        const uint32_t n_layer = model.hparams.n_layer;
+        auto & writes = cparams.mtp_op_type == MTP_OP_NONE ?
+            openpangu_cache_writes : openpangu_cache_writes_mtp;
+        if (!llama_openpangu_cache_writes_validate_and_retarget(
+                writes, kv_self.k_l, cparams.mtp_op_type,
+                n_layer, model.hparams.nextn_predict_layers,
+                mtp_n_heads, mtp_step_idx, kv_self.head, true)) {
+            return false;
         }
         if (!patch_dsa_cache_copies()) {
             return false;
         }
-        return any;
+        return true;
     }
     const int n_layer = model.mtp && cparams.mtp_op_type != MTP_OP_NONE ?
         model.hparams.n_layer : model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
@@ -742,8 +738,8 @@ llama_context::llama_context(const llama_model & model)
     // DSA indexer-key cache copy. Entries stay null for non-DSA models and non-indexer layers,
     // so update_cache_copies() is a no-op when DSA is off.
     dsa_cache_copies.resize(hparams.n_layer);
-    openpangu_cache_copies.resize(hparams.n_layer);
-    openpangu_cache_copies_mtp.resize(hparams.n_layer);
+    openpangu_cache_writes.resize(hparams.n_layer);
+    openpangu_cache_writes_mtp.resize(hparams.n_layer);
     llama_all_contexts().push_back(this);
 }
 
@@ -871,10 +867,34 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
         return 0;
     }
 
-    // Keep these fixed constants in sync with build_openpangu.cpp. This budget
-    // estimator mirrors that file's chunk loops, including dense-fallback attention
-    // chunks when the DSA schedule/indexer is absent, plus a small fixed margin below
-    // for graph-node bookkeeping drift.
+    // Keep these fixed constants and this accounting in sync with build_openpangu.cpp.
+    // This counts graph nodes only. Capability probes and fused candidates that a backend
+    // rejects stay in ctx0 but are left unreferenced, so they never enter gf->nodes and are
+    // not counted here. The dense fused-attn probe is decision-only: the adopted path builds
+    // fresh nodes, so the probe and its two views are always dead in the ctx0 meta-arena even
+    // when the gate accepts (a few dead tensors per layer, absorbed by arena headroom). In a
+    // GGML_OPENPANGU_LEGACY_OPS build the candidates are not built at all. A future backend that
+    // constructs a fused candidate and then falls back would grow only the ctx0 arena, not
+    // this node budget.
+    // Node derivation (ggml_new_tensor_* leaves do not enter gf->nodes):
+    //   * full-span fused dense/SWA/MTP: raw-cache view + mask view + op = 3 nodes;
+    //     a materialized legacy DSA sel_mask adds one add = 4. These replace baseline
+    //     attention nodes and need no chunk-scaled allowance here.
+    //   * C explicit dense/SWA/MTP chunks: 16*C + (C - 1) output concats + at most
+    //     7 shared K/V view/cast/transpose nodes = 17*C + 6 <= 32*C.
+    //   * I indexer chunks: 16*I common + up to I sel-index concats + 4*I mask ops
+    //     + up to I mask concats = 22*I <= 24*I (the two mask-storage leaves are not nodes).
+    //   * C DSA non-gather chunks: explicit fallback adds 10*C deferred-mask nodes,
+    //     giving at most 27*C + 6; fused fallback is at most 12*C. Keep the 48*C bound.
+    //   * G legacy gathered DSA subchunks across one outer chunk: 3 outer nodes + 26*G,
+    //     up to G cache casts, and G - 1 inner concats = 28*G + 2, plus at most 2
+    //     shared-view/outer-concat nodes = 28*G + 4 <= the 32 + 32*G bound.
+    //     When all C outer chunks gather, mode-1 emits 2*C query view/cont nodes,
+    //     2*C index view/cont nodes, C indexed ops, C - 1 output concats, and one
+    //     shared raw-cache view: exactly 6*C. Budget the legacy (max-node) chain
+    //     unconditionally: the capability-gated fused path only removes nodes, so this
+    //     stays an upper bound whether or not a layer adopts the fused op at run time.
+    //     The final 64 + 5% margin covers fixed per-layer setup and bookkeeping drift.
     static constexpr int64_t OPENPANGU_IDX_SCORE_CHUNK = 256;
     static constexpr int64_t OPENPANGU_ATT_SCORE_CHUNK = 256;
     static constexpr int64_t OPENPANGU_ATT_FULL_KQ_MAX_MIB = 1024;
@@ -896,47 +916,67 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
     const int64_t idx_chunks = idx_chunk > 0 && n_tokens > idx_chunk ? llama_div_ceil_i64(n_tokens, idx_chunk) : 0;
 
     int64_t extra_nodes = 0;
-    for (int64_t il = 0; il < n_layer_base; ++il) {
-        const bool is_swa_layer = hparams.n_swa > 0 && hparams.openpangu_window[il] > 0;
-        const bool is_dsa_layer = has_dsa_indexer && hparams.openpangu_window[il] == 0;
-        const int64_t n_kv_eff = !is_swa_layer ? n_kv :
-            llama_openpangu_calc_swa_window_view(n_kv, n_tokens, hparams.openpangu_window[il], pad).w_view;
+
+    // MTP graphs build only NextN layers, all with the shared MTP SWA window. The fused
+    // path is one full-span op per built head, so it has no dynamic chunk allowance.
+    // Under the opt-out, budget every model head although draft graphs usually build one.
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
+        const int64_t n_kv_eff = hparams.n_swa_mtp > 0 && hparams.n_swa > 0 ?
+            llama_openpangu_calc_swa_window_view(n_kv, n_tokens, hparams.n_swa_mtp, pad).w_view : n_kv;
         const double full_kq_bytes =
             (double) (n_kv_eff + n_sinks) * (double) n_heads * (double) n_tokens * (double) sizeof(float);
         const bool att_chunks =
             att_chunk > 0 && att_cap_mib > 0 && n_tokens > att_chunk &&
             full_kq_bytes > (double) att_cap_mib * 1024.0 * 1024.0;
-
-        if (!is_dsa_layer) {
-            // SWA and dense-fallback layers only use the outer attention chunk loop when
-            // the full score tensor would exceed the cap; there is no top-k gather subchunk loop.
-            if (att_chunks) {
-                extra_nodes += llama_div_ceil_i64(n_tokens, att_chunk) * 32;
-            }
-            continue;
-        }
-
-        // DSA layers build one top-k indexer chain per token chunk. In the deep prefill
-        // path, attention then adds an outer attention chunk loop plus a CUDA-grid-safe
-        // get_rows subchunk loop where topk * subchunk_tokens <= 65535.
-        extra_nodes += idx_chunks * 24;
         if (att_chunks) {
-            const bool can_prefill_gather =
-                hparams.f_max_alibi_bias == 0.0f &&
-                topk <= OPENPANGU_CUDA_GET_ROWS_GRID_Y_MAX;
-            const int64_t gather_tokens = can_prefill_gather ?
-                std::max<int64_t>(1, OPENPANGU_CUDA_GET_ROWS_GRID_Y_MAX / topk) : 1;
+            extra_nodes += hparams.nextn_predict_layers * llama_div_ceil_i64(n_tokens, att_chunk) * 32;
+        }
+    } else {
+        for (int64_t il = 0; il < n_layer_base; ++il) {
+            const bool is_swa_layer = hparams.n_swa > 0 && hparams.openpangu_window[il] > 0;
+            const bool is_dsa_layer = has_dsa_indexer && hparams.openpangu_window[il] == 0;
+            const int64_t n_kv_eff = !is_swa_layer ? n_kv :
+                llama_openpangu_calc_swa_window_view(n_kv, n_tokens, hparams.openpangu_window[il], pad).w_view;
+            const double full_kq_bytes =
+                (double) (n_kv_eff + n_sinks) * (double) n_heads * (double) n_tokens * (double) sizeof(float);
+            const bool att_chunks =
+                att_chunk > 0 && att_cap_mib > 0 && n_tokens > att_chunk &&
+                full_kq_bytes > (double) att_cap_mib * 1024.0 * 1024.0;
 
-            for (int64_t c0 = 0; c0 < n_tokens; c0 += att_chunk) {
-                const int64_t tc = std::min<int64_t>(att_chunk, n_tokens - c0);
-                const bool prefill_gather =
-                    can_prefill_gather &&
-                    n_kv >= n_tokens &&
-                    n_kv - n_tokens + c0 >= OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad;
-                if (prefill_gather) {
-                    extra_nodes += 32 + llama_div_ceil_i64(tc, gather_tokens) * 32;
-                } else {
-                    extra_nodes += 48;
+            if (!is_dsa_layer) {
+                // SWA and dense-fallback layers only use the outer attention chunk loop when
+                // the full score tensor would exceed the cap; there is no top-k gather subchunk loop.
+                if (att_chunks) {
+                    extra_nodes += llama_div_ceil_i64(n_tokens, att_chunk) * 32;
+                }
+                continue;
+            }
+
+            // DSA layers build one top-k indexer chain per token chunk. Deep prefill then
+            // adds an outer attention chunk loop. Mode-1 uses one indexed op for gathered
+            // chunks; the opt-out retains CUDA-grid-safe get_rows subchunks.
+            extra_nodes += idx_chunks * 24;
+            if (att_chunks) {
+                const bool can_prefill_gather =
+                    hparams.f_max_alibi_bias == 0.0f &&
+                    topk <= OPENPANGU_CUDA_GET_ROWS_GRID_Y_MAX;
+                const int64_t gather_tokens = can_prefill_gather ?
+                    std::max<int64_t>(1, OPENPANGU_CUDA_GET_ROWS_GRID_Y_MAX / topk) : 1;
+
+                for (int64_t c0 = 0; c0 < n_tokens; c0 += att_chunk) {
+                    const int64_t tc = std::min<int64_t>(att_chunk, n_tokens - c0);
+                    const bool prefill_gather =
+                        can_prefill_gather &&
+                        n_kv >= n_tokens &&
+                        n_kv - n_tokens + c0 >= OPENPANGU_DSA_GATHER_MIN_RATIO*topk + pad;
+                    if (prefill_gather) {
+                        // Intentionally retain the legacy allowance: an all-gather C-chunk
+                        // fused graph emits 6*C nodes, while the opt-out still emits the
+                        // bounded get_rows subchunk chain accounted here.
+                        extra_nodes += 32 + llama_div_ceil_i64(tc, gather_tokens) * 32;
+                    } else {
+                        extra_nodes += 48;
+                    }
                 }
             }
         }
@@ -7787,7 +7827,13 @@ struct llama_context * llama_init_from_model(
         }
     }
     if (model->arch == LLM_ARCH_OPENPANGU) {
-        LLAMA_LOG_INFO("%s: dsa_idx_topk  = %d\n",     __func__, cparams.fused_idx_topk);
+        const bool legacy_ops = openpangu_legacy_ops_forced();
+        LLAMA_LOG_INFO("%s: openpangu_ops = %s\n", __func__,
+                legacy_ops ? "legacy-forced (-DGGML_OPENPANGU_LEGACY_OPS=1)" : "fused (capability-gated)");
+        // legacy-forced dominates an explicit -fidx, so report the effective selection in that order.
+        const char * idx_topk_policy = legacy_ops ? "legacy-forced" :
+            (cparams.fused_idx_topk ? "explicit-force" : "auto (backend-gated)");
+        LLAMA_LOG_INFO("%s: dsa_idx_topk_policy = %s\n", __func__, idx_topk_policy);
         if (cparams.dsa_top_k > 0) {
             LLAMA_LOG_INFO("%s: dsa_top_k     = %d\n",     __func__, cparams.dsa_top_k);
         }

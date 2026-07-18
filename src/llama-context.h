@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-cparams.h"
 #include "llama-sampling.h"
+#include "llama-openpangu-cache-write.h"
 
 #include "llama-spec-features.h"
 
@@ -448,6 +449,7 @@ struct llama_context {
         ggml_tensor * cpy = nullptr;
         size_t        step = 0;
     };
+    using CacheWrite = llama_openpangu_cache_write;
     std::vector<CacheCopy> cache_copies;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
     // the K/V cache_copies fixup does NOT cover. Under graph reuse (FA pads KV to 256, so n_kv
@@ -457,8 +459,8 @@ struct llama_context {
     // uninitialized -> wrong block-max-pool/top-k -> degraded/NaN sparse-FA decode). Register the
     // kr_l cpy per layer here and patch its offset in update_cache_copies(), exactly like K/V.
     std::vector<CacheCopy> dsa_cache_copies;
-    std::vector<CacheCopy> openpangu_cache_copies;
-    std::vector<CacheCopy> openpangu_cache_copies_mtp;
+    std::vector<CacheWrite> openpangu_cache_writes;
+    std::vector<CacheWrite> openpangu_cache_writes_mtp;
 
     bool update_cache_copies();
 

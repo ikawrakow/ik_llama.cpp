@@ -112,7 +112,7 @@ static __global__ void rope_norm_fast(const float * src0, const float * src1, fl
 
 template<bool forward, bool has_ff, typename T>
 static __global__ void rope_neox(
-        const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
+        const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims, const int rot_off,
         const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
         const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors) {
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
@@ -126,15 +126,20 @@ static __global__ void rope_neox(
     const int row_x     = row_dst % ne1;
     const int channel_x = row_dst / ne1;
 
-    const int idst = row_dst*ne0 + i0/2;
-    const int ix   = channel_x*s2 + row_x*s1 + i0/2;
-
     if (i0 >= n_dims) {
-        dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
-        dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
+        const int copy_rel = i0 - n_dims;
+        const int copy_i0  = copy_rel < rot_off ? copy_rel : copy_rel + n_dims;
+        const int idst = row_dst*ne0 + copy_i0;
+        const int ix   = channel_x*s2 + row_x*s1 + copy_i0;
+        dst[idst + 0] = x[ix + 0];
+        dst[idst + 1] = x[ix + 1];
 
         return;
     }
+
+    const int ic_abs = rot_off + i0/2;
+    const int idst = row_dst*ne0 + ic_abs;
+    const int ix   = channel_x*s2 + row_x*s1 + ic_abs;
 
     const float theta_base = pos[channel_x]*powf(theta_scale, i0/2.0f);
 
@@ -481,10 +486,11 @@ static void rope_norm_cuda(
 
 template<bool forward, typename T>
 static void rope_neox_cuda(
-        const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims, const int nr,
+        const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims, const int rot_off, const int nr,
         const int32_t * pos, const float freq_scale, const float freq_base, const float ext_factor, const float attn_factor,
         const rope_corr_dims corr_dims, const float * freq_factors, cudaStream_t stream) {
     GGML_ASSERT(ne0 % 2 == 0);
+    GGML_ASSERT(rot_off >= 0 && rot_off % 2 == 0 && (int64_t) rot_off + n_dims <= ne0);
     const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
     const int n_blocks_x = (ne0 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(nr, n_blocks_x, 1);
@@ -493,11 +499,11 @@ static void rope_neox_cuda(
 
     if (freq_factors == nullptr) {
         rope_neox<forward, false, T><<<block_nums, block_dims, 0, stream>>>(
-            x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor,
+            x, dst, ne0, ne1, s1, s2, n_dims, rot_off, pos, freq_scale, ext_factor,
             attn_factor, corr_dims, theta_scale, freq_factors);
     } else {
         rope_neox<forward, true, T><<<block_nums, block_dims, 0, stream>>>(
-            x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor,
+            x, dst, ne0, ne1, s1, s2, n_dims, rot_off, pos, freq_scale, ext_factor,
             attn_factor, corr_dims, theta_scale, freq_factors);
     }
 }
@@ -634,6 +640,18 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
 
+    if (dst->op == GGML_OP_ROPE_OFFSET) {
+        GGML_ASSERT(src0->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_is_contiguous(src0));
+        GGML_ASSERT(src0->ne[3] == 1);
+        GGML_ASSERT(src1 != nullptr);
+        GGML_ASSERT(src1->type == GGML_TYPE_I32);
+        GGML_ASSERT(ggml_is_vector(src1));
+        GGML_ASSERT(src1->ne[0] == src0->ne[2]);
+        GGML_ASSERT(ggml_is_contiguous(src1));
+        GGML_ASSERT(src2 == nullptr);
+    }
+
     const float * src0_d = (const float *)src0->data;
     const float * src1_d = (const float *)src1->data;
 
@@ -657,7 +675,18 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int mode       = ((int32_t *) dst->op_params)[2];
     //const int n_ctx      = ((int32_t *) dst->op_params)[3];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+    const int rot_off    = dst->op == GGML_OP_ROPE_OFFSET ? ((int32_t *) dst->op_params)[15] : 0;
     mrope_sections sections;
+
+    if (dst->op == GGML_OP_ROPE_OFFSET) {
+        GGML_ASSERT(mode == GGML_ROPE_TYPE_NEOX);
+        GGML_ASSERT(src0->ne[0] % 2 == 0);
+        GGML_ASSERT(n_dims > 0 && n_dims % 2 == 0);
+        GGML_ASSERT(rot_off >= 0 && rot_off % 2 == 0);
+        GGML_ASSERT((int64_t) rot_off + n_dims <= src0->ne[0]);
+        GGML_ASSERT(src0->ne[0] <= 2LL*CUDA_ROPE_BLOCK_SIZE*CUDA_ROPE_MAX_GRID_Y);
+        GGML_ASSERT(ggml_nelements(src0) <= std::numeric_limits<int>::max());
+    }
 
     // RoPE alteration for extended context
     float freq_base;
@@ -702,11 +731,11 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     if (is_neox) {
         if (src0->type == GGML_TYPE_F32) {
             rope_neox_cuda<forward>(
-                (const float *) src0_d, (float *) dst_d, ne00, ne01, s01, s02, n_dims, nr, pos, freq_scale,
+                (const float *) src0_d, (float *) dst_d, ne00, ne01, s01, s02, n_dims, rot_off, nr, pos, freq_scale,
                 freq_base, ext_factor, attn_factor, corr_dims, freq_factors, stream);
         } else if (src0->type == GGML_TYPE_F16) {
             rope_neox_cuda<forward>(
-                (const half *) src0_d, (half *) dst_d, ne00, ne01, s01, s02, n_dims, nr, pos, freq_scale,
+                (const half *) src0_d, (half *) dst_d, ne00, ne01, s01, s02, n_dims, rot_off, nr, pos, freq_scale,
                 freq_base, ext_factor, attn_factor, corr_dims, freq_factors, stream);
         } else {
             GGML_ABORT("fatal error");

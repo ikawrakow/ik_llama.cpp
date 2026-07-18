@@ -40,6 +40,8 @@ endif()
 add_library(llama
             ../include/llama.h
             llama.cpp
+            llama-openpangu-cache-write.h
+            llama-openpangu-cache-write.cpp
             llama-spec-features.cpp
             llama-spec-features-dflash.cpp
             llama-dflash.cpp
@@ -146,4 +148,12 @@ if (GGML_MAX_CONTEXTS)
 endif()
 if (GGML_MAX_SRC)
   add_compile_definitions(GGML_MAX_SRC=${GGML_MAX_SRC})
+endif()
+
+# OpenPangu legacy-op bring-up switch: an all-or-nothing A/B baseline resolved at compile time
+# (see src/graphs/openpangu-op-policy.h). Configure with -DGGML_OPENPANGU_LEGACY_OPS=1 to force
+# every OpenPangu legacy chain; the default build leaves the capability-gated fused paths on.
+option(GGML_OPENPANGU_LEGACY_OPS "Force the OpenPangu legacy op chains for A/B bring-up" OFF)
+if (GGML_OPENPANGU_LEGACY_OPS)
+    target_compile_definitions(llama PRIVATE GGML_OPENPANGU_LEGACY_OPS=1)
 endif()
