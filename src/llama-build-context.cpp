@@ -549,6 +549,13 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, boo
     return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa_win, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa_win;
 }
 
+//build_mhc_post: x = 4096 x 4096 x 1 x 1, post = 4 x 4096 x 1 x 1, residual = 4096 x 4 x 4096 x 1, comb = 4 x 4 x 4096 x 1
+//build_mhc_post: x = 4096 x 1 x 1 x 1, post = 4 x 1 x 1 x 1, residual = 4096 x 4 x 1 x 1, comb = 4 x 4 x 1 x 1
+// x        = n_embd x n_tokens           <--- y in Pangu
+// post     = 4 x n_tokens                <--- h_post in Pangu
+// residual = n_embd x 4 x n_tokens       <--- Rin in Pangu
+// comb     = 4 x 4 x n_tokens
+
 ggml_tensor * llm_build_context::build_mhc_post(
         ggml_tensor * x,
         ggml_tensor * post,
@@ -559,6 +566,26 @@ ggml_tensor * llm_build_context::build_mhc_post(
         bool comb_output_dim0) {
     const int64_t n_tokens = x->ne[1];
     ggml_tensor * out = nullptr;
+
+    //ggml_tensor * x3 = ggml_reshape_3d(ctx0, x, n_embd, 1, n_tokens);
+    //ggml_tensor * post3 = ggml_reshape_3d(ctx0, post, 1, n_stream, n_tokens);
+    //ggml_tensor repeater;
+    //repeater.ne[0] = n_embd; repeater.ne[1] = n_stream; repeater.ne[2] = n_tokens; repeater.ne[3] = 1;
+    //ggml_tensor * term1 = ggml_mul(ctx0, ggml_repeat(ctx0, x3, &repeater), post3);
+
+    //ggml_tensor * term2 = nullptr;
+    //for (int s = 0; s < n_stream; ++s) {
+    //    ggml_tensor * m_s = ggml_cont(ctx0, ggml_view_2d(ctx0, comb, n_stream, n_tokens, comb->nb[2], s*comb->nb[1]));
+    //    ggml_tensor * m_s3 = ggml_reshape_3d(ctx0, m_s, 1, n_stream, n_tokens);
+    //    ggml_tensor * acc = ggml_mul(ctx0, residual, m_s3);
+    //    ggml_tensor * summed = ggml_sum_rows_ext(ctx0, acc, 1);
+    //    term2 = term2 ? ggml_concat(ctx0, term2, summed, 1) : summed;
+    //}
+    //return ggml_add(ctx0, term1, term2);
+    //printf("%s: x = %ld x %ld x %ld x %ld, post = %ld x %ld x %ld x %ld, residual = %ld x %ld x %ld x %ld, comb = %ld x %ld x %ld x %ld\n",
+    //        __func__, x->ne[0], x->ne[1], x->ne[2], x->ne[3], post->ne[0], post->ne[1], post->ne[2], post->ne[3],
+    //        residual->ne[0], residual->ne[1], residual->ne[2], residual->ne[3],
+    //        comb->ne[0], comb->ne[1], comb->ne[2], comb->ne[3]);
 
     for (int64_t dst = 0; dst < n_stream; ++dst) {
         ggml_tensor * post_dst = ggml_cont(ctx0,
@@ -578,7 +605,13 @@ ggml_tensor * llm_build_context::build_mhc_post(
         }
 
         cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
-        out = out ? ggml_concat(ctx0, out, cur, 1) : cur;
+        if (out) {
+            out = ggml_concat(ctx0, out, cur, 1);
+            cb(out, "mhc_post", dst);
+        } else {
+            out = cur;
+        }
+        //out = out ? ggml_concat(ctx0, out, cur, 1) : cur;
     }
 
     return out;
