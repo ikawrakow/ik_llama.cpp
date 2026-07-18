@@ -1066,13 +1066,13 @@ bool llama_model_loader::load_all_data(
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 
     // Number of worker threads for cuda and host tensor loading.
-    const int n_workers = 8;
+    constexpr int n_workers = LLAMA_MODEL_LOADER_N_LOAD_WORKERS;
 
     std::vector<std::vector<no_init<uint8_t>>> read_bufs(n_workers);
 
 #if defined(GGML_USE_CUDA)
     // One pinned staging buffer per worker for async uploads
-    constexpr size_t buffer_size = 16 * 1024 * 1024; // 16MB
+    constexpr size_t buffer_size = LLAMA_MODEL_LOADER_CUDA_STAGING_BYTES;
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<void*> host_ptrs;

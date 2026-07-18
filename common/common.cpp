@@ -3301,6 +3301,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "repack tensors if interleaved variant is available.\n"
                                                                         "0/off = disable, 1/on = always (legacy), auto = enable with auto-disable\n"
                                                                         "when estimated peak memory exceeds safe headroom. Default: 0."});
+    options.push_back({ "*",           "-rtra, --run-time-repack-auto", "alias for --run-time-repack auto" });
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
@@ -4262,6 +4263,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mtp             = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     mparams.flash_attn      = params.flash_attn;
     mparams.defer_experts   = params.defer_experts;
+    mparams.prefetch_experts = params.prefetch_experts;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {

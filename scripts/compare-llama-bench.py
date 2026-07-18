@@ -21,17 +21,24 @@ logger = logging.getLogger("compare-llama-bench")
 KEY_PROPERTIES = [
     "cpu_info", "gpu_info", "n_gpu_layers", "cuda", "vulkan", "metal", "sycl", "rpc", "gpu_blas",
     "blas", "model_filename", "model_type", "model_size", "model_n_params", "n_batch", "n_ubatch", "embeddings", "n_threads",
-    "type_k", "type_v", "use_mmap", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn",
+    "type_k", "type_v", "mmap_comparison", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn",
     "repack", "repack_auto", "repack_effective", "repack_status", "n_prompt", "n_gen"
 ]
 
 # These columns were introduced with the RTR metadata. Old `test` tables can
 # still be compared, but their RTR configuration is unknown rather than assumed
 # to match a newer run.
-OPTIONAL_SOURCE_COLUMNS = {"repack", "repack_auto", "repack_effective", "repack_status"}
+# Older schemas cannot truthfully report the new state.  They remain readable,
+# but source-schema provenance prevents NULL metadata from becoming a wildcard.
+OPTIONAL_SOURCE_COLUMNS = {
+    "repack", "repack_auto", "repack_effective", "repack_status",
+    "use_mmap_requested", "use_mmap_effective", "mmap_backed_buffers",
+}
+V3_MMAP_COLUMNS = {"use_mmap_requested", "use_mmap_effective", "mmap_backed_buffers"}
 
 # Properties that are boolean and are converted to Yes/No for the table:
-BOOL_PROPERTIES = ["cuda", "vulkan", "metal", "sycl", "gpu_blas", "blas", "embeddings", "use_mmap", "no_kv_offload", "flash_attn", "repack", "repack_auto", "repack_effective"]
+SHOW_PROPERTIES = ["source_schema"] + KEY_PROPERTIES[:-2] + ["use_mmap", "use_mmap_requested", "use_mmap_effective", "mmap_backed_buffers"]
+BOOL_PROPERTIES = ["cuda", "vulkan", "metal", "sycl", "gpu_blas", "blas", "embeddings", "mmap_comparison", "use_mmap", "use_mmap_requested", "use_mmap_effective", "mmap_backed_buffers", "no_kv_offload", "flash_attn", "repack", "repack_auto", "repack_effective"]
 
 # Header names for the table:
 PRETTY_NAMES = {
@@ -40,7 +47,7 @@ PRETTY_NAMES = {
     "model_size": "Model Size [GiB]", "model_n_params": "Num. of Par.", "n_batch": "Batch size", "n_ubatch": "Microbatch size",
     "n_threads": "Threads", "type_k": "K type", "type_v": "V type", "n_gpu_layers": "GPU layers", "split_mode": "Split mode",
     "main_gpu": "Main GPU", "no_kv_offload": "NKVO", "flash_attn": "FlashAttention", "tensor_split": "Tensor split",
-    "use_mmap": "Use mmap", "embeddings": "Embeddings", "repack": "RTR", "repack_auto": "RTR auto",
+    "source_schema": "Schema", "mmap_comparison": "Mmap state", "use_mmap": "Requested mmap", "use_mmap_requested": "Requested mmap", "use_mmap_effective": "Effective mmap", "mmap_backed_buffers": "Mmap buffers", "embeddings": "Embeddings", "repack": "RTR", "repack_auto": "RTR auto",
     "repack_effective": "RTR effective", "repack_status": "RTR status",
 }
 
@@ -93,7 +100,8 @@ parser.add_argument("-o", "--output", help=help_o, default="pipe")
 help_s = (
     "Columns to add to the table. "
     "Accepts a comma-separated list of values. "
-    f"Legal values: {', '.join(KEY_PROPERTIES[:-2])}. "
+    f"Legal values: {', '.join(SHOW_PROPERTIES)}. "
+    "Schema provenance is always added so results from incompatible table generations are never combined. "
     "Defaults to model name (model_type) and CPU and/or GPU name (cpu_info, gpu_info) "
     "plus any column where not all data points are the same. "
     "If the columns are manually specified, then the results for each unique combination of the "
@@ -127,27 +135,28 @@ if input_file is None:
 connection = sqlite3.connect(input_file)
 cursor = connection.cursor()
 
-# The SQL printer used to write `test`, and now writes the immutable versioned
-# table `test_v2`.  Keep the consumer compatible with both without mutating the
-# user's database or guessing arbitrary table names.
-BENCH_TABLE_NAMES = ("test", "test_v2")
+# The SQL printer wrote `test`, then `test_v2`, and now writes immutable
+# `test_v3`.  The schemas have different mmap semantics, so table provenance is
+# carried through the query and joins never cross generations.
+BENCH_TABLE_NAMES = ("test", "test_v2", "test_v3")
 BENCH_SOURCE_COLUMNS = list(dict.fromkeys(
-    ["build_commit", "test_time", "avg_ts"] + KEY_PROPERTIES + ["n_prompt", "n_gen"]
+    ["build_commit", "test_time", "avg_ts"] + KEY_PROPERTIES + ["use_mmap", "use_mmap_requested", "use_mmap_effective", "mmap_backed_buffers", "n_prompt", "n_gen"]
 ))
 REQUIRED_BENCH_SOURCE_COLUMNS = [
-    column for column in BENCH_SOURCE_COLUMNS if column not in OPTIONAL_SOURCE_COLUMNS
+    column for column in BENCH_SOURCE_COLUMNS
+    if column not in OPTIONAL_SOURCE_COLUMNS and column != "mmap_comparison"
 ]
 
 
 def get_bench_source_query():
     tables = cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?)",
         BENCH_TABLE_NAMES,
     ).fetchall()
     tables = {name for (name,) in tables}
 
     if not tables:
-        logger.error("No compatible llama-bench table found; expected `test` or `test_v2`.")
+        logger.error("No compatible llama-bench table found; expected `test`, `test_v2`, or `test_v3`.")
         sys.exit(1)
 
     selects = []
@@ -156,7 +165,12 @@ def get_bench_source_query():
             continue
 
         columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
-        missing = [column for column in REQUIRED_BENCH_SOURCE_COLUMNS if column not in columns]
+        required = set(REQUIRED_BENCH_SOURCE_COLUMNS)
+        if table in ("test_v2", "test_v3"):
+            required.update({"repack", "repack_auto", "repack_effective", "repack_status"})
+        if table == "test_v3":
+            required.update(V3_MMAP_COLUMNS)
+        missing = sorted(column for column in required if column not in columns)
         if missing:
             logger.error(
                 "table %s is not compatible; missing required columns: %s",
@@ -167,10 +181,16 @@ def get_bench_source_query():
 
         # `table` and every selected column are from fixed local allowlists.
         # NULL preserves the fact that an old table cannot report RTR settings.
-        projection = [
-            column if column in columns else f"NULL AS {column}"
-            for column in BENCH_SOURCE_COLUMNS
-        ]
+        projection = []
+        for column in BENCH_SOURCE_COLUMNS:
+            if column == "mmap_comparison":
+                # v3 is the only schema whose value is loader-effective.
+                # Historical rows retain requested mmap and never join with v3.
+                projection.append(
+                    ("use_mmap_effective" if table == "test_v3" else "use_mmap") + " AS mmap_comparison"
+                )
+            else:
+                projection.append(column if column in columns else f"NULL AS {column}")
         unavailable_optional = OPTIONAL_SOURCE_COLUMNS - columns
         if unavailable_optional:
             logger.warning(
@@ -178,7 +198,7 @@ def get_bench_source_query():
                 table,
                 ", ".join(sorted(unavailable_optional)),
             )
-        selects.append(f"SELECT {', '.join(projection)} FROM {table}")
+        selects.append(f"SELECT '{table}' AS source_schema, {', '.join(projection)} FROM {table}")
 
     # UNION ALL is safe while the writer emits into exactly one versioned table.
     # Any future dual-write must replace this with run_id-based deduplication.
@@ -330,14 +350,17 @@ def get_rows(properties):
     The resulting rows are then grouped by the provided properties and the t/s values are averaged.
     The returned rows are unique in terms of property combinations.
     """
+    # Keep schema provenance through aggregation as well as the JOIN. Without
+    # this, compatible pairs from different immutable schema generations could
+    # be averaged into one misleading result row.
+    properties = list(properties)
+    if "source_schema" not in properties:
+        properties.insert(0, "source_schema")
     select_string = ", ".join(
         [f"tb.{p}" for p in properties] + ["tb.n_prompt", "tb.n_gen", "AVG(tb.avg_ts)", "AVG(tc.avg_ts)"])
     equal_string = " AND ".join(
-        [
-            (f"(tb.{p} IS tc.{p} OR tb.{p} IS NULL OR tc.{p} IS NULL)"
-             if p in OPTIONAL_SOURCE_COLUMNS else f"tb.{p} IS tc.{p}")
-            for p in KEY_PROPERTIES
-        ] + [
+        [f"tb.{p} IS tc.{p}" for p in KEY_PROPERTIES] +
+        ["tb.source_schema IS tc.source_schema"] + [
             f"tb.build_commit = '{hexsha8_baseline}'", f"tc.build_commit = '{hexsha8_compare}'"]
     )
     group_order_string = ", ".join([f"tb.{p}" for p in properties] + ["tb.n_gen", "tb.n_prompt"])
@@ -347,35 +370,48 @@ def get_rows(properties):
     return cursor.execute(query).fetchall()
 
 
+def exit_no_comparable_configurations():
+    logger.error("no comparable configurations between baseline and compare data")
+    sys.exit(1)
+
+
 # If the user provided columns to group the results by, use them:
 if known_args.show is not None:
     show = known_args.show.split(",")
     unknown_cols = []
     for prop in show:
-        if prop not in KEY_PROPERTIES[:-2]:  # Last two values are n_prompt, n_gen.
+        if prop not in SHOW_PROPERTIES:
             unknown_cols.append(prop)
     if unknown_cols:
         logger.error(f"Unknown values for --show: {', '.join(unknown_cols)}")
         parser.print_usage()
         sys.exit(1)
+    if "source_schema" not in show:
+        show.insert(0, "source_schema")
     rows_show = get_rows(show)
+    if not rows_show:
+        exit_no_comparable_configurations()
 # Otherwise, select those columns where the values are not all the same:
 else:
     rows_full = get_rows(KEY_PROPERTIES)
+    if not rows_full:
+        exit_no_comparable_configurations()
     properties_different = []
     for i, kp_i in enumerate(KEY_PROPERTIES):
         if kp_i in DEFAULT_SHOW or kp_i == "n_prompt" or kp_i == "n_gen":
             continue
         for row_full in rows_full:
-            if row_full[i] != rows_full[0][i]:
+            # get_rows() prepends source_schema to retain provenance through
+            # grouping; KEY_PROPERTIES begins one column later in these rows.
+            if row_full[i + 1] != rows_full[0][i + 1]:
                 properties_different.append(kp_i)
                 break
 
     show = []
     # Show CPU and/or GPU by default even if the hardware for all results is the same:
     if "gpu_blas" not in properties_different and "n_gpu_layers" not in properties_different:
-        gpu_blas = bool(rows_full[0][KEY_PROPERTIES.index("gpu_blas")])
-        ngl = int(rows_full[0][KEY_PROPERTIES.index("n_gpu_layers")])
+        gpu_blas = bool(int(rows_full[0][KEY_PROPERTIES.index("gpu_blas") + 1]))
+        ngl = int(rows_full[0][KEY_PROPERTIES.index("n_gpu_layers") + 1])
 
         if not gpu_blas or ngl != 99 and "cpu_info" not in properties_different:
             show.append("cpu_info")
@@ -383,6 +419,9 @@ else:
             show.append("gpu_info")
 
     show += properties_different
+
+    if "source_schema" not in show:
+        show.insert(0, "source_schema")
 
     index_default = 0
     for prop in ["cpu_info", "gpu_info", "n_gpu_layers", "main_gpu"]:
@@ -395,6 +434,8 @@ else:
         except ValueError:
             pass
     rows_show = get_rows(show)
+    if not rows_show:
+        exit_no_comparable_configurations()
 
 table = []
 for row in rows_show:
@@ -415,7 +456,14 @@ for bool_property in BOOL_PROPERTIES:
     if bool_property in show:
         ip = show.index(bool_property)
         for row_table in table:
-            row_table[ip] = "Yes" if int(row_table[ip]) == 1 else "No"
+            value = row_table[ip]
+            row_table[ip] = "Unknown" if value is None else ("Yes" if int(value) == 1 else "No")
+
+if "repack_status" in show:
+    ip = show.index("repack_status")
+    for row_table in table:
+        if row_table[ip] is None:
+            row_table[ip] = "Unknown"
 
 if "model_type" in show:
     ip = show.index("model_type")

@@ -240,12 +240,12 @@ $ ./llama-bench -o json
 
 ### SQL
 
-SQL output is suitable for importing into a SQLite database. The current writer uses the versioned `test_v2` table; it can be piped into the `sqlite3` command line tool to add results to a database.
+SQL output is suitable for importing into a SQLite database. The current writer uses the immutable versioned `test_v3` table; it can be piped into the `sqlite3` command line tool to add results to a database. `use_mmap` remains the requested compatibility field. `use_mmap_requested`, `use_mmap_effective`, and `mmap_backed_buffers` record the requested setting, loader decision, and actual mmap-backed buffers separately.
 
 ```sh
 $ ./llama-bench -o sql | sqlite3 llama-bench.sqlite
-$ sqlite3 llama-bench.sqlite '.schema test_v2'
+$ sqlite3 llama-bench.sqlite '.schema test_v3'
 $ ./scripts/compare-llama-bench.py -i llama-bench.sqlite
 ```
 
-The compare script reads both legacy `test` data and current `test_v2` data. It combines the two only while the writer emits one table per run; a future dual-write schema must provide a stable run identifier and deduplication.
+The compare script reads legacy `test`, historical `test_v2`, and current `test_v3` data. It compares rows only within the same schema generation: `test_v2` has no effective-mmap semantics and is never compared with `test_v3`. The schema column is therefore always included in comparison output, including when `--show` is specified. A future dual-write schema must provide a stable run identifier and deduplication.

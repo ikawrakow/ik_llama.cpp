@@ -68,11 +68,22 @@ int main() {
         assert(params.use_mmap);
     }
 
+    {
+        const llama_model_params defaults = llama_model_default_params();
+        assert(!defaults.prefetch_experts);
+
+        gpt_params common_params;
+        common_params.prefetch_experts = true;
+        const llama_model_params model_params = common_model_params_to_llama(common_params);
+        assert(model_params.prefetch_experts);
+    }
+
     assert(!llama_model_mmap_requested(nullptr));
     assert(!llama_model_loader_mmap_enabled(nullptr));
     assert(!llama_model_has_mmap_buffers(nullptr));
     assert(!llama_model_repack_pass_executed(nullptr));
     assert(llama_model_n_repacked(nullptr) == 0);
+    assert(llama_model_rtr_status(nullptr) == LLAMA_RTR_STATUS_DISABLED);
 
     return 0;
 }

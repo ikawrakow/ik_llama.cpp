@@ -444,6 +444,9 @@ extern "C" {
         // Appended to preserve the source layout of all pre-existing fields.
         // The C ABI still requires callers and the library to use matching headers.
         bool repack_tensors_auto; // if true, may auto-disable run-time repack
+        // Appended to preserve the source layout of all pre-existing fields.
+        // The C ABI still requires callers and the library to use matching headers.
+        bool prefetch_experts; // if true, auto RTR preserves mmap for expert prefetch
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

@@ -203,6 +203,7 @@ llama_build_and_test(
 llama_build_and_test(test-regex-partial.cpp)
 llama_build_and_test(test-rtr-params.cpp)
 llama_build_and_test(test-cgroup-resolver.cpp)
+llama_build_and_test(test-rtr-auto-peak.cpp)
 
 # llama_target_and_test(test-opt.cpp) # SLOW
 

@@ -1341,7 +1341,13 @@ struct test {
     Ser  ser;
     std::vector<float> tensor_split;
     std::string cuda_params;
+    // `use_mmap` is retained as the command-line request for compatibility
+    // with historical SQL output.  The other three fields describe what the
+    // successfully loaded model actually did.
     bool use_mmap;
+    bool use_mmap_requested = false;
+    bool use_mmap_effective = false;
+    bool mmap_backed_buffers = false;
     bool embeddings;
     bool repack = false;
     bool repack_auto = false;
@@ -1393,6 +1399,9 @@ struct test {
         tensor_split = inst.tensor_split;
         cuda_params = inst.cuda_params;
         use_mmap = inst.use_mmap;
+        use_mmap_requested = llama_model_mmap_requested(lmodel);
+        use_mmap_effective = llama_model_loader_mmap_enabled(lmodel);
+        mmap_backed_buffers = llama_model_has_mmap_buffers(lmodel);
         embeddings = inst.embeddings;
         repack = inst.repack;
         repack_auto = inst.repack_auto;
@@ -1531,7 +1540,8 @@ struct test {
         }
         if (field == "cuda" || field == "vulkan" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
-            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" ||
+            field == "flash_attn" || field == "use_mmap" || field == "use_mmap_requested" ||
+            field == "use_mmap_effective" || field == "mmap_backed_buffers" || field == "embeddings" || field == "repack" ||
             field == "repack_auto" || field == "repack_effective" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse" || field == "muge" || field == "defer_experts" || field == "sas") {
@@ -1576,7 +1586,8 @@ struct test {
             std::to_string(n_gpu_layers), split_mode_str(split_mode),
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
-            tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
+            tensor_split_str, std::to_string(use_mmap), std::to_string(use_mmap_requested),
+            std::to_string(use_mmap_effective), std::to_string(mmap_backed_buffers), std::to_string(embeddings),
             std::to_string(repack), std::to_string(repack_auto), std::to_string(repack_effective), repack_status,
             std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
@@ -1600,7 +1611,7 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
-            "tensor_split", "use_mmap", "embeddings", "repack", "repack_auto", "repack_effective", "repack_status",
+            "tensor_split", "use_mmap", "use_mmap_requested", "use_mmap_effective", "mmap_backed_buffers", "embeddings", "repack", "repack_auto", "repack_effective", "repack_status",
             "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
             "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
@@ -2117,11 +2128,11 @@ struct markdown_printer : public printer {
 };
 
 struct sql_printer : public printer {
-    // Schema v2 adds the effective RTR decision fields. Keep a versioned table
+    // Schema v3 adds requested/effective mmap state. Keep a versioned table
     // name so SQL output can be appended to databases created by older builds
     // without failing on missing columns in the legacy `test` table.
     static const char * table_name() {
-        return "test_v2";
+        return "test_v3";
     }
 
     static std::string escape_sql(const std::string & value) {

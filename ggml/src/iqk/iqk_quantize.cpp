@@ -8440,8 +8440,7 @@ int iqk_repacked_type(const struct ggml_tensor * tensor) {
 
 uint64_t iqk_repack_workspace_size(const struct ggml_tensor * tensor) {
     constexpr int kChunk = 8;
-    if (!tensor || tensor->ne[1] % 4 != 0 ||
-        iqk_repacked_type(tensor) == (int) tensor->type) {
+    if (!tensor || iqk_repacked_type(tensor) == (int) tensor->type) {
         return 0;
     }
 
@@ -8468,8 +8467,6 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
     if (!tensor) return;
     if (!ggml_is_contiguous(tensor)) return;
     if (is_forbidden_tensor(tensor->name)) return;
-    if (tensor->ne[1] % 4) return;
-
     auto rptr = get_repack_info(tensor->type);
     if (!rptr) return;
     if (tensor->ne[1] % rptr->num_rows) return;

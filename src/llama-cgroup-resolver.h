@@ -3,6 +3,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <istream>
 #include <sstream>
@@ -12,7 +13,7 @@
 // cgroup paths in /proc files are absolute, lexical paths.  Never feed a
 // malformed path (in particular one containing "..") back into the host
 // filesystem: an unresolved cgroup must make the auto policy conservative.
-static bool llama_normalize_cgroup_path(const std::string & path, std::string & result) {
+static inline bool llama_normalize_cgroup_path(const std::string & path, std::string & result) {
     if (path.empty() || path[0] != '/') {
         return false;
     }
@@ -44,12 +45,12 @@ static bool llama_normalize_cgroup_path(const std::string & path, std::string & 
     return true;
 }
 
-static bool llama_cgroup_path_has_prefix(const std::string & path, const std::string & prefix) {
+static inline bool llama_cgroup_path_has_prefix(const std::string & path, const std::string & prefix) {
     return (prefix == "/" && !path.empty() && path[0] == '/') || path == prefix ||
         (prefix != "/" && path.size() > prefix.size() && path.compare(0, prefix.size(), prefix) == 0 && path[prefix.size()] == '/');
 }
 
-static std::string llama_cgroup_join_path(const std::string & base, const std::string & suffix) {
+static inline std::string llama_cgroup_join_path(const std::string & base, const std::string & suffix) {
     if (suffix == "/") {
         return base;
     }
@@ -58,7 +59,7 @@ static std::string llama_cgroup_join_path(const std::string & base, const std::s
 
 // Decode the four escapes permitted by proc(5) mountinfo. Reject any other
 // backslash sequence rather than guessing which host path it denotes.
-static bool llama_decode_mountinfo_path(const std::string & encoded, std::string & decoded) {
+static inline bool llama_decode_mountinfo_path(const std::string & encoded, std::string & decoded) {
     decoded.clear();
     for (size_t i = 0; i < encoded.size(); ++i) {
         if (encoded[i] != '\\') {
@@ -85,7 +86,7 @@ static bool llama_decode_mountinfo_path(const std::string & encoded, std::string
     return true;
 }
 
-static bool llama_comma_list_contains(const std::string & values, const std::string & needle) {
+static inline bool llama_comma_list_contains(const std::string & values, const std::string & needle) {
     std::stringstream stream(values);
     std::string value;
     while (std::getline(stream, value, ',')) {
@@ -108,11 +109,37 @@ struct llama_cgroup_mount {
 };
 
 struct llama_resolved_cgroup_mount {
+    bool        v2;
     std::string mountpoint;
     std::string path;
 };
 
-static bool llama_parse_cgroup_memberships(std::istream & file, std::vector<llama_cgroup_membership> & result) {
+// Intersect all visible hierarchy headrooms. The reader must fail closed for a
+// mapping it cannot evaluate; ignoring an unreadable bind/full-hierarchy mount
+// could otherwise turn an unknown ancestor limit into an unsafe AUTO_KEEP.
+template<typename Reader>
+static inline bool llama_intersect_cgroup_headrooms(
+        const std::vector<llama_resolved_cgroup_mount> & mappings,
+        Reader reader,
+        bool & limited,
+        uint64_t & bytes) {
+    uint64_t headroom = UINT64_MAX;
+    for (const auto & mapping : mappings) {
+        bool candidate_limited = false;
+        uint64_t candidate_bytes = 0;
+        if (!reader(mapping, candidate_limited, candidate_bytes)) {
+            return false;
+        }
+        if (candidate_limited) {
+            headroom = std::min(headroom, candidate_bytes);
+        }
+    }
+    limited = headroom != UINT64_MAX;
+    bytes = limited ? headroom : 0;
+    return true;
+}
+
+static inline bool llama_parse_cgroup_memberships(std::istream & file, std::vector<llama_cgroup_membership> & result) {
     result.clear();
     std::string line;
     while (std::getline(file, line)) {
@@ -139,12 +166,12 @@ static bool llama_parse_cgroup_memberships(std::istream & file, std::vector<llam
     return !file.bad();
 }
 
-static bool llama_read_cgroup_memberships(std::vector<llama_cgroup_membership> & result) {
+static inline bool llama_read_cgroup_memberships(std::vector<llama_cgroup_membership> & result) {
     std::ifstream file("/proc/self/cgroup");
     return file.is_open() && llama_parse_cgroup_memberships(file, result);
 }
 
-static bool llama_parse_cgroup_mounts(std::istream & file, std::vector<llama_cgroup_mount> & result) {
+static inline bool llama_parse_cgroup_mounts(std::istream & file, std::vector<llama_cgroup_mount> & result) {
     result.clear();
     std::string line;
     while (std::getline(file, line)) {
@@ -189,39 +216,38 @@ static bool llama_parse_cgroup_mounts(std::istream & file, std::vector<llama_cgr
     return !file.bad();
 }
 
-static bool llama_read_cgroup_mounts(std::vector<llama_cgroup_mount> & result) {
+static inline bool llama_read_cgroup_mounts(std::vector<llama_cgroup_mount> & result) {
     std::ifstream file("/proc/self/mountinfo");
     return file.is_open() && llama_parse_cgroup_mounts(file, result);
 }
 
-// Resolve one membership against its cgroup mounts. Host-relative mappings are
-// preferred; among them, use the most specific root. Keep equally-specific
-// duplicates (including bind mounts), whose headroom must be intersected.
-static bool llama_resolve_cgroup_mounts(
+// Resolve one membership against its cgroup mounts. Keep every host-relative
+// mapping: a less-specific/full-hierarchy mount can expose an ancestor limit
+// hidden by a more-specific bind mount. Namespace-relative mappings are only a
+// fallback when no host-relative mapping exists.
+static inline bool llama_resolve_cgroup_mounts(
         const llama_cgroup_membership & membership,
         const std::vector<llama_cgroup_mount> & mounts,
         std::vector<llama_resolved_cgroup_mount> & result) {
     result.clear();
-    size_t best_root_size = 0;
     bool have_host_relative = false;
-    bool have_exact = false;
+
+    auto append_unique = [&result, &membership] (const llama_cgroup_mount & mount, const std::string & path) {
+        const auto duplicate = std::find_if(result.begin(), result.end(), [&mount, &path, &membership] (const auto & existing) {
+            return existing.v2 == membership.v2 && existing.mountpoint == mount.mountpoint && existing.path == path;
+        });
+        if (duplicate == result.end()) {
+            result.push_back({ membership.v2, mount.mountpoint, path });
+        }
+    };
 
     for (const llama_cgroup_mount & mount : mounts) {
         if (mount.v2 != membership.v2 || !llama_cgroup_path_has_prefix(membership.path, mount.root)) {
             continue;
         }
-        const bool exact = membership.path == mount.root;
-        const size_t root_size = mount.root.size();
-        if (!have_host_relative || (exact && !have_exact) || (exact == have_exact && root_size > best_root_size)) {
-            result.clear();
-            best_root_size = root_size;
-            have_host_relative = true;
-            have_exact = exact;
-        }
-        if (exact == have_exact && root_size == best_root_size) {
-            const std::string suffix = mount.root == "/" ? membership.path : membership.path.substr(mount.root.size());
-            result.push_back({ mount.mountpoint, llama_cgroup_join_path(mount.mountpoint, suffix.empty() ? "/" : suffix) });
-        }
+        have_host_relative = true;
+        const std::string suffix = mount.root == "/" ? membership.path : membership.path.substr(mount.root.size());
+        append_unique(mount, llama_cgroup_join_path(mount.mountpoint, suffix.empty() ? "/" : suffix));
     }
     if (have_host_relative) {
         return true;
@@ -231,13 +257,13 @@ static bool llama_resolve_cgroup_mounts(
     // mounted hierarchy. In that case the membership is appended directly.
     for (const llama_cgroup_mount & mount : mounts) {
         if (mount.v2 == membership.v2) {
-            result.push_back({ mount.mountpoint, llama_cgroup_join_path(mount.mountpoint, membership.path) });
+            append_unique(mount, llama_cgroup_join_path(mount.mountpoint, membership.path));
         }
     }
     return !result.empty();
 }
 
-static bool llama_cgroup_parent_path(const std::string & path, const std::string & mountpoint, std::string & parent) {
+static inline bool llama_cgroup_parent_path(const std::string & path, const std::string & mountpoint, std::string & parent) {
     if (path == mountpoint) return false;
     const size_t slash = path.find_last_of('/');
     if (slash == std::string::npos) return false;
@@ -248,4 +274,28 @@ static bool llama_cgroup_parent_path(const std::string & path, const std::string
     }
     parent = path.substr(0, slash);
     return llama_cgroup_path_has_prefix(parent, mountpoint);
+}
+
+// A cgroup-v2 hierarchy root can be visible without exposing the memory
+// interface files at that exact mountpoint (for example through a namespace or
+// delegated mount).  A missing pair is safe to skip only at the mountpoint;
+// below it, or when just one file is missing, the hierarchy is unreadable and
+// the auto policy must fail closed.
+static inline bool llama_cgroup_v2_level_files(
+        bool limit_exists,
+        bool usage_exists,
+        bool at_mountpoint,
+        bool & skip_level) {
+    skip_level = false;
+    if (limit_exists != usage_exists) {
+        return false;
+    }
+    if (limit_exists) {
+        return true;
+    }
+    if (at_mountpoint) {
+        skip_level = true;
+        return true;
+    }
+    return false;
 }
