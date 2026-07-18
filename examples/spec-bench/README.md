@@ -9,7 +9,7 @@ benchmarking through `llama-server`.
 - built-in canonical tasks: `code`, `extract`, `story`
 - optional strict JSONL prompt-file override
 - baseline and speculative runs use the same binary and normal model/sampler args
-- one JSONL row per task attempt plus one summary row at the end
+- Markdown report by default; compact JSONL is available with `--output-format jsonl`
 - per-stage drafted and accepted counts by speculative position
 
 ## Benchmark-specific flags
@@ -19,6 +19,7 @@ benchmarking through `llama-server`.
 - `--repeat <n>`: repeat each task `n` times
 - `--retry <n>`: retry transient task failures up to `n` times
 - `--output-format jsonl`: select the common JSONL output convention; output is written to `stdout`
+- `--output-details`: include effective prompts, generated text, and runtime/provenance details
 - `--predict <n>` / `-n <n>`: command-level generation budget for every task without a row override
 
 ## Dataset format
@@ -34,15 +35,20 @@ IDs default to the one-based input line number and must be unique. Unknown field
 duplicate IDs, empty prompts, malformed JSON, and invalid `max_tokens` values are rejected.
 The file replaces the built-in task set for that invocation.
 
-The built-in extraction task uses the pinned `fixtures/youtube-extract.txt` snapshot
-from the introduction of <https://en.wikipedia.org/wiki/YouTube>, stopping before the
-`History` section. The fixture is stored directly in the repository and no network
-request is made during a benchmark.
+The canonical prompts are embedded into the executable at configure time from `prompts/code.txt`,
+`prompts/extract.txt`, and `prompts/story.txt`; no source-tree or network access is needed at runtime.
 
 Speculative output includes `drafted_by_position`, `accepted_by_position`,
 `acceptance_rate_by_position`, and `conditional_acceptance_rate` arrays for every stage.
 Array element zero is speculative position one. The first conditional rate is `null`
 because it has no preceding position.
+
+Acceptance length is defined consistently as `1 + accepted_tokens / num_drafts` in detailed JSON, compact JSON, Markdown, and repeat summaries.
+
+The common speculative-round helper is used by `llama-spec-bench`. CLI adoption is
+explicitly deferred: its interactive/session-aware loop also owns antiprompt,
+context-shift, EOG, and carry behavior, so extracting the contained boundary
+without changing those semantics would be invasive. Server migration remains out of scope.
 
 ## Example
 

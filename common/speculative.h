@@ -268,3 +268,29 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past);
+
+struct common_speculative_round_result {
+    bool attempted = false;
+    bool sampled_before_ready = false;
+    bool sampled_before_from_carry = false;
+    bool used_speculative = false;
+    bool failed = false;
+    std::string error;
+    llama_token sampled_before = LLAMA_TOKEN_NULL;
+    llama_tokens ids;
+};
+
+common_speculative_round_result common_speculative_run_round(
+    common_speculative * spec,
+    llama_model * model,
+    llama_context * ctx,
+    common_sampler * sampler,
+    llama_context * ctx_guidance,
+    common_params_speculative params,
+    const common_params_sampling & sparams,
+    llama_seq_id seq_id,
+    llama_pos n_past,
+    int n_predict_budget,
+    bool have_carry,
+    const llama_tokens & draft_history,
+    llama_token carry_token);

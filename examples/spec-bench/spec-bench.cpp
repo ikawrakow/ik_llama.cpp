@@ -1,12 +1,16 @@
 #include "common.h"
+#include "chat.h"
 #include "speculative.h"
 #include "llama.h"
+#include "spec-bench-prompts.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <map>
 #include <cinttypes>
-#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -22,13 +26,11 @@ using json = nlohmann::ordered_json;
 struct spec_bench_options {
     std::string prompts_path;
     std::vector<std::string> task_names;
+    std::string output_format = "md";
+    bool output_details = false;
+    bool task_selection_seen = false;
     int repeat = 1;
     int retry = 0;
-};
-
-struct spec_bench_git_info {
-    std::string branch = "unknown";
-    std::string commit = LLAMA_COMMIT;
 };
 
 struct spec_bench_task {
@@ -76,9 +78,15 @@ struct spec_bench_attempt_result {
     double prompt_s = 0.0;
     double decode_s = 0.0;
     double total_s = 0.0;
+    std::string effective_prompt;
     spec_bench_metrics_delta spec_delta;
 };
 
+struct spec_bench_record {
+    spec_bench_task task;
+    spec_bench_attempt_result result;
+    int repeat_index = 0;
+};
 struct spec_bench_summary {
     int attempts = 0;
     int successes = 0;
@@ -92,86 +100,15 @@ struct spec_bench_summary {
     spec_bench_metrics_delta spec_delta;
 };
 
-static std::string spec_bench_trim_copy(std::string value) {
-    return string_strip(value);
-}
-
-static std::string spec_bench_run_command_capture(const char * command) {
-#if defined(_WIN32)
-    FILE * pipe = _popen(command, "r");
-#else
-    FILE * pipe = popen(command, "r");
-#endif
-    if (pipe == nullptr) {
-        return "";
-    }
-
-    std::string output;
-    char buffer[256];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        output += buffer;
-    }
-
-#if defined(_WIN32)
-    const int rc = _pclose(pipe);
-#else
-    const int rc = pclose(pipe);
-#endif
-    if (rc != 0) {
-        return "";
-    }
-
-    return spec_bench_trim_copy(output);
-}
-
-static spec_bench_git_info spec_bench_get_git_info() {
-    spec_bench_git_info info;
-
-    const std::string branch = spec_bench_run_command_capture("git rev-parse --abbrev-ref HEAD");
-    if (!branch.empty()) {
-        info.branch = branch;
-    }
-
-    const std::string commit = spec_bench_run_command_capture("git rev-parse HEAD");
-    if (!commit.empty()) {
-        info.commit = commit;
-    }
-
-    return info;
-}
-
-static std::string spec_bench_read_fixture(const char * name) {
-#if defined(SPEC_BENCH_FIXTURE_DIR)
-    const std::string path = std::string(SPEC_BENCH_FIXTURE_DIR) + "/" + name;
-#else
-    const std::string path = std::string("examples/spec-bench/fixtures/") + name;
-#endif
-
-    std::ifstream in(path);
-    if (!in) {
-        throw std::runtime_error("failed to open benchmark fixture: " + path);
-    }
-
-    std::ostringstream contents;
-    contents << in.rdbuf();
-    const std::string result = contents.str();
-    if (string_strip(result).empty()) {
-        throw std::runtime_error("benchmark fixture is empty: " + path);
-    }
-    return result;
-}
-
 static std::vector<spec_bench_task> spec_bench_builtin_tasks() {
-    const std::string extract_prompt =
-        "Extract all core events with their exact dates into a bulleted list from the following text\n\n" +
-        spec_bench_read_fixture("youtube-extract.txt");
+    const std::string extract_prompt = SPEC_BENCH_PROMPT_EXTRACT;
 
     return {
         {
             /* .id = */ "builtin-code",
             /* .name = */ "code",
             /* .category = */ "code",
-            /* .prompt = */ "Write a quick sort implementation in python",
+            /* .prompt = */ SPEC_BENCH_PROMPT_CODE,
             /* .max_tokens = */ -1,
             /* .builtin = */ true,
         },
@@ -187,7 +124,7 @@ static std::vector<spec_bench_task> spec_bench_builtin_tasks() {
             /* .id = */ "builtin-story",
             /* .name = */ "story",
             /* .category = */ "long-form-summary",
-            /* .prompt = */ "Give me an extended summary of the history of Bulgaria",
+            /* .prompt = */ SPEC_BENCH_PROMPT_STORY,
             /* .max_tokens = */ -1,
             /* .builtin = */ true,
         },
@@ -202,7 +139,8 @@ static void spec_bench_print_usage(const char * argv0) {
     LOG_TEE("  --task LIST           built-in tasks to run, e.g. code,extract,story\n");
     LOG_TEE("  --repeat N            repeat each task N times (default: 1)\n");
     LOG_TEE("  --retry N             retry each failed task up to N times (default: 0)\n");
-    LOG_TEE("  --output-format jsonl emit comparable JSONL rows (default)\n");
+    LOG_TEE("  --output-format md|jsonl emit Markdown by default, or JSONL\n");
+    LOG_TEE("  --output-details     include prompt/output/provenance/runtime details\n");
     LOG_TEE("\n");
 }
 
@@ -242,6 +180,13 @@ static bool spec_bench_parse_args(
             if (!value) {
                 return false;
             }
+            opts.task_selection_seen = true;
+            for (const auto & selection : string_split(std::string(value), ",")) {
+                if (string_strip(selection).empty()) {
+                    LOG_TEE("--task must not contain empty selections\n");
+                    return false;
+                }
+            }
             for (const auto & name : string_split(std::string(value), ',')) {
                 const std::string trimmed = string_strip(name);
                 if (!trimmed.empty()) {
@@ -266,6 +211,20 @@ static bool spec_bench_parse_args(
             opts.retry = std::max(0, std::stoi(value));
             continue;
         }
+        if (arg == "--output-format") {
+            const char * value = require_value("--output-format");
+            if (!value) { return false; }
+            opts.output_format = string_strip(value);
+            if (opts.output_format != "md" && opts.output_format != "jsonl") {
+                LOG_TEE("--output-format must be md or jsonl\n");
+                return false;
+            }
+            continue;
+        }
+        if (arg == "--output-details") {
+            opts.output_details = true;
+            continue;
+        }
         if (arg == "--output") {
             LOG_TEE("--output is not a benchmark destination; use --output-format jsonl and redirect stdout\n");
             return false;
@@ -286,18 +245,6 @@ static std::vector<char *> spec_bench_make_argv(std::vector<std::string> & args)
     return out;
 }
 
-static bool spec_bench_validate_output_format(const std::vector<std::string> & args) {
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (args[i] != "--output-format") {
-            continue;
-        }
-        if (i + 1 >= args.size() || args[i + 1] != "jsonl") {
-            LOG_TEE("llama-spec-bench only supports --output-format jsonl\n");
-            return false;
-        }
-    }
-    return true;
-}
 
 static std::vector<spec_bench_task> spec_bench_load_dataset(const std::string & path) {
     std::ifstream in(path);
@@ -505,13 +452,12 @@ static void spec_bench_accumulate(spec_bench_summary & summary, const spec_bench
     }
 }
 
+static double spec_bench_acceptance_rate(uint64_t accepted, uint64_t drafted);
+static double spec_bench_acceptance_length(uint64_t accepted, uint64_t rounds);
+
 static json spec_bench_stage_json(const spec_bench_stage_delta & stage) {
-    const double acceptance_rate = stage.draft_tokens > 0
-        ? (double) stage.accepted_tokens / (double) stage.draft_tokens
-        : 0.0;
-    const double acceptance_length = stage.num_drafts > 0
-        ? 1.0 + (double) stage.accepted_tokens / (double) stage.num_drafts
-        : 0.0;
+    const double acceptance_rate = spec_bench_acceptance_rate(stage.accepted_tokens, stage.draft_tokens);
+    const double acceptance_length = spec_bench_acceptance_length(stage.accepted_tokens, stage.num_drafts);
 
     json drafted_by_position = json::array();
     json accepted_by_position = json::array();
@@ -556,12 +502,8 @@ static json spec_bench_stage_json(const spec_bench_stage_delta & stage) {
 }
 
 static json spec_bench_metrics_json(const spec_bench_metrics_delta & delta) {
-    const double acceptance_rate = delta.draft_tokens > 0
-        ? (double) delta.accepted_tokens / (double) delta.draft_tokens
-        : 0.0;
-    const double acceptance_length = delta.num_drafts > 0
-        ? 1.0 + (double) delta.accepted_tokens / (double) delta.num_drafts
-        : 0.0;
+    const double acceptance_rate = spec_bench_acceptance_rate(delta.accepted_tokens, delta.draft_tokens);
+    const double acceptance_length = spec_bench_acceptance_length(delta.accepted_tokens, delta.num_drafts);
 
     json stages = json::array();
     for (const auto & stage : delta.stages) {
@@ -652,6 +594,20 @@ static std::string spec_bench_decode_tokens(
     return text;
 }
 
+static std::string spec_bench_effective_prompt(
+        llama_model * model,
+        const gpt_params & params,
+        const std::string & prompt) {
+    if (!params.enable_chat_template) {
+        return prompt;
+    }
+    auto chat_templates = common_chat_templates_init(model, params.chat_template);
+    if (!chat_templates) {
+        throw std::runtime_error("failed to initialize chat templates");
+    }
+    return common_chat_format_single(chat_templates.get(), {}, common_chat_msg{"user", prompt}, true, params.use_jinja);
+}
+
 static llama_batch spec_bench_make_batch(
         const llama_tokens & tokens,
         int                  offset,
@@ -702,7 +658,8 @@ static spec_bench_attempt_result spec_bench_run_attempt(
         return result;
     }
 
-    llama_tokens prompt_tokens = common_tokenize(ctx, task.prompt, true, true);
+    result.effective_prompt = spec_bench_effective_prompt(model, params, task.prompt);
+    llama_tokens prompt_tokens = common_tokenize(ctx, result.effective_prompt, true, true);
     result.prompt_tokens = (int) prompt_tokens.size();
 
     const int n_ctx = llama_n_ctx(ctx);
@@ -718,17 +675,21 @@ static spec_bench_attempt_result spec_bench_run_attempt(
         llama_kv_cache_clear(ctx);
     }
     llama_reset_timings(ctx);
+    if (params.has_mtp) {
+        llama_set_embeddings(ctx, true);
+    }
 
     llama_tokens embd = prompt_tokens;
     llama_tokens speculative_tokens = prompt_tokens;
     int n_past = 0;
     int n_remain = task_max_tokens;
     bool embd_is_prompt = true;
+    int final_prompt_output_index = -1;
+    llama_pos final_prompt_hidden_pos = -1;
+    bool have_carry = false;
+    llama_token carry_token = LLAMA_TOKEN_NULL;
 
     const auto spec_before = common_speculative_get_metrics_snapshot(spec);
-    if (spec != nullptr) {
-        common_speculative_begin(spec, prompt_tokens);
-    }
     for (llama_token token : prompt_tokens) {
         common_sampler_accept(sampler, ctx, token, false);
     }
@@ -752,10 +713,34 @@ static spec_bench_attempt_result spec_bench_run_attempt(
                     return result;
                 }
             }
+            if (embd_is_prompt && i + n_eval == (int) embd.size()) {
+                final_prompt_output_index = n_eval - 1;
+                final_prompt_hidden_pos = n_past + n_eval - 1;
+            }
             llama_batch_free(batch);
             n_past += n_eval;
         }
         embd.clear();
+    }
+
+    if (spec != nullptr) {
+        static const llama_tokens empty_speculative_prompt;
+        const llama_tokens & speculative_prompt =
+            params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            !params.speculative.has_composite_stage_chain()
+                ? empty_speculative_prompt
+                : speculative_tokens;
+        common_speculative_begin(spec, speculative_prompt);
+        if (params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            final_prompt_output_index >= 0 &&
+            final_prompt_hidden_pos >= 0 &&
+            !common_speculative_capture_output_hidden(spec, ctx, final_prompt_output_index, 0, final_prompt_hidden_pos)) {
+            result.error = "failed to capture final prompt hidden state";
+            return result;
+        }
+    }
+    if (params.has_mtp) {
+        llama_set_embeddings(ctx, false);
     }
 
     const int64_t t_prompt_end_us = ggml_time_us();
@@ -768,109 +753,53 @@ static spec_bench_attempt_result spec_bench_run_attempt(
         llama_token fallback_sampled = LLAMA_TOKEN_NULL;
 
         if (spec != nullptr && n_remain >= 3) {
-            int max_usable_draft = std::min(n_remain - 2, n_ctx - n_past - 2);
-            max_usable_draft = std::min(max_usable_draft, (int) llama_n_batch(ctx) - 1);
-            max_usable_draft = std::max(max_usable_draft, 0);
-
-            if (max_usable_draft > 0) {
-                common_params_speculative speculative_params = params.speculative;
-                spec_bench_limit_speculative_params(speculative_params, max_usable_draft);
-                const llama_token sampled_before = common_sampler_sample_legacy(sampler, ctx, nullptr);
+            static const llama_tokens empty_speculative_history;
+            const llama_tokens & draft_history =
+                params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+                !params.speculative.has_composite_stage_chain()
+                    ? empty_speculative_history
+                    : speculative_tokens;
+            auto round = common_speculative_run_round(
+                spec, model, ctx, sampler, nullptr, params.speculative, params.sparams,
+                0, n_past, n_remain, have_carry, draft_history, carry_token);
+            if (round.failed) {
+                result.error = round.error;
+                return result;
+            }
+            if (round.sampled_before_ready && !round.used_speculative) {
                 have_fallback_sampled = true;
-                fallback_sampled = sampled_before;
-                common_sampler_accept(sampler, ctx, sampled_before, true);
-
-                auto draft_result = common_speculative_draft_ex(
-                    spec,
-                    ctx,
-                    speculative_params,
-                    speculative_tokens,
-                    sampled_before,
-                    n_past,
-                    0);
-
-                auto & draft = draft_result.tokens;
-
-                const int min_usable_draft = speculative_params.get_min_usable_stage_n_min();
-                if ((int) draft.size() >= min_usable_draft && !draft.empty()) {
-                    if (llama_model_has_recurrent(model)) {
-                        if (!common_speculative_before_draft(
-                                spec,
-                                model,
-                                ctx,
-                                sampler,
-                                params.sparams,
-                                0,
-                                n_past,
-                                sampled_before,
-                                (int) draft.size() + 1,
-                                params.speculative.recurrent_ckpt_mode)) {
-                            draft.clear();
-                        }
-                    }
-
-                    if (!draft.empty()) {
-                        llama_batch verify_batch = llama_batch_init((int) draft.size() + 1, 0, 1);
-                        std::vector<int> verify_indices;
-                        verify_indices.reserve(draft.size() + 1);
-
-                        common_batch_add(verify_batch, sampled_before, n_past, {0}, true);
-                        verify_indices.push_back(0);
-                        for (size_t i = 0; i < draft.size(); ++i) {
-                            common_batch_add(verify_batch, draft[i], n_past + 1 + (llama_pos) i, {0}, true);
-                            verify_indices.push_back((int) i + 1);
-                        }
-
-                        if (llama_decode(ctx, verify_batch) != 0) {
-                            llama_batch_free(verify_batch);
-                            result.error = "speculative verify decode failed";
-                            return result;
-                        }
-
-                        llama_tokens ids;
-                        try {
-                            ids = common_sampler_sample_and_accept_n(sampler, ctx, verify_indices, draft);
-                        } catch (const std::exception & e) {
-                            llama_batch_free(verify_batch);
-                            result.error = e.what();
-                            return result;
-                        }
-
-                        std::vector<int32_t> accepted_output_indices;
-                        if (!ids.empty()) {
-                            accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
-                        }
-
-                        common_speculative_commit(
-                            spec,
-                            ctx,
-                            sampler,
-                            0,
-                            sampled_before,
-                            ids,
-                            (int) draft.size(),
-                            n_past + 1,
-                            accepted_output_indices);
-
-                        llama_batch_free(verify_batch);
-
-                        if (!ids.empty()) {
-                            result.output_tokens.push_back(sampled_before);
-                            result.output_tokens.insert(result.output_tokens.end(), ids.begin(), ids.end());
-                            next_embd.push_back(ids.back());
-                            speculative_tokens.push_back(sampled_before);
-                            if (ids.size() > 1) {
-                                speculative_tokens.insert(speculative_tokens.end(), ids.begin(), ids.end() - 1);
-                            }
-                            n_past += (int) ids.size();
-                            n_remain -= (int) (ids.size() + 1);
-                            used_speculative = true;
-                        }
+                fallback_sampled = round.sampled_before;
+            }
+            if (round.used_speculative) {
+                if (!round.sampled_before_from_carry) {
+                    result.output_tokens.push_back(round.sampled_before);
+                    n_remain -= 1;
+                }
+                result.output_tokens.insert(result.output_tokens.end(), round.ids.begin(), round.ids.end());
+                n_remain -= (int) round.ids.size();
+                n_past += (int) round.ids.size();
+                carry_token = round.ids.back();
+                have_carry = !llama_token_is_eog(model, carry_token);
+                if (!have_carry) {
+                    result.hit_eog = true;
+                    n_remain = 0;
+                }
+                if (!params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) ||
+                    params.speculative.has_composite_stage_chain()) {
+                    speculative_tokens.push_back(round.sampled_before);
+                    if (round.ids.size() > 1) {
+                        speculative_tokens.insert(speculative_tokens.end(), round.ids.begin(), round.ids.end() - 1);
                     }
                 }
+                used_speculative = true;
             }
         }
 
+        if (!used_speculative && have_carry) {
+            next_embd.push_back(carry_token);
+            have_carry = false;
+            used_speculative = true;
+        }
         if (!used_speculative) {
             const llama_token id = have_fallback_sampled
                 ? fallback_sampled
@@ -892,9 +821,6 @@ static spec_bench_attempt_result spec_bench_run_attempt(
 
         embd = std::move(next_embd);
         embd_is_prompt = false;
-        if (embd.empty()) {
-            break;
-        }
 
         for (int i = 0; i < (int) embd.size(); i += params.n_batch) {
             int n_eval = std::min(params.n_batch, (int) embd.size() - i);
@@ -906,7 +832,7 @@ static spec_bench_attempt_result spec_bench_run_attempt(
                 return result;
             }
             llama_batch_free(batch);
-            if (spec != nullptr) {
+            if (spec != nullptr && (!params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) || params.speculative.has_composite_stage_chain())) {
                 speculative_tokens.insert(speculative_tokens.end(), embd.begin() + i, embd.begin() + i + n_eval);
             }
             n_past += n_eval;
@@ -933,8 +859,35 @@ static spec_bench_attempt_result spec_bench_run_attempt(
     return result;
 }
 
+static std::string spec_bench_positions(const spec_bench_stage_delta & stage) {
+    std::ostringstream out;
+    const size_t count = std::max(stage.drafted_by_position.size(), stage.accepted_by_position.size());
+    for (size_t i = 0; i < count; ++i) {
+        if (i > 0) { out << ", "; }
+        const uint64_t drafted = i < stage.drafted_by_position.size() ? stage.drafted_by_position[i] : 0;
+        const uint64_t accepted = i < stage.accepted_by_position.size() ? stage.accepted_by_position[i] : 0;
+        out << accepted << "/" << drafted;
+    }
+    return out.str();
+}
+
+static json spec_bench_position_array(const std::vector<uint64_t> & values) {
+    json result = json::array();
+    for (const uint64_t value : values) {
+        result.push_back(value);
+    }
+    return result;
+}
+
+static double spec_bench_acceptance_rate(uint64_t accepted, uint64_t drafted) {
+    return drafted > 0 ? (double) accepted / (double) drafted : 0.0;
+}
+
+static double spec_bench_acceptance_length(uint64_t accepted, uint64_t rounds) {
+    return rounds > 0 ? 1.0 + (double) accepted / (double) rounds : 0.0;
+}
+
 static json spec_bench_attempt_json(
-        const spec_bench_git_info & git_info,
         const gpt_params & params,
         const spec_bench_options & opts,
         const spec_bench_task & task,
@@ -943,7 +896,6 @@ static json spec_bench_attempt_json(
     const bool is_baseline = !params.speculative.has_stage_chain();
     const double decode_tps = result.decode_s > 0.0 ? result.generated_tokens / result.decode_s : 0.0;
     const double total_tps = result.total_s > 0.0 ? result.generated_tokens / result.total_s : 0.0;
-
     return json{
         {"row_type", "attempt"},
         {"task_id", task.id},
@@ -952,44 +904,20 @@ static json spec_bench_attempt_json(
         {"max_tokens", spec_bench_resolve_max_tokens(task, params)},
         {"repeat_index", repeat_index},
         {"builtin", task.builtin},
-        {"git", {
-            {"branch", git_info.branch},
-            {"commit", git_info.commit},
-            {"build_commit", LLAMA_COMMIT},
-        }},
         {"prompts", opts.prompts_path.empty() ? "builtin-default" : opts.prompts_path},
         {"runtime", spec_bench_runtime_json(params)},
-        {"variant", {
-            {"is_baseline", is_baseline},
-            {"spec_types", spec_bench_stage_types_json(params.speculative)},
-            {"stage_chain", common_speculative_stage_chain_to_str(params.speculative)}
-        }},
+        {"variant", {{"is_baseline", is_baseline}, {"spec_types", spec_bench_stage_types_json(params.speculative)}, {"stage_chain", common_speculative_stage_chain_to_str(params.speculative)}}},
         {"sampler", spec_bench_sampler_json(params)},
-        {"timing", {
-            {"prompt_s", result.prompt_s},
-            {"decode_s", result.decode_s},
-            {"total_s", result.total_s},
-            {"decode_tps", decode_tps},
-            {"overall_tps", total_tps},
-        }},
-        {"tokens", {
-            {"prompt", result.prompt_tokens},
-            {"generated", result.generated_tokens},
-        }},
+        {"timing", {{"prompt_s", result.prompt_s}, {"decode_s", result.decode_s}, {"total_s", result.total_s}, {"decode_tps", decode_tps}, {"overall_tps", total_tps}}},
+        {"tokens", {{"prompt", result.prompt_tokens}, {"generated", result.generated_tokens}}},
         {"speculative", spec_bench_metrics_json(result.spec_delta)},
-        {"quality", {
-            {"ok", result.ok},
-            {"error", result.error.empty() ? json(nullptr) : json(result.error)},
-            {"retries_used", result.retries_used},
-            {"hit_eog", result.hit_eog},
-        }},
-        {"prompt", task.prompt},
+        {"quality", {{"ok", result.ok}, {"error", result.error.empty() ? json(nullptr) : json(result.error)}, {"retries_used", result.retries_used}, {"hit_eog", result.hit_eog}}},
+        {"prompt", result.effective_prompt},
         {"output", result.output_text},
     };
 }
 
 static json spec_bench_summary_json(
-        const spec_bench_git_info & git_info,
         const gpt_params & params,
         const spec_bench_options & opts,
         const std::vector<spec_bench_task> & tasks,
@@ -997,14 +925,8 @@ static json spec_bench_summary_json(
     const bool is_baseline = !params.speculative.has_stage_chain();
     const double decode_tps = summary.decode_s > 0.0 ? summary.generated_tokens / summary.decode_s : 0.0;
     const double total_tps = summary.total_s > 0.0 ? summary.generated_tokens / summary.total_s : 0.0;
-
     return json{
         {"row_type", "summary"},
-        {"git", {
-            {"branch", git_info.branch},
-            {"commit", git_info.commit},
-            {"build_commit", LLAMA_COMMIT},
-        }},
         {"prompts", opts.prompts_path.empty() ? "builtin-default" : opts.prompts_path},
         {"requested_tasks", json(opts.task_names)},
         {"selected_tasks", spec_bench_task_names_json(tasks)},
@@ -1012,29 +934,130 @@ static json spec_bench_summary_json(
         {"retry", opts.retry},
         {"default_max_tokens", params.n_predict > 0 ? params.n_predict : 256},
         {"runtime", spec_bench_runtime_json(params)},
-        {"variant", {
-            {"is_baseline", is_baseline},
-            {"spec_types", spec_bench_stage_types_json(params.speculative)},
-            {"stage_chain", common_speculative_stage_chain_to_str(params.speculative)}
-        }},
+        {"variant", {{"is_baseline", is_baseline}, {"spec_types", spec_bench_stage_types_json(params.speculative)}, {"stage_chain", common_speculative_stage_chain_to_str(params.speculative)}}},
         {"sampler", spec_bench_sampler_json(params)},
-        {"attempts", summary.attempts},
-        {"successes", summary.successes},
-        {"failures", summary.failures},
-        {"retries_used", summary.retries_used},
-        {"timing", {
-            {"prompt_s", summary.prompt_s},
-            {"decode_s", summary.decode_s},
-            {"total_s", summary.total_s},
-            {"decode_tps", decode_tps},
-            {"overall_tps", total_tps},
-        }},
-        {"tokens", {
-            {"prompt", summary.prompt_tokens},
-            {"generated", summary.generated_tokens},
-        }},
+        {"attempts", summary.attempts}, {"successes", summary.successes}, {"failures", summary.failures}, {"retries_used", summary.retries_used},
+        {"timing", {{"prompt_s", summary.prompt_s}, {"decode_s", summary.decode_s}, {"total_s", summary.total_s}, {"decode_tps", decode_tps}, {"overall_tps", total_tps}}},
+        {"tokens", {{"prompt", summary.prompt_tokens}, {"generated", summary.generated_tokens}}},
         {"speculative", spec_bench_metrics_json(summary.spec_delta)},
     };
+}
+
+static json spec_bench_compact_attempt_json(const spec_bench_task & task, const spec_bench_attempt_result & result, int repeat_index) {
+    json stages = json::array();
+    for (const auto & stage : result.spec_delta.stages) {
+        stages.push_back({
+            {"type", common_speculative_type_to_str(stage.type)},
+            {"drafts", stage.num_drafts}, {"draft_tokens", stage.draft_tokens}, {"accepted", stage.accepted_tokens},
+            {"accept_percent", 100.0 * spec_bench_acceptance_rate(stage.accepted_tokens, stage.draft_tokens)},
+            {"accept_length", spec_bench_acceptance_length(stage.accepted_tokens, stage.num_drafts)},
+            {"drafted_by_position", spec_bench_position_array(stage.drafted_by_position)},
+            {"accepted_by_position", spec_bench_position_array(stage.accepted_by_position)},
+        });
+    }
+    return json{{"row_type", "attempt"}, {"task", task.name}, {"run", repeat_index + 1}, {"ok", result.ok}, {"stop", !result.ok ? "fail" : result.hit_eog ? "eog" : "limit"}, {"generated", result.generated_tokens}, {"decode_s", result.decode_s}, {"decode_tps", result.decode_s > 0.0 ? result.generated_tokens / result.decode_s : 0.0}, {"stages", stages}, {"error", result.error.empty() ? json(nullptr) : json(result.error)}};
+}
+
+static json spec_bench_compact_summary_json(const spec_bench_summary & summary) {
+    return json{{"row_type", "summary"}, {"attempts", summary.attempts}, {"successes", summary.successes}, {"failures", summary.failures}, {"generated", summary.generated_tokens}, {"decode_s", summary.decode_s}, {"decode_tps", summary.decode_s > 0.0 ? summary.generated_tokens / summary.decode_s : 0.0}, {"speculative", spec_bench_metrics_json(summary.spec_delta)}};
+}
+
+static void spec_bench_print_markdown(const gpt_params & params, const spec_bench_options & opts, const std::vector<spec_bench_record> & records) {
+    auto number = [](double value, int precision) {
+        std::ostringstream out; out << std::fixed << std::setprecision(precision) << value; return out.str();
+    };
+    auto fit = [](const std::string & value, size_t width) { return value.size() <= width ? value : value.substr(0, width - 3) + "..."; };
+    auto error_text = [&](const std::string & value) {
+        std::string result = value;
+        for (char & ch : result) { if (ch == 10 || ch == 13 || ch == 9) { ch = 32; } }
+        return fit(string_strip(result), 120);
+    };
+
+    std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::right << std::setw(3) << "run"
+              << " | " << std::left << std::setw(7) << "stage" << " | " << std::right << std::setw(7) << "tokens"
+              << " | " << std::left << std::setw(5) << "stop" << " | " << std::right << std::setw(7) << "time(s)"
+              << " | " << std::setw(7) << "tok/s" << " | " << std::setw(6) << "rounds"
+              << " | " << std::setw(11) << "accepted" << " | " << std::setw(7) << "rate"
+              << " | " << std::setw(6) << "a.len" << " | " << std::left << std::setw(28) << "accepted/drafted by position" << " |\n";
+    std::cout << "|----------|-----|---------|---------|-------|---------|---------|--------|-------------|---------|--------|------------------------------|\n";
+
+    for (const auto & record : records) {
+        const auto & result = record.result;
+        const int run = record.repeat_index + 1;
+        const std::string stop = !result.ok ? "fail" : result.hit_eog ? "eog" : "limit";
+        const std::string tokens = result.ok ? std::to_string(result.generated_tokens) : "-";
+        const double tps = result.decode_s > 0.0 ? result.generated_tokens / result.decode_s : 0.0;
+        auto row = [&](const std::string & stage_name, uint64_t rounds, uint64_t drafted, uint64_t accepted, const std::string & positions) {
+            const bool has_metrics = drafted > 0 || rounds > 0;
+            std::cout << "| " << std::left << std::setw(8) << fit(record.task.name, 8) << " | " << std::right << std::setw(3) << run
+                      << " | " << std::left << std::setw(7) << fit(stage_name, 7) << " | " << std::right << std::setw(7) << fit(tokens, 7)
+                      << " | " << std::left << std::setw(5) << stop << " | " << std::right << std::setw(7) << (result.ok ? number(result.decode_s, 3) : "-")
+                      << " | " << std::setw(7) << (result.ok ? number(tps, 2) : "-") << " | " << std::setw(6) << (has_metrics ? std::to_string(rounds) : "-")
+                      << " | " << std::setw(11) << fit(has_metrics ? std::to_string(accepted) + "/" + std::to_string(drafted) : "-", 11)
+                      << " | " << std::setw(7) << (has_metrics ? number(100.0 * spec_bench_acceptance_rate(accepted, drafted), 2) + "%" : "-")
+                      << " | " << std::setw(6) << (has_metrics ? number(spec_bench_acceptance_length(accepted, rounds), 2) : "-")
+                      << " | " << std::left << std::setw(28) << fit(positions.empty() ? "-" : positions, 28) << " |\n";
+        };
+        if (!result.ok && result.spec_delta.stages.empty()) {
+            row("error", 0, 0, 0, "");
+        } else if (result.spec_delta.stages.empty()) {
+            row("base", 0, 0, 0, "");
+        } else {
+            for (const auto & stage : result.spec_delta.stages) {
+                row(common_speculative_type_to_str(stage.type), stage.num_drafts, stage.draft_tokens, stage.accepted_tokens, spec_bench_positions(stage));
+            }
+        }
+        if (opts.output_details) {
+            std::cout << "\nPrompt: " << result.effective_prompt << "\n\nOutput:\n```text\n" << result.output_text << "\n```\n";
+        }
+    }
+
+    if (opts.repeat > 1) {
+        struct repeat_group { std::string task; std::string stage; std::vector<double> speed; std::vector<double> rate; std::vector<double> length; };
+        std::vector<repeat_group> groups;
+        auto get_group = [&](const std::string & task, const std::string & stage) -> repeat_group & {
+            for (auto & group : groups) { if (group.task == task && group.stage == stage) { return group; } }
+            groups.push_back({task, stage, {}, {}, {}}); return groups.back();
+        };
+        for (const auto & record : records) {
+            if (!record.result.ok) { continue; }
+            const double speed = record.result.decode_s > 0.0 ? record.result.generated_tokens / record.result.decode_s : 0.0;
+            if (record.result.spec_delta.stages.empty()) { get_group(record.task.name, "base").speed.push_back(speed); continue; }
+            for (const auto & stage : record.result.spec_delta.stages) {
+                auto & group = get_group(record.task.name, common_speculative_type_to_str(stage.type));
+                group.speed.push_back(speed);
+                if (stage.num_drafts > 0 || stage.draft_tokens > 0) {
+                    group.rate.push_back(spec_bench_acceptance_rate(stage.accepted_tokens, stage.draft_tokens));
+                    group.length.push_back(spec_bench_acceptance_length(stage.accepted_tokens, stage.num_drafts));
+                }
+            }
+        }
+        auto mean_std = [](const std::vector<double> & values) {
+            if (values.empty()) { return std::pair<double, double>{0.0, 0.0}; }
+            double mean = 0.0; for (double value : values) { mean += value; } mean /= values.size();
+            double variance = 0.0; for (double value : values) { const double delta = value - mean; variance += delta * delta; }
+            return std::pair<double, double>{mean, std::sqrt(variance / values.size())};
+        };
+        std::cout << "\nRepeat summary (" << opts.repeat << " runs/task)\n\n";
+        std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::setw(7) << "stage" << " | " << std::right << std::setw(4) << "runs"
+                  << " | " << std::setw(15) << "tok/s mean/std" << " | " << std::setw(15) << "rate mean/std" << " | " << std::setw(15) << "a.len mean/std" << " |\n";
+        std::cout << "|----------|---------|------|-----------------|-----------------|-----------------|\n";
+        for (const auto & group : groups) {
+            const auto speed = mean_std(group.speed); const auto rate = mean_std(group.rate); const auto length = mean_std(group.length);
+            std::cout << "| " << std::left << std::setw(8) << fit(group.task, 8) << " | " << std::setw(7) << fit(group.stage, 7)
+                      << " | " << std::right << std::setw(4) << group.speed.size() << " | " << std::setw(15) << number(speed.first, 2) + "/" + number(speed.second, 2)
+                      << " | " << std::setw(15) << (group.rate.empty() ? "-" : number(100.0 * rate.first, 2) + "%/" + number(100.0 * rate.second, 2) + "%")
+                      << " | " << std::setw(15) << (group.length.empty() ? "-" : number(length.first, 2) + "/" + number(length.second, 2)) << " |\n";
+        }
+    }
+
+    bool printed_errors = false;
+    for (const auto & record : records) {
+        if (!record.result.ok) {
+            if (!printed_errors) { std::cout << "\nErrors:\n"; printed_errors = true; }
+            std::cout << "- " << record.task.name << " run " << (record.repeat_index + 1) << ": " << error_text(record.result.error) << "\n";
+        }
+    }
 }
 
 static bool spec_bench_prepare_spec(
@@ -1098,9 +1121,6 @@ int main(int argc, char ** argv) {
 
     auto argv_storage = spec_bench_make_argv(passthrough);
 
-    if (!spec_bench_validate_output_format(passthrough)) {
-        return 1;
-    }
 
     gpt_params params;
     if (!gpt_params_parse((int) argv_storage.size(), argv_storage.data(), params)) {
@@ -1122,7 +1142,6 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s\n", e.what());
         return 1;
     }
-    const spec_bench_git_info git_info = spec_bench_get_git_info();
 
     std::ostream * out = &std::cout;
 
@@ -1164,6 +1183,7 @@ int main(int argc, char ** argv) {
     }
 
     spec_bench_summary summary;
+    std::vector<spec_bench_record> records;
     for (const auto & task : tasks) {
         for (int repeat_index = 0; repeat_index < bench_opts.repeat; ++repeat_index) {
             spec_bench_attempt_result best_result;
@@ -1181,11 +1201,22 @@ int main(int argc, char ** argv) {
 
             best_result.retries_used = success ? best_result.retries_used : bench_opts.retry;
             spec_bench_accumulate(summary, best_result);
-            *out << spec_bench_attempt_json(git_info, params, bench_opts, task, best_result, repeat_index).dump() << '\n';
+            records.push_back({task, best_result, repeat_index});
+            if (bench_opts.output_format == "jsonl") {
+                *out << (bench_opts.output_details
+                    ? spec_bench_attempt_json(params, bench_opts, task, best_result, repeat_index)
+                    : spec_bench_compact_attempt_json(task, best_result, repeat_index)).dump() << '\n';
+            }
         }
     }
 
-    *out << spec_bench_summary_json(git_info, params, bench_opts, tasks, summary).dump() << '\n';
+    if (bench_opts.output_format == "md") {
+        spec_bench_print_markdown(params, bench_opts, records);
+    } else {
+        *out << (bench_opts.output_details
+            ? spec_bench_summary_json(params, bench_opts, tasks, summary)
+            : spec_bench_compact_summary_json(summary)).dump() << '\n';
+    }
     out->flush();
 
     common_sampler_free(sampler);

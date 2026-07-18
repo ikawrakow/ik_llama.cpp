@@ -3151,3 +3151,153 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
     return ret;
 }
+common_speculative_round_result common_speculative_run_round(
+        common_speculative * spec,
+        llama_model * model,
+        llama_context * ctx,
+        common_sampler * sampler,
+        llama_context * ctx_guidance,
+        common_params_speculative params,
+        const common_params_sampling & sparams,
+        llama_seq_id seq_id,
+        llama_pos n_past,
+        int n_predict_budget,
+        bool have_carry,
+        const llama_tokens & draft_history,
+        llama_token carry_token) {
+    common_speculative_round_result result;
+
+    if (spec == nullptr || n_predict_budget == 1) {
+        return result;
+    }
+
+    const int n_ctx = llama_n_ctx(ctx);
+    const int n_batch = llama_n_batch(ctx);
+    int max_usable_draft = params.get_max_stage_n_max();
+    if (max_usable_draft <= 0) {
+        max_usable_draft = params.n_max;
+    }
+    const int configured_n_max = common_speculative_get_configured_n_max(spec);
+    if (configured_n_max > 0) {
+        max_usable_draft = std::min(max_usable_draft, configured_n_max);
+    }
+    if (n_predict_budget >= 0) {
+        max_usable_draft = std::min(max_usable_draft, n_predict_budget - 2);
+    }
+    max_usable_draft = std::min(max_usable_draft, n_ctx - (int) n_past - 2);
+    max_usable_draft = std::min(max_usable_draft, n_batch - 1);
+
+    // A normal speculative round needs room for the sampled token, at least one
+    // draft position, and the verification carry.
+    if (max_usable_draft <= 0) {
+        return result;
+    }
+
+    params.n_max = std::max(0, max_usable_draft);
+    params.n_min = std::min(std::max(0, params.n_min), params.n_max);
+    for (auto & stage : params.stages) {
+        if (stage.has_n_max_override()) {
+            stage.n_max = std::min(stage.n_max, params.n_max);
+        }
+        if (stage.has_n_min_override()) {
+            const int stage_max = stage.has_n_max_override() ? stage.n_max : params.n_max;
+            stage.n_min = std::min(stage.n_min, stage_max);
+        }
+    }
+
+    result.attempted = true;
+    result.sampled_before_from_carry = have_carry;
+    if (have_carry) {
+        result.sampled_before = carry_token;
+    } else {
+        result.sampled_before = common_sampler_sample_legacy(sampler, ctx, ctx_guidance);
+        common_sampler_accept(sampler, ctx, result.sampled_before, true);
+    }
+    result.sampled_before_ready = true;
+
+    auto draft_result = common_speculative_draft_ex(
+        spec,
+        ctx,
+        params,
+        draft_history,
+        result.sampled_before,
+        n_past,
+        seq_id);
+    auto & draft = draft_result.tokens;
+
+    const int min_usable_draft = params.get_min_usable_stage_n_min();
+    if ((int) draft.size() < min_usable_draft || (draft.empty() && !draft_result.target_only)) {
+        return result;
+    }
+
+    if (llama_model_has_recurrent(model) || llama_model_is_openpangu(model)) {
+        if (!common_speculative_before_draft(
+                spec,
+                model,
+                ctx,
+                sampler,
+                sparams,
+                seq_id,
+                n_past,
+                result.sampled_before,
+                (int) draft.size() + 1,
+                params.recurrent_ckpt_mode)) {
+            draft.clear();
+        }
+    }
+
+    if (draft.empty() && !draft_result.target_only) {
+        return result;
+    }
+
+    llama_batch verify_batch = llama_batch_init((int) draft.size() + 1, 0, 1);
+    std::vector<int> verify_indices;
+    verify_indices.reserve(draft.size() + 1);
+
+    common_batch_add(verify_batch, result.sampled_before, n_past, { seq_id }, true);
+    verify_indices.push_back(0);
+    for (size_t i = 0; i < draft.size(); ++i) {
+        common_batch_add(verify_batch, draft[i], n_past + 1 + (llama_pos) i, { seq_id }, true);
+        verify_indices.push_back((int) i + 1);
+    }
+
+    if (llama_decode(ctx, verify_batch) != 0) {
+        llama_batch_free(verify_batch);
+        result.failed = true;
+        result.error = "speculative verify decode failed";
+        return result;
+    }
+
+    std::vector<llama_token> ids;
+    try {
+        ids = common_sampler_sample_and_accept_n(sampler, ctx, verify_indices, draft);
+    } catch (const std::exception & e) {
+        llama_batch_free(verify_batch);
+        result.failed = true;
+        result.error = e.what();
+        return result;
+    }
+
+    std::vector<int32_t> accepted_output_indices;
+    if (!ids.empty()) {
+        accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
+    }
+
+    if (!ids.empty()) {
+        common_speculative_commit(
+            spec,
+            ctx,
+            sampler,
+            seq_id,
+            result.sampled_before,
+            ids,
+            (int) draft.size(),
+            n_past + 1,
+            accepted_output_indices);
+        result.ids = std::move(ids);
+        result.used_speculative = true;
+    }
+
+    llama_batch_free(verify_batch);
+    return result;
+}
