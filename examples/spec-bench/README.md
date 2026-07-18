@@ -7,7 +7,8 @@ benchmarking through `llama-server`.
 ## Scope
 
 - built-in canonical tasks: `code`, `extract`, `story`
-- optional strict JSONL prompt-file override
+- one built-in workload by default, or one plain custom prompt via `-p` / `-f`
+- optional strict JSONL prompt-file override for structured multi-prompt workloads
 - baseline and speculative runs use the same binary and normal model/sampler args
 - Markdown report by default; compact JSONL is available with `--output-format jsonl`
 - per-stage drafted and accepted counts by speculative position
@@ -15,12 +16,25 @@ benchmarking through `llama-server`.
 ## Benchmark-specific flags
 
 - `--prompts <path>`: replace the built-in tasks with a strict JSONL prompt file
+- `-p, --prompt <text>`: run one inline custom prompt
+- `-f, --file <path>`: run one plain-text custom prompt file; the file is one prompt, not one task per line
 - `--task <name[,name...]>`: select built-in tasks
 - `--repeat <n>`: repeat each task `n` times
 - `--retry <n>`: retry transient task failures up to `n` times
 - `--output-format jsonl`: select the common JSONL output convention; output is written to `stdout`
-- `--output-details`: include effective prompts, generated text, and runtime/provenance details
+- `--output-details`: print prompts and responses first, followed by normal and detailed Markdown metrics; JSONL includes complete details
 - `--predict <n>` / `-n <n>`: command-level generation budget for every task without a row override
+
+## Input modes
+
+Choose exactly one mode: built-ins (optionally narrowed with `--task`), one `-p` prompt, one `-f` file, or one `--prompts` JSONL dataset. Do not combine custom input with `--task`, and do not combine `-p` with `-f`. Custom prompts use category `custom`; file tasks use the file basename.
+
+Examples:
+
+```bash
+./build/bin/llama-spec-bench -m model.gguf -n 4 -p "Write a merge sort in C++."
+./build/bin/llama-spec-bench -m model.gguf -n 4 -f examples/spec-bench/prompts/code.txt
+```
 
 ## Dataset format
 
@@ -49,6 +63,10 @@ The common speculative-round helper is used by `llama-spec-bench`. CLI adoption 
 explicitly deferred: its interactive/session-aware loop also owns antiprompt,
 context-shift, EOG, and carry behavior, so extracting the contained boundary
 without changing those semantics would be invasive. Server migration remains out of scope.
+
+## Output and validation notes
+
+Backend initialization diagnostics may surround JSON result records. Select lines with `row_type` before parsing JSONL; spec-bench does not alter global CUDA logging streams. CLI parity is exact after normalizing its final display newline; proposal counters can differ at the final boundary. Server smoke is required to succeed, but server output parity is not claimed.
 
 ## Example
 

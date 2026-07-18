@@ -29,6 +29,8 @@ struct spec_bench_options {
     std::string output_format = "md";
     bool output_details = false;
     bool task_selection_seen = false;
+    bool inline_prompt_seen = false;
+    bool file_prompt_seen = false;
     int repeat = 1;
     int retry = 0;
 };
@@ -135,6 +137,7 @@ static void spec_bench_print_usage(const char * argv0) {
     LOG_TEE("usage: %s [benchmark options] [normal llama args]\n", argv0);
     LOG_TEE("\n");
     LOG_TEE("benchmark options:\n");
+    LOG_TEE("  -p PROMPT / -f FILE  one custom plain-text prompt (mutually exclusive)\n");
     LOG_TEE("  --prompts PATH        optional strict JSONL prompt-file override\n");
     LOG_TEE("  --task LIST           built-in tasks to run, e.g. code,extract,story\n");
     LOG_TEE("  --repeat N            repeat each task N times (default: 1)\n");
@@ -168,7 +171,39 @@ static bool spec_bench_parse_args(
             if (!value) {
                 return false;
             }
+            if (!opts.prompts_path.empty()) {
+                LOG_TEE("--prompts may be specified only once\n");
+                return false;
+            }
             opts.prompts_path = value;
+            continue;
+        }
+        if (arg == "-p" || arg == "--prompt") {
+            if (opts.inline_prompt_seen) {
+                LOG_TEE("inline prompt may be specified only once\n");
+                return false;
+            }
+            const char * value = require_value(arg.c_str());
+            if (!value) {
+                return false;
+            }
+            opts.inline_prompt_seen = true;
+            passthrough.push_back(arg);
+            passthrough.push_back(value);
+            continue;
+        }
+        if (arg == "-f" || arg == "--file") {
+            if (opts.file_prompt_seen) {
+                LOG_TEE("prompt file may be specified only once\n");
+                return false;
+            }
+            const char * value = require_value(arg.c_str());
+            if (!value) {
+                return false;
+            }
+            opts.file_prompt_seen = true;
+            passthrough.push_back(arg);
+            passthrough.push_back(value);
             continue;
         }
         if (arg == "--dataset") {
@@ -231,6 +266,20 @@ static bool spec_bench_parse_args(
         }
 
         passthrough.push_back(arg);
+    }
+
+    const int single_prompt_modes = (opts.inline_prompt_seen ? 1 : 0) + (opts.file_prompt_seen ? 1 : 0);
+    if (single_prompt_modes > 1) {
+        LOG_TEE("choose exactly one of -p/--prompt or -f/--file\n");
+        return false;
+    }
+    if (!opts.prompts_path.empty() && (single_prompt_modes > 0 || opts.task_selection_seen)) {
+        LOG_TEE("--prompts cannot be combined with --task, -p/--prompt, or -f/--file\n");
+        return false;
+    }
+    if (single_prompt_modes > 0 && opts.task_selection_seen) {
+        LOG_TEE("-p/--prompt and -f/--file cannot be combined with --task\n");
+        return false;
     }
 
     return true;
@@ -320,7 +369,30 @@ static std::vector<spec_bench_task> spec_bench_load_dataset(const std::string & 
     return tasks;
 }
 
-static std::vector<spec_bench_task> spec_bench_select_tasks(const spec_bench_options & opts) {
+static std::string spec_bench_prompt_file_basename(const std::string & path) {
+    const size_t slash = path.find_last_of("/\\");
+    const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    return name.empty() ? "prompt" : name;
+}
+
+static std::vector<spec_bench_task> spec_bench_select_tasks(const spec_bench_options & opts, const gpt_params & params) {
+    if (opts.inline_prompt_seen || opts.file_prompt_seen) {
+        if (string_strip(params.prompt).empty()) {
+            throw std::runtime_error("custom prompt must be non-empty");
+        }
+        const bool from_file = opts.file_prompt_seen;
+        const std::string name = from_file ? spec_bench_prompt_file_basename(params.prompt_file) : "prompt";
+        return {{
+            {
+                "custom-" + name,
+                name,
+                "custom",
+                params.prompt,
+                -1,
+                false,
+            },
+        }};
+    }
     if (!opts.prompts_path.empty()) {
         return spec_bench_load_dataset(opts.prompts_path);
     }
@@ -972,14 +1044,53 @@ static void spec_bench_print_markdown(const gpt_params & params, const spec_benc
         for (char & ch : result) { if (ch == 10 || ch == 13 || ch == 9) { ch = 32; } }
         return fit(string_strip(result), 120);
     };
+    size_t max_backticks = 3;
+    auto inspect_fence = [&](const std::string & text) {
+        size_t run = 0;
+        for (const char ch : text) {
+            if (ch == char(96)) {
+                ++run;
+                max_backticks = std::max(max_backticks, run);
+            } else {
+                run = 0;
+            }
+        }
+    };
+    for (const auto & record : records) {
+        inspect_fence(record.result.effective_prompt);
+        inspect_fence(record.result.output_text);
+    }
+    const std::string fence(max_backticks + 1, char(96));
 
-    std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::right << std::setw(3) << "run"
+    if (opts.output_details) {
+        std::cout << "\n## Prompt and response details\n\n";
+        for (const auto & record : records) {
+            std::cout << "### " << record.task.name << " / run " << (record.repeat_index + 1) << "\n\n";
+            std::cout << "Prompt:\n" << fence << "\n" << record.result.effective_prompt << "\n" << fence << "\n\n";
+            std::cout << "Response:\n" << fence << "\n" << record.result.output_text << "\n" << fence << "\n\n";
+        }
+    }
+
+    std::cout << "\n| " << std::left << std::setw(8) << "task" << " | " << std::right << std::setw(3) << "run"
               << " | " << std::left << std::setw(7) << "stage" << " | " << std::right << std::setw(7) << "tokens"
               << " | " << std::left << std::setw(5) << "stop" << " | " << std::right << std::setw(7) << "time(s)"
               << " | " << std::setw(7) << "tok/s" << " | " << std::setw(6) << "rounds"
               << " | " << std::setw(11) << "accepted" << " | " << std::setw(7) << "rate"
-              << " | " << std::setw(6) << "a.len" << " | " << std::left << std::setw(28) << "accepted/drafted by position" << " |\n";
+              << " | " << std::setw(6) << "a.len" << " | " << std::left << std::setw(28) << "pos accept" << " |\n";
     std::cout << "|----------|-----|---------|---------|-------|---------|---------|--------|-------------|---------|--------|------------------------------|\n";
+
+    auto position_percentages = [&](const spec_bench_stage_delta & stage) {
+        std::ostringstream out;
+        const size_t count = std::max(stage.drafted_by_position.size(), stage.accepted_by_position.size());
+        for (size_t i = 0; i < count; ++i) {
+            if (i > 0) { out << " "; }
+            const uint64_t drafted = i < stage.drafted_by_position.size() ? stage.drafted_by_position[i] : 0;
+            const uint64_t accepted = i < stage.accepted_by_position.size() ? stage.accepted_by_position[i] : 0;
+            if (drafted == 0) { out << "-"; }
+            else { out << std::fixed << std::setprecision(1) << (100.0 * accepted / drafted) << "%"; }
+        }
+        return out.str();
+    };
 
     for (const auto & record : records) {
         const auto & result = record.result;
@@ -993,23 +1104,46 @@ static void spec_bench_print_markdown(const gpt_params & params, const spec_benc
                       << " | " << std::left << std::setw(7) << fit(stage_name, 7) << " | " << std::right << std::setw(7) << fit(tokens, 7)
                       << " | " << std::left << std::setw(5) << stop << " | " << std::right << std::setw(7) << (result.ok ? number(result.decode_s, 3) : "-")
                       << " | " << std::setw(7) << (result.ok ? number(tps, 2) : "-") << " | " << std::setw(6) << (has_metrics ? std::to_string(rounds) : "-")
-                      << " | " << std::setw(11) << fit(has_metrics ? std::to_string(accepted) + "/" + std::to_string(drafted) : "-", 11)
+                      << " | " << std::setw(11) << (has_metrics ? std::to_string(accepted) + "/" + std::to_string(drafted) : "-")
                       << " | " << std::setw(7) << (has_metrics ? number(100.0 * spec_bench_acceptance_rate(accepted, drafted), 2) + "%" : "-")
                       << " | " << std::setw(6) << (has_metrics ? number(spec_bench_acceptance_length(accepted, rounds), 2) : "-")
                       << " | " << std::left << std::setw(28) << fit(positions.empty() ? "-" : positions, 28) << " |\n";
         };
-        if (!result.ok && result.spec_delta.stages.empty()) {
-            row("error", 0, 0, 0, "");
-        } else if (result.spec_delta.stages.empty()) {
-            row("base", 0, 0, 0, "");
-        } else {
+        if (!result.ok && result.spec_delta.stages.empty()) { row("error", 0, 0, 0, ""); }
+        else if (result.spec_delta.stages.empty()) { row("base", 0, 0, 0, ""); }
+        else {
             for (const auto & stage : result.spec_delta.stages) {
-                row(common_speculative_type_to_str(stage.type), stage.num_drafts, stage.draft_tokens, stage.accepted_tokens, spec_bench_positions(stage));
+                row(common_speculative_type_to_str(stage.type), stage.num_drafts, stage.draft_tokens, stage.accepted_tokens, position_percentages(stage));
             }
         }
-        if (opts.output_details) {
-            std::cout << "\nPrompt: " << result.effective_prompt << "\n\nOutput:\n```text\n" << result.output_text << "\n```\n";
+    }
+    std::cout << "\n";
+
+    if (opts.output_details) {
+        std::cout << "## Detailed metrics\n\n";
+        std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::right << std::setw(3) << "run"
+                  << " | " << std::setw(10) << "prompt tok" << " | " << std::setw(9) << "prompt s"
+                  << " | " << std::setw(9) << "total s" << " | " << std::left << std::setw(7) << "stage"
+                  << " | " << std::right << std::setw(9) << "draft s" << " | " << std::setw(9) << "accept s"
+                  << " | " << std::left << std::setw(30) << "accepted/drafted by position" << " |\n";
+        std::cout << "|----------|-----|------------|-----------|-----------|---------|-----------|-----------|--------------------------------|\n";
+        for (const auto & record : records) {
+            const auto & result = record.result;
+            auto metric_row = [&](const std::string & stage_name, double draft_s, double accept_s, const std::string & positions) {
+                std::cout << "| " << std::left << std::setw(8) << fit(record.task.name, 8) << " | " << std::right << std::setw(3) << (record.repeat_index + 1)
+                          << " | " << std::setw(10) << result.prompt_tokens << " | " << std::setw(9) << number(result.prompt_s, 3)
+                          << " | " << std::setw(9) << number(result.total_s, 3) << " | " << std::left << std::setw(7) << fit(stage_name, 7)
+                          << " | " << std::right << std::setw(9) << number(draft_s, 6) << " | " << std::setw(9) << number(accept_s, 6)
+                          << " | " << std::left << std::setw(30) << fit(positions.empty() ? "-" : positions, 30) << " |\n";
+            };
+            if (result.spec_delta.stages.empty()) { metric_row("base", 0.0, 0.0, ""); }
+            else {
+                for (const auto & stage : result.spec_delta.stages) {
+                    metric_row(common_speculative_type_to_str(stage.type), stage.t_draft_us / 1e6, stage.t_accept_us / 1e6, spec_bench_positions(stage));
+                }
+            }
         }
+        std::cout << "\n";
     }
 
     if (opts.repeat > 1) {
@@ -1038,7 +1172,7 @@ static void spec_bench_print_markdown(const gpt_params & params, const spec_benc
             double variance = 0.0; for (double value : values) { const double delta = value - mean; variance += delta * delta; }
             return std::pair<double, double>{mean, std::sqrt(variance / values.size())};
         };
-        std::cout << "\nRepeat summary (" << opts.repeat << " runs/task)\n\n";
+        std::cout << "Repeat summary (" << opts.repeat << " runs/task)\n\n";
         std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::setw(7) << "stage" << " | " << std::right << std::setw(4) << "runs"
                   << " | " << std::setw(15) << "tok/s mean/std" << " | " << std::setw(15) << "rate mean/std" << " | " << std::setw(15) << "a.len mean/std" << " |\n";
         std::cout << "|----------|---------|------|-----------------|-----------------|-----------------|\n";
@@ -1049,15 +1183,17 @@ static void spec_bench_print_markdown(const gpt_params & params, const spec_benc
                       << " | " << std::setw(15) << (group.rate.empty() ? "-" : number(100.0 * rate.first, 2) + "%/" + number(100.0 * rate.second, 2) + "%")
                       << " | " << std::setw(15) << (group.length.empty() ? "-" : number(length.first, 2) + "/" + number(length.second, 2)) << " |\n";
         }
+        std::cout << "\n";
     }
 
     bool printed_errors = false;
     for (const auto & record : records) {
         if (!record.result.ok) {
-            if (!printed_errors) { std::cout << "\nErrors:\n"; printed_errors = true; }
+            if (!printed_errors) { std::cout << "Errors:\n"; printed_errors = true; }
             std::cout << "- " << record.task.name << " run " << (record.repeat_index + 1) << ": " << error_text(record.result.error) << "\n";
         }
     }
+    std::cout << "\n";
 }
 
 static bool spec_bench_prepare_spec(
@@ -1137,7 +1273,7 @@ int main(int argc, char ** argv) {
 
     std::vector<spec_bench_task> tasks;
     try {
-        tasks = spec_bench_select_tasks(bench_opts);
+        tasks = spec_bench_select_tasks(bench_opts, params);
     } catch (const std::exception & e) {
         LOG_TEE("%s\n", e.what());
         return 1;
