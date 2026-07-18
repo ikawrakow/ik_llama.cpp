@@ -137,6 +137,9 @@ static ggml_tensor * dsv4_build_raw_mask_view(
     const int64_t n_rows_stream = GGML_PAD(n_kv, 256);
 
     if (raw_k_read_idxs == nullptr) {
+        //auto base = mask->ne[0] == n_kv && mask->ne[1] == n_tokens ? mask
+        //          : ggml_cont(ctx, ggml_view_2d(ctx, mask, n_kv, n_tokens, mask->nb[1], 0));
+        //return n_stream == 1 ? base : dsv4_build_mask_stream_view(ctx, base, n_stream, n_tokens);
         ggml_tensor * base = ggml_cont(ctx, ggml_view_2d(ctx, mask, n_kv, n_tokens, mask->nb[1], 0));
         return dsv4_build_mask_stream_view(ctx, base, n_stream, n_tokens);
     }
@@ -144,6 +147,10 @@ static ggml_tensor * dsv4_build_raw_mask_view(
     if (n_stream <= 0 || n_tokens % n_stream != 0 || raw_k_read_idxs->ne[0] < n_rows_stream*n_stream) {
         ggml_tensor * base = ggml_cont(ctx, ggml_view_2d(ctx, mask, n_kv, n_tokens, mask->nb[1], 0));
         return dsv4_build_mask_stream_view(ctx, base, std::max<int64_t>(1, n_stream), n_tokens);
+    }
+
+    if (n_stream == 1 && mask->ne[0] == raw_k_read_idxs->ne[0]) {
+        return mask;
     }
 
     ggml_tensor * mask_t = ggml_cont(ctx, ggml_transpose(ctx, mask));
