@@ -1675,6 +1675,13 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
 
+                if (model.arch == LLM_ARCH_DEEPSEEK4) {
+                    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,     hparams.swiglu_limits,   hparams.n_layer);
+                    if (!ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_limits_shared, hparams.n_layer, 0)) {
+                        hparams.swiglu_limits_shared = hparams.swiglu_limits;
+                    }
+                }
+
                 // Shared latent-attention ranks used by common hparams and
                 // cache helpers. DSV4 has its own CSA/HCA execution graph;
                 // this does not select the DeepSeek V3 MLA path.
