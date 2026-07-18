@@ -15,6 +15,8 @@
 #include <type_traits>
 #include <vector>
 #include <algorithm>
+#include <climits>
+#include <limits>
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
@@ -1737,6 +1739,157 @@ bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_ty
 }
 
 namespace {
+bool iqk_checked_mul_size(size_t a, size_t b, size_t & result) {
+    if (a != 0 && b > std::numeric_limits<size_t>::max()/a) {
+        return false;
+    }
+    result = a*b;
+    return true;
+}
+
+bool iqk_checked_add_size(size_t a, size_t b, size_t & result) {
+    if (b > std::numeric_limits<size_t>::max() - a) {
+        return false;
+    }
+    result = a + b;
+    return true;
+}
+
+bool iqk_plain_layout_supported(const ggml_tensor * tensor, ggml_type type, int used_dims) {
+    if (tensor == nullptr || tensor->type != type || used_dims < 1 || used_dims > GGML_MAX_DIMS) {
+        return false;
+    }
+    const size_t element_size = ggml_type_size(type);
+    if (tensor->nb[0] != element_size || tensor->view_offs % element_size != 0 ||
+        (tensor->data != nullptr && (uintptr_t) tensor->data % element_size != 0)) {
+        return false;
+    }
+    size_t extent = element_size;
+    for (int i = 0; i < used_dims; ++i) {
+        if (tensor->ne[i] <= 0 || (i > 0 && tensor->nb[i] < extent)) {
+            return false;
+        }
+        size_t offset = 0;
+        if (!iqk_checked_mul_size((size_t) (tensor->ne[i] - 1), tensor->nb[i], offset) ||
+            !iqk_checked_add_size(offset, extent, extent)) {
+            return false;
+        }
+    }
+    size_t end = 0;
+    return iqk_checked_add_size(tensor->view_offs, extent, end);
+}
+
+bool iqk_k_layout_supported(const ggml_tensor * k) {
+    if (k == nullptr || k->type < 0 || k->type >= GGML_TYPE_COUNT) {
+        return false;
+    }
+    const int64_t block_size = ggml_blck_size(k->type);
+    if (block_size <= 0 || k->ne[0] <= 0 || k->ne[0] % block_size != 0) {
+        return false;
+    }
+    const size_t type_size = ggml_type_size(k->type);
+    size_t row_size = 0;
+    size_t row_offset = 0;
+    size_t span = 0;
+    size_t end = 0;
+    return type_size > 0 && k->nb[0] == type_size &&
+           k->view_offs % type_size == 0 &&
+           (k->data == nullptr || (uintptr_t) k->data % alignof(uint16_t) == 0) &&
+           iqk_checked_mul_size((size_t) (k->ne[0]/block_size), type_size, row_size) &&
+           k->nb[1] >= row_size &&
+           iqk_checked_mul_size((size_t) (k->ne[1] - 1), k->nb[1], row_offset) &&
+           iqk_checked_add_size(row_offset, row_size, span) &&
+           iqk_checked_add_size(k->view_offs, span, end);
+}
+
+bool iqk_indexer_topk_contract_supported(const ggml_tensor * dst, int nthread) {
+    if (dst == nullptr || dst->op != GGML_OP_INDEXER_TOPK || nthread <= 0 ||
+        ggml_unary_op(dst->op_params[0]) != GGML_UNARY_OP_RELU) {
+        return false;
+    }
+    const ggml_tensor * k = dst->src[0];
+    const ggml_tensor * q = dst->src[1];
+    const ggml_tensor * w = dst->src[2];
+    const ggml_tensor * m = dst->src[3];
+    if (k == nullptr || q == nullptr || w == nullptr || m == nullptr) {
+        return false;
+    }
+
+    const int64_t d = k->ne[0];
+    const int64_t n_kv = k->ne[1];
+    const int64_t n_head = q->ne[1];
+    const int64_t n_tokens = q->ne[2];
+    const int64_t n_top_k = dst->ne[0];
+    if (d <= 0 || n_kv <= 0 || n_head <= 0 || n_tokens <= 0 || n_top_k <= 0 ||
+        d > INT_MAX || n_kv > INT_MAX || n_head > INT_MAX || n_tokens > INT_MAX ||
+        n_top_k > INT_MAX || n_top_k >= n_kv ||
+        k->ne[2] != 1 || k->ne[3] != 1 ||
+        q->ne[0] != d || q->ne[3] != 1 ||
+        w->ne[0] != n_head || w->ne[1] != n_tokens || w->ne[2] != 1 || w->ne[3] != 1 ||
+        m->ne[0] != n_kv || m->ne[1] != n_tokens || m->ne[2] != 1 || m->ne[3] != 1 ||
+        dst->ne[1] != n_tokens || dst->ne[2] != 1 || dst->ne[3] != 1 ||
+        !iqk_k_layout_supported(k) ||
+        !iqk_plain_layout_supported(q, GGML_TYPE_F32, 3) ||
+        !iqk_plain_layout_supported(w, GGML_TYPE_F32, 2) ||
+        !iqk_plain_layout_supported(dst, GGML_TYPE_I32, 2) ||
+        (m->type != GGML_TYPE_F32 && m->type != GGML_TYPE_F16) ||
+        !iqk_plain_layout_supported(m, m->type, 2)) {
+        return false;
+    }
+
+    const auto tt = ggml_internal_get_type_traits(k->type);
+    ggml_type q_type = q->type;
+    size_t quantize_size = 0;
+    if (tt.is_quantized && tt.vec_dot_type != q->type) {
+        const auto ttq = ggml_internal_get_type_traits(tt.vec_dot_type);
+        if (ttq.from_float == nullptr || q->nb[1] != (size_t) d*sizeof(float)) {
+            return false;
+        }
+        q_type = tt.vec_dot_type;
+        if (d % ggml_blck_size(q_type) != 0) {
+            return false;
+        }
+        const size_t row_size_q = ggml_row_size(q_type, d);
+        if (!iqk_checked_mul_size(row_size_q, (size_t) n_head, quantize_size)) {
+            return false;
+        }
+    }
+
+    MulMat mm;
+    if (!MulMat::prepare(int(k->type), int(q_type), int(d), mm, int(n_head)) ||
+        (n_tokens < nthread && n_kv % 32 != 0)) {
+        return false;
+    }
+
+    size_t kq_size = 0;
+    size_t score_size = 0;
+    size_t sorted_size = 0;
+    size_t work_size = quantize_size;
+    if (!iqk_checked_mul_size((size_t) n_kv, (size_t) n_head, kq_size) ||
+        !iqk_checked_mul_size(kq_size, sizeof(float), kq_size) ||
+        !iqk_checked_mul_size((size_t) n_kv, sizeof(float), score_size) ||
+        !iqk_checked_mul_size((size_t) n_kv, sizeof(int32_t), sorted_size)) {
+        return false;
+    }
+    if (n_tokens < nthread && quantize_size != 0 &&
+        !iqk_checked_mul_size(quantize_size, (size_t) n_tokens, work_size)) {
+        return false;
+    }
+    if (!iqk_checked_add_size(work_size, kq_size, work_size) ||
+        !iqk_checked_add_size(work_size, score_size, work_size) ||
+        !iqk_checked_add_size(work_size, sorted_size, work_size)) {
+        return false;
+    }
+    if (n_tokens >= nthread) {
+        if (work_size > std::numeric_limits<size_t>::max() - 127) {
+            return false;
+        }
+        work_size = GGML_PAD(work_size, 128);
+        return iqk_checked_mul_size(work_size, (size_t) nthread, work_size);
+    }
+    return true;
+}
+
 size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth) {
     auto k = dst->src[0];
     auto q = dst->src[1];
@@ -1763,7 +1916,14 @@ inline void iqk_f16_to_f32(int n, const ggml_fp16_t * x, float * y) {
 }
 }
 
+bool iqk_indexer_topk_supported(const struct ggml_tensor * dst, int nthread) {
+    return iqk_indexer_topk_contract_supported(dst, nthread);
+}
+
 size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread) {
+    if (!iqk_indexer_topk_supported(dst, nthread)) {
+        return 0;
+    }
     auto k = dst->src[0];
     auto q = dst->src[1];
     if (q->ne[2] >= nthread) {
@@ -1782,7 +1942,7 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
 }
 
 bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t barrier, void * barrier_data, int ith, int nth) {
-    if (dst->op != GGML_OP_INDEXER_TOPK) {
+    if (!iqk_indexer_topk_supported(dst, nth)) {
         return false;
     }
     auto op = ggml_unary_op(dst->op_params[0]);
@@ -1972,6 +2132,10 @@ bool iqk_fused_delta_net(int, int, int, int, int, int,
 }
 
 bool iqk_indexer_topk(struct ggml_tensor *, void *, barrier_t, void *, int, int) {
+    return false;
+}
+
+bool iqk_indexer_topk_supported(const struct ggml_tensor *, int) {
     return false;
 }
 

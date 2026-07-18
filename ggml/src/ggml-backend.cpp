@@ -3,6 +3,9 @@
 #include "ggml-impl.h"
 #include "ggml-rpc.h"
 #include "ggml-moe-prefetch.h"
+#ifdef GGML_USE_IQK_MULMAT
+#include "iqk/iqk_mul_mat.h"
+#endif
 
 #include <cassert>
 #include <climits>
@@ -896,6 +899,11 @@ GGML_CALL static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t 
 }
 
 GGML_CALL static bool ggml_backend_cpu_supports_op(ggml_backend_t backend, const struct ggml_tensor * op) {
+#ifdef GGML_USE_IQK_MULMAT
+    struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *) backend->context;
+#else
+    GGML_UNUSED(backend);
+#endif
     switch (op->op) {
         case GGML_OP_CPY:
             return
@@ -906,11 +914,15 @@ GGML_CALL static bool ggml_backend_cpu_supports_op(ggml_backend_t backend, const
         case GGML_OP_MUL_MAT:
             return true;
             //return op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == ggml_internal_get_type_traits(op->src[0]->type).vec_dot_type;
+        case GGML_OP_INDEXER_TOPK:
+#ifdef GGML_USE_IQK_MULMAT
+            return iqk_indexer_topk_supported(op, cpu_ctx->n_threads);
+#else
+            return false;
+#endif
         default:
             return true;
     }
-
-    GGML_UNUSED(backend);
 }
 
 GGML_CALL static bool ggml_backend_cpu_supports_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
@@ -1731,7 +1743,12 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             const int node_backend_id = tensor_backend_id(node);
 
-            assert(node_backend_id != -1); // all nodes should be assigned by now
+            // GGML_ASSERT (not assert) so an op that no backend supports fails as a defined
+            // abort even under NDEBUG, rather than falling through to sched->backends[-1] (UB).
+            // Reachable only in a build where the sole backend's supports_op rejects a node
+            // (e.g. INDEXER_TOPK on a CPU-only, non-IQK build); such configs already could not
+            // run the op, so this preserves base's diagnosable failure instead of a silent crash.
+            GGML_ASSERT(node_backend_id != -1 && "op has no supporting backend");
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;

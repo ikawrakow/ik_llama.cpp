@@ -4435,6 +4435,7 @@ static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_p
     }
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         graph_node_properties->src_address[i] = node->src[i] ? node->src[i]->data : nullptr;
+        graph_node_properties->src_type[i] = node->src[i] ? node->src[i]->type : GGML_TYPE_COUNT;
     }
     memcpy(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
@@ -4472,6 +4473,19 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
     if (node->op == GGML_OP_SCALE &&
         memcmp(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
         return false;
+    }
+
+    // INDEXER_TOPK dispatches a source-type-specialized kernel (dense F16 vs quantized cache,
+    // and an F32 vs F16 mask variant). Source addresses alone do not identify the captured
+    // kernel, so a reused graph whose sources were reallocated at the same addresses with a
+    // different type would replay the wrong kernel. Force re-capture when a source type changes.
+    if (node->op == GGML_OP_INDEXER_TOPK) {
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            const ggml_type src_type = node->src[i] ? node->src[i]->type : GGML_TYPE_COUNT;
+            if (src_type != graph_node_properties->src_type[i]) {
+                return false;
+            }
+        }
     }
 
     return true;
