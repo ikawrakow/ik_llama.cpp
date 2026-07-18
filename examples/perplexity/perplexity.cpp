@@ -311,7 +311,7 @@ static void process_logits(std::ostream& out, int n_vocab, const float * logits,
     for (auto & w : workers) {
         w.join();
     }
-    out.write((const char *)log_probs.data(), n_token*nv*sizeof(uint16_t));
+    out.write((const char *)log_probs.data(), (size_t)n_token*nv*sizeof(uint16_t));
 }
 
 struct kl_divergence_result {
@@ -419,7 +419,7 @@ static void process_logits(int n_vocab, const float * logits, const int * tokens
                 break;
             }
             lock.unlock();
-            std::pair<double, float> v = log_softmax(n_vocab, logits + i*n_vocab, base_log_probs.data() + i*nv, tokens[i+1], local_kld);
+            std::pair<double, float> v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, base_log_probs.data() + size_t(i)*nv, tokens[i+1], local_kld);
             kld_values[i]    = (float)v.first;
             p_diff_values[i] = v.second;
         }
@@ -648,9 +648,9 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     if (!params.logits_file.empty()) {
         logits_stream.write((const char *)&n_vocab, sizeof(n_vocab));
         logits_stream.write((const char *)&n_chunk, sizeof(n_chunk));
-        logits_stream.write((const char *)tokens.data(), n_chunk*n_ctx*sizeof(tokens[0]));
+        logits_stream.write((const char *)tokens.data(), (size_t)n_chunk*n_ctx*sizeof(tokens[0]));
         const int nv = 2*((n_vocab + 1)/2) + 4;
-        log_probs.resize(n_ctx * nv);
+        log_probs.resize((size_t)n_ctx * nv);
     }
 
     // We get the logits for all the tokens in the context window (params.n_ctx)
@@ -813,7 +813,7 @@ static bool decode_helper(llama_context * ctx, llama_batch & batch, std::vector<
             n_outputs += batch_view.logits[i] != 0;
         }
 
-        memcpy(batch_logits.data() + prev_outputs*n_vocab, llama_get_logits(ctx), n_outputs*n_vocab*sizeof(float));
+        memcpy(batch_logits.data() + (size_t)prev_outputs*n_vocab, llama_get_logits(ctx), (size_t)n_outputs*n_vocab*sizeof(float));
 
         prev_outputs += n_outputs;
     }
@@ -990,7 +990,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
 
     std::vector<float> tok_logits(n_vocab);
     // TODO: this could be made smaller; it's currently the worst-case size
-    std::vector<float> batch_logits(n_vocab*n_ctx);
+    std::vector<float> batch_logits((size_t)n_vocab*n_ctx);
 
     std::vector<std::pair<size_t, llama_token>> eval_pairs;
     std::vector<float> eval_results;
@@ -1272,7 +1272,7 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
 
     std::vector<float> tok_logits(n_vocab);
     // TODO: this could be made smaller; it's currently the worst-case size
-    std::vector<float> batch_logits(n_vocab*n_ctx);
+    std::vector<float> batch_logits((size_t)n_vocab*n_ctx);
 
     std::vector<std::pair<size_t, llama_token>> eval_pairs;
     std::vector<float> eval_results;
@@ -1626,7 +1626,7 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
     llama_batch batch = llama_batch_init(n_ctx, 0, max_seq);
 
     std::vector<float> tok_logits(n_vocab);
-    std::vector<float> batch_logits(n_vocab*n_ctx);
+    std::vector<float> batch_logits((size_t)n_vocab*n_ctx);
 
     std::vector<std::pair<size_t, llama_token>> eval_pairs;
     std::vector<float> eval_results;
@@ -1844,7 +1844,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     std::vector<float> p_diff_values(size_t(n_ctx - 1 - n_ctx/2)*n_chunk);
     std::vector<float> logits;
     if (num_batches > 1) {
-        logits.reserve(n_ctx * n_vocab);
+        logits.reserve((size_t)n_ctx * n_vocab);
     }
 
     std::vector<std::thread> workers(std::thread::hardware_concurrency() - 1);
@@ -1929,7 +1929,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
         const int first = n_ctx/2;
         const float * all_logits = num_batches > 1 ? logits.data() : llama_get_logits(ctx);
-        process_logits(n_vocab, all_logits + first*n_vocab, tokens.data() + start + first, n_ctx - 1 - first,
+        process_logits(n_vocab, all_logits + size_t(first)*n_vocab, tokens.data() + start + first, n_ctx - 1 - first,
                 workers, log_probs_uint16, kld, kld_ptr, p_diff_ptr);
         p_diff_ptr += n_ctx - 1 - first;
         kld_ptr    += n_ctx - 1 - first;
