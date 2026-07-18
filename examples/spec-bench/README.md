@@ -7,7 +7,7 @@ benchmarking through `llama-server`.
 ## Scope
 
 - built-in canonical tasks: `code`, `extract`, `story`
-- one built-in workload by default, or one plain custom prompt via `-p` / `-f`
+- all three canonical built-in workloads by default, or one plain custom prompt via `-p` / `-f`
 - optional strict JSONL prompt-file override for structured multi-prompt workloads
 - baseline and speculative runs use the same binary and normal model/sampler args
 - Markdown report by default; compact JSONL is available with `--output-format jsonl`
@@ -52,10 +52,11 @@ The file replaces the built-in task set for that invocation.
 The canonical prompts are embedded into the executable at configure time from `prompts/code.txt`,
 `prompts/extract.txt`, and `prompts/story.txt`; no source-tree or network access is needed at runtime.
 
-Speculative output includes `drafted_by_position`, `accepted_by_position`,
-`acceptance_rate_by_position`, and `conditional_acceptance_rate` arrays for every stage.
-Array element zero is speculative position one. The first conditional rate is `null`
-because it has no preceding position.
+Compact JSONL includes raw `drafted_by_position` and `accepted_by_position` arrays for
+every stage. Detailed JSONL additionally includes the derived
+`acceptance_rate_by_position` and `conditional_acceptance_rate` arrays. Array element
+zero is speculative position one; the first conditional rate is `null` because it has
+no preceding position.
 
 Acceptance length is defined consistently as `1 + accepted_tokens / num_drafts` in detailed JSON, compact JSON, Markdown, and repeat summaries.
 

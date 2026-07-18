@@ -1120,13 +1120,20 @@ static void spec_bench_print_markdown(const gpt_params & params, const spec_benc
     std::cout << "\n";
 
     if (opts.output_details) {
+        size_t raw_position_width = 30;
+        for (const auto & record : records) {
+            for (const auto & stage : record.result.spec_delta.stages) {
+                raw_position_width = std::max(raw_position_width, spec_bench_positions(stage).size());
+            }
+        }
         std::cout << "## Detailed metrics\n\n";
         std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::right << std::setw(3) << "run"
                   << " | " << std::setw(10) << "prompt tok" << " | " << std::setw(9) << "prompt s"
                   << " | " << std::setw(9) << "total s" << " | " << std::left << std::setw(7) << "stage"
                   << " | " << std::right << std::setw(9) << "draft s" << " | " << std::setw(9) << "accept s"
-                  << " | " << std::left << std::setw(30) << "accepted/drafted by position" << " |\n";
-        std::cout << "|----------|-----|------------|-----------|-----------|---------|-----------|-----------|--------------------------------|\n";
+                  << " | " << std::left << std::setw(raw_position_width) << "accepted/drafted by position" << " |\n";
+        std::cout << "|----------|-----|------------|-----------|-----------|---------|-----------|-----------|"
+                  << std::string(raw_position_width + 2, '-') << "|\n";
         for (const auto & record : records) {
             const auto & result = record.result;
             auto metric_row = [&](const std::string & stage_name, double draft_s, double accept_s, const std::string & positions) {
@@ -1134,7 +1141,7 @@ static void spec_bench_print_markdown(const gpt_params & params, const spec_benc
                           << " | " << std::setw(10) << result.prompt_tokens << " | " << std::setw(9) << number(result.prompt_s, 3)
                           << " | " << std::setw(9) << number(result.total_s, 3) << " | " << std::left << std::setw(7) << fit(stage_name, 7)
                           << " | " << std::right << std::setw(9) << number(draft_s, 6) << " | " << std::setw(9) << number(accept_s, 6)
-                          << " | " << std::left << std::setw(30) << fit(positions.empty() ? "-" : positions, 30) << " |\n";
+                          << " | " << std::left << std::setw(raw_position_width) << (positions.empty() ? "-" : positions) << " |\n";
             };
             if (result.spec_delta.stages.empty()) { metric_row("base", 0.0, 0.0, ""); }
             else {
@@ -1193,7 +1200,6 @@ static void spec_bench_print_markdown(const gpt_params & params, const spec_benc
             std::cout << "- " << record.task.name << " run " << (record.repeat_index + 1) << ": " << error_text(record.result.error) << "\n";
         }
     }
-    std::cout << "\n";
 }
 
 static bool spec_bench_prepare_spec(
