@@ -68,6 +68,7 @@ int main() {
         assert(params.use_mmap);
     }
 
+    assert(!llama_model_mmap_requested(nullptr));
     assert(!llama_model_loader_mmap_enabled(nullptr));
     assert(!llama_model_has_mmap_buffers(nullptr));
     assert(!llama_model_repack_pass_executed(nullptr));

@@ -4785,7 +4785,12 @@ static llama_available_memory_result llama_get_available_ram_bytes() {
     // nested memory limit is visible to this process. Treat any job membership
     // as unknown rather than risking AUTO_KEEP from host-wide headroom.
     BOOL in_job = FALSE;
-    if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job) || in_job) {
+    if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job)) {
+        LLAMA_LOG_WARN("%s: could not determine Windows Job Object membership; RTR auto memory headroom is unknown\n", __func__);
+        return { false, 0 };
+    }
+    if (in_job) {
+        LLAMA_LOG_INFO("%s: process is in a Windows Job Object; RTR auto memory headroom is unknown\n", __func__);
         return { false, 0 };
     }
 
@@ -9080,6 +9085,10 @@ uint64_t llama_model_size(const struct llama_model * model) {
 
 enum llama_rtr_status llama_model_rtr_status(const struct llama_model * model) {
     return model ? model->rtr_status : LLAMA_RTR_STATUS_DISABLED;
+}
+
+bool llama_model_mmap_requested(const struct llama_model * model) {
+    return model && model->use_mmap_requested;
 }
 
 bool llama_model_loader_mmap_enabled(const struct llama_model * model) {

@@ -693,6 +693,9 @@ extern "C" {
     // Returns the effective run-time repack decision used for this model load.
     LLAMA_API enum llama_rtr_status llama_model_rtr_status(const struct llama_model * model);
 
+    // Returns the mmap setting requested before loader fallbacks.
+    LLAMA_API bool llama_model_mmap_requested(const struct llama_model * model);
+
     // Returns the mmap setting used by the model loader after its own fallbacks.
     LLAMA_API bool llama_model_loader_mmap_enabled(const struct llama_model * model);
 
