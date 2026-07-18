@@ -21,6 +21,9 @@
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+#include <cerrno>
+#include <chrono>
+#include <string>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -28,6 +31,89 @@
 
 // Public C API for hot-swap (defined in src/llama.cpp)
 extern "C" bool llama_reload_changed_tensors(struct llama_context * ctx);
+
+// ------------------------------------------------------------------
+// Hot-swap signal mode: file-based signalling so an external driver can
+// swap GGUF shards on disk and ask this process to reload + recompute
+// without ever restarting it. Plain files are used instead of POSIX
+// signals so the exact same protocol works on Windows, macOS and Linux.
+//
+// Protocol:
+//   - status file (written by us, read by the driver), single line:
+//         <state> <iter> <seq>
+//     where <state> is one of computing/done/reload_failed/exiting,
+//     <iter> is the 1-based index of the current computation and <seq>
+//     is the sequence number of the last accepted command (0 = none).
+//   - control file (written by the driver, read + deleted by us):
+//         <command> <seq>
+//     where <command> is one of:
+//         reload  - reload tensors that changed on disk, then recompute
+//         compute - recompute without reloading anything
+//         exit    - terminate the process (quit/stop are synonyms)
+//     <seq> must increase monotonically; commands whose <seq> is not
+//     greater than the last accepted one are ignored (this makes
+//     duplicate delivery harmless). A command without <seq> is always
+//     executed (convenient for manual use: `echo reload > ctrl`).
+// ------------------------------------------------------------------
+
+static void hotswap_write_status(const char * path, const char * state, int iter, int seq) {
+    const std::string tmp = std::string(path) + ".tmp";
+    // The status file is the driver's only view of our progress: losing a
+    // single update would deadlock the whole protocol (we would wait for a
+    // command the driver will never send). So never give up - retry until the
+    // update is published. Transient failures are expected on Windows while
+    // another process (the driver polling, antivirus, indexer) briefly holds
+    // one of the files open; publish via tmp + rename so a reader can never
+    // observe a partially written status.
+    for (long attempt = 0; ; ++attempt) {
+        FILE * f = fopen(tmp.c_str(), "wb"); // binary: keep LF line ending on Windows
+        if (f) {
+            fprintf(f, "%s %d %d\n", state, iter, seq);
+            fclose(f);
+            std::remove(path); // Windows: rename fails when the destination exists
+            if (std::rename(tmp.c_str(), path) == 0) {
+                return;
+            }
+        }
+        if (attempt > 0 && attempt % 500 == 0) { // roughly every 10 seconds
+            fprintf(stderr, "hotswap: still trying to publish status '%s' to file '%s': %s\n", state, path, strerror(errno));
+            fflush(stderr);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+// Returns true when a complete command was read (and the control file deleted).
+// A file without a terminating newline is considered partially written and is
+// left in place to be retried on the next poll.
+static bool hotswap_read_command(const char * path, std::string & cmd, int & seq) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    in.close();
+    const std::string content = ss.str();
+    if (content.find('\n') == std::string::npos) {
+        return false;
+    }
+    cmd.clear();
+    std::istringstream parser(content);
+    parser >> cmd;
+    if (!(parser >> seq)) {
+        seq = -1; // no sequence number provided
+    }
+    if (cmd.empty()) {
+        return false;
+    }
+    // Delete so the command is not picked up twice; retry in case the writer
+    // still briefly holds the file open (Windows sharing semantics).
+    for (int attempt = 0; attempt < 50 && std::remove(path) != 0; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return true;
+}
 
 struct results_perplexity {
     std::vector<llama_token> tokens;
@@ -225,7 +311,7 @@ static void process_logits(std::ostream& out, int n_vocab, const float * logits,
     for (auto & w : workers) {
         w.join();
     }
-    out.write((const char *)log_probs.data(), n_token*nv*sizeof(uint16_t));
+    out.write((const char *)log_probs.data(), (size_t)n_token*nv*sizeof(uint16_t));
 }
 
 struct kl_divergence_result {
@@ -333,7 +419,7 @@ static void process_logits(int n_vocab, const float * logits, const int * tokens
                 break;
             }
             lock.unlock();
-            std::pair<double, float> v = log_softmax(n_vocab, logits + i*n_vocab, base_log_probs.data() + i*nv, tokens[i+1], local_kld);
+            std::pair<double, float> v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, base_log_probs.data() + size_t(i)*nv, tokens[i+1], local_kld);
             kld_values[i]    = (float)v.first;
             p_diff_values[i] = v.second;
         }
@@ -562,9 +648,9 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     if (!params.logits_file.empty()) {
         logits_stream.write((const char *)&n_vocab, sizeof(n_vocab));
         logits_stream.write((const char *)&n_chunk, sizeof(n_chunk));
-        logits_stream.write((const char *)tokens.data(), n_chunk*n_ctx*sizeof(tokens[0]));
+        logits_stream.write((const char *)tokens.data(), (size_t)n_chunk*n_ctx*sizeof(tokens[0]));
         const int nv = 2*((n_vocab + 1)/2) + 4;
-        log_probs.resize(n_ctx * nv);
+        log_probs.resize((size_t)n_ctx * nv);
     }
 
     // We get the logits for all the tokens in the context window (params.n_ctx)
@@ -727,7 +813,7 @@ static bool decode_helper(llama_context * ctx, llama_batch & batch, std::vector<
             n_outputs += batch_view.logits[i] != 0;
         }
 
-        memcpy(batch_logits.data() + prev_outputs*n_vocab, llama_get_logits(ctx), n_outputs*n_vocab*sizeof(float));
+        memcpy(batch_logits.data() + (size_t)prev_outputs*n_vocab, llama_get_logits(ctx), (size_t)n_outputs*n_vocab*sizeof(float));
 
         prev_outputs += n_outputs;
     }
@@ -904,7 +990,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
 
     std::vector<float> tok_logits(n_vocab);
     // TODO: this could be made smaller; it's currently the worst-case size
-    std::vector<float> batch_logits(n_vocab*n_ctx);
+    std::vector<float> batch_logits((size_t)n_vocab*n_ctx);
 
     std::vector<std::pair<size_t, llama_token>> eval_pairs;
     std::vector<float> eval_results;
@@ -1186,7 +1272,7 @@ static void winogrande_score(llama_context * ctx, const gpt_params & params) {
 
     std::vector<float> tok_logits(n_vocab);
     // TODO: this could be made smaller; it's currently the worst-case size
-    std::vector<float> batch_logits(n_vocab*n_ctx);
+    std::vector<float> batch_logits((size_t)n_vocab*n_ctx);
 
     std::vector<std::pair<size_t, llama_token>> eval_pairs;
     std::vector<float> eval_results;
@@ -1540,7 +1626,7 @@ static void multiple_choice_score(llama_context * ctx, const gpt_params & params
     llama_batch batch = llama_batch_init(n_ctx, 0, max_seq);
 
     std::vector<float> tok_logits(n_vocab);
-    std::vector<float> batch_logits(n_vocab*n_ctx);
+    std::vector<float> batch_logits((size_t)n_vocab*n_ctx);
 
     std::vector<std::pair<size_t, llama_token>> eval_pairs;
     std::vector<float> eval_results;
@@ -1758,7 +1844,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     std::vector<float> p_diff_values(size_t(n_ctx - 1 - n_ctx/2)*n_chunk);
     std::vector<float> logits;
     if (num_batches > 1) {
-        logits.reserve(n_ctx * n_vocab);
+        logits.reserve((size_t)n_ctx * n_vocab);
     }
 
     std::vector<std::thread> workers(std::thread::hardware_concurrency() - 1);
@@ -1843,7 +1929,7 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
 
         const int first = n_ctx/2;
         const float * all_logits = num_batches > 1 ? logits.data() : llama_get_logits(ctx);
-        process_logits(n_vocab, all_logits + first*n_vocab, tokens.data() + start + first, n_ctx - 1 - first,
+        process_logits(n_vocab, all_logits + size_t(first)*n_vocab, tokens.data() + start + first, n_ctx - 1 - first,
                 workers, log_probs_uint16, kld, kld_ptr, p_diff_ptr);
         p_diff_ptr += n_ctx - 1 - first;
         kld_ptr    += n_ctx - 1 - first;
@@ -2060,11 +2146,35 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
     }
 
-    const char * hotswap_env = std::getenv("LLAMA_HOTSWAP_ENABLED");
-    const char * pre_script  = std::getenv("LLAMA_PERPLEXITY_PRE_RELOAD_SCRIPT");
+    const char * hotswap_env  = std::getenv("LLAMA_HOTSWAP_ENABLED");
+    const char * pre_script   = std::getenv("LLAMA_PERPLEXITY_PRE_RELOAD_SCRIPT");
+    const char * hotswap_ctrl = std::getenv("LLAMA_HOTSWAP_CONTROL_FILE");
+    const char * hotswap_stat = std::getenv("LLAMA_HOTSWAP_STATUS_FILE");
+
+    // Signal-driven hot-swap mode: never exit on our own; after every
+    // computation wait for a command in the control file (see the protocol
+    // description at the top of this file).
+    const bool hotswap_signal_mode = hotswap_env && hotswap_ctrl && *hotswap_ctrl;
+
+    if (hotswap_signal_mode && !(hotswap_stat && *hotswap_stat)) {
+        fprintf(stderr, "%s: error: LLAMA_HOTSWAP_CONTROL_FILE requires LLAMA_HOTSWAP_STATUS_FILE to be set as well\n", __func__);
+        llama_free(ctx);
+        llama_free_model(model);
+        llama_backend_free();
+        return 1;
+    }
 
     if (hotswap_env) {
         llama_reload_changed_tensors(ctx);
+    }
+
+    int hotswap_iter = 1; // 1-based index of the current computation
+    int hotswap_seq  = 0; // sequence number of the last accepted command
+    if (hotswap_signal_mode) {
+        std::remove(hotswap_ctrl); // discard stale commands from a previous run
+        fprintf(stderr, "%s: hot-swap signal mode enabled (control='%s', status='%s')\n",
+                __func__, hotswap_ctrl, hotswap_stat);
+        hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
     }
 
     while (true) {
@@ -2083,6 +2193,62 @@ int main(int argc, char ** argv) {
 
         llama_print_timings(ctx);
         write_logfile(ctx, params, model, results);
+
+        if (hotswap_signal_mode) {
+            fprintf(stderr, "%s: hot-swap iteration %d finished, waiting for the next command\n", __func__, hotswap_iter);
+            fflush(stdout);
+            fflush(stderr);
+            hotswap_write_status(hotswap_stat, "done", hotswap_iter, hotswap_seq);
+
+            bool terminate = false;
+            while (true) {
+                std::string cmd;
+                int seq = -1;
+                if (!hotswap_read_command(hotswap_ctrl, cmd, seq)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    continue;
+                }
+                if (seq >= 0 && seq <= hotswap_seq) {
+                    fprintf(stderr, "%s: ignoring stale hot-swap command '%s' (seq %d <= %d)\n",
+                            __func__, cmd.c_str(), seq, hotswap_seq);
+                    continue;
+                }
+                if (seq >= 0) {
+                    hotswap_seq = seq;
+                }
+                fprintf(stderr, "%s: hot-swap command received: %s\n", __func__, cmd.c_str());
+                if (cmd == "exit" || cmd == "quit" || cmd == "stop") {
+                    terminate = true;
+                    break;
+                }
+                if (cmd == "reload") {
+                    if (llama_reload_changed_tensors(ctx)) {
+                        break;
+                    }
+                    fprintf(stderr, "%s: hot-swap reload requested, but no tensor has changed on disk\n", __func__);
+                    fflush(stderr);
+                    hotswap_write_status(hotswap_stat, "reload_failed", hotswap_iter, hotswap_seq);
+                    continue;
+                }
+                if (cmd == "compute") {
+                    break; // recompute without reloading
+                }
+                fprintf(stderr, "%s: unknown hot-swap command '%s' ignored\n", __func__, cmd.c_str());
+                fflush(stderr);
+            }
+            if (terminate) {
+                fprintf(stderr, "%s: hot-swap exit requested, terminating\n", __func__);
+                fflush(stdout);
+                fflush(stderr);
+                hotswap_write_status(hotswap_stat, "exiting", hotswap_iter, hotswap_seq);
+                break;
+            }
+
+            hotswap_iter++;
+            llama_reset_timings(ctx); // per-iteration timings, like separate runs would report
+            hotswap_write_status(hotswap_stat, "computing", hotswap_iter, hotswap_seq);
+            continue;
+        }
 
         if (pre_script) {
             fprintf(stderr, "%s: executing pre-reload script: %s\n", __func__, pre_script);

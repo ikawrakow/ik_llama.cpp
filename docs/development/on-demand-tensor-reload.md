@@ -135,20 +135,56 @@ Returns `true` if at least one tensor was reloaded. When this happens, the funct
 | Variable | Purpose |
 |----------|---------|
 | `LLAMA_HOTSWAP_ENABLED` | Enables the hot-swap loop in `perplexity` and the health-check hook in `server`. |
-| `LLAMA_PERPLEXITY_PRE_RELOAD_SCRIPT` | Path to an executable script run between perplexity iterations (e.g., to regenerate/re-quantize a tensor file). |
+| `LLAMA_PERPLEXITY_PRE_RELOAD_SCRIPT` | Path to an executable script run between perplexity iterations (e.g., to regenerate/re-quantize a tensor file). Legacy loop mode only. |
+| `LLAMA_HOTSWAP_CONTROL_FILE` | Path to a command file polled by `perplexity`. Setting it (together with `LLAMA_HOTSWAP_ENABLED`) switches the tool into **signal mode** (see below). |
+| `LLAMA_HOTSWAP_STATUS_FILE` | Path to a status file written by `perplexity` in signal mode. Required when `LLAMA_HOTSWAP_CONTROL_FILE` is set. |
 
 ---
 
 ## Integration Points
 
-### `examples/perplexity/perplexity.cpp`
-When `LLAMA_HOTSWAP_ENABLED` is set, the tool runs in a loop:
+### `examples/perplexity/perplexity.cpp` (legacy loop mode)
+When `LLAMA_HOTSWAP_ENABLED` is set (and `LLAMA_HOTSWAP_CONTROL_FILE` is not), the tool runs in a loop:
 
 1. Perform an initial `llama_reload_changed_tensors()` to apply any pending changes before the first evaluation.
-2. Compute perplexity (or Hellaswag, etc.).
+2. Compute perplexity (or Hellaswag, KL divergence, etc.).
 3. Print timings and write logs.
 4. Execute the optional pre-reload script.
 5. Call `llama_reload_changed_tensors(ctx)`. If no tensors changed, exit; otherwise repeat from step 2.
+
+### `examples/perplexity/perplexity.cpp` (signal mode)
+
+When both `LLAMA_HOTSWAP_ENABLED` and `LLAMA_HOTSWAP_CONTROL_FILE` are set (the latter requires `LLAMA_HOTSWAP_STATUS_FILE` too), the tool **never terminates on its own**. Instead, an external driver (e.g. `benchmark_each_tensor.sh --hotswap` from Thireus' GGUF Tool Suite) swaps GGUF shards on disk and steers the process through two plain files. Files are used instead of POSIX signals so the exact same protocol works on Windows, macOS and Linux.
+
+**Status file** (written atomically by `perplexity` via tmp-file + rename, single line):
+
+```
+<state> <iter> <seq>
+```
+
+* `<state>` — `computing` (an evaluation is running), `done` (evaluation finished, waiting for a command), `reload_failed` (a `reload` command found no changed tensor; still waiting), `exiting` (an `exit` command was accepted).
+* `<iter>` — 1-based index of the evaluation. It only advances when a `reload` or `compute` command is accepted.
+* `<seq>` — sequence number of the last accepted command (`0` before any command).
+
+**Control file** (written by the driver — ideally atomically via tmp-file + rename —, consumed and deleted by `perplexity`, single line):
+
+```
+<command> <seq>
+```
+
+* `reload <seq>` — call `llama_reload_changed_tensors()`; on success re-evaluate, on "nothing changed" publish `reload_failed` and keep waiting.
+* `compute <seq>` — re-evaluate without reloading (useful when the on-disk state already matches the desired state).
+* `exit <seq>` — publish `exiting`, free the model and terminate (aliases: `quit`, `stop`).
+* `<seq>` must increase monotonically; a command whose `<seq>` is not greater than the last accepted one is deleted and ignored, which makes duplicate delivery harmless. A command without `<seq>` is always executed (convenient for manual testing: `echo reload > ctrl`).
+
+Driver loop in a nutshell:
+
+1. Swap the shard(s) of the tensor(s) to benchmark, start `llama-perplexity` with the three environment variables, redirecting stdout+stderr to a session log; wait for `done 1`.
+2. Capture the per-benchmark log by remembering the session log's byte size before each command and slicing from that offset once `done <iter>` appears.
+3. Restore the previous shard(s), swap the next one(s), write `reload <seq>` and wait for `done <iter+1>` — both the restore and the new swap are applied by the same reload.
+4. When finished, write `exit <seq>`.
+
+This mode works with any of the evaluation flavours (`perplexity`, `--kl-divergence`, HellaSwag, ...); KL divergence is fully re-entrant since the base-logits file is re-read on every iteration.
 
 ### `examples/server/server.cpp`
 On every health-check (`/health`) request, if `LLAMA_HOTSWAP_ENABLED` is set, the server calls `llama_reload_changed_tensors()`. This provides a convenient, external trigger: simply `touch` or overwrite a tensor’s source GGUF file and poll `/health` to apply the change.
