@@ -99,9 +99,9 @@ void ggml_cuda_op_pack_cache_rows(ggml_backend_cuda_context & ctx, ggml_tensor *
     char ** write_dest_ptrs_d = nullptr;
     int write_index = -1;
 #if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
-    if (ctx.cur_graph != nullptr && ctx.cur_graph->use_write_indirection) {
+    if (ctx.cur_graph != nullptr && ctx.cur_graph->use_cpy_indirection) {
         write_dest_ptrs_d = ctx.cur_graph->dest_ptrs_d;
-        write_index = ctx.cur_graph->graph_write_index;
+        write_index = ctx.cur_graph->graph_cpynode_index;
     }
 #endif
 
@@ -135,8 +135,8 @@ void ggml_cuda_op_pack_cache_rows(ggml_backend_cuda_context & ctx, ggml_tensor *
     }
 
 #if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
-    if (ctx.cur_graph != nullptr && ctx.cur_graph->use_write_indirection) {
-        ctx.cur_graph->graph_write_index = write_index + 1;
+    if (ctx.cur_graph != nullptr && ctx.cur_graph->use_cpy_indirection) {
+        ctx.cur_graph->graph_cpynode_index = write_index + 1;
     }
 #endif
 }

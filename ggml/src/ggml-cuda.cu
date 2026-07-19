@@ -4360,8 +4360,8 @@ static bool check_node_graph_compatibility_and_refresh_write_ops(
         int               max_grid_x) {
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
-    graph->use_write_indirection = false;
-    graph->write_dest_ptrs.clear();
+    graph->use_cpy_indirection = false;
+    graph->cpy_dest_ptrs.clear();
 
     const std::string gemma3n_per_layer_proj_src0_name = "inp_per_layer_selected";
     const std::string gemma3n_per_layer_proj_src1_name = "per_layer_proj";
@@ -4426,7 +4426,7 @@ static bool check_node_graph_compatibility_and_refresh_write_ops(
 
             // Store destinations that can be retargeted between replays. Their kernels consume
             // this table in the same graph order, including graphs that mix CPY and PACK.
-            graph->write_dest_ptrs.push_back(node->op == GGML_OP_CPY
+            graph->cpy_dest_ptrs.push_back(node->op == GGML_OP_CPY
                     ? (char *) node->src[1]->data
                     : (char *) node->data);
 
@@ -4449,9 +4449,9 @@ static bool check_node_graph_compatibility_and_refresh_write_ops(
     }
 
     if (use_cuda_graph) {
-        graph->use_write_indirection = true;
+        graph->use_cpy_indirection = true;
         // copy pointers to GPU so they can be accessed via indirection within CUDA graph
-        ggml_cuda_write_dest_ptrs_copy(graph, graph->write_dest_ptrs.data(), graph->write_dest_ptrs.size(), stream);
+        ggml_cuda_cpy_dest_ptrs_copy(graph, graph->cpy_dest_ptrs.data(), graph->cpy_dest_ptrs.size(), stream);
     }
 
     return use_cuda_graph;
@@ -4734,7 +4734,7 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     }
 
     if (graph && !use_cuda_graph) {
-        graph->use_write_indirection = false;
+        graph->use_cpy_indirection = false;
     }
 
 #else
