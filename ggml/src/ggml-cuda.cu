@@ -4462,8 +4462,8 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (node->src[i] &&
             node->src[i]->data != graph_node_properties->src_address[i] &&
-            node->op != GGML_OP_CPY &&
-            node->op != GGML_OP_VIEW
+            node->op != GGML_OP_VIEW &&
+            !(node->op == GGML_OP_CPY && i == 1)
         ) {
             return false;
         }

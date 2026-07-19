@@ -5953,9 +5953,22 @@ static int llama_decode_internal(
         // helpers for smoother batch API transition
         // after deprecating the llama_eval calls, these will be removed
         if (u_batch.pos == nullptr) {
-            pos.resize(n_tokens);
+            // MROPE/IMROPE models (e.g. Qwen3.5) read 4 position sections per token; the RoPE op indexes
+            // pos[i], pos[i+n], pos[i+2n], pos[i+3n]. Sizing this legacy fallback to only n_tokens (as for
+            // standard rope) made llama_set_inputs copy n_tokens*4 out of a n_tokens-sized vector -> an
+            // out-of-bounds read (UB) that fed garbage into the extra rope sections -> wrong, run-to-run
+            // non-deterministic RoPE. Build the 4 sections like the explicit-pos path above (text: t,t,t,0).
+            const int rope_pt = (hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ||
+                                 hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
+            pos.resize((size_t) n_tokens * rope_pt);
             for (uint32_t i = 0; i < n_tokens; i++) {
-                pos[i] = u_batch.all_pos_0 + i*u_batch.all_pos_1;
+                const int32_t p = u_batch.all_pos_0 + i*u_batch.all_pos_1;
+                pos[i] = p;
+                if (rope_pt == 4) {
+                    pos[    n_tokens + i] = p;
+                    pos[2 * n_tokens + i] = p;
+                    pos[3 * n_tokens + i] = 0;
+                }
             }
 
             u_batch.pos = pos.data();
@@ -9277,6 +9290,29 @@ struct llama_data_write {
                 }
             }
         }
+
+        // DSA lightning-indexer key cache (kv_self.kr_l): one row per cell, like K/V.
+        const uint32_t dsa_indexer_state = !kv_self.kr_l.empty() ? 1 : 0;
+        write(&dsa_indexer_state, sizeof(dsa_indexer_state));
+
+        if (dsa_indexer_state != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_kr_cache = need_kv && il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
+                if (!has_kr_cache) continue;
+
+                const int32_t kr_type_i = has_kr_cache ? (int32_t) kv_self.kr_l[il]->type : -1;
+                write(&kr_type_i, sizeof(kr_type_i));
+
+                const uint64_t kr_size_row = has_kr_cache ? ggml_row_size(kv_self.kr_l[il]->type, kv_self.kr_l[il]->ne[0]) : 0;
+                write(&kr_size_row, sizeof(kr_size_row));
+
+                for (const auto & range : cell_ranges) {
+                    const size_t range_size = range.second - range.first;
+                    const size_t buf_size   = range_size * kr_size_row;
+                    write_tensor_data(kv_self.kr_l[il], range.first * kr_size_row, buf_size, il);
+                }
+            }
+        }
     }
 
     void write_kv_cache(const struct llama_context * ctx, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
@@ -9802,6 +9838,48 @@ struct llama_data_read {
                         read_kv_cache_data_split(ctx, kv_self.s_l[il], read(s_data_size), s_dst_row, s_size_row, s_rows, il);
                     } else {
                         ggml_backend_tensor_set(kv_self.s_l[il], read(s_data_size), s_dst_offset, s_data_size);
+                    }
+                }
+            }
+        }
+
+        // DSA lightning-indexer key cache (kv_self.kr_l).
+        uint32_t dsa_indexer_state_ref = 0;
+        read_to(&dsa_indexer_state_ref, sizeof(dsa_indexer_state_ref));
+
+        const bool has_dsa_indexer = !kv_self.kr_l.empty();
+        if ((dsa_indexer_state_ref != 0) != has_dsa_indexer) {
+            LLAMA_LOG_ERROR("%s: incompatible DSA indexer key cache presence (file=%u, model=%d)\n",
+                    __func__, dsa_indexer_state_ref, has_dsa_indexer ? 1 : 0);
+            return false;
+        }
+
+        if (dsa_indexer_state_ref != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_kr_cache = need_kv && il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
+                if (!has_kr_cache) continue;
+
+                int32_t kr_type_i_ref;
+                read_to(&kr_type_i_ref, sizeof(kr_type_i_ref));
+                const int32_t kr_type_i = (int32_t) kv_self.kr_l[il]->type;
+                if (kr_type_i != kr_type_i_ref) {
+                    LLAMA_LOG_ERROR("%s: mismatched DSA indexer key type (%d != %d, layer %d)\n", __func__, kr_type_i, kr_type_i_ref, il);
+                    return false;
+                }
+
+                uint64_t kr_size_row_ref;
+                read_to(&kr_size_row_ref, sizeof(kr_size_row_ref));
+                const size_t kr_size_row = ggml_row_size(kv_self.kr_l[il]->type, kv_self.kr_l[il]->ne[0]);
+                if (kr_size_row != kr_size_row_ref) {
+                    LLAMA_LOG_ERROR("%s: mismatched DSA indexer key row size (%zu != %zu, layer %d)\n", __func__, kr_size_row, (size_t) kr_size_row_ref, il);
+                    return false;
+                }
+
+                if (cell_count) {
+                    if (kv_self.kr_l[il]->extra) {
+                        read_kv_cache_data_split(ctx, kv_self.kr_l[il], read(cell_count * kr_size_row), kv_self.head, kr_size_row, cell_count, il);
+                    } else {
+                        ggml_backend_tensor_set(kv_self.kr_l[il], read(cell_count * kr_size_row), kv_self.head * kr_size_row, cell_count * kr_size_row);
                     }
                 }
             }
