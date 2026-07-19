@@ -299,7 +299,7 @@ static ggml_tensor * dsv4_raw_get_k(
         ggml_context  * ctx,
         ggml_tensor   * cache,
         ggml_tensor   * raw_k_read_idxs,
-        int64_t         n_embd_head) {
+        int64_t         n_embd_head, [[maybe_unused]] int il) {
     if (cache == nullptr) {
         return nullptr;
     }
@@ -325,6 +325,13 @@ static ggml_tensor * dsv4_raw_get_k(
     GGML_ASSERT(n_embd_gqa % n_embd_head == 0);
 
     const int64_t n_head_kv = n_embd_gqa/n_embd_head;
+
+    if (n_stream == 1 && lctx->kv_self.n == raw_k_read_idxs->ne[0]) {
+        return ggml_view_3d(ctx, cache, n_embd_head, n_head_kv, n_kv,
+                ggml_row_size(cache->type, n_embd_head),
+                ggml_row_size(cache->type, n_embd_head)*n_head_kv, 0);
+    }
+
     GGML_ASSERT(raw_k_read_idxs != nullptr);
     GGML_ASSERT(raw_k_read_idxs->ne[0] >= n_kv*n_stream);
 
@@ -1278,7 +1285,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
 
         ggml_tensor * raw_k = nullptr;
         if (hparams.n_head_kv(il) == 1 && lctx.dsv4.inputs.raw_k_read_idxs != nullptr) {
-            raw_k = dsv4_raw_get_k(&lctx, ctx0, kv_self.k_l[il], lctx.dsv4.inputs.raw_k_read_idxs, n_embd_head);
+            raw_k = dsv4_raw_get_k(&lctx, ctx0, kv_self.k_l[il], lctx.dsv4.inputs.raw_k_read_idxs, n_embd_head, il);
         }
         if (raw_k == nullptr) {
             raw_k = ggml_view_3d(ctx0, kv_self.k_l[il],
