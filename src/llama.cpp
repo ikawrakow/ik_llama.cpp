@@ -7189,7 +7189,7 @@ struct llama_context_params llama_context_default_params() {
         /*.rope_cache                  =*/ false,
         /*.graph_reuse                 =*/ true,
         /*.dsa                         =*/ false,
-        /*.fused_idx_topk              =*/ false,
+        /*.fused_idx_topk              =*/ true,
         /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
