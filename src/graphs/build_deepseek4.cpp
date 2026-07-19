@@ -643,6 +643,7 @@ static ggml_tensor * build_hc_pre(
     }
     auto flat = ggml_reshape_2d(ctx0, x, n_embd * hc, nt);
     auto normed = ggml_rms_norm(ctx0, flat, norm_rms_eps);
+    cb(normed, "hc_pre", il);
     auto mixes  = ggml_mul_mat(ctx0, hc_fn, normed);
     cb(mixes, "hc_pre_mixes", il);
 
@@ -1081,6 +1082,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         cb(q, "q_b", il);
         q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
         q = ggml_rms_norm(ctx0, q, hparams.f_norm_rms_eps);
+        cb(q, "q_b", il);
 
         ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_nope, n_head, n_tokens,
                 ggml_row_size(q->type, n_embd_head),
