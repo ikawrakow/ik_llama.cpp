@@ -23681,19 +23681,79 @@ static void ggml_compute_forward_hc_post_f32(
     GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1 && post->ne[2] == 1 && post->ne[3] == 1 && res->ne[3] == 1 && comb->ne[3] == 1);
     GGML_ASSERT(post->ne[0] == res->ne[1] && post->ne[0] == comb->ne[0] && post->ne[0] == comb->ne[1]);
 
+    int ne0 = x->ne[0];
     int S = post->ne[0];
-    int T = x->ne[1];
-    int64_t npt = (T + nth - 1)/nth;
-
     GGML_ASSERT(S <= 8);
+
+    float r[8];
+
+    int T = x->ne[1];
+    const int i0_chunk = 64;
+    //if (T < nth && ne0 > i0_chunk && ne0 % i0_chunk == 0) {
+    //    int ne0_64 = ne0/i0_chunk;
+    //    int nchunk = T*ne0_64;
+    //    int npt = (nchunk + nth - 1)/nth;
+    //    int first = ith * npt;
+    //    int last  = MIN(first + npt, nchunk);
+
+    //    for (int ic = first; ic < last; ++ic) {
+    //        int t = ic / ne0_64;
+    //        int i0_first = ic - t * ne0_64;
+
+    //        const float * x_r    = (const float *)((const char *)x->data + t*x->nb[1]) + i0_first;
+    //        const float * post_r = (const float *)((const char *)post->data + t*post->nb[1]);
+    //        const float * comb_r = (const float *)((const char *)comb->data + t*comb->nb[2]);
+
+    //        for (int i0 = 0; i0 < i0_chunk; ++i0) {
+    //            for (int j = 0; j < S; ++j) {
+    //                const float * res_r  = (const float *)((const char *)res->data + t*res->nb[2] + j*res->nb[1]);
+    //                r[j] = res_r[i0_first + i0];
+    //            }
+    //            for (int i = 0; i < S; ++i) {
+    //                float sum = x_r[i0] * post_r[i];
+    //                for (int j = 0; j < S; ++j) {
+    //                    sum += comb_r[j*S + i] * r[j];
+    //                }
+    //                float * dst_r = (float *)((char *)dst->data + t*dst->nb[2] + i*dst->nb[1]) + i0_first;
+    //                dst_r[i0] = sum;
+    //            }
+    //        }
+    //    }
+    //    return;
+    //}
+
+    if (T == 1) {
+        const float * x_r    = (const float *)((const char *)x->data);
+        const float * post_r = (const float *)((const char *)post->data);
+        const float * comb_r = (const float *)((const char *)comb->data);
+
+        int nchunk = (ne0 + nth - 1)/nth;
+
+        for (int ic = ith; ic < nchunk; ic += nth) {
+            int first = 64*ic;
+            for (int i0 = first; i0 < first + 64 && i0 < ne0; ++i0) {
+                for (int j = 0; j < S; ++j) {
+                    const float * res_r  = (const float *)((const char *)res->data + j*res->nb[1]);
+                    r[j] = res_r[i0];
+                }
+                for (int i = 0; i < S; ++i) {
+                    float sum = x_r[i0] * post_r[i];
+                    for (int j = 0; j < S; ++j) {
+                        sum += comb_r[j*S + i] * r[j];
+                    }
+                    float * dst_r = (float *)((char *)dst->data + i*dst->nb[1]);
+                    dst_r[i0] = sum;
+                }
+            }
+        }
+        return;
+    }
+
+    int64_t npt = (T + nth - 1)/nth;
 
     // one token is S*S floats (16 at S=4): parallelize over tokens only
     const int t0 = ith * npt;
     const int t1 = MIN(t0 + npt, T);
-
-    float r[8];
-
-    int ne0 = x->ne[0];
 
     for (int64_t t = t0; t < t1; ++t) {
         const float * x_r    = (const float *)((const char *)x->data + t*x->nb[1]);
