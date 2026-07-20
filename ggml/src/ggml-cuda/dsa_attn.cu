@@ -220,7 +220,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * sink = dst->src[4];
     const ggml_tensor * indexer = dst->src[5];
 
-    //if (sink) return false; // We do not support sinks at this point
+    if (sink) return false; // Something still goes wrong with sinks
     if (!Q || !K || !V || !mask || !indexer) return false;
 
     if (indexer->ne[0] % 256 != 0) return false; // lazyness to add checks and handle tailes in case of not multiple of 256

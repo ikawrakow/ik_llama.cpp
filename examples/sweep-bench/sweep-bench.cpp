@@ -191,8 +191,8 @@ int main(int argc, char ** argv) {
 
         // first measure token generation performance at this context size
         const auto t_tg_start = ggml_time_us();
-        printf("======================================== tg_start for n_kv = %u\n", n_kv);
-        fprintf(stderr, "======================================== tg_start for n_kv = %u\n", n_kv);
+        //printf("======================================== tg_start for n_kv = %u\n", n_kv);
+        //fprintf(stderr, "======================================== tg_start for n_kv = %u\n", n_kv);
 
         for (int irep = 0; irep < nrep; ++irep) {
 
@@ -209,8 +209,8 @@ int main(int argc, char ** argv) {
             }
 
         }
-        printf("======================================== tg_end for n_kv = %u\n", n_kv);
-        fprintf(stderr, "======================================== tg_end for n_kv = %u\n", n_kv);
+        //printf("======================================== tg_end for n_kv = %u\n", n_kv);
+        //fprintf(stderr, "======================================== tg_end for n_kv = %u\n", n_kv);
 
         const auto t_tg_end = ggml_time_us();
 
