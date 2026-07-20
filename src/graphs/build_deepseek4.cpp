@@ -1408,7 +1408,25 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             if (raw_mask->type != csa_mask->type) {
                 raw_mask = ggml_cast(ctx0, raw_mask, csa_mask->type);
             }
+            {
+                constexpr int k_fa_chunk = 256;
+                int n_swa = hparams.n_swa;
+                int ntokens = std::max(k_fa_chunk, int(q->ne[2]));
+                int nton = k_fa_chunk*((ntokens + n_swa + k_fa_chunk - 1)/k_fa_chunk);
+                int first = raw_k->ne[2] - nton;
+                if (first > 0) {
+                    raw_k = ggml_view_4d(ctx0, raw_k, raw_k->ne[0], raw_k->ne[1], nton, raw_k->ne[3],
+                                raw_k->nb[1], raw_k->nb[2], raw_k->nb[3], raw_k->nb[2]*first);
+                    raw_mask = ggml_view_4d(ctx0, raw_mask, nton, raw_mask->ne[1], raw_mask->ne[2], raw_mask->ne[3],
+                            raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
+                }
+            }
             ggml_tensor * k_all = ggml_concat(ctx0, raw_k, csa_k, 2);
+            //printf("k_all: %ld x %ld x %ld x %ld, raw_k: %ld x %ld x %ld x %ld, csa_k = %ld x %ld x %ld x %ld, q = %ld x %ld x %ld x %ld\n",
+            //        k_all->ne[0], k_all->ne[1], k_all->ne[2], k_all->ne[3],
+            //        raw_k->ne[0], raw_k->ne[1], raw_k->ne[2], raw_k->ne[3],
+            //        csa_k->ne[0], csa_k->ne[1], csa_k->ne[2], csa_k->ne[3],
+            //        q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
             ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
             ggml_tensor * kq_b = dsv4_build_kq_zero_bias(ctx0, cparams, kq_mask, q->ne[1]);
             cb(csa_k, "csa_k", il);
@@ -1438,6 +1456,19 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             raw_k = dsv4_repeat_streams(ctx0, raw_k, hca_k->ne[3]);
             if (raw_mask->type != hca_mask->type) {
                 raw_mask = ggml_cast(ctx0, raw_mask, hca_mask->type);
+            }
+            {
+                constexpr int k_fa_chunk = 256;
+                int n_swa = hparams.n_swa;
+                int ntokens = std::max(k_fa_chunk, int(q->ne[2]));
+                int nton = k_fa_chunk*((ntokens + n_swa + k_fa_chunk - 1)/k_fa_chunk);
+                int first = raw_k->ne[2] - nton;
+                if (first > 0) {
+                    raw_k = ggml_view_4d(ctx0, raw_k, raw_k->ne[0], raw_k->ne[1], nton, raw_k->ne[3],
+                                raw_k->nb[1], raw_k->nb[2], raw_k->nb[3], raw_k->nb[2]*first);
+                    raw_mask = ggml_view_4d(ctx0, raw_mask, nton, raw_mask->ne[1], raw_mask->ne[2], raw_mask->ne[3],
+                            raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
+                }
             }
             ggml_tensor * k_all = ggml_concat(ctx0, raw_k, hca_k, 2);
             ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
