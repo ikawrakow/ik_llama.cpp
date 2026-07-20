@@ -6076,9 +6076,9 @@ static int llama_decode_internal(
             return GGML_STATUS_FAILED;
         }
 
-            if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, true, false)) {
-                return GGML_STATUS_FAILED;
-            }
+        if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, true, false)) {
+            return GGML_STATUS_FAILED;
+        }
 
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
@@ -6136,6 +6136,7 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
+        //fprintf(stderr, "%s: setting inputs\n", __func__);
         llama_set_inputs(lctx, u_batch);
 #if IK_PRINT_TIMING == 1
         tim2 = ggml_time_us();
@@ -6144,7 +6145,9 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
+        //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
         llama_graph_compute(lctx, gf, n_threads);
+
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
         tim2 = ggml_time_us();

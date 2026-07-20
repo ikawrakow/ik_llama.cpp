@@ -240,7 +240,9 @@ static __global__ void k_indexer_mask(int ne0, int ne1, int ne2, int ntopk, int 
 
     if (i1 < ne11) {
         for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] = inf;
+        __syncthreads();
         for (int j = threadIdx.x; j < ntopk; j += blockDim.x) d[i[j]] = zero;
+        __syncthreads();
         for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] += m[j];
     } else {
         for (int j = threadIdx.x; j < ne0;   j += blockDim.x) d[j] = m[j];
@@ -301,7 +303,7 @@ static __global__ void k_mask_to_index(int ne00, [[maybe_unused]] int ne0,
 
     int nOn = 0;
     for (int j = threadIdx.x; j < ne00; j += WARP_SIZE) {
-        nOn += (mask_r[j] == zero);
+        nOn += (mask_r[j] == zero ? 1 : 0);
     }
     counts[threadIdx.x] = nOn;
     __syncthreads();
@@ -311,7 +313,7 @@ static __global__ void k_mask_to_index(int ne00, [[maybe_unused]] int ne0,
         cum[i] = start;
         start += counts[i];
     }
-    start = counts[threadIdx.x];
+    start = cum[threadIdx.x];
     for (int j = threadIdx.x; j < ne00; j += WARP_SIZE) {
         if (mask_r[j] == zero) idx_r[start++] = j;
     }

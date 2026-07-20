@@ -1045,12 +1045,15 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
         return false;
     }
 
+    //auto tim1 = ggml_time_us();
     lctx.dsv4.csa_plan = build_plan(llama_context::dsv4_runtime::CSA_RATIO, true, csa_state_size, csa_kv_size, cache_n_stream);
     lctx.dsv4.hca_plan = build_plan(llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size, cache_n_stream);
     lctx.dsv4.lid_plan = build_plan(llama_context::dsv4_runtime::CSA_RATIO, true, lid_state_size, lid_kv_size, cache_n_stream);
     lctx.dsv4.csa_ctx = dsv4_build_comp_context(batch, cache_n_stream, lctx.dsv4.csa_plan.n_kv);
     lctx.dsv4.hca_ctx = dsv4_build_comp_context(batch, cache_n_stream, lctx.dsv4.hca_plan.n_kv);
     lctx.dsv4.lid_ctx = dsv4_build_comp_context(batch, cache_n_stream, lctx.dsv4.lid_plan.n_kv);
+    //auto tim2 = ggml_time_us();
+    //fprintf(stderr, "%s: %ld us to buils plans\n", __func__, tim2-tim1);
 
     if (!dsv4_validate_comp_plan("csa", batch, lctx.dsv4.csa_plan, llama_context::dsv4_runtime::CSA_RATIO, true, csa_state_size, csa_kv_size, cache_n_stream) ||
         !dsv4_validate_comp_plan("hca", batch, lctx.dsv4.hca_plan, llama_context::dsv4_runtime::HCA_RATIO, false, hca_state_size, hca_kv_size, cache_n_stream) ||
@@ -1062,6 +1065,8 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     if (!set_tensors) {
         return true;
     }
+
+    //tim1 = ggml_time_us();
 
     dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_write_src_idxs, lctx.dsv4.raw.write_src_idxs);
     dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_write_idxs, lctx.dsv4.raw.write_dst_idxs);
@@ -1082,6 +1087,9 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     set_comp(lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, true);
     set_comp(lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, true);
     set_comp(lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, false);
+
+    //tim2 = ggml_time_us();
+    //fprintf(stderr, "%s: setting input tensors took %ld us\n", __func__, tim2 - tim1);
 
     return true;
 }

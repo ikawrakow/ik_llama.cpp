@@ -510,7 +510,8 @@ static ggml_tensor * dsv4_build_attn(
         float          kq_scale,
         const llm_build_cb & cb,
         int            il,
-        int            n_compressed) {
+        int            n_compressed,
+        ggml_cgraph  * gf) {
     const bool v_trans = v->nb[1] > v->nb[2];
     const int64_t n_stream = k->ne[3];
 
@@ -537,7 +538,7 @@ static ggml_tensor * dsv4_build_attn(
             }
 
             ggml_tensor * cur_s = dsv4_build_attn(ctx, hparams, cparams,
-                    q_s, k_s, v_s, nullptr, mask_s, sinks, kq_scale, cb, il, n_compressed);
+                    q_s, k_s, v_s, nullptr, mask_s, sinks, kq_scale, cb, il, n_compressed, gf);
             result = result == nullptr ? cur_s : ggml_concat(ctx, result, cur_s, 1);
         }
         return result;
@@ -580,13 +581,33 @@ static ggml_tensor * dsv4_build_attn(
             int n_compressed_padded = GGML_PAD(n_compressed, 256);
             if (n_compressed_padded < kq_mask->ne[0]) {
                 selected = ggml_mask_to_index(ctx, kq_mask, n_compressed_padded);
-                //printf("%s(%2d): mask is %ld -> using selected = %ld x %ld x %ld x %ld\n", __func__, il, kq_mask->ne[0],
-                //        selected->ne[0], selected->ne[1], selected->ne[2], selected->ne[3]);
+                cb(selected, "mask_to_idx", il);
+                ggml_build_forward_expand(gf, selected);
+                //if (q->ne[1] == 1) {
+                //    selected = ggml_view_1d(ctx, selected, selected->ne[0], 0);
+                //    kq_mask = ggml_view_1d(ctx, kq_mask, kq_mask->ne[0], 0);
+                //    kq_mask = ggml_reshape_2d(ctx, kq_mask, 1, kq_mask->ne[0]);
+                //    kq_mask = ggml_get_rows(ctx, kq_mask, selected);
+                //    kq_mask = ggml_reshape_1d(ctx, kq_mask, kq_mask->ne[1]);
+                //    k = ggml_get_rows(ctx, k, selected);
+                //    auto kq = ggml_mul_mat(ctx, k, q);
+                //    if (kq_b != nullptr) {
+                //        kq = ggml_add(ctx, kq, kq_b);
+                //    }
+                //    kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, 0.0f);
+                //    ggml_soft_max_add_sinks(kq, sinks);
+                //    v = ggml_cont(ctx, ggml_transpose(ctx, k));
+                //    auto kqv = ggml_mul_mat(ctx, v, kq);
+                //    kqv = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+                //    kqv = ggml_reshape_2d(ctx, kqv, kqv->ne[0]*kqv->ne[1], kqv->ne[2]*kqv->ne[3]);
+                //    return kqv;
+                //}
             }
         }
 
         ggml_tensor * cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        cb(cur, "fattn", il);
         // DSV4 uses the generic CPU FA path here for numerical correctness.
         if (selected) {
             cur->src[5] = selected;
@@ -595,6 +616,7 @@ static ggml_tensor * dsv4_build_attn(
         }
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+        ggml_build_forward_expand(gf, cur);
         return ggml_reshape_2d(ctx, cur, cur->ne[0] * cur->ne[1], cur->ne[2] * cur->ne[3]);
     }
 
@@ -1393,7 +1415,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             cb(k_all, "csa_k_all", il);
             cb(kq_mask, "csa_kq_mask", il);
             int n_csa = hparams.n_swa + hparams.indexer_top_k;
-            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, cb, il, n_csa);
+            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, cb, il, n_csa, gf);
             cb(attn, "attn_csa", il);
         } else if (ratio == llama_context::dsv4_runtime::HCA_RATIO &&
                 lctx.dsv4.inputs.hca.kq_mask != nullptr &&
@@ -1425,11 +1447,11 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             cb(kq_mask, "hca_kq_mask", il);
             int n_hca = (n_kv + llama_context::dsv4_runtime::HCA_RATIO - 1)/llama_context::dsv4_runtime::HCA_RATIO;
             n_hca += hparams.n_swa;
-            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, cb, il, n_hca);
+            attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_b, kq_mask, model.layers[il].attn_sinks, kq_scale, cb, il, n_hca, gf);
             cb(attn, "attn_hca", il);
         } else {
             ggml_tensor * kq_b = dsv4_build_kq_zero_bias(ctx0, cparams, raw_mask, q->ne[1]);
-            attn = dsv4_build_attn(ctx0, hparams, cparams, q, raw_k, raw_k, kq_b, raw_mask, model.layers[il].attn_sinks, kq_scale, cb, il, -1);
+            attn = dsv4_build_attn(ctx0, hparams, cparams, q, raw_k, raw_k, kq_b, raw_mask, model.layers[il].attn_sinks, kq_scale, cb, il, -1, gf);
             cb(attn, "attn_raw", il);
         }
 

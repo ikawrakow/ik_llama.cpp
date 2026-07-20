@@ -24,7 +24,8 @@ static __global__ void k_prepare_one_batch_kv(int nk, int ncol, const int * idx,
     int col = blockIdx.x;
     int i = idx[row*stride_idx + col];
     if (i < 0) {
-        return;
+        i = 0;
+        //return;
     }
     auto k_row = (const half *)(k_in + stride_k * i);
     k_out += (row*ncol + col)*nk;
@@ -53,12 +54,12 @@ static __global__ void k_copy_dst(int nelem, const half * kqv16, float * dst) {
 }
 
 template <int ncols_template, int block_size_template>
-static __global__ void soft_max_f16_simple(half * x, const half * mask, const float * sinks, const int ncols_par, const int nrows_y, const float scale) {
+static __global__ void soft_max_f16_simple(const half * x, half * y, const half * mask, const float * sinks, const int ncols_par, const int nrows_y, const float scale) {
     const int ncols = ncols_template == 0 ? ncols_par : ncols_template;
 
     const int tid  = threadIdx.x;
     const int rowx = blockIdx.x;
-    const int rowy = rowx / nrows_y; // broadcast the mask in the row dimension
+    const int rowy = rowx / nrows_y;
 
     const int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
 
@@ -154,13 +155,15 @@ static __global__ void soft_max_f16_simple(half * x, const half * mask, const fl
         }
 
         const int64_t ix = (int64_t)rowx*ncols + col;
-        x[ix] = __float2half(vals[col] * inv_sum);
+        y[ix] = __float2half(vals[col] * inv_sum);
     }
 }
 
 #define CUDA_SOFT_MAX_BLOCK_SIZE 1024
 
-static void soft_max_f16_cuda_simple(half * x, const half * mask, const float * sinks, const int ncols_x, const int nrows_x,
+// nrows_y is Q->ne[2]
+// nrows_x is Q->ne[2] * nrows
+static void soft_max_f16_cuda_simple(const half * x, half * y, const half * mask, const float * sinks, const int ncols_x, const int nrows_x,
         const int nrows_y, const float scale, cudaStream_t stream) {
     int nth = WARP_SIZE;
     while (nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE) nth *= 2;
@@ -173,31 +176,34 @@ static void soft_max_f16_cuda_simple(half * x, const half * mask, const float * 
 
     switch (ncols_x) {
         case 32:
-            soft_max_f16_simple<32, 32><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<32, 32><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 64:
-            soft_max_f16_simple<64, 64><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<64, 64><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 128:
-            soft_max_f16_simple<128, 128><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<128, 128><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 256:
-            soft_max_f16_simple<256, 256><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<256, 256><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 512:
-            soft_max_f16_simple<512, 512><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<512, 512><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
+            break;
+        case 768:
+            soft_max_f16_simple<768, 768><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 1024:
-            soft_max_f16_simple<1024, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<1024, 1024><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 2048:
-            soft_max_f16_simple<2048, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<2048, 1024><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 4096:
-            soft_max_f16_simple<4096, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<4096, 1024><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
         default:
-            soft_max_f16_simple<0, 0><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<0, 0><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
     }
 }
@@ -242,6 +248,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     auto kqv_size = V->ne[0]*Q->ne[2]*max_rows;
     ggml_cuda_pool_alloc<half> q16(ctx.pool(), q_size);
     ggml_cuda_pool_alloc<half> kq16(ctx.pool(), kq_size);
+    ggml_cuda_pool_alloc<half> soft_kq16(ctx.pool(), kq_size);
     ggml_cuda_pool_alloc<half> kqv16(ctx.pool(), kqv_size);
     ggml_cuda_pool_alloc<half> mask16(ctx.pool(), mask_size);
     ggml_cuda_pool_alloc<half> k16(ctx.pool(), k_cache_size);
@@ -290,7 +297,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                     q16.get(), Q->ne[0], Q->ne[0]*Q->ne[2],
                     &beta, kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2], nrows));
 
-        soft_max_f16_cuda_simple(kq16.get(), mask16.get() + first*indexer->ne[0],
+        soft_max_f16_cuda_simple(kq16.get(), soft_kq16.get(), mask16.get() + first*indexer->ne[0],
                 sink ? (const float *)sink->data : nullptr,
                 indexer->ne[0], Q->ne[2]*nrows,
                 Q->ne[2], scale, ctx.stream());
@@ -300,13 +307,13 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
             CUBLAS_CHECK(cublasHgemmStridedBatched(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
                         V->ne[0], Q->ne[2], indexer->ne[0],
                         &alpha, k16.get() + v_offset, K->ne[0], K->ne[0]*indexer->ne[0],
-                        kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2],
+                        soft_kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2],
                         &beta, kqv16.get(), V->ne[0], V->ne[0]*Q->ne[2], nrows));
         } else {
             CUBLAS_CHECK(cublasHgemmStridedBatched(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
                         V->ne[0], Q->ne[2], indexer->ne[0],
                         &alpha, v16.get(), V->ne[0], V->ne[0]*indexer->ne[0],
-                        kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2],
+                        soft_kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2],
                         &beta, kqv16.get(), V->ne[0], V->ne[0]*Q->ne[2], nrows));
         }
 
