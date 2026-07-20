@@ -4146,6 +4146,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_MASK_TOPK:
             ggml_cuda_op_indexer_mask(ctx, dst);
             break;
+        case GGML_OP_MASK_TO_IDX:
+            ggml_cuda_op_mask_to_index(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -5051,6 +5054,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
+        case GGML_OP_MASK_TO_IDX:
             return true;
         case GGML_OP_HC_PRE:
         case GGML_OP_HC_POST:

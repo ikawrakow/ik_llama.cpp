@@ -4337,9 +4337,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SINKHORN",
     "HC_PRE",
     "HC_POST",
+    "MASK_TO_IDX",
 };
 
-static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
+static_assert(GGML_OP_COUNT == 109, "GGML_OP_COUNT != 109");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4463,10 +4464,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sinkhorn(x)",
     "hc_pre(x,s,b)",
     "hc_post(x,p,r,c)",
+    "mask_to_idx(masl)",
 
 };
 
-static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
+static_assert(GGML_OP_COUNT == 109, "GGML_OP_COUNT != 109");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -10242,6 +10244,19 @@ struct ggml_tensor * ggml_hc_post(
     return result;
 }
 
+struct ggml_tensor * ggml_mask_to_index(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            int                   max_row_size) {
+    GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
+
+    int64_t ne0 = MIN(mask->ne[0], max_row_size);
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, ne0, mask->ne[1], mask->ne[2], mask->ne[3]);
+    result->src[0] = mask;
+    result->op = GGML_OP_MASK_TO_IDX;
+
+    return result;
+}
 
 
 // ggml_fill
@@ -12833,6 +12848,57 @@ static void ggml_compute_forward_add_f16_f32(
     }
 }
 
+static void ggml_compute_forward_add_f32_f16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nr  = ggml_nrows(src0);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT( nb0 == sizeof(float));
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    if (nb10 == sizeof(ggml_fp16_t)) {
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src0, src1 and dst are same shape => same indices
+            const int i3 = ir/(ne2*ne1);
+            const int i2 = (ir - i3*ne2*ne1)/ne1;
+            const int i1 = (ir - i3*ne2*ne1 - i2*ne1);
+
+            float *       dst_ptr  = (float *)       ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1);
+            float *       src0_ptr = (float *)       ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
+            ggml_fp16_t * src1_ptr = (ggml_fp16_t *) ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11);
+
+            for (int i = 0; i < ne0; i++) {
+                dst_ptr[i] = src0_ptr[i] + GGML_FP16_TO_FP32(src1_ptr[i]);
+            }
+        }
+    }
+    else {
+        // src1 is not contiguous
+        GGML_ABORT("fatal error");
+    }
+}
+
 static void ggml_compute_forward_add_bf16_f32(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -13102,7 +13168,7 @@ static void ggml_compute_forward_add(
                     ggml_compute_forward_add_f32(params, dst);
                 }
                 else {
-                    GGML_ABORT("fatal error");
+                    ggml_compute_forward_add_f32_f16(params, dst);
                 }
             } break;
         case GGML_TYPE_F16:
@@ -15237,6 +15303,28 @@ static void ggml_compute_forward_concat_any(
 
     const int ith = params->ith;
     const int nth = params->nth;
+
+    //if (ith == 0 && (strcmp(dst->name, "csa_kq_mask-2") == 0 || strcmp(dst->name, "hca_kq_mask-3") == 0)) {
+    //    printf("%s: %s, %s: %ld x %ld x %ld x %ld + %ld x %ld x %ld x %ld\n", __func__, dst->name, ggml_type_name(dst->type),
+    //            src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+    //            src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3]);
+    //    const uint16_t * M = (const uint16_t *)src0->data;
+    //    int n = src0->ne[0];
+    //    int first = 0, last = n;
+    //    for ( ; first < n; ++first) if (M[first] == 0) break;
+    //    for ( ; last > first; --last) if (M[last-1] == 0) break;
+    //    int nOn = 0;
+    //    for (int j = first; j < last; ++j) if (M[j] == 0) ++nOn;
+    //    printf("    src0: %d ON in %d...%d\n", nOn, first, last);
+    //    M = (const uint16_t *)src1->data;
+    //    n = src1->ne[0];
+    //    first = 0; last = n;
+    //    for ( ; first < n; ++first) if (M[first] == 0) break;
+    //    for ( ; last > first; --last) if (M[last-1] == 0) break;
+    //    nOn = 0;
+    //    for (int j = first; j < last; ++j) if (M[j] == 0) ++nOn;
+    //    printf("    src1: %d ON in %d...%d\n", nOn, first, last);
+    //}
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -23559,6 +23647,52 @@ static void ggml_compute_forward_hc_pre(
     }
 }
 
+static void ggml_compute_forward_mask_to_idx(const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    struct ggml_tensor * src = dst->src[0];
+    GGML_ASSERT(src->type == GGML_TYPE_F16 || src->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+    GGML_ASSERT(src->ne[1] == dst->ne[1] && src->ne[2] == dst->ne[2] && src->ne[3] == dst->ne[3]);
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nrows = ggml_nrows(dst);
+    int npt = (nrows + nth - 1)/nth;
+    int first = npt*ith;
+    int last  = MIN(first + npt, nrows);
+
+    int ne0   = dst->ne[0];
+    int ne00  = src->ne[0];
+
+    for (int ir = first; ir < last; ++ir) {
+        int ii = ir;
+        int i3 = ii/(src->ne[1]*src->ne[2]); ii -= i3*src->ne[1]*src->ne[2];
+        int i2 = ii/src->ne[1];              ii -= i2*src->ne[1];
+        int i1 = ii;
+
+        int32_t * y = (int32_t *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+        //memset(y, 0, ne0*sizeof(int));
+        for (int j = 0; j < ne0; ++j) y[j] = -1;
+
+        if (src->type == GGML_TYPE_F16) {
+            const uint16_t * x = (const uint16_t *)((const char *)src->data + i1*src->nb[1] + i2*src->nb[2] + i3*src->nb[3]);
+            int idx = 0;
+            for (int j = 0; j < ne00; ++j) {
+                assert(idx < ne0);
+                if (x[j] == 0) y[idx++] = j;
+            }
+        } else {
+            const float * x = (const float *)((const char *)src->data + i1*src->nb[1] + i2*src->nb[2] + i3*src->nb[3]);
+            int idx = 0;
+            for (int j = 0; j < ne00; ++j) {
+                assert(idx < ne0);
+                if (x[j] == 0.0f) y[idx++] = j;
+            }
+        }
+    }
+}
+
 
 // ggml_compute_forward_win_part
 
@@ -25314,6 +25448,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_hc_post(params, tensor);
             } break;
+        case GGML_OP_MASK_TO_IDX:
+            {
+                ggml_compute_forward_mask_to_idx(params, tensor);
+            } break;
         case GGML_OP_INDEXER_TOPK:
             {
                 if (!iqk_indexer_topk(tensor, params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, params->ith, params->nth)) {
@@ -26390,6 +26528,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_SINKHORN:
         case GGML_OP_HC_PRE:
         case GGML_OP_HC_POST:
+        case GGML_OP_MASK_TO_IDX:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -27131,6 +27270,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SINKHORN:
         case GGML_OP_HC_PRE:
         case GGML_OP_HC_POST:
+        case GGML_OP_MASK_TO_IDX:
             {
                 n_tasks = n_threads;
             } break;

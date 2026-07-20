@@ -778,7 +778,6 @@ static void dsv4_set_input_tensor(ggml_tensor * tensor, const std::vector<T> & v
 
 static void dsv4_set_mask_tensor(
         ggml_tensor * tensor,
-        std::vector<float> & storage,
         const llama_context::dsv4_runtime::comp_plan & plan,
         int32_t n_tokens) {
     if (tensor == nullptr) {
@@ -791,16 +790,32 @@ static void dsv4_set_mask_tensor(
 
     const int64_t width = tensor->ne[0];
     const int64_t height = tensor->ne[1];
-    storage.assign((size_t) width*height, -INFINITY);
+    auto type = tensor->type;
+    GGML_ASSERT(type == GGML_TYPE_F16 || type == GGML_TYPE_F32);
 
-    for (int32_t i = 0; i < n_tokens; ++i) {
-        const int32_t n_visible = i < (int32_t) plan.n_visible.size() ? plan.n_visible[(size_t) i] : 0;
-        for (int32_t j = 0; j < n_visible && j < width; ++j) {
-            storage[(size_t) i*width + j] = 0.0f;
+    //printf("%s: preparing mask %s of type %s with %ld x %ld entries\n", __func__, tensor->name, ggml_type_name(type), tensor->ne[0], tensor->ne[1]);
+    if (type == GGML_TYPE_F16) {
+        auto h_inf = ggml_fp32_to_fp16(-INFINITY);
+        auto h_zero = ggml_fp32_to_fp16(0.0f);
+        std::vector<ggml_fp16_t> storage((size_t) width*height, h_inf);
+        for (int32_t i = 0; i < n_tokens; ++i) {
+            const int32_t n_visible = i < (int32_t) plan.n_visible.size() ? plan.n_visible[(size_t) i] : 0;
+            //if (i == 0) printf("    n_visible = %d\n", n_visible);
+            for (int32_t j = 0; j < n_visible && j < width; ++j) {
+                storage[(size_t) i*width + j] = h_zero;
+            }
         }
+        ggml_backend_tensor_set(tensor, storage.data(), 0, storage.size()*sizeof(ggml_fp16_t));
+    } else {
+        std::vector<float> storage((size_t) width*height, -INFINITY);
+        for (int32_t i = 0; i < n_tokens; ++i) {
+            const int32_t n_visible = i < (int32_t) plan.n_visible.size() ? plan.n_visible[(size_t) i] : 0;
+            for (int32_t j = 0; j < n_visible && j < width; ++j) {
+                storage[(size_t) i*width + j] = 0.0f;
+            }
+        }
+        ggml_backend_tensor_set(tensor, storage.data(), 0, storage.size()*sizeof(float));
     }
-
-    ggml_backend_tensor_set(tensor, storage.data(), 0, storage.size()*sizeof(float));
 }
 
 bool llama_context::ensure_dsv4_cache_tensors() {
@@ -1052,21 +1067,21 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
     dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_write_idxs, lctx.dsv4.raw.write_dst_idxs);
     dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_read_idxs, lctx.dsv4.raw.read_dst_idxs);
 
-    auto set_comp = [&](llama_context::dsv4_runtime::comp_inputs & inputs, llama_context::dsv4_runtime::comp_plan & plan, std::vector<float> * mask_data) {
+    auto set_comp = [&](llama_context::dsv4_runtime::comp_inputs & inputs, llama_context::dsv4_runtime::comp_plan & plan, bool set_mask) {
         dsv4_set_input_tensor(inputs.state_pos, plan.state_pos);
         dsv4_set_input_tensor(inputs.state_persist_src_idxs, plan.state_persist_src_idxs);
         dsv4_set_input_tensor(inputs.state_persist_dst_idxs, plan.state_persist_dst_idxs);
         dsv4_set_input_tensor(inputs.state_read_idxs, plan.state_read_idxs);
         dsv4_set_input_tensor(inputs.state_write_idxs, plan.state_write_idxs);
         dsv4_set_input_tensor(inputs.state_write_pos, plan.state_write_pos);
-        if (mask_data != nullptr) {
-            dsv4_set_mask_tensor(inputs.kq_mask, *mask_data, plan, batch.n_tokens);
+        if (set_mask) {
+            dsv4_set_mask_tensor(inputs.kq_mask, plan, batch.n_tokens);
         }
     };
 
-    set_comp(lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, &lctx.dsv4.csa_mask_data);
-    set_comp(lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, &lctx.dsv4.hca_mask_data);
-    set_comp(lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, nullptr);
+    set_comp(lctx.dsv4.inputs.csa, lctx.dsv4.csa_plan, true);
+    set_comp(lctx.dsv4.inputs.hca, lctx.dsv4.hca_plan, true);
+    set_comp(lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, false);
 
     return true;
 }

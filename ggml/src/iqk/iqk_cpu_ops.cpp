@@ -1066,7 +1066,7 @@ inline void iqk_add_f16(int n, const ggml_half * x, ggml_half * y) {
 void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth) {
     auto mask = dst->src[0];
     auto topk = dst->src[1];
-    GGML_ASSERT(mask->ne[0] >= topk->ne[1]);
+    GGML_ASSERT(mask->ne[0] >= topk->ne[0]);
     GGML_ASSERT(mask->ne[1] >= topk->ne[1] && mask->ne[2] == topk->ne[2] && mask->ne[3] == topk->ne[3]);
     GGML_ASSERT(ggml_are_same_shape(mask, dst));
     GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);

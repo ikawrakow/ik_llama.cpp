@@ -14,7 +14,8 @@ static __global__ void k_prepare_mask(int nidx, const int * __restrict__ idx, co
     int row = blockIdx.x;
     int col = blockIdx.y*blockDim.x + threadIdx.x;
     idx += row*stride_idx;
-    m_out[row*nidx + col] = m_in[row*stride_m + idx[col]];
+    int ii = idx[col];
+    m_out[row*nidx + col] = ii >= 0 ? m_in[row*stride_m + ii] : __float2half(-INFINITY);
 }
 
 static __global__ void k_prepare_one_batch_kv(int nk, int ncol, const int * idx, const char * k_in,
@@ -22,6 +23,9 @@ static __global__ void k_prepare_one_batch_kv(int nk, int ncol, const int * idx,
     int row = blockIdx.y;
     int col = blockIdx.x;
     int i = idx[row*stride_idx + col];
+    if (i < 0) {
+        return;
+    }
     auto k_row = (const half *)(k_in + stride_k * i);
     k_out += (row*ncol + col)*nk;
     for (int j = threadIdx.x; j < nk; j += blockDim.x) {
@@ -49,7 +53,7 @@ static __global__ void k_copy_dst(int nelem, const half * kqv16, float * dst) {
 }
 
 template <int ncols_template, int block_size_template>
-static __global__ void soft_max_f16_simple(half * x, const half * mask, const int ncols_par, const int nrows_y, const float scale) {
+static __global__ void soft_max_f16_simple(half * x, const half * mask, const float * sinks, const int ncols_par, const int nrows_y, const float scale) {
     const int ncols = ncols_template == 0 ? ncols_par : ncols_template;
 
     const int tid  = threadIdx.x;
@@ -66,7 +70,7 @@ static __global__ void soft_max_f16_simple(half * x, const half * mask, const in
     // shared memory buffer to cache values between iterations:
     float * vals = buf_iw + WARP_SIZE;
 
-    float max_val = -INFINITY;
+    float max_val = sinks ? sinks[rowx % nrows_y] : -INFINITY;
 
 #pragma unroll
     for (int col0 = 0; col0 < ncols; col0 += block_size) {
@@ -135,6 +139,10 @@ static __global__ void soft_max_f16_simple(half * x, const half * mask, const in
         tmp = warp_reduce_sum(tmp);
     }
 
+    if (sinks) {
+        tmp += expf(sinks[rowx % nrows_y] - max_val);
+    }
+
     const float inv_sum = 1.0f / tmp;
 
 #pragma unroll
@@ -152,7 +160,7 @@ static __global__ void soft_max_f16_simple(half * x, const half * mask, const in
 
 #define CUDA_SOFT_MAX_BLOCK_SIZE 1024
 
-static void soft_max_f16_cuda_simple(half * x, const half * mask, const int ncols_x, const int nrows_x,
+static void soft_max_f16_cuda_simple(half * x, const half * mask, const float * sinks, const int ncols_x, const int nrows_x,
         const int nrows_y, const float scale, cudaStream_t stream) {
     int nth = WARP_SIZE;
     while (nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE) nth *= 2;
@@ -165,31 +173,31 @@ static void soft_max_f16_cuda_simple(half * x, const half * mask, const int ncol
 
     switch (ncols_x) {
         case 32:
-            soft_max_f16_simple<32, 32><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<32, 32><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 64:
-            soft_max_f16_simple<64, 64><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<64, 64><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 128:
-            soft_max_f16_simple<128, 128><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<128, 128><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 256:
-            soft_max_f16_simple<256, 256><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<256, 256><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 512:
-            soft_max_f16_simple<512, 512><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<512, 512><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 1024:
-            soft_max_f16_simple<1024, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<1024, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 2048:
-            soft_max_f16_simple<2048, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<2048, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         case 4096:
-            soft_max_f16_simple<4096, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<4096, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
         default:
-            soft_max_f16_simple<0, 0><<<block_nums, block_dims, shmem, stream>>>(x, mask, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<0, 0><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
             break;
     }
 }
@@ -206,7 +214,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * sink = dst->src[4];
     const ggml_tensor * indexer = dst->src[5];
 
-    if (sink) return false; // We do not support sinks at this point
+    //if (sink) return false; // We do not support sinks at this point
     if (!Q || !K || !V || !mask || !indexer) return false;
 
     if (indexer->ne[0] % 256 != 0) return false; // lazyness to add checks and handle tailes in case of not multiple of 256
@@ -215,6 +223,8 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     if (K->ne[2] > 1 || K->ne[3] > 1 || mask->ne[2] > 1 || mask->ne[3] > 1 || Q->ne[3] > 1) return false;
     if (K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16 || mask->type != GGML_TYPE_F16 || Q->type != GGML_TYPE_F32) return false;
     if (K->ne[0] != Q->ne[0]) return false;
+
+    //printf("%s(%s)\n", __func__, dst->name);
 
     float scale;
     memcpy(&scale, dst->op_params, sizeof(float));
@@ -280,7 +290,9 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                     q16.get(), Q->ne[0], Q->ne[0]*Q->ne[2],
                     &beta, kq16.get(), indexer->ne[0], indexer->ne[0]*Q->ne[2], nrows));
 
-        soft_max_f16_cuda_simple(kq16.get(), mask16.get() + first*indexer->ne[0], indexer->ne[0], Q->ne[2]*nrows,
+        soft_max_f16_cuda_simple(kq16.get(), mask16.get() + first*indexer->ne[0],
+                sink ? (const float *)sink->data : nullptr,
+                indexer->ne[0], Q->ne[2]*nrows,
                 Q->ne[2], scale, ctx.stream());
         CUDA_CHECK(cudaGetLastError());
 

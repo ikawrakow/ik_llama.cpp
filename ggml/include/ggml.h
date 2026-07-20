@@ -709,6 +709,7 @@ extern "C" {
         GGML_OP_SINKHORN,
         GGML_OP_HC_PRE,
         GGML_OP_HC_POST,
+        GGML_OP_MASK_TO_IDX,
 
         GGML_OP_COUNT,
     };
@@ -2626,6 +2627,12 @@ extern "C" {
             struct ggml_tensor  * post,
             struct ggml_tensor  * res,
             struct ggml_tensor  * comb);
+
+    GGML_API struct ggml_tensor * ggml_mask_to_index(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            int                   max_row_size);
+
 
     // custom operators
 
