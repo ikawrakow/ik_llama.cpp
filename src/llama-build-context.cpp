@@ -1217,17 +1217,31 @@ llm_expert_gating_func_type   gating_op,
 
     // select experts
     ggml_tensor * selected_experts;
+    ggml_tensor * weight_experts = nullptr;
     if (lctx.cparams.grouped_expert_routing && lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
         auto& hparams = lctx.model.hparams;
         selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
     } else {
-        //selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
-        //        lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
-        selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+        const bool smart_reduction = lctx.cparams.min_experts > 0 &&
+            lctx.cparams.min_experts < n_expert_used &&
+            lctx.cparams.thresh_experts > 0.0f;
+        if (smart_reduction) {
+            const char * preserve = getenv("GGML_SMART_EXPERT_PRESERVE_NORM");
+            if (preserve && strcmp(preserve, "0") != 0) {
+                // Preserve the model's original top-k normalization denominator
+                // while the thresholded IDs zero the optional expert outputs.
+                weight_experts = ggml_top_k(ctx, selection_probs, n_expert_used);
+            }
+            selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
+                    lctx.cparams.min_experts, lctx.cparams.thresh_experts);
+        } else {
+            selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used);
+        }
     }
     cb(selected_experts, "ffn_moe_topk", il);
     ggml_tensor * weights = ggml_get_rows(ctx,
-            ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
+            ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens),
+            weight_experts ? weight_experts : selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
     if (gating_op == LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {

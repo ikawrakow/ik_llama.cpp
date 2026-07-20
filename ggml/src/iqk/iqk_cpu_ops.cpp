@@ -243,8 +243,11 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
     auto last  = std::min(first + npt, nrows);
     if (last <= first) return;
 
-    auto order = (ggml_sort_order)dst->op_params[0];
-    int nk = dst->op_params[1];
+    // Thresholded expert routing uses the same optimized partial sort, but its
+    // first two op parameters retain the public min_entries/threshold ABI.
+    const bool thresholded = dst->op == GGML_OP_ARGSORT_THRESH;
+    auto order = thresholded ? GGML_SORT_ORDER_DESC : (ggml_sort_order)dst->op_params[0];
+    int nk = thresholded ? dst->op_params[2] : dst->op_params[1];
 
     int ne00 = src->ne[0];
     auto& aux = get_work_buffer(ne00);

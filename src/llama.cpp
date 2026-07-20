@@ -6935,6 +6935,47 @@ static size_t llama_get_available_ram_bytes() {
 static size_t llama_get_available_ram_bytes() { return 0; }
 #endif
 
+// Seed a bounded fraction of the secondary expert cache before the first graph.
+// Selection happens in ggml from a stable hash of layer/expert/node, so every
+// tensor kind in a selected expert bundle is reproducible with the same seed.
+static void llama_prefill_numa_expert_cache(const llama_model & model) {
+    if (!ggml_numa_expert_cache_prefill_active()) {
+        return;
+    }
+
+    std::vector<std::pair<ggml_tensor *, int>> expert_tensors;
+    size_t total_expert_bytes = 0;
+
+    for (struct ggml_context * ctx : model.ctxs) {
+        for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (!t->data || t->view_src || !t->buffer ||
+                    !ggml_backend_buffer_is_host(t->buffer) || t->ne[2] <= 1) {
+                continue;
+            }
+            const char * name = ggml_get_name(t);
+            if (!name || (!strstr(name, "_exps") && !strstr(name, "experts"))) {
+                continue;
+            }
+            const int n_experts = (int) t->ne[2];
+            expert_tensors.emplace_back(t, n_experts);
+            total_expert_bytes += t->nb[2] * (size_t) n_experts;
+        }
+    }
+
+    if (expert_tensors.empty() || total_expert_bytes == 0) {
+        LLAMA_LOG_WARN("%s: expert-cache prefill requested, but no stacked host expert tensors were found\n",
+                __func__);
+        return;
+    }
+
+    LLAMA_LOG_INFO("%s: prefill candidates: %zu tensors, %.2f GiB\n",
+            __func__, expert_tensors.size(), total_expert_bytes / 1073741824.0);
+    ggml_numa_expert_cache_prefill_begin(total_expert_bytes);
+    for (const auto & item : expert_tensors) {
+        ggml_numa_expert_cache_prefill_tensor(item.first, item.second);
+    }
+}
+
 // Duplicate the model's host weight buffers once per NUMA node and point each weight tensor at its
 // per-node copies (see ggml_numa_tensor_data). Must run AFTER all weight repacking (load-time and
 // the context-time up/gate merge) so the mirrored bytes are final. Idempotent per model.
@@ -7771,6 +7812,10 @@ struct llama_context * llama_init_from_model(
             }
 
             llama_repack_up_gate_exps(*ctx);
+
+            // Optional seeded secondary-cache prefill, after all expert repacking
+            // has finalized the bytes and before the first graph is reserved.
+            llama_prefill_numa_expert_cache(ctx->model);
 
             // NUMA mirror: duplicate the (now final) weights per node before building graphs
             llama_mirror_model_weights(ctx->model);

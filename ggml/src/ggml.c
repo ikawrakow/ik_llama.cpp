@@ -4819,6 +4819,1069 @@ static inline void * ggml_numa_tensor_data(const struct ggml_tensor * t, int nod
     return t->data;
 }
 
+// Hash all tensor kinds for the same (layer, expert, node) to one bundle key.
+// Standard GGUF expert names differ after "ffn_" (up/gate/down); a generic
+// "experts" marker covers model-specific names. Keeping the kind out of this
+// key lets prefill and periodic promotion operate on complete expert bundles.
+static uint64_t ggml_numa_expert_bundle_key(
+        const struct ggml_tensor * tensor, int expert, int node) {
+    uint64_t h = 1469598103934665603ull;
+    const char * name = ggml_get_name(tensor);
+    const char * end = name ? name + strlen(name) : name;
+    if (name) {
+        const char * marker = strstr(name, "ffn_");
+        if (!marker) {
+            marker = strstr(name, "experts");
+        }
+        if (marker) {
+            end = marker;
+        }
+        for (const unsigned char * p = (const unsigned char *) name;
+                p < (const unsigned char *) end; ++p) {
+            h ^= *p;
+            h *= 1099511628211ull;
+        }
+    } else {
+        h ^= (uint64_t) (uintptr_t) tensor;
+        h *= 1099511628211ull;
+    }
+    h ^= (uint64_t) (uint32_t) expert + 0x9e3779b97f4a7c15ull;
+    h *= 1099511628211ull;
+    h ^= (uint64_t) (uint32_t) node + 0x517cc1b727220a95ull;
+    h *= 1099511628211ull;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    return h;
+}
+
+struct ggml_numa_expert_cache_entry {
+    const struct ggml_tensor * tensor;
+    int expert;
+    int node;
+    size_t size;
+    uint64_t bundle_key;
+    _Atomic(uint64_t) hits;
+    _Atomic(uint64_t) data_hits;
+    _Atomic(uint64_t) routed_rows;
+    uint64_t last_access;
+    _Atomic(void *) data;
+    struct ggml_numa_expert_cache_entry * next;
+};
+
+struct ggml_numa_expert_primary_entry {
+    const struct ggml_tensor * tensor;
+    int expert;
+    int node;
+    size_t size;
+    struct ggml_numa_expert_primary_entry * next;
+};
+
+#define GGML_NUMA_EXPERT_CACHE_BUCKETS 8192
+#define GGML_NUMA_EXPERT_BUNDLE_MAX_TENSORS 16
+
+static atomic_flag g_ggml_numa_expert_cache_lock = ATOMIC_FLAG_INIT;
+static _Atomic(struct ggml_numa_expert_cache_entry *)
+    g_ggml_numa_expert_cache[GGML_NUMA_EXPERT_CACHE_BUCKETS];
+static uint64_t g_ggml_numa_expert_cache_clock = 0;
+static uint64_t g_ggml_numa_expert_cache_requests = 0;
+static uint64_t g_ggml_numa_expert_cache_entry_hits = 0;
+static uint64_t g_ggml_numa_expert_cache_data_hits = 0;
+static uint64_t g_ggml_numa_expert_cache_entries = 0;
+static uint64_t g_ggml_numa_expert_cache_copies = 0;
+static uint64_t g_ggml_numa_expert_cache_evictions = 0;
+static size_t g_ggml_numa_expert_cache_bytes = 0;
+static size_t g_ggml_numa_expert_cache_node_bytes[GGML_NUMA_MAX_NODES];
+static bool g_ggml_numa_expert_cache_node_pressure[GGML_NUMA_MAX_NODES];
+// 0 = uninitialized, 1 = one thread is initializing, 2 = ready.
+static atomic_int g_ggml_numa_expert_cache_init = 0;
+static int g_ggml_numa_expert_cache_enabled = 0;
+static int g_ggml_numa_expert_cache_evict = 1;
+static int g_ggml_numa_expert_cache_evict_target_pct = 85;
+static const char * g_ggml_numa_expert_cache_dump_path = NULL;
+static uint64_t g_ggml_numa_expert_cache_min_hits = 2;
+static int64_t g_ggml_numa_expert_cache_admit_min_tokens = 2;
+static int64_t g_ggml_numa_expert_cache_admit_min_rows = 1;
+static size_t g_ggml_numa_expert_cache_budget = 0;
+static size_t g_ggml_numa_expert_cache_node_budget = 0;
+static size_t g_ggml_numa_expert_cache_node_budget_override[GGML_NUMA_MAX_NODES];
+
+// Whole-expert NUMA scheduling is opt-in. In this mode each routed expert has a
+// primary NUMA owner, and only the threads on its selected execution node work
+// on that expert. Secondary cache copies can then be used to resolve route
+// imbalance without reading the full expert remotely.
+static atomic_int g_ggml_numa_expert_parallel_init = 0;
+static int g_ggml_numa_expert_parallel_enabled = 0;
+static int g_ggml_numa_expert_parallel_bind = 1;
+static int g_ggml_numa_expert_parallel_balance = 1;
+static int g_ggml_numa_expert_parallel_warm_cache = 1;
+static struct ggml_numa_expert_primary_entry *
+    g_ggml_numa_expert_primary[GGML_NUMA_EXPERT_CACHE_BUCKETS];
+static uint64_t g_ggml_numa_expert_primary_binds = 0;
+static uint64_t g_ggml_numa_expert_primary_bind_failures = 0;
+static uint64_t g_ggml_numa_expert_primary_scheduled = 0;
+static uint64_t g_ggml_numa_expert_replica_scheduled = 0;
+static uint64_t g_ggml_numa_expert_epoch_primary_work[GGML_NUMA_MAX_NODES];
+static uint64_t g_ggml_numa_expert_epoch_exec_work[GGML_NUMA_MAX_NODES];
+static uint64_t g_ggml_numa_expert_rebalance_graphs = 0;
+static uint64_t g_ggml_numa_expert_rebalance_promotions = 0;
+static int g_ggml_numa_expert_rebalance_interval = 32;
+static int g_ggml_numa_expert_rebalance_skew_pct = 20;
+static uint64_t g_ggml_numa_expert_rebalance_min_hits = 8;
+static int g_ggml_numa_expert_rebalance_max_copies = 1;
+static int g_ggml_numa_expert_prefill_pct = 0;
+static uint64_t g_ggml_numa_expert_prefill_seed = 0x6a09e667f3bcc909ull;
+static size_t g_ggml_numa_expert_prefill_total_bytes = 0;
+static uint64_t g_ggml_numa_expert_prefill_copies = 0;
+static size_t g_ggml_numa_expert_prefill_bytes = 0;
+
+int ggml_numa_node_count(void);
+bool ggml_numa_mirror_active(void);
+void * ggml_numa_alloc(size_t size, int node);
+void ggml_numa_free(void * ptr, size_t size);
+void ggml_numa_bind(void * ptr, size_t size, int node);
+static void ggml_numa_expert_cache_init(void);
+static bool ggml_numa_bind_impl(void * ptr, size_t size, int node);
+static void ggml_numa_expert_parallel_report(void);
+
+static void ggml_numa_expert_parallel_config_init(void) {
+    int state = atomic_load(&g_ggml_numa_expert_parallel_init);
+    if (state == 2) {
+        return;
+    }
+
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&g_ggml_numa_expert_parallel_init, &expected, 1)) {
+        const char * enabled = getenv("GGML_NUMA_EXPERT_PARALLEL");
+        const char * bind = getenv("GGML_NUMA_EXPERT_PARALLEL_BIND");
+        const char * balance = getenv("GGML_NUMA_EXPERT_PARALLEL_BALANCE");
+        const char * warm_cache = getenv("GGML_NUMA_EXPERT_PARALLEL_WARM_CACHE");
+        const char * rebalance_interval = getenv("GGML_NUMA_EXPERT_REBALANCE_INTERVAL");
+        const char * rebalance_skew_pct = getenv("GGML_NUMA_EXPERT_REBALANCE_SKEW_PCT");
+        const char * rebalance_min_hits = getenv("GGML_NUMA_EXPERT_REBALANCE_MIN_HITS");
+        const char * rebalance_max_copies = getenv("GGML_NUMA_EXPERT_REBALANCE_MAX_COPIES");
+        const char * prefill_pct = getenv("GGML_NUMA_EXPERT_CACHE_PREFILL_PCT");
+        const char * prefill_seed = getenv("GGML_NUMA_EXPERT_CACHE_PREFILL_SEED");
+
+        g_ggml_numa_expert_parallel_enabled = enabled && strcmp(enabled, "0") != 0;
+        if (bind && bind[0]) {
+            g_ggml_numa_expert_parallel_bind = strcmp(bind, "0") != 0;
+        }
+        if (balance && balance[0]) {
+            g_ggml_numa_expert_parallel_balance = strcmp(balance, "0") != 0;
+        }
+        if (warm_cache && warm_cache[0]) {
+            g_ggml_numa_expert_parallel_warm_cache = strcmp(warm_cache, "0") != 0;
+        }
+        if (rebalance_interval && rebalance_interval[0]) {
+            const int v = atoi(rebalance_interval);
+            if (v >= 0) {
+                g_ggml_numa_expert_rebalance_interval = v;
+            }
+        }
+        if (rebalance_skew_pct && rebalance_skew_pct[0]) {
+            const int v = atoi(rebalance_skew_pct);
+            if (v >= 0 && v <= 1000) {
+                g_ggml_numa_expert_rebalance_skew_pct = v;
+            }
+        }
+        if (rebalance_min_hits && rebalance_min_hits[0]) {
+            const long long v = atoll(rebalance_min_hits);
+            if (v >= 0) {
+                g_ggml_numa_expert_rebalance_min_hits = (uint64_t) v;
+            }
+        }
+        if (rebalance_max_copies && rebalance_max_copies[0]) {
+            const int v = atoi(rebalance_max_copies);
+            if (v >= 0) {
+                g_ggml_numa_expert_rebalance_max_copies = v;
+            }
+        }
+        if (prefill_pct && prefill_pct[0]) {
+            const int v = atoi(prefill_pct);
+            if (v >= 0 && v <= 100) {
+                g_ggml_numa_expert_prefill_pct = v;
+            }
+        }
+        if (prefill_seed && prefill_seed[0]) {
+            g_ggml_numa_expert_prefill_seed = (uint64_t) strtoull(prefill_seed, NULL, 0);
+        }
+
+        if (g_ggml_numa_expert_parallel_enabled) {
+            fprintf(stderr,
+                    "ggml_numa_expert_parallel: enabled bind=%d balance=%d warm_cache=%d rebalance_interval=%d skew_pct=%d min_hits=%llu max_copies=%d prefill_pct=%d prefill_seed=%llu\n",
+                    g_ggml_numa_expert_parallel_bind,
+                    g_ggml_numa_expert_parallel_balance,
+                    g_ggml_numa_expert_parallel_warm_cache,
+                    g_ggml_numa_expert_rebalance_interval,
+                    g_ggml_numa_expert_rebalance_skew_pct,
+                    (unsigned long long) g_ggml_numa_expert_rebalance_min_hits,
+                    g_ggml_numa_expert_rebalance_max_copies,
+                    g_ggml_numa_expert_prefill_pct,
+                    (unsigned long long) g_ggml_numa_expert_prefill_seed);
+            atexit(ggml_numa_expert_parallel_report);
+        }
+        atomic_store(&g_ggml_numa_expert_parallel_init, 2);
+        return;
+    }
+
+    while (atomic_load(&g_ggml_numa_expert_parallel_init) != 2) {
+        sched_yield();
+    }
+}
+
+static bool ggml_numa_expert_parallel_active(void) {
+    ggml_numa_expert_parallel_config_init();
+    if (!g_ggml_numa_expert_parallel_enabled || ggml_numa_node_count() <= 1) {
+        return false;
+    }
+    // NUMACTL does not give ggml a deterministic thread-to-node mapping, and
+    // ISOLATE intentionally confines all workers to one node.
+    return g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_DISTRIBUTE ||
+           g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR;
+}
+
+static int ggml_numa_expert_primary_node(int expert) {
+    const int n_nodes = ggml_numa_node_count();
+    return n_nodes > 1 ? expert % n_nodes : 0;
+}
+
+static void ggml_numa_expert_cache_lock(void) {
+    while (atomic_flag_test_and_set(&g_ggml_numa_expert_cache_lock)) {
+        sched_yield();
+    }
+}
+
+static void ggml_numa_expert_cache_unlock(void) {
+    atomic_flag_clear(&g_ggml_numa_expert_cache_lock);
+}
+
+static uint32_t ggml_numa_expert_cache_hash(
+        const struct ggml_tensor * tensor,
+        int expert,
+        int node,
+        size_t size) {
+    uintptr_t v = (uintptr_t) tensor;
+    v ^= ((uintptr_t) expert + 0x9e3779b97f4a7c15ull + (v << 6) + (v >> 2));
+    v ^= ((uintptr_t) node   + 0x9e3779b97f4a7c15ull + (v << 6) + (v >> 2));
+    v ^= ((uintptr_t) size   + 0x9e3779b97f4a7c15ull + (v << 6) + (v >> 2));
+    return (uint32_t) (v & (GGML_NUMA_EXPERT_CACHE_BUCKETS - 1));
+}
+
+static void ggml_numa_expert_cache_report(void) {
+    if (!g_ggml_numa_expert_cache_enabled) {
+        return;
+    }
+
+    uint64_t total_hits = 0;
+    uint64_t total_data_hits = 0;
+    ggml_numa_expert_cache_lock();
+    for (int b = 0; b < GGML_NUMA_EXPERT_CACHE_BUCKETS; ++b) {
+        for (struct ggml_numa_expert_cache_entry * e =
+                atomic_load(&g_ggml_numa_expert_cache[b]); e; e = e->next) {
+            total_hits += atomic_load(&e->hits);
+            total_data_hits += atomic_load(&e->data_hits);
+        }
+    }
+    ggml_numa_expert_cache_unlock();
+
+    fprintf(stderr,
+            "ggml_numa_expert_cache: requests=%llu slow_requests=%llu entries=%llu entry_hits=%llu data_hits=%llu copies=%llu evictions=%llu bytes=%zu MiB",
+            (unsigned long long) total_hits,
+            (unsigned long long) g_ggml_numa_expert_cache_requests,
+            (unsigned long long) g_ggml_numa_expert_cache_entries,
+            (unsigned long long) (total_hits >= g_ggml_numa_expert_cache_entries ?
+                total_hits - g_ggml_numa_expert_cache_entries : 0),
+            (unsigned long long) total_data_hits,
+            (unsigned long long) g_ggml_numa_expert_cache_copies,
+            (unsigned long long) g_ggml_numa_expert_cache_evictions,
+            g_ggml_numa_expert_cache_bytes / (1024u * 1024u));
+    for (int i = 0; i < GGML_NUMA_MAX_NODES; ++i) {
+        if (g_ggml_numa_expert_cache_node_bytes[i] > 0) {
+            fprintf(stderr, " node%d=%zu MiB", i, g_ggml_numa_expert_cache_node_bytes[i] / (1024u * 1024u));
+        }
+    }
+    fprintf(stderr, "\n");
+
+    if (g_ggml_numa_expert_cache_dump_path && g_ggml_numa_expert_cache_dump_path[0]) {
+        FILE * f = fopen(g_ggml_numa_expert_cache_dump_path, "w");
+        if (f) {
+            fprintf(f, "tensor,expert,node,bundle_key,size,hits,data_hits,routed_rows,last_access,resident\n");
+            ggml_numa_expert_cache_lock();
+            for (int b = 0; b < GGML_NUMA_EXPERT_CACHE_BUCKETS; ++b) {
+                for (struct ggml_numa_expert_cache_entry * e =
+                        atomic_load(&g_ggml_numa_expert_cache[b]); e; e = e->next) {
+                    const char * name = ggml_get_name(e->tensor);
+                    fprintf(f, "%s,%d,%d,%llu,%zu,%llu,%llu,%llu,%llu,%d\n",
+                            name && name[0] ? name : "<unnamed>",
+                            e->expert,
+                            e->node,
+                            (unsigned long long) e->bundle_key,
+                            e->size,
+                            (unsigned long long) atomic_load(&e->hits),
+                            (unsigned long long) atomic_load(&e->data_hits),
+                            (unsigned long long) atomic_load(&e->routed_rows),
+                            (unsigned long long) e->last_access,
+                            atomic_load(&e->data) != NULL);
+                }
+            }
+            ggml_numa_expert_cache_unlock();
+            fclose(f);
+        }
+    }
+}
+
+static void ggml_numa_expert_parallel_report(void) {
+    if (!g_ggml_numa_expert_parallel_enabled) {
+        return;
+    }
+    fprintf(stderr,
+            "ggml_numa_expert_parallel: primary_binds=%llu bind_failures=%llu primary_scheduled=%llu replica_scheduled=%llu rebalance_promotions=%llu prefill_copies=%llu prefill_bytes=%zu MiB\n",
+            (unsigned long long) g_ggml_numa_expert_primary_binds,
+            (unsigned long long) g_ggml_numa_expert_primary_bind_failures,
+            (unsigned long long) g_ggml_numa_expert_primary_scheduled,
+            (unsigned long long) g_ggml_numa_expert_replica_scheduled,
+            (unsigned long long) g_ggml_numa_expert_rebalance_promotions,
+            (unsigned long long) g_ggml_numa_expert_prefill_copies,
+            g_ggml_numa_expert_prefill_bytes / (1024u * 1024u));
+}
+
+static size_t ggml_numa_expert_cache_budget_for_node(int node) {
+    if (node >= 0 && node < GGML_NUMA_MAX_NODES &&
+            g_ggml_numa_expert_cache_node_budget_override[node] > 0) {
+        return g_ggml_numa_expert_cache_node_budget_override[node];
+    }
+    if (g_ggml_numa_expert_cache_node_budget > 0 && node >= 0 && node < GGML_NUMA_MAX_NODES) {
+        return g_ggml_numa_expert_cache_node_budget;
+    }
+    return g_ggml_numa_expert_cache_budget;
+}
+
+static size_t ggml_numa_expert_cache_bytes_for_node(int node) {
+    if ((g_ggml_numa_expert_cache_node_budget > 0 ||
+                (node >= 0 && node < GGML_NUMA_MAX_NODES &&
+                 g_ggml_numa_expert_cache_node_budget_override[node] > 0)) &&
+            node >= 0 && node < GGML_NUMA_MAX_NODES) {
+        return g_ggml_numa_expert_cache_node_bytes[node];
+    }
+    return g_ggml_numa_expert_cache_bytes;
+}
+
+static void ggml_numa_expert_cache_add_bytes(int node, size_t size) {
+    g_ggml_numa_expert_cache_bytes += size;
+    if (node >= 0 && node < GGML_NUMA_MAX_NODES) {
+        g_ggml_numa_expert_cache_node_bytes[node] += size;
+    }
+}
+
+static void ggml_numa_expert_cache_sub_bytes(int node, size_t size) {
+    g_ggml_numa_expert_cache_bytes -= MIN(g_ggml_numa_expert_cache_bytes, size);
+    if (node >= 0 && node < GGML_NUMA_MAX_NODES) {
+        g_ggml_numa_expert_cache_node_bytes[node] -= MIN(g_ggml_numa_expert_cache_node_bytes[node], size);
+    }
+}
+
+static uint64_t ggml_numa_expert_cache_value(const struct ggml_numa_expert_cache_entry * e) {
+    return atomic_load(&e->data_hits) * 16 +
+           atomic_load(&e->hits) * 2 +
+           atomic_load(&e->routed_rows);
+}
+
+static void ggml_numa_expert_cache_maintain(void) {
+    ggml_numa_expert_cache_init();
+
+    if (!g_ggml_numa_expert_cache_enabled) {
+        return;
+    }
+
+    ggml_numa_expert_cache_lock();
+
+    const int n_nodes = ggml_numa_node_count();
+    for (int node = 0; g_ggml_numa_expert_cache_evict &&
+            node < n_nodes && node < GGML_NUMA_MAX_NODES; ++node) {
+        const size_t budget = ggml_numa_expert_cache_budget_for_node(node);
+        if (budget == 0 || !g_ggml_numa_expert_cache_node_pressure[node]) {
+            continue;
+        }
+
+        const size_t target = budget * (size_t) g_ggml_numa_expert_cache_evict_target_pct / 100u;
+
+        while (ggml_numa_expert_cache_bytes_for_node(node) > target) {
+            struct ggml_numa_expert_cache_entry * victim = NULL;
+            uint64_t victim_value = UINT64_MAX;
+
+            for (int b = 0; b < GGML_NUMA_EXPERT_CACHE_BUCKETS; ++b) {
+                for (struct ggml_numa_expert_cache_entry * e =
+                        atomic_load(&g_ggml_numa_expert_cache[b]); e; e = e->next) {
+                    if (atomic_load(&e->data) && e->node == node) {
+                        const uint64_t value = ggml_numa_expert_cache_value(e);
+                        if (!victim || value < victim_value ||
+                                (value == victim_value && e->last_access < victim->last_access)) {
+                            victim = e;
+                            victim_value = value;
+                        }
+                    }
+                }
+            }
+
+            if (!victim) {
+                break;
+            }
+
+            void * victim_data = atomic_exchange(&victim->data, NULL);
+            ggml_numa_free(victim_data, victim->size);
+            ggml_numa_expert_cache_sub_bytes(victim->node, victim->size);
+            g_ggml_numa_expert_cache_evictions++;
+
+            // Keep the metadata entry so future requests retain hotness history.
+            // It can be re-admitted after enough value accumulates again.
+        }
+
+        g_ggml_numa_expert_cache_node_pressure[node] =
+            ggml_numa_expert_cache_bytes_for_node(node) >= budget;
+    }
+
+    // Slow rebalancing loop: if execution has stayed skewed for an epoch,
+    // promote a small number of high-value secondary replicas on the lighter
+    // node. Copies happen only at graph boundaries, never inside a matmul.
+    if (ggml_numa_expert_parallel_active() && g_ggml_numa_expert_parallel_balance &&
+            g_ggml_numa_expert_rebalance_interval > 0 &&
+            ++g_ggml_numa_expert_rebalance_graphs %
+                (uint64_t) g_ggml_numa_expert_rebalance_interval == 0) {
+        int light_node = 0;
+        int heavy_node = 0;
+        for (int node = 1; node < n_nodes && node < GGML_NUMA_MAX_NODES; ++node) {
+            if (g_ggml_numa_expert_epoch_exec_work[node] <
+                    g_ggml_numa_expert_epoch_exec_work[light_node]) {
+                light_node = node;
+            }
+            if (g_ggml_numa_expert_epoch_exec_work[node] >
+                    g_ggml_numa_expert_epoch_exec_work[heavy_node]) {
+                heavy_node = node;
+            }
+        }
+
+        const uint64_t light_work = g_ggml_numa_expert_epoch_exec_work[light_node];
+        const uint64_t heavy_work = g_ggml_numa_expert_epoch_exec_work[heavy_node];
+        const bool skewed = heavy_node != light_node && heavy_work > 0 &&
+            (light_work == 0 || heavy_work * 100u >
+                light_work * (uint64_t) (100 + g_ggml_numa_expert_rebalance_skew_pct));
+
+        if (skewed) {
+            for (int promoted = 0;
+                    promoted < g_ggml_numa_expert_rebalance_max_copies; ++promoted) {
+                struct ggml_numa_expert_cache_entry * candidate = NULL;
+                uint64_t candidate_value = 0;
+
+                for (int b = 0; b < GGML_NUMA_EXPERT_CACHE_BUCKETS; ++b) {
+                    for (struct ggml_numa_expert_cache_entry * e =
+                            atomic_load(&g_ggml_numa_expert_cache[b]); e; e = e->next) {
+                        if (atomic_load(&e->data) || e->node != light_node ||
+                                atomic_load(&e->hits) < g_ggml_numa_expert_rebalance_min_hits ||
+                                ggml_numa_expert_primary_node(e->expert) == light_node) {
+                            continue;
+                        }
+                        const size_t budget = ggml_numa_expert_cache_budget_for_node(light_node);
+                        if (budget == 0 ||
+                                ggml_numa_expert_cache_bytes_for_node(light_node) + e->size > budget) {
+                            continue;
+                        }
+                        const uint64_t value = ggml_numa_expert_cache_value(e);
+                        if (!candidate || value * candidate->size > candidate_value * e->size) {
+                            candidate = e;
+                            candidate_value = value;
+                        }
+                    }
+                }
+
+                if (!candidate) {
+                    break;
+                }
+
+                struct ggml_numa_expert_cache_entry * bundle[GGML_NUMA_EXPERT_BUNDLE_MAX_TENSORS];
+                void * copies[GGML_NUMA_EXPERT_BUNDLE_MAX_TENSORS] = { NULL };
+                int n_bundle = 0;
+                size_t bundle_bytes = 0;
+                bool bundle_too_large = false;
+                for (int b = 0; b < GGML_NUMA_EXPERT_CACHE_BUCKETS && !bundle_too_large; ++b) {
+                    for (struct ggml_numa_expert_cache_entry * e =
+                            atomic_load(&g_ggml_numa_expert_cache[b]); e; e = e->next) {
+                        if (e->bundle_key != candidate->bundle_key || e->node != light_node ||
+                                atomic_load(&e->data)) {
+                            continue;
+                        }
+                        if (n_bundle == GGML_NUMA_EXPERT_BUNDLE_MAX_TENSORS) {
+                            bundle_too_large = true;
+                            break;
+                        }
+                        bundle[n_bundle++] = e;
+                        bundle_bytes += e->size;
+                    }
+                }
+
+                const size_t budget = ggml_numa_expert_cache_budget_for_node(light_node);
+                if (bundle_too_large || n_bundle == 0 || budget == 0 ||
+                        ggml_numa_expert_cache_bytes_for_node(light_node) + bundle_bytes > budget) {
+                    break;
+                }
+
+                bool copied = true;
+                for (int i = 0; i < n_bundle; ++i) {
+                    copies[i] = ggml_numa_alloc(bundle[i]->size, light_node);
+                    if (!copies[i]) {
+                        copied = false;
+                        break;
+                    }
+                    const char * source = (const char *) bundle[i]->tensor->data +
+                        bundle[i]->expert * bundle[i]->size;
+                    memcpy(copies[i], source, bundle[i]->size);
+                }
+                if (!copied) {
+                    for (int i = 0; i < n_bundle; ++i) {
+                        if (copies[i]) {
+                            ggml_numa_free(copies[i], bundle[i]->size);
+                        }
+                    }
+                    break;
+                }
+
+                for (int i = 0; i < n_bundle; ++i) {
+                    atomic_store_explicit(&bundle[i]->data, copies[i], memory_order_release);
+                    bundle[i]->last_access = ++g_ggml_numa_expert_cache_clock;
+                    ggml_numa_expert_cache_add_bytes(light_node, bundle[i]->size);
+                    g_ggml_numa_expert_cache_copies++;
+                }
+                g_ggml_numa_expert_rebalance_promotions++;
+            }
+        }
+
+        memset(g_ggml_numa_expert_epoch_primary_work, 0,
+                sizeof(g_ggml_numa_expert_epoch_primary_work));
+        memset(g_ggml_numa_expert_epoch_exec_work, 0,
+                sizeof(g_ggml_numa_expert_epoch_exec_work));
+    }
+
+    ggml_numa_expert_cache_unlock();
+}
+
+static void ggml_numa_expert_cache_init(void) {
+    int state = atomic_load(&g_ggml_numa_expert_cache_init);
+    if (state == 2) {
+        return;
+    }
+
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(
+                &g_ggml_numa_expert_cache_init, &expected, 1)) {
+        while (atomic_load(&g_ggml_numa_expert_cache_init) != 2) {
+            sched_yield();
+        }
+        return;
+    }
+
+    const char * enabled = getenv("GGML_NUMA_EXPERT_CACHE");
+    g_ggml_numa_expert_cache_enabled = enabled && strcmp(enabled, "0") != 0;
+
+    const char * min_hits = getenv("GGML_NUMA_EXPERT_CACHE_MIN_HITS");
+    if (min_hits && min_hits[0]) {
+        int v = atoi(min_hits);
+        if (v > 0) {
+            g_ggml_numa_expert_cache_min_hits = (uint64_t) v;
+        }
+    }
+
+    const char * budget_mb = getenv("GGML_NUMA_EXPERT_CACHE_MB");
+    if (budget_mb && budget_mb[0]) {
+        long long v = atoll(budget_mb);
+        if (v > 0) {
+            g_ggml_numa_expert_cache_budget = (size_t) v * 1024u * 1024u;
+        }
+    }
+
+    const char * node_budget_mb = getenv("GGML_NUMA_EXPERT_CACHE_NODE_MB");
+    if (node_budget_mb && node_budget_mb[0]) {
+        long long v = atoll(node_budget_mb);
+        if (v > 0) {
+            g_ggml_numa_expert_cache_node_budget = (size_t) v * 1024u * 1024u;
+        }
+    }
+
+    for (int node = 0; node < GGML_NUMA_MAX_NODES; ++node) {
+        char env_name[64];
+        snprintf(env_name, sizeof(env_name), "GGML_NUMA_EXPERT_CACHE_NODE%d_MB", node);
+        const char * node_override_mb = getenv(env_name);
+        if (node_override_mb && node_override_mb[0]) {
+            long long v = atoll(node_override_mb);
+            if (v > 0) {
+                g_ggml_numa_expert_cache_node_budget_override[node] =
+                    (size_t) v * 1024u * 1024u;
+            }
+        }
+    }
+
+    const char * evict = getenv("GGML_NUMA_EXPERT_CACHE_EVICT");
+    if (evict && evict[0]) {
+        g_ggml_numa_expert_cache_evict = strcmp(evict, "0") != 0;
+    }
+
+    const char * evict_target_pct = getenv("GGML_NUMA_EXPERT_CACHE_EVICT_TARGET_PCT");
+    if (evict_target_pct && evict_target_pct[0]) {
+        int v = atoi(evict_target_pct);
+        if (v > 0 && v <= 100) {
+            g_ggml_numa_expert_cache_evict_target_pct = v;
+        }
+    }
+
+    g_ggml_numa_expert_cache_dump_path = getenv("GGML_NUMA_EXPERT_CACHE_DUMP");
+
+    const char * admit_min_tokens = getenv("GGML_NUMA_EXPERT_CACHE_ADMIT_MIN_TOKENS");
+    if (admit_min_tokens && admit_min_tokens[0]) {
+        long long v = atoll(admit_min_tokens);
+        if (v >= 0) {
+            g_ggml_numa_expert_cache_admit_min_tokens = (int64_t) v;
+        }
+    }
+
+    const char * admit_min_rows = getenv("GGML_NUMA_EXPERT_CACHE_ADMIT_MIN_ROWS");
+    if (admit_min_rows && admit_min_rows[0]) {
+        long long v = atoll(admit_min_rows);
+        if (v > 0) {
+            g_ggml_numa_expert_cache_admit_min_rows = (int64_t) v;
+        }
+    }
+
+    if (g_ggml_numa_expert_cache_enabled && g_ggml_numa_expert_cache_budget == 0 &&
+            g_ggml_numa_expert_cache_node_budget == 0) {
+        g_ggml_numa_expert_cache_budget = 4096ull * 1024ull * 1024ull;
+    }
+
+    if (g_ggml_numa_expert_cache_enabled) {
+        fprintf(stderr,
+                "ggml_numa_expert_cache: enabled budget=%zu MiB node_budget=%zu MiB node0_budget=%zu MiB node1_budget=%zu MiB min_hits=%llu admit_min_tokens=%lld admit_min_rows=%lld evict=%d evict_target_pct=%d\n",
+                g_ggml_numa_expert_cache_budget / (1024u * 1024u),
+                g_ggml_numa_expert_cache_node_budget / (1024u * 1024u),
+                g_ggml_numa_expert_cache_node_budget_override[0] / (1024u * 1024u),
+                g_ggml_numa_expert_cache_node_budget_override[1] / (1024u * 1024u),
+                (unsigned long long) g_ggml_numa_expert_cache_min_hits,
+                (long long) g_ggml_numa_expert_cache_admit_min_tokens,
+                (long long) g_ggml_numa_expert_cache_admit_min_rows,
+                g_ggml_numa_expert_cache_evict,
+                g_ggml_numa_expert_cache_evict_target_pct);
+        atexit(ggml_numa_expert_cache_report);
+    }
+
+    atomic_store(&g_ggml_numa_expert_cache_init, 2);
+}
+
+static inline const char * ggml_numa_expert_tensor_data(
+        const struct ggml_tensor * tensor,
+        int expert,
+        size_t expert_size,
+        int node,
+        int64_t batch_tokens,
+        int64_t expert_rows) {
+
+    const char * canonical = (const char *) ggml_numa_tensor_data(tensor, node) + expert * expert_size;
+
+    ggml_numa_expert_cache_init();
+
+    const bool expert_parallel = ggml_numa_expert_parallel_active();
+    const int primary_node = expert_parallel ? ggml_numa_expert_primary_node(expert) : 0;
+
+    if (!g_ggml_numa_expert_cache_enabled || (!expert_parallel && node <= 0) ||
+            (expert_parallel && node == primary_node) || expert_size == 0 ||
+            ggml_numa_mirror_active() || ggml_numa_node_count() <= 1) {
+        return canonical;
+    }
+
+    // In expert-parallel mode the canonical mmap range is bound to its primary
+    // owner. Otherwise node 0 remains the canonical source as before.
+    const char * source = (const char *) ggml_numa_tensor_data(tensor, primary_node) + expert * expert_size;
+    const bool allow_admit =
+        batch_tokens >= g_ggml_numa_expert_cache_admit_min_tokens &&
+        expert_rows  >= g_ggml_numa_expert_cache_admit_min_rows;
+
+    const uint32_t bucket = ggml_numa_expert_cache_hash(tensor, expert, node, expert_size);
+
+    // Resident metadata entries are never freed, and their data pointers are
+    // published atomically. The overwhelmingly common decode hit therefore
+    // avoids the global admission/eviction lock entirely.
+    for (struct ggml_numa_expert_cache_entry * fast =
+            atomic_load_explicit(&g_ggml_numa_expert_cache[bucket], memory_order_acquire);
+            fast; fast = fast->next) {
+        if (fast->tensor == tensor && fast->expert == expert &&
+                fast->node == node && fast->size == expert_size) {
+            void * cached = atomic_load_explicit(&fast->data, memory_order_acquire);
+            if (cached) {
+                atomic_fetch_add_explicit(&fast->hits, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&fast->data_hits, 1, memory_order_relaxed);
+                if (expert_rows > 0) {
+                    atomic_fetch_add_explicit(&fast->routed_rows,
+                            (uint64_t) expert_rows, memory_order_relaxed);
+                }
+                return (const char *) cached;
+            }
+            break;
+        }
+    }
+
+    ggml_numa_expert_cache_lock();
+    g_ggml_numa_expert_cache_requests++;
+
+    struct ggml_numa_expert_cache_entry * e =
+        atomic_load_explicit(&g_ggml_numa_expert_cache[bucket], memory_order_acquire);
+    while (e) {
+        if (e->tensor == tensor && e->expert == expert && e->node == node && e->size == expert_size) {
+            const uint64_t hits = atomic_fetch_add(&e->hits, 1) + 1;
+            if (expert_rows > 0) {
+                atomic_fetch_add(&e->routed_rows, (uint64_t) expert_rows);
+            }
+            e->last_access = ++g_ggml_numa_expert_cache_clock;
+            g_ggml_numa_expert_cache_entry_hits++;
+            void * cached = atomic_load(&e->data);
+            if (cached) {
+                atomic_fetch_add(&e->data_hits, 1);
+                g_ggml_numa_expert_cache_data_hits++;
+            }
+            const char * data = cached ? (const char *) cached : canonical;
+
+            const size_t budget = ggml_numa_expert_cache_budget_for_node(node);
+            const uint64_t min_hits = expert_parallel && g_ggml_numa_expert_parallel_warm_cache ?
+                1 : g_ggml_numa_expert_cache_min_hits;
+            if (!cached && allow_admit && hits >= min_hits &&
+                    budget > 0 && ggml_numa_expert_cache_bytes_for_node(node) + expert_size <= budget) {
+                void * copy = ggml_numa_alloc(expert_size, node);
+                if (copy) {
+                    memcpy(copy, source, expert_size);
+                    atomic_store_explicit(&e->data, copy, memory_order_release);
+                    ggml_numa_expert_cache_add_bytes(node, expert_size);
+                    g_ggml_numa_expert_cache_copies++;
+                    data = (const char *) copy;
+                }
+            } else if (!cached && allow_admit && budget > 0) {
+                g_ggml_numa_expert_cache_node_pressure[node] = true;
+            }
+
+            ggml_numa_expert_cache_unlock();
+            return data;
+        }
+        e = e->next;
+    }
+
+    e = (struct ggml_numa_expert_cache_entry *) calloc(1, sizeof(*e));
+    if (!e) {
+        ggml_numa_expert_cache_unlock();
+        return canonical;
+    }
+
+    e->tensor = tensor;
+    e->expert = expert;
+    e->node = node;
+    e->size = expert_size;
+    e->bundle_key = ggml_numa_expert_bundle_key(tensor, expert, node);
+    atomic_store(&e->hits, 1);
+    atomic_store(&e->routed_rows, expert_rows > 0 ? (uint64_t) expert_rows : 0);
+    e->last_access = ++g_ggml_numa_expert_cache_clock;
+    e->next = atomic_load_explicit(&g_ggml_numa_expert_cache[bucket], memory_order_relaxed);
+    atomic_store_explicit(&g_ggml_numa_expert_cache[bucket], e, memory_order_release);
+    g_ggml_numa_expert_cache_entries++;
+
+    const char * data = canonical;
+    const size_t budget = ggml_numa_expert_cache_budget_for_node(node);
+    const uint64_t min_hits = expert_parallel && g_ggml_numa_expert_parallel_warm_cache ?
+        1 : g_ggml_numa_expert_cache_min_hits;
+    if (allow_admit && atomic_load(&e->hits) >= min_hits &&
+            budget > 0 && ggml_numa_expert_cache_bytes_for_node(node) + expert_size <= budget) {
+        void * copy = ggml_numa_alloc(expert_size, node);
+        if (copy) {
+            memcpy(copy, source, expert_size);
+            atomic_store_explicit(&e->data, copy, memory_order_release);
+            ggml_numa_expert_cache_add_bytes(node, expert_size);
+            g_ggml_numa_expert_cache_copies++;
+            data = (const char *) copy;
+        }
+    } else if (allow_admit && budget > 0) {
+        g_ggml_numa_expert_cache_node_pressure[node] = true;
+    }
+
+    ggml_numa_expert_cache_unlock();
+    return data;
+}
+
+static bool ggml_numa_expert_cache_resident(
+        const struct ggml_tensor * tensor,
+        int expert,
+        size_t expert_size,
+        int node) {
+    if (ggml_numa_mirror_active()) {
+        return true;
+    }
+    if (node == ggml_numa_expert_primary_node(expert)) {
+        return true;
+    }
+
+    ggml_numa_expert_cache_init();
+    if (!g_ggml_numa_expert_cache_enabled || expert_size == 0) {
+        return false;
+    }
+
+    const uint32_t bucket = ggml_numa_expert_cache_hash(tensor, expert, node, expert_size);
+    bool resident = false;
+    for (struct ggml_numa_expert_cache_entry * e =
+            atomic_load_explicit(&g_ggml_numa_expert_cache[bucket], memory_order_acquire);
+            e; e = e->next) {
+        if (e->tensor == tensor && e->expert == expert && e->node == node && e->size == expert_size) {
+            resident = atomic_load_explicit(&e->data, memory_order_acquire) != NULL;
+            break;
+        }
+    }
+    return resident;
+}
+
+static void ggml_numa_expert_primary_prepare(
+        const struct ggml_tensor * tensor,
+        int expert,
+        size_t expert_size) {
+    if (!ggml_numa_expert_parallel_active() || !g_ggml_numa_expert_parallel_bind ||
+            ggml_numa_mirror_active() || expert_size == 0) {
+        return;
+    }
+
+    const int node = ggml_numa_expert_primary_node(expert);
+    const uint32_t bucket = ggml_numa_expert_cache_hash(tensor, expert, node, expert_size);
+
+    ggml_numa_expert_cache_lock();
+    for (struct ggml_numa_expert_primary_entry * e = g_ggml_numa_expert_primary[bucket]; e; e = e->next) {
+        if (e->tensor == tensor && e->expert == expert && e->node == node && e->size == expert_size) {
+            ggml_numa_expert_cache_unlock();
+            return;
+        }
+    }
+
+    struct ggml_numa_expert_primary_entry * e =
+        (struct ggml_numa_expert_primary_entry *) calloc(1, sizeof(*e));
+    if (!e) {
+        g_ggml_numa_expert_primary_bind_failures++;
+        ggml_numa_expert_cache_unlock();
+        return;
+    }
+
+    void * data = (char *) tensor->data + expert * expert_size;
+    const bool bound = ggml_numa_bind_impl(data, expert_size, node);
+    e->tensor = tensor;
+    e->expert = expert;
+    e->node = node;
+    e->size = expert_size;
+    e->next = g_ggml_numa_expert_primary[bucket];
+    g_ggml_numa_expert_primary[bucket] = e;
+    g_ggml_numa_expert_primary_binds++;
+    if (!bound) {
+        g_ggml_numa_expert_primary_bind_failures++;
+    }
+    ggml_numa_expert_cache_unlock();
+}
+
+static uint64_t ggml_numa_expert_prefill_hash(
+        const struct ggml_tensor * tensor, int expert, int node) {
+    uint64_t h = ggml_numa_expert_bundle_key(tensor, expert, node) ^
+        g_ggml_numa_expert_prefill_seed;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    return h;
+}
+
+bool ggml_numa_expert_cache_prefill_active(void) {
+    ggml_numa_expert_cache_init();
+    return ggml_numa_expert_parallel_active() && g_ggml_numa_expert_cache_enabled &&
+        g_ggml_numa_expert_prefill_pct > 0 && !ggml_numa_mirror_active();
+}
+
+void ggml_numa_expert_cache_prefill_begin(size_t total_expert_bytes) {
+    if (!ggml_numa_expert_cache_prefill_active()) {
+        return;
+    }
+    g_ggml_numa_expert_prefill_total_bytes = total_expert_bytes;
+    fprintf(stderr,
+            "ggml_numa_expert_prefill: target=%d%% of cache budgets, candidate_expert_bytes=%zu MiB seed=%llu\n",
+            g_ggml_numa_expert_prefill_pct,
+            total_expert_bytes / (1024u * 1024u),
+            (unsigned long long) g_ggml_numa_expert_prefill_seed);
+}
+
+void ggml_numa_expert_cache_prefill_tensor(
+        const struct ggml_tensor * tensor, int n_experts) {
+    if (!ggml_numa_expert_cache_prefill_active() || !tensor || !tensor->data ||
+            n_experts <= 0 || tensor->ne[2] != n_experts ||
+            g_ggml_numa_expert_prefill_total_bytes == 0) {
+        return;
+    }
+
+    const size_t expert_size = tensor->nb[2];
+    const int n_nodes = ggml_numa_node_count();
+    if (expert_size == 0 || n_nodes <= 1) {
+        return;
+    }
+
+    const long double candidate_bytes_per_node =
+        (long double) g_ggml_numa_expert_prefill_total_bytes *
+        (long double) (n_nodes - 1) / (long double) n_nodes;
+
+    for (int expert = 0; expert < n_experts; ++expert) {
+        const int owner = ggml_numa_expert_primary_node(expert);
+        for (int node = 0; node < n_nodes && node < GGML_NUMA_MAX_NODES; ++node) {
+            if (node == owner) {
+                continue;
+            }
+
+            const size_t budget = ggml_numa_expert_cache_budget_for_node(node);
+            const size_t target = budget * (size_t) g_ggml_numa_expert_prefill_pct / 100u;
+            if (target == 0 || ggml_numa_expert_cache_bytes_for_node(node) >= target) {
+                continue;
+            }
+
+            long double probability = (long double) target / candidate_bytes_per_node;
+            if (probability > 1.0L) {
+                probability = 1.0L;
+            }
+            const long double sample =
+                (long double) ggml_numa_expert_prefill_hash(tensor, expert, node) /
+                (long double) UINT64_MAX;
+            if (sample >= probability) {
+                continue;
+            }
+
+            ggml_numa_expert_primary_prepare(tensor, expert, expert_size);
+            const uint32_t bucket =
+                ggml_numa_expert_cache_hash(tensor, expert, node, expert_size);
+
+            ggml_numa_expert_cache_lock();
+            struct ggml_numa_expert_cache_entry * e =
+                atomic_load_explicit(&g_ggml_numa_expert_cache[bucket], memory_order_acquire);
+            while (e && !(e->tensor == tensor && e->expert == expert &&
+                    e->node == node && e->size == expert_size)) {
+                e = e->next;
+            }
+            if (!e) {
+                e = (struct ggml_numa_expert_cache_entry *) calloc(1, sizeof(*e));
+                if (e) {
+                    e->tensor = tensor;
+                    e->expert = expert;
+                    e->node = node;
+                    e->size = expert_size;
+                    e->bundle_key = ggml_numa_expert_bundle_key(tensor, expert, node);
+                    atomic_store(&e->hits, 1);
+                    e->last_access = ++g_ggml_numa_expert_cache_clock;
+                    e->next = atomic_load_explicit(
+                            &g_ggml_numa_expert_cache[bucket], memory_order_relaxed);
+                    atomic_store_explicit(
+                            &g_ggml_numa_expert_cache[bucket], e, memory_order_release);
+                    g_ggml_numa_expert_cache_entries++;
+                }
+            }
+
+            if (e && !atomic_load(&e->data) &&
+                    ggml_numa_expert_cache_bytes_for_node(node) + expert_size <= target) {
+                void * copy = ggml_numa_alloc(expert_size, node);
+                if (copy) {
+                    const char * source = (const char *) tensor->data + expert * expert_size;
+                    memcpy(copy, source, expert_size);
+                    atomic_store_explicit(&e->data, copy, memory_order_release);
+                    ggml_numa_expert_cache_add_bytes(node, expert_size);
+                    g_ggml_numa_expert_cache_copies++;
+                    g_ggml_numa_expert_prefill_copies++;
+                    g_ggml_numa_expert_prefill_bytes += expert_size;
+                }
+            }
+            ggml_numa_expert_cache_unlock();
+        }
+    }
+}
+
+static void ggml_numa_expert_plan_bundle(
+        const struct ggml_tensor * const * tensors,
+        const size_t * expert_sizes,
+        int n_tensors,
+        const int64_t * matrix_row_counts,
+        int n_as,
+        int64_t batch_tokens,
+        int32_t * exec_nodes) {
+    const int n_nodes = ggml_numa_node_count();
+    uint64_t node_work[GGML_NUMA_MAX_NODES] = { 0 };
+
+    for (int expert = 0; expert < n_as; ++expert) {
+        exec_nodes[expert] = -1;
+        const int64_t rows = matrix_row_counts[expert];
+        if (rows <= 0) {
+            continue;
+        }
+
+        const int owner = ggml_numa_expert_primary_node(expert);
+        for (int t = 0; t < n_tensors; ++t) {
+            if (tensors[t] && expert_sizes[t] > 0) {
+                ggml_numa_expert_primary_prepare(tensors[t], expert, expert_sizes[t]);
+            }
+        }
+
+        bool local[GGML_NUMA_MAX_NODES] = { false };
+        local[owner] = true;
+        if (g_ggml_numa_expert_parallel_balance) {
+            for (int node = 0; node < n_nodes && node < GGML_NUMA_MAX_NODES; ++node) {
+                if (node == owner) {
+                    continue;
+                }
+
+                bool all_resident = true;
+                for (int t = 0; t < n_tensors; ++t) {
+                    if (!tensors[t] || expert_sizes[t] == 0) {
+                        continue;
+                    }
+                    if (g_ggml_numa_expert_parallel_warm_cache) {
+                        (void) ggml_numa_expert_tensor_data(
+                                tensors[t], expert, expert_sizes[t], node, batch_tokens, rows);
+                    }
+                    if (!ggml_numa_expert_cache_resident(tensors[t], expert, expert_sizes[t], node)) {
+                        all_resident = false;
+                    }
+                }
+                local[node] = all_resident;
+            }
+        }
+
+        int selected = owner;
+        for (int node = 0; node < n_nodes && node < GGML_NUMA_MAX_NODES; ++node) {
+            if (local[node] && node_work[node] < node_work[selected]) {
+                selected = node;
+            }
+        }
+
+        exec_nodes[expert] = selected;
+        node_work[selected] += (uint64_t) rows;
+        g_ggml_numa_expert_epoch_primary_work[owner] += (uint64_t) rows;
+        g_ggml_numa_expert_epoch_exec_work[selected] += (uint64_t) rows;
+        if (selected == owner) {
+            g_ggml_numa_expert_primary_scheduled++;
+        } else {
+            g_ggml_numa_expert_replica_scheduled++;
+        }
+    }
+}
+
+static void ggml_numa_expert_plan(
+        const struct ggml_tensor * tensor,
+        size_t expert_size,
+        const int64_t * matrix_row_counts,
+        int n_as,
+        int64_t batch_tokens,
+        int32_t * exec_nodes) {
+    const struct ggml_tensor * tensors[] = { tensor };
+    const size_t sizes[] = { expert_size };
+    ggml_numa_expert_plan_bundle(
+            tensors, sizes, 1, matrix_row_counts, n_as, batch_tokens, exec_nodes);
+}
+
 int ggml_numa_node_count(void) {
     return g_state.numa.n_nodes > 0 ? (int) g_state.numa.n_nodes : 1;
 }
@@ -4835,16 +5898,54 @@ uint32_t ggml_numa_get_mirror(void) {
     return g_state.numa.mirror_flags;
 }
 
-// block split of [0, nth) threads across the detected NUMA nodes. Used by BOTH the thread
-// affinity pinning and the per-thread weight-pointer redirection, so they always agree.
+// Return the NUMA node selected by set_numa_thread_affinity(). DISTRIBUTE uses
+// round-robin thread IDs; MIRROR uses contiguous blocks. Keeping this mapping
+// identical to affinity is required for node-local weight/cache pointers.
 int ggml_numa_node_for_thread(int ith, int nth) {
     int n = (int) g_state.numa.n_nodes;
     if (n <= 1 || nth <= 0) {
         return 0;
     }
-    int node = (ith * n) / nth;
-    if (node >= n) node = n - 1;
-    return node;
+    switch (g_state.numa.numa_strategy) {
+        case GGML_NUMA_STRATEGY_DISTRIBUTE:
+            return ith % n;
+        case GGML_NUMA_STRATEGY_MIRROR: {
+            int node = (ith * n) / nth;
+            return node < n ? node : n - 1;
+        }
+        case GGML_NUMA_STRATEGY_ISOLATE:
+            return (int) g_state.numa.current_node;
+        default:
+            return 0;
+    }
+}
+
+static void ggml_numa_local_thread_partition(
+        int ith, int nth, int * node, int * local_ith, int * local_nth) {
+    const int n = (int) g_state.numa.n_nodes;
+    *node = ggml_numa_node_for_thread(ith, nth);
+    if (n <= 1) {
+        *local_ith = ith;
+        *local_nth = nth;
+        return;
+    }
+
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_DISTRIBUTE) {
+        *local_ith = ith / n;
+        *local_nth = (nth + n - 1 - *node) / n;
+        return;
+    }
+
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
+        const int first = (*node * nth + n - 1) / n;
+        const int end = ((*node + 1) * nth + n - 1) / n;
+        *local_ith = ith - first;
+        *local_nth = end - first;
+        return;
+    }
+
+    *local_ith = ith;
+    *local_nth = nth;
 }
 
 #if defined(__gnu_linux__)
@@ -4907,10 +6008,10 @@ void ggml_numa_free(void * ptr, size_t size) {
 
 // best-effort migration of an already-populated range (e.g. the original weight buffer) onto a
 // given node. Used to make node 0's "copy" (which aliases the original buffer) node-0-local.
-void ggml_numa_bind(void * ptr, size_t size, int node) {
+static bool ggml_numa_bind_impl(void * ptr, size_t size, int node) {
 #if defined(__gnu_linux__)
     if (!ptr || node < 0 || node >= (int) g_state.numa.n_nodes) {
-        return;
+        return false;
     }
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0) pg = 4096;
@@ -4921,10 +6022,22 @@ void ggml_numa_bind(void * ptr, size_t size, int node) {
     unsigned long nodemask[(GGML_NUMA_MAX_NODES + 8 * sizeof(unsigned long) - 1) / (8 * sizeof(unsigned long))];
     memset(nodemask, 0, sizeof(nodemask));
     nodemask[node / bits] |= 1UL << (node % bits);
-    ggml_sys_mbind((void *) aligned_start, len, MPOL_BIND, nodemask, GGML_NUMA_MAX_NODES + 1, MPOL_MF_MOVE);
+    if (ggml_sys_mbind((void *) aligned_start, len, MPOL_BIND, nodemask,
+                GGML_NUMA_MAX_NODES + 1, MPOL_MF_MOVE) == 0) {
+        return true;
+    }
+    // Shared/file-backed pages are not always movable. Retrying without MOVE
+    // still installs the policy for pages faulted after this call.
+    return ggml_sys_mbind((void *) aligned_start, len, MPOL_BIND, nodemask,
+            GGML_NUMA_MAX_NODES + 1, 0) == 0;
 #else
     UNUSED(ptr); UNUSED(size); UNUSED(node);
+    return false;
 #endif
+}
+
+void ggml_numa_bind(void * ptr, size_t size, int node) {
+    (void) ggml_numa_bind_impl(ptr, size, node);
 }
 
 // Configure the hierarchical barrier for the given thread count. Called single-threaded from
@@ -4932,7 +6045,10 @@ void ggml_numa_bind(void * ptr, size_t size, int node) {
 // Activates only when NUMA mirroring is on (threads are pinned per node, matching the block split
 // used by ggml_numa_node_for_thread); otherwise leaves the flat barrier in place.
 static void ggml_numa_barrier_setup(int n_threads) {
-    if (g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_MIRROR || g_state.numa.n_nodes < 2 || n_threads <= 1) {
+    const bool use_hierarchical =
+        g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR ||
+        ggml_numa_expert_parallel_active();
+    if (!use_hierarchical || g_state.numa.n_nodes < 2 || n_threads <= 1) {
         g_numa_barrier.active = 0;
         return;
     }
@@ -4956,12 +6072,18 @@ static void ggml_numa_barrier_setup(int n_threads) {
         atomic_store(&g_numa_barrier.global_arrive, 0);
         atomic_store(&g_numa_barrier.global_release, 0);
     }
+    for (int k = 0; k < n; ++k) {
+        g_numa_barrier.node_nth[k] = 0;
+    }
+    for (int ith = 0; ith < n_threads; ++ith) {
+        const int node = ggml_numa_node_for_thread(ith, n_threads);
+        if (node >= 0 && node < n) {
+            g_numa_barrier.node_nth[node]++;
+        }
+    }
+
     int leaders = 0;
     for (int k = 0; k < n; ++k) {
-        // contiguous block split, identical to ggml_numa_node_for_thread(ith,nth) = (ith*n)/nth
-        const int first_k  = ( k      * n_threads + n - 1) / n;
-        const int first_k1 = ((k + 1) * n_threads + n - 1) / n;
-        g_numa_barrier.node_nth[k] = first_k1 - first_k;
         if (g_numa_barrier.node_nth[k] > 0) {
             ++leaders;
         }
@@ -10633,6 +11755,10 @@ struct ggml_tensor * ggml_top_k_thresh(
         result = ggml_argsort(ctx, a, GGML_SORT_ORDER_DESC);
     } else {
         result = ggml_argsort_thresh(ctx, a, min_entries, thresh);
+        ggml_set_op_params_i32(result, 2, k);
+        const char * mode = getenv("GGML_SMART_EXPERT_THRESHOLD_MODE");
+        ggml_set_op_params_i32(result, 3,
+                mode && strcmp(mode, "mass") == 0 ? 1 : 0);
     }
 
     result = ggml_view_4d(ctx, result,
@@ -17671,9 +18797,14 @@ static void ggml_compute_forward_mul_mat_id(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    // NUMA mirror: node-local copy of the (stacked expert) weights for this thread
-    const int numa_node = ggml_numa_node_for_thread(ith, nth);
-    const char * const src0_data = (const char *) ggml_numa_tensor_data(src0, numa_node);
+    // NUMA mirror/cache: node-local copy of the (stacked expert) weights for this thread.
+    // Expert-parallel work uses a node-local thread index/count so one socket can
+    // compute a complete expert while the other advances through a different queue.
+    int numa_node = 0;
+    int numa_ith = ith;
+    int numa_nth = nth;
+    ggml_numa_local_thread_partition(ith, nth, &numa_node, &numa_ith, &numa_nth);
+    const bool expert_parallel = ggml_numa_expert_parallel_active();
 
     const enum ggml_type type = src0->type;
 
@@ -17710,6 +18841,7 @@ static void ggml_compute_forward_mul_mat_id(
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
     struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
+    int32_t * matrix_exec_nodes = (int32_t *) (matrix_rows + n_as*ne12); // [n_as]
 
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
@@ -17762,6 +18894,11 @@ static void ggml_compute_forward_mul_mat_id(
                 matrix_row_counts[i02] += 1;
             }
         }
+
+        if (expert_parallel) {
+            ggml_numa_expert_plan(src0, nb02, matrix_row_counts, n_as,
+                    ids->ne[1], matrix_exec_nodes);
+        }
     }
 
     ggml_barrier(params->shared);
@@ -17774,7 +18911,14 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
-        const char * src0_cur = src0_data + cur_a*nb02;
+        if (expert_parallel && matrix_exec_nodes[cur_a] != numa_node) {
+            continue;
+        }
+
+        const int work_ith = expert_parallel ? numa_ith : ith;
+        const int work_nth = expert_parallel ? numa_nth : nth;
+
+        const char * src0_cur = ggml_numa_expert_tensor_data(src0, cur_a, nb02, numa_node, ids->ne[1], cne1);
 
         const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
@@ -17788,18 +18932,18 @@ static void ggml_compute_forward_mul_mat_id(
                        src0->type, (const char *)src0_cur, nb01, ///ggml_type_size(src0->type),
                        vec_dot_type, (const char *)wdata, row_size, ///ggml_type_size(vec_dot_type),
                        (float *)dst->data, nb1, nb2,
-                       matrix_rows + cur_a*ne12, ith, nth)) goto IQK_MulMat_Not_Available;
+                       matrix_rows + cur_a*ne12, work_ith, work_nth)) goto IQK_MulMat_Not_Available;
                 continue;
         }
 IQK_MulMat_Not_Available:;
 #endif
 
         if (((ggml_n_dims(src0) - 1) == 2) && gemv) {
-            int64_t src0_cur_start = (ith * ne01) / nth;
-            int64_t src0_cur_end   = ((ith + 1) * ne01) / nth;
+            int64_t src0_cur_start = (work_ith * ne01) / work_nth;
+            int64_t src0_cur_end   = ((work_ith + 1) * ne01) / work_nth;
             src0_cur_start = (src0_cur_start % matmul_num_cols) ? src0_cur_start + matmul_num_cols - (src0_cur_start % matmul_num_cols): src0_cur_start;
             src0_cur_end   = (src0_cur_end % matmul_num_cols) ? src0_cur_end + matmul_num_cols - (src0_cur_end % matmul_num_cols): src0_cur_end;
-            if (src0_cur_start >= src0_cur_end) return;
+            if (src0_cur_start >= src0_cur_end) continue;
 
             for (int ir1 = 0; ir1 < nr1; ir1++) {
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
@@ -17823,11 +18967,11 @@ IQK_MulMat_Not_Available:;
         }
 
         if (((ggml_n_dims(src0) - 1) == 2) && gemv) {
-            int64_t src0_cur_start = (ith * ne01) / nth;
-            int64_t src0_cur_end   = ((ith + 1) * ne01) / nth;
+            int64_t src0_cur_start = (work_ith * ne01) / work_nth;
+            int64_t src0_cur_end   = ((work_ith + 1) * ne01) / work_nth;
             src0_cur_start = (src0_cur_start % matmul_num_cols) ? src0_cur_start + matmul_num_cols - (src0_cur_start % matmul_num_cols): src0_cur_start;
             src0_cur_end   = (src0_cur_end % matmul_num_cols) ? src0_cur_end + matmul_num_cols - (src0_cur_end % matmul_num_cols): src0_cur_end;
-            if (src0_cur_start >= src0_cur_end) return;
+            if (src0_cur_start >= src0_cur_end) continue;
 
             for (int ir1 = 0; ir1 < nr1; ir1++) {
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
@@ -17852,11 +18996,11 @@ IQK_MulMat_Not_Available:;
 
         // distribute the thread work across the inner or outer loop based on which one is larger
 
-        const int64_t nth0 = nr0 > nr1 ? nth : 1; // parallelize by src0 rows
-        const int64_t nth1 = nr0 > nr1 ? 1 : nth; // parallelize by src1 rows
+        const int64_t nth0 = nr0 > nr1 ? work_nth : 1; // parallelize by src0 rows
+        const int64_t nth1 = nr0 > nr1 ? 1 : work_nth; // parallelize by src1 rows
 
-        const int64_t ith0 = ith % nth0;
-        const int64_t ith1 = ith / nth0;
+        const int64_t ith0 = work_ith % nth0;
+        const int64_t ith1 = work_ith / nth0;
 
         const int64_t dr0 = (nr0 + nth0 - 1)/nth0;
         const int64_t dr1 = (nr1 + nth1 - 1)/nth1;
@@ -17923,6 +19067,42 @@ IQK_MulMat_Not_Available:;
 }
 
 #if GGML_USE_IQK_MULMAT
+static inline float ggml_up_gate_apply_gate_f32(enum ggml_unary_op op, float x, float limit) {
+    switch (op) {
+        case GGML_UNARY_OP_GELU:
+            x = ggml_gelu_f32(x);
+            break;
+        case GGML_UNARY_OP_RELU:
+            x = MAX(0.0f, x);
+            break;
+        case GGML_UNARY_OP_SILU:
+            x = ggml_silu_f32(x);
+            break;
+        case GGML_UNARY_OP_SIGMOID:
+            x = 1.0f/(1.0f + expf(-x));
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+
+    if (limit > 1e-6f) {
+        x = MIN(x, limit);
+    }
+
+    return x;
+}
+
+static inline float ggml_up_gate_apply_up_f32(enum ggml_unary_op op, float x, float limit) {
+    if (op == GGML_UNARY_OP_SWIGLU_OAI) {
+        x = MIN(x,  limit);
+        x = MAX(x, -limit);
+    } else if (limit > 1e-6f) {
+        x = MAX(-limit, MIN(limit, x));
+    }
+
+    return x;
+}
+
 static void ggml_compute_forward_mul_mat_id_up_gate(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -17944,16 +19124,17 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    // NUMA mirror: node-local copies of the up/gate expert weights (and optional biases)
-    const int numa_node = ggml_numa_node_for_thread(ith, nth);
-    const char * const src0_1_data = (const char *) ggml_numa_tensor_data(src0_1, numa_node);
-    const char * const src0_2_data = src0_2 ? (const char *) ggml_numa_tensor_data(src0_2, numa_node) : NULL;
-    const char * const up_b_data   = up_b   ? (const char *) ggml_numa_tensor_data(up_b,   numa_node) : NULL;
-    const char * const gate_b_data = gate_b ? (const char *) ggml_numa_tensor_data(gate_b, numa_node) : NULL;
-
+    // NUMA-local complete-expert worker group.
+    int numa_node = 0;
+    int numa_ith = ith;
+    int numa_nth = nth;
+    ggml_numa_local_thread_partition(ith, nth, &numa_node, &numa_ith, &numa_nth);
+    const bool expert_parallel = ggml_numa_expert_parallel_active();
     const enum ggml_type type = src0->type;
 
     enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
+    ggml_vec_dot_t    const vec_dot         = type_traits[type].vec_dot;
+    const bool src1_cont = ggml_is_contiguous(src1);
 
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(type));
@@ -17984,6 +19165,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
     struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
+    int32_t * matrix_exec_nodes = (int32_t *) (matrix_rows + n_as*ne12); // [n_as]
 
     if (src1->type != vec_dot_type) {
 
@@ -18039,6 +19221,15 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                 matrix_row_counts[i02] += 1;
             }
         }
+
+        if (expert_parallel) {
+            const struct ggml_tensor * tensors[] = { src0_1, src0_2, up_b, gate_b };
+            const size_t sizes[] = {
+                nb02, src0_2 ? nb02 : 0, up_b ? nb41 : 0, gate_b ? nb51 : 0,
+            };
+            ggml_numa_expert_plan_bundle(tensors, sizes, 4, matrix_row_counts,
+                    n_as, ids->ne[1], matrix_exec_nodes);
+        }
     }
 
     ggml_barrier(params->shared);
@@ -18055,18 +19246,25 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
             continue;
         }
 
+        if (expert_parallel && matrix_exec_nodes[cur_a] != numa_node) {
+            continue;
+        }
+
+        const int work_ith = expert_parallel ? numa_ith : ith;
+        const int work_nth = expert_parallel ? numa_nth : nth;
+
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
-            src0_1_cur = src0_1_data + cur_a*nb02;
-            src0_2_cur = src0_2_data + cur_a*nb02;
-            up_b_cur   = up_b   ? up_b_data   + cur_a*nb41 : NULL;
-            gate_b_cur = gate_b ? gate_b_data + cur_a*nb51 : NULL;
+            src0_1_cur = ggml_numa_expert_tensor_data(src0_1, cur_a, nb02, numa_node, ids->ne[1], cne1);
+            src0_2_cur = ggml_numa_expert_tensor_data(src0_2, cur_a, nb02, numa_node, ids->ne[1], cne1);
+            up_b_cur   = up_b   ? ggml_numa_expert_tensor_data(up_b,   cur_a, nb41, numa_node, ids->ne[1], cne1) : NULL;
+            gate_b_cur = gate_b ? ggml_numa_expert_tensor_data(gate_b, cur_a, nb51, numa_node, ids->ne[1], cne1) : NULL;
         } else {
-            src0_2_cur = src0_1_data + cur_a*nb02;
+            src0_2_cur = ggml_numa_expert_tensor_data(src0_1, cur_a, nb02, numa_node, ids->ne[1], cne1);
             src0_1_cur = src0_2_cur + nb02/2;
             if (up_b) {
                 GGML_ASSERT(!gate_b);
-                gate_b_cur = up_b_data + cur_a*nb41;
+                gate_b_cur = ggml_numa_expert_tensor_data(up_b, cur_a, nb41, numa_node, ids->ne[1], cne1);
                 up_b_cur   = gate_b_cur + nb41/2;
             }
         }
@@ -18077,12 +19275,67 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         const int64_t nr0 = src0_2 ? ne01 : ne01/2; // src0 rows
         const int64_t nr1 = cne1; // src1 rows
 
-        if (!iqk_moe_fused_up_gate(nr0, nr1, ne00, ne11, dst->op_params[0],
+        if (iqk_moe_fused_up_gate(nr0, nr1, ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
                             vec_dot_type, (const char *)wdata, row_size,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, limit, ith, nth)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, work_ith, work_nth)) {
+            continue;
+        }
+
+        // Some Qwen3Next GGUFs use MoE expert shapes/quant types that are not
+        // accepted by the IQK fused kernel. Fall back to the generic vec_dot
+        // path instead of aborting so the model remains runnable.
+        const int64_t nth0 = nr0 > nr1 ? work_nth : 1;
+        const int64_t nth1 = nr0 > nr1 ? 1 : work_nth;
+
+        const int64_t ith0 = work_ith % nth0;
+        const int64_t ith1 = work_ith / nth0;
+
+        const int64_t dr0 = (nr0 + nth0 - 1)/nth0;
+        const int64_t dr1 = (nr1 + nth1 - 1)/nth1;
+
+        const int64_t ir010 = dr0*ith0;
+        const int64_t ir011 = MIN(ir010 + dr0, nr0);
+
+        const int64_t ir110 = dr1*ith1;
+        const int64_t ir111 = MIN(ir110 + dr1, nr1);
+
+        enum ggml_unary_op op = (enum ggml_unary_op) dst->op_params[0];
+
+        for (int64_t ir1 = ir110; ir1 < ir111; ++ir1) {
+            struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
+            const int id = row_mapping.i1;
+
+            const int64_t i11 = id % ne11;
+            const int64_t i12 = row_mapping.i2;
+
+            const char * src1_col = (const char *) wdata +
+                (src1_cont || src1->type != vec_dot_type
+                    ? (i11 + i12*ne11)*row_size
+                    : (i11*nb11 + i12*nb12));
+
+            float * dst_col = (float *) ((char *) dst->data + (id*nb1 + i12*nb2));
+
+            for (int64_t ir0 = ir010; ir0 < ir011; ++ir0) {
+                float gate;
+                float up;
+
+                vec_dot(ne00, &gate, 0, src0_2_cur + ir0*nb01, 0, src1_col, 0, 1);
+                vec_dot(ne00, &up,   0, src0_1_cur + ir0*nb01, 0, src1_col, 0, 1);
+
+                if (gate_b_cur) {
+                    gate += ((const float *) gate_b_cur)[ir0];
+                }
+                if (up_b_cur) {
+                    up += ((const float *) up_b_cur)[ir0];
+                }
+
+                dst_col[ir0] = ggml_up_gate_apply_gate_f32(op, gate, limit) *
+                               ggml_up_gate_apply_up_f32(op, up, limit);
+            }
+        }
 
     }
 
@@ -18117,6 +19370,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
     const enum ggml_type type = src0->type;
 
     enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
+    ggml_vec_dot_t    const vec_dot         = type_traits[type].vec_dot;
 
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(type));
@@ -18156,12 +19410,50 @@ static void ggml_compute_forward_mul_mat_up_gate(
 
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
-    if (!iqk_moe_fused_up_gate(ne01, ne11, ne00, ne11, dst->op_params[0],
+    if (iqk_moe_fused_up_gate(ne01, ne11, ne00, ne11, dst->op_params[0],
                          type, src0_1_data, src0_2_data, nb01,
                          vec_dot_type, (const char *)wdata, row_size,
                          NULL, NULL,
                          (float *)dst->data, nb1, nb2,
-                         NULL, limit, ith, nth)) GGML_ABORT("fatal error");
+                         NULL, limit, ith, nth)) {
+        return;
+    }
+
+    const int64_t nr0 = ne01;
+    const int64_t nr1 = ne11;
+
+    const int64_t nth0 = nr0 > nr1 ? nth : 1;
+    const int64_t nth1 = nr0 > nr1 ? 1 : nth;
+
+    const int64_t ith0 = ith % nth0;
+    const int64_t ith1 = ith / nth0;
+
+    const int64_t dr0 = (nr0 + nth0 - 1)/nth0;
+    const int64_t dr1 = (nr1 + nth1 - 1)/nth1;
+
+    const int64_t ir010 = dr0*ith0;
+    const int64_t ir011 = MIN(ir010 + dr0, nr0);
+
+    const int64_t ir110 = dr1*ith1;
+    const int64_t ir111 = MIN(ir110 + dr1, nr1);
+
+    enum ggml_unary_op op = (enum ggml_unary_op) dst->op_params[0];
+
+    for (int64_t ir1 = ir110; ir1 < ir111; ++ir1) {
+        const char * src1_col = (const char *) wdata + ir1*row_size;
+        float * dst_col = (float *) ((char *) dst->data + ir1*nb1);
+
+        for (int64_t ir0 = ir010; ir0 < ir011; ++ir0) {
+            float gate;
+            float up;
+
+            vec_dot(ne00, &gate, 0, (const char *)src0_2_data + ir0*nb01, 0, src1_col, 0, 1);
+            vec_dot(ne00, &up,   0, (const char *)src0_1_data + ir0*nb01, 0, src1_col, 0, 1);
+
+            dst_col[ir0] = ggml_up_gate_apply_gate_f32(op, gate, limit) *
+                           ggml_up_gate_apply_up_f32(op, up, limit);
+        }
+    }
 
 }
 #endif
@@ -22130,6 +23422,37 @@ static void ggml_compute_forward_argsort(
 
 // ggml_compute_forward_argsort_thresh
 
+static atomic_int g_ggml_smart_expert_report_init = 0;
+static _Atomic(uint64_t) g_ggml_smart_expert_rows = 0;
+static _Atomic(uint64_t) g_ggml_smart_expert_optional_slots = 0;
+static _Atomic(uint64_t) g_ggml_smart_expert_dropped_slots = 0;
+static _Atomic(uint64_t) g_ggml_smart_expert_invalid_mass_rows = 0;
+
+static void ggml_smart_expert_report(void) {
+    const uint64_t rows = atomic_load(&g_ggml_smart_expert_rows);
+    const uint64_t optional = atomic_load(&g_ggml_smart_expert_optional_slots);
+    const uint64_t dropped = atomic_load(&g_ggml_smart_expert_dropped_slots);
+    const uint64_t invalid = atomic_load(&g_ggml_smart_expert_invalid_mass_rows);
+    fprintf(stderr,
+            "ggml_smart_expert: rows=%llu optional_slots=%llu dropped_slots=%llu drop_rate=%.4f invalid_mass_rows=%llu\n",
+            (unsigned long long) rows,
+            (unsigned long long) optional,
+            (unsigned long long) dropped,
+            optional > 0 ? (double) dropped / (double) optional : 0.0,
+            (unsigned long long) invalid);
+}
+
+static void ggml_smart_expert_report_init(
+        int min_entries, int top_k, float thresh, int mass_mode) {
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&g_ggml_smart_expert_report_init, &expected, 1)) {
+        fprintf(stderr,
+                "ggml_smart_expert: enabled mode=%s min_experts=%d top_k=%d threshold=%g\n",
+                mass_mode ? "mass" : "max_ratio", min_entries, top_k, (double) thresh);
+        atexit(ggml_smart_expert_report);
+    }
+}
+
 static void ggml_compute_forward_argsort_thresh_f32(
     const struct ggml_compute_params * params,
     struct ggml_tensor * dst) {
@@ -22147,35 +23470,63 @@ static void ggml_compute_forward_argsort_thresh_f32(
 
     int min_entries = ggml_get_op_params_i32(dst, 0);
     float thresh    = ggml_get_op_params_f32(dst, 1);
+    int top_k       = ggml_get_op_params_i32(dst, 2);
+    int mass_mode   = ggml_get_op_params_i32(dst, 3);
+    if (top_k <= 0 || top_k > ne0) {
+        top_k = (int) ne0;
+    }
+    ggml_smart_expert_report_init(min_entries, top_k, thresh, mass_mode);
 
     //if (ith == 0) printf("%s: min_entries = %d, thresh = %g\n", __func__, min_entries, (double)thresh);
 
-    for (int64_t i = ith; i < nr; i += nth) {
+    // iqk_argsort performs an O(n log k) partial sort for the selected top-k.
+    // Keep the same contiguous row partition here so each thread thresholds
+    // only rows whose sort it has already completed.
+    iqk_argsort(dst, ith, nth);
+    const int64_t rows_per_thread = (nr + nth - 1) / nth;
+    const int64_t first_row = rows_per_thread * ith;
+    const int64_t last_row = MIN(first_row + rows_per_thread, nr);
+
+    for (int64_t i = first_row; i < last_row; ++i) {
         int32_t * dst_data = (int32_t *)((char *) dst->data + i*nb1);
         const float * src_data = (float *)((char *) src0->data + i*nb01);
-
-        for (int64_t j = 0; j < ne0; j++) {
-            dst_data[j] = j;
+        float max_value = src_data[dst_data[0]];
+        float top_k_sum = 0.0f;
+        bool mass_valid = true;
+        if (mass_mode) {
+            for (int j = 0; j < top_k; ++j) {
+                const float score = src_data[dst_data[j]];
+                if (!isfinite(score)) {
+                    mass_valid = false;
+                } else {
+                    top_k_sum += MAX(0.0f, score);
+                }
+            }
+            mass_valid = mass_valid && isfinite(top_k_sum) && top_k_sum > 0.0f;
+            if (!mass_valid) {
+                atomic_fetch_add_explicit(&g_ggml_smart_expert_invalid_mass_rows,
+                        1, memory_order_relaxed);
+            }
         }
-
-        // C doesn't have a functional sort, so we do a bubble sort instead
-        for (int64_t j = 0; j < ne0; j++) {
-            for (int64_t k = j + 1; k < ne0; k++) {
-                if (src_data[dst_data[j]] < src_data[dst_data[k]]) {
-                    int32_t tmp = dst_data[j];
-                    dst_data[j] = dst_data[k];
-                    dst_data[k] = tmp;
+        //printf("Row %ld: max_value is %g, next is %g\n", i, (double)max_value, (double)src_data[dst_data[1]]);
+        uint64_t dropped_top_k = 0;
+        for (int j = min_entries; j < top_k; ++j) {
+            const bool below_threshold = mass_mode ?
+                (mass_valid && src_data[dst_data[j]] / top_k_sum < thresh) :
+                src_data[dst_data[j]] < max_value*thresh;
+            if (below_threshold) {
+                //printf("    row %ld: turning off expert %d(%d) with value %g\n", i, j, dst_data[j], (double)src_data[dst_data[j]]);
+                dst_data[j] = -1;
+                if (j < top_k) {
+                    dropped_top_k++;
                 }
             }
         }
-        float max_value = src_data[dst_data[0]];
-        //printf("Row %ld: max_value is %g, next is %g\n", i, (double)max_value, (double)src_data[dst_data[1]]);
-        for (int j = min_entries; j < ne0; ++j) {
-            if (src_data[dst_data[j]] < max_value*thresh) {
-                //printf("    row %ld: turning off expert %d(%d) with value %g\n", i, j, dst_data[j], (double)src_data[dst_data[j]]);
-                dst_data[j] = -1;
-            }
-        }
+        atomic_fetch_add_explicit(&g_ggml_smart_expert_rows, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_ggml_smart_expert_optional_slots,
+                (uint64_t) MAX(0, top_k - min_entries), memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_ggml_smart_expert_dropped_slots,
+                dropped_top_k, memory_order_relaxed);
     }
 }
 
@@ -26735,10 +28086,12 @@ static void set_numa_thread_affinity(int thread_n, int n_threads) {
         case GGML_NUMA_STRATEGY_DISTRIBUTE:
             // run thread on node_num thread_n / (threads per node)
             node_num = thread_n % g_state.numa.n_nodes;
+            tl_numa_node = node_num;
             break;
         case GGML_NUMA_STRATEGY_ISOLATE:
             // run thread on current_node
             node_num = g_state.numa.current_node;
+            tl_numa_node = node_num;
             break;
         case GGML_NUMA_STRATEGY_MIRROR:
             // block-split threads across nodes; must match ggml_numa_node_for_thread()
@@ -27121,6 +28474,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += n_as * sizeof(int32_t);               // expert execution NUMA nodes
                 } break;
             case GGML_OP_MOE_FUSED_UP_GATE:
                 {
@@ -27136,6 +28490,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += n_as * sizeof(int32_t);               // expert execution NUMA nodes
                 } break;
             case GGML_OP_FUSED_UP_GATE:
                 {
@@ -27318,6 +28673,8 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     GGML_ASSERT(cplan->work_size == 0 || cplan->work_data != NULL);
 
     int n_threads = cplan->n_threads;
+
+    ggml_numa_expert_cache_maintain();
 
     struct ggml_compute_state_shared state_shared = {
         /*.cgraph                  =*/ cgraph,

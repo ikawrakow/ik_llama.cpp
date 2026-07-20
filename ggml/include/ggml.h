@@ -933,12 +933,16 @@ extern "C" {
     GGML_API bool     ggml_numa_mirror_active(void);               // true if strategy == MIRROR and >1 node
     GGML_API void     ggml_numa_set_mirror(uint32_t flags);        // which ggml_numa_mirror_flags to mirror
     GGML_API uint32_t ggml_numa_get_mirror(void);                  // current mirror flags
-    GGML_API int      ggml_numa_node_for_thread(int ith, int nth); // block split of threads across nodes
+    GGML_API int      ggml_numa_node_for_thread(int ith, int nth); // node selected by the active NUMA strategy
     // allocate/free memory bound to a specific NUMA node (mmap + mbind + THP)
     GGML_API void *   ggml_numa_alloc(size_t size, int node);
     GGML_API void     ggml_numa_free(void * ptr, size_t size);
     // best-effort migrate an already-populated range onto a node (mbind + MPOL_MF_MOVE)
     GGML_API void     ggml_numa_bind(void * ptr, size_t size, int node);
+    // optional deterministic random prefill for the whole-expert secondary cache
+    GGML_API bool     ggml_numa_expert_cache_prefill_active(void);
+    GGML_API void     ggml_numa_expert_cache_prefill_begin(size_t total_expert_bytes);
+    GGML_API void     ggml_numa_expert_cache_prefill_tensor(const struct ggml_tensor * tensor, int n_experts);
     // attach/detach per-node copies to a tensor. node_data must have ggml_numa_node_count() entries.
     GGML_API void     ggml_numa_tensor_set_mirror(struct ggml_tensor * tensor, void * const * node_data);
     GGML_API void     ggml_numa_tensor_clear_mirror(struct ggml_tensor * tensor);
