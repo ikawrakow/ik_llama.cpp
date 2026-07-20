@@ -584,6 +584,11 @@ struct llama_model {
     std::unique_ptr<reload_info> reload;
 };
 
+// Recompute the load-time-derived combined wkv_b (computed_wkv_b) of layer il
+// from the current wk_b/wv_b tensor data (hot-swap support). Defined in
+// llama.cpp next to llm_prepare_mla.
+bool llm_refresh_computed_wkv_b(llama_model & model, int il);
+
 struct llama_lora_weight {
     struct ggml_tensor * a = nullptr;
     struct ggml_tensor * b = nullptr;

@@ -3171,6 +3171,134 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     ggml_free(ctx);
 }
 
+// Recompute the load-time-derived combined wkv_b (computed_wkv_b) of one layer
+// from the current wk_b/wv_b tensor data. Used by the hot-swap reload: the
+// MLA>1 prompt-processing path consumes the derived wkv_b, so after attn_k_b /
+// attn_v_b are reloaded from disk the derived tensor must be refreshed as well,
+// or evaluations would keep using weights derived from the previously loaded
+// data. Returns true when the layer has no derived wkv_b (nothing to do) or
+// when the refresh succeeded.
+bool llm_refresh_computed_wkv_b(llama_model & model, int il) {
+    if (il < 0 || il >= (int) model.layers.size()) return false;
+    auto & l = model.layers[il];
+    if (!l.computed_wkv_b || l.wkv_b != l.computed_wkv_b.get()) return true; // wkv_b is not derived
+    if (!l.wk_b || !l.wv_b) return false;
+    if (l.wk_b->extra || l.wv_b->extra) return false; // per-device split tensors are not supported here
+
+    // Same derivation as llm_prepare_mla above, for a single layer
+    auto wk_b = *l.wk_b;
+    auto wv_b = *l.wv_b;
+    wk_b.extra = nullptr;
+    wv_b.extra = nullptr;
+
+    std::vector<char> wk_buffer, wv_buffer;
+    if (!ggml_backend_buffer_is_host(l.wk_b->buffer)) {
+        wk_buffer.resize(ggml_nbytes(l.wk_b));
+        ggml_backend_tensor_get(l.wk_b, wk_buffer.data(), 0, wk_buffer.size());
+        wk_b.data = wk_buffer.data();
+    }
+    if (!ggml_backend_buffer_is_host(l.wv_b->buffer)) {
+        wv_buffer.resize(ggml_nbytes(l.wv_b));
+        ggml_backend_tensor_get(l.wv_b, wv_buffer.data(), 0, wv_buffer.size());
+        wv_b.data = wv_buffer.data();
+    }
+
+    auto n_wk = ggml_nelements(&wk_b);
+    auto n_wv = ggml_nelements(&wv_b);
+
+    size_t tot_size = 0;
+    if (wk_b.type != GGML_TYPE_F32) tot_size += n_wk*sizeof(float);
+    tot_size += n_wk*sizeof(float);                // ggml_cont(ggml_transpose(wk_b_used))
+    if (wv_b.type != GGML_TYPE_F32) tot_size += n_wv*sizeof(float);
+    tot_size += (n_wk + n_wv)*sizeof(float);       // ggml_concat
+    tot_size += (n_wk + n_wv)*sizeof(float);       // ggml_cast to new_type
+    std::vector<char> tmp_buffer(tot_size);
+
+    ggml_init_params params{ggml_tensor_overhead()*32 + ggml_graph_overhead_custom(8, false), nullptr, true};
+    auto ctx = ggml_init(params);
+    if (!ctx) return false;
+    auto graph = ggml_new_graph_custom(ctx, 8, false);
+
+    auto ptr = tmp_buffer.data();
+    auto wk_b_used = &wk_b;
+    if (wk_b.type != GGML_TYPE_F32) {
+        wk_b_used = ggml_cast(ctx, &wk_b, GGML_TYPE_F32);
+        wk_b_used->data = ptr;
+        ptr += ggml_nbytes(wk_b_used);
+    }
+    auto wk_b_transposed = ggml_cont(ctx, ggml_transpose(ctx, wk_b_used));
+    wk_b_transposed->data = ptr;
+    ptr += ggml_nbytes(wk_b_transposed);
+
+    auto wv_b_used = &wv_b;
+    if (wv_b.type != GGML_TYPE_F32) {
+        wv_b_used = ggml_cast(ctx, &wv_b, GGML_TYPE_F32);
+        wv_b_used->data = ptr;
+        ptr += ggml_nbytes(wv_b_used);
+    }
+
+    auto wkv_b_f32_3d = ggml_concat(ctx, wk_b_transposed, wv_b_used, 1);
+    wkv_b_f32_3d->data = ptr;
+    ptr += ggml_nbytes(wkv_b_f32_3d);
+
+    auto wkv_b_f32 = ggml_view_2d(ctx, wkv_b_f32_3d, wkv_b_f32_3d->ne[0], wkv_b_f32_3d->ne[1]*wkv_b_f32_3d->ne[2],
+            wkv_b_f32_3d->nb[1], 0);
+
+    auto new_type = wk_b.type == GGML_TYPE_BF16 && wv_b.type == GGML_TYPE_BF16 ? GGML_TYPE_BF16
+                  : wk_b.type == GGML_TYPE_F16  && wv_b.type == GGML_TYPE_F16  ? GGML_TYPE_F16
+                  : GGML_TYPE_Q8_0;
+
+    auto wkv_b = ggml_cast(ctx, wkv_b_f32, new_type);
+    wkv_b->data = ptr;
+    ptr += ggml_nbytes(wkv_b);
+
+    ggml_build_forward_expand(graph, wkv_b);
+
+    std::vector<uint8_t> work_data;
+    auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+    if (plan.work_size > 0) {
+        work_data.resize(plan.work_size);
+        plan.work_data = work_data.data();
+    }
+    auto status = ggml_graph_compute(graph, &plan);
+    if (status != GGML_STATUS_SUCCESS) {
+        ggml_free(ctx);
+        return false;
+    }
+
+    auto dst = l.computed_wkv_b.get();
+    if (dst->type == wkv_b->type && ggml_nbytes(dst) == ggml_nbytes(wkv_b)) {
+        ggml_backend_tensor_set(dst, wkv_b->data, 0, ggml_nbytes(wkv_b));
+    } else {
+        // The derived type/size changed (e.g. BF16 -> Q8_0 after a swap to a
+        // quantized wk_b/wv_b, or the load-time in-place host repack changed
+        // the type). Reallocate the destination buffer; the tensor object
+        // itself must be preserved (it is registered in tensors_by_name and
+        // referenced as l.wkv_b by the compute graph builder).
+        auto buft = ggml_backend_buffer_get_type(dst->buffer);
+        auto new_buf = ggml_backend_buft_alloc_buffer(buft, ggml_nbytes(wkv_b));
+        if (!new_buf) {
+            ggml_free(ctx);
+            return false;
+        }
+        ggml_backend_buffer_set_usage(new_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ggml_backend_buffer_free(dst->buffer);
+        dst->type = wkv_b->type;
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            dst->ne[i] = wkv_b->ne[i];
+            dst->nb[i] = wkv_b->nb[i];
+        }
+        dst->buffer = new_buf;
+        dst->data   = ggml_backend_buffer_get_base(new_buf);
+        ggml_backend_tensor_set(dst, wkv_b->data, 0, ggml_nbytes(wkv_b));
+    }
+    if (ggml_backend_buffer_is_host(dst->buffer)) {
+        iqk_modify_tensor(dst);
+    }
+    ggml_free(ctx);
+    return true;
+}
+
 static void llm_prepare_openpangu_param_sinks(llama_model & model) {
     if (model.arch != LLM_ARCH_OPENPANGU) return;
 
