@@ -35,6 +35,40 @@ static __global__ void batched_mix_f32(
     dst[index] = sum;
 }
 
+bool ggml_cuda_batched_mix_is_supported(const ggml_tensor * op) {
+    const ggml_tensor * r   = op->src[0];
+    const ggml_tensor * mix = op->src[1];
+    if (r == nullptr || mix == nullptr) {
+        return false;
+    }
+    for (int i = 2; i < GGML_MAX_SRC; ++i) {
+        if (op->src[i] != nullptr) {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < GGML_MAX_OP_PARAMS/sizeof(op->op_params[0]); ++i) {
+        if (op->op_params[i] != 0) {
+            return false;
+        }
+    }
+    if (!ggml_batched_mix_f32_layout_is_valid(r) ||
+            !ggml_batched_mix_f32_layout_is_valid(mix) ||
+            !ggml_batched_mix_f32_layout_is_valid(op)) {
+        return false;
+    }
+    if (r->ne[0] <= 0 || r->ne[1] < 1 || r->ne[1] > 8 || r->ne[2] <= 0 ||
+            r->ne[3] != 1 || mix->ne[0] != r->ne[1] || mix->ne[1] <= 0 ||
+            mix->ne[2] != r->ne[2] || mix->ne[3] != 1) {
+        return false;
+    }
+    if (op->ne[0] != r->ne[0] || op->ne[1] != mix->ne[1] ||
+            op->ne[2] != r->ne[2] || op->ne[3] != 1 || !ggml_is_contiguous(op)) {
+        return false;
+    }
+    constexpr int64_t block_size = 256;
+    return ggml_nelements(op) <= (int64_t) INT_MAX*block_size;
+}
+
 void ggml_cuda_op_batched_mix(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * r   = dst->src[0];
     const ggml_tensor * mix = dst->src[1];

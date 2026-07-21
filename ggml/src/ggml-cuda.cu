@@ -8,7 +8,6 @@
 #include "ggml-cuda.h"
 #include "ggml.h"
 #include "ggml-backend-impl.h"
-#include "ggml-batched-mix.h"
 
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -4749,23 +4748,6 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     return GGML_STATUS_SUCCESS;
 }
 
-static bool ggml_cuda_fused_rms_norm_add_f32_data_is_aligned(const ggml_tensor * tensor) {
-    return tensor->view_offs % sizeof(float) == 0 &&
-           (tensor->data == nullptr || (uintptr_t) tensor->data % sizeof(float) == 0);
-}
-
-static bool ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(const ggml_tensor * tensor) {
-    if (!ggml_cuda_fused_rms_norm_add_f32_data_is_aligned(tensor)) {
-        return false;
-    }
-    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
-        if (tensor->ne[i] > 1 && tensor->nb[i] % sizeof(float) != 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
 GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_tensor * op) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
@@ -5032,25 +5014,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             return ggml_is_contiguous(op->src[0]) && op->ne[0] % WARP_SIZE == 0;
             break;
         case GGML_OP_FUSED_RMS_NORM_ADD:
-            return op->src[0]->type == GGML_TYPE_F32 &&
-                   op->src[1]->type == GGML_TYPE_F32 &&
-                   op->src[2]->type == GGML_TYPE_F32 &&
-                   op->type == GGML_TYPE_F32 &&
-                   ggml_cuda_fused_rms_norm_add_shape_is_supported(op, cuda_ctx->device) &&
-                   op->src[0]->nb[0] == sizeof(float) &&
-                   op->src[1]->nb[0] == sizeof(float) &&
-                   op->src[2]->nb[0] == sizeof(float) &&
-                   ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(op->src[0]) &&
-                   ggml_cuda_fused_rms_norm_add_f32_data_is_aligned(op->src[1]) &&
-                   ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(op->src[2]) &&
-                   ggml_are_same_shape(op->src[0], op->src[2]) &&
-                   ggml_are_same_shape(op->src[0], op) &&
-                   op->src[0]->ne[0] == op->src[1]->ne[0] &&
-                   op->src[1]->ne[1] == 1 &&
-                   op->src[1]->ne[2] == 1 &&
-                   op->src[1]->ne[3] == 1 &&
-                   ggml_is_contiguous(op->src[1]) &&
-                   ggml_is_contiguous(op);
+            return ggml_cuda_fused_rms_norm_add_is_supported(op, cuda_ctx->device);
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
@@ -5079,29 +5043,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_ROPE_FAST:
         case GGML_OP_ROPE_CACHE:
             return true;
-        case GGML_OP_ROPE_OFFSET: {
-            const int32_t * params = (const int32_t *) op->op_params;
-            const int32_t n_dims = params[1];
-            const int32_t rot_off = params[15];
-            return op->src[0]->type == GGML_TYPE_F32 &&
-                   op->type == op->src[0]->type &&
-                   ggml_is_contiguous(op->src[0]) &&
-                   op->src[0]->ne[3] == 1 &&
-                   op->src[1] != nullptr &&
-                   op->src[1]->type == GGML_TYPE_I32 &&
-                   ggml_is_vector(op->src[1]) &&
-                   op->src[1]->ne[0] == op->src[0]->ne[2] &&
-                   ggml_is_contiguous(op->src[1]) &&
-                   op->src[2] == nullptr &&
-                   params[2] == GGML_ROPE_TYPE_NEOX &&
-                   op->src[0]->ne[0] % 2 == 0 &&
-                   // rope_neox maps row-width tiles to grid.y and uses signed-int flat indices.
-                   op->src[0]->ne[0] <= 2LL*CUDA_ROPE_BLOCK_SIZE*CUDA_ROPE_MAX_GRID_Y &&
-                   ggml_nelements(op->src[0]) <= std::numeric_limits<int>::max() &&
-                   n_dims > 0 && n_dims % 2 == 0 &&
-                   rot_off >= 0 && rot_off % 2 == 0 &&
-                   (int64_t) rot_off + n_dims <= op->src[0]->ne[0];
-        }
+        case GGML_OP_ROPE_OFFSET:
+            return ggml_cuda_rope_offset_is_supported(op);
         case GGML_OP_FUSED_NORM:
             return ggml_is_contiguous(op->src[0]);
         //case GGML_OP_ROPE:
@@ -5173,67 +5116,10 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
                    sink_s >= 1 && sink_s <= 8 && op->src[0]->ne[0] == (int64_t) sink_s*sink_s;
         }
-        case GGML_OP_LATENT_ATTN: {
-            const ggml_tensor * cache = op->src[1];
-            const ggml_tensor * pk    = op->src[2];
-            const ggml_tensor * pv    = op->src[3];
-            const ggml_tensor * mask  = op->src[4];
-            const ggml_tensor * indices = op->src[5];
-            const int mode = op->op_params[4];
-            if (mode != 0 && mode != 1) return false;
-            if (mode == 0 && indices) return false;
-            if (mode == 1 && (!indices || indices->type != GGML_TYPE_I32 ||
-                              !ggml_is_contiguous(indices))) return false;
-            if (op->src[0]->type != GGML_TYPE_F32) return false;    // q
-            if (cache->type != GGML_TYPE_F32 && cache->type != GGML_TYPE_F16 &&
-                cache->type != GGML_TYPE_Q8_0) return false;
-            // Both dense (cuBLAS) and indexed (row-gather) F32/F16 readers index each cache row
-            // as a packed element array, so require a packed inner dimension in either mode.
-            if (cache->type == GGML_TYPE_F32 || cache->type == GGML_TYPE_F16) {
-                const size_t element_size = ggml_type_size(cache->type);
-                if (cache->nb[0] != element_size) return false;
-                // The dense path also feeds cuBLAS, which needs a byte row stride that is exactly
-                // representable as a valid int-sized leading dimension.
-                if (mode == 0) {
-                    if (cache->nb[1] % element_size != 0) return false;
-                    const size_t lda = cache->nb[1] / element_size;
-                    if (lda < (size_t) cache->ne[0] ||
-                        lda > (size_t) std::numeric_limits<int>::max()) return false;
-                }
-            }
-            // quantized caches are dequantized flat, so their rows must be contiguous
-            if (ggml_is_quantized(cache->type) &&
-                cache->nb[1] != ggml_row_size(cache->type, cache->ne[0])) return false;
-            if (pk && (pk->type != GGML_TYPE_F32 && pk->type != GGML_TYPE_F16)) return false;
-            if (pv && (pv->type != GGML_TYPE_F32 && pv->type != GGML_TYPE_F16)) return false;
-            // The kernel forms mask rows by float-pointer arithmetic (nb[1]/sizeof(float)), so a
-            // non-float-aligned row stride would read the wrong address and diverge from CPU.
-            if (mask && (mask->type != GGML_TYPE_F32 || mask->nb[0] != sizeof(float) ||
-                         mask->nb[1] % sizeof(float) != 0)) return false;
-            return true;
-        }
-        case GGML_OP_BATCHED_MIX: {
-            const ggml_tensor * r   = op->src[0];
-            const ggml_tensor * mix = op->src[1];
-            if (r == nullptr || mix == nullptr) return false;
-            for (int i = 2; i < GGML_MAX_SRC; ++i) {
-                if (op->src[i] != nullptr) return false;
-            }
-            for (size_t i = 0; i < GGML_MAX_OP_PARAMS/sizeof(op->op_params[0]); ++i) {
-                if (op->op_params[i] != 0) return false;
-            }
-            if (!ggml_batched_mix_f32_layout_is_valid(r) ||
-                    !ggml_batched_mix_f32_layout_is_valid(mix) ||
-                    !ggml_batched_mix_f32_layout_is_valid(op)) return false;
-            if (r->ne[0] <= 0 || r->ne[1] < 1 || r->ne[1] > 8 || r->ne[2] <= 0 ||
-                    r->ne[3] != 1 || mix->ne[0] != r->ne[1] || mix->ne[1] <= 0 ||
-                    mix->ne[2] != r->ne[2] || mix->ne[3] != 1) return false;
-            if (op->ne[0] != r->ne[0] || op->ne[1] != mix->ne[1] ||
-                    op->ne[2] != r->ne[2] || op->ne[3] != 1) return false;
-            if (!ggml_is_contiguous(op)) return false;
-            constexpr int64_t block_size = 256;
-            return ggml_nelements(op) <= (int64_t) std::numeric_limits<int>::max()*block_size;
-        }
+        case GGML_OP_LATENT_ATTN:
+            return ggml_cuda_latent_attn_is_supported(op);
+        case GGML_OP_BATCHED_MIX:
+            return ggml_cuda_batched_mix_is_supported(op);
         case GGML_OP_FLASH_ATTN_EXT:
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;

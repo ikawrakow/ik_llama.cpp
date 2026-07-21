@@ -2,6 +2,8 @@
 #include "convert.cuh"
 #include "latent_attn.cuh"
 
+#include <climits>
+
 // Latent attention over a packed K/V cache with an independently-visible K/V prefix
 // (ggml_latent_attn_prefix_ext, dense mode 0). CUDA path for F32, F16, and Q8_0 caches
 // (Q8_0 is dequantized once to a contiguous F16 buffer, then takes the F16 path).
@@ -13,6 +15,46 @@
 //   out[Dv, QT] = cacheV @ W_cache + prefix_v^T @ W_prefix
 // where cacheV is the value slice cache[dv_off .. dv_off+Dv, :] read in place (no
 // transpose, no cont). Query columns are tiled to bound the [P+N, cw] score buffer.
+
+static __device__ float latent_block_reduce_max(float value, float * buf) {
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int warp = threadIdx.x / WARP_SIZE;
+
+    value = warp_reduce_max(value);
+    if (blockDim.x > WARP_SIZE) {
+        __syncthreads();
+        if (warp == 0) {
+            buf[lane] = -INFINITY;
+        }
+        __syncthreads();
+        if (lane == 0) {
+            buf[warp] = value;
+        }
+        __syncthreads();
+        value = warp_reduce_max(buf[lane]);
+    }
+    return value;
+}
+
+static __device__ float latent_block_reduce_sum(float value, float * buf) {
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int warp = threadIdx.x / WARP_SIZE;
+
+    value = warp_reduce_sum(value);
+    if (blockDim.x > WARP_SIZE) {
+        __syncthreads();
+        if (warp == 0) {
+            buf[lane] = 0.0f;
+        }
+        __syncthreads();
+        if (lane == 0) {
+            buf[warp] = value;
+        }
+        __syncthreads();
+        value = warp_reduce_sum(buf[lane]);
+    }
+    return value;
+}
 
 // Fused mask-add + column softmax. One block per score column. scores is column-major
 // [PN, cw] (a column's PN logits are contiguous). The cache segment (rows >= P) gets the
@@ -35,7 +77,7 @@ static __global__ void k_latent_mask_softmax(
     const int t = (c0 + col) % T;
     const float * mrow = mask ? mask + (size_t) t*mask_nb1_f : nullptr;
 
-    extern __shared__ float shbuf[]; // nth floats
+    extern __shared__ float shbuf[]; // WARP_SIZE floats
 
     // pass 1: max of (logit + mask)
     float local_max = -INFINITY;
@@ -45,14 +87,7 @@ static __global__ void k_latent_mask_softmax(
         if (mrow && k >= P) v += mrow[k - P];
         local_max = fmaxf(local_max, v);
     }
-    shbuf[tid] = local_max;
-    __syncthreads();
-    for (int stride = nth/2; stride > 0; stride >>= 1) {
-        if (tid < stride) shbuf[tid] = fmaxf(shbuf[tid], shbuf[tid + stride]);
-        __syncthreads();
-    }
-    const float mx = shbuf[0];
-    __syncthreads();
+    const float mx = latent_block_reduce_max(local_max, shbuf);
 
     // pass 2: sum of exp
     float local_sum = 0.0f;
@@ -62,14 +97,8 @@ static __global__ void k_latent_mask_softmax(
         if (mrow && k >= P) v += mrow[k - P];
         local_sum += expf(v - mx);
     }
-    shbuf[tid] = local_sum;
-    __syncthreads();
-    for (int stride = nth/2; stride > 0; stride >>= 1) {
-        if (tid < stride) shbuf[tid] += shbuf[tid + stride];
-        __syncthreads();
-    }
-    const float inv = shbuf[0] > 0.0f ? 1.0f/shbuf[0] : 0.0f;
-    __syncthreads();
+    const float sum = latent_block_reduce_sum(local_sum, shbuf);
+    const float inv = sum > 0.0f ? 1.0f/sum : 0.0f;
 
     // pass 3: normalized weights
     for (int k = tid; k < PN; k += nth) {
@@ -130,31 +159,17 @@ static __global__ void k_latent_pack_q_scaled(
         amax = fmaxf(amax, fabsf(v));
     }
 
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        amax = fmaxf(amax, __shfl_down_sync(0xffffffff, amax, offset));
-    }
     extern __shared__ float shbuf[];
-    const int lane = tid & 31;
-    const int warp = tid >> 5;
-    const int nwarps = (blockDim.x + 31)/32;
-    if (lane == 0) shbuf[warp] = amax;
-    __syncthreads();
-
-    if (warp == 0) {
-        amax = lane < nwarps ? shbuf[lane] : 0.0f;
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            amax = fmaxf(amax, __shfl_down_sync(0xffffffff, amax, offset));
-        }
-        if (lane == 0) {
-            float r = 1.0f;
-            if (isfinite(amax)) {
-                while (amax/r > 65504.0f) {
-                    r *= 2.0f;
-                }
+    amax = latent_block_reduce_max(amax, shbuf);
+    if (tid == 0) {
+        float r = 1.0f;
+        if (isfinite(amax)) {
+            while (amax/r > 65504.0f) {
+                r *= 2.0f;
             }
-            restore[col] = r;
-            shbuf[0] = r;
         }
+        restore[col] = r;
+        shbuf[0] = r;
     }
     __syncthreads();
 
@@ -237,14 +252,7 @@ static __global__ void k_latent_mask_softmax_indexed(
         if (mrow && k >= P) v += mrow[idx[k - P]];
         local_max = fmaxf(local_max, v);
     }
-    shbuf[tid] = local_max;
-    __syncthreads();
-    for (int stride = nth/2; stride > 0; stride >>= 1) {
-        if (tid < stride) shbuf[tid] = fmaxf(shbuf[tid], shbuf[tid + stride]);
-        __syncthreads();
-    }
-    const float mx = shbuf[0];
-    __syncthreads();
+    const float mx = latent_block_reduce_max(local_max, shbuf);
 
     float local_sum = 0.0f;
     for (int k = tid; k < M; k += nth) {
@@ -253,14 +261,8 @@ static __global__ void k_latent_mask_softmax_indexed(
         if (mrow && k >= P) v += mrow[idx[k - P]];
         local_sum += expf(v - mx);
     }
-    shbuf[tid] = local_sum;
-    __syncthreads();
-    for (int stride = nth/2; stride > 0; stride >>= 1) {
-        if (tid < stride) shbuf[tid] += shbuf[tid + stride];
-        __syncthreads();
-    }
-    const float inv = shbuf[0] > 0.0f ? 1.0f/shbuf[0] : 0.0f;
-    __syncthreads();
+    const float sum = latent_block_reduce_sum(local_sum, shbuf);
+    const float inv = sum > 0.0f ? 1.0f/sum : 0.0f;
 
     for (int k = tid; k < M; k += nth) {
         float v = s[k];
@@ -287,6 +289,69 @@ static __global__ void k_latent_copy_out_indexed(
 }
 
 // ---- host-side small helpers -------------------------------------------------------
+
+bool ggml_cuda_latent_attn_is_supported(const ggml_tensor * op) {
+    const ggml_tensor * q       = op->src[0];
+    const ggml_tensor * cache   = op->src[1];
+    const ggml_tensor * pk      = op->src[2];
+    const ggml_tensor * pv      = op->src[3];
+    const ggml_tensor * mask    = op->src[4];
+    const ggml_tensor * indices = op->src[5];
+    if (q == nullptr || cache == nullptr) {
+        return false;
+    }
+
+    const int mode = op->op_params[4];
+    if (mode != 0 && mode != 1) {
+        return false;
+    }
+    if (mode == 0 && indices) {
+        return false;
+    }
+    if (mode == 1 && (!indices || indices->type != GGML_TYPE_I32 || !ggml_is_contiguous(indices))) {
+        return false;
+    }
+    if (q->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (cache->type != GGML_TYPE_F32 && cache->type != GGML_TYPE_F16 && cache->type != GGML_TYPE_Q8_0) {
+        return false;
+    }
+
+    // Both dense (cuBLAS) and indexed (row-gather) readers index each cache row as a packed
+    // element array. The dense path additionally requires an int-sized cuBLAS leading dimension.
+    if (cache->type == GGML_TYPE_F32 || cache->type == GGML_TYPE_F16) {
+        const size_t element_size = ggml_type_size(cache->type);
+        if (cache->nb[0] != element_size) {
+            return false;
+        }
+        if (mode == 0) {
+            if (cache->nb[1] % element_size != 0) {
+                return false;
+            }
+            const size_t lda = cache->nb[1] / element_size;
+            if (lda < (size_t) cache->ne[0] || lda > (size_t) INT_MAX) {
+                return false;
+            }
+        }
+    }
+    if (ggml_is_quantized(cache->type) &&
+            cache->nb[1] != ggml_row_size(cache->type, cache->ne[0])) {
+        return false;
+    }
+    if (pk && pk->type != GGML_TYPE_F32 && pk->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (pv && pv->type != GGML_TYPE_F32 && pv->type != GGML_TYPE_F16) {
+        return false;
+    }
+    // Mask rows are addressed as float arrays, so their row stride must be float-aligned.
+    if (mask && (mask->type != GGML_TYPE_F32 || mask->nb[0] != sizeof(float) ||
+                 mask->nb[1] % sizeof(float) != 0)) {
+        return false;
+    }
+    return true;
+}
 
 // f32 GEMM path: C[m,n] = alpha * op(A) @ op(B) + beta * C, all float.
 static void sgemm(ggml_backend_cuda_context & ctx, cublasOperation_t ta, cublasOperation_t tb,
@@ -433,7 +498,7 @@ static void ggml_cuda_op_latent_attn_indexed(ggml_backend_cuda_context & ctx, gg
     }
 
     constexpr int nth = 256;
-    const size_t softmax_shmem = nth*sizeof(float);
+    const size_t softmax_shmem = WARP_SIZE*sizeof(float);
     for (int first = 0; first < T; first += max_rows) {
         const int rows = std::min(max_rows, T - first);
         const int cols = rows*H;
@@ -615,7 +680,7 @@ void ggml_cuda_op_latent_attn(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     }
 
     const int sm_nth = 256;
-    const size_t sm_shmem = sm_nth*sizeof(float);
+    const size_t sm_shmem = WARP_SIZE*sizeof(float);
 
     for (int64_t c0 = 0; c0 < QT; c0 += cw) {
         const int64_t cwn = std::min<int64_t>(cw, QT - c0);

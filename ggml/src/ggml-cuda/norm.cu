@@ -910,6 +910,32 @@ bool ggml_cuda_fused_rms_norm_add_shape_is_supported(const ggml_tensor * dst, in
            nrows <= ggml_cuda_info().devices[device].max_grid_x;
 }
 
+bool ggml_cuda_fused_rms_norm_add_is_supported(const ggml_tensor * dst, int device) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src2 = dst->src[2];
+    if (src0 == nullptr || src1 == nullptr || src2 == nullptr) {
+        return false;
+    }
+    return src0->type == GGML_TYPE_F32 &&
+           src1->type == GGML_TYPE_F32 &&
+           src2->type == GGML_TYPE_F32 &&
+           dst->type == GGML_TYPE_F32 &&
+           ggml_cuda_fused_rms_norm_add_shape_is_supported(dst, device) &&
+           src0->nb[0] == sizeof(float) &&
+           src1->nb[0] == sizeof(float) &&
+           src2->nb[0] == sizeof(float) &&
+           ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(src0) &&
+           ggml_cuda_fused_rms_norm_add_f32_data_is_aligned(src1) &&
+           ggml_cuda_fused_rms_norm_add_f32_layout_is_aligned(src2) &&
+           ggml_are_same_shape(src0, src2) &&
+           ggml_are_same_shape(src0, dst) &&
+           src0->ne[0] == src1->ne[0] &&
+           src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+           ggml_is_contiguous(src1) &&
+           ggml_is_contiguous(dst);
+}
+
 void ggml_cuda_op_fused_rms_norm_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];

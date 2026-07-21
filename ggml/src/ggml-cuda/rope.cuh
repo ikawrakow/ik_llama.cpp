@@ -3,6 +3,7 @@
 #define CUDA_ROPE_BLOCK_SIZE 256
 #define CUDA_ROPE_MAX_GRID_Y 65535
 
+bool ggml_cuda_rope_offset_is_supported(const ggml_tensor * op);
 void ggml_cuda_op_rope(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_rope_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst);

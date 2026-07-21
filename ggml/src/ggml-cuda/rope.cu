@@ -634,6 +634,34 @@ static void rope_vision_cuda(
     }
 }
 
+bool ggml_cuda_rope_offset_is_supported(const ggml_tensor * op) {
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    if (src0 == nullptr || src1 == nullptr) {
+        return false;
+    }
+
+    const int32_t * params = (const int32_t *) op->op_params;
+    const int32_t n_dims = params[1];
+    const int32_t rot_off = params[15];
+    return src0->type == GGML_TYPE_F32 &&
+           op->type == src0->type &&
+           ggml_is_contiguous(src0) &&
+           src0->ne[3] == 1 &&
+           src1->type == GGML_TYPE_I32 &&
+           ggml_is_vector(src1) &&
+           src1->ne[0] == src0->ne[2] &&
+           ggml_is_contiguous(src1) &&
+           op->src[2] == nullptr &&
+           params[2] == GGML_ROPE_TYPE_NEOX &&
+           src0->ne[0] % 2 == 0 &&
+           src0->ne[0] <= 2LL*CUDA_ROPE_BLOCK_SIZE*CUDA_ROPE_MAX_GRID_Y &&
+           ggml_nelements(src0) <= std::numeric_limits<int>::max() &&
+           n_dims > 0 && n_dims % 2 == 0 &&
+           rot_off >= 0 && rot_off % 2 == 0 &&
+           (int64_t) rot_off + n_dims <= src0->ne[0];
+}
+
 template <bool forward>
 void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
@@ -641,15 +669,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src2 = dst->src[2];
 
     if (dst->op == GGML_OP_ROPE_OFFSET) {
-        GGML_ASSERT(src0->type == GGML_TYPE_F32);
-        GGML_ASSERT(ggml_is_contiguous(src0));
-        GGML_ASSERT(src0->ne[3] == 1);
-        GGML_ASSERT(src1 != nullptr);
-        GGML_ASSERT(src1->type == GGML_TYPE_I32);
-        GGML_ASSERT(ggml_is_vector(src1));
-        GGML_ASSERT(src1->ne[0] == src0->ne[2]);
-        GGML_ASSERT(ggml_is_contiguous(src1));
-        GGML_ASSERT(src2 == nullptr);
+        GGML_ASSERT(ggml_cuda_rope_offset_is_supported(dst));
     }
 
     const float * src0_d = (const float *)src0->data;
@@ -677,16 +697,6 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
     const int rot_off    = dst->op == GGML_OP_ROPE_OFFSET ? ((int32_t *) dst->op_params)[15] : 0;
     mrope_sections sections;
-
-    if (dst->op == GGML_OP_ROPE_OFFSET) {
-        GGML_ASSERT(mode == GGML_ROPE_TYPE_NEOX);
-        GGML_ASSERT(src0->ne[0] % 2 == 0);
-        GGML_ASSERT(n_dims > 0 && n_dims % 2 == 0);
-        GGML_ASSERT(rot_off >= 0 && rot_off % 2 == 0);
-        GGML_ASSERT((int64_t) rot_off + n_dims <= src0->ne[0]);
-        GGML_ASSERT(src0->ne[0] <= 2LL*CUDA_ROPE_BLOCK_SIZE*CUDA_ROPE_MAX_GRID_Y);
-        GGML_ASSERT(ggml_nelements(src0) <= std::numeric_limits<int>::max());
-    }
 
     // RoPE alteration for extended context
     float freq_base;

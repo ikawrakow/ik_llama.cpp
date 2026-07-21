@@ -12,6 +12,7 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
 void ggml_cuda_op_fused_rms_norm_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 bool ggml_cuda_fused_rms_norm_add_shape_is_supported(const ggml_tensor * dst, int device);
+bool ggml_cuda_fused_rms_norm_add_is_supported(const ggml_tensor * dst, int device);
 
 void ggml_cuda_op_fused_add_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * add, ggml_tensor * dst);
 
