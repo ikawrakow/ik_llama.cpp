@@ -906,6 +906,12 @@ GGML_CALL static bool ggml_backend_cpu_supports_op(ggml_backend_t backend, const
         case GGML_OP_MUL_MAT:
             return true;
             //return op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == ggml_internal_get_type_traits(op->src[0]->type).vec_dot_type;
+        case GGML_OP_INDEXER_TOPK:
+#ifdef GGML_USE_IQK_MULMAT
+            return true;
+#else
+            return false;
+#endif
         default:
             return true;
     }

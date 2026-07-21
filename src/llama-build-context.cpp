@@ -133,6 +133,15 @@ void llm_build_context::free() {
     }
 }
 
+bool llm_build_context::supports_op(const ggml_tensor * op) const {
+    for (ggml_backend_t backend : lctx.backends) {
+        if (ggml_backend_supports_op(backend, op)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 ggml_cgraph * llm_build_context::build_k_shift() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(n_tokens), false);
 

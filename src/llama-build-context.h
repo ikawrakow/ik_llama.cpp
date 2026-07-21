@@ -119,6 +119,8 @@ struct llm_build_context {
 
     void free();
 
+    bool supports_op(const ggml_tensor * op) const;
+
     ggml_cgraph * build_k_shift();
 
     ggml_cgraph * build_s_copy();
