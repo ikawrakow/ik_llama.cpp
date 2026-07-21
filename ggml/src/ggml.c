@@ -3308,8 +3308,10 @@ inline static void ggml_vec_relu_f32 (const int n, float * y, const float * x) {
 inline static void ggml_vec_leaky_relu_f32 (const int n, float * y, const float * x, const float ns) { for (int i = 0; i < n; ++i) y[i] = ((x[i] > 0.f) ? x[i] : 0.f) + ns * ((x[i] < 0.0f) ? x[i] : 0.f); }
 inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = 1.f / (1.f + expf(-x[i])); }
 inline static float ggml_compute_softplus_f32(const float x) { return x > 20.0f ? x : logf(1.0f + expf(x)); }
+inline static float ggml_compute_sqrt_softplus_f32(const float x) { return sqrtf(ggml_compute_softplus_f32(x)); }
 inline static void ggml_vec_exp_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = expf(x[i]); }
 inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]); }
+inline static void ggml_vec_sqrt_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_sqrt_softplus_f32(x[i]); }
 // TODO: optimize performance
 inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
 inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
@@ -4492,9 +4494,10 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "GELU_ERF",
     "EXP",
     "SOFTPLUS",
+    "SQRT_SOFTPLUS",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 18, "GGML_UNARY_OP_COUNT != 18");
+static_assert(GGML_UNARY_OP_COUNT == 19, "GGML_UNARY_OP_COUNT != 19");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
@@ -7175,7 +7178,19 @@ struct ggml_tensor * ggml_softplus(
 struct ggml_tensor * ggml_softplus_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
-    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SOFTPLUS);
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SQRT_SOFTPLUS);
+}
+
+struct ggml_tensor * ggml_sqrt_softplus(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_SQRT_SOFTPLUS);
+}
+
+struct ggml_tensor * ggml_sqrt_softplus_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SQRT_SOFTPLUS);
 }
 
 // ggml_gelu
@@ -15930,6 +15945,53 @@ static void ggml_compute_forward_softplus(
     }
 }
 
+// ggml_compute_forward_sqrt_softplus
+
+static void ggml_compute_forward_sqrt_softplus_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    assert(ggml_is_contiguous_1(src0));
+    assert(ggml_is_contiguous_1(dst));
+    assert(ggml_are_same_shape(src0, dst));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src0->ne[0];
+    const int nr = ggml_nrows(src0);
+
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        ggml_vec_sqrt_softplus_f32(nc,
+                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
+                (float *) ((char *) src0->data + i1*(src0->nb[1])));
+    }
+}
+
+static void ggml_compute_forward_sqrt_softplus(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_sqrt_softplus_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_gelu
 
 static void ggml_compute_forward_gelu_f32(
@@ -23688,7 +23750,7 @@ static void ggml_compute_forward_hc_post_f32(
     float r[8];
 
     int T = x->ne[1];
-    const int i0_chunk = 64;
+    //const int i0_chunk = 64;
     //if (T < nth && ne0 > i0_chunk && ne0 % i0_chunk == 0) {
     //    int ne0_64 = ne0/i0_chunk;
     //    int nchunk = T*ne0_64;
@@ -24053,6 +24115,10 @@ static void ggml_compute_forward_unary(
         case GGML_UNARY_OP_SOFTPLUS:
             {
                 ggml_compute_forward_softplus(params, dst);
+            } break;
+        case GGML_UNARY_OP_SQRT_SOFTPLUS:
+            {
+                ggml_compute_forward_sqrt_softplus(params, dst);
             } break;
         default:
             {
@@ -26819,6 +26885,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                         {
                             GGML_ABORT("fatal error"); // TODO: not implemented
                         }
+                    case GGML_UNARY_OP_SQRT_SOFTPLUS:
+                        {
+                            GGML_ABORT("fatal error"); // TODO: not implemented
+                        }
                     case GGML_UNARY_OP_SILU:
                         {
                             // necessary for llama
@@ -27371,6 +27441,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SOFTPLUS:
+                case GGML_UNARY_OP_SQRT_SOFTPLUS:
                 case GGML_UNARY_OP_SWIGLU:
                 case GGML_UNARY_OP_SWIGLU_OAI:
                     {

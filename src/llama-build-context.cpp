@@ -1345,7 +1345,8 @@ llm_expert_gating_func_type   gating_op,
             } break;
         case LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS:
             {
-                probs = ggml_sqrt(ctx, ggml_softplus(ctx, logits)); // [n_expert, n_tokens]
+                //probs = ggml_sqrt(ctx, ggml_softplus(ctx, logits)); // [n_expert, n_tokens]
+                probs = ggml_sqrt_softplus(ctx, logits); // [n_expert, n_tokens]
             } break;
         default:
             GGML_ABORT("fatal error");

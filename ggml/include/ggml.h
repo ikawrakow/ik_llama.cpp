@@ -733,6 +733,7 @@ extern "C" {
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_SOFTPLUS,
+        GGML_UNARY_OP_SQRT_SOFTPLUS,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1226,6 +1227,14 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_softplus_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sqrt_softplus(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sqrt_softplus_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 

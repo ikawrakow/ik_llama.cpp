@@ -3836,6 +3836,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_SOFTPLUS:
                     ggml_cuda_op_softplus(ctx, dst);
                     break;
+                case GGML_UNARY_OP_SQRT_SOFTPLUS:
+                    ggml_cuda_op_sqrt_softplus(ctx, dst);
+                    break;
                 default:
                     return -1;
             }
@@ -4727,6 +4730,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SOFTPLUS:
+                case GGML_UNARY_OP_SQRT_SOFTPLUS:
                 case GGML_UNARY_OP_NEG:
                     return ggml_is_contiguous(op->src[0]);
                 default:
@@ -4838,6 +4842,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                         return true;
+                    case GGML_TYPE_I32:
+                        return op->src[0]->type == op->type;
                     default:
                         return false;
                 }

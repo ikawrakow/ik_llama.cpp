@@ -812,7 +812,7 @@ static ggml_tensor * build_hca_compressed_kv_from_state(
     ggml_tensor * weights = ggml_soft_max(ctx0, scores);
     ggml_tensor * comp = ggml_mul(ctx0, values, weights);
     comp = ggml_sum_rows(ctx0, comp);
-    comp = ggml_reshape_4d(ctx0, comp, comp->ne[1], 1, comp->ne[2], comp->ne[3]);
+    comp = ggml_reshape_3d(ctx0, comp, comp->ne[1], comp->ne[2], comp->ne[3]);
     //comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
     llm.cb(comp, "hca_comp_merge", il);
 
@@ -901,7 +901,8 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     ggml_tensor * weights = ggml_soft_max(ctx0, scores);
     ggml_tensor * comp = ggml_mul(ctx0, values, weights);
     comp = ggml_sum_rows(ctx0, comp);
-    comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
+    //comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
+    comp = ggml_reshape_3d(ctx0, comp, comp->ne[1], comp->ne[2], comp->ne[3]);
     llm.cb(comp, tag, il);
 
     comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
