@@ -863,8 +863,8 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     GGML_ASSERT(state_read_idxs != nullptr);
 
     // Why do we need this?
-    //kv_state = dsv4_append_zero_row(ctx0, kv_state, false);
-    //score_state = dsv4_append_zero_row(ctx0, score_state, true);
+    kv_state = dsv4_append_zero_row(ctx0, kv_state, false);
+    score_state = dsv4_append_zero_row(ctx0, score_state, true);
 
     auto kv_state_prev = ggml_view_4d(ctx0, kv_state, n_embd_head, kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
             kv_state->nb[1], kv_state->nb[2], kv_state->nb[3], 0);
