@@ -136,7 +136,7 @@ static ggml_tensor * dsv4_build_raw_mask_view(
         int64_t        n_kv,
         int64_t        n_tokens,
         int64_t        n_stream,
-        const llm_build_cb & cb) {
+        const llm_build_cb & cb, int il) {
     const int64_t n_tokens_stream = n_stream > 0 ? n_tokens/n_stream : n_tokens;
     const int64_t n_rows_stream = GGML_PAD(n_kv, 256);
 
@@ -144,6 +144,7 @@ static ggml_tensor * dsv4_build_raw_mask_view(
         auto base = ggml_view_2d(ctx, mask, n_kv, n_tokens, mask->nb[1], 0);
         if (!ggml_is_contiguous(base)) {
             base = ggml_cont(ctx, base);
+            cb(base, "mask_base", il);
         }
         return n_stream == 1 ? base : dsv4_build_mask_stream_view(ctx, base, n_stream, n_tokens);
         //auto base = mask->ne[0] == n_kv && mask->ne[1] == n_tokens ? mask
@@ -156,6 +157,7 @@ static ggml_tensor * dsv4_build_raw_mask_view(
     if (n_stream <= 0 || n_tokens % n_stream != 0 || raw_k_read_idxs->ne[0] < n_rows_stream*n_stream) {
         //printf("%s(Oops): %d, %d, %d\n", __func__, n_stream <= 0, n_tokens % n_stream != 0, raw_k_read_idxs->ne[0] < n_rows_stream*n_stream);
         ggml_tensor * base = ggml_cont(ctx, ggml_view_2d(ctx, mask, n_kv, n_tokens, mask->nb[1], 0));
+        cb(base, "mask_base1", il);
         return dsv4_build_mask_stream_view(ctx, base, std::max<int64_t>(1, n_stream), n_tokens);
     }
 
@@ -853,28 +855,42 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     GGML_ASSERT(n_blocks > 0);
     GGML_ASSERT(state_read_idxs != nullptr);
 
+    // Why do we need this?
     kv_state = dsv4_append_zero_row(ctx0, kv_state, false);
     score_state = dsv4_append_zero_row(ctx0, score_state, true);
+
+    //auto kv_state_prev = ggml_view_4d(ctx0, kv_state, n_embd_head, kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
+    //        kv_state->nb[1], kv_state->nb[2], kv_state->nb[3], 0);
+    //auto kv_state_cur = ggml_view_4d(ctx0, kv_state, n_embd_head, kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
+    //        kv_state->nb[1], kv_state->nb[2], kv_state->nb[3], ggml_row_size(kv_state->type, n_embd_head));
+    //auto score_state_prev = ggml_view_4d(ctx0, score_state, n_embd_head, score_state->ne[1], score_state->ne[2], score_state->ne[3],
+    //        score_state->nb[1], score_state->nb[2], score_state->nb[3], 0);
+    //auto score_state_cur  = ggml_view_4d(ctx0, score_state, n_embd_head, score_state->ne[1], score_state->ne[2], score_state->ne[3],
+    //        score_state->nb[1], score_state->nb[2], score_state->nb[3], ggml_row_size(score_state->type, n_embd_head));
 
     ggml_tensor * prev_idxs = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, 0);
     ggml_tensor * cur_idxs  = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, ratio * n_blocks);
 
     ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state, prev_idxs);
     kv_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_prev, n_embd_head, ratio * n_blocks, kv_prev->nb[1], 0));
+    //ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state_prev, prev_idxs);
     kv_prev = ggml_reshape_3d(ctx0, kv_prev, n_embd_head, ratio, n_blocks);
 
     ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state, prev_idxs);
     score_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, score_prev, n_embd_head, ratio * n_blocks, score_prev->nb[1], 0));
+    //ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state_prev, prev_idxs);
     score_prev = ggml_reshape_3d(ctx0, score_prev, n_embd_head, ratio, n_blocks);
 
     ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state, cur_idxs);
     kv_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_cur, n_embd_head, ratio * n_blocks, kv_cur->nb[1],
             ggml_row_size(kv_cur->type, n_embd_head)));
+    //ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state_cur, cur_idxs);
     kv_cur = ggml_reshape_3d(ctx0, kv_cur, n_embd_head, ratio, n_blocks);
 
     ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state, cur_idxs);
     score_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, score_cur, n_embd_head, ratio * n_blocks, score_cur->nb[1],
             ggml_row_size(score_cur->type, n_embd_head)));
+    //ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state_cur, cur_idxs);
     score_cur = ggml_reshape_3d(ctx0, score_cur, n_embd_head, ratio, n_blocks);
 
     ggml_tensor * values = dsv4_concat_named(ctx0, kv_prev, kv_cur, 1, "dsv4_comp_values");
@@ -1053,7 +1069,7 @@ static ggml_tensor * dsv4_build_lid_top_k(
 
     GGML_ASSERT(llm.lctx.dsv4.inputs.csa.kq_mask != nullptr);
     ggml_tensor * lid_mask = dsv4_build_raw_mask_view(ctx0,
-            llm.lctx.dsv4.inputs.csa.kq_mask, nullptr, n_lid, n_tokens, n_stream, cb);
+            llm.lctx.dsv4.inputs.csa.kq_mask, nullptr, n_lid, n_tokens, n_stream, cb, il);
     const uint32_t n_top_k = (uint32_t) std::min<int64_t>(n_lid, hparams.indexer_top_k);
     if (llm.cparams.fused_idx_topk && n_lid > n_top_k) {
         if (ggml_tensor * selected = dsv4_build_lid_top_k_shared(ctx0,
@@ -1369,7 +1385,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             raw_k = dsv4_pad_raw_k_to(ctx0, raw_k, raw_attn_n_kv);
         }
         ggml_tensor * raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask,
-                lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, raw_k->ne[3], cb);
+                lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, raw_k->ne[3], cb, il);
         cb(raw_mask, "raw_mask_view", il);
         raw_mask = dsv4_pad_mask_tokens(ctx0, raw_mask, n_tokens);
         raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
@@ -1389,7 +1405,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             ggml_tensor * top_k = dsv4_build_lid_top_k(ctx0, *this, qr, cur, inp_pos, il, gf, cb);
             ggml_tensor * csa_mask = build_top_k_mask(ctx0,
                     dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, nullptr,
-                            lctx.dsv4.csa_plan.n_kv, n_tokens, csa_k->ne[3], cb),
+                            lctx.dsv4.csa_plan.n_kv, n_tokens, csa_k->ne[3], cb, il),
                     top_k);
             cb(csa_mask, "csa_mask", il);
             const bool use_fattn = cparams.flash_attn;
@@ -1399,7 +1415,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             raw_k = dsv4_repeat_streams(ctx0, raw_k, csa_k->ne[3]);
             if (!use_fattn) {
                 raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask,
-                        lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, csa_k->ne[3], cb);
+                        lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, csa_k->ne[3], cb, il);
                 raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
             }
             if (use_fattn && csa_mask->type != GGML_TYPE_F16) {
@@ -1448,7 +1464,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                     lctx.dsv4.cache.hca_k[(size_t) il]->ne[1]/std::max<uint32_t>(1, lctx.dsv4.cache.n_stream));
             const bool use_fattn = cparams.flash_attn;
             ggml_tensor * hca_mask = dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.hca.kq_mask, nullptr,
-                    lctx.dsv4.hca_plan.n_kv, n_tokens, hca_k->ne[3], cb);
+                    lctx.dsv4.hca_plan.n_kv, n_tokens, hca_k->ne[3], cb, il);
             hca_mask = dsv4_pad_mask_tokens(ctx0, hca_mask, n_tokens);
             if (use_fattn && hca_mask->type != GGML_TYPE_F16) {
                 hca_mask = ggml_cast(ctx0, hca_mask, GGML_TYPE_F16);
@@ -1516,7 +1532,11 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 attn);
         cb(oa, "attn_wo_a", il);
         oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
-        oa = ggml_cont_2d(ctx0, oa, o_lora_rank * n_groups, n_tokens);
+        if (n_tokens == 1) {
+            oa = ggml_reshape_2d(ctx0, oa, o_lora_rank * n_groups, n_tokens);
+        } else {
+            oa = ggml_cont_2d(ctx0, oa, o_lora_rank * n_groups, n_tokens);
+        }
 
         cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo_b, oa);
         cb(cur, "attn_out", il);
