@@ -190,9 +190,6 @@ static void soft_max_f16_cuda_simple(const half * x, half * y, const half * mask
         case 512:
             soft_max_f16_simple<512, 512><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
-        case 768:
-            soft_max_f16_simple<768, 768><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
-            break;
         case 1024:
             soft_max_f16_simple<1024, 1024><<<block_nums, block_dims, shmem, stream>>>(x, y, mask, sinks, ncols_x, nrows_y, scale);
             break;
@@ -220,10 +217,9 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * sink = dst->src[4];
     const ggml_tensor * indexer = dst->src[5];
 
-    if (sink) return false; // Something still goes wrong with sinks
     if (!Q || !K || !V || !mask || !indexer) return false;
 
-    if (indexer->ne[0] % 256 != 0) return false; // lazyness to add checks and handle tailes in case of not multiple of 256
+    if (indexer->ne[0] % 256 != 0) return false; // lazyness to add checks and handle tails in case of not multiple of 256
                                                  // But are there DSA variants where top_k is not a multiple of 256?
     if (K->ne[1] < 4*indexer->ne[0]) return false; // for efficiency
     if (K->ne[2] > 1 || K->ne[3] > 1 || mask->ne[2] > 1 || mask->ne[3] > 1 || Q->ne[3] > 1) return false;
