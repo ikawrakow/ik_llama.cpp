@@ -1065,6 +1065,67 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_DEEPSEEK4,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,             "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,            "output_norm" },
+            { LLM_TENSOR_OUTPUT,                 "output" },
+            { LLM_TENSOR_ATTN_NORM,              "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_SINKS,             "blk.%d.attn_sinks" },
+            { LLM_TENSOR_ATTN_Q_A_NORM,          "blk.%d.attn_q_a_norm" },
+            { LLM_TENSOR_ATTN_KV_A_NORM,         "blk.%d.attn_kv_a_norm" },
+            { LLM_TENSOR_ATTN_Q,                 "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_A,               "blk.%d.attn_q_a" },
+            { LLM_TENSOR_ATTN_Q_B,               "blk.%d.attn_q_b" },
+            { LLM_TENSOR_ATTN_KV_LATENT,         "blk.%d.attn_kv" },
+            { LLM_TENSOR_ATTN_OUT_A,             "blk.%d.attn_output_a" },
+            { LLM_TENSOR_ATTN_OUT_B,             "blk.%d.attn_output_b" },
+            { LLM_TENSOR_ATTN_COMP_KV,           "blk.%d.attn_compressor_kv" },
+            { LLM_TENSOR_ATTN_COMP_GATE,         "blk.%d.attn_compressor_gate" },
+            { LLM_TENSOR_ATTN_COMP_APE,          "blk.%d.attn_compressor_ape" },
+            { LLM_TENSOR_ATTN_COMP_NORM,         "blk.%d.attn_compressor_norm" },
+            { LLM_TENSOR_ATTN_OUT,               "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,               "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,               "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_UP,                 "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_DOWN,               "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_GATE_INP,           "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,          "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,          "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,            "blk.%d.ffn_up_exps" },
+            { LLM_TENSOR_FFN_GATE_UP_EXPS,       "blk.%d.ffn_gate_up_exps" },
+            { LLM_TENSOR_FFN_GATE_INP_SHEXP,     "blk.%d.ffn_gate_inp_shexp" },
+            { LLM_TENSOR_FFN_GATE_SHEXP,         "blk.%d.ffn_gate_shexp" },
+            { LLM_TENSOR_FFN_DOWN_SHEXP,         "blk.%d.ffn_down_shexp" },
+            { LLM_TENSOR_FFN_UP_SHEXP,           "blk.%d.ffn_up_shexp" },
+	        { LLM_TENSOR_FFN_EXP_PROBS_B,        "blk.%d.exp_probs_b" },
+            { LLM_TENSOR_FFN_GATE_TID2EID,       "blk.%d.ffn_gate_tid2eid" },
+            { LLM_TENSOR_INDEXER_K_NORM,         "blk.%d.indexer.k_norm" },
+            { LLM_TENSOR_INDEXER_PROJ,           "blk.%d.indexer.proj" },
+            { LLM_TENSOR_INDEXER_ATTN_K,         "blk.%d.indexer.attn_k" },
+            { LLM_TENSOR_INDEXER_ATTN_Q_B,       "blk.%d.indexer.attn_q_b" },
+            { LLM_TENSOR_INDEXER_COMP_KV,        "blk.%d.indexer_compressor_kv" },
+            { LLM_TENSOR_INDEXER_COMP_GATE,      "blk.%d.indexer_compressor_gate" },
+            { LLM_TENSOR_INDEXER_COMP_APE,       "blk.%d.indexer_compressor_ape" },
+            { LLM_TENSOR_INDEXER_COMP_NORM,      "blk.%d.indexer_compressor_norm" },
+            { LLM_TENSOR_HC_HEAD_BASE,           "output_hc_base" },
+            { LLM_TENSOR_HC_HEAD_FN,             "output_hc_fn" },
+            { LLM_TENSOR_HC_HEAD_SCALE,          "output_hc_scale" },
+            { LLM_TENSOR_HC_ATTN_BASE,           "blk.%d.hc_attn_base" },
+            { LLM_TENSOR_HC_ATTN_FN,             "blk.%d.hc_attn_fn" },
+            { LLM_TENSOR_HC_ATTN_SCALE,          "blk.%d.hc_attn_scale" },
+            { LLM_TENSOR_HC_FFN_BASE,            "blk.%d.hc_ffn_base" },
+            { LLM_TENSOR_HC_FFN_FN,              "blk.%d.hc_ffn_fn" },
+            { LLM_TENSOR_HC_FFN_SCALE,           "blk.%d.hc_ffn_scale" },
+            { LLM_TENSOR_NEXTN_EH_PROJ,          "blk.%d.nextn.eh_proj" },
+            { LLM_TENSOR_NEXTN_EMBED_TOKENS,     "blk.%d.nextn.embed_tokens" },
+            { LLM_TENSOR_NEXTN_ENORM,            "blk.%d.nextn.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,            "blk.%d.nextn.hnorm" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.nextn.shared_head_head" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.nextn.shared_head_norm" },
+        },
+    },
+    {
         LLM_ARCH_MISTRAL4,
         {
             { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
@@ -2145,15 +2206,13 @@ bool llama_model_is_split_mode_graph(const struct llama_model * model) {
 }
 
 bool llama_model_supports_ctx_shift(const struct llama_model * model) {
-    // openPangu's latent K rows carry baked-in rope (k_pe) and the DSA indexer cache is
-    // keyed by absolute position; neither survives K-shift/defrag-style repositioning.
-    return model && model->arch != LLM_ARCH_OPENPANGU;
+    // openPangu and DeepSeek4 keep position-dependent private state outside the generic KV cache.
+    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4;
 }
 
 bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {
-    // openPangu keeps only the current MoME conv state, so a sequence can be extended or
-    // reset, but rewinding into its decoded middle cannot reconstruct the state at that point.
-    return model && model->arch != LLM_ARCH_OPENPANGU;
+    // These architectures cannot reconstruct their private per-position state after a mid-sequence rewind.
+    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4;
 }
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
@@ -2219,6 +2278,31 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         }
         return size;
     }
+    if (arch == LLM_ARCH_DEEPSEEK4) {
+        constexpr uint32_t csa_ratio = 4;
+        constexpr uint32_t hca_ratio = 128;
+        constexpr uint32_t cache_pad = 256;
+
+        const uint32_t n_stream = std::max<uint32_t>(1, n_seq_max);
+        const uint32_t csa_kv = GGML_PAD(std::max<uint32_t>(1, (kv_size + csa_ratio - 1)/csa_ratio), cache_pad);
+        const uint32_t hca_kv = GGML_PAD(std::max<uint32_t>(1, (kv_size + hca_ratio - 1)/hca_ratio), cache_pad);
+        const uint32_t ratio = hparams.dsv4_compress_ratios[(size_t) il];
+        const int64_t n_embd_head = hparams.n_embd_head_k(il);
+        const int64_t n_indexer_head = hparams.indexer_head_size;
+
+        size_t size = ggml_row_size(type_k, n_embd_head) * hparams.n_head_kv(il) * kv_size;
+        if (ratio == csa_ratio) {
+            size += ggml_row_size(type_k, n_embd_head) * csa_kv * n_stream;
+            size += ggml_row_size(idx_type_k, n_indexer_head) * csa_kv * n_stream;
+            size += (size_t) 2 * n_embd_head * 2 * csa_ratio * n_stream * sizeof(float) * 2;
+            size += (size_t) 2 * n_indexer_head * 2 * csa_ratio * n_stream * sizeof(float) * 2;
+        } else if (ratio == hca_ratio) {
+            size += ggml_row_size(type_k, n_embd_head) * hca_kv * n_stream;
+            size += (size_t) n_embd_head * hca_ratio * n_stream * sizeof(float) * 2;
+        }
+        return size;
+    }
+
     auto n_head_kv = hparams.n_head_kv(il);
     auto k_size = ggml_row_size(type_k, hparams.n_embd_head_k(il)) * n_head_kv*kv_size;
     auto v_size = ggml_row_size(type_v, hparams.n_embd_v_gqa(il)) * kv_size;

@@ -1046,10 +1046,11 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         h_pre = ggml_add(ctx0, ggml_mul(ctx0, ggml_cont(ctx0, h_pre), a_pre), b_pre);  // broadcast scalar + [S]
         h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+eps omitted, inert)
 
-        // combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
+        //// combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
         ggml_tensor * hpre3 = ggml_reshape_3d(ctx0, h_pre, 1, S, n_tokens);
-        ggml_tensor * weighted = ggml_mul(ctx0, Rin, hpre3);          // [H,S,T]
-        ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows_ext(ctx0, weighted, 1), n_embd, n_tokens);
+        auto x = ggml_mul_multi_add(ctx0, Rin, hpre3);
+        //ggml_tensor * weighted = ggml_mul(ctx0, Rin, hpre3);          // [H,S,T]
+        //ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows_ext(ctx0, weighted, 1), n_embd, n_tokens);
         ggml_build_forward_expand(gf, x);
 
         *h_post_out = ggml_cont(ctx0, h_post);

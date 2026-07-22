@@ -392,6 +392,121 @@ struct llama_context {
     dflash_runtime dflash;
     using dflash_capture_state = dflash_runtime::capture_state;
 
+    struct dsv4_runtime {
+        static constexpr uint32_t CSA_RATIO = 4;
+        static constexpr uint32_t HCA_RATIO = 128;
+
+        struct slot_info {
+            int32_t s0 = 0;
+            int32_t s1 = 0;
+            std::vector<llama_seq_id> strm;
+            std::vector<std::vector<uint32_t>> idxs;
+
+            void resize(size_t n) {
+                strm.resize(n);
+                idxs.resize(n);
+            }
+
+            size_t size() const {
+                GGML_ASSERT(strm.size() == idxs.size());
+                if (idxs.empty()) {
+                    return 0;
+                }
+
+                return idxs[0].size();
+            }
+
+            size_t n_stream() const {
+                GGML_ASSERT(strm.size() == idxs.size());
+                return strm.size();
+            }
+
+            bool empty() const {
+                return idxs.empty();
+            }
+        };
+
+        struct raw_context {
+            std::vector<int32_t> write_src_idxs;
+            std::vector<int32_t> write_dst_idxs;
+            std::vector<int32_t> read_dst_idxs;
+            std::vector<int32_t> write_counts;
+            std::vector<int32_t> read_counts;
+            slot_info sinfo_write;
+            slot_info sinfo_read;
+            int64_t graph_n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
+        struct comp_context {
+            slot_info sinfo;
+            int64_t graph_n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
+        struct comp_plan {
+            std::vector<int32_t> state_pos;
+            std::vector<int32_t> state_persist_src_idxs;
+            std::vector<int32_t> state_persist_dst_idxs;
+            std::vector<int32_t> state_read_idxs;
+            std::vector<int64_t> state_write_idxs;
+            std::vector<int32_t> state_write_pos;
+            std::vector<int32_t> n_visible;
+            int64_t n_stream = 1;
+            int64_t n_kv = 0;
+        };
+
+        struct comp_inputs {
+            struct ggml_tensor * state_pos = nullptr;
+            struct ggml_tensor * state_persist_src_idxs = nullptr;
+            struct ggml_tensor * state_persist_dst_idxs = nullptr;
+            struct ggml_tensor * state_read_idxs = nullptr;
+            struct ggml_tensor * state_write_idxs = nullptr;
+            struct ggml_tensor * state_write_pos = nullptr;
+            struct ggml_tensor * kq_mask = nullptr;
+        };
+
+        struct storage {
+            std::vector<struct ggml_tensor *> csa_k;
+            std::vector<struct ggml_tensor *> hca_k;
+            std::vector<struct ggml_tensor *> lid_k;
+
+            std::vector<struct ggml_tensor *> csa_state_kv;
+            std::vector<struct ggml_tensor *> csa_state_score;
+            std::vector<struct ggml_tensor *> hca_state_kv;
+            std::vector<struct ggml_tensor *> hca_state_score;
+            std::vector<struct ggml_tensor *> lid_state_kv;
+            std::vector<struct ggml_tensor *> lid_state_score;
+
+            struct ggml_context * cache_ctx = nullptr;
+            std::vector<ggml_backend_buffer_t> cache_bufs;
+            uint32_t n_stream = 1;
+        };
+
+        struct input_state {
+            struct ggml_tensor * raw_k_write_src_idxs = nullptr;
+            struct ggml_tensor * raw_k_write_idxs = nullptr;
+            struct ggml_tensor * raw_k_read_idxs = nullptr;
+            comp_inputs csa;
+            comp_inputs hca;
+            comp_inputs lid;
+        };
+
+        storage cache;
+        input_state inputs;
+        raw_context raw;
+        comp_context csa_ctx;
+        comp_context hca_ctx;
+        comp_context lid_ctx;
+        comp_plan csa_plan;
+        comp_plan hca_plan;
+        comp_plan lid_plan;
+
+        std::vector<float> csa_mask_data;
+        std::vector<float> hca_mask_data;
+    };
+    dsv4_runtime dsv4;
+
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
@@ -464,6 +579,8 @@ struct llama_context {
 
     bool ensure_dflash_kv_cache_tensors(int32_t cross_ctx);
     void free_dflash_kv_cache_tensors();
+    bool ensure_dsv4_cache_tensors();
+    void free_dsv4_cache_tensors();
 
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx);

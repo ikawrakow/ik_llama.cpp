@@ -3836,6 +3836,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_SOFTPLUS:
                     ggml_cuda_op_softplus(ctx, dst);
                     break;
+                case GGML_UNARY_OP_SQRT_SOFTPLUS:
+                    ggml_cuda_op_sqrt_softplus(ctx, dst);
+                    break;
                 default:
                     return -1;
             }
@@ -4131,6 +4134,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SINKHORN:
             ggml_cuda_op_sinkhorn(ctx, dst);
             break;
+        case GGML_OP_HC_PRE:
+            ggml_cuda_op_hc_pre(ctx, dst);
+            break;
+        case GGML_OP_HC_POST:
+            ggml_cuda_op_hc_post(ctx, dst);
+            break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
             break;
@@ -4139,6 +4148,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_MASK_TOPK:
             ggml_cuda_op_indexer_mask(ctx, dst);
+            break;
+        case GGML_OP_MASK_TO_IDX:
+            ggml_cuda_op_mask_to_index(ctx, dst);
             break;
         default:
             return false;
@@ -4718,6 +4730,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SOFTPLUS:
+                case GGML_UNARY_OP_SQRT_SOFTPLUS:
                 case GGML_UNARY_OP_NEG:
                     return ggml_is_contiguous(op->src[0]);
                 default:
@@ -4829,6 +4842,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                         return true;
+                    case GGML_TYPE_I32:
+                        return op->src[0]->type == op->type;
                     default:
                         return false;
                 }
@@ -5045,6 +5060,10 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
+        case GGML_OP_MASK_TO_IDX:
+            return true;
+        case GGML_OP_HC_PRE:
+        case GGML_OP_HC_POST:
             return true;
         case GGML_OP_SINKHORN: {
             const int sink_s = op->op_params[0];
