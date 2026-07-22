@@ -160,7 +160,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     ggml_cuda_pool_alloc<char>  q_converted(ctx.pool());
     auto q_padded = GGML_PAD(q->ne[0], MATRIX_ROW_PADDING);
     if (ggml_is_quantized(k->type)) {
-        auto nbytes_q = q->ne[1] * max_rows * sizeof(block_q8_1)/QK8_1;
+        auto nbytes_q = (size_t)(q_padded/QK8_1) * ((size_t) q->ne[1] * max_rows) * sizeof(block_q8_1);
         nbytes_q += get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
         q_converted.alloc(nbytes_q);
     } else {
@@ -177,7 +177,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         auto q_data = (const char *)q->data + istep*max_rows*q->nb[2];
         auto m_data = (const char *)m->data + istep*max_rows*m->nb[1];
         if (ggml_is_quantized(k->type)) {
-            quantize_mmq_q8_1_cuda((const float *)q_data, q_converted.get(), q->ne[0], nrows, 1, q_padded, k->type, ctx.stream());
+            quantize_mmq_q8_1_cuda((const float *)q_data, q_converted.get(), q->ne[0], q->ne[1]*nrows, 1, q_padded, k->type, ctx.stream());
             CUDA_CHECK(cudaGetLastError());
             mmq_args args{(const char *)k->data, q_converted.get(), kq.get(),
                 k->ne[0], k->ne[1], int64_t(k->nb[1]),
@@ -253,7 +253,7 @@ static __global__ void k_indexer_mask(int ne0, int ne1, int ne2, int ntopk, int 
 void ggml_cuda_op_indexer_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto mask = dst->src[0];
     auto topk = dst->src[1];
-    GGML_ASSERT(mask->ne[0] >= topk->ne[1]);
+    GGML_ASSERT(mask->ne[0] >= topk->ne[0]);
     GGML_ASSERT(mask->ne[1] >= topk->ne[1] && mask->ne[2] == topk->ne[2] && mask->ne[3] == topk->ne[3]);
     GGML_ASSERT(ggml_are_same_shape(mask, dst));
     GGML_ASSERT(mask->type == GGML_TYPE_F16 || mask->type == GGML_TYPE_F32);
@@ -274,6 +274,69 @@ void ggml_cuda_op_indexer_mask(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                 topk->nb[1], topk->nb[2], topk->nb[3],
                 dst->nb[1],  dst->nb[2],  dst->nb[3],
                 (const float *)mask->data, (const int *)topk->data, (float *)dst->data);
+    }
+
+}
+
+template <typename mask_t>
+static __global__ void k_mask_to_index(int ne00, [[maybe_unused]] int ne0,
+        size_t nb01, size_t nb02, size_t nb03,
+        size_t nb1,  size_t nb2,  size_t nb3,
+        const mask_t * __restrict__ mask, int * __restrict__ idx) {
+    int i1 = blockIdx.x;
+    int i2 = blockIdx.y;
+    int i3 = blockIdx.z;
+
+    mask_t zero;
+    if constexpr (std::is_same_v<mask_t, half>) {
+        zero = __float2half(0.0f);
+    } else {
+        zero = 0.0f;
+    }
+    __shared__ int counts[WARP_SIZE];
+    const mask_t * mask_r = (const mask_t *)((const char *)mask + i1*nb01 + i2*nb02 + i3*nb03);
+    int * idx_r = (int *)((char *)idx + i1*nb1 + i2*nb2 + i3*nb3);
+
+    for (int j = threadIdx.x; j < ne0; j += WARP_SIZE) {
+        idx_r[j] = -1;
+    }
+
+    int nOn = 0;
+    for (int j = threadIdx.x; j < ne00; j += WARP_SIZE) {
+        nOn += (mask_r[j] == zero ? 1 : 0);
+    }
+    counts[threadIdx.x] = nOn;
+    __syncthreads();
+    int cum[WARP_SIZE];
+    int start = 0;
+    for (int i = 0; i < WARP_SIZE; ++i) {
+        cum[i] = start;
+        start += counts[i];
+    }
+    start = cum[threadIdx.x];
+    for (int j = threadIdx.x; j < ne00; j += WARP_SIZE) {
+        if (mask_r[j] == zero) idx_r[start++] = j;
+    }
+}
+
+void ggml_cuda_op_mask_to_index(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    auto src = dst->src[0];
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+    GGML_ASSERT(src->type == GGML_TYPE_F32 || src->type == GGML_TYPE_F16);
+    GGML_ASSERT(src->ne[1] == dst->ne[1] && src->ne[2] == dst->ne[2] && src->ne[3] == dst->ne[3]);
+    GGML_ASSERT(src->ne[0] >= dst->ne[0]);
+
+    dim3 grid(dst->ne[1], dst->ne[2], dst->ne[3]);
+    if (src->type == GGML_TYPE_F16) {
+        k_mask_to_index<<<grid, WARP_SIZE, 0, ctx.stream()>>>(src->ne[0], dst->ne[0],
+                src->nb[1], src->nb[2], src->nb[3],
+                dst->nb[1], dst->nb[2], dst->nb[3],
+                (const half *)src->data, (int *)dst->data);
+    } else {
+        k_mask_to_index<<<grid, WARP_SIZE, 0, ctx.stream()>>>(src->ne[0], dst->ne[0],
+                src->nb[1], src->nb[2], src->nb[3],
+                dst->nb[1], dst->nb[2], dst->nb[3],
+                (const float *)src->data, (int *)dst->data);
     }
 
 }
