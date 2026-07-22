@@ -710,6 +710,7 @@ extern "C" {
         GGML_OP_HC_PRE,
         GGML_OP_HC_POST,
         GGML_OP_MASK_TO_IDX,
+        GGML_OP_LATENT_ATTN,
 
         GGML_OP_COUNT,
     };
@@ -2499,6 +2500,53 @@ extern "C" {
     GGML_API void ggml_flash_attn_ext_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
+
+    // Latent attention over a packed K/V cache with an independently-visible K/V prefix.
+    // The value vector of cache row n is cache[dv_off .. dv_off+dv, n] (MLA "absorbed"
+    // layout: openPangu packs [ckv|k_pe] -> dv_off=0; DeepSeek/GLM_DSA packs [k_pe|ckv]
+    // rope-first -> dv_off=64). The prefix K/V rows are always visible (bias 0); the mask
+    // applies to the cache segment only.
+    //
+    // q:        [Dk, T, H]   F32, contiguous
+    // cache:    [Dk, N]      F32 / F16: row stride nb[1] arbitrary (windowed views ok);
+    //                        Q8_0: rows must be packed (nb[1] == row size)
+    // prefix_k: [Dk, P]      F32 / F16, contiguous; NULL iff P == 0
+    // prefix_v: [P,  Dv]     F32 / F16, contiguous (value-transposed: ne0 = P); NULL iff P == 0
+    // mask:     [N,  >=T]    F32, additive, cache segment only; NULL = unmasked cache
+    // returns:  [Dv, T, H]   F32, contiguous
+    // Precondition: every query column must have at least one visible position (a prefix row,
+    // or a cache row not masked to -inf). Violating it is undefined: a fully-masked column with
+    // P == 0 yields NaN on CUDA and on the CPU dense path, and zeros on the CPU indexed path, so
+    // callers must not depend on the value. Inference-only: a gradient-bearing input is rejected.
+    GGML_API struct ggml_tensor * ggml_latent_attn_prefix_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * cache,
+            struct ggml_tensor  * prefix_k,
+            struct ggml_tensor  * prefix_v,
+            struct ggml_tensor  * mask,
+            int                   dv,
+            int                   dv_off,
+            float                 scale,
+            float                 max_bias);
+
+    // Indexed latent attention over absolute cache row ids shared across heads.
+    // indices: [topk, T] I32, contiguous; mask remains [N, >=T] and is gathered by index.
+    // Preconditions: each index must lie in [0, N); an out-of-range id aborts on CPU and is
+    // undefined behavior (an out-of-bounds device read) on CUDA. The visible-position and
+    // inference-only preconditions above apply here as well.
+    GGML_API struct ggml_tensor * ggml_latent_attn_indexed_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * cache,
+            struct ggml_tensor  * prefix_k,
+            struct ggml_tensor  * prefix_v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * indices,
+            int                   dv,
+            int                   dv_off,
+            float                 scale,
+            float                 max_bias);
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(

@@ -4340,9 +4340,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "HC_PRE",
     "HC_POST",
     "MASK_TO_IDX",
+    "LATENT_ATTN",
 };
 
-static_assert(GGML_OP_COUNT == 109, "GGML_OP_COUNT != 109");
+static_assert(GGML_OP_COUNT == 110, "GGML_OP_COUNT != 110");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4467,10 +4468,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "hc_pre(x,s,b)",
     "hc_post(x,p,r,c)",
     "mask_to_idx(masl)",
+    "latent_attn_prefix(q,c,pk,pv,mask)",
 
 };
 
-static_assert(GGML_OP_COUNT == 109, "GGML_OP_COUNT != 109");
+static_assert(GGML_OP_COUNT == 110, "GGML_OP_COUNT != 110");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -10478,6 +10480,150 @@ struct ggml_tensor * ggml_top_k_thresh(
                 0);
 
     return result;
+}
+
+// ggml_latent_attn_ext_impl
+
+static struct ggml_tensor * ggml_latent_attn_ext_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * cache,
+        struct ggml_tensor  * prefix_k,
+        struct ggml_tensor  * prefix_v,
+        struct ggml_tensor  * mask,
+        struct ggml_tensor  * indices,
+        int                   dv,
+        int                   dv_off,
+        float                 scale,
+        float                 max_bias,
+        int                   mode) {
+    // Inference-only op: reject a differentiable graph at construction rather than silently
+    // detaching it (there is no backward pass; see the GGML_OP_LATENT_ATTN backward dispatch).
+    if ((q && q->grad) || (cache && cache->grad) || (prefix_k && prefix_k->grad) ||
+        (prefix_v && prefix_v->grad) || (mask && mask->grad) || (indices && indices->grad)) {
+        GGML_ABORT("ggml_latent_attn does not support automatic differentiation");
+    }
+    GGML_ASSERT(q->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(q));
+    GGML_ASSERT(q->ne[0] == cache->ne[0]);                          // Dk match
+    // Both backends compute exactly [Dv, T, H]: unused outer dimensions must be 1 on every
+    // operand, so a batched or higher-rank view is rejected instead of silently truncated.
+    GGML_ASSERT(q->ne[3] == 1);
+    GGML_ASSERT(cache->ne[2] == 1 && cache->ne[3] == 1);
+    GGML_ASSERT(dv > 0 && dv_off >= 0 && (int64_t) dv_off + dv <= cache->ne[0]);
+    GGML_ASSERT(max_bias == 0.0f && "ggml_latent_attn: ALiBi not implemented");
+    GGML_ASSERT(cache->type == GGML_TYPE_F32 || cache->type == GGML_TYPE_F16 ||
+                cache->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(mode == 0 || mode == 1);
+    GGML_ASSERT((indices != NULL) == (mode == 1));
+
+    // prefix is all-or-nothing
+    GGML_ASSERT((prefix_k == NULL) == (prefix_v == NULL));
+    if (prefix_k) {
+        GGML_ASSERT(prefix_k->ne[0] == cache->ne[0]);              // Dk
+        GGML_ASSERT(prefix_v->ne[0] == prefix_k->ne[1]);           // value-transposed: ne0 = P
+        GGML_ASSERT(prefix_v->ne[1] == dv);
+        GGML_ASSERT(ggml_is_contiguous(prefix_k));
+        GGML_ASSERT(ggml_is_contiguous(prefix_v));
+        GGML_ASSERT(prefix_k->type == GGML_TYPE_F32 || prefix_k->type == GGML_TYPE_F16);
+        GGML_ASSERT(prefix_v->type == GGML_TYPE_F32 || prefix_v->type == GGML_TYPE_F16);
+        GGML_ASSERT(prefix_k->ne[2] == 1 && prefix_k->ne[3] == 1);
+        GGML_ASSERT(prefix_v->ne[2] == 1 && prefix_v->ne[3] == 1);
+    }
+
+    if (mask) {
+        GGML_ASSERT(mask->type == GGML_TYPE_F32);
+        GGML_ASSERT(mask->nb[0] == sizeof(float));
+        // Both backends step mask rows by float-pointer arithmetic (nb[1]/sizeof(float)), which
+        // cannot express a row stride that is not a whole number of floats. Reject it here so
+        // construction and both backends agree; canonical OpenPangu masks are aligned.
+        GGML_ASSERT(mask->nb[1] % sizeof(float) == 0 &&
+                    "ggml_latent_attn: mask row stride must be a whole number of floats");
+        GGML_ASSERT(mask->ne[0] == cache->ne[1]);                  // N
+        GGML_ASSERT(mask->ne[1] >= q->ne[1]);                      // >= T
+        GGML_ASSERT(mask->ne[2] == 1 && mask->ne[3] == 1);
+    }
+
+    if (indices) {
+        GGML_ASSERT(indices->type == GGML_TYPE_I32);
+        GGML_ASSERT(indices->ne[0] >= 1);                           // topk
+        GGML_ASSERT(indices->ne[1] >= q->ne[1]);                    // >= T
+        GGML_ASSERT(ggml_is_contiguous(indices));
+        GGML_ASSERT(indices->ne[2] == 1 && indices->ne[3] == 1);
+    }
+
+    // block alignment so quantized-cache dequant and the value slice stay on block rows, and
+    // packed rows so the constructor accepts exactly what the backends implement
+    if (ggml_is_quantized(cache->type)) {
+        const int64_t blk = ggml_blck_size(cache->type);
+        GGML_ASSERT(cache->ne[0] % blk == 0);
+        GGML_ASSERT(dv     % blk == 0);
+        GGML_ASSERT(dv_off % blk == 0);
+        GGML_ASSERT(cache->nb[1] == ggml_row_size(cache->type, cache->ne[0]) &&
+                    "ggml_latent_attn: quantized cache rows must be packed");
+    }
+
+    // The dense (cuBLAS) and indexed (row-gather) readers both index each F32/F16 cache row as a
+    // packed element array (src[d]), so a non-packed inner stride would read the wrong elements.
+    // The row stride nb[1] may still be a windowed view.
+    if (cache->type == GGML_TYPE_F32 || cache->type == GGML_TYPE_F16) {
+        GGML_ASSERT(cache->nb[0] == ggml_type_size(cache->type) &&
+                    "ggml_latent_attn: cache inner dimension must be packed");
+    }
+
+    int64_t ne[4] = { dv, q->ne[1], q->ne[2], 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    ggml_set_op_params_f32(result, 0, scale);
+    ggml_set_op_params_f32(result, 1, max_bias);
+    ggml_set_op_params_i32(result, 2, dv);
+    ggml_set_op_params_i32(result, 3, dv_off);
+    ggml_set_op_params_i32(result, 4, mode); // mode 0 = dense; mode 1 = indexed
+
+    result->op     = GGML_OP_LATENT_ATTN;
+    result->src[0] = q;
+    result->src[1] = cache;
+    result->src[2] = prefix_k;
+    result->src[3] = prefix_v;
+    result->src[4] = mask;
+    result->src[5] = indices;
+
+    return result;
+}
+
+// ggml_latent_attn_prefix_ext
+
+struct ggml_tensor * ggml_latent_attn_prefix_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * cache,
+        struct ggml_tensor  * prefix_k,
+        struct ggml_tensor  * prefix_v,
+        struct ggml_tensor  * mask,
+        int                   dv,
+        int                   dv_off,
+        float                 scale,
+        float                 max_bias) {
+    return ggml_latent_attn_ext_impl(ctx, q, cache, prefix_k, prefix_v, mask, NULL,
+            dv, dv_off, scale, max_bias, 0);
+}
+
+// ggml_latent_attn_indexed_ext
+
+struct ggml_tensor * ggml_latent_attn_indexed_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * cache,
+        struct ggml_tensor  * prefix_k,
+        struct ggml_tensor  * prefix_v,
+        struct ggml_tensor  * mask,
+        struct ggml_tensor  * indices,
+        int                   dv,
+        int                   dv_off,
+        float                 scale,
+        float                 max_bias) {
+    return ggml_latent_attn_ext_impl(ctx, q, cache, prefix_k, prefix_v, mask, indices,
+            dv, dv_off, scale, max_bias, 1);
 }
 
 // ggml_flash_attn_ext
@@ -23911,6 +24057,239 @@ static void ggml_compute_forward_mask_to_idx(const struct ggml_compute_params * 
 }
 
 
+// ggml_compute_forward_latent_attn
+
+// Latent attention over a packed K/V cache with an independently-visible K/V prefix.
+// Reference (correctness-first) implementation: parallelize over the T*H query rows; for
+// each row compute prefix+cache logits, one joint f32 softmax over [prefix | cache], then
+// the two value contractions. Quantized/F16 cache rows are dequantized whole into a per-
+// thread scratch row (one row at a time -> the full F32 cache tensor is never materialized).
+// The value slice of cache row n is channels [dv_off, dv_off+dv); the prefix value tensor is
+// value-transposed [P, Dv] (ne0=P) exactly like the openPangu s_lat_t operand. The fused
+// single-dequant-per-row optimization lives in the CUDA kernel. In dense mode this reference
+// dequantizes each non-F32 cache row once for the K dot and again for a nonzero V contribution.
+// A masked-out row has softmax weight exactly 0, so its value contribution is skipped.
+// Mode 1 gathers indices[k,t] shared across heads and applies mask[idx,t], then jointly
+// normalizes prefix and gathered rows. Non-F32 gathered rows are dequantized whole once.
+static void ggml_compute_forward_latent_attn_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * q        = dst->src[0];
+    const struct ggml_tensor * cache    = dst->src[1];
+    const struct ggml_tensor * prefix_k = dst->src[2];
+    const struct ggml_tensor * prefix_v = dst->src[3];
+    const struct ggml_tensor * mask     = dst->src[4];
+    const struct ggml_tensor * indices  = dst->src[5];
+
+    const int64_t Dk = q->ne[0];
+    const int64_t T  = q->ne[1];
+    const int64_t H  = q->ne[2];
+    const int64_t N  = cache->ne[1];
+    const int64_t P  = prefix_k ? prefix_k->ne[1] : 0;
+    const int64_t topk = indices ? indices->ne[0] : 0;
+
+    float scale;
+    memcpy(&scale, &dst->op_params[0], sizeof(float));
+    const int dv     = dst->op_params[2];
+    const int dv_off = dst->op_params[3];
+    const int mode   = dst->op_params[4];
+    GGML_ASSERT(mode == 0 || mode == 1);
+    GGML_ASSERT((indices != NULL) == (mode == 1));
+    GGML_ASSERT(dst->ne[0] == dv && dst->ne[1] == T && dst->ne[2] == H);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    // per-thread scratch: [P + dense-or-gathered rows] scores followed by one [Dk] dequant row
+    const int64_t score_count = P + (mode == 0 ? N : topk);
+    const int64_t stride = score_count + Dk;
+    float * scores = (float *) params->wdata + (size_t) ith*stride;
+    float * rowbuf = scores + score_count;
+
+    const bool cache_is_f32 = cache->type == GGML_TYPE_F32;
+    ggml_to_float_t cache_to_float = cache_is_f32 ? NULL : type_traits[cache->type].to_float;
+
+    const int64_t QR = T*H;                 // total query rows
+    const int64_t r0 = (QR *  ith   ) / nth;
+    const int64_t r1 = (QR * (ith+1)) / nth;
+
+    for (int64_t r = r0; r < r1; ++r) {
+        const int64_t t = r % T;
+        const int64_t h = r / T;
+
+        const float * qrow = (const float *)((const char *)q->data + t*q->nb[1] + h*q->nb[2]); // [Dk]
+
+        if (mode == 1) {
+            // Online accumulation lets one whole-row dequant serve both the K dot and V slice.
+            float * out = (float *)((char *)dst->data + t*dst->nb[1] + h*dst->nb[2]); // [Dv]
+            for (int64_t d = 0; d < dv; ++d) out[d] = 0.0f;
+
+            float mx = -INFINITY;
+            for (int64_t p = 0; p < P; ++p) {
+                const char * kcol = (const char *)prefix_k->data + p*prefix_k->nb[1];
+                float s = 0.0f;
+                if (prefix_k->type == GGML_TYPE_F32) {
+                    const float * kf = (const float *)kcol;
+                    for (int64_t i = 0; i < Dk; ++i) s += qrow[i]*kf[i];
+                } else {
+                    const ggml_fp16_t * kf = (const ggml_fp16_t *)kcol;
+                    for (int64_t i = 0; i < Dk; ++i) s += qrow[i]*GGML_FP16_TO_FP32(kf[i]);
+                }
+                scores[p] = scale*s;
+                mx = MAX(mx, scores[p]);
+            }
+
+            float sum = 0.0f;
+            for (int64_t p = 0; p < P; ++p) {
+                scores[p] = expf(scores[p] - mx);
+                sum += scores[p];
+            }
+            for (int64_t d = 0; d < dv; ++d) {
+                const char * pvd = prefix_v ? (const char *)prefix_v->data + d*prefix_v->nb[1] : NULL;
+                float acc = 0.0f;
+                if (P > 0) {
+                    if (prefix_v->type == GGML_TYPE_F32) {
+                        const float * pv = (const float *)pvd;
+                        for (int64_t p = 0; p < P; ++p) acc += scores[p]*pv[p];
+                    } else {
+                        const ggml_fp16_t * pv = (const ggml_fp16_t *)pvd;
+                        for (int64_t p = 0; p < P; ++p) acc += scores[p]*GGML_FP16_TO_FP32(pv[p]);
+                    }
+                }
+                out[d] = acc;
+            }
+
+            for (int64_t k = 0; k < topk; ++k) {
+                const int32_t idx = *(const int32_t *)((const char *)indices->data + t*indices->nb[1] + k*indices->nb[0]);
+                GGML_ASSERT(idx >= 0 && idx < N);
+
+                const char * crow = (const char *)cache->data + idx*cache->nb[1];
+                const float * cf;
+                if (cache_is_f32) {
+                    cf = (const float *)crow;
+                } else {
+                    cache_to_float(crow, rowbuf, Dk);
+                    cf = rowbuf;
+                }
+
+                float s = 0.0f;
+                for (int64_t i = 0; i < Dk; ++i) s += qrow[i]*cf[i];
+                s *= scale;
+                if (mask) {
+                    s += *(const float *)((const char *)mask->data + t*mask->nb[1] + idx*mask->nb[0]);
+                }
+
+                if (mx == -INFINITY && s == -INFINITY) {
+                    continue;
+                }
+                if (s > mx) {
+                    const float rescale = expf(mx - s);
+                    sum = sum*rescale + 1.0f;
+                    for (int64_t d = 0; d < dv; ++d) out[d] = out[d]*rescale + cf[dv_off + d];
+                    mx = s;
+                } else {
+                    const float e = expf(s - mx);
+                    sum += e;
+                    for (int64_t d = 0; d < dv; ++d) out[d] += e*cf[dv_off + d];
+                }
+            }
+
+            const float inv = sum > 0.0f ? 1.0f/sum : 0.0f;
+            for (int64_t d = 0; d < dv; ++d) out[d] *= inv;
+            continue;
+        }
+
+        // --- logits: prefix rows (always visible) then cache rows (masked) ---
+        for (int64_t p = 0; p < P; ++p) {
+            const char * kcol = (const char *)prefix_k->data + p*prefix_k->nb[1];
+            float s = 0.0f;
+            if (prefix_k->type == GGML_TYPE_F32) {
+                const float * kf = (const float *)kcol;
+                for (int64_t i = 0; i < Dk; ++i) s += qrow[i]*kf[i];
+            } else {
+                const ggml_fp16_t * kf = (const ggml_fp16_t *)kcol;
+                for (int64_t i = 0; i < Dk; ++i) s += qrow[i]*GGML_FP16_TO_FP32(kf[i]);
+            }
+            scores[p] = scale*s;
+        }
+        for (int64_t n = 0; n < N; ++n) {
+            const char * crow = (const char *)cache->data + n*cache->nb[1];
+            const float * cf;
+            if (cache_is_f32) {
+                cf = (const float *)crow;
+            } else {
+                cache_to_float(crow, rowbuf, Dk);
+                cf = rowbuf;
+            }
+            float s = 0.0f;
+            for (int64_t i = 0; i < Dk; ++i) s += qrow[i]*cf[i];
+            s *= scale;
+            if (mask) {
+                s += *(const float *)((const char *)mask->data + t*mask->nb[1] + n*mask->nb[0]);
+            }
+            scores[P + n] = s;
+        }
+
+        // --- one joint softmax over [0, P+N) ---
+        const int64_t M = P + N;
+        float mx = -INFINITY;
+        for (int64_t k = 0; k < M; ++k) mx = MAX(mx, scores[k]);
+        float sum = 0.0f;
+        for (int64_t k = 0; k < M; ++k) { const float e = expf(scores[k] - mx); scores[k] = e; sum += e; }
+        const float inv = sum > 0.0f ? 1.0f/sum : 0.0f;
+        for (int64_t k = 0; k < M; ++k) scores[k] *= inv;
+
+        // --- values: out[d] = sum_p w[p]*prefix_v[p,d] + sum_n w[P+n]*cache[dv_off+d, n] ---
+        float * out = (float *)((char *)dst->data + t*dst->nb[1] + h*dst->nb[2]); // [Dv]
+        for (int64_t d = 0; d < dv; ++d) out[d] = 0.0f;
+
+        // prefix values: prefix_v is [P, Dv] (ne0=P), so row d holds the P prefix values for d
+        for (int64_t d = 0; d < dv; ++d) {
+            const char * pvd = prefix_v ? (const char *)prefix_v->data + d*prefix_v->nb[1] : NULL;
+            float acc = 0.0f;
+            if (P > 0) {
+                if (prefix_v->type == GGML_TYPE_F32) {
+                    const float * pv = (const float *)pvd;
+                    for (int64_t p = 0; p < P; ++p) acc += scores[p]*pv[p];
+                } else {
+                    const ggml_fp16_t * pv = (const ggml_fp16_t *)pvd;
+                    for (int64_t p = 0; p < P; ++p) acc += scores[p]*GGML_FP16_TO_FP32(pv[p]);
+                }
+            }
+            out[d] = acc;
+        }
+
+        // cache values: re-dequant each row, take channels [dv_off, dv_off+dv). A masked row
+        // has softmax weight exactly 0, so its contribution vanishes without a branch.
+        for (int64_t n = 0; n < N; ++n) {
+            const float w = scores[P + n];
+            if (w == 0.0f) continue;
+            const char * crow = (const char *)cache->data + n*cache->nb[1];
+            const float * cf;
+            if (cache_is_f32) {
+                cf = (const float *)crow;
+            } else {
+                cache_to_float(crow, rowbuf, Dk);
+                cf = rowbuf;
+            }
+            const float * cv = cf + dv_off;
+            for (int64_t d = 0; d < dv; ++d) out[d] += w * cv[d];
+        }
+    }
+}
+
+static void ggml_compute_forward_latent_attn(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_latent_attn_f32(params, dst);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
 // ggml_compute_forward_win_part
 
 static void ggml_compute_forward_win_part_f32(
@@ -25673,6 +26052,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_mask_to_idx(params, tensor);
             } break;
+        case GGML_OP_LATENT_ATTN:
+            {
+                ggml_compute_forward_latent_attn(params, tensor);
+            } break;
         case GGML_OP_INDEXER_TOPK:
             {
                 if (!iqk_indexer_topk(tensor, params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, params->ith, params->nth)) {
@@ -26750,6 +27133,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_HC_PRE:
         case GGML_OP_HC_POST:
         case GGML_OP_MASK_TO_IDX:
+        case GGML_OP_LATENT_ATTN:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -27497,6 +27881,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_HC_PRE:
         case GGML_OP_HC_POST:
         case GGML_OP_MASK_TO_IDX:
+        case GGML_OP_LATENT_ATTN:
             {
                 n_tasks = n_threads;
             } break;
@@ -27804,6 +28189,17 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     size_t size = iqk_fa_work_buffer_size(node, n_tasks);
                     cur = MAX(cur, size);
 #endif
+                } break;
+            case GGML_OP_LATENT_ATTN:
+                {
+                    // per thread: [P+dense-or-gathered rows] f32 scores + one [Dk] dequant row
+                    const int64_t Dk = node->src[1]->ne[0];
+                    const int64_t N  = node->src[1]->ne[1];
+                    const int64_t P  = node->src[2] ? node->src[2]->ne[1] : 0;
+                    const int mode = node->op_params[4];
+                    GGML_ASSERT(mode == 0 || mode == 1);
+                    const int64_t rows = mode == 0 ? N : node->src[5]->ne[0];
+                    cur = sizeof(float)*(P + rows + Dk)*n_tasks;
                 } break;
             case GGML_OP_FLASH_ATTN_BACK:
                 {
