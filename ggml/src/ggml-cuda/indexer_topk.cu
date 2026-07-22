@@ -160,7 +160,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     ggml_cuda_pool_alloc<char>  q_converted(ctx.pool());
     auto q_padded = GGML_PAD(q->ne[0], MATRIX_ROW_PADDING);
     if (ggml_is_quantized(k->type)) {
-        auto nbytes_q = q->ne[1] * max_rows * sizeof(block_q8_1)/QK8_1;
+        auto nbytes_q = (size_t)(q_padded/QK8_1) * ((size_t) q->ne[1] * max_rows) * sizeof(block_q8_1);
         nbytes_q += get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
         q_converted.alloc(nbytes_q);
     } else {
@@ -177,7 +177,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         auto q_data = (const char *)q->data + istep*max_rows*q->nb[2];
         auto m_data = (const char *)m->data + istep*max_rows*m->nb[1];
         if (ggml_is_quantized(k->type)) {
-            quantize_mmq_q8_1_cuda((const float *)q_data, q_converted.get(), q->ne[0], nrows, 1, q_padded, k->type, ctx.stream());
+            quantize_mmq_q8_1_cuda((const float *)q_data, q_converted.get(), q->ne[0], q->ne[1]*nrows, 1, q_padded, k->type, ctx.stream());
             CUDA_CHECK(cudaGetLastError());
             mmq_args args{(const char *)k->data, q_converted.get(), kq.get(),
                 k->ne[0], k->ne[1], int64_t(k->nb[1]),
