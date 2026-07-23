@@ -805,23 +805,6 @@ static ggml_tensor * build_hca_compressed_kv_from_state(
 
     auto comp = ggml_ds4_comp(ctx0, kv_state, score_state, state_read_idxs, llama_context::dsv4_runtime::HCA_RATIO, 1);
 
-    //ggml_tensor * kv = ggml_get_rows(ctx0, kv_state, state_read_idxs);
-    //cb(kv, "hca_kv", il);
-    //kv = ggml_reshape_3d(ctx0, kv, n_embd_head, llama_context::dsv4_runtime::HCA_RATIO, n_blocks);
-    //llm.cb(kv, "hca_comp_kv_rows", il);
-
-    //ggml_tensor * score = ggml_get_rows(ctx0, score_state, state_read_idxs);
-    //cb(score, "hca_score", il);
-    //score = ggml_reshape_3d(ctx0, score, n_embd_head, llama_context::dsv4_runtime::HCA_RATIO, n_blocks);
-    //llm.cb(score, "hca_comp_score_rows", il);
-
-    //ggml_tensor * values = ggml_cont(ctx0, ggml_permute(ctx0, kv, 1, 0, 2, 3));
-    //ggml_tensor * scores = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
-    //ggml_tensor * weights = ggml_soft_max(ctx0, scores);
-    //ggml_tensor * comp = ggml_mul(ctx0, values, weights);
-    //comp = ggml_sum_rows(ctx0, comp);
-    //comp = ggml_reshape_3d(ctx0, comp, comp->ne[1], comp->ne[2], comp->ne[3]);
-    ////comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
     llm.cb(comp, "hca_comp_merge", il);
 
     comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
