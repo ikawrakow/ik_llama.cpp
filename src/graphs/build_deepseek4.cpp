@@ -1140,6 +1140,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         ggml_tensor * kv = llm_build_lora_mm(lctx, ctx0, model.layers[il].wkv_latent, cur);
         cb(kv, "wkv", il);
         kv = llm_build_norm(ctx0, kv, hparams, model.layers[il].attn_kv_norm, nullptr, LLM_NORM_RMS, cb, il);
+        cb(kv, "kv_norm", il);
         kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
         cb(kv, "kv_norm", il);
 
@@ -1165,7 +1166,6 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 cb(kv, "kv_hadamard", il);
             }
         }
-        cb(kv, "dsv4_raw_k_before_write", il);
         const float kq_scale = 1.0f / std::sqrt(float(n_embd_head));
 
         ggml_tensor * hca_state_kv = nullptr;
