@@ -699,6 +699,22 @@ class TensorNameMap:
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
         ),
+
+        MODEL_TENSOR.INDEXER_K_NORM: (
+            "model.layers.{bid}.indexer.k_norm",
+        ),
+
+        MODEL_TENSOR.INDEXER_PROJ: (
+            "model.layers.{bid}.indexer.proj",
+        ),
+
+        MODEL_TENSOR.INDEXER_ATTN_K: (
+            "model.layers.{bid}.indexer.attn_k",
+        ),
+
+        MODEL_TENSOR.INDEXER_ATTN_Q_B: (
+            "model.layers.{bid}.indexer.attn_q_b",
+        ),
     }
 
     # architecture-specific block mappings

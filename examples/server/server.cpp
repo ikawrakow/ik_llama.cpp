@@ -767,8 +767,19 @@ int main(int argc, char ** argv) {
                     const char * hotswap_env = std::getenv("LLAMA_HOTSWAP_ENABLED");
                     if (hotswap_env) {
                         // WARNING: llama_reload_changed_tensors is NOT thread-safe with active inference.
-                        // Only enable this when you can guarantee the server is idle during health checks.
-                        llama_reload_changed_tensors(ctx_server.ctx);
+                        // Best effort: only attempt the reload when no slot is processing (a request
+                        // arriving between the metrics snapshot and the reload can still race it).
+                        if (n_processing_slots > 0) {
+                            LOG_INFO("hotswap: skipping tensor reload, slots are processing", {{"processing", n_processing_slots}});
+                        } else if (llama_reload_changed_tensors(ctx_server.ctx)) {
+                            // KV cache entries and cached prompts were computed with the
+                            // previous weights; drop them so they cannot be reused.
+                            ctx_server.kv_cache_clear();
+                            for (auto & slot : ctx_server.slots) {
+                                slot.cache_tokens.clear();
+                            }
+                            LOG_INFO("hotswap: tensors reloaded; KV cache and cached prompts cleared", {});
+                        }
                     }
 
                     break;

@@ -707,6 +707,9 @@ extern "C" {
         GGML_OP_INDEXER_TOPK,
         GGML_OP_MASK_TOPK,
         GGML_OP_SINKHORN,
+        GGML_OP_HC_PRE,
+        GGML_OP_HC_POST,
+        GGML_OP_MASK_TO_IDX,
 
         GGML_OP_COUNT,
     };
@@ -730,6 +733,7 @@ extern "C" {
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_SOFTPLUS,
+        GGML_UNARY_OP_SQRT_SOFTPLUS,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1223,6 +1227,14 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_softplus_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sqrt_softplus(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sqrt_softplus_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -2476,6 +2488,10 @@ extern "C" {
             float                 max_bias,
             float                 softcap);
 
+    // Backend hint stored in ggml_flash_attn_ext op_params slot 4.
+    // Negative values request the generic implementation instead of IQK FA.
+    #define GGML_FLASH_ATTN_EXT_IQK_DISABLED (-1)
+
     GGML_API void ggml_flash_attn_ext_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
@@ -2604,6 +2620,28 @@ extern "C" {
             int                   n_iters,
             float                 eps,
             bool                  output_transposed);
+
+    GGML_API struct ggml_tensor * ggml_hc_pre(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * bias,
+            int                   S,
+            int                   n_iters,
+            float                 eps);
+
+    GGML_API struct ggml_tensor * ggml_hc_post(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * post,
+            struct ggml_tensor  * res,
+            struct ggml_tensor  * comb);
+
+    GGML_API struct ggml_tensor * ggml_mask_to_index(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            int                   max_row_size);
+
 
     // custom operators
 

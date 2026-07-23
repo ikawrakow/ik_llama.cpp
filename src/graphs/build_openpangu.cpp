@@ -375,16 +375,18 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 !dsa_gather_allowed &&
                 openpangu_att_score_should_chunk(n_kv, hparams.param_sink_number, n_head, n_tokens,
                         OPENPANGU_ATT_SCORE_CHUNK, OPENPANGU_ATT_FULL_KQ_MAX_MIB);
+            ggml_tensor * fused_sel_idx = nullptr;
             if (lctx.cparams.fused_idx_topk) {
-                // Fused indexer top-k (CPU-only op): one op computes sum_g w * relu(q.k) + causal
-                // mask -> top-k without materializing the [n_kv, n_ihead, T] score tensor, so no
-                // score chunking is needed. CUDA backends do not implement GGML_OP_INDEXER_TOPK;
-                // the scheduler runs it on CPU and copies the operands across the backend boundary.
                 // The op reads the mask row-strided, so the raw view suffices.
                 ggml_tensor * idx_mask = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens,
                                                       KQ_mask->nb[1], 0);
-                sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask,
-                                            GGML_UNARY_OP_RELU, (int) topk);          // [topk, T] i32
+                fused_sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask,
+                                                  GGML_UNARY_OP_RELU, (int) topk);    // [topk, T] i32
+            }
+            if (fused_sel_idx && supports_op(fused_sel_idx)) {
+                // One op computes sum_g w * relu(q.k) + causal mask -> top-k without
+                // materializing the [n_kv, n_ihead, T] score tensor.
+                sel_idx = fused_sel_idx;
                 if (il == 0) ggml_set_name(sel_idx, "opg0_idx_sel");
                 dsa_gather_engaged = dsa_gather_allowed;
                 if (dsa_gather_engaged) {
@@ -1046,10 +1048,11 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         h_pre = ggml_add(ctx0, ggml_mul(ctx0, ggml_cont(ctx0, h_pre), a_pre), b_pre);  // broadcast scalar + [S]
         h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+eps omitted, inert)
 
-        // combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
+        //// combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
         ggml_tensor * hpre3 = ggml_reshape_3d(ctx0, h_pre, 1, S, n_tokens);
-        ggml_tensor * weighted = ggml_mul(ctx0, Rin, hpre3);          // [H,S,T]
-        ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows_ext(ctx0, weighted, 1), n_embd, n_tokens);
+        auto x = ggml_mul_multi_add(ctx0, Rin, hpre3);
+        //ggml_tensor * weighted = ggml_mul(ctx0, Rin, hpre3);          // [H,S,T]
+        //ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows_ext(ctx0, weighted, 1), n_embd, n_tokens);
         ggml_build_forward_expand(gf, x);
 
         *h_post_out = ggml_cont(ctx0, h_post);

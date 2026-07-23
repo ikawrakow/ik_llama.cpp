@@ -186,6 +186,23 @@ Driver loop in a nutshell:
 
 This mode works with any of the evaluation flavours (`perplexity`, `--kl-divergence`, HellaSwag, ...); KL divergence is fully re-entrant since the base-logits file is re-read on every iteration.
 
+**Load-time-derived tensors (MLA).** `llm_prepare_mla` derives tensors at load time: when a GGUF ships `attn_k_b`/`attn_v_b` but no `attn_kv_b`, a combined `attn_kv_b` is computed from them - and the `mla>1` prompt-processing path consumes the *derived* tensor, not the originals. Reloading `attn_k_b`/`attn_v_b` therefore also re-derives the affected layer's `attn_kv_b` in place (`llm_refresh_computed_wkv_b`), logging `hotswap: refreshed derived tensor 'blk.N.attn_kv_b.weight'`. If a refresh is impossible (per-rank split tensors under `-sm graph/attn`, or the reverse derivation where `attn_k_b`/`attn_v_b` were computed from a reloaded `attn_kv_b`), a `hotswap: failed to refresh derived tensor ...` warning is emitted so external drivers can quarantine the affected evaluation instead of recording stale results.
+
+**Other load-time weight transforms (refused or propagated).** Several mechanisms transform, merge or fuse weights at load/context-creation time, making a raw-byte reload wrong or ineffective. The reload machinery handles them as follows:
+
+* **Refused with a loud `hotswap: tensor '...' cannot be hot-swapped: <reason>` warning** (`reload_tensor` returns false, so drivers see no `reloaded tensor` line and quarantine the round):
+  * views into merged tensors created by **`-mqkv`** (merged `wqkv`) and **`-muge`** (merged `ffn_gate_up_exps`, which is additionally re-interleaved per expert at context creation);
+  * `attn_k_b`/`attn_v_b`/`attn_kv_b` when the **`-khad`** Hadamard transform was folded into the MLA weights (`khad_pretransformed`);
+  * `ffn_gate_inp_s` (scaled in place at load by `llm_scale_gate_inp_s`);
+  * BitNet `*.scale` tensors (fused into the paired weight's `op_params` at load);
+  * OpenPangu `param_sink*` and `attn_kv_a_norm` (feed load-time-derived parameter sinks);
+  * same-dtype swaps of tensors whose original data is **mmap-backed** (read-only mapping cannot be refreshed in place; use `--no-mmap` for hot-swap workflows).
+* **Propagated automatically**: tensors physically duplicated at load under the same name (tied lm-head copy of `token_embd`, per-layer `rope_freqs`/`rope_factors` copies, expert-bias `*_dup` copies) - the reloaded data is written to every duplicate instance, or a `failed to refresh derived tensor` warning is emitted when that is impossible.
+* **Warned as stale**: the pre-transposed `wk_b_pp` under `-sm graph/attn`, and the runtime-requantized MTP head (`output_extra.weight`) after an `output.weight` reload.
+* **`-rtr` (run-time repacking)**: a warning is emitted at registration - restores write the plain file type and cannot reproduce the repacked state (mathematically equivalent for lossless repacks, but `F16 -> BF16_R16` is lossy), so benchmark results may be inconsistent.
+
+**llama-server specifics.** The `/health` hot-swap hook now only attempts a reload when no slot is processing (best effort - a request arriving concurrently can still race it), and after a successful reload it clears the KV cache and all cached prompts, since those were computed with the previous weights. Note that a draft/speculative model and an mtmd projector are separate models with their own files and are not covered by the hot-swap registry.
+
 ### `examples/server/server.cpp`
 On every health-check (`/health`) request, if `LLAMA_HOTSWAP_ENABLED` is set, the server calls `llama_reload_changed_tensors()`. This provides a convenient, external trigger: simply `touch` or overwrite a tensor’s source GGUF file and poll `/health` to apply the change.
 
