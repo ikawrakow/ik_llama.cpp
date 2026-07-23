@@ -39,6 +39,7 @@ struct llama_cparams {
     bool fused_mmad;
     bool rope_cache;
     bool graph_reuse;
+    bool swa_full;
     bool prefetch_experts;
     bool k_cache_hadamard;
     bool v_cache_hadamard;

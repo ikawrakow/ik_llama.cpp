@@ -79,6 +79,15 @@ struct llama_kv_cache {
     // computed before each graph build
     uint32_t n = 0;
 
+    // SWA ring (Laguna): sliding-window layers allocate only size_swa rows and are
+    // written at cell % size_swa. ring_occ[r] = index of the cell whose K/V currently
+    // occupy ring slot r (-1 = never written). Cell bookkeeping (cells/head/n) stays
+    // full-sized; only tensor storage, views and the SWA mask are ring-aware.
+    bool     swa_ring = false;
+    uint32_t size_swa = 0;
+    uint32_t ring_n_swa = 0; // hparams.n_swa, needed by seq_rm rewind-safety check
+    std::vector<int32_t> ring_occ;
+
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;
 

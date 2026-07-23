@@ -1886,6 +1886,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.flash_attn = false;
         return true;
     }
+    if (arg == "--swa-full") {
+        params.swa_full = true;
+        return true;
+    }
 
     if (arg == "-fa" || arg == "--flash-attn") {
         CHECK_ARG
@@ -3044,6 +3048,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
     options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
+    options.push_back({ "*",           "       --swa-full",             "use dense (full-context) KV for sliding-window layers, disabling the Laguna SWA ring (default: %s)", params.swa_full ? "true" : "false" });
     options.push_back({ "*",           "-fa, --flash-attn (auto|on|off|0|1)", "set Flash Attention (default: %s)", params.flash_attn ? "on" : "off" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-dsa,  --dsa",                  "enable GLM DSA sparse attention (GLM-DSA arch only; default: %s)", params.dsa ? "enabled" : "disabled" });
@@ -3110,6 +3115,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --top-k N",              "top-k sampling (default: %d, 0 = disabled)", sparams.top_k });
     options.push_back({ "*",           "       --top-p N",              "top-p sampling (default: %.1f, 1.0 = disabled)", (double)sparams.top_p });
     options.push_back({ "*",           "       --min-p N",              "min-p sampling (default: %.1f, 0.0 = disabled)", (double)sparams.min_p });
+    options.push_back({ "*",           "       --dry-multiplier N",     "DRY repetition penalty multiplier (default: %.1f, 0.0 = disabled)", (double)sparams.dry_multiplier });
+    options.push_back({ "*",           "       --dry-base N",           "DRY repetition penalty base (default: %.2f)", (double)sparams.dry_base });
+    options.push_back({ "*",           "       --dry-allowed-length N", "DRY allowed repeat length before penalty (default: %d)", sparams.dry_allowed_length });
+    options.push_back({ "*",           "       --dry-penalty-last-n N", "DRY penalty scan window (default: %d, -1 = context size, 0 = disabled)", sparams.dry_penalty_last_n });
     options.push_back({ "*",           "       --tfs N",                "tail free sampling, parameter z (default: %.1f, 1.0 = disabled)", (double)sparams.tfs_z });
     options.push_back({ "*",           "       --typical N",            "locally typical sampling, parameter p (default: %.1f, 1.0 = disabled)", (double)sparams.typical_p });
     options.push_back({ "*",           "       --repeat-last-n N",      "last n tokens to consider for penalize (default: %d, 0 = disabled, -1 = ctx_size)", sparams.penalty_last_n });
@@ -4292,6 +4301,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.flash_attn        = params.flash_attn;
+    cparams.swa_full          = params.swa_full;
     cparams.mla_attn          = params.mla_attn;
     cparams.attn_max_batch    = params.attn_max_batch;
     cparams.fused_moe_up_gate = params.fused_moe_up_gate;

@@ -687,6 +687,17 @@ bool llama_context::update_cache_copies() {
             if (vl) {
                 GGML_ASSERT(kl->n_device == vl->n_device);
             }
+            // SWA ring: patch with the ring offset; a write that would wrap the ring
+            // changes the graph shape, so reuse is refused (wrapped-built graphs have
+            // null cache_copies entries and are refused by the checks below)
+            size_t head_il = kv_self.head;
+            if (kv_self.swa_ring && model.hparams.swa_layers[il]) {
+                const auto * rp = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
+                head_il = kv_self.head % kv_self.size_swa;
+                if (!rp || head_il + (uint32_t) rp->n_tokens > kv_self.size_swa) {
+                    return false;
+                }
+            }
             for (int id = 0; id < kl->n_device; ++id) {
                 if (!kl->splits[id]) continue;
                 size_t idx = 2*model.splits.size()*il + 2*id + 0;
@@ -694,7 +705,7 @@ bool llama_context::update_cache_copies() {
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kl->splits[id]) {
                     return false;
                 }
-                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->view_offs = head_il*c.step;
                 c.cpy->src[1]->data = (char *)kl->splits[id]->data + c.cpy->view_offs;
                 c.cpy->data = c.cpy->src[1]->data;
             }
@@ -705,16 +716,25 @@ bool llama_context::update_cache_copies() {
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != vl->splits[id]) {
                     return false;
                 }
-                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->view_offs = head_il*c.step;
                 c.cpy->src[1]->data = (char *)vl->splits[id]->data + c.cpy->view_offs;
                 c.cpy->data = c.cpy->src[1]->data;
             }
         } else {
+            // SWA ring: patch with the ring offset; refuse reuse if the write would wrap
+            size_t head_il = kv_self.head;
+            if (kv_self.swa_ring && model.hparams.swa_layers[il]) {
+                const auto * rp = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
+                head_il = kv_self.head % kv_self.size_swa;
+                if (!rp || head_il + (uint32_t) rp->n_tokens > kv_self.size_swa) {
+                    return false;
+                }
+            }
             auto& c = cache_copies[2*il+0];
             if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) {
                 return false;
             }
-            c.cpy->view_offs = kv_self.head*c.step;
+            c.cpy->view_offs = head_il*c.step;
             c.cpy->src[1]->data = (char *)kv_self.k_l[il]->data + c.cpy->view_offs;
             c.cpy->data = c.cpy->src[1]->data;
             if (!kv_self.v_l.empty() && kv_self.v_l[il]) {
@@ -722,7 +742,7 @@ bool llama_context::update_cache_copies() {
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) {
                     return false;
                 }
-                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->view_offs = head_il*c.step;
                 c.cpy->src[1]->data = (char *)kv_self.v_l[il]->data + c.cpy->view_offs;
                 c.cpy->data = c.cpy->src[1]->data;
             }
@@ -1049,6 +1069,7 @@ static bool llama_kv_cache_init(
                          ggml_type   type_v,
                          ggml_type   idx_type_k,
                           uint32_t   kv_size,
+                          uint32_t   kv_size_swa,
                               bool   offload,
                           ggml_type  type_k_first,
                           ggml_type  type_k_last,
@@ -1084,6 +1105,15 @@ static bool llama_kv_cache_init(
 
     cache.cells.clear();
     cache.cells.resize(kv_size);
+
+    // SWA ring (Laguna): sliding-window layers store K/V in a kv_size_swa-cell ring
+    cache.swa_ring = kv_size_swa > 0 && kv_size_swa < kv_size;
+    cache.size_swa = cache.swa_ring ? kv_size_swa : 0;
+    cache.ring_n_swa = cache.swa_ring ? model.hparams.n_swa : 0;
+    cache.ring_occ.clear();
+    if (cache.swa_ring) {
+        cache.ring_occ.assign(cache.size_swa, -1);
+    }
 
     if (cache.recurrent || llm_arch_is_hybrid(model.arch)) {
         // init state copy sources
@@ -1329,6 +1359,8 @@ static bool llama_kv_cache_init(
                 split_cache_i = false;
             }
             int n_embd_head_v = hparams.n_embd_head_v(i);
+            // SWA ring: sliding-window layers get window-sized K/V tensors
+            const uint32_t kv_size_l = (cache.swa_ring && hparams.swa_layers[i]) ? cache.size_swa : kv_size;
             auto this_type_k = type_k;
             if (model.arch != LLM_ARCH_OPENPANGU && type_k_first != type_k && n_k_first > 0 && i < n_k_first) {
                 this_type_k = type_k_first;
@@ -1339,7 +1371,7 @@ static bool llama_kv_cache_init(
             if (this_type_k != type_k) {
                 LLAMA_LOG_INFO("================= Setting K-cache type in layer %2d to %s\n", i, ggml_type_name(this_type_k));
             }
-            int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
+            int64_t v_ne = int64_t(n_embd_v_row)*kv_size_l;
             auto this_type_v = type_v;
             if (model.arch != LLM_ARCH_OPENPANGU && type_v_first != type_v && n_v_first > 0 && i < n_v_first) {
                 this_type_v = type_v_first;
@@ -1359,7 +1391,7 @@ static bool llama_kv_cache_init(
             } else if (is_dsv4_k_only) {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
             } else {
-                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size_l);
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
             }
 
@@ -1410,7 +1442,7 @@ static bool llama_kv_cache_init(
                         LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
                                 i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
                     }
-                    split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, nhead_kv * kv_size);
+                    split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, nhead_kv * kv_size_l);
                     auto split_name = k_name + '.' + std::to_string(is);
                     ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
                     mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
@@ -1421,7 +1453,7 @@ static bool llama_kv_cache_init(
                 for (int is = 0; is < extra_V->n_device; ++is) {
                     auto split = extra_V->splits[is];
                     if (!split) continue;
-                    split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, this_type_v, split->ne[1] * kv_size);
+                    split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, this_type_v, split->ne[1] * kv_size_l);
                     auto split_name = v_name + '.' + std::to_string(is);
                     ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
                     mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
@@ -1589,6 +1621,13 @@ static bool llama_kv_cache_find_slot(
 
         for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
             cache.cells[cache.head + i].seq_id.insert(batch.seq_id[i][j]);
+        }
+    }
+
+    if (cache.swa_ring) {
+        // record which cell's K/V now physically occupy each ring slot
+        for (uint32_t i = 0; i < n_tokens; i++) {
+            cache.ring_occ[(cache.head + i) % cache.size_swa] = (int32_t)(cache.head + i);
         }
     }
 
@@ -2069,6 +2108,10 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     cache.head = 0;
     cache.used = 0;
 
+    if (cache.swa_ring) {
+        std::fill(cache.ring_occ.begin(), cache.ring_occ.end(), -1);
+    }
+
     for (auto & buf : cache.bufs) {
         ggml_backend_buffer_clear(buf, 0);
     }
@@ -2099,6 +2142,36 @@ static bool llama_kv_cache_seq_rm(
             // seq_id is negative, then the range should include everything or nothing
             if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
                 return false;
+            }
+        }
+    }
+
+    // SWA ring: removing the tail of a sequence rewinds its append point to p0.
+    // That is only safe while every cell inside the attention window behind p0
+    // is still resident in its ring slot; otherwise the rewound sequence would
+    // attend to K/V the ring has already overwritten. Refuse (per the contract
+    // above) so callers fall back to clearing the whole sequence. Whole-sequence
+    // removals (p0 == 0) never fail, and mid-range removals keep the tail — and
+    // with it the append point — untouched.
+    if (cache.swa_ring && p0 > 0) {
+        llama_pos pos_max  = -1; // highest pos among the affected cells
+        llama_pos pos_tail = -1; // highest pos surviving the removal (>= p1)
+        for (uint32_t i = 0; i < cache.size; ++i) {
+            const auto & cell = cache.cells[i];
+            if (cell.pos < 0) continue;
+            if (seq_id >= 0 && !cell.has_seq_id(seq_id)) continue;
+            pos_max = std::max(pos_max, cell.pos);
+            if (cell.pos >= p1) pos_tail = std::max(pos_tail, cell.pos);
+        }
+        if (pos_tail < 0 && pos_max >= p0) {
+            for (uint32_t i = 0; i < cache.size; ++i) {
+                const auto & cell = cache.cells[i];
+                if (cell.pos < 0 || cell.pos >= p0) continue;
+                if (seq_id >= 0 && !cell.has_seq_id(seq_id)) continue;
+                if (p0 - cell.pos <= (llama_pos) cache.ring_n_swa &&
+                    cache.ring_occ[i % cache.size_swa] != (int32_t) i) {
+                    return false;
+                }
             }
         }
     }
@@ -5038,6 +5111,59 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
+            // SWA ring (Laguna): the SWA mask is [size_swa, n_tokens_padded], indexed by
+            // ring slot. Fill it from ring occupancy here and exclude it from the dense
+            // n_kv-wide fill loops below.
+            if (mask_kv_self.swa_ring && (data_swa || data_swa_f16)) {
+                float     * data_ring     = data_swa;     data_swa     = nullptr;
+                ggml_half * data_ring_f16 = data_swa_f16; data_swa_f16 = nullptr;
+
+                const int64_t   W      = mask_kv_self.size_swa;
+                const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
+                const ggml_half h_zero = ggml_fp32_to_fp16(0.0f);
+                for (int j = 0; j < n_tokens; ++j) {
+                    const llama_pos    pos    = batch.pos[j];
+                    const llama_seq_id seq_id = batch.seq_id[j][0];
+                    for (int64_t r = 0; r < W; ++r) {
+                        bool visible = false;
+                        const int32_t c = mask_kv_self.ring_occ[r];
+                        if (c >= 0) {
+                            const auto & cell = mask_kv_self.cells[c];
+                            visible = cell.pos >= 0 && cell.has_seq_id(seq_id) && cell.pos <= pos &&
+                                      pos - cell.pos < (int32_t) n_swa_eff;
+                        }
+                        if (data_ring)     data_ring[j*W + r]     = visible ? 0.0f : -INFINITY;
+                        if (data_ring_f16) data_ring_f16[j*W + r] = visible ? h_zero : h_inf;
+                    }
+                }
+                const int64_t n_tokens_padded = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_tokens_padded > n_tokens) {
+                    if (data_ring) {
+                        std::fill(data_ring + int64_t(n_tokens)*W, data_ring + n_tokens_padded*W, -INFINITY);
+                    }
+                    if (data_ring_f16) {
+                        std::fill(data_ring_f16 + int64_t(n_tokens)*W, data_ring_f16 + n_tokens_padded*W, h_inf);
+                    }
+                }
+
+                // occupancy guard: every cell still inside some query's window must be
+                // its slot's occupant, otherwise its K/V were overwritten and the result
+                // would be silently wrong (non-append-only cache use)
+                llama_pos pos_min = std::numeric_limits<llama_pos>::max();
+                llama_pos pos_max = std::numeric_limits<llama_pos>::min();
+                for (int j = 0; j < n_tokens; ++j) {
+                    pos_min = std::min(pos_min, batch.pos[j]);
+                    pos_max = std::max(pos_max, batch.pos[j]);
+                }
+                for (int64_t i = 0; i < n_kv; ++i) {
+                    const auto & cell = mask_kv_self.cells[i];
+                    if (cell.pos < 0 || cell.pos > pos_max || cell.is_empty()) continue;
+                    if (pos_min - cell.pos < (int32_t) n_swa_eff && mask_kv_self.ring_occ[i % W] != (int32_t) i) {
+                        GGML_ABORT("SWA ring KV: a cell inside the attention window was overwritten; run with --swa-full");
+                    }
+                }
+            }
+
             if (lctx.inp_KQ_mask_swa_win) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa_win->buffer));
                 if (cparams.flash_attn) {
@@ -5313,6 +5439,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
+            if (kv_self.swa_ring && lctx.inp_KQ_mask_swa) {
+                // this non-causal path fills the SWA mask cell-indexed and dense-width,
+                // which does not exist under the ring layout
+                GGML_ABORT("SWA ring KV: non-causal SWA mask path is not supported; run with --swa-full");
+            }
             if (lctx.inp_KQ_mask_swa) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa->buffer));
                 if (cparams.flash_attn) {
@@ -6876,6 +7007,12 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
     // apply K-shift if needed
     if (lctx.model.hparams.rope_type != LLAMA_ROPE_TYPE_NONE && lctx.kv_self.has_shift) {
+        if (lctx.kv_self.swa_ring) {
+            // ring rows are keyed by cell % size_swa; the K-shift graph ropes dense
+            // per-cell rows and would rotate the wrong entries
+            LLAMA_LOG_ERROR("%s: context shift is not supported with SWA ring KV (Laguna); run with --swa-full\n", __func__);
+            return 1;
+        }
         if (!get_can_shift(lctx)) {
             if (lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
                 LLAMA_LOG_WARN("%s: DeepSeek4 does not support context shifting; use --no-context-shift or increase context size\n",
@@ -6937,6 +7074,10 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
     // defragment the KV cache if needed
     if (lctx.kv_self.do_defrag) {
+        if (lctx.kv_self.swa_ring) {
+            // defrag moves cells; the ring's cell % size_swa mapping cannot follow
+            GGML_ABORT("KV defrag is not supported with SWA ring KV (Laguna); run with --swa-full");
+        }
         llama_kv_cache_defrag_internal(lctx);
 
         need_reserve = true;
@@ -7286,6 +7427,7 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
         /*.graph_reuse                 =*/ true,
+        /*.swa_full                    =*/ false,
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
         /*.dsa_top_k                   =*/ -1,
@@ -7761,6 +7903,7 @@ struct llama_context * llama_init_from_model(
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
+    cparams.swa_full         = params.swa_full;
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
     cparams.dsa_top_k        = params.dsa_top_k;
@@ -7965,6 +8108,28 @@ struct llama_context * llama_init_from_model(
         type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
     }
 
+    // Laguna SWA ring: allocate sliding-window layers at (padded) window size instead
+    // of n_ctx. Exact for append-only single-sequence use; incompatible ops (K-shift,
+    // defrag, state save/load) are guarded. --swa-full restores dense allocation.
+    uint32_t kv_size_swa = 0;
+    if (model->arch == LLM_ARCH_LAGUNA && hparams.n_swa > 0 && !cparams.swa_full) {
+        if (cparams.n_seq_max > 1) {
+            LLAMA_LOG_WARN("%s: SWA ring KV needs n_seq_max == 1 (got %u) -> using full-size SWA KV\n",
+                    __func__, cparams.n_seq_max);
+        } else if (cparams.defrag_thold >= 0.0f) {
+            LLAMA_LOG_WARN("%s: SWA ring KV is incompatible with KV defrag -> using full-size SWA KV\n", __func__);
+        } else {
+            const uint32_t pad = std::max<uint32_t>(llama_kv_cache_get_padding(cparams), 256u);
+            kv_size_swa = GGML_PAD(hparams.n_swa + cparams.n_ubatch, pad);
+            if (kv_size_swa >= kv_size) {
+                kv_size_swa = 0; // window does not undercut the full context; dense is not larger
+            } else {
+                LLAMA_LOG_INFO("%s: SWA ring KV: n_swa = %u -> ring size %u cells (full context %u); --swa-full disables\n",
+                        __func__, hparams.n_swa, kv_size_swa, kv_size);
+            }
+        }
+    }
+
     GGML_ASSERT(hparams.n_embd_head_k(0) % ggml_blck_size(type_k) == 0);
     GGML_ASSERT(hparams.n_embd_head_v(0) % ggml_blck_size(type_v) == 0);
     if (!hparams.vocab_only) {
@@ -8124,7 +8289,7 @@ struct llama_context * llama_init_from_model(
         }
         ctx->backends.push_back(ctx->backend_cpu);
 
-        if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, params.idx_type_k, kv_size, cparams.offload_kqv,
+        if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, params.idx_type_k, kv_size, kv_size_swa, cparams.offload_kqv,
                     params.type_k_first, params.type_k_last, params.type_v_first, params.type_v_last,
                     params.n_k_first, params.n_k_last, params.n_v_first, params.n_v_last)) {
             LLAMA_LOG_ERROR("%s: llama_kv_cache_init() failed for self-attention cache\n", __func__);
@@ -9117,6 +9282,10 @@ void llama_spec_ckpt_discard(struct llama_context * ctx) {
     kv.ckpt.cpu_state_data.clear();
 }
 
+bool llama_kv_self_is_swa_ring(const struct llama_context * ctx) {
+    return ctx->kv_self.swa_ring;
+}
+
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     const bool result = llama_kv_cache_seq_rm(ctx->kv_self, seq_id, p0, p1);
     if (result && ctx->model.arch == LLM_ARCH_DEEPSEEK4 && p0 <= 0 && p1 < 0) {
@@ -9306,6 +9475,11 @@ struct llama_data_write {
         llama_state_seq_flags flags = 0) {
         const struct llama_kv_cache & kv_self = ctx->kv_self;
         const struct llama_hparams & hparams = ctx->model.hparams;
+        if (kv_self.swa_ring) {
+            // ring tensors hold size_swa rows keyed by cell % size_swa; the dense
+            // cell-range serialization below would write the wrong rows
+            GGML_ABORT("state save is not supported with SWA ring KV (Laguna); run with --swa-full");
+        }
         bool need_kv = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
         // v_state: 0 -> not transposed V cache
         //          1 -> transposed V cache
@@ -9739,6 +9913,10 @@ struct llama_data_read {
     bool read_kv_cache_data(struct llama_context * ctx, uint32_t cell_count, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
         const struct llama_hparams & hparams = ctx->model.hparams;
         struct llama_kv_cache & kv_self = ctx->kv_self;
+        if (kv_self.swa_ring) {
+            LLAMA_LOG_ERROR("%s: state load is not supported with SWA ring KV (Laguna); run with --swa-full\n", __func__);
+            return false;
+        }
         bool need_kv = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
         // v_state: 0 -> not transposed V cache
         //          1 -> transposed V cache
@@ -10492,6 +10670,14 @@ bool llama_state_save_file(struct llama_context * ctx, const char * path_session
 
 static size_t llama_state_seq_get_data_internal(struct llama_context * ctx, llama_data_write & data_ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {
     if (!llama_state_io_supported(ctx, __func__)) {
+        return 0;
+    }
+    // the SWA ring stores only a window of each sequence's KV; a serialized
+    // sequence state would be incomplete. Refuse gracefully (background users
+    // like the server prompt cache treat 0 as "cannot save") instead of hitting
+    // the write_kv_cache_data abort that guards user-initiated full-state saves.
+    if (ctx->kv_self.swa_ring && (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
+        LLAMA_LOG_WARN("%s: sequence KV state cannot be serialized with the SWA ring KV cache; run with --swa-full\n", __func__);
         return 0;
     }
     llama_synchronize(ctx);

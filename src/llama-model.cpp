@@ -2248,6 +2248,13 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
 
 size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const {
     if (il < 0 || il >= hparams.n_layer) return 0;
+    if (arch == LLM_ARCH_LAGUNA && hparams.n_swa > 0 && hparams.swa_layers[il]) {
+        // SWA ring KV: sliding-window layers allocate GGML_PAD(n_swa + n_ubatch, >=256)
+        // cells instead of the full context. n_ubatch is not known here, so bound it by
+        // 4096 to keep this an upper estimate for typical ubatch sizes. Without this,
+        // -sm graph auto-fit rejects long-context layouts the ring actually fits.
+        kv_size = std::min(kv_size, (uint32_t) GGML_PAD(hparams.n_swa + 4096, 256));
+    }
     if (hparams.recurrent_layer_arr[il]) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
         return hparams.n_embd_v_s() * state_sots * sizeof(float);

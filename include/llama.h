@@ -491,6 +491,7 @@ extern "C" {
         bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
         bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
         bool graph_reuse;       // whether to reuse graphs when possible [EXPERIMENTAL]
+        bool swa_full;          // allocate full-size KV for sliding-window layers (disables the Laguna SWA ring) [EXPERIMENTAL]
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (off by default) [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
@@ -867,6 +868,11 @@ extern "C" {
                     llama_seq_id   seq_id,
                        llama_pos   p0,
                        llama_pos   p1);
+
+    // Returns true when the context uses the Laguna SWA ring KV cache for its
+    // sliding-window layers. Sequence KV state cannot be serialized in that
+    // mode (llama_state_seq_* returns 0); --swa-full disables the ring.
+    LLAMA_API bool llama_kv_self_is_swa_ring(const struct llama_context * ctx);
 
     // Copy all tokens that belong to the specified sequence to another sequence
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence

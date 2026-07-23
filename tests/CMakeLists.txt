@@ -214,3 +214,10 @@ add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 
+
+# Laguna SWA ring KV parity (needs python3 + numpy; generates its own tiny GGUF)
+add_test(
+    NAME test-laguna-swa-ring
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test-laguna-swa-ring.sh ${CMAKE_BINARY_DIR}
+)
+set_property(TEST test-laguna-swa-ring PROPERTY LABELS main)
