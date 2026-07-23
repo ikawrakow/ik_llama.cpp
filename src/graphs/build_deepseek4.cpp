@@ -999,10 +999,10 @@ static ggml_tensor * dsv4_build_lid_top_k(
     indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / std::sqrt(float(n_embd_indexer_head * n_indexer_head)));
 
     ggml_tensor * indexer_k = dsv4_comp_get_k(ctx0,
-            llm.lctx.dsv4.cache.lid_k[(size_t) il],
+            llm.lctx.dsv4.cache.lid_k[il],
             llm.lctx.dsv4.lid_ctx,
             n_embd_indexer_head,
-            llm.lctx.dsv4.cache.lid_k[(size_t) il]->ne[1]/std::max<uint32_t>(1, llm.lctx.dsv4.cache.n_stream));
+            llm.lctx.dsv4.cache.lid_k[il]->ne[1]/std::max<uint32_t>(1, llm.lctx.dsv4.cache.n_stream));
     llm.cb(indexer_k, "lid_k", il);
 
     const int64_t n_stream = std::max<int64_t>(1, indexer_k->ne[3]);
@@ -1107,7 +1107,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         qr = llm_build_norm(ctx0, qr, hparams, model.layers[il].attn_q_a_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(qr, "qr_norm", il);
 
-        const int64_t ratio = hparams.dsv4_compress_ratios[(size_t) il];
+        const int64_t ratio = hparams.dsv4_compress_ratios[il];
         const bool use_compress_rope = ratio != 0;
         const float freq_base_l = use_compress_rope ? hparams.dsv4_compress_rope_base : freq_base;
         const float freq_scale_l = use_compress_rope ? freq_scale : 1.0f;
@@ -1193,8 +1193,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             ggml_tensor * csa_dep = nullptr;
 
             if (lctx.dsv4.inputs.csa.state_write_idxs != nullptr && lctx.dsv4.csa_plan.state_write_idxs.size() > 0) {
-                ggml_tensor * csa_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.csa_state_kv[(size_t) il], csa_state_kv, 1, "dsv4_csa_source_kv");
-                ggml_tensor * csa_source_score = dsv4_concat_named(ctx0, lctx.dsv4.cache.csa_state_score[(size_t) il], csa_state_score, 1, "dsv4_csa_source_score");
+                ggml_tensor * csa_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.csa_state_kv[il], csa_state_kv, 1, "dsv4_csa_source_kv");
+                ggml_tensor * csa_source_score = dsv4_concat_named(ctx0, lctx.dsv4.cache.csa_state_score[il], csa_state_score, 1, "dsv4_csa_source_score");
                 ggml_tensor * csa_comp = build_overlap_compressed_kv_from_state(
                         ctx0, *this,
                         csa_source_kv, csa_source_score,
@@ -1206,7 +1206,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                         il,
                         "csa_state_compress");
                 ggml_tensor * csa_comp_2d = ggml_reshape_2d(ctx0, csa_comp, n_embd_head, lctx.dsv4.inputs.csa.state_write_idxs->ne[0]);
-                ggml_tensor * csa_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.csa_k[(size_t) il], csa_comp_2d, lctx.dsv4.inputs.csa.state_write_idxs, n_embd_head);
+                ggml_tensor * csa_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.csa_k[il], csa_comp_2d, lctx.dsv4.inputs.csa.state_write_idxs, n_embd_head);
                 ggml_build_forward_expand(gf, csa_write);
                 cb(csa_write, "dsv4_csa_k_write", il);
                 csa_dep = csa_comp;
@@ -1219,8 +1219,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             cb(csa_persist_kv, "csa_persist_kv", il);
             ggml_tensor * csa_persist_score = ggml_get_rows(ctx0, csa_state_score, lctx.dsv4.inputs.csa.state_persist_src_idxs);
             cb(csa_persist_score, "csa_persist_score", il);
-            ggml_tensor * csa_state_kv_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.csa_state_kv[(size_t) il], csa_persist_kv, lctx.dsv4.inputs.csa.state_persist_dst_idxs);
-            ggml_tensor * csa_state_score_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.csa_state_score[(size_t) il], csa_persist_score, lctx.dsv4.inputs.csa.state_persist_dst_idxs);
+            ggml_tensor * csa_state_kv_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.csa_state_kv[il], csa_persist_kv, lctx.dsv4.inputs.csa.state_persist_dst_idxs);
+            ggml_tensor * csa_state_score_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.csa_state_score[il], csa_persist_score, lctx.dsv4.inputs.csa.state_persist_dst_idxs);
             ggml_build_forward_expand(gf, csa_state_kv_write);
             ggml_build_forward_expand(gf, csa_state_score_write);
             cb(csa_state_kv_write, "dsv4_csa_k_state_persist", il);
@@ -1236,8 +1236,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             ggml_tensor * lid_dep = nullptr;
 
             if (lctx.dsv4.inputs.lid.state_write_idxs != nullptr && lctx.dsv4.lid_plan.state_write_idxs.size() > 0) {
-                ggml_tensor * lid_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.lid_state_kv[(size_t) il], lid_state_kv, 1, "dsv4_lid_source_kv");
-                ggml_tensor * lid_source_score = dsv4_concat_named(ctx0, lctx.dsv4.cache.lid_state_score[(size_t) il], lid_state_score, 1, "dsv4_lid_source_score");
+                ggml_tensor * lid_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.lid_state_kv[il], lid_state_kv, 1, "dsv4_lid_source_kv");
+                ggml_tensor * lid_source_score = dsv4_concat_named(ctx0, lctx.dsv4.cache.lid_state_score[il], lid_state_score, 1, "dsv4_lid_source_score");
                 ggml_tensor * lid_comp = build_overlap_compressed_kv_from_state(
                         ctx0, *this,
                         lid_source_kv, lid_source_score,
@@ -1254,7 +1254,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 lid_comp = ggml_hadamard(ctx0, lid_comp, hadamard_block);
                 cb(lid_comp, "lid_state_compress_hadamard", il);
                 ggml_tensor * lid_comp_2d = ggml_reshape_2d(ctx0, lid_comp, hparams.indexer_head_size, lctx.dsv4.inputs.lid.state_write_idxs->ne[0]);
-                ggml_tensor * lid_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.lid_k[(size_t) il], lid_comp_2d, lctx.dsv4.inputs.lid.state_write_idxs, hparams.indexer_head_size);
+                ggml_tensor * lid_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.lid_k[il], lid_comp_2d, lctx.dsv4.inputs.lid.state_write_idxs, hparams.indexer_head_size);
                 ggml_build_forward_expand(gf, lid_write);
                 cb(lid_write, "dsv4_lid_k_write", il);
                 lid_dep = lid_comp;
@@ -1267,8 +1267,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             cb(lid_persist_kv, "lid_persist_kv", il);
             ggml_tensor * lid_persist_score = ggml_get_rows(ctx0, lid_state_score, lctx.dsv4.inputs.lid.state_persist_src_idxs);
             cb(lid_persist_score, "lid_persist_score", il);
-            ggml_tensor * lid_state_kv_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.lid_state_kv[(size_t) il], lid_persist_kv, lctx.dsv4.inputs.lid.state_persist_dst_idxs);
-            ggml_tensor * lid_state_score_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.lid_state_score[(size_t) il], lid_persist_score, lctx.dsv4.inputs.lid.state_persist_dst_idxs);
+            ggml_tensor * lid_state_kv_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.lid_state_kv[il], lid_persist_kv, lctx.dsv4.inputs.lid.state_persist_dst_idxs);
+            ggml_tensor * lid_state_score_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.lid_state_score[il], lid_persist_score, lctx.dsv4.inputs.lid.state_persist_dst_idxs);
             ggml_build_forward_expand(gf, lid_state_kv_write);
             ggml_build_forward_expand(gf, lid_state_score_write);
             cb(lid_state_kv_write, "dsv4_lid_k_state_persist", il);
@@ -1278,8 +1278,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         if (ratio == llama_context::dsv4_runtime::HCA_RATIO && hca_state_kv != nullptr && hca_state_score != nullptr) {
             ggml_tensor * hca_dep = nullptr;
             if (lctx.dsv4.inputs.hca.state_write_idxs != nullptr && lctx.dsv4.hca_plan.state_write_idxs.size() > 0) {
-                ggml_tensor * hca_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.hca_state_kv[(size_t) il], hca_state_kv, 1, "dsv4_hca_source_kv");
-                ggml_tensor * hca_source_score = dsv4_concat_named(ctx0, lctx.dsv4.cache.hca_state_score[(size_t) il], hca_state_score, 1, "dsv4_hca_source_score");
+                ggml_tensor * hca_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.hca_state_kv[il], hca_state_kv, 1, "dsv4_hca_source_kv");
+                ggml_tensor * hca_source_score = dsv4_concat_named(ctx0, lctx.dsv4.cache.hca_state_score[il], hca_state_score, 1, "dsv4_hca_source_score");
                 ggml_tensor * hca_comp = build_hca_compressed_kv_from_state(
                         ctx0, *this,
                         hca_source_kv, hca_source_score,
@@ -1289,7 +1289,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                         n_embd_head,
                         il);
                 ggml_tensor * hca_comp_2d = ggml_reshape_2d(ctx0, hca_comp, n_embd_head, lctx.dsv4.inputs.hca.state_write_idxs->ne[0]);
-                ggml_tensor * hca_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.hca_k[(size_t) il], hca_comp_2d, lctx.dsv4.inputs.hca.state_write_idxs, n_embd_head);
+                ggml_tensor * hca_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.hca_k[il], hca_comp_2d, lctx.dsv4.inputs.hca.state_write_idxs, n_embd_head);
                 ggml_build_forward_expand(gf, hca_write);
                 cb(hca_write, "dsv4_hca_k_write", il);
                 hca_dep = hca_comp;
@@ -1302,8 +1302,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             ggml_tensor * hca_persist_score = ggml_get_rows(ctx0, hca_state_score, lctx.dsv4.inputs.hca.state_persist_src_idxs);
             cb(hca_persist_kv, "hca_persist_kv", il);
             cb(hca_persist_score, "hca_persist_score", il);
-            ggml_tensor * hca_state_kv_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.hca_state_kv[(size_t) il], hca_persist_kv, lctx.dsv4.inputs.hca.state_persist_dst_idxs);
-            ggml_tensor * hca_state_score_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.hca_state_score[(size_t) il], hca_persist_score, lctx.dsv4.inputs.hca.state_persist_dst_idxs);
+            ggml_tensor * hca_state_kv_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.hca_state_kv[il], hca_persist_kv, lctx.dsv4.inputs.hca.state_persist_dst_idxs);
+            ggml_tensor * hca_state_score_write = dsv4_comp_state_cpy(ctx0, lctx.dsv4.cache.hca_state_score[il], hca_persist_score, lctx.dsv4.inputs.hca.state_persist_dst_idxs);
             ggml_build_forward_expand(gf, hca_state_kv_write);
             ggml_build_forward_expand(gf, hca_state_score_write);
             cb(hca_state_kv_write, "dsv4_hca_k_state_persist", il);
@@ -1320,7 +1320,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         if (raw_k_write == nullptr) {
             llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, kv, nullptr, n_tokens, kv_head, cb, il);
         }
-        if (il < (int64_t) kv_self.v_l.size() && kv_self.v_l[(size_t) il] != nullptr) {
+        if (il < (int64_t) kv_self.v_l.size() && kv_self.v_l[il] != nullptr) {
             llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, nullptr, kv, n_tokens, kv_head, cb, il);
         }
 
@@ -1358,10 +1358,10 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                 lctx.dsv4.lid_plan.n_kv > 0 &&
                 !cparams.k_cache_hadamard) {
             ggml_tensor * csa_k = dsv4_comp_get_k(ctx0,
-                    lctx.dsv4.cache.csa_k[(size_t) il],
+                    lctx.dsv4.cache.csa_k[il],
                     lctx.dsv4.csa_ctx,
                     n_embd_head,
-                    lctx.dsv4.cache.csa_k[(size_t) il]->ne[1]/std::max<uint32_t>(1, lctx.dsv4.cache.n_stream));
+                    lctx.dsv4.cache.csa_k[il]->ne[1]/std::max<uint32_t>(1, lctx.dsv4.cache.n_stream));
             ggml_tensor * top_k = dsv4_build_lid_top_k(ctx0, *this, qr, cur, inp_pos, il, gf, cb);
             ggml_tensor * csa_mask = build_top_k_mask(ctx0,
                     dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, nullptr,
@@ -1418,10 +1418,10 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                         [](int32_t n_visible) { return n_visible > 0; }) &&
                 !cparams.k_cache_hadamard) {
             ggml_tensor * hca_k = dsv4_comp_get_k(ctx0,
-                    lctx.dsv4.cache.hca_k[(size_t) il],
+                    lctx.dsv4.cache.hca_k[il],
                     lctx.dsv4.hca_ctx,
                     n_embd_head,
-                    lctx.dsv4.cache.hca_k[(size_t) il]->ne[1]/std::max<uint32_t>(1, lctx.dsv4.cache.n_stream));
+                    lctx.dsv4.cache.hca_k[il]->ne[1]/std::max<uint32_t>(1, lctx.dsv4.cache.n_stream));
             const bool use_fattn = cparams.flash_attn;
             ggml_tensor * hca_mask = dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.hca.kq_mask, nullptr,
                     lctx.dsv4.hca_plan.n_kv, n_tokens, hca_k->ne[3], cb, il);
