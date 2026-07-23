@@ -854,7 +854,7 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
         int64_t ratio,
         int64_t n_embd_head,
         int il,
-        const char * tag, const llm_build_cb & cb) {
+        const char * tag) {
     const int64_t n_embd_head_rope = llm.hparams.n_rot;
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
     const int64_t n_blocks = comp_pos ? comp_pos->ne[0] : 0;
@@ -866,54 +866,63 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     kv_state = dsv4_append_zero_row(ctx0, kv_state, false);
     score_state = dsv4_append_zero_row(ctx0, score_state, true);
 
-    auto kv_state_prev = ggml_view_4d(ctx0, kv_state, n_embd_head, kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
-            kv_state->nb[1], kv_state->nb[2], kv_state->nb[3], 0);
-    auto kv_state_cur = ggml_view_4d(ctx0, kv_state, n_embd_head, kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
-            kv_state->nb[1], kv_state->nb[2], kv_state->nb[3], ggml_row_size(kv_state->type, n_embd_head));
-    auto score_state_prev = ggml_view_4d(ctx0, score_state, n_embd_head, score_state->ne[1], score_state->ne[2], score_state->ne[3],
-            score_state->nb[1], score_state->nb[2], score_state->nb[3], 0);
-    auto score_state_cur  = ggml_view_4d(ctx0, score_state, n_embd_head, score_state->ne[1], score_state->ne[2], score_state->ne[3],
-            score_state->nb[1], score_state->nb[2], score_state->nb[3], ggml_row_size(score_state->type, n_embd_head));
+    //printf("%s(%2d): ne0 = %ld, ratio = %ld, nblock = %ld\n", __func__, il, kv_state->ne[0], ratio, n_blocks);
 
-    ggml_tensor * prev_idxs = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, 0);
-    ggml_tensor * cur_idxs  = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, ratio * n_blocks);
+    //printf("state: %ld x %ld x %ld x %ld, score: %ld x %ld x %ld x %ld, idx: %ld x %ld x %ld x %ld\n",
+    //        kv_state->ne[0], kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
+    //        score_state->ne[0], score_state->ne[1], score_state->ne[2], score_state->ne[3],
+    //        state_read_idxs->ne[0], state_read_idxs->ne[1], state_read_idxs->ne[2], state_read_idxs->ne[3]);
+    ggml_tensor * comp = ggml_ds4_comp(ctx0, kv_state, score_state, state_read_idxs, ratio);
 
-    //ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state, prev_idxs);
-    //kv_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_prev, n_embd_head, ratio * n_blocks, kv_prev->nb[1], 0));
-    ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state_prev, prev_idxs);
-    cb(kv_prev, tag, il);
-    kv_prev = ggml_reshape_3d(ctx0, kv_prev, n_embd_head, ratio, n_blocks);
+    //auto kv_state_prev = ggml_view_4d(ctx0, kv_state, n_embd_head, kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
+    //        kv_state->nb[1], kv_state->nb[2], kv_state->nb[3], 0);
+    //auto kv_state_cur = ggml_view_4d(ctx0, kv_state, n_embd_head, kv_state->ne[1], kv_state->ne[2], kv_state->ne[3],
+    //        kv_state->nb[1], kv_state->nb[2], kv_state->nb[3], ggml_row_size(kv_state->type, n_embd_head));
+    //auto score_state_prev = ggml_view_4d(ctx0, score_state, n_embd_head, score_state->ne[1], score_state->ne[2], score_state->ne[3],
+    //        score_state->nb[1], score_state->nb[2], score_state->nb[3], 0);
+    //auto score_state_cur  = ggml_view_4d(ctx0, score_state, n_embd_head, score_state->ne[1], score_state->ne[2], score_state->ne[3],
+    //        score_state->nb[1], score_state->nb[2], score_state->nb[3], ggml_row_size(score_state->type, n_embd_head));
 
-    //ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state, prev_idxs);
-    //score_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, score_prev, n_embd_head, ratio * n_blocks, score_prev->nb[1], 0));
-    ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state_prev, prev_idxs);
-    cb(score_prev, tag, il);
-    score_prev = ggml_reshape_3d(ctx0, score_prev, n_embd_head, ratio, n_blocks);
+    //ggml_tensor * prev_idxs = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, 0);
+    //ggml_tensor * cur_idxs  = dsv4_view_1d(ctx0, state_read_idxs, ratio * n_blocks, ratio * n_blocks);
 
-    //ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state, cur_idxs);
-    //kv_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_cur, n_embd_head, ratio * n_blocks, kv_cur->nb[1],
-    //        ggml_row_size(kv_cur->type, n_embd_head)));
-    ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state_cur, cur_idxs);
-    cb(kv_cur, tag, il);
-    kv_cur = ggml_reshape_3d(ctx0, kv_cur, n_embd_head, ratio, n_blocks);
+    ////ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state, prev_idxs);
+    ////kv_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_prev, n_embd_head, ratio * n_blocks, kv_prev->nb[1], 0));
+    //ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state_prev, prev_idxs);
+    //cb(kv_prev, tag, il);
+    //kv_prev = ggml_reshape_3d(ctx0, kv_prev, n_embd_head, ratio, n_blocks);
 
-    //ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state, cur_idxs);
-    //score_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, score_cur, n_embd_head, ratio * n_blocks, score_cur->nb[1],
-    //        ggml_row_size(score_cur->type, n_embd_head)));
-    ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state_cur, cur_idxs);
-    cb(score_cur, tag, il);
-    score_cur = ggml_reshape_3d(ctx0, score_cur, n_embd_head, ratio, n_blocks);
+    ////ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state, prev_idxs);
+    ////score_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, score_prev, n_embd_head, ratio * n_blocks, score_prev->nb[1], 0));
+    //ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state_prev, prev_idxs);
+    //cb(score_prev, tag, il);
+    //score_prev = ggml_reshape_3d(ctx0, score_prev, n_embd_head, ratio, n_blocks);
 
-    ggml_tensor * values = dsv4_concat_named(ctx0, kv_prev, kv_cur, 1, "dsv4_comp_values");
-    ggml_tensor * scores = dsv4_concat_named(ctx0, score_prev, score_cur, 1, "dsv4_comp_scores");
-    values = ggml_cont(ctx0, ggml_permute(ctx0, values, 1, 0, 2, 3));
-    scores = ggml_cont(ctx0, ggml_permute(ctx0, scores, 1, 0, 2, 3));
+    ////ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state, cur_idxs);
+    ////kv_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_cur, n_embd_head, ratio * n_blocks, kv_cur->nb[1],
+    ////        ggml_row_size(kv_cur->type, n_embd_head)));
+    //ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state_cur, cur_idxs);
+    //cb(kv_cur, tag, il);
+    //kv_cur = ggml_reshape_3d(ctx0, kv_cur, n_embd_head, ratio, n_blocks);
 
-    ggml_tensor * weights = ggml_soft_max(ctx0, scores);
-    ggml_tensor * comp = ggml_mul(ctx0, values, weights);
-    comp = ggml_sum_rows(ctx0, comp);
-    //comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
-    comp = ggml_reshape_3d(ctx0, comp, comp->ne[1], comp->ne[2], comp->ne[3]);
+    ////ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state, cur_idxs);
+    ////score_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, score_cur, n_embd_head, ratio * n_blocks, score_cur->nb[1],
+    ////        ggml_row_size(score_cur->type, n_embd_head)));
+    //ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state_cur, cur_idxs);
+    //cb(score_cur, tag, il);
+    //score_cur = ggml_reshape_3d(ctx0, score_cur, n_embd_head, ratio, n_blocks);
+
+    //ggml_tensor * values = dsv4_concat_named(ctx0, kv_prev, kv_cur, 1, "dsv4_comp_values");
+    //ggml_tensor * scores = dsv4_concat_named(ctx0, score_prev, score_cur, 1, "dsv4_comp_scores");
+    //values = ggml_cont(ctx0, ggml_permute(ctx0, values, 1, 0, 2, 3));
+    //scores = ggml_cont(ctx0, ggml_permute(ctx0, scores, 1, 0, 2, 3));
+
+    //ggml_tensor * weights = ggml_soft_max(ctx0, scores);
+    //ggml_tensor * comp = ggml_mul(ctx0, values, weights);
+    //comp = ggml_sum_rows(ctx0, comp);
+    ////comp = ggml_cont(ctx0, ggml_permute(ctx0, comp, 1, 0, 2, 3));
+    //comp = ggml_reshape_3d(ctx0, comp, comp->ne[1], comp->ne[2], comp->ne[3]);
+    //printf("comp: %ld x %ld x %ld\n", comp->ne[0], comp->ne[1], comp->ne[2]);
     llm.cb(comp, tag, il);
 
     comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
@@ -1265,7 +1274,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                         llama_context::dsv4_runtime::CSA_RATIO,
                         n_embd_head,
                         il,
-                        "csa_state_compress", cb);
+                        "csa_state_compress");
                 ggml_tensor * csa_comp_2d = ggml_reshape_2d(ctx0, csa_comp, n_embd_head, lctx.dsv4.inputs.csa.state_write_idxs->ne[0]);
                 ggml_tensor * csa_write = dsv4_comp_cpy_k(ctx0, lctx.dsv4.cache.csa_k[(size_t) il], csa_comp_2d, lctx.dsv4.inputs.csa.state_write_idxs, n_embd_head);
                 ggml_build_forward_expand(gf, csa_write);
@@ -1308,7 +1317,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                         llama_context::dsv4_runtime::CSA_RATIO,
                         hparams.indexer_head_size,
                         il,
-                        "lid_state_compress", cb);
+                        "lid_state_compress");
                 const int hadamard_block = llama_model::hadamard_size((int) hparams.indexer_head_size);
                 GGML_ASSERT(hadamard_block > 0);
                 GGML_ASSERT(lid_comp->ne[0] % hadamard_block == 0);
