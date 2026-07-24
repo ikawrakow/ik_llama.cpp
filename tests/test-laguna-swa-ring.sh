@@ -2,9 +2,10 @@
 # Parity test for the Laguna SWA ring KV cache.
 #
 # The ring allocates window-sized K/V for sliding-window layers and must be
-# numerically equivalent to the dense allocation (--swa-full). This test:
+# numerically equivalent to the dense (default) allocation. Ring is opt-in via
+# --swa-compress. This test:
 #   1. generates a tiny random Laguna GGUF (deterministic seed),
-#   2. checks perplexity parity ring vs --swa-full on three legs:
+#   2. checks perplexity parity --swa-compress (ring) vs default (dense) on three legs:
 #        - no-FA, ub=48: prompt-processing incl. ring wrap-SPLIT writes
 #          (48 does not divide the ring size 256, so a ubatch straddles the
 #          ring end; a divisor would leave the split path untested),
@@ -25,6 +26,7 @@
 # (perplexity) is the tie-robust oracle; it matched to 7 significant digits.
 #
 # Usage: tests/test-laguna-swa-ring.sh [BUILD_DIR]   (default: ./build)
+# All ring-mode invocations below pass --swa-compress explicitly.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,6 +51,8 @@ python3 -c "import numpy" 2>/dev/null || {
 
 MODEL="$WORK_DIR/tiny-laguna.gguf"
 python3 "$REPO_DIR/tests/make-tiny-laguna-gguf.py" "$MODEL" --seed 42
+# The ring gate is now arch-generic (supports_swa_ring()); this Laguna GGUF
+# still exercises it since Laguna is not in the LLAMA4/OPENPANGU exclusion set.
 
 # Deterministic prompt long enough to cross the SWA window (n_swa=64 in the
 # tiny model) and to wrap the ring (256 cells < n_ctx = 768) repeatedly.
@@ -60,6 +64,8 @@ text = " ".join(words[i % 8] + str(i % 97) for i in range(600))
 open(sys.argv[1], "w").write(text)
 EOF
 
+# NOTE: ring is opt-in via --swa-compress; omitting it (the default) must stay
+# byte-identical to the project's pre-ring dense behavior.
 COMMON_ARGS=(-m "$MODEL" -c 768 -b 768 --seed 7 -t 4 --no-warmup)
 
 run_ppl() { # $1: extra args, $2: output tag
@@ -83,21 +89,55 @@ EOF
 }
 
 echo "== ppl leg 1: no-FA, ub=48 (prompt processing + wrap-split writes) =="
-run_ppl "-no-fa -ub 48"             ring-nofa
-run_ppl "-no-fa -ub 48 --swa-full"  full-nofa
+run_ppl "-no-fa -ub 48 --swa-compress"  ring-nofa
+run_ppl "-no-fa -ub 48"                 full-nofa
 check_ppl_pair ring-nofa full-nofa
 
+# Pins the generalized ring-size formula (n_swa=64, ub=48 -> GGML_PAD(64+48,256)=256):
+# a regression to a hardcoded ubatch assumption (the --fit estimator bug) would not
+# show up here since this is the real allocation path, but the ring size logged must
+# track the actual ubatch, not a fixed constant.
+if ! grep -q "ring size 256 cells" "$WORK_DIR/ppl-ring-nofa.log"; then
+    echo "FAIL: ring size did not match GGML_PAD(n_swa + n_ubatch, 256) for n_swa=64, ub=48"
+    tail -5 "$WORK_DIR/ppl-ring-nofa.log"
+    exit 1
+fi
+
+echo "== ppl leg 1b: -mqkv, no-FA, ub=48 (fused-QKV strided-view wrap split, v_trans branch) =="
+# -mqkv fuses Q/K/V into one weight, making Kcur/Vcur strided views into the combined
+# qkv tensor (row stride spans Q+K+V) -- non-contiguous by ggml's definition. Under
+# -no-fa the V cache is transposed (v_trans=true), which takes llm_build_kv_store's
+# view_2d-by-nb[1] wrap-split branch -- that branch already respects the real row
+# stride and needs no ggml_cont, and K is RoPE'd back to contiguous before storage,
+# so this leg does NOT exercise the ggml_cont fix itself. It still pins the strided
+# v_trans wrap path is correct for a non-owned-stride source. The actual fix (the
+# non-transposed V branch, only reachable with flash attention) is pinned by leg 2b
+# below.
+run_ppl "-no-fa -ub 48 -mqkv --swa-compress"  ring-mqkv
+run_ppl "-no-fa -ub 48 -mqkv"                 full-mqkv
+check_ppl_pair ring-mqkv full-mqkv
+
 echo "== ppl leg 2: FA, ub=48 (F16 mask + fattn kernels) =="
-if run_ppl "-fa on -ub 48" ring-fa 2>/dev/null && [ -s "$WORK_DIR/ppl-ring-fa.val" ]; then
-    run_ppl "-fa on -ub 48 --swa-full" full-fa
+if run_ppl "-fa on -ub 48 --swa-compress" ring-fa 2>/dev/null && [ -s "$WORK_DIR/ppl-ring-fa.val" ]; then
+    run_ppl "-fa on -ub 48" full-fa
     check_ppl_pair ring-fa full-fa
+
+    echo "== ppl leg 2b: FA + -mqkv, ub=48 (the actual fused-QKV ggml_cont wrap-split fix) =="
+    # With flash attention, v_trans is false (src/llama.cpp: cache.v_trans =
+    # !cache.recurrent && !cparams.flash_attn && ...), so llm_build_kv_store's
+    # NON-transposed V branch handles the wrap split -- the one that assumed a
+    # flat contiguous buffer and asserted/aborted on -mqkv's strided Vcur view
+    # before the W3 fix. This is the leg leg 1b (no-FA) cannot exercise.
+    run_ppl "-fa on -ub 48 -mqkv --swa-compress" ring-fa-mqkv
+    run_ppl "-fa on -ub 48 -mqkv"                full-fa-mqkv
+    check_ppl_pair ring-fa-mqkv full-fa-mqkv
 else
-    echo "flash attention unavailable on this build/CPU -> skipping FA leg"
+    echo "flash attention unavailable on this build/CPU -> skipping FA leg (and FA+mqkv leg)"
 fi
 
 echo "== ppl leg 3: no-FA, ub=1 + graph reuse (decode-shaped graphs, reuse patching) =="
-run_ppl "-no-fa -ub 1 -gr"             ring-ub1
-run_ppl "-no-fa -ub 1 -gr --swa-full"  full-ub1
+run_ppl "-no-fa -ub 1 -gr --swa-compress"  ring-ub1
+run_ppl "-no-fa -ub 1 -gr"                 full-ub1
 check_ppl_pair ring-ub1 full-ub1
 
 # Shorter prompt for generation legs: prompt + 350 generated tokens must fit
@@ -110,8 +150,8 @@ run_gen() { # $1: extra args, $2: output tag
     "$BIN/llama-cli" "${COMMON_ARGS[@]}" -ub 48 -f "$PROMPT_GEN_FILE" -n 350 --temp 0 --top-k 1 \
         --no-display-prompt $1 > "$WORK_DIR/gen-$2.txt" 2> "$WORK_DIR/gen-$2.log"
 }
-run_gen ""           ring
-run_gen "--swa-full" full
+run_gen "--swa-compress" ring
+run_gen ""               full
 [ -s "$WORK_DIR/gen-ring.txt" ] || { echo "FAIL: ring generation produced no output"; exit 1; }
 [ -s "$WORK_DIR/gen-full.txt" ] || { echo "FAIL: dense generation produced no output"; exit 1; }
 echo "generation smoke OK"
@@ -127,7 +167,9 @@ if ! grep -q "SWA ring KV" "$WORK_DIR/gen-ring.log"; then
     exit 1
 fi
 if grep -q "SWA ring KV: n_swa" "$WORK_DIR/ppl-full-nofa.log"; then
-    echo "FAIL: --swa-full run unexpectedly engaged the SWA ring"
+    # supports_swa_ring() must stay opt-in-gated: dense run (no --swa-compress)
+    # must never engage the ring regardless of arch eligibility.
+    echo "FAIL: default (no --swa-compress) run unexpectedly engaged the SWA ring"
     exit 1
 fi
 
@@ -144,30 +186,63 @@ assert ring < 0.8 * full, f"ring KV ({ring} MiB) did not shrink vs dense KV ({fu
 print(f"KV shrink OK ({full/max(ring,1e-9):.1f}x smaller)")
 EOF
 
-echo "== guard: state save must fail cleanly with the ring =="
-if "$BIN/llama-cli" "${COMMON_ARGS[@]}" -ub 48 -f "$PROMPT_GEN_FILE" -n 8 --temp 0 --top-k 1 \
+echo "== --fit estimator unit test: cache_size() SWA formula (no multi-device needed) =="
+# get_layer_sizes()/cache_size() are only ever called from the --fit multi-device
+# split-mode-graph path (src/llama.cpp), which throws below 2 devices -- unreachable
+# on this single-device build. test-cache-size-estimator loads $MODEL directly and
+# calls cache_size() itself, pinning the formula independent of that gate.
+if [ -x "$BIN/test-cache-size-estimator" ]; then
+    "$BIN/test-cache-size-estimator" "$MODEL" 2>&1 | tee "$WORK_DIR/cache-size-estimator.log"
+    grep -q "cache_size() estimator OK" "$WORK_DIR/cache-size-estimator.log" \
+        || { echo "FAIL: cache_size() estimator unit test did not report OK"; exit 1; }
+else
+    echo "SKIP: test-cache-size-estimator not built in $BIN"
+fi
+
+echo "== guard: state save must refuse gracefully with the ring (not abort the process) =="
+# A save API call on a ring context must never kill the caller -- llama_state_get_data_internal
+# refuses with a warning and returns 0 (llama-cli itself still exits 0: it discards the
+# save's return value, same as any other save failure in this codebase).
+if ! "$BIN/llama-cli" "${COMMON_ARGS[@]}" -ub 48 --swa-compress -f "$PROMPT_GEN_FILE" -n 8 --temp 0 --top-k 1 \
         --prompt-cache "$WORK_DIR/state.bin" > "$WORK_DIR/state.log" 2>&1; then
-    echo "FAIL: state save with ring should have failed"
+    echo "FAIL: state save with ring should exit cleanly (refuse-and-continue), not crash the process"
+    tail -20 "$WORK_DIR/state.log"
     exit 1
 fi
-if ! grep -qi "swa-full" "$WORK_DIR/state.log"; then
-    echo "FAIL: state-save failure lacks the SWA ring guard message"
+if ! grep -qi "cannot be serialized with the SWA ring" "$WORK_DIR/state.log"; then
+    echo "FAIL: state-save refusal lacks the specific SWA ring guard message"
     tail -5 "$WORK_DIR/state.log"
     exit 1
 fi
 echo "state-save guard OK"
 
-echo "== guard: context shift must fail cleanly with the ring =="
+echo "== guard: context shift must fail cleanly with the ring (error-return, not a crash) =="
 # n_ctx 512 keeps the ring engaged (ring 256 < 512); prompt + 400 generated
-# tokens overflow it, so llama-cli attempts a context shift, which the ring
-# must refuse with a message pointing at --swa-full (not corrupt silently).
-if "$BIN/llama-cli" -m "$MODEL" -c 512 -b 512 -ub 48 --seed 7 -t 4 --no-warmup \
-        -f "$PROMPT_GEN_FILE" -n 400 --temp 0 --top-k 1 > "$WORK_DIR/shift.log" 2>&1; then
+# tokens overflow it, so llama-cli attempts a context shift. The ring must
+# refuse via llama_kv_cache_update_internal's has_shift-gated check (a clean
+# error return, exit 1) -- NOT via a process abort. A clean-exit-only check
+# (nonzero status) cannot tell these apart: a SIGABRT core dump is also
+# nonzero. This regression-tests exactly that: an earlier attempt to guard
+# llama_kv_cache_seq_add() at the entrypoint (refusing the mutation instead of
+# letting it set has_shift for update_internal to detect) silently skipped the
+# shift, generation continued on stale positions, and the run crashed in the
+# ring's own out-of-window overwrite guard instead of stopping cleanly.
+set +e
+"$BIN/llama-cli" -m "$MODEL" -c 512 -b 512 -ub 48 --swa-compress --seed 7 -t 4 --no-warmup \
+        -f "$PROMPT_GEN_FILE" -n 400 --temp 0 --top-k 1 > "$WORK_DIR/shift.log" 2>&1
+SHIFT_RC=$?
+set -e
+if [ "$SHIFT_RC" -eq 0 ]; then
     echo "FAIL: generation past n_ctx with ring should have failed (context shift unsupported)"
     exit 1
 fi
-if ! grep -qi "swa-full" "$WORK_DIR/shift.log"; then
-    echo "FAIL: context-shift failure lacks the SWA ring guard message"
+if [ "$SHIFT_RC" -gt 128 ]; then
+    echo "FAIL: context-shift refusal crashed the process (signal $((SHIFT_RC - 128))) instead of a clean error return"
+    tail -20 "$WORK_DIR/shift.log"
+    exit 1
+fi
+if ! grep -qi "context shift is not supported with SWA ring" "$WORK_DIR/shift.log"; then
+    echo "FAIL: context-shift failure lacks the specific SWA ring guard message"
     tail -5 "$WORK_DIR/shift.log"
     exit 1
 fi
@@ -182,7 +257,7 @@ echo "== server: cache-reuse rewind must fall back, not crash =="
 if [ -x "$BIN/llama-server" ]; then
     SRV_PORT=18731
     # c=1024 ub=128 -> ring R = 256, n_swa = 64, slack = 192
-    "$BIN/llama-server" -m "$MODEL" -c 1024 -ub 128 --port $SRV_PORT --host 127.0.0.1 \
+    "$BIN/llama-server" -m "$MODEL" -c 1024 -ub 128 --swa-compress --port $SRV_PORT --host 127.0.0.1 \
         -np 1 --no-context-shift -t 4 --dry-multiplier 0.8 > "$WORK_DIR/server.log" 2>&1 &
     SRV_PID=$!
     for _ in $(seq 1 60); do
@@ -231,4 +306,31 @@ else
     echo "SKIP: server rewind leg (llama-server not built in $BIN)"
 fi
 
-echo "PASS: Laguna SWA ring parity"
+echo "== arch-generalization leg: real non-Laguna SWA arch (GEMMA2) must engage + shrink the ring =="
+# supports_swa_ring() is arch-generic, but the ring's per-layer routing keys off
+# hparams.swa_layers, not n_swa alone. GEMMA2 alternates SWA on even layers via a
+# hardcoded graph pattern (build_gemma2.cpp: il % 2 == 0) and, until fixed, never
+# populated swa_layers to match -- so the ring silently never shrank any GEMMA2
+# layer despite passing the arch gate. This leg pins that swa_layers now tracks
+# the real per-layer pattern for a non-Laguna arch.
+GEMMA2_MODEL="$WORK_DIR/tiny-gemma2.gguf"
+python3 "$REPO_DIR/tests/make-tiny-gemma2-gguf.py" "$GEMMA2_MODEL" --seed 42
+COMMON_ARGS=(-m "$GEMMA2_MODEL" -c 768 -b 768 --seed 7 -t 4 --no-warmup)
+run_ppl "-no-fa -ub 48 --swa-compress" g2-ring
+run_ppl "-no-fa -ub 48"                g2-full
+check_ppl_pair g2-ring g2-full
+if ! grep -q "SWA ring KV" "$WORK_DIR/ppl-g2-ring.log"; then
+    echo "FAIL: gemma2 (non-Laguna arch) did not engage the SWA ring under --swa-compress"
+    exit 1
+fi
+KV_RING_G2=$(kv_mib "$WORK_DIR/ppl-g2-ring.log")
+KV_FULL_G2=$(kv_mib "$WORK_DIR/ppl-g2-full.log")
+echo "gemma2 KV self size: ring=${KV_RING_G2} MiB full=${KV_FULL_G2} MiB"
+python3 - "$KV_RING_G2" "$KV_FULL_G2" <<'EOF'
+import sys
+ring, full = float(sys.argv[1]), float(sys.argv[2])
+assert ring < 0.9 * full, f"gemma2 ring KV ({ring} MiB) did not shrink vs dense KV ({full} MiB)"
+print(f"gemma2 KV shrink OK ({full/max(ring,1e-9):.2f}x smaller)")
+EOF
+
+echo "PASS: SWA ring (--swa-compress) parity"

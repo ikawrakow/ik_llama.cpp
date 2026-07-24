@@ -2246,14 +2246,42 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
     return LLM_TENSOR_UNKNOWN;
 }
 
-size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const {
+bool llama_model::supports_swa_ring() const {
+    // DEEPSEEK4's CSA/HCA attention (build_deepseek4.cpp) applies its SWA mask
+    // uniformly from n_swa alone rather than branching per layer on
+    // hparams.swa_layers, and it isn't established whether the ring's per-layer
+    // swa_layers-keyed sizing lines up with that uniform application. Excluded
+    // until audited, same as LLAMA4's chunk sentinel and OPENPANGU's per-layer windows.
+    //
+    // DFLASH_DRAFT never reads the shared kv_self ring machinery at all --
+    // build_dflash.cpp hand-rolls its own ctx-length-sized cache
+    // (lctx.dflash.kv.k_ctx_cache/v_ctx_cache) and its own mask tensors. Letting
+    // the ring "activate" for it would ring-shrink kv_self layers the dflash graph
+    // never reads (harmless waste) but would also arm the ring's guards (state-save
+    // abort, seq_rm rewind refusal, context-shift refusal) on a draft-model context
+    // that was never audited against them. Excluded until audited.
+    return hparams.n_swa > 0 && arch != LLM_ARCH_LLAMA4 && arch != LLM_ARCH_OPENPANGU
+        && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_DFLASH_DRAFT;
+}
+
+size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn, uint32_t n_ubatch, bool swa_compress) const {
     if (il < 0 || il >= hparams.n_layer) return 0;
-    if (arch == LLM_ARCH_LAGUNA && hparams.n_swa > 0 && hparams.swa_layers[il]) {
-        // SWA ring KV: sliding-window layers allocate GGML_PAD(n_swa + n_ubatch, >=256)
-        // cells instead of the full context. n_ubatch is not known here, so bound it by
-        // 4096 to keep this an upper estimate for typical ubatch sizes. Without this,
-        // -sm graph auto-fit rejects long-context layouts the ring actually fits.
-        kv_size = std::min(kv_size, (uint32_t) GGML_PAD(hparams.n_swa + 4096, 256));
+    if (swa_compress && supports_swa_ring() && hparams.swa_layers[il] && n_seq_max <= 1) {
+        // SWA ring KV (opt-in via --swa-compress): sliding-window layers allocate
+        // GGML_PAD(n_swa + n_ubatch, pad) cells instead of the full context, matching
+        // the real allocation formula at the ring's activation site (src/llama.cpp:
+        // pad = max(llama_kv_pad_granularity(flash_attn), 256)) -- via the SAME shared
+        // helper, not a re-derived constant, so the two can't silently diverge.
+        // Mirrors the runtime's own n_seq_max gate (src/llama.cpp: "SWA ring KV needs
+        // n_seq_max == 1") -- with n_seq_max > 1 the runtime falls back to full-size
+        // dense KV, and this estimator must agree or --fit under-budgets the real
+        // allocation.
+        // NOTE: the runtime also falls back to dense when cparams.defrag_thold >= 0,
+        // which this estimator has no way to see (defrag is a context-time-only
+        // setting, not threaded through the model-load-time --fit path) -- --fit
+        // + --swa-compress + a non-default --defrag-thold can still under-budget.
+        const uint32_t pad = std::max<uint32_t>(llama_kv_pad_granularity(flash_attn), 256u);
+        kv_size = std::min(kv_size, (uint32_t) GGML_PAD(hparams.n_swa + n_ubatch, pad));
     }
     if (hparams.recurrent_layer_arr[il]) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);

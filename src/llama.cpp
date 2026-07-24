@@ -2412,8 +2412,7 @@ static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
 }
 
 static uint32_t llama_kv_cache_get_padding(const struct llama_cparams & cparams) {
-    // the FA kernels require padding to avoid extra runtime boundary checks
-    return cparams.flash_attn ? 256u : 32u;
+    return llama_kv_pad_granularity(cparams.flash_attn);
 }
 
 //
@@ -3738,7 +3737,7 @@ struct expert_tensors {
 
 static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model,
         ggml_type cache_type_k, ggml_type cache_type_v, ggml_type idx_type_k, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
-        int amb, int worst_case_tokens, bool flash_attn,
+        int amb, int worst_case_tokens, bool flash_attn, bool swa_compress,
         std::vector<expert_tensors> & experts) {
     int n_layer = model.hparams.n_layer;
     std::vector<double> result(n_layer+1, 0);
@@ -3945,7 +3944,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
-        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn);
+        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress);
         LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
         tot_model += result[il];
@@ -3986,6 +3985,7 @@ static bool llm_load_tensors(
         const int * fit_margin_array,
         int worst_case_tokens,
         bool flash_attn,
+        bool swa_compress,
         bool use_mlock,
         bool validate_quants,
         bool mtp,
@@ -4184,7 +4184,7 @@ static bool llm_load_tensors(
     if (device_count > 0 && !model.devices.empty()) {
         std::vector<expert_tensors> experts;
         auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
-                amb, worst_case_tokens, flash_attn, experts);
+                amb, worst_case_tokens, flash_attn, swa_compress, experts);
         size_t required_mem = 0;
         for (int i = 0; i <= n_layer; ++i) {
             required_mem += layer_sizes[i];
@@ -4813,7 +4813,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.idx_type_k, params.extra_output_type,
             params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.fit_margin_array,
-            params.worst_graph_tokens, params.flash_attn,
+            params.worst_graph_tokens, params.flash_attn, params.swa_compress,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -5159,7 +5159,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     const auto & cell = mask_kv_self.cells[i];
                     if (cell.pos < 0 || cell.pos > pos_max || cell.is_empty()) continue;
                     if (pos_min - cell.pos < (int32_t) n_swa_eff && mask_kv_self.ring_occ[i % W] != (int32_t) i) {
-                        GGML_ABORT("SWA ring KV: a cell inside the attention window was overwritten; run with --swa-full");
+                        GGML_ABORT("SWA ring KV: a cell inside the attention window was overwritten; run without --swa-compress");
                     }
                 }
             }
@@ -5442,7 +5442,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             if (kv_self.swa_ring && lctx.inp_KQ_mask_swa) {
                 // this non-causal path fills the SWA mask cell-indexed and dense-width,
                 // which does not exist under the ring layout
-                GGML_ABORT("SWA ring KV: non-causal SWA mask path is not supported; run with --swa-full");
+                GGML_ABORT("SWA ring KV: non-causal SWA mask path is not supported; run without --swa-compress");
             }
             if (lctx.inp_KQ_mask_swa) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa->buffer));
@@ -7010,7 +7010,7 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         if (lctx.kv_self.swa_ring) {
             // ring rows are keyed by cell % size_swa; the K-shift graph ropes dense
             // per-cell rows and would rotate the wrong entries
-            LLAMA_LOG_ERROR("%s: context shift is not supported with SWA ring KV (Laguna); run with --swa-full\n", __func__);
+            LLAMA_LOG_ERROR("%s: context shift is not supported with SWA ring KV; run without --swa-compress\n", __func__);
             return 1;
         }
         if (!get_can_shift(lctx)) {
@@ -7076,7 +7076,7 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
     if (lctx.kv_self.do_defrag) {
         if (lctx.kv_self.swa_ring) {
             // defrag moves cells; the ring's cell % size_swa mapping cannot follow
-            GGML_ABORT("KV defrag is not supported with SWA ring KV (Laguna); run with --swa-full");
+            GGML_ABORT("KV defrag is not supported with SWA ring KV; run without --swa-compress");
         }
         llama_kv_cache_defrag_internal(lctx);
 
@@ -7335,6 +7335,7 @@ struct llama_model_params llama_model_default_params() {
         /*.max_ctx_size                =*/ 0,
         /*.n_seq_max                   =*/ 1,
         /*.n_ubatch                    =*/ 512,
+        /*.swa_compress                =*/ false,
         /*.amb                         =*/ 0,
         /*.fit_margin                  =*/ 0,
         /*.fit                         =*/ false,
@@ -7427,7 +7428,7 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
         /*.graph_reuse                 =*/ true,
-        /*.swa_full                    =*/ false,
+        /*.swa_compress                =*/ false,
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
         /*.dsa_top_k                   =*/ -1,
@@ -7903,7 +7904,7 @@ struct llama_context * llama_init_from_model(
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
-    cparams.swa_full         = params.swa_full;
+    cparams.swa_compress     = params.swa_compress;
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
     cparams.dsa_top_k        = params.dsa_top_k;
@@ -8108,11 +8109,18 @@ struct llama_context * llama_init_from_model(
         type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
     }
 
-    // Laguna SWA ring: allocate sliding-window layers at (padded) window size instead
-    // of n_ctx. Exact for append-only single-sequence use; incompatible ops (K-shift,
-    // defrag, state save/load) are guarded. --swa-full restores dense allocation.
+    // SWA ring (opt-in via --swa-compress): allocate sliding-window layers at (padded)
+    // window size instead of n_ctx. Exact for append-only single-sequence use;
+    // incompatible ops (K-shift, defrag, state save/load) are guarded. Default is dense.
+    // Excludes archs whose windowing isn't a plain trailing window (see supports_swa_ring()).
     uint32_t kv_size_swa = 0;
-    if (model->arch == LLM_ARCH_LAGUNA && hparams.n_swa > 0 && !cparams.swa_full) {
+    if (cparams.swa_compress && !model->supports_swa_ring()) {
+        // Requested but this arch either has no SWA layers or is excluded (see
+        // supports_swa_ring()) -- say so once instead of silently staying dense,
+        // so a user chasing a memory budget isn't left wondering why it didn't shrink.
+        LLAMA_LOG_WARN("%s: --swa-compress requested but this arch does not support the SWA ring -> using full-size KV\n", __func__);
+    }
+    if (model->supports_swa_ring() && cparams.swa_compress) {
         if (cparams.n_seq_max > 1) {
             LLAMA_LOG_WARN("%s: SWA ring KV needs n_seq_max == 1 (got %u) -> using full-size SWA KV\n",
                     __func__, cparams.n_seq_max);
@@ -8124,7 +8132,7 @@ struct llama_context * llama_init_from_model(
             if (kv_size_swa >= kv_size) {
                 kv_size_swa = 0; // window does not undercut the full context; dense is not larger
             } else {
-                LLAMA_LOG_INFO("%s: SWA ring KV: n_swa = %u -> ring size %u cells (full context %u); --swa-full disables\n",
+                LLAMA_LOG_INFO("%s: SWA ring KV: n_swa = %u -> ring size %u cells (full context %u); omit --swa-compress to disable\n",
                         __func__, hparams.n_swa, kv_size_swa, kv_size);
             }
         }
@@ -9294,14 +9302,33 @@ bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llam
     return result;
 }
 
+// Cell mutations below rewrite cache.cells[].pos/seq_id, which the ring's
+// occupancy tracking (ring_occ, cf. seq_rm) does not follow -- a mutation here
+// would silently desync ring occupancy from actual cell state. The ring
+// requires n_seq_max <= 1 append-only use, so none of these have a legitimate
+// reason to fire on a ring context; refuse loudly instead of corrupting.
+static bool llama_kv_cache_refuse_if_ring(const struct llama_context * ctx, const char * func) {
+    if (ctx->kv_self.swa_ring) {
+        LLAMA_LOG_ERROR("%s: sequence mutation is not supported with SWA ring KV; run without --swa-compress\n", func);
+        return true;
+    }
+    return false;
+}
+
 void llama_kv_cache_seq_cp(struct llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     if (seq_id_src == seq_id_dst) {
+        return;
+    }
+    if (llama_kv_cache_refuse_if_ring(ctx, __func__)) {
         return;
     }
     llama_kv_cache_seq_cp(ctx->kv_self, seq_id_src, seq_id_dst, p0, p1);
 }
 
 void llama_kv_cache_seq_keep(struct llama_context * ctx, llama_seq_id seq_id) {
+    if (llama_kv_cache_refuse_if_ring(ctx, __func__)) {
+        return;
+    }
     llama_kv_cache_seq_keep(ctx->kv_self, seq_id);
 }
 
@@ -9309,7 +9336,16 @@ void llama_kv_cache_seq_add(struct llama_context * ctx, llama_seq_id seq_id, lla
     if (delta == 0) {
         return;
     }
-
+    // NOT guarded here (unlike seq_cp/seq_keep above): this call sets
+    // cache.has_shift = true, which llama_kv_cache_update_internal (~7010)
+    // later checks to detect a ring-incompatible context shift and refuse
+    // gracefully. Refusing the mutation here instead would silently skip the
+    // shift, has_shift would never be set, and the caller (llama-cli's normal
+    // context-shift path) would keep generating on stale positions with no
+    // signal that anything failed -- confirmed by testing: this previously
+    // produced garbage output followed by a crash in the ring's own
+    // out-of-window overwrite guard, replacing a clean error-return with a
+    // worse failure mode. Leave the deferred detection as the enforcement point.
     llama_kv_cache_seq_add(ctx->kv_self, seq_id, p0, p1, delta);
 }
 
@@ -9317,7 +9353,9 @@ void llama_kv_cache_seq_div(struct llama_context * ctx, llama_seq_id seq_id, lla
     if (d == 1) {
         return;
     }
-
+    // NOT guarded here: same has_shift deferred-detection dependency as
+    // seq_add above (used by self-extend / group-attention here instead of
+    // context shift). See the comment there.
     llama_kv_cache_seq_div(ctx->kv_self, seq_id, p0, p1, d);
 }
 
@@ -9475,12 +9513,16 @@ struct llama_data_write {
         llama_state_seq_flags flags = 0) {
         const struct llama_kv_cache & kv_self = ctx->kv_self;
         const struct llama_hparams & hparams = ctx->model.hparams;
-        if (kv_self.swa_ring) {
-            // ring tensors hold size_swa rows keyed by cell % size_swa; the dense
-            // cell-range serialization below would write the wrong rows
-            GGML_ABORT("state save is not supported with SWA ring KV (Laguna); run with --swa-full");
-        }
         bool need_kv = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
+        if (kv_self.swa_ring && need_kv) {
+            // ring tensors hold size_swa rows keyed by cell % size_swa; the dense
+            // cell-range serialization below would write the wrong rows. A
+            // PARTIAL_ONLY save (need_kv false) never reads KV tensor data at
+            // all (see has_v_cache below), so it is safe to let through --
+            // aborting it too was the actual process-death path a PARTIAL_ONLY
+            // seq-state save on a ring context could still hit.
+            GGML_ABORT("state save is not supported with SWA ring KV; run without --swa-compress");
+        }
         // v_state: 0 -> not transposed V cache
         //          1 -> transposed V cache
         //          2 -> no V cache (as it may be the case with MLA)
@@ -9913,11 +9955,13 @@ struct llama_data_read {
     bool read_kv_cache_data(struct llama_context * ctx, uint32_t cell_count, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
         const struct llama_hparams & hparams = ctx->model.hparams;
         struct llama_kv_cache & kv_self = ctx->kv_self;
-        if (kv_self.swa_ring) {
-            LLAMA_LOG_ERROR("%s: state load is not supported with SWA ring KV (Laguna); run with --swa-full\n", __func__);
+        bool need_kv = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
+        if (kv_self.swa_ring && need_kv) {
+            // Same PARTIAL_ONLY exemption as write_kv_cache_data: a PARTIAL_ONLY
+            // load never reads dense KV extents, so it's safe on a ring context.
+            LLAMA_LOG_ERROR("%s: state load is not supported with SWA ring KV; run without --swa-compress\n", __func__);
             return false;
         }
-        bool need_kv = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
         // v_state: 0 -> not transposed V cache
         //          1 -> transposed V cache
         //          2 -> no V cache (as it may be the case with MLA)
@@ -10513,6 +10557,15 @@ static size_t llama_state_get_data_internal(struct llama_context * ctx, llama_da
     if (!llama_state_io_supported(ctx, __func__)) {
         return 0;
     }
+    // The SWA ring stores only a window of KV per layer; the dense cell-range
+    // serialization below cannot represent it. Refuse gracefully -- a save API
+    // call must not kill the caller's process -- instead of hitting
+    // write_kv_cache_data's abort (which stays as defense-in-depth for any
+    // other path that reaches it without this guard).
+    if (ctx->kv_self.swa_ring) {
+        LLAMA_LOG_WARN("%s: state cannot be serialized with the SWA ring KV cache; run without --swa-compress\n", __func__);
+        return 0;
+    }
     llama_synchronize(ctx);
 
     data_ctx.write_model_info(ctx);
@@ -10553,6 +10606,15 @@ size_t llama_state_get_size(struct llama_context * ctx) {
 
 static size_t llama_state_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx) {
     if (!llama_state_io_supported(ctx, __func__)) {
+        return SIZE_MAX;
+    }
+    // Mirrors the save-side guard: refuse before read_kv_cache() runs, not after.
+    // The deep guard in read_kv_cache_data() fires only after read_kv_cache_meta()
+    // has already mutated cell state for a dense layout that doesn't match a ring
+    // cache, so the failure handler then has to clear the cache before throwing --
+    // coherent, but needlessly destructive when refusing up front is just as valid.
+    if (ctx->kv_self.swa_ring) {
+        LLAMA_LOG_ERROR("%s: state load is not supported with SWA ring KV; run without --swa-compress\n", __func__);
         return SIZE_MAX;
     }
     llama_synchronize(ctx);
@@ -10677,7 +10739,7 @@ static size_t llama_state_seq_get_data_internal(struct llama_context * ctx, llam
     // like the server prompt cache treat 0 as "cannot save") instead of hitting
     // the write_kv_cache_data abort that guards user-initiated full-state saves.
     if (ctx->kv_self.swa_ring && (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        LLAMA_LOG_WARN("%s: sequence KV state cannot be serialized with the SWA ring KV cache; run with --swa-full\n", __func__);
+        LLAMA_LOG_WARN("%s: sequence KV state cannot be serialized with the SWA ring KV cache; run without --swa-compress\n", __func__);
         return 0;
     }
     llama_synchronize(ctx);

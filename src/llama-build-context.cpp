@@ -857,7 +857,13 @@ void llm_build_context::llm_build_kv_store(
         GGML_ASSERT(2*il+1 < (int)lctx.cache_copies.size());
         auto k_row_size = ggml_row_size(kv.k_l[il]->type, n_embd_head_k);
         if (n_first < n_tokens) {
-            GGML_ASSERT(ggml_is_contiguous(k_cur));
+            // A fused-QKV (-mqkv) k_cur is a strided view into the combined qkv
+            // tensor (row stride spans Q+K+V, not just K) -- non-contiguous by
+            // ggml's definition. The byte-offset ggml_view_1d split below assumes
+            // a flat contiguous buffer, so materialize one first when needed.
+            if (!ggml_is_contiguous(k_cur)) {
+                k_cur = ggml_cont(ctx, k_cur);
+            }
             const int64_t k_per_tok = ggml_nelements(k_cur)/n_tokens;
             auto k_cur_a  = ggml_view_1d(ctx, k_cur, k_per_tok*n_first, 0);
             auto k_cur_b  = ggml_view_1d(ctx, k_cur, k_per_tok*(n_tokens - n_first), k_per_tok*n_first*ggml_element_size(k_cur));
@@ -881,7 +887,10 @@ void llm_build_context::llm_build_kv_store(
     if (v_cur) {
         if (!kv.v_trans) {
             if (n_first < n_tokens) {
-                GGML_ASSERT(ggml_is_contiguous(v_cur));
+                // Same fused-QKV (-mqkv) non-contiguity as k_cur above.
+                if (!ggml_is_contiguous(v_cur)) {
+                    v_cur = ggml_cont(ctx, v_cur);
+                }
                 const int64_t v_per_tok = ggml_nelements(v_cur)/n_tokens;
                 auto v_row    = ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa);
                 auto v_cur_a  = ggml_view_1d(ctx, v_cur, v_per_tok*n_first, 0);
@@ -3151,7 +3160,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT(idx+1 < (int)lctx.cache_copies.size());
                 auto k_row_size = ggml_row_size(split_kl->type, n_embd_head_k);
                 if (n_first < n_tokens) {
-                    GGML_ASSERT(ggml_is_contiguous(Kcur));
+                    // Same fused-QKV (-mqkv) non-contiguity as llm_build_kv_store.
+                    if (!ggml_is_contiguous(Kcur)) {
+                        Kcur = ggml_cont(ctx0, Kcur);
+                    }
                     const int64_t k_per_tok = ggml_nelements(Kcur)/n_tokens;
                     auto k_cur_a  = ggml_view_1d(ctx0, Kcur, k_per_tok*n_first, 0);
                     auto k_cur_b  = ggml_view_1d(ctx0, Kcur, k_per_tok*(n_tokens - n_first), k_per_tok*n_first*ggml_element_size(Kcur));
@@ -3172,7 +3184,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
 
                 if (cparams.flash_attn && n_first < n_tokens) {
-                    GGML_ASSERT(ggml_is_contiguous(Vcur));
+                    // Same fused-QKV (-mqkv) non-contiguity as llm_build_kv_store.
+                    if (!ggml_is_contiguous(Vcur)) {
+                        Vcur = ggml_cont(ctx0, Vcur);
+                    }
                     const int64_t v_per_tok = ggml_nelements(Vcur)/n_tokens;
                     auto v_row    = ggml_row_size(split_vl->type, split_wv->ne[1]);
                     auto v_cur_a  = ggml_view_1d(ctx0, Vcur, v_per_tok*n_first, 0);
@@ -3186,7 +3201,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     // transposed V (no flash attention): slice the CONTIGUOUS source per
                     // token range BEFORE transposing — views of a transposed tensor
                     // assume contiguous rows (same discipline as llm_build_kv_store)
-                    GGML_ASSERT(ggml_is_contiguous(Vcur));
+                    if (!ggml_is_contiguous(Vcur)) {
+                        Vcur = ggml_cont(ctx0, Vcur);
+                    }
                     const size_t esz = ggml_element_size(split_vl);
                     auto v_cur_a  = ggml_transpose(ctx0, ggml_view_2d(ctx0, Vcur, Vcur->ne[0], n_first,
                             Vcur->nb[1], 0));

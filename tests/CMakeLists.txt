@@ -207,6 +207,14 @@ llama_build_and_test(test-regex-partial.cpp)
 llama_target_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_target_and_test(test-autorelease.cpp        LABEL "model")
 
+# Unit-tests llama_model::cache_size()'s SWA-ring formula directly against a
+# loaded model, since its only real caller (the --fit multi-device split-mode-graph
+# estimator) needs 2+ devices to reach at all. Skips (via get_model_or_exit) unless
+# invoked with a model path or LLAMACPP_TEST_MODELFILE -- tests/test-laguna-swa-ring.sh
+# invokes it directly against its generated tiny GGUF.
+llama_target_and_test(test-cache-size-estimator.cpp LABEL "model")
+target_include_directories(test-cache-size-estimator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)

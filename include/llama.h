@@ -382,6 +382,7 @@ extern "C" {
         uint32_t max_ctx_size;
         int32_t  n_seq_max;
         int32_t  n_ubatch;
+        bool     swa_compress; // mirrors llama_context_params.swa_compress; needed by the --fit KV-size estimator
         int32_t  amb;
         int32_t  fit_margin;
         bool     fit;
@@ -491,7 +492,7 @@ extern "C" {
         bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
         bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
         bool graph_reuse;       // whether to reuse graphs when possible [EXPERIMENTAL]
-        bool swa_full;          // allocate full-size KV for sliding-window layers (disables the Laguna SWA ring) [EXPERIMENTAL]
+        bool swa_compress;      // opt-in: window-sized SWA ring KV cache for sliding-window layers (default: dense) [EXPERIMENTAL]
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (off by default) [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
@@ -869,9 +870,9 @@ extern "C" {
                        llama_pos   p0,
                        llama_pos   p1);
 
-    // Returns true when the context uses the Laguna SWA ring KV cache for its
+    // Returns true when the context uses the SWA ring KV cache for its
     // sliding-window layers. Sequence KV state cannot be serialized in that
-    // mode (llama_state_seq_* returns 0); --swa-full disables the ring.
+    // mode (llama_state_seq_* returns 0); pass --swa-compress to enable the ring.
     LLAMA_API bool llama_kv_self_is_swa_ring(const struct llama_context * ctx);
 
     // Copy all tokens that belong to the specified sequence to another sequence

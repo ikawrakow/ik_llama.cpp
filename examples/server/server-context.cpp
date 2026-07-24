@@ -400,7 +400,7 @@ void server_context::init() {
     }
     else {
         if (params_base.cache_ram_mib != 0 && llama_kv_self_is_swa_ring(ctx)) {
-            LLAMA_LOG_WARN("prompt cache is disabled: the SWA ring KV cache cannot serialize sequence state (run with --swa-full to enable it)\n");
+            LLAMA_LOG_WARN("prompt cache is disabled: the SWA ring KV cache cannot serialize sequence state (run without --swa-compress to enable it)\n");
         } else if (params_base.cache_ram_mib != 0) {
             LLAMA_LOG_WARN("prompt cache is disabled because this model has private state outside the generic KV cache\n");
         } else {

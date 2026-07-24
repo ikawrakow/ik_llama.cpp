@@ -1886,8 +1886,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.flash_attn = false;
         return true;
     }
-    if (arg == "--swa-full") {
-        params.swa_full = true;
+    if (arg == "--swa-compress") {
+        params.swa_compress = true;
         return true;
     }
 
@@ -3048,7 +3048,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
     options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
-    options.push_back({ "*",           "       --swa-full",             "use dense (full-context) KV for sliding-window layers, disabling the Laguna SWA ring (default: %s)", params.swa_full ? "true" : "false" });
+    options.push_back({ "*",           "       --swa-compress",         "use a window-sized ring KV cache for sliding-window layers instead of dense (default: %s)", params.swa_compress ? "true" : "false" });
     options.push_back({ "*",           "-fa, --flash-attn (auto|on|off|0|1)", "set Flash Attention (default: %s)", params.flash_attn ? "on" : "off" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-dsa,  --dsa",                  "enable GLM DSA sparse attention (GLM-DSA arch only; default: %s)", params.dsa ? "enabled" : "disabled" });
@@ -4217,6 +4217,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.max_ctx_size    = params.n_ctx;
     mparams.n_seq_max       = params.n_parallel;
     mparams.n_ubatch        = get_batch_ubatch(params).second;
+    mparams.swa_compress    = params.swa_compress;
     mparams.amb             = params.attn_max_batch;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
@@ -4301,7 +4302,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.flash_attn        = params.flash_attn;
-    cparams.swa_full          = params.swa_full;
+    cparams.swa_compress      = params.swa_compress;
     cparams.mla_attn          = params.mla_attn;
     cparams.attn_max_batch    = params.attn_max_batch;
     cparams.fused_moe_up_gate = params.fused_moe_up_gate;
