@@ -1473,13 +1473,12 @@ void llm_load_hparams(
 
                 //TODO OAI_MOE: SWA
                 //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                //hparams.set_swa_pattern(2);
 
-                // build_openai.cpp: is_sliding = il % sliding_window_pattern < (pattern - 1),
-                // with a hardcoded local pattern of 2 (that graph-local constant is the
-                // "set_swa_pattern(2)" the TODO above never wired up).
+                // build_openai.cpp reads sliding_window_pattern from hparams.n_swa_pattern
+                // (no longer a graph-local hardcoded literal -- see build_openai.cpp).
                 if (hparams.n_swa > 0) {
-                    llama_hparams_set_swa_layers_periodic(hparams, 2);
+                    hparams.n_swa_pattern = 2;
+                    llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
                 }
 
                 // TODO: switch (hparams.n_layer)

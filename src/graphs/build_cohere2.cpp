@@ -22,8 +22,9 @@ ggml_cgraph * llm_build_context::build_cohere2() {
     struct ggml_tensor * KQ_mask     = build_inp_KQ_mask();
     struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa();
 
-    // sliding window switch pattern
-    const int32_t sliding_window_pattern = 4;
+    // sliding window switch pattern; comes from hparams.n_swa_pattern (set in
+    // llama-hparams.cpp), not re-declared here, so the two sites can't drift apart.
+    const int32_t sliding_window_pattern = hparams.n_swa_pattern;
 
     for (int il = 0; il < n_layer; ++il) {
         // three layers sliding window attention (window size 4096) and ROPE

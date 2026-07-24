@@ -333,4 +333,23 @@ assert ring < 0.9 * full, f"gemma2 ring KV ({ring} MiB) did not shrink vs dense 
 print(f"gemma2 KV shrink OK ({full/max(ring,1e-9):.2f}x smaller)")
 EOF
 
+echo "== guard: no dual-codified SWA periodicity constants (GEMMA3/COHERE2/OPENAI_MOE) =="
+# These three archs used to hardcode their own copy of the sliding-window
+# period as a graph-builder-local constant, duplicating hparams.n_swa_pattern
+# set in llama-hparams.cpp -- the two could silently drift apart. The fix made
+# each graph builder read hparams.n_swa_pattern instead of re-declaring the
+# literal. This leg pins that the literal re-declaration doesn't come back.
+for f in build_gemma3.cpp build_cohere2.cpp build_openai.cpp; do
+    path="$REPO_DIR/src/graphs/$f"
+    if grep -qE 'sliding_window_pattern\s*=\s*[0-9]+\s*;' "$path"; then
+        echo "FAIL: $f re-declares a hardcoded sliding_window_pattern literal instead of reading hparams.n_swa_pattern"
+        exit 1
+    fi
+    if ! grep -q 'sliding_window_pattern = hparams.n_swa_pattern' "$path"; then
+        echo "FAIL: $f does not read sliding_window_pattern from hparams.n_swa_pattern"
+        exit 1
+    fi
+done
+echo "dual-codification guard OK (gemma3/cohere2/openai_moe all read hparams.n_swa_pattern)"
+
 echo "PASS: SWA ring (--swa-compress) parity"
