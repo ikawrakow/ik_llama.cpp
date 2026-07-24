@@ -1397,6 +1397,9 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                             raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
                 }
             }
+            if (raw_k->type != csa_k->type) {
+                csa_k = ggml_cast(ctx0, csa_k, raw_k->type);
+            }
             ggml_tensor * k_all = ggml_concat(ctx0, raw_k, csa_k, 2);
             //printf("k_all: %ld x %ld x %ld x %ld, raw_k: %ld x %ld x %ld x %ld, csa_k = %ld x %ld x %ld x %ld, q = %ld x %ld x %ld x %ld\n",
             //        k_all->ne[0], k_all->ne[1], k_all->ne[2], k_all->ne[3],
@@ -1445,6 +1448,9 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                     raw_mask = ggml_view_4d(ctx0, raw_mask, nton, raw_mask->ne[1], raw_mask->ne[2], raw_mask->ne[3],
                             raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
                 }
+            }
+            if (hca_k->type != raw_k->type) {
+                hca_k = ggml_cast(ctx0, hca_k, raw_k->type);
             }
             ggml_tensor * k_all = ggml_concat(ctx0, raw_k, hca_k, 2);
             ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
