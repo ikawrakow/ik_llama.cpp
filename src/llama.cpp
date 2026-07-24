@@ -9476,6 +9476,45 @@ struct llama_data_write {
                 }
             }
         }
+
+        // DSV4 compressed indexer cache
+        const uint32_t has_dsv4_cache = ctx->model.arch == LLM_ARCH_DEEPSEEK4 && ctx->dsv4.cache.cache_ctx != nullptr ? 1 : 0;
+        write(&has_dsv4_cache, sizeof(has_dsv4_cache));
+
+        if (has_dsv4_cache) {
+            const uint32_t dsv4_n_layer = n_layer;
+            write(&dsv4_n_layer, sizeof(dsv4_n_layer));
+            write(&ctx->dsv4.cache.n_stream, sizeof(ctx->dsv4.cache.n_stream));
+
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                uint32_t layer_type = 0;
+                if (il < ctx->dsv4.cache.csa_k.size() && ctx->dsv4.cache.csa_k[il] != nullptr) {
+                    layer_type = 1; // CSA+LID layer
+                } else if (il < ctx->dsv4.cache.hca_k.size() && ctx->dsv4.cache.hca_k[il] != nullptr) {
+                    layer_type = 2; // HCA layer
+                }
+                write(&layer_type, sizeof(layer_type));
+                if (layer_type != 0) {
+                    write_dsv4_cache(ctx, il);
+                }
+            }
+        }
+    }
+
+    void write_dsv4_cache(const struct llama_context * ctx, int il) {
+        const auto & cache = ctx->dsv4.cache;
+        if (il < (int)cache.csa_k.size() && cache.csa_k[il] != nullptr) {
+            write_tensor_data(cache.csa_k[il], 0, ggml_nbytes(cache.csa_k[il]), il);
+            write_tensor_data(cache.lid_k[il], 0, ggml_nbytes(cache.lid_k[il]), il);
+            write_tensor_data(cache.csa_state_kv[il], 0, ggml_nbytes(cache.csa_state_kv[il]), il);
+            write_tensor_data(cache.csa_state_score[il], 0, ggml_nbytes(cache.csa_state_score[il]), il);
+            write_tensor_data(cache.lid_state_kv[il], 0, ggml_nbytes(cache.lid_state_kv[il]), il);
+            write_tensor_data(cache.lid_state_score[il], 0, ggml_nbytes(cache.lid_state_score[il]), il);
+        } else if (il < (int)cache.hca_k.size() && cache.hca_k[il] != nullptr) {
+            write_tensor_data(cache.hca_k[il], 0, ggml_nbytes(cache.hca_k[il]), il);
+            write_tensor_data(cache.hca_state_kv[il], 0, ggml_nbytes(cache.hca_state_kv[il]), il);
+            write_tensor_data(cache.hca_state_score[il], 0, ggml_nbytes(cache.hca_state_score[il]), il);
+        }
     }
 
     void write_kv_cache(const struct llama_context * ctx, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
@@ -10047,6 +10086,56 @@ struct llama_data_read {
                 }
             }
         }
+
+        // DSV4 compressed indexer cache
+        uint32_t has_dsv4_cache = 0;
+        read_to(&has_dsv4_cache, sizeof(has_dsv4_cache));
+
+        if (has_dsv4_cache) {
+            const bool is_dsv4 = ctx->model.arch == LLM_ARCH_DEEPSEEK4;
+            if (!is_dsv4) {
+                LLAMA_LOG_ERROR("%s: DSV4 cache present but model is not DEEPSEEK4\n", __func__);
+                return false;
+            }
+
+            auto & cache = ctx->dsv4.cache;
+            if (cache.cache_ctx == nullptr) {
+                LLAMA_LOG_ERROR("%s: DSV4 cache not initialized\n", __func__);
+                return false;
+            }
+
+            uint32_t dsv4_n_layer;
+            read_to(&dsv4_n_layer, sizeof(dsv4_n_layer));
+            if (dsv4_n_layer != n_layer) {
+                LLAMA_LOG_ERROR("%s: DSV4 cache layer count mismatch (%u != %u)\n", __func__, dsv4_n_layer, n_layer);
+                return false;
+            }
+
+            uint32_t dsv4_n_stream;
+            read_to(&dsv4_n_stream, sizeof(dsv4_n_stream));
+            if (dsv4_n_stream != cache.n_stream) {
+                LLAMA_LOG_ERROR("%s: DSV4 cache stream count mismatch (%u != %u)\n", __func__, dsv4_n_stream, cache.n_stream);
+                return false;
+            }
+
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                uint32_t layer_type;
+                read_to(&layer_type, sizeof(layer_type));
+
+                if (layer_type == 1) {
+                    ggml_backend_tensor_set(cache.csa_k[il], read(ggml_nbytes(cache.csa_k[il])), 0, ggml_nbytes(cache.csa_k[il]));
+                    ggml_backend_tensor_set(cache.lid_k[il], read(ggml_nbytes(cache.lid_k[il])), 0, ggml_nbytes(cache.lid_k[il]));
+                    ggml_backend_tensor_set(cache.csa_state_kv[il], read(ggml_nbytes(cache.csa_state_kv[il])), 0, ggml_nbytes(cache.csa_state_kv[il]));
+                    ggml_backend_tensor_set(cache.csa_state_score[il], read(ggml_nbytes(cache.csa_state_score[il])), 0, ggml_nbytes(cache.csa_state_score[il]));
+                    ggml_backend_tensor_set(cache.lid_state_kv[il], read(ggml_nbytes(cache.lid_state_kv[il])), 0, ggml_nbytes(cache.lid_state_kv[il]));
+                    ggml_backend_tensor_set(cache.lid_state_score[il], read(ggml_nbytes(cache.lid_state_score[il])), 0, ggml_nbytes(cache.lid_state_score[il]));
+                } else if (layer_type == 2) {
+                    ggml_backend_tensor_set(cache.hca_k[il], read(ggml_nbytes(cache.hca_k[il])), 0, ggml_nbytes(cache.hca_k[il]));
+                    ggml_backend_tensor_set(cache.hca_state_kv[il], read(ggml_nbytes(cache.hca_state_kv[il])), 0, ggml_nbytes(cache.hca_state_kv[il]));
+                    ggml_backend_tensor_set(cache.hca_state_score[il], read(ggml_nbytes(cache.hca_state_score[il])), 0, ggml_nbytes(cache.hca_state_score[il]));
+                }
+            }
+        }
         return true;
     }
 
@@ -10319,9 +10408,8 @@ struct llama_data_read_file : llama_data_read {
 
 // Refuse state I/O when private per-position state is not part of the format.
 static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
-    if (ctx->model.arch == LLM_ARCH_OPENPANGU || ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
-        const char * arch = ctx->model.arch == LLM_ARCH_OPENPANGU ? "openPangu" : "DeepSeek4";
-        LLAMA_LOG_ERROR("%s: state save/restore is not supported for %s (private cache and side state are not serialized)\n", func, arch);
+    if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
+        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (private cache and side state are not serialized)\n", func);
         return false;
     }
     return true;

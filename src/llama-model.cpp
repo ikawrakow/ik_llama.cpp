@@ -2178,6 +2178,13 @@ bool llama_model_has_recurrent(const llama_model * model) {
     return llm_arch_is_hybrid(model->arch) || llm_arch_is_recurrent(model->arch);
 }
 
+bool llama_model_supports_state_checkpoints(const llama_model * model) {
+    // Recurrent/hybrid models and DSV4 have private per-position state
+    // that makes partial KV reuse impossible; checkpoints allow restoring
+    // this state instead of reprocessing from scratch.
+    return llama_model_has_recurrent(model) || model->arch == LLM_ARCH_DEEPSEEK4;
+}
+
 bool llama_model_is_openpangu(const llama_model * model) {
     return model && model->arch == LLM_ARCH_OPENPANGU;
 }

@@ -700,6 +700,10 @@ extern "C" {
 
     LLAMA_API bool llama_model_has_recurrent(const struct llama_model * model);
 
+    // Returns true if the model supports state checkpoints
+    // (models with private per-position state that cannot be recovered via partial KV reuse alone)
+    LLAMA_API bool llama_model_supports_state_checkpoints(const struct llama_model * model);
+
     // Returns true if the model is openPangu (conv-only recurrent state that rides the spec-rollback checkpoint)
     LLAMA_API bool llama_model_is_openpangu(const struct llama_model * model);
 

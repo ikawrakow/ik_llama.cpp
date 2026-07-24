@@ -1788,7 +1788,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     } while (false);
     slot.allow_ruless_prev = slot.allow_ruless;
 
-    if (llama_model_has_recurrent(llama_get_model(slot.ctx))) {
+    if (llama_model_supports_state_checkpoints(llama_get_model(slot.ctx))) {
         params_base.can_ban_phrases = false;
         bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
         // make checkpoints only for completion tasks
@@ -3903,11 +3903,41 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                 // the cache diverges from the new prompt mid-sequence; this
                                 // model can only extend or reset a cached sequence (per-position
                                 // side state past the divergence point is already lost)
-                                LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
-                                        __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
-                                slot.n_past = 0;
-                                slot.n_past_prompt = 0;
-                                slot.n_past_offset = 0;
+
+                                bool restored = false;
+                                // DSV4 supports state checkpoints that include the private cache;
+                                // try to restore from the newest checkpoint before the divergence point
+                                if (llama_model_supports_state_checkpoints(model) &&
+                                    !slot.server_cached_prompt.checkpoints.empty()) {
+                                    const auto it = std::find_if(
+                                        slot.server_cached_prompt.checkpoints.rbegin(),
+                                        slot.server_cached_prompt.checkpoints.rend(),
+                                        [&](const auto & cur) {
+                                            return cur.pos_min < (llama_pos)slot.n_past || cur.pos_min == 0;
+                                        });
+                                    if (it != slot.server_cached_prompt.checkpoints.rend()) {
+                                        const size_t checkpoint_size = it->data.size();
+                                        const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        if (n == checkpoint_size) {
+                                            slot.n_past = slot.cache_tokens.size_up_to_pos(std::max(it->pos_min + 1, it->pos_max));
+                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(std::max(it->pos_min_prompt + 1, it->pos_max_prompt));
+                                            slot.n_past_offset = slot.n_past_prompt - slot.n_past;
+                                            slot.n_discarded_prompt = 0;
+                                            restored = true;
+                                            SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
+                                                it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
+                                                (float)checkpoint_size / 1024.0f / 1024.0f);
+                                        }
+                                    }
+                                }
+
+                                if (!restored) {
+                                    LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
+                                            __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
+                                    slot.n_past = 0;
+                                    slot.n_past_prompt = 0;
+                                    slot.n_past_offset = 0;
+                                }
                             }
 
                             if (slot.n_past > 0 && slot.spec != nullptr &&
