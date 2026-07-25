@@ -2085,6 +2085,15 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
         LOG_ERROR("DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state", {});
         return false;
     }
+    // Same class of problem for the SWA ring: system_prompt_update() fans the prompt out
+    // to every slot with llama_kv_cache_seq_cp(), which the ring refuses (it cannot copy
+    // one sequence's window rows into another's). seq_cp returns void, so that refusal is
+    // invisible to the caller -- accepting the prompt here would leave every slot but 0
+    // believing it holds a system prompt whose K/V were never written. Refuse up front.
+    if (!sys_prompt.empty() && ctx != nullptr && llama_kv_self_is_swa_ring(ctx)) {
+        LOG_ERROR("server system prompts are unsupported with --swa-compress: the SWA ring cannot copy a sequence's window to another slot", {});
+        return false;
+    }
 
     system_prompt = sys_prompt;
 
