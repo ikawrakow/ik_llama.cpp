@@ -276,6 +276,39 @@ int main(int argc, char ** argv) {
         if (dst) llama_free(dst);
     }
 
+    // ------------------------ (3a) save/restore of a FRAGMENTED cell layout
+    // With several slots interleaving, a sequence's cells are scattered through the cell
+    // array -- allocation is contiguous per ubatch, not per sequence. Since rows are
+    // derived from positions, that fragmentation is irrelevant to the ring's layout, and
+    // a checkpoint must still serialize: it is exactly what a multi-slot server does when
+    // it saves a slot.
+    //
+    // What flips it red: require the saved cells to be one contiguous cell range (the
+    // single-sequence assumption) and this save is refused with "cannot serialize a
+    // fragmented cell layout" -- which is how a 4-slot server's /slots/N?action=save
+    // failed before the position-ordered serialization.
+    {
+        // `ring` at this point has both sequences interleaved through the cell array
+        const size_t sz = llama_state_seq_get_size(ring, 1, 0);
+        std::vector<uint8_t> blob(sz ? sz : 1);
+        const size_t written = sz ? llama_state_seq_get_data(ring, blob.data(), blob.size(), 1, 0) : 0;
+        check(sz > 0 && written == sz, "a fragmented-cell-layout sequence serializes");
+
+        llama_context * dst = make_ctx(model, true, n_ctx, n_seq);
+        const size_t nread = (dst && written) ? llama_state_seq_set_data(dst, blob.data(), written, 1, 0) : 0;
+        check(nread == written && written > 0, "that blob restores into a fresh context");
+
+        const llama_pos next = n_prompt + n_skew + 6;
+        std::vector<float> l_ref  = decode_one(ring, probe, next, 1, n_vocab);
+        decode_one(dense, probe, next, 1, n_vocab);   // keep the dense reference in lockstep
+        std::vector<float> l_test = (nread == written && written)
+                ? decode_one(dst, probe, next, 1, n_vocab) : std::vector<float>();
+        const float d = max_abs_diff(l_ref, l_test);
+        check(d <= 2e-3f, "restored fragmented layout continues with the same logits");
+        printf("     max |logit diff| after fragmented-layout restore: %g\n", d);
+        if (dst) llama_free(dst);
+    }
+
     // --------------------------- (3b) a blob is portable across --parallel values
     // The ring descriptor in a sequence blob must carry the PER-SEQUENCE window, not the
     // total row count, or a checkpoint taken by a single-slot server could not be restored

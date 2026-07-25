@@ -9672,28 +9672,46 @@ struct llama_data_write {
 
             ring_rows = llama_kv_ring_rows(kv_self, cell_count);
             if (ring_rows > 0 && need_kv) {
-                // The window tail is only well defined while the saved cells form one
-                // contiguous ascending block of ONE sequence -- which is all the ring
-                // supports anyway (append-only, no defrag and no context shift). Refuse
-                // rather than silently serialize rows in the wrong order.
-                if (cell_ranges.size() != 1) {
-                    throw std::runtime_error("SWA ring KV: cannot serialize a fragmented cell layout");
-                }
+                // The ranges arrive in position order (see write_kv_cache), so the window
+                // tail is the last ring_rows cells of that walk. Cell fragmentation does
+                // not matter -- rows come from positions -- but the positions themselves
+                // must be one ascending run, which is what append-only use guarantees.
                 if (seq_id < 0) {
                     // A whole-context blob packs cells from index 0 with no sequence of
                     // their own, so it cannot describe striped rows. Sequence-scoped
                     // save/restore is the supported path once the ring is striped.
-                    for (uint32_t i = cell_ranges[0].first; i < cell_ranges[0].second; ++i) {
-                        if (kv_self.cells[i].seq_id.size() != 1 ||
-                            *kv_self.cells[i].seq_id.begin() != *kv_self.cells[cell_ranges[0].first].seq_id.begin()) {
-                            throw std::runtime_error("SWA ring KV: cannot serialize a whole context holding several sequences");
+                    const llama_seq_id s0 = kv_self.cells[cell_ranges[0].first].seq_id.empty()
+                            ? -1 : *kv_self.cells[cell_ranges[0].first].seq_id.begin();
+                    for (const auto & range : cell_ranges) {
+                        for (uint32_t i = range.first; i < range.second; ++i) {
+                            if (kv_self.cells[i].seq_id.size() != 1 || *kv_self.cells[i].seq_id.begin() != s0) {
+                                throw std::runtime_error("SWA ring KV: cannot serialize a whole context holding several sequences");
+                            }
                         }
                     }
                 }
-                const uint32_t last = cell_ranges[0].second - 1;
-                const uint32_t first_saved = cell_ranges[0].second - ring_rows;
-                ring_base  = kv_self.ring_row_of_cell(last) - (kv_self.ring_row_of_cell(last) % kv_self.ring_w);
-                ring_first = kv_self.ring_row_of_cell(first_saved) % kv_self.ring_w;
+                // walk back ring_rows cells through the position-ordered ranges
+                uint32_t first_saved = 0, last = 0;
+                {
+                    uint32_t skip = cell_count - ring_rows;
+                    for (const auto & range : cell_ranges) {
+                        const uint32_t n = range.second - range.first;
+                        if (skip >= n) { skip -= n; continue; }
+                        first_saved = range.first + skip;
+                        break;
+                    }
+                    last = cell_ranges.back().second - 1;
+                }
+                const llama_pos p_first = kv_self.cells[first_saved].pos;
+                const llama_pos p_last  = kv_self.cells[last].pos;
+                if (p_last - p_first + 1 != (llama_pos) ring_rows) {
+                    // a gap in the positions means the window is not the run we are about
+                    // to write; refuse rather than serialize rows that do not line up
+                    throw std::runtime_error("SWA ring KV: cannot serialize a non-contiguous position range");
+                }
+                const uint32_t row_l = kv_self.ring_row_of_cell(last);
+                ring_base  = row_l - (row_l % kv_self.ring_w);
+                ring_first = (uint32_t) (p_first % (llama_pos) kv_self.ring_w);
             }
         }
 
@@ -9904,6 +9922,20 @@ struct llama_data_write {
             cell_count_check += range.second - range.first;
         }
         GGML_ASSERT(cell_count == cell_count_check);
+
+        if (kv_self.swa_ring && cell_count > 0) {
+            // A sequence's cells are NOT contiguous once several sequences interleave --
+            // allocation is contiguous per ubatch, not per sequence -- but the ring's rows
+            // are derived from positions, so the layout only cares about position order.
+            // Serialize the ranges in that order: the metadata then describes one ascending
+            // position run (which is what the reader replays) and the window tail below is
+            // the last min(ring_w, cell_count) of it. Only done for a ring cache, so dense
+            // blobs stay byte-identical to what earlier builds wrote.
+            std::sort(cell_ranges.begin(), cell_ranges.end(),
+                    [&](const std::pair<uint32_t, uint32_t> & a, const std::pair<uint32_t, uint32_t> & b) {
+                        return kv_self.cells[a.first].pos < kv_self.cells[b.first].pos;
+                    });
+        }
 
         write(&cell_count, sizeof(cell_count));
 
