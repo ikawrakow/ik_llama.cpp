@@ -174,6 +174,15 @@ split-KV tensors need the same treatment, which mainline never had).
   the runtime's dense fallback. Remaining gap: `--swa-compress` + a non-default
   `--defrag-thold` can still under-budget `--fit`, since defrag is a
   context-time-only setting with no path into the model-load-time estimator.
-- Multi-seq / context-shift / state-IO deliberately unsupported with ring.
+- Multi-seq / context-shift / defrag / `seq_cp` / `seq_keep` deliberately
+  unsupported with ring.
+- **Resolved (W5)**: state IO is ring-aware. A ring layer serializes the last
+  `min(size_swa, cell_count)` cells oldest-first; the blob carries a `RING`
+  descriptor (`size_swa`, `n_swa`) so mismatched-geometry and cross-mode
+  (ring<->dense) restores are refused. Written only when the ring is engaged, so
+  dense blobs stay byte-compatible with pre-W5 builds. `--prompt-cache`, the
+  server RAM prompt cache and `/slots/{id}?action=save|restore` all work now;
+  pinned by `tests/test-swa-ring-state.cpp` plus new legs in
+  `tests/test-laguna-swa-ring.sh`.
 - 256k KV is now global-layer-bound (~10G). Further shrink needs KV quant
   (-ctk/-ctv) or global-layer work — out of scope.

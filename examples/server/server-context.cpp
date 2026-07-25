@@ -387,7 +387,7 @@ void server_context::init() {
 
     metrics.init();
 
-    if (params_base.cache_ram_mib != 0 && llama_model_supports_partial_kv_reuse(model) && !llama_kv_self_is_swa_ring(ctx)) {
+    if (params_base.cache_ram_mib != 0 && llama_model_supports_partial_kv_reuse(model)) {
         if (params_base.cache_ram_mib < 0) {
             LLAMA_LOG_INFO("prompt cache is enabled, size limit: %s\n", "no limit");
         }
@@ -399,9 +399,7 @@ void server_context::init() {
         prompt_cache = std::make_unique<server_prompt_cache>(ctx, params_base.cache_ram_mib, 0);
     }
     else {
-        if (params_base.cache_ram_mib != 0 && llama_kv_self_is_swa_ring(ctx)) {
-            LLAMA_LOG_WARN("prompt cache is disabled: the SWA ring KV cache cannot serialize sequence state (run without --swa-compress to enable it)\n");
-        } else if (params_base.cache_ram_mib != 0) {
+        if (params_base.cache_ram_mib != 0) {
             LLAMA_LOG_WARN("prompt cache is disabled because this model has private state outside the generic KV cache\n");
         } else {
             LLAMA_LOG_INFO("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");

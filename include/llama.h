@@ -871,8 +871,11 @@ extern "C" {
                        llama_pos   p1);
 
     // Returns true when the context uses the SWA ring KV cache for its
-    // sliding-window layers. Sequence KV state cannot be serialized in that
-    // mode (llama_state_seq_* returns 0); pass --swa-compress to enable the ring.
+    // sliding-window layers (pass --swa-compress to enable it). State IO works in
+    // that mode -- a ring layer serializes only its window, so the blob is smaller
+    // and restores only into a cache with the same window geometry. Still
+    // unsupported with the ring: context shift, KV defrag, seq_cp/seq_keep, and a
+    // partial llama_kv_cache_seq_rm that rewinds behind the resident window.
     LLAMA_API bool llama_kv_self_is_swa_ring(const struct llama_context * ctx);
 
     // Copy all tokens that belong to the specified sequence to another sequence

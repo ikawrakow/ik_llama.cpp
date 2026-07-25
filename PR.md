@@ -34,11 +34,25 @@ queries in flight.
   rewinds past the resident window (`rewind > R - n_swa`); the server and
   speculative trim already fall back to clearing the sequence and
   reprocessing. Smaller rewinds keep partial cache reuse.
-- The server's RAM prompt cache serializes slot KV via `llama_state_seq_*`,
-  which the ring cannot support: the server auto-disables it (new
-  `llama_kv_self_is_swa_ring()`) and the seq-state getters refuse with a
-  warning instead of aborting. User-initiated full-state saves still fail
-  loudly.
+- State IO (checkpointing) is ring-aware, not refused. A ring layer serializes
+  the last `min(size_swa, cell_count)` cells in oldest-to-newest order instead
+  of one row per cell; replaying them into the destination ring at the slots its
+  own cell indices imply reproduces the source exactly, and the cells that fall
+  out are outside every future query's window by construction (`size_swa =
+  pad(n_swa + n_ubatch)`). The blob carries the ring geometry so a restore into a
+  differently sized window -- or into a dense cache, or a dense blob into a ring
+  -- is refused instead of restored wrong. A blob saved *without*
+  `--swa-compress` is byte-identical to what earlier builds wrote, so no existing
+  session or slot-save file is invalidated. This covers `--prompt-cache`, the
+  server's RAM prompt cache (no longer auto-disabled) and
+  `/slots/{id}?action=save|restore`.
+- `llama_state_seq_get_size` no longer lets an exception escape into C callers,
+  and a restore that fails part-way now discards what it wrote on the throwing
+  paths too (a half-restored ring would otherwise abort the next decode in the
+  occupancy guard).
+- `main.cpp` honors `llama_kv_cache_seq_rm`'s refusal when trimming a reloaded
+  session: it reprocesses the prompt instead of continuing on cells whose K/V
+  the ring no longer holds.
 - `--dry-*` sampling flags are now documented in `--help` (the parsers
   existed; the help entries did not).
 
@@ -57,9 +71,16 @@ end-to-end on Laguna and (as a real non-Laguna arch) GEMMA2, whose alternating
 SWA layers are populated via a new periodic-pattern helper
 (`llama_hparams_set_swa_layers_periodic()`); several other archs generalize
 structurally the same way but are not yet test-covered (tracked follow-up).
-Context shift (K-shift), defrag, and state save/load are incompatible with a
-ring and fail with errors pointing at `--swa-compress` (disengage to restore
-full dense/state-save behavior). `-sm graph` without flash attention crashes
+Context shift (K-shift), defrag, `seq_cp` and `seq_keep` are incompatible with a
+ring and fail with errors pointing at `--swa-compress` (disengage to restore the
+dense behavior). State save/load is supported, but only for the single-sequence
+append-only layout the ring itself supports: a fragmented cell layout is refused
+rather than serialized in the wrong order. Metadata-only restores
+(`LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY`, used by the server's in-context rewind
+checkpoints) are also refused: they rewind cells without rewriting rows, which a
+ring cannot honor once generation past the rewind point has overwritten those
+slots — the server falls back to a reset, as it already does when a checkpoint
+cannot be restored. `-sm graph` without flash attention crashes
 upstream even with dense KV, so the split-path no-FA wrap handling is
 consistency hardening, not a reachable path today.
 
@@ -97,6 +118,5 @@ consistency hardening, not a reachable path today.
 Refs #1607: implements the window-sized SWA KV storage requested there. The
 ring approach (single shared cache, per-layer ring storage, occupancy-guarded
 mask) now generalizes to any arch passing `supports_swa_ring()`, not just
-Laguna; sequence-state checkpointing is deliberately refused rather than
-implemented (disengage `--swa-compress` to restore the previous dense
-behavior where state IO is needed).
+Laguna; sequence-state checkpointing is implemented window-aware, so slot
+save/restore and prompt caching work with the ring engaged.

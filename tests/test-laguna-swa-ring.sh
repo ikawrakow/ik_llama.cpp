@@ -199,22 +199,79 @@ else
     echo "SKIP: test-cache-size-estimator not built in $BIN"
 fi
 
-echo "== guard: state save must refuse gracefully with the ring (not abort the process) =="
-# A save API call on a ring context must never kill the caller -- llama_state_get_data_internal
-# refuses with a warning and returns 0 (llama-cli itself still exits 0: it discards the
-# save's return value, same as any other save failure in this codebase).
+echo "== state save/restore unit test (ring blob layout, byte-exact round-trip, refusals) =="
+# Ring layers serialize only the window (min(size_swa, cell_count) rows, oldest first)
+# instead of one row per cell, so this pins: the blob is smaller than the dense one, a
+# restore re-serializes byte-for-byte, the continuation logits match, and cross-mode /
+# mismatched-geometry blobs are refused with 0 rather than restored wrong.
+if [ -x "$BIN/test-swa-ring-state" ]; then
+    "$BIN/test-swa-ring-state" "$MODEL" 2>&1 | tee "$WORK_DIR/ring-state.log"
+    grep -q "SWA ring state save/restore OK" "$WORK_DIR/ring-state.log" \
+        || { echo "FAIL: SWA ring state save/restore unit test did not report OK"; exit 1; }
+else
+    echo "SKIP: test-swa-ring-state not built in $BIN"
+fi
+
+echo "== end-to-end: --prompt-cache must round-trip with the ring =="
+# Until the ring-aware serialization landed, every llama_state_* call refused on a ring
+# context and this leg asserted the refusal instead. Now the first run must WRITE a
+# session file and the second must load it and match the prompt exactly.
+rm -f "$WORK_DIR/state.bin"
 if ! "$BIN/llama-cli" "${COMMON_ARGS[@]}" -ub 48 --swa-compress -f "$PROMPT_GEN_FILE" -n 8 --temp 0 --top-k 1 \
-        --prompt-cache "$WORK_DIR/state.bin" > "$WORK_DIR/state.log" 2>&1; then
-    echo "FAIL: state save with ring should exit cleanly (refuse-and-continue), not crash the process"
-    tail -20 "$WORK_DIR/state.log"
+        --prompt-cache "$WORK_DIR/state.bin" > "$WORK_DIR/state-save.log" 2>&1; then
+    echo "FAIL: state save with the ring should exit cleanly"
+    tail -20 "$WORK_DIR/state-save.log"
     exit 1
 fi
-if ! grep -qi "cannot be serialized with the SWA ring" "$WORK_DIR/state.log"; then
-    echo "FAIL: state-save refusal lacks the specific SWA ring guard message"
-    tail -5 "$WORK_DIR/state.log"
+if grep -qi "cannot be serialized with the SWA ring\|not supported with SWA ring" "$WORK_DIR/state-save.log"; then
+    echo "FAIL: state save still refuses under the ring"
+    grep -i "SWA ring" "$WORK_DIR/state-save.log" | tail -5
     exit 1
 fi
-echo "state-save guard OK"
+[ -s "$WORK_DIR/state.bin" ] || { echo "FAIL: --prompt-cache wrote no session file under the ring"; exit 1; }
+
+if ! "$BIN/llama-cli" "${COMMON_ARGS[@]}" -ub 48 --swa-compress -f "$PROMPT_GEN_FILE" -n 8 --temp 0 --top-k 1 \
+        --prompt-cache "$WORK_DIR/state.bin" > "$WORK_DIR/state-load.log" 2>&1; then
+    echo "FAIL: reloading the session file under the ring should exit cleanly"
+    tail -20 "$WORK_DIR/state-load.log"
+    exit 1
+fi
+if ! grep -q "exact match for prompt\|using full prompt from session file" "$WORK_DIR/state-load.log"; then
+    echo "FAIL: reloaded session did not match the prompt (restore silently produced nothing usable)"
+    grep -i "session" "$WORK_DIR/state-load.log" | tail -8
+    exit 1
+fi
+if grep -qi "a cell inside the attention window was overwritten" "$WORK_DIR/state-load.log"; then
+    echo "FAIL: restored ring occupancy disagrees with the restored rows (mask guard fired)"
+    exit 1
+fi
+# "exact match" alone only proves the token list matched. The restored KV was actually KEPT
+# only if the session trim succeeded -- if it had been refused, main.cpp clears the cache and
+# reprocesses, which would make this leg pass while reusing nothing.
+if grep -q "cannot trim the session" "$WORK_DIR/state-load.log"; then
+    echo "FAIL: exact-match reload fell back to reprocessing, so no restored KV was reused"
+    grep -i "session" "$WORK_DIR/state-load.log" | tail -8
+    exit 1
+fi
+
+echo "== end-to-end: a partially matching session must not leave the ring incoherent =="
+# main.cpp trims the non-matching tail with llama_kv_cache_seq_rm(p0 = n_matching), which
+# the ring refuses when the cells just behind p0 are no longer resident. That refusal must
+# turn into a full reprocess, never a silent continue on stale cells (which the ring's own
+# occupancy guard would then turn into a process abort).
+cat "$PROMPT_GEN_FILE" > "$WORK_DIR/prompt-ext.txt"
+printf ' and then something entirely different about penguins in the desert\n' >> "$WORK_DIR/prompt-ext.txt"
+if ! "$BIN/llama-cli" "${COMMON_ARGS[@]}" -ub 48 --swa-compress -f "$WORK_DIR/prompt-ext.txt" -n 8 --temp 0 --top-k 1 \
+        --prompt-cache "$WORK_DIR/state.bin" > "$WORK_DIR/state-partial.log" 2>&1; then
+    echo "FAIL: partially matching session reload should exit cleanly"
+    tail -20 "$WORK_DIR/state-partial.log"
+    exit 1
+fi
+if grep -qi "a cell inside the attention window was overwritten" "$WORK_DIR/state-partial.log"; then
+    echo "FAIL: partial session reuse continued on stale cells under the ring"
+    exit 1
+fi
+echo "state save/restore OK"
 
 echo "== guard: context shift must fail cleanly with the ring (error-return, not a crash) =="
 # n_ctx 512 keeps the ring engaged (ring 256 < 512); prompt + 400 generated
@@ -257,8 +314,10 @@ echo "== server: cache-reuse rewind must fall back, not crash =="
 if [ -x "$BIN/llama-server" ]; then
     SRV_PORT=18731
     # c=1024 ub=128 -> ring R = 256, n_swa = 64, slack = 192
+    mkdir -p "$WORK_DIR/slots"
     "$BIN/llama-server" -m "$MODEL" -c 1024 -ub 128 --swa-compress --port $SRV_PORT --host 127.0.0.1 \
-        -np 1 --no-context-shift -t 4 --dry-multiplier 0.8 > "$WORK_DIR/server.log" 2>&1 &
+        -np 1 --no-context-shift -t 4 --dry-multiplier 0.8 --slot-save-path "$WORK_DIR/slots" \
+        > "$WORK_DIR/server.log" 2>&1 &
     SRV_PID=$!
     for _ in $(seq 1 60); do
         curl -s -m 2 "http://127.0.0.1:$SRV_PORT/health" 2>/dev/null | grep -q '"ok"' && break
@@ -291,17 +350,54 @@ if [ -x "$BIN/llama-server" ]; then
     grep "kv cache rm" "$WORK_DIR/server.log" | tail -1 | grep -q "p0=0" \
         || { echo "FAIL: rewind was not refused into a full reprocess (last kv-cache-rm p0 != 0)"; kill $SRV_PID 2>/dev/null; exit 1; }
     # the server-side RAM prompt cache (on by default) snapshots slot KV via
-    # llama_state_seq_get_size/get_data, which the ring cannot serialize —
-    # the server must auto-disable it at startup and survive prompt switches
-    # that would otherwise trigger prompt_save (pre-fix: GGML_ABORT).
-    grep -q "prompt cache is disabled: the SWA ring" "$WORK_DIR/server.log" \
-        || { echo "FAIL: server prompt cache was not auto-disabled under the ring"; kill $SRV_PID 2>/dev/null; exit 1; }
+    # llama_state_seq_get_size/get_data. The ring used to be unable to serialize that, so
+    # the server auto-disabled the cache at startup; now that ring state round-trips it
+    # must stay ENABLED and survive prompt switches that trigger prompt_save.
+    if grep -q "prompt cache is disabled: the SWA ring" "$WORK_DIR/server.log"; then
+        echo "FAIL: server still auto-disables the prompt cache under the ring"
+        kill $SRV_PID 2>/dev/null; exit 1
+    fi
+    grep -q "prompt cache is enabled" "$WORK_DIR/server.log" \
+        || { echo "FAIL: server prompt cache not enabled under the ring"; kill $SRV_PID 2>/dev/null; exit 1; }
     curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT/completion" -H 'Content-Type: application/json' \
         -d "{\"prompt\": \"a completely different prompt about penguins\", \"n_predict\": 32, \"cache_prompt\": true, \"ignore_eos\": true}" > "$WORK_DIR/srv3.json" || true
     curl -s -m 5 "http://127.0.0.1:$SRV_PORT/health" | grep -q '"ok"' \
         || { echo "FAIL: server unhealthy after prompt switch (prompt_save path?)"; kill $SRV_PID 2>/dev/null; exit 1; }
+    # A PARTIAL_ONLY (metadata-only) checkpoint restore cannot be honored by a ring: the rows
+    # behind the rewind point have been overwritten, and find_slot would re-record the
+    # restored cells as their slots' owners, making the occupancy guard confirm a lie. The
+    # refusal must be graceful -- the server falls back to a reset, never generates on it.
+    if grep -q "failed to restore context checkpoint" "$WORK_DIR/server.log"; then
+        grep -qi "PARTIAL_ONLY) restore is not possible with the SWA ring" "$WORK_DIR/server.log" \
+            || { echo "FAIL: checkpoint restore failed for a reason other than the ring refusal"; kill $SRV_PID 2>/dev/null; exit 1; }
+    fi
+    grep -qi "a cell inside the attention window was overwritten" "$WORK_DIR/server.log" \
+        && { echo "FAIL: a metadata-only checkpoint restore was honored under the ring"; kill $SRV_PID 2>/dev/null; exit 1; }
+
+    # slot checkpointing: /slots/N?action=save|restore is the "SWA checkpoint" the ring
+    # could not provide before (llama_state_seq_save_file returned 0). Both directions must
+    # report a nonzero token count and leave the server healthy.
+    curl -s -m 30 -X POST "http://127.0.0.1:$SRV_PORT/slots/0?action=save" -H 'Content-Type: application/json' \
+        -d '{"filename": "ring-slot0.bin"}' > "$WORK_DIR/slot-save.json" || true
+    grep -q '"n_saved": *[1-9]' "$WORK_DIR/slot-save.json" \
+        || { echo "FAIL: slot save under the ring stored no tokens"; cat "$WORK_DIR/slot-save.json"; kill $SRV_PID 2>/dev/null; exit 1; }
+    [ -s "$WORK_DIR/slots/ring-slot0.bin" ] \
+        || { echo "FAIL: slot save wrote no file under the ring"; kill $SRV_PID 2>/dev/null; exit 1; }
+    curl -s -m 30 -X POST "http://127.0.0.1:$SRV_PORT/slots/0?action=restore" -H 'Content-Type: application/json' \
+        -d '{"filename": "ring-slot0.bin"}' > "$WORK_DIR/slot-restore.json" || true
+    grep -q '"n_restored": *[1-9]' "$WORK_DIR/slot-restore.json" \
+        || { echo "FAIL: slot restore under the ring loaded no tokens"; cat "$WORK_DIR/slot-restore.json"; kill $SRV_PID 2>/dev/null; exit 1; }
+    kill -0 $SRV_PID 2>/dev/null || { echo "FAIL: server died during slot save/restore"; tail -20 "$WORK_DIR/server.log"; exit 1; }
+    # a restored slot must still generate -- this is where a wrongly placed ring row shows
+    # up as the occupancy-guard abort rather than as bad text
+    curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT/completion" -H 'Content-Type: application/json' \
+        -d "{\"prompt\": \"$SRV_PROMPT\", \"n_predict\": 16, \"cache_prompt\": true, \"ignore_eos\": true}" > "$WORK_DIR/srv4.json" || true
+    curl -s -m 5 "http://127.0.0.1:$SRV_PORT/health" | grep -q '"ok"' \
+        || { echo "FAIL: server unhealthy after generating from a restored slot"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
+    grep -qi "a cell inside the attention window was overwritten" "$WORK_DIR/server.log" \
+        && { echo "FAIL: restored slot left the ring occupancy inconsistent"; kill $SRV_PID 2>/dev/null; exit 1; }
     kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null || true
-    echo "server cache-rewind fallback OK"
+    echo "server cache-rewind fallback + slot checkpointing OK"
 else
     echo "SKIP: server rewind leg (llama-server not built in $BIN)"
 fi

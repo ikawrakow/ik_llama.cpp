@@ -215,6 +215,12 @@ llama_target_and_test(test-autorelease.cpp        LABEL "model")
 llama_target_and_test(test-cache-size-estimator.cpp LABEL "model")
 target_include_directories(test-cache-size-estimator PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
+# Pins state save/restore for the SWA ring KV cache (ring blob smaller than dense,
+# byte-exact round-trip, same continuation logits, cross-mode blobs refused).
+# Same model gating as above: skips without a model path / LLAMACPP_TEST_MODELFILE.
+llama_target_and_test(test-swa-ring-state.cpp LABEL "model")
+target_include_directories(test-swa-ring-state PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)

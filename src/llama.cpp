@@ -2203,6 +2203,13 @@ static bool llama_kv_cache_seq_rm(
     // If we freed up a slot, set head to it so searching can start there.
     if (new_head != cache.size && new_head < cache.head) cache.head = new_head;
 
+    if (cache.swa_ring && cache.used == 0) {
+        // nothing is resident any more, so no ring slot has a valid occupant: drop the
+        // recorded occupancy rather than let it outlive the cells it points at (the same
+        // thing llama_kv_cache_clear does).
+        std::fill(cache.ring_occ.begin(), cache.ring_occ.end(), -1);
+    }
+
     return true;
 }
 
@@ -9410,6 +9417,33 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
     return kv;
 }
 
+// SWA ring KV state serialization
+// -------------------------------
+// A ring layer stores only kv_self.size_swa rows and puts cell c at row
+// c % size_swa, so the dense "one row per cell, in cell order" layout the rest of
+// this code uses cannot describe it. Instead a ring layer serializes the last
+// min(size_swa, cell_count) cells in logical (oldest -> newest) order; replaying
+// them into the destination ring, at the slots its own cell indices imply,
+// reproduces the source ring exactly. Cells older than that tail are outside every
+// future query's window -- size_swa is GGML_PAD(n_swa + n_ubatch, pad), so the tail
+// always covers a full window plus a ubatch of slack -- and their rows are gone
+// from the source anyway.
+//
+// Written only when the source cache is a ring, so a blob produced without
+// --swa-compress stays byte-identical to what earlier builds wrote (no session or
+// slot-save file is invalidated by this feature). A ring blob fed to a dense cache
+// -- or the reverse -- fails the type/row-size checks that follow.
+static const uint32_t LLAMA_KV_RING_MAGIC = 0x474e4952u; // "RING"
+
+static inline bool llama_kv_ring_layer(const struct llama_kv_cache & kv, const struct llama_hparams & hparams, uint32_t il) {
+    return kv.swa_ring && hparams.swa_layers[il];
+}
+
+// number of logical cells a ring layer keeps rows for
+static inline uint32_t llama_kv_ring_rows(const struct llama_kv_cache & kv, uint32_t cell_count) {
+    return std::min(kv.size_swa, cell_count);
+}
+
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
@@ -9489,6 +9523,34 @@ struct llama_data_write {
         }
     }
 
+    // Write `n_rows` rows of a ring layer, oldest first. Logical cell c lives at row
+    // c % size_swa, so a contiguous run of cells is at most two contiguous runs of
+    // rows (one before the wrap, one after).
+    void write_ring_rows(const struct ggml_tensor * tensor, uint32_t first_cell, uint32_t n_rows,
+            uint32_t size_swa, uint64_t row_size, int il) {
+        for (uint32_t done = 0; done < n_rows; ) {
+            const uint32_t slot = (first_cell + done) % size_swa;
+            const uint32_t run  = std::min(n_rows - done, size_swa - slot);
+            write_tensor_data(tensor, (size_t) slot * row_size, (size_t) run * row_size, il);
+            done += run;
+        }
+    }
+
+    // Same, for a transposed V cache: element j of every cell sits in row j, whose
+    // stride is the layer's own row count (size_swa for a ring layer, not kv_self.size).
+    void write_ring_elems(const struct ggml_tensor * tensor, uint32_t first_cell, uint32_t n_rows,
+            uint32_t size_swa, uint32_t n_embd_v_gqa, uint32_t v_size_el, int il) {
+        for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+            for (uint32_t done = 0; done < n_rows; ) {
+                const uint32_t slot = (first_cell + done) % size_swa;
+                const uint32_t run  = std::min(n_rows - done, size_swa - slot);
+                write_tensor_data(tensor, ((size_t) slot + (size_t) j * size_swa) * v_size_el,
+                        (size_t) run * v_size_el, il);
+                done += run;
+            }
+        }
+    }
+
     void write_kv_cache_meta(const llama_kv_cache & kv_self, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) {
 
         for (const auto & range : cell_ranges) {
@@ -9514,15 +9576,12 @@ struct llama_data_write {
         const struct llama_kv_cache & kv_self = ctx->kv_self;
         const struct llama_hparams & hparams = ctx->model.hparams;
         bool need_kv = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
-        if (kv_self.swa_ring && need_kv) {
-            // ring tensors hold size_swa rows keyed by cell % size_swa; the dense
-            // cell-range serialization below would write the wrong rows. A
-            // PARTIAL_ONLY save (need_kv false) never reads KV tensor data at
-            // all (see has_v_cache below), so it is safe to let through --
-            // aborting it too was the actual process-death path a PARTIAL_ONLY
-            // seq-state save on a ring context could still hit.
-            GGML_ABORT("state save is not supported with SWA ring KV; run without --swa-compress");
+
+        uint32_t cell_count = 0;
+        for (const auto & range : cell_ranges) {
+            cell_count += range.second - range.first;
         }
+
         // v_state: 0 -> not transposed V cache
         //          1 -> transposed V cache
         //          2 -> no V cache (as it may be the case with MLA)
@@ -9531,6 +9590,28 @@ struct llama_data_write {
 
         write(&v_state, sizeof(v_state));
         write(&n_layer, sizeof(n_layer));
+
+        // ring geometry, plus where a ring layer's window starts in the source cells
+        // (see LLAMA_KV_RING_MAGIC above)
+        uint32_t ring_rows  = 0;
+        uint32_t ring_first = 0;
+        if (kv_self.swa_ring) {
+            write(&LLAMA_KV_RING_MAGIC, sizeof(LLAMA_KV_RING_MAGIC));
+            write(&kv_self.size_swa,    sizeof(kv_self.size_swa));
+            write(&kv_self.ring_n_swa,  sizeof(kv_self.ring_n_swa));
+
+            ring_rows = llama_kv_ring_rows(kv_self, cell_count);
+            if (ring_rows > 0 && need_kv) {
+                // The window tail is only well defined while the saved cells form one
+                // contiguous ascending block -- which is all the ring supports anyway
+                // (single sequence, append-only, no defrag and no context shift). Refuse
+                // rather than silently serialize rows in the wrong order.
+                if (cell_ranges.size() != 1) {
+                    throw std::runtime_error("SWA ring KV: cannot serialize a fragmented cell layout");
+                }
+                ring_first = cell_ranges[0].second - ring_rows;
+            }
+        }
 
         // Iterate and write all the keys first, each row is a cell
         // Get whole range at a time
@@ -9556,6 +9637,11 @@ struct llama_data_write {
                 continue;
             }
 
+            if (llama_kv_ring_layer(kv_self, hparams, il)) {
+                write_ring_rows(kv_self.k_l[il], ring_first, ring_rows, kv_self.size_swa, k_size_row, il);
+                continue;
+            }
+
             // Read each range of cells of k_size length each into tmp_buf and write out
             for (const auto & range : cell_ranges) {
                 const size_t range_size = range.second - range.first;
@@ -9578,6 +9664,11 @@ struct llama_data_write {
                 write(&v_size_row, sizeof(v_size_row));
 
                 if (!has_v_cache) {
+                    continue;
+                }
+
+                if (llama_kv_ring_layer(kv_self, hparams, il)) {
+                    write_ring_rows(kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa, v_size_row, il);
                     continue;
                 }
 
@@ -9609,6 +9700,12 @@ struct llama_data_write {
                 write(&n_embd_v_gqa_write, sizeof(n_embd_v_gqa_write));
 
                 if (!has_v_cache) {
+                    continue;
+                }
+
+                if (llama_kv_ring_layer(kv_self, hparams, il)) {
+                    write_ring_elems(kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa,
+                            n_embd_v_gqa, v_size_el, il);
                     continue;
                 }
 
@@ -9669,6 +9766,12 @@ struct llama_data_write {
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const bool has_kr_cache = need_kv && il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
                 if (!has_kr_cache) continue;
+
+                // kr_l is allocated with kv_self.size rows and is never ring-keyed: the
+                // only arch with a DSA indexer cache (DEEPSEEK4) is excluded from the ring
+                // by llama_model::supports_swa_ring(). Catch it here if that ever changes.
+                GGML_ASSERT(!llama_kv_ring_layer(kv_self, hparams, il) &&
+                        "DSA indexer key cache has no SWA ring layout");
 
                 const int32_t kr_type_i = has_kr_cache ? (int32_t) kv_self.kr_l[il]->type : -1;
                 write(&kr_type_i, sizeof(kr_type_i));
@@ -9820,6 +9923,37 @@ struct llama_data_read {
         }
     }
 
+    // Mirrors write_ring_rows: place n_rows rows of a ring layer, oldest first, at the
+    // slots the destination cell indices imply (cell c -> row c % size_swa).
+    void read_ring_rows(struct llama_context * ctx, struct ggml_tensor * tensor, uint32_t first_cell,
+            uint32_t n_rows, uint32_t size_swa, size_t row_size, int il) {
+        for (uint32_t done = 0; done < n_rows; ) {
+            const uint32_t slot = (first_cell + done) % size_swa;
+            const uint32_t run  = std::min(n_rows - done, size_swa - slot);
+            const uint8_t * src = read((size_t) run * row_size);
+            if (tensor->extra) {
+                read_kv_cache_data_split(ctx, tensor, src, slot, row_size, run, il);
+            } else {
+                ggml_backend_tensor_set(tensor, src, (size_t) slot * row_size, (size_t) run * row_size);
+            }
+            done += run;
+        }
+    }
+
+    // Mirrors write_ring_elems (transposed V: row stride is the layer's own row count).
+    void read_ring_elems(struct ggml_tensor * tensor, uint32_t first_cell, uint32_t n_rows,
+            uint32_t size_swa, uint32_t n_embd_v_gqa, uint32_t v_size_el) {
+        for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+            for (uint32_t done = 0; done < n_rows; ) {
+                const uint32_t slot = (first_cell + done) % size_swa;
+                const uint32_t run  = std::min(n_rows - done, size_swa - slot);
+                ggml_backend_tensor_set(tensor, read((size_t) run * v_size_el),
+                        ((size_t) slot + (size_t) j * size_swa) * v_size_el, (size_t) run * v_size_el);
+                done += run;
+            }
+        }
+    }
+
     bool read_kv_cache_meta(struct llama_context * ctx, uint32_t cell_count, llama_seq_id dest_seq_id = -1) {
         struct llama_kv_cache & kv_self = ctx->kv_self;
 
@@ -9956,12 +10090,6 @@ struct llama_data_read {
         const struct llama_hparams & hparams = ctx->model.hparams;
         struct llama_kv_cache & kv_self = ctx->kv_self;
         bool need_kv = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
-        if (kv_self.swa_ring && need_kv) {
-            // Same PARTIAL_ONLY exemption as write_kv_cache_data: a PARTIAL_ONLY
-            // load never reads dense KV extents, so it's safe on a ring context.
-            LLAMA_LOG_ERROR("%s: state load is not supported with SWA ring KV; run without --swa-compress\n", __func__);
-            return false;
-        }
         // v_state: 0 -> not transposed V cache
         //          1 -> transposed V cache
         //          2 -> no V cache (as it may be the case with MLA)
@@ -9983,6 +10111,46 @@ struct llama_data_read {
         if (kv_self.v_trans != (v_state == 1)) {
             LLAMA_LOG_ERROR("%s: incompatible V transposition\n", __func__);
             return false;
+        }
+
+        // ring geometry, written only by a ring source (see LLAMA_KV_RING_MAGIC). A blob
+        // saved from a dense cache lacks it, so the magic check is also what rejects
+        // restoring a dense state into a ring cache; the reverse direction fails the key
+        // type/row-size checks below, since a dense reader consumes the magic as a type.
+        uint32_t ring_rows  = 0;
+        uint32_t ring_first = 0;
+        if (kv_self.swa_ring) {
+            uint32_t ring_magic = 0, size_swa = 0, n_swa = 0;
+            read_to(&ring_magic, sizeof(ring_magic));
+            read_to(&size_swa,   sizeof(size_swa));
+            read_to(&n_swa,      sizeof(n_swa));
+
+            if (ring_magic != LLAMA_KV_RING_MAGIC) {
+                LLAMA_LOG_ERROR("%s: state was not saved from a SWA ring KV cache; load it without --swa-compress\n", __func__);
+                return false;
+            }
+            if (size_swa != kv_self.size_swa || n_swa != kv_self.ring_n_swa) {
+                LLAMA_LOG_ERROR("%s: mismatched SWA ring geometry (window %u, n_swa %u instead of %u, %u)\n",
+                        __func__, size_swa, n_swa, kv_self.size_swa, kv_self.ring_n_swa);
+                return false;
+            }
+
+            ring_rows = llama_kv_ring_rows(kv_self, cell_count);
+            if (ring_rows > 0 && need_kv) {
+                ring_first = kv_self.head + cell_count - ring_rows;
+
+                // Replaying every restored cell's slot makes ring_occ agree with the rows
+                // written below: slot r ends up holding the newest restored cell mapping to
+                // it, which is exactly what the tail carries. Needed because the whole-cache
+                // path cleared ring_occ (llama_kv_cache_clear) before repopulating cells;
+                // the single-sequence path went through llama_kv_cache_find_slot, which
+                // already recorded the same thing. The SWA mask's occupancy guard aborts
+                // the process if this ever disagrees with the tensor contents.
+                for (uint32_t i = 0; i < cell_count; ++i) {
+                    const uint32_t c = kv_self.head + i;
+                    kv_self.ring_occ[c % kv_self.size_swa] = (int32_t) c;
+                }
+            }
         }
 
         // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
@@ -10023,6 +10191,11 @@ struct llama_data_read {
             if (k_size_row != k_size_row_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched key row size (%zu != %zu, layer %d)\n", __func__, k_size_row, (size_t) k_size_row_ref, il);
                 return false;
+            }
+
+            if (llama_kv_ring_layer(kv_self, hparams, il)) {
+                read_ring_rows(ctx, kv_self.k_l[il], ring_first, ring_rows, kv_self.size_swa, k_size_row, il);
+                continue;
             }
 
             if (cell_count) {
@@ -10070,6 +10243,11 @@ struct llama_data_read {
                 if (v_size_row != v_size_row_ref) {
                     LLAMA_LOG_ERROR("%s: mismatched value row size (%zu != %zu, layer %d)\n", __func__, v_size_row, (size_t) v_size_row_ref, il);
                     return false;
+                }
+
+                if (llama_kv_ring_layer(kv_self, hparams, il)) {
+                    read_ring_rows(ctx, kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa, v_size_row, il);
+                    continue;
                 }
 
                 if (cell_count) {
@@ -10133,6 +10311,15 @@ struct llama_data_read {
                 if (n_embd_v_gqa != n_embd_v_gqa_ref) {
                     LLAMA_LOG_ERROR("%s: mismatched GQA embedding size (%u != %u, layer %d)\n", __func__, n_embd_v_gqa, n_embd_v_gqa_ref, il);
                     return false;
+                }
+
+                if (llama_kv_ring_layer(kv_self, hparams, il)) {
+                    if (kv_self.v_l[il]->extra) {
+                        throw std::runtime_error("Transposed V cache is not sypported with split mode 'graph'");
+                    }
+                    read_ring_elems(kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa,
+                            n_embd_v_gqa, (uint32_t) ggml_type_size(kv_self.v_l[il]->type));
+                    continue;
                 }
 
                 if (cell_count) {
@@ -10235,6 +10422,10 @@ struct llama_data_read {
                 const bool has_kr_cache = need_kv && il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
                 if (!has_kr_cache) continue;
 
+                // see the matching assert on the write side: kr_l is never ring-keyed
+                GGML_ASSERT(!llama_kv_ring_layer(kv_self, hparams, il) &&
+                        "DSA indexer key cache has no SWA ring layout");
+
                 int32_t kr_type_i_ref;
                 read_to(&kr_type_i_ref, sizeof(kr_type_i_ref));
                 const int32_t kr_type_i = (int32_t) kv_self.kr_l[il]->type;
@@ -10263,18 +10454,35 @@ struct llama_data_read {
         return true;
     }
 
+    // drop whatever a failed restore already wrote, so the cache never describes cells
+    // whose rows were never filled in
+    static void discard_kv_cache(struct llama_context * ctx, llama_seq_id seq_id) {
+        if (seq_id == -1) {
+            llama_kv_cache_clear(ctx);
+        } else {
+            llama_kv_cache_seq_rm(ctx, seq_id, -1, -1);
+        }
+    }
+
     void read_kv_cache(struct llama_context * ctx, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
         uint32_t cell_count;
         read_to(&cell_count, sizeof(cell_count));
 
-        bool res = read_kv_cache_meta(ctx, cell_count, seq_id) && read_kv_cache_data(ctx, cell_count, seq_id, flags);
+        bool res;
+        try {
+            res = read_kv_cache_meta(ctx, cell_count, seq_id) && read_kv_cache_data(ctx, cell_count, seq_id, flags);
+        } catch (...) {
+            // read_kv_cache_meta has already rewritten cell metadata by the time the KV
+            // payload is consumed, so a throw here (short buffer, backend error) would
+            // otherwise leave cells describing rows nothing ever wrote. Under the SWA ring
+            // the mask's occupancy guard turns exactly that into a process abort on the
+            // next decode, so the cleanup has to cover the throwing paths too.
+            discard_kv_cache(ctx, seq_id);
+            throw;
+        }
 
         if (!res) {
-            if (seq_id == -1) {
-                llama_kv_cache_clear(ctx);
-            } else {
-                llama_kv_cache_seq_rm(ctx, seq_id, -1, -1);
-            }
+            discard_kv_cache(ctx, seq_id);
             throw std::runtime_error("failed to restore kv cache");
         }
     }
@@ -10557,15 +10765,6 @@ static size_t llama_state_get_data_internal(struct llama_context * ctx, llama_da
     if (!llama_state_io_supported(ctx, __func__)) {
         return 0;
     }
-    // The SWA ring stores only a window of KV per layer; the dense cell-range
-    // serialization below cannot represent it. Refuse gracefully -- a save API
-    // call must not kill the caller's process -- instead of hitting
-    // write_kv_cache_data's abort (which stays as defense-in-depth for any
-    // other path that reaches it without this guard).
-    if (ctx->kv_self.swa_ring) {
-        LLAMA_LOG_WARN("%s: state cannot be serialized with the SWA ring KV cache; run without --swa-compress\n", __func__);
-        return 0;
-    }
     llama_synchronize(ctx);
 
     data_ctx.write_model_info(ctx);
@@ -10606,15 +10805,6 @@ size_t llama_state_get_size(struct llama_context * ctx) {
 
 static size_t llama_state_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx) {
     if (!llama_state_io_supported(ctx, __func__)) {
-        return SIZE_MAX;
-    }
-    // Mirrors the save-side guard: refuse before read_kv_cache() runs, not after.
-    // The deep guard in read_kv_cache_data() fires only after read_kv_cache_meta()
-    // has already mutated cell state for a dense layout that doesn't match a ring
-    // cache, so the failure handler then has to clear the cache before throwing --
-    // coherent, but needlessly destructive when refusing up front is just as valid.
-    if (ctx->kv_self.swa_ring) {
-        LLAMA_LOG_ERROR("%s: state load is not supported with SWA ring KV; run without --swa-compress\n", __func__);
         return SIZE_MAX;
     }
     llama_synchronize(ctx);
@@ -10734,14 +10924,6 @@ static size_t llama_state_seq_get_data_internal(struct llama_context * ctx, llam
     if (!llama_state_io_supported(ctx, __func__)) {
         return 0;
     }
-    // the SWA ring stores only a window of each sequence's KV; a serialized
-    // sequence state would be incomplete. Refuse gracefully (background users
-    // like the server prompt cache treat 0 as "cannot save") instead of hitting
-    // the write_kv_cache_data abort that guards user-initiated full-state saves.
-    if (ctx->kv_self.swa_ring && (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        LLAMA_LOG_WARN("%s: sequence KV state cannot be serialized with the SWA ring KV cache; run without --swa-compress\n", __func__);
-        return 0;
-    }
     llama_synchronize(ctx);
 
     data_ctx.write_kv_cache(ctx, seq_id, flags);
@@ -10751,7 +10933,15 @@ static size_t llama_state_seq_get_data_internal(struct llama_context * ctx, llam
 
 size_t llama_state_seq_get_size(struct llama_context * ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {
     llama_data_write_dummy data_ctx;
-    return llama_state_seq_get_data_internal(ctx, data_ctx, seq_id, flags);
+    try {
+        // same contract as llama_state_seq_get_data: a state that cannot be serialized
+        // (e.g. a fragmented cell layout under the SWA ring) reports 0, it does not let
+        // an exception escape into C callers
+        return llama_state_seq_get_data_internal(ctx, data_ctx, seq_id, flags);
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error sizing sequence state: %s\n", __func__, err.what());
+        return 0;
+    }
 }
 
 size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
@@ -10767,6 +10957,17 @@ size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_
 static size_t llama_state_seq_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx, llama_seq_id dest_seq_id, llama_state_seq_flags flags) {
     if (!llama_state_io_supported(ctx, __func__)) {
         return SIZE_MAX;
+    }
+    // A PARTIAL_ONLY restore rewinds cell metadata and deliberately does NOT rewrite the KV
+    // tensors -- it assumes the rows behind the rewind point are still the ones those cells
+    // wrote. A ring cannot honor that: generation past the rewind point overwrites the slots
+    // of the cells being restored to, and llama_kv_cache_find_slot then re-records those
+    // cells as their slots' occupants, so the mask's occupancy guard would confirm an
+    // occupancy that no longer matches the rows. Refuse; callers already treat a short
+    // return as "checkpoint unusable" and fall back to reprocessing.
+    if (ctx->kv_self.swa_ring && (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) != 0) {
+        LLAMA_LOG_WARN("%s: metadata-only (PARTIAL_ONLY) restore is not possible with the SWA ring KV cache\n", __func__);
+        return 0;
     }
     llama_synchronize(ctx);
 
