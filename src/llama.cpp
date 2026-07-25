@@ -3786,7 +3786,7 @@ struct expert_tensors {
 
 static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model,
         ggml_type cache_type_k, ggml_type cache_type_v, ggml_type idx_type_k, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
-        int amb, int worst_case_tokens, bool flash_attn, bool swa_compress, float defrag_thold,
+        int amb, int worst_case_tokens, bool flash_attn, bool swa_compress,
         std::vector<expert_tensors> & experts) {
     int n_layer = model.hparams.n_layer;
     std::vector<double> result(n_layer+1, 0);
@@ -3993,7 +3993,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
-        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress, defrag_thold);
+        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn, (uint32_t) n_ubatch, swa_compress);
         LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
         tot_model += result[il];
@@ -4035,7 +4035,6 @@ static bool llm_load_tensors(
         int worst_case_tokens,
         bool flash_attn,
         bool swa_compress,
-        float defrag_thold,
         bool use_mlock,
         bool validate_quants,
         bool mtp,
@@ -4234,7 +4233,7 @@ static bool llm_load_tensors(
     if (device_count > 0 && !model.devices.empty()) {
         std::vector<expert_tensors> experts;
         auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
-                amb, worst_case_tokens, flash_attn, swa_compress, defrag_thold, experts);
+                amb, worst_case_tokens, flash_attn, swa_compress, experts);
         size_t required_mem = 0;
         for (int i = 0; i <= n_layer; ++i) {
             required_mem += layer_sizes[i];
@@ -4863,7 +4862,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.idx_type_k, params.extra_output_type,
             params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.fit_margin_array,
-            params.worst_graph_tokens, params.flash_attn, params.swa_compress, params.defrag_thold,
+            params.worst_graph_tokens, params.flash_attn, params.swa_compress,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -7145,14 +7144,21 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
     // defragment the KV cache if needed
     if (lctx.kv_self.do_defrag) {
         if (lctx.kv_self.swa_ring) {
-            // defrag moves cells; the ring's cell % size_swa mapping cannot follow
-            GGML_ABORT("KV defrag is not supported with SWA ring KV; run without --swa-compress");
-        }
+            // Defrag moves cells; the ring's (sequence, position) row mapping cannot
+            // follow, so the request is dropped. llama_kv_cache_defrag() is public API --
+            // aborting here would let a caller kill the host process over an optimization
+            // hint. The automatic trigger cannot fire (defrag_thold is forced off when the
+            // ring engages), so this only ever comes from an explicit request.
+            LLAMA_LOG_ERROR("%s: KV defrag is not supported with SWA ring KV; request ignored "
+                    "(run without --swa-compress to defrag)\n", __func__);
+            lctx.kv_self.do_defrag = false;
+        } else {
         llama_kv_cache_defrag_internal(lctx);
 
         need_reserve = true;
 
         lctx.kv_self.do_defrag = false;
+        }
     }
 
     // reserve a worst case graph again
@@ -7406,7 +7412,6 @@ struct llama_model_params llama_model_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_ubatch                    =*/ 512,
         /*.swa_compress                =*/ false,
-        /*.defrag_thold                =*/ -1.0f,
         /*.amb                         =*/ 0,
         /*.fit_margin                  =*/ 0,
         /*.fit                         =*/ false,
@@ -8193,8 +8198,17 @@ struct llama_context * llama_init_from_model(
     }
     if (model->supports_swa_ring() && cparams.swa_compress) {
         if (cparams.defrag_thold >= 0.0f) {
-            LLAMA_LOG_WARN("%s: SWA ring KV is incompatible with KV defrag -> using full-size SWA KV\n", __func__);
-        } else {
+            // Defrag moves cells, which the ring's row mapping cannot follow. The ring
+            // wins: silently switching to a dense layout instead would make the KV size
+            // depend on a context-time-only setting that llama_model::cache_size() (the
+            // --fit estimator, which runs at model load) cannot see, and --fit would then
+            // budget a window-sized cache against a dense allocation and OOM.
+            LLAMA_LOG_WARN("%s: SWA ring KV is incompatible with KV defrag -> disabling KV defrag "
+                    "(--defrag-thold %.2f ignored); omit --swa-compress to keep defrag\n",
+                    __func__, cparams.defrag_thold);
+            cparams.defrag_thold = -1.0f;
+        }
+        {
             // One stripe of ring_w rows per sequence. The +n_ubatch slack is what makes
             // eviction exact: a row is only overwritten by a token n_seq positions later,
             // by which point the oldest query in that ubatch is already past the window.

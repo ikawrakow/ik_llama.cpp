@@ -4218,10 +4218,6 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.n_seq_max       = params.n_parallel;
     mparams.n_ubatch        = get_batch_ubatch(params).second;
     mparams.swa_compress    = params.swa_compress;
-    // the ring is disabled when defrag is enabled, so the --fit KV estimator needs
-    // to see defrag_thold too (otherwise it budgets a window-sized cache against a
-    // dense allocation)
-    mparams.defrag_thold    = params.defrag_thold;
     mparams.amb             = params.attn_max_batch;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;

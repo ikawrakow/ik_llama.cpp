@@ -45,11 +45,10 @@ int main(int argc, char * argv[]) {
     const uint32_t expect_pad = std::max<uint32_t>(llama_kv_pad_granularity(false), 256u);
     const uint32_t expect_swa_cells = GGML_PAD(hparams.n_swa + n_ubatch, expect_pad);
 
-    auto size = [&](int il, bool swa_compress, int n_seq_max, float defrag_thold = -1.0f) {
+    auto size = [&](int il, bool swa_compress, int n_seq_max) {
         return model->cache_size(il, GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_F16,
                                   kv_size, /*mla_attn=*/0, n_seq_max,
-                                  /*flash_attn=*/false, n_ubatch, swa_compress,
-                                  defrag_thold);
+                                  /*flash_attn=*/false, n_ubatch, swa_compress);
     };
 
     const size_t swa_on  = size(il_swa, true, 1);
@@ -61,13 +60,9 @@ int main(int argc, char * argv[]) {
     // too small and the load OOMs, too large and it needlessly offloads fewer layers.
     const size_t swa_on_2 = size(il_swa, true, 2);
     const size_t swa_on_4 = size(il_swa, true, 4);
-    // The runtime ALSO falls back to dense whenever defrag is enabled
-    // (cparams.defrag_thold >= 0): "SWA ring KV is incompatible with KV defrag".
-    // Without this the estimator budgets a window-sized cache while the runtime
-    // allocates a full dense one, so --fit + --swa-compress + --defrag-thold
-    // under-budgets and the load OOMs.
-    const size_t swa_on_defrag  = size(il_swa, true, 1, /*defrag_thold=*/0.1f);
-    const size_t swa_on_defrag0 = size(il_swa, true, 1, /*defrag_thold=*/0.0f);
+    // NOTE: --defrag-thold deliberately does NOT appear here. The runtime keeps the ring
+    // and disables defrag instead of swapping the layout, so the KV size no longer depends
+    // on a context-time-only setting that a model-load-time estimator cannot see.
 
     int rc = EXIT_SUCCESS;
 
@@ -93,30 +88,9 @@ int main(int argc, char * argv[]) {
         rc = EXIT_FAILURE;
     }
 
-    // swa_compress must be a no-op when defrag is enabled, matching the runtime.
-    // defrag_thold == 0 counts as enabled (the runtime gate is >= 0, not > 0).
-    if (swa_on_defrag != swa_off) {
-        fprintf(stderr, "FAIL: swa_compress shrank an SWA layer despite defrag_thold=0.1 (%zu vs dense %zu)\n",
-                swa_on_defrag, swa_off);
-        rc = EXIT_FAILURE;
-    }
-    if (swa_on_defrag0 != swa_off) {
-        fprintf(stderr, "FAIL: swa_compress shrank an SWA layer despite defrag_thold=0 (%zu vs dense %zu)\n",
-                swa_on_defrag0, swa_off);
-        rc = EXIT_FAILURE;
-    }
-
-    // The mirrored model-params field must default to "defrag disabled", or every
-    // --fit caller that does not explicitly set it would silently lose the shrink.
-    if (!(llama_model_default_params().defrag_thold < 0)) {
-        fprintf(stderr, "FAIL: llama_model_default_params().defrag_thold is %f, expected < 0 (defrag disabled)\n",
-                llama_model_default_params().defrag_thold);
-        rc = EXIT_FAILURE;
-    }
-
-    // With defrag disabled (the default, < 0) the shrink must still happen.
+    // The shrink must happen for an SWA layer.
     if (swa_on >= swa_off) {
-        fprintf(stderr, "FAIL: swa_compress did not shrink the SWA layer with defrag disabled (%zu vs %zu)\n",
+        fprintf(stderr, "FAIL: swa_compress did not shrink the SWA layer (%zu vs %zu)\n",
                 swa_on, swa_off);
         rc = EXIT_FAILURE;
     }

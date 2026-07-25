@@ -333,25 +333,25 @@ if ! grep -qi "context shift is not supported with SWA ring" "$WORK_DIR/shift.lo
 fi
 echo "context-shift guard OK"
 
-echo "== guard: --defrag-thold disengages the ring (estimator and runtime must agree) =="
-# The runtime refuses to engage the ring when defrag is enabled. That fallback is
-# what llama_model::cache_size() mirrors via its defrag_thold argument, so --fit
-# budgets a DENSE cache in this configuration. If the runtime ever silently keeps
-# the ring here, the estimator would over-shrink and --fit would under-budget.
+echo "== guard: --defrag-thold is ignored, the ring stays engaged =="
+# Defrag moves cells, which the ring cannot follow. Rather than silently swapping the
+# layout for a dense one (which used to force the --fit estimator to know about a
+# context-time-only setting), the ring wins and defrag is disabled with a warning: the
+# KV size a caller budgeted for is the KV size it gets, whatever --defrag-thold says.
 "$BIN/llama-cli" -m "$MODEL" -c 768 -b 768 -ub 48 --swa-compress --defrag-thold 0.5 \
         --seed 7 -t 4 --no-warmup -p "hello" -n 4 --temp 0 --top-k 1 \
         > "$WORK_DIR/defrag.log" 2>&1
-if ! grep -qi "incompatible with KV defrag" "$WORK_DIR/defrag.log"; then
-    echo "FAIL: --swa-compress with --defrag-thold did not report the defrag fallback"
+if ! grep -qi "disabling KV defrag" "$WORK_DIR/defrag.log"; then
+    echo "FAIL: --swa-compress with --defrag-thold did not report that defrag was disabled"
     tail -10 "$WORK_DIR/defrag.log"
     exit 1
 fi
-if grep -qi "SWA ring KV: n_swa" "$WORK_DIR/defrag.log"; then
-    echo "FAIL: the ring engaged despite --defrag-thold; the --fit estimator assumes it does not"
+if ! grep -qi "SWA ring KV: n_swa" "$WORK_DIR/defrag.log"; then
+    echo "FAIL: the ring did not engage; --defrag-thold must not change the KV layout"
     tail -10 "$WORK_DIR/defrag.log"
     exit 1
 fi
-echo "defrag fallback guard OK"
+echo "defrag guard OK"
 
 echo "== server: cache-reuse rewind must fall back, not crash =="
 # A cache_prompt reuse that truncates more generated tokens off the cache than

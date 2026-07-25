@@ -349,6 +349,38 @@ int main(int argc, char * argv[]) {
         if (ctx_x) llama_free(ctx_x);
     }
 
+    // ---------------------------------------------------- explicit defrag request
+    // llama_kv_cache_defrag() is public API: any caller can request a defrag on a ring
+    // context. Defrag moves cells, which the ring's row mapping cannot follow, so the
+    // request must be REFUSED -- not honored, and not aborted. An abort here would let a
+    // library caller kill the host process.
+    //
+    // What flips it red: GGML_ABORT on the request (the process dies and this test never
+    // reports), or actually running the defrag (the cells move and the next decode aborts
+    // in the occupancy guard).
+    {
+        llama_context * ctx_g = make_ctx(model, cfg_ring);
+        bool ok = ctx_g != nullptr && decode_tokens(ctx_g, tokens.data(), 64, 0);
+        const std::vector<float> before = ok ? decode_one(ctx_g, next_tok, 64, n_vocab) : std::vector<float>();
+        if (ctx_g) {
+            llama_kv_cache_defrag(ctx_g);
+        }
+        const std::vector<float> after = ok ? decode_one(ctx_g, next_tok, 65, n_vocab) : std::vector<float>();
+        check(ok && !after.empty(), "explicit llama_kv_cache_defrag() on a ring context is refused, not fatal");
+
+        // and the cache is unchanged: re-decoding the same position reproduces the logits
+        llama_context * ctx_h = make_ctx(model, cfg_ring);
+        bool ok2 = ctx_h != nullptr && decode_tokens(ctx_h, tokens.data(), 64, 0);
+        const std::vector<float> ref  = ok2 ? decode_one(ctx_h, next_tok, 64, n_vocab) : std::vector<float>();
+        check(!before.empty() && max_abs_diff(before, ref) == 0.0f, "defrag-request baseline matches a clean context");
+        const std::vector<float> ref2 = ok2 ? decode_one(ctx_h, next_tok, 65, n_vocab) : std::vector<float>();
+        const float d = max_abs_diff(after, ref2);
+        check(d <= 2e-3f, "the refused defrag left the ring cache intact");
+        printf("     max |logit diff| after a refused defrag: %g\n", d);
+        if (ctx_g) llama_free(ctx_g);
+        if (ctx_h) llama_free(ctx_h);
+    }
+
     // The window-size clamp has a second branch: a prompt SHORTER than the ring, where
     // only cell_count of its size_swa slots are live and no wrap has happened yet.
     check_round_trip(model, cfg_ring, std::max<int32_t>(8, (int32_t) hparams.n_swa / 2), n_vocab, 0,
