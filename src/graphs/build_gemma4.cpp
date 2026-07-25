@@ -361,7 +361,16 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, hparams.f_max_alibi_bias,
                     hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
             cb(cur, "fa", il_cb);
-            cur->op_params[4] = n_swa;
+            // The CUDA fattn wrapper treats n_swa as licence to keep only the last
+            // pad(n_swa + n_tokens) CELLS of the cache and drop the rest outright, which is
+            // a superset of the window only for a single append-only sequence. With
+            // n_seq_max > 1 the slots interleave, so one sequence's n_swa-position window
+            // spans ~n_seq_max times as many cells as the slice keeps and the rest are
+            // absent from the tensor rather than masked -- silently wrong (upstream #2186).
+            // A ring layer is not position-ordered at all (rows are seq*ring_w + pos%ring_w).
+            if (cparams.n_seq_max == 1 && !(kv_self.swa_ring && is_sliding)) {
+                cur->op_params[4] = n_swa;
+            }
             if (cparams.v_cache_hadamard) {
                 if (int block_size = lctx.model.hadamard_size_v(il); block_size > 0) {
                     cur = ggml_hadamard(ctx0, cur, block_size);
@@ -693,7 +702,11 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head)*n_head_kv,
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head), 0);
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, 0.0f, 0.0f);
-                cur->op_params[4] = n_swa;
+                // Same cell-tail slice hazard as the non-MTP path above (upstream #2186):
+                // sound only for one append-only sequence over a position-ordered cache.
+                if (target_cparams.n_seq_max == 1 && !(target_kv.swa_ring && is_sliding)) {
+                    cur->op_params[4] = n_swa;
+                }
                 cb(cur, "fa", il_cb);
                 cur = ggml_reshape_2d(ctx0, cur, split_ol->splits[id]->ne[0], ggml_nelements(cur)/split_ol->splits[id]->ne[0]);
                 cur = llm_build_lora_mm(lctx, ctx0, split_ol->splits[id], cur);
