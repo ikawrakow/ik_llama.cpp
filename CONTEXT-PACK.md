@@ -50,6 +50,9 @@ split-KV tensors need the same treatment, which mainline never had).
   + guard; non-causal swa-mask path aborts; `update_cache_copies` patches
   `head % R`, refuses wrap; K-shift returns error; defrag/state-save abort,
   state-load errors (all messages point at `--swa-compress` now, post-flip).
+  **Since superseded**: rows are (seq, pos)-derived and striped per sequence, the
+  write follows a per-ubatch run plan, state IO round-trips, and defrag is
+  disabled-with-a-warning rather than aborting.
 - `src/llama-build-context.cpp`: `llm_build_kv_store` ring writes (wrap-split);
   `llm_build_kqv` ring reads (`n_kv_l=R`, v_trans stride R); same in
   `build_std_attention` split path (`-sm graph`); `build_inp_KQ_mask_swa`
@@ -172,9 +175,9 @@ split-KV tensors need the same treatment, which mainline never had).
 - **Resolved (W4)**: estimator now takes the real `n_ubatch` instead of a
   hardcoded `n_swa+4096` bound; scales by `n_seq_max` (one striped window per
   sequence) in lockstep with the runtime, and clamps to dense where the striped
-  ring would reach the full context. Remaining gap: `--swa-compress` + a non-default
-  `--defrag-thold` can still under-budget `--fit`, since defrag is a
-  context-time-only setting with no path into the model-load-time estimator.
+  ring would reach the full context. The old `--defrag-thold` under-budget gap is
+  closed from the other side: defrag no longer changes the layout (it is disabled
+  when the ring engages), so the estimator never needs to see it.
 - Multi-seq IS supported: rows are striped per sequence
   (`row = seq*ring_w + pos % ring_w`), so `-np > 1` engages the ring. Context
   shift / defrag / `seq_cp` / `seq_keep` (and hence server system prompts, which

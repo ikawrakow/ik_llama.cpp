@@ -80,7 +80,7 @@ behavior) and engages only for architectures that pass
 window), `LLM_ARCH_OPENPANGU` (per-layer *varying* window sizes, incompatible
 with the ring's uniform invariant), `LLM_ARCH_DEEPSEEK4` and
 `LLM_ARCH_DFLASH_DRAFT` (both apply/store SWA in ways not audited against the
-ring's per-layer `swa_layers[il]`-keyed sizing)), with defrag off, and only when
+ring's per-layer `swa_layers[il]`-keyed sizing)), and only when
 the ring (`n_seq_max * W` rows) is smaller than the full context -- so a small
 context with many slots correctly declines to engage and stays dense. Verified
 end-to-end on Laguna, on GEMMA3 (`gemma-3-4b-it`, real weights, CUDA) and on
@@ -88,9 +88,14 @@ end-to-end on Laguna, on GEMMA3 (`gemma-3-4b-it`, real weights, CUDA) and on
 SWA layers are populated via a new periodic-pattern helper
 (`llama_hparams_set_swa_layers_periodic()`); several other archs generalize
 structurally the same way but are not yet test-covered (tracked follow-up).
-Context shift (K-shift), defrag, `seq_cp` and `seq_keep` are incompatible with a
-ring and fail with errors pointing at `--swa-compress` (disengage to restore the
-dense behavior). Server system prompts are refused too, because fanning one out to
+Context shift (K-shift), `seq_cp` and `seq_keep` are incompatible with a ring and
+fail with errors pointing at `--swa-compress` (disengage to restore the dense
+behavior). Defrag is incompatible too, but it LOSES to the ring rather than
+changing the layout: `--defrag-thold` is ignored with a warning when the ring
+engages, and an explicit `llama_kv_cache_defrag()` is dropped with an error rather
+than aborting the process. Keeping the layout independent of a context-time-only
+setting is what lets the model-load-time `--fit` estimator stay correct without
+being told about it. Server system prompts are refused too, because fanning one out to
 every slot goes through `seq_cp`. State save/load is supported per sequence, but
 only for the append-only layout the ring itself supports: a fragmented cell layout,
 or a whole-context save holding several sequences (its cells are packed from index
