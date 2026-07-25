@@ -2033,9 +2033,17 @@ static ggml_tensor * llm_build_kqv(
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, "fa", il);
         ggml_flash_attn_ext_add_sinks(cur, sinks);
-        // ring K/V are not position-ordered, and the CUDA fattn wrapper uses n_swa to
-        // slice the newest-at-the-end tail of the cache -> must stay 0 for ring layers
-        if (n_swa > 0 && !ring) {
+        // The CUDA fattn wrapper uses n_swa to slice the newest-at-the-end tail of the
+        // cache (ggml-cuda/fattn.cu: it keeps the last pad(n_swa + n_tokens) CELLS and
+        // drops the rest outright). That is a superset of the window only for a single
+        // append-only sequence:
+        //   - ring layers are not position-ordered at all (rows are seq*ring_w + pos%ring_w);
+        //   - with n_seq_max > 1 the slots interleave, so ONE sequence's n_swa-position
+        //     window spans ~n_seq_max times as many cells as the slice keeps, and the cells
+        //     that fall outside it are absent from the tensor rather than masked -- silently
+        //     wrong output, measured at 23x the -fa on/off noise floor (upstream #2186).
+        // Leave it 0 in both cases.
+        if (n_swa > 0 && !ring && cparams.n_seq_max == 1) {
             ((int32_t *)cur->op_params)[4] = n_swa;
         }
 
@@ -3299,8 +3307,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     ggml_flash_attn_ext_add_sinks(cur, sinks);
                 }
                 // ring K/V are not position-ordered; the CUDA fattn wrapper would slice
-                // the tail of the cache based on n_swa -> must stay 0 for ring layers
-                if (n_swa > 0 && !ring) {
+                // the tail of the cache based on n_swa -> must stay 0 for ring layers,
+                // and for n_seq_max > 1 where interleaved slots break the same assumption
+                // (see llm_build_kv / upstream #2186)
+                if (n_swa > 0 && !ring && cparams.n_seq_max == 1) {
                     ((int32_t *)cur->op_params)[4] = n_swa;
                 }
                 // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
