@@ -224,6 +224,8 @@ static llama_init_result ik_init_from_loaded_model(llama_model * model, gpt_para
 static void print_usage(int argc, char ** argv, const gpt_params & params) {
     gpt_params_print_usage(argc, argv, params);
 
+    LOG_TEE("\nimatrix-specific options:\n\n");
+    LOG_TEE("  -lsim, --layer-similarity    collect layer similarity data\n");
     LOG_TEE("\nexample usage:\n");
     LOG_TEE("\n    %s \\\n"
             "       -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output] [--verbosity 1] \\\n"
