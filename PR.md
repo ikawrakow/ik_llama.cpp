@@ -130,6 +130,33 @@ consistency hardening, not a reachable path today.
   size -- in lockstep with the runtime, independent of
   the `--fit` multi-device path (which requires 2+ devices to reach and is
   otherwise unexercised on a single-device build).
+- Throughput, measured (2x L40, `-sm graph -fa on`, `gemma-2-2b-it`, 64k context,
+  14,002-token prompts, 256 tokens generated each, aggregate over slots):
+
+  | config | ring pp / tg | dense pp / tg | KV |
+  |---|---|---|---|
+  | `-np 1`, 1 request  | 21,392 / 154.6 tok/s | 20,701 / 163.2 tok/s | 3,562 vs 6,656 MiB |
+  | `-np 4`, 4 concurrent | 9,099 / 160.7 tok/s | 11,900 / 191.7 tok/s | 4,264 vs 6,656 MiB |
+
+  At `-np 1` it is a wash (prompt processing slightly ahead, generation ~5% behind,
+  inside the run-to-run band) for roughly half the KV. At `-np 4` the ring costs
+  ~24% of prompt processing and ~16% of generation against a dense cache that still
+  fits.
+
+  The cause is not the striping bookkeeping -- it is that a dense SWA layer gets
+  CUDA flash-attention's `n_swa` tail slice (`op_params[4]`, set at
+  `llama-build-context.cpp:2038`) and a ring layer cannot: striped rows are not the
+  position-ordered tail that kernel assumes, so a ring SWA layer reads all
+  `n_seq_max * W` rows where dense reads `n_swa`. It is therefore ~`n_seq_max`x the
+  SWA-layer attention work, and it grows with `--parallel`. Graph rebuilds were the
+  other suspect and are not the answer: an A/B with `-no-gr` moves both sides by
+  about 1%.
+
+  The fix is per-sequence attention slices for ring layers (each token attending
+  only its own stripe, which restores the `W`-wide read) -- a graph change I have
+  deliberately not attempted in this PR. Until then `-np > 1` is a memory-for-speed
+  trade, and it is only unambiguously a win where a dense cache does not fit at all,
+  which is the case the ring exists for.
 - Multi-sequence (`-np 4`) on real weights, 2x NVIDIA L40 under `-sm graph -fa on`
   (`gemma-2-2b-it`, `n_swa = 4096`, 64k context):
   - `tests/test-swa-ring-multiseq.cpp` passes 24/24 with `LLAMACPP_TEST_NGL=99`,
@@ -192,6 +219,7 @@ consistency hardening, not a reachable path today.
   | gpt-oss  | gpt-oss-20b              | 768  | 210 / 384 MiB   | 2.2062 / 2.2060 | identical |
   | gemma4   | gemma-4-E2B-it           | 1536 | -- / 144 MiB    | 5.7570 / 5.7314 | identical |
   | laguna   | Laguna-S-2.1 / XS        | 1024 | 8784 MiB @ 180k | within noise    | identical |
+  | mellum   | Mellum-4b-sft-all        | 1536 | 175 / 448 MiB   | 2.2557 / 2.2584 | (single GPU) |
 
   `-mqkv` and transposed V reproduce the ring column exactly on gemma2 and cohere2;
   zero `GGML_ASSERT`/`GGML_ABORT` anywhere in the sweep; `--fit`'s multi-device
@@ -202,7 +230,11 @@ consistency hardening, not a reachable path today.
   GGUFs lacking `phi3.attention.sliding_window` fail to load at all (the compat
   fallback naming those models sits below a required `get_key`, ikawrakow/ik_llama.cpp#2183),
   and cohere2 under `-sm graph` aborts with a CUDA illegal memory access on context
-  shift with `--swa-compress` absent and the ring never engaged (#2184). `gemma4`
+  shift with `--swa-compress` absent and the ring never engaged (#2184). `mellum`
+  aborts under `-sm graph` at graph build (`GGML_ASSERT(nhave > 1)` in `ggml_reduce`,
+  #2185) with dense KV and no fork flags, so its numbers above are single-GPU;
+  `-mqkv` (2.2613), `-ub 1` (2.2549) and transposed V (2.2577 vs dense 2.2584) all
+  land inside the same band there, and `-np 4` engages with zero aborts. `gemma4`
   with `-fa off` returns garbage perplexity for dense as well as ring, so the
   transposed-V leg is not measurable there.
 
