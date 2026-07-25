@@ -608,6 +608,19 @@ struct llama_context {
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+
+    // SWA ring: a ring layer's write is one copy per destination row run (see
+    // llama_kv_cache::ring_parts), so it needs one CacheCopy per run rather than one per
+    // layer. `n` is the run length the graph was BUILT with: reuse is sound only while the
+    // run structure repeats, because the source views are baked at cumulative offsets.
+    // Indexed exactly like cache_copies. With -np > 1 every decode step is a mixed ubatch,
+    // so refusing reuse for them would rebuild the graph once per token.
+    struct RingCopy {
+        ggml_tensor * cpy = nullptr;
+        size_t        step = 0;
+        uint32_t      n    = 0;
+    };
+    std::vector<std::vector<RingCopy>> ring_copies;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
     // the K/V cache_copies fixup does NOT cover. Under graph reuse (FA pads KV to 256, so n_kv
     // stays constant across consecutive decode ubatches and the graph IS reused) its view_offs

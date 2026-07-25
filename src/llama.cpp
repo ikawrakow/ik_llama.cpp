@@ -674,6 +674,32 @@ bool llama_context::update_cache_copies() {
     if (!kv_self.v_l.empty() && (int)kv_self.v_l.size() < n_layer) {
         return false;
     }
+    // SWA ring: a ring layer's write is one copy per destination row run. Reuse is sound
+    // while the run STRUCTURE repeats -- same count, same lengths -- because the baked
+    // source views sit at cumulative offsets; only the destination rows move, and each is
+    // re-patched here. This is what keeps a multi-slot server from rebuilding its graph
+    // once per token: with -np > 1 every decode step is a mixed-sequence ubatch.
+    auto patch_ring_copies = [&](size_t idx, const ggml_tensor * dst) -> bool {
+        const auto & recorded = ring_copies[idx];
+        const auto & parts    = kv_self.ring_parts;
+        if (recorded.empty() || recorded.size() != parts.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < recorded.size(); ++i) {
+            const auto & c = recorded[i];
+            if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != dst || c.n != parts[i].n) {
+                return false;
+            }
+        }
+        for (size_t i = 0; i < recorded.size(); ++i) {
+            const auto & c = recorded[i];
+            c.cpy->view_offs    = parts[i].row * c.step;
+            c.cpy->src[1]->data = (char *) dst->data + c.cpy->view_offs;
+            c.cpy->data         = c.cpy->src[1]->data;
+        }
+        return true;
+    };
+
     for (int il = 0; il < n_layer; ++il) {
         if (!layer_has_attention_kv(il) || kv_self.k_l[il] == nullptr) {
             continue;
@@ -687,26 +713,17 @@ bool llama_context::update_cache_copies() {
             if (vl) {
                 GGML_ASSERT(kl->n_device == vl->n_device);
             }
-            // SWA ring: patch with the ring offset; a write that would wrap the ring
-            // changes the graph shape, so reuse is refused (wrapped-built graphs have
-            // null cache_copies entries and are refused by the checks below)
-            size_t head_il = kv_self.head;
-            if (kv_self.swa_ring && model.hparams.swa_layers[il]) {
-                // A reusable graph has exactly one baked K/V copy per layer, so it can only
-                // serve a ubatch whose ring write is a single contiguous run covering all of
-                // it. Several runs (a mixed-sequence ubatch, or one that wraps its stripe)
-                // change the graph shape -- and the reuse key does not distinguish sequence
-                // mixes, so accepting one here would patch a foreign sequence's offset in.
-                const auto * rp = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
-                if (!rp || kv_self.ring_parts.size() != 1 ||
-                    kv_self.ring_parts[0].n != (uint32_t) rp->n_tokens) {
-                    return false;
-                }
-                head_il = kv_self.ring_parts[0].row;
-            }
+            // SWA ring layers are patched per destination row run (patch_ring_copies);
+            // dense layers keep the single-offset patch below.
+            const size_t head_il  = kv_self.head;
+            const bool ring_layer = kv_self.swa_ring && model.hparams.swa_layers[il];
             for (int id = 0; id < kl->n_device; ++id) {
                 if (!kl->splits[id]) continue;
                 size_t idx = 2*model.splits.size()*il + 2*id + 0;
+                if (ring_layer) {
+                    if (!patch_ring_copies(idx, kl->splits[id])) return false;
+                    continue;
+                }
                 auto& c = cache_copies[idx];
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kl->splits[id]) {
                     return false;
@@ -718,7 +735,12 @@ bool llama_context::update_cache_copies() {
             if (!vl) continue;
             for (int id = 0; id < vl->n_device; ++id) {
                 if (!vl->splits[id]) continue;
-                auto& c = cache_copies[2*model.splits.size()*il + 2*id + 1];
+                size_t idx = 2*model.splits.size()*il + 2*id + 1;
+                if (ring_layer) {
+                    if (!patch_ring_copies(idx, vl->splits[id])) return false;
+                    continue;
+                }
+                auto& c = cache_copies[idx];
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != vl->splits[id]) {
                     return false;
                 }
@@ -727,20 +749,13 @@ bool llama_context::update_cache_copies() {
                 c.cpy->data = c.cpy->src[1]->data;
             }
         } else {
-            // SWA ring: patch with the ring offset; refuse reuse if the write would wrap
-            size_t head_il = kv_self.head;
-            if (kv_self.swa_ring && model.hparams.swa_layers[il]) {
-                // A reusable graph has exactly one baked K/V copy per layer, so it can only
-                // serve a ubatch whose ring write is a single contiguous run covering all of
-                // it. Several runs (a mixed-sequence ubatch, or one that wraps its stripe)
-                // change the graph shape -- and the reuse key does not distinguish sequence
-                // mixes, so accepting one here would patch a foreign sequence's offset in.
-                const auto * rp = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
-                if (!rp || kv_self.ring_parts.size() != 1 ||
-                    kv_self.ring_parts[0].n != (uint32_t) rp->n_tokens) {
-                    return false;
-                }
-                head_il = kv_self.ring_parts[0].row;
+            const size_t head_il  = kv_self.head;
+            const bool ring_layer = kv_self.swa_ring && model.hparams.swa_layers[il];
+            if (ring_layer) {
+                if (!patch_ring_copies(2*il+0, kv_self.k_l[il])) return false;
+                if (!kv_self.v_l.empty() && kv_self.v_l[il] &&
+                    !patch_ring_copies(2*il+1, kv_self.v_l[il])) return false;
+                continue;
             }
             auto& c = cache_copies[2*il+0];
             if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) {
@@ -776,6 +791,7 @@ llama_context::llama_context(const llama_model & model)
     } else {
         cache_copies.resize(2*hparams.n_layer);
     }
+    ring_copies.resize(cache_copies.size());
     // DSA indexer-key cache copy. Entries stay null for non-DSA models and non-indexer layers,
     // so update_cache_copies() is a no-op when DSA is off.
     dsa_cache_copies.resize(hparams.n_layer);

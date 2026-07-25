@@ -877,11 +877,15 @@ void llm_build_context::llm_build_kv_store(
             }
             const int64_t k_per_tok = ggml_nelements(k_cur)/n_tokens;
             lctx.cache_copies[2*il+0].cpy = nullptr;
+            auto & recorded = lctx.ring_copies[2*il+0];
+            recorded.clear();
             for (const auto & p : parts) {
                 auto k_cur_p  = ggml_view_1d(ctx, k_cur, k_per_tok*p.n,
                         k_per_tok*p.src_off*ggml_element_size(k_cur));
                 auto k_view_p = ggml_view_1d(ctx, kv.k_l[il], k_per_tok*p.n, k_row_size*n_head_kv*p.row);
-                ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur_p, k_view_p));
+                auto cpy = ggml_cpy(ctx, k_cur_p, k_view_p);
+                recorded.push_back({cpy, (size_t) (k_row_size*n_head_kv), p.n});
+                ggml_build_forward_expand(graph, cpy);
             }
         } else {
             ggml_tensor * k_cache_view = ggml_view_2d(ctx, kv.k_l[il], n_embd_head_k, n_tokens*n_head_kv,
@@ -905,11 +909,15 @@ void llm_build_context::llm_build_kv_store(
                 const int64_t v_per_tok = ggml_nelements(v_cur)/n_tokens;
                 auto v_row    = ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa);
                 lctx.cache_copies[2*il+1].cpy = nullptr;
+                auto & recorded = lctx.ring_copies[2*il+1];
+                recorded.clear();
                 for (const auto & p : parts) {
                     auto v_cur_p  = ggml_view_1d(ctx, v_cur, v_per_tok*p.n,
                             v_per_tok*p.src_off*ggml_element_size(v_cur));
                     auto v_view_p = ggml_view_1d(ctx, kv.v_l[il], v_per_tok*p.n, p.row*v_row);
-                    ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_p, v_view_p));
+                    auto cpy = ggml_cpy(ctx, v_cur_p, v_view_p);
+                    recorded.push_back({cpy, (size_t) v_row, p.n});
+                    ggml_build_forward_expand(graph, cpy);
                 }
                 return;
             }
@@ -929,11 +937,15 @@ void llm_build_context::llm_build_kv_store(
                 GGML_ASSERT(v_cur->ne[1] == n_tokens);
                 auto esz = ggml_element_size(kv.v_l[il]);
                 lctx.cache_copies[2*il+1].cpy = nullptr;
+                auto & recorded = lctx.ring_copies[2*il+1];
+                recorded.clear();
                 for (const auto & p : parts) {
                     auto v_cur_p  = ggml_transpose(ctx, ggml_view_2d(ctx, v_cur, v_cur->ne[0], p.n,
                             v_cur->nb[1], (size_t) p.src_off*v_cur->nb[1]));
                     auto v_view_p = ggml_view_2d(ctx, kv.v_l[il], p.n, n_embd_v_gqa, kv_size_l*esz, p.row*esz);
-                    ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_p, v_view_p));
+                    auto cpy = ggml_cpy(ctx, v_cur_p, v_view_p);
+                    recorded.push_back({cpy, esz, p.n});
+                    ggml_build_forward_expand(graph, cpy);
                 }
                 return;
             }
@@ -3181,11 +3193,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     }
                     const int64_t k_per_tok = ggml_nelements(Kcur)/n_tokens;
                     lctx.cache_copies[idx+0].cpy = nullptr;
+                    auto & recorded = lctx.ring_copies[idx+0];
+                    recorded.clear();
                     for (const auto & p : parts) {
                         auto k_cur_p  = ggml_view_1d(ctx0, Kcur, k_per_tok*p.n,
                                 k_per_tok*p.src_off*ggml_element_size(Kcur));
                         auto k_view_p = ggml_view_1d(ctx0, split_kl, k_per_tok*p.n, k_row_size*n_head_kv*p.row);
-                        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_cur_p, k_view_p));
+                        auto cpy = ggml_cpy(ctx0, k_cur_p, k_view_p);
+                        recorded.push_back({cpy, (size_t) (k_row_size*n_head_kv), p.n});
+                        ggml_build_forward_expand(gf, cpy);
                     }
                 } else {
                     ggml_tensor * k_cache_view = ggml_view_2d(ctx0, split_kl, n_embd_head_k, n_tokens*n_head_kv,
@@ -3206,11 +3222,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     const int64_t v_per_tok = ggml_nelements(Vcur)/n_tokens;
                     auto v_row    = ggml_row_size(split_vl->type, split_wv->ne[1]);
                     lctx.cache_copies[idx+1].cpy = nullptr;
+                    auto & recorded = lctx.ring_copies[idx+1];
+                    recorded.clear();
                     for (const auto & p : parts) {
                         auto v_cur_p  = ggml_view_1d(ctx0, Vcur, v_per_tok*p.n,
                                 v_per_tok*p.src_off*ggml_element_size(Vcur));
                         auto v_view_p = ggml_view_1d(ctx0, split_vl, v_per_tok*p.n, p.row*v_row);
-                        ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur_p, v_view_p));
+                        auto cpy = ggml_cpy(ctx0, v_cur_p, v_view_p);
+                        recorded.push_back({cpy, (size_t) v_row, p.n});
+                        ggml_build_forward_expand(gf, cpy);
                     }
                 } else if (multi) {
                     // transposed V (no flash attention): slice the CONTIGUOUS source per
@@ -3221,11 +3241,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     }
                     const size_t esz = ggml_element_size(split_vl);
                     lctx.cache_copies[idx+1].cpy = nullptr;
+                    auto & recorded = lctx.ring_copies[idx+1];
+                    recorded.clear();
                     for (const auto & p : parts) {
                         auto v_cur_p  = ggml_transpose(ctx0, ggml_view_2d(ctx0, Vcur, Vcur->ne[0], p.n,
                                 Vcur->nb[1], (size_t) p.src_off*Vcur->nb[1]));
                         auto v_view_p = ggml_view_2d(ctx0, split_vl, p.n, split_wv->ne[1], kv_size_l*esz, p.row*esz);
-                        ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur_p, v_view_p));
+                        auto cpy = ggml_cpy(ctx0, v_cur_p, v_view_p);
+                        recorded.push_back({cpy, esz, p.n});
+                        ggml_build_forward_expand(gf, cpy);
                     }
                 } else {
                     struct ggml_tensor * v_cache_view = nullptr;

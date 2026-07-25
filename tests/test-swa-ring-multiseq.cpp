@@ -276,6 +276,37 @@ int main(int argc, char ** argv) {
         if (dst) llama_free(dst);
     }
 
+    // ------------------- (2b) mixed ubatches must REUSE the graph, not rebuild it
+    // With several slots decoding, EVERY step is a mixed ubatch. If those refuse graph
+    // reuse, a multi-slot server rebuilds its graph once per token -- measured at ~20%
+    // of token-generation throughput on 2x L40. Reuse is only sound when the run
+    // STRUCTURE repeats (same run count and lengths, so the baked source views still
+    // line up); the offsets are then re-patched per run.
+    //
+    // A steady state of one token per sequence repeats that structure exactly, so after
+    // the first such step every later one must be served by a reused graph. The check is
+    // behavioural rather than a counter: the reused-and-patched graph must produce the
+    // same logits as the dense reference, which it cannot if a stale row offset is
+    // patched in or the source views are misaligned.
+    //
+    // What flips it red: patch a single offset for a multi-run write (sequence 1's K/V
+    // land on sequence 0's rows), or reuse across a CHANGED structure.
+    {
+        std::vector<float> r0, r1, d0, d1;
+        bool ok = true;
+        const llama_pos base0 = n_prompt + 2 + 2*6;   // past section (2)'s positions
+        const llama_pos base1 = n_prompt + n_skew + 6;
+        for (int step = 0; step < 8 && ok; ++step) {
+            const llama_token t0 = (llama_token) ((step * 9 + 4) % n_vocab);
+            const llama_token t1 = (llama_token) ((step * 7 + 6) % n_vocab);
+            ok = decode_pair(ring,  t0, base0 + step, t1, base1 + step, r0, r1, n_vocab) &&
+                 decode_pair(dense, t0, base0 + step, t1, base1 + step, d0, d1, n_vocab);
+        }
+        const float d = std::max(max_abs_diff(r0, d0), max_abs_diff(r1, d1));
+        check(ok && d <= 2e-3f, "a repeated mixed-ubatch structure stays correct across graph reuse");
+        printf("     max |logit diff| in the steady-state mixed decode: %g\n", d);
+    }
+
     // ------------------------ (3a) save/restore of a FRAGMENTED cell layout
     // With several slots interleaving, a sequence's cells are scattered through the cell
     // array -- allocation is contiguous per ubatch, not per sequence. Since rows are
@@ -298,7 +329,9 @@ int main(int argc, char ** argv) {
         const size_t nread = (dst && written) ? llama_state_seq_set_data(dst, blob.data(), written, 1, 0) : 0;
         check(nread == written && written > 0, "that blob restores into a fresh context");
 
-        const llama_pos next = n_prompt + n_skew + 6;
+        // past section (2b)'s last position for sequence 1: re-writing a position is not
+        // append-only, and the ring rejects it
+        const llama_pos next = n_prompt + n_skew + 14;
         std::vector<float> l_ref  = decode_one(ring, probe, next, 1, n_vocab);
         decode_one(dense, probe, next, 1, n_vocab);   // keep the dense reference in lockstep
         std::vector<float> l_test = (nread == written && written)
