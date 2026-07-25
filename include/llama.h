@@ -383,6 +383,8 @@ extern "C" {
         int32_t  n_seq_max;
         int32_t  n_ubatch;
         bool     swa_compress; // mirrors llama_context_params.swa_compress; needed by the --fit KV-size estimator
+        float    defrag_thold; // mirrors llama_context_params.defrag_thold; the SWA ring is disabled when defrag is
+                               // enabled (>= 0), so the --fit estimator must see it or it under-budgets the KV cache
         int32_t  amb;
         int32_t  fit_margin;
         bool     fit;

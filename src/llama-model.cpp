@@ -2264,9 +2264,9 @@ bool llama_model::supports_swa_ring() const {
         && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_DFLASH_DRAFT;
 }
 
-size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn, uint32_t n_ubatch, bool swa_compress) const {
+size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn, uint32_t n_ubatch, bool swa_compress, float defrag_thold) const {
     if (il < 0 || il >= hparams.n_layer) return 0;
-    if (swa_compress && supports_swa_ring() && hparams.swa_layers[il] && n_seq_max <= 1) {
+    if (swa_compress && supports_swa_ring() && hparams.swa_layers[il] && n_seq_max <= 1 && defrag_thold < 0) {
         // SWA ring KV (opt-in via --swa-compress): sliding-window layers allocate
         // GGML_PAD(n_swa + n_ubatch, pad) cells instead of the full context, matching
         // the real allocation formula at the ring's activation site (src/llama.cpp:
@@ -2276,10 +2276,11 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         // n_seq_max == 1") -- with n_seq_max > 1 the runtime falls back to full-size
         // dense KV, and this estimator must agree or --fit under-budgets the real
         // allocation.
-        // NOTE: the runtime also falls back to dense when cparams.defrag_thold >= 0,
-        // which this estimator has no way to see (defrag is a context-time-only
-        // setting, not threaded through the model-load-time --fit path) -- --fit
-        // + --swa-compress + a non-default --defrag-thold can still under-budget.
+        // The runtime also falls back to dense when cparams.defrag_thold >= 0
+        // ("SWA ring KV is incompatible with KV defrag"), so defrag_thold is
+        // mirrored into llama_model_params for the --fit path and gated on above --
+        // otherwise --fit + --swa-compress + a non-default --defrag-thold budgets a
+        // window-sized cache against a dense allocation and the load OOMs.
         const uint32_t pad = std::max<uint32_t>(llama_kv_pad_granularity(flash_attn), 256u);
         kv_size = std::min(kv_size, (uint32_t) GGML_PAD(hparams.n_swa + n_ubatch, pad));
     }

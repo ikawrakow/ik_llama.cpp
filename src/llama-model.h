@@ -593,7 +593,7 @@ struct llama_model {
         return hadamard_size(hparams.n_embd_head_v(il));
     }
 
-    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn, uint32_t n_ubatch, bool swa_compress) const;
+    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn, uint32_t n_ubatch, bool swa_compress, float defrag_thold) const;
 
     // true when this arch's sliding-window layers are a plain trailing window the
     // ring KV cache can compress (excludes LLAMA4's chunked-attention n_swa sentinel,

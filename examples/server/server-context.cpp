@@ -4465,8 +4465,18 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     slot.cache_tokens.keep_first(n_keep_cache);
     slot.n_past = slot.cache_tokens.n_tokens();
 
-    // Remove from KV cache
-    llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1);
+    // Remove from KV cache. A partial tail removal is REFUSED when it rewinds
+    // past what the SWA ring still holds; continuing would leave those cells
+    // populated while the slot believes they are gone, so drop the whole
+    // sequence instead and let the prompt be reprocessed. A whole-sequence
+    // removal is always accepted.
+    if (!llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1)) {
+        LLAMA_LOG_DEBUG("rewind to pos %d is deeper than the resident KV window; clearing the sequence and reprocessing\n",
+            ban_pos);
+        llama_kv_cache_seq_rm(slot.ctx, slot.id, -1, -1);
+        slot.cache_tokens.keep_first(0);
+        slot.n_past = 0;
+    }
 
     // Truncate buffer
     slot.token_buffer.resize(n_keep_buffer);
