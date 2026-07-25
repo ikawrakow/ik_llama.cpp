@@ -125,6 +125,25 @@ consistency hardening, not a reachable path today.
   size -- in lockstep with the runtime, independent of
   the `--fit` multi-device path (which requires 2+ devices to reach and is
   otherwise unexercised on a single-device build).
+- Multi-sequence (`-np 4`) on real weights, 2x NVIDIA L40 under `-sm graph -fa on`
+  (`gemma-2-2b-it`, `n_swa = 4096`, 64k context):
+  - `tests/test-swa-ring-multiseq.cpp` passes 24/24 with `LLAMACPP_TEST_NGL=99`,
+    so the striped write offsets, the mixed-ubatch multi-run writes and the
+    cross-stripe state IO are exercised on device buffers and on the split-tensor
+    path, not only on CPU.
+  - The ring engages and is sized per sequence: 4,608 rows at `-np 1`, 18,432 at
+    `-np 4` (KV 4,264 vs 6,656 MiB dense). With a context too small for the
+    stripes (`-c 16384`, `-np 4`) it correctly declines and stays dense.
+  - A 4-slot server (`--swa-compress -np 4 -ub 48`, ring 17,408 rows, KV 4,212 vs
+    6,656 MiB) answered four concurrent requests with text IDENTICAL to the same
+    dense server, each slot recalling its own planted token. Then the skew case a
+    shared ring cannot survive: one slot generated a long run while the others sat
+    idle, and every idle slot's continuation was still identical to dense.
+  - `/slots/2?action=save|restore` on a non-zero slot round-tripped 884 cells and
+    continued identically -- the case that failed before the serializer followed
+    position order rather than cell order.
+  - Zero `GGML_ASSERT`/`GGML_ABORT` on either server. `--fit` with `-np 4` did not
+    OOM; transposed V (`-fa off`) and `-mqkv` both ran clean at `-np 4`.
 - CUDA / real weights, current build (2x NVIDIA L40, GPU-offloaded):
   - `tests/test-swa-ring-state.cpp` passes 31/31 with `LLAMACPP_TEST_NGL=99`
     (Laguna-XS Q4_K_M, all 40 layers on GPU), so the ring state IO -- including

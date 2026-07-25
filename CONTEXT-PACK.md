@@ -170,12 +170,15 @@ split-KV tensors need the same treatment, which mainline never had).
 - bf16 reduce under -sm graph is inherently noisy on this model+quant
   (control max KLD ~14 between two CORRECT configs) — expected, not ring's.
 - **Resolved (W4)**: estimator now takes the real `n_ubatch` instead of a
-  hardcoded `n_swa+4096` bound; also now gates on `n_seq_max <= 1` matching
-  the runtime's dense fallback. Remaining gap: `--swa-compress` + a non-default
+  hardcoded `n_swa+4096` bound; scales by `n_seq_max` (one striped window per
+  sequence) in lockstep with the runtime, and clamps to dense where the striped
+  ring would reach the full context. Remaining gap: `--swa-compress` + a non-default
   `--defrag-thold` can still under-budget `--fit`, since defrag is a
   context-time-only setting with no path into the model-load-time estimator.
-- Multi-seq / context-shift / defrag / `seq_cp` / `seq_keep` deliberately
-  unsupported with ring.
+- Multi-seq IS supported: rows are striped per sequence
+  (`row = seq*ring_w + pos % ring_w`), so `-np > 1` engages the ring. Context
+  shift / defrag / `seq_cp` / `seq_keep` (and hence server system prompts, which
+  fan out via `seq_cp`) remain deliberately unsupported with ring.
 - **Resolved (W5)**: state IO is ring-aware. A ring layer serializes the last
   `min(size_swa, cell_count)` cells oldest-first; the blob carries a `RING`
   descriptor (`size_swa`, `n_swa`) so mismatched-geometry and cross-mode
