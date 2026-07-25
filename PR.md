@@ -130,33 +130,48 @@ consistency hardening, not a reachable path today.
   size -- in lockstep with the runtime, independent of
   the `--fit` multi-device path (which requires 2+ devices to reach and is
   otherwise unexercised on a single-device build).
-- Throughput, measured (2x L40, `-sm graph -fa on`, `gemma-2-2b-it`, 64k context,
-  14,002-token prompts, 256 tokens generated each, aggregate over slots):
+- **CUDA flash attention's SWA tail slice is unsound with `--parallel > 1`** -- found while
+  benchmarking this branch, fixed here, filed upstream as ikawrakow/ik_llama.cpp#2186.
+  `ggml_cuda_flash_attn_ext` keeps the last `pad(n_swa + n_tokens)` **cells** and drops the
+  rest from the tensor (`ggml-cuda/fattn.cu:52-66`); with several slots interleaving, one
+  sequence's window spans ~`n_seq_max` times as many cells as the slice keeps, so in-window
+  cells become unattendable rather than masked. `op_params[4]` was set on every dense SWA
+  layer with no sequence-count condition; it is now also gated on `n_seq_max == 1`
+  (`llama-build-context.cpp:2038`, `:3303`). The ring already left it at zero, since its
+  rows are not position-ordered.
+
+  gemma-2-2b-it (`n_swa = 4096`), 2x L40, `-sm graph`, four concurrent 3,313-token prompts,
+  greedy, top-5 logprobs of the first 12 generated tokens:
+
+  | comparison | result |
+  |---|---|
+  | `-np 1`, `-fa on` vs `-fa off` (control: the slice is a superset) | text identical, max abs logprob diff **0.31** |
+  | `-np 4`, `-fa on` vs `-fa off` | **2 of 4 slots produce different text**, max diff **7.11** |
+  | `-np 4`, **ring** vs `-fa off` | **4 of 4 identical**, max diff **0.47** |
+
+  The control bounds FA arithmetic noise at ~0.3; the `-np 4` divergence is ~23x that and
+  changes sampled tokens. The ring agrees with the unsliced reference.
+
+- Throughput, measured (2x L40, `-sm graph`, `gemma-2-2b-it`, 64k context, 14,002-token
+  prompts, 256 tokens generated each, aggregate over slots), **both sides correct** (i.e.
+  after the fix above):
 
   | config | ring pp / tg | dense pp / tg | KV |
   |---|---|---|---|
   | `-np 1`, 1 request  | 21,392 / 154.6 tok/s | 20,701 / 163.2 tok/s | 3,562 vs 6,656 MiB |
-  | `-np 4`, 4 concurrent | 9,099 / 160.7 tok/s | 11,900 / 191.7 tok/s | 4,264 vs 6,656 MiB |
+  | `-np 4`, 4 concurrent | 9,138 / **160.5** tok/s | 9,616 / 139.1 tok/s | **4,264** vs 6,656 MiB |
 
-  At `-np 1` it is a wash (prompt processing slightly ahead, generation ~5% behind,
-  inside the run-to-run band) for roughly half the KV. At `-np 4` the ring costs
-  ~24% of prompt processing and ~16% of generation against a dense cache that still
-  fits.
+  At `-np 1` it is a wash for roughly half the KV. At `-np 4` the ring is ~5% behind on
+  prompt processing and **~15% ahead on generation**, at 0.64x the KV -- so the striped ring
+  is the faster *and* smaller multi-sequence configuration, not a memory-for-speed trade.
 
-  The cause is not the striping bookkeeping -- it is that a dense SWA layer gets
-  CUDA flash-attention's `n_swa` tail slice (`op_params[4]`, set at
-  `llama-build-context.cpp:2038`) and a ring layer cannot: striped rows are not the
-  position-ordered tail that kernel assumes, so a ring SWA layer reads all
-  `n_seq_max * W` rows where dense reads `n_swa`. It is therefore ~`n_seq_max`x the
-  SWA-layer attention work, and it grows with `--parallel`. Graph rebuilds were the
-  other suspect and are not the answer: an A/B with `-no-gr` moves both sides by
-  about 1%.
+  Two earlier readings of this are worth recording as corrections, since both were wrong in
+  the same direction. Against dense `-fa on` BEFORE the fix the ring looked ~16-24% slower;
+  that baseline was the unsound one. Against dense `-fa off` (correct, but no flash
+  attention at all) the ring looks ~1.9x faster on both axes, which flatters it. The table
+  above is the comparison that holds both sides to the same standard. Graph rebuilds were a
+  third false lead: an A/B with `-no-gr` moves both sides ~1%.
 
-  The fix is per-sequence attention slices for ring layers (each token attending
-  only its own stripe, which restores the `W`-wide read) -- a graph change I have
-  deliberately not attempted in this PR. Until then `-np > 1` is a memory-for-speed
-  trade, and it is only unambiguously a win where a dense cache does not fit at all,
-  which is the case the ring exists for.
 - Multi-sequence (`-np 4`) on real weights, 2x NVIDIA L40 under `-sm graph -fa on`
   (`gemma-2-2b-it`, `n_swa = 4096`, 64k context):
   - `tests/test-swa-ring-multiseq.cpp` passes 24/24 with `LLAMACPP_TEST_NGL=99`,
