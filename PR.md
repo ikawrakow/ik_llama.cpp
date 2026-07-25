@@ -133,6 +133,38 @@ consistency hardening, not a reachable path today.
   - A non-SWA arch from another publisher (`qwen35`, `n_swa = 0`) refuses the
     ring cleanly: "`--swa-compress` requested but this arch does not support the
     SWA ring -> using full-size KV", correct generation.
+- Per-arch sweep on real weights, all under `-sm graph -fa on` on 2x L40 (each arch
+  run through: ring engagement + KV shrink, perplexity ring vs dense at a
+  wrap-forcing `-ub 48`, `-mqkv` fused QKV, transposed V (`-fa off`, single-GPU
+  since `-sm graph` requires FA), decode-shaped `-ub 1` graph reuse, the defrag
+  and context-shift guards, `--prompt-cache` round-trip, `--fit`, and a server
+  slot save/restore over a prompt longer than the window):
+
+  | arch | model | ring cells | KV ring/dense | ppl ring vs dense | slot save/restore |
+  |---|---|---|---|---|---|
+  | gemma2   | gemma-2-2b-it            | 4608 | 650 / 832 MiB   | 2.8392 / 2.8392 (exact) | identical |
+  | gemma3   | gemma-3-4b-it            | 1536 | 225 / 544 MiB   | 3.1249 / 3.1192 | (cli only) |
+  | cohere2  | c4ai-command-r7b         | 4608 | 688 / 1024 MiB  | 2.5108 / 2.5108 (exact) | identical |
+  | gpt-oss  | gpt-oss-20b              | 768  | 210 / 384 MiB   | 2.2062 / 2.2060 | identical |
+  | gemma4   | gemma-4-E2B-it           | 1536 | -- / 144 MiB    | 5.7570 / 5.7314 | identical |
+  | laguna   | Laguna-S-2.1 / XS        | 1024 | 8784 MiB @ 180k | within noise    | identical |
+
+  `-mqkv` and transposed V reproduce the ring column exactly on gemma2 and cohere2;
+  zero `GGML_ASSERT`/`GGML_ABORT` anywhere in the sweep; `--fit`'s multi-device
+  estimator path (unreachable below 2 devices, hence never previously executed) ran
+  without OOM on every arch.
+
+  Two findings from the sweep are NOT ring defects and are filed upstream: Phi-3
+  GGUFs lacking `phi3.attention.sliding_window` fail to load at all (the compat
+  fallback naming those models sits below a required `get_key`, ikawrakow/ik_llama.cpp#2183),
+  and cohere2 under `-sm graph` aborts with a CUDA illegal memory access on context
+  shift with `--swa-compress` absent and the ring never engaged (#2184). `gemma4`
+  with `-fa off` returns garbage perplexity for dense as well as ring, so the
+  transposed-V leg is not measurable there.
+
+  The context-shift guard leg is only meaningful where the ring actually engages
+  (it cannot when `n_swa >= n_ctx`); it is pinned on Laguna and gpt-oss, and the
+  guard itself is arch-independent (`update_internal` refusing on `has_shift`).
 - Real model (Laguna-XS Q4_K_M, 3x NVIDIA L40, `-sm graph -fa on`):
   ring-vs-dense KL divergence sits at the bf16 numerics noise floor measured
   between two dense configs differing only in ubatch — mean KLD 0.050 vs
