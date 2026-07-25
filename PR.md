@@ -67,7 +67,8 @@ with the ring's uniform invariant), `LLM_ARCH_DEEPSEEK4` and
 `LLM_ARCH_DFLASH_DRAFT` (both apply/store SWA in ways not audited against the
 ring's per-layer `swa_layers[il]`-keyed sizing)), with `n_seq_max == 1` and
 defrag off, and only when the ring is smaller than the full context. Verified
-end-to-end on Laguna and (as a real non-Laguna arch) GEMMA2, whose alternating
+end-to-end on Laguna, on GEMMA3 (`gemma-3-4b-it`, real weights, CUDA) and on
+(as a synthetic non-Laguna fixture) GEMMA2, whose alternating
 SWA layers are populated via a new periodic-pattern helper
 (`llama_hparams_set_swa_layers_periodic()`); several other archs generalize
 structurally the same way but are not yet test-covered (tracked follow-up).
@@ -104,6 +105,34 @@ consistency hardening, not a reachable path today.
   `n_seq_max <= 1` dense-fallback agreement with the runtime, independent of
   the `--fit` multi-device path (which requires 2+ devices to reach and is
   otherwise unexercised on a single-device build).
+- CUDA / real weights, current build (2x NVIDIA L40, GPU-offloaded):
+  - `tests/test-swa-ring-state.cpp` passes 31/31 with `LLAMACPP_TEST_NGL=99`
+    (Laguna-XS Q4_K_M, all 40 layers on GPU), so the ring state IO -- including
+    the cross-mode and geometry refusals -- is exercised on device buffers, not
+    only on CPU. `LLAMACPP_TEST_NGL` defaults to 0, so ctest is unchanged.
+  - Server slot save/restore round-trip under `-sm graph` (Laguna-S-2.1
+    UD-Q5_K_S, 180k ctx, 18,690-token prompt, i.e. far past both `n_swa` and the
+    ring): `/slots/0?action=save` wrote 700,059,692 B for 11,168 cells in 244 ms
+    -- the window-aware size (12 global layers x 11,168 + 36 ring layers x 1,024
+    cells; a dense blob would be ~2.09 GB) -- and after poisoning the cache with
+    an unrelated prompt, `action=restore` read back the same byte count and the
+    continuation was IDENTICAL to the pre-save baseline. This is the split-tensor
+    read path (`read_kv_cache_data_split`), which is unreachable on a single
+    device and therefore untestable on CPU.
+  - GEMMA3 (`gemma-3-4b-it` Q4_K_M, a real non-Laguna SWA arch from another
+    publisher): ring engages at `n_swa = 1024`, pattern 6, ring 1536 cells; KV
+    544 -> 225 MiB (2.4x). Perplexity ring vs dense 3.1249 vs 3.1192 (rel.
+    1.8e-03) against a dense-vs-dense ubatch control spread of 7.2e-03 -- i.e.
+    inside the numerics noise floor; with `-fa off` the gap tightens to 6.4e-04.
+  - Laguna-XS Q4_K_M re-measured on this build: ring 2.7070 vs dense 2.7120 over
+    20 chunks (rel. 1.8e-03, ring marginally lower, +/- 3.2e-02 stderr),
+    bit-identical across repeated runs. Note that at only 6 chunks the same
+    comparison reads +1.1e-02: ring and dense are not bit-identical under CUDA
+    flash attention (different `n_kv`, hence different kernel tiling and
+    reduction order), so short perplexity samples are not a usable oracle here.
+  - A non-SWA arch from another publisher (`qwen35`, `n_swa = 0`) refuses the
+    ring cleanly: "`--swa-compress` requested but this arch does not support the
+    SWA ring -> using full-size KV", correct generation.
 - Real model (Laguna-XS Q4_K_M, 3x NVIDIA L40, `-sm graph -fa on`):
   ring-vs-dense KL divergence sits at the bf16 numerics noise floor measured
   between two dense configs differing only in ubatch — mean KLD 0.050 vs

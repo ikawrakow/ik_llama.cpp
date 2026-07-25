@@ -172,6 +172,13 @@ int main(int argc, char * argv[]) {
 
     llama_model_params mparams = llama_model_default_params();
     mparams.use_mmap = false;
+    // LLAMACPP_TEST_NGL=<n> offloads n layers so the ring's state IO is exercised on
+    // device buffers (and, with 2+ devices under -sm graph, on the split-tensor path).
+    // Default 0 keeps the CPU-only behavior, so ctest is unchanged.
+    if (const char * ngl = getenv("LLAMACPP_TEST_NGL")) {
+        mparams.n_gpu_layers = atoi(ngl);
+        printf("LLAMACPP_TEST_NGL: offloading %d layers\n", mparams.n_gpu_layers);
+    }
     auto * model = (llama_model *) llama_model_load_from_file(model_path, mparams);
     if (model == nullptr) {
         fprintf(stderr, "failed to load model at '%s'\n", model_path);
