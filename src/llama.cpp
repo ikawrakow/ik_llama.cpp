@@ -7847,6 +7847,149 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
     }
 }
 
+// Walk a K/V/mask operand back to the cache tensor (or mask tensor) it ultimately reads.
+// Views carry view_src, which ggml already collapses to the root buffer rather than to the
+// intermediate view; the remaining hops are materializations (cont/cpy, and ggml_cast is a
+// GGML_OP_CPY) and shape-only ops that keep their source in src[0].
+static const struct ggml_tensor * llama_graph_root(const struct ggml_tensor * t) {
+    while (t) {
+        if (t->view_src) {
+            t = t->view_src;
+        } else if ((t->op == GGML_OP_CONT || t->op == GGML_OP_CPY || t->op == GGML_OP_RESHAPE ||
+                    t->op == GGML_OP_PERMUTE || t->op == GGML_OP_TRANSPOSE) && t->src[0]) {
+            t = t->src[0];
+        } else {
+            break;
+        }
+    }
+    return t;
+}
+
+// One-time audit of a built graph against the SWA ring's assumptions.
+//
+// The ring rewrites only the KV write offsets, the SWA mask and state IO; it trusts every
+// attention builder to read a sliding-window layer through the shared helpers, which is
+// where the ring's row geometry is applied. That trust was previously expressed as an arch
+// denylist in llama_model::supports_swa_ring() -- a denylist cannot see a builder that
+// hand-rolls its cache access (several do; grep cache_copies under src/graphs), and a
+// hand-rolled read of n_kv rows over a size_swa tensor is SILENTLY wrong rather than loud:
+// find_slot records ring_occ wherever the write was meant to land, so the SWA mask's
+// occupancy guard cannot detect that the tensor write went somewhere else.
+//
+// So check the graph itself. For every attention node reading a ring layer's K, the mask
+// must be the SWA mask and the K view must span the whole ring (size_swa rows) -- a builder
+// that took an n_kv-shaped view of a ring tensor fails here. Every ring layer must also be
+// reached by at least one such node, which is what catches an arch that reads its window
+// from somewhere other than kv_self.
+static bool llama_kv_ring_audit_graph(struct llama_context & lctx, const struct ggml_cgraph * gf) {
+    const struct llama_kv_cache & kv = lctx.kv_self;
+    const struct llama_hparams & hparams = lctx.model.hparams;
+
+    if (!kv.swa_ring) {
+        return true;
+    }
+
+    // cache tensor (or per-device split of one) -> layer index
+    std::unordered_map<const struct ggml_tensor *, uint32_t> layer_of;
+    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+        for (const auto * base : { il < kv.k_l.size() ? kv.k_l[il] : nullptr,
+                                   il < kv.v_l.size() ? kv.v_l[il] : nullptr }) {
+            if (!base) {
+                continue;
+            }
+            layer_of[base] = il;
+            if (base->extra) {
+                const auto * split = (const ggml_split_tensor_t *) base->extra;
+                for (int id = 0; id < split->n_device; ++id) {
+                    if (split->splits[id]) {
+                        layer_of[split->splits[id]] = il;
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<bool> seen(hparams.n_layer, false);
+    const struct ggml_tensor * mask_swa = llama_graph_root(lctx.inp_KQ_mask_swa);
+
+    for (int i = 0; i < gf->n_nodes; ++i) {
+        const struct ggml_tensor * node = gf->nodes[i];
+
+        const struct ggml_tensor * k    = nullptr;
+        const struct ggml_tensor * mask = nullptr;
+        switch (node->op) {
+            case GGML_OP_FLASH_ATTN_EXT:
+                k = node->src[1]; mask = node->src[3];
+                break;
+            case GGML_OP_LATENT_ATTN:
+                k = node->src[1]; mask = node->src[4];
+                break;
+            case GGML_OP_SOFT_MAX:
+            case GGML_OP_SOFT_CAP_MAX:
+                // Both take the KQ product in src[0] and the mask in src[1];
+                // SOFT_CAP_MAX is this fork's fused softcap+softmax (gemma-family
+                // logit softcapping), which a SOFT_MAX-only audit would not see at all.
+                // K reaches them through the KQ product; tolerate scale/softcap/bias
+                // nodes in between by walking src[0] until the mul_mat.
+                mask = node->src[1];
+                for (const struct ggml_tensor * t = node->src[0]; t && t->src[0]; t = t->src[0]) {
+                    if (t->op == GGML_OP_MUL_MAT) {
+                        k = t->src[0];
+                        break;
+                    }
+                }
+                break;
+            default:
+                continue;
+        }
+        if (!k) {
+            continue;
+        }
+
+        const auto it = layer_of.find(llama_graph_root(k));
+        if (it == layer_of.end()) {
+            if (getenv("LLAMA_RING_AUDIT_DEBUG")) {
+                LLAMA_LOG_INFO("%s: DEBUG node %s op %s k=%s root=%s\n", __func__, node->name,
+                        ggml_op_name(node->op), k->name, llama_graph_root(k)->name);
+            }
+            continue; // not reading kv_self (a private cache, or Q-side only)
+        }
+        const uint32_t il = it->second;
+        if (!hparams.swa_layers[il]) {
+            continue; // dense layer, unaffected by the ring
+        }
+        seen[il] = true;
+
+        if (llama_graph_root(mask) != mask_swa) {
+            LLAMA_LOG_ERROR("%s: layer %u is a sliding-window layer but its attention reads a "
+                    "non-SWA mask -- the SWA ring cannot be used with this graph\n", __func__, il);
+            return false;
+        }
+        if (k->ne[1] != (int64_t) kv.size_swa) {
+            LLAMA_LOG_ERROR("%s: layer %u reads %" PRId64 " rows of a %u-row SWA ring cache -- the "
+                    "ring stripes rows by sequence, so a partial view drops resident cells\n",
+                    __func__, il, k->ne[1], kv.size_swa);
+            return false;
+        }
+    }
+
+    uint32_t n_audited = 0;
+    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+        if (!hparams.swa_layers[il] || il >= kv.k_l.size() || !kv.k_l[il]) {
+            continue;
+        }
+        if (!seen[il]) {
+            LLAMA_LOG_ERROR("%s: layer %u holds SWA ring rows that no attention node in the graph "
+                    "reads -- its window comes from somewhere the ring does not manage\n", __func__, il);
+            return false;
+        }
+        ++n_audited;
+    }
+
+    LLAMA_LOG_INFO("%s: SWA ring graph audit passed (%u sliding-window layers)\n", __func__, n_audited);
+    return true;
+}
+
 struct llama_context * llama_init_from_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
@@ -8516,6 +8659,14 @@ struct llama_context * llama_init_from_model(
                 return nullptr;
             }
             ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, reserve_batch, true, cparams.worst_graph_tokens);
+
+            // The ring's tensors are already allocated at this point, so there is no falling
+            // back to dense: an arch whose graph does not honour the ring has to be refused.
+            if (!llama_kv_ring_audit_graph(*ctx, gf)) {
+                LLAMA_LOG_ERROR("%s: retry without --swa-compress\n", __func__);
+                llama_free(ctx);
+                return nullptr;
+            }
 
             // initialize scheduler with the worst-case graph
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);

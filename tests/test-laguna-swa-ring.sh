@@ -173,6 +173,31 @@ if grep -q "SWA ring KV: n_swa" "$WORK_DIR/ppl-full-nofa.log"; then
     exit 1
 fi
 
+# The graph audit must RUN and PASS whenever the ring engages: it is what catches a
+# builder that hand-rolls its cache access and reads a ring layer at the wrong width
+# (an arch denylist cannot see that, and the occupancy guard cannot either -- ring_occ
+# is recorded wherever the write was MEANT to land). A ring run without the audit line
+# means the audit was bypassed, which is as bad as the audit failing.
+for tag in ppl-ring-nofa gen-ring ring-mqkv; do
+    log="$WORK_DIR/${tag}.log"
+    [ -f "$log" ] || log="$WORK_DIR/ppl-${tag}.log"
+    [ -f "$log" ] || continue
+    if ! grep -q "SWA ring graph audit passed" "$log"; then
+        echo "FAIL: ring run $tag engaged the ring without passing the graph audit"
+        exit 1
+    fi
+    # A vacuous audit (zero layers examined) would "pass" while checking nothing.
+    if grep -q "SWA ring graph audit passed (0 sliding-window layers)" "$log"; then
+        echo "FAIL: graph audit examined no sliding-window layers in $tag"
+        exit 1
+    fi
+done
+# ... and must not run at all when the ring is off.
+if grep -q "SWA ring graph audit" "$WORK_DIR/ppl-full-nofa.log"; then
+    echo "FAIL: graph audit ran on a dense (non-ring) context"
+    exit 1
+fi
+
 # And the allocation must actually shrink: this is the point of the feature.
 # The tiny model is mostly SWA layers, so ring KV must be well under dense KV.
 kv_mib() { grep -oE 'KV self size *= *[0-9.]+ MiB' "$1" | grep -oE '[0-9.]+' | head -1; }
