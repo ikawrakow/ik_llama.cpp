@@ -98,11 +98,14 @@ static void dsv4_build_plan_inputs(
     }
 }
 
-static ggml_tensor * dsv4_append_zero_row(ggml_context * ctx, ggml_tensor * t, bool neg_inf) {
-    ggml_tensor * row = ggml_view_1d(ctx, t, t->ne[0], 0);
-    row = neg_inf ? ggml_scale_bias(ctx, row, 0.0f, -INFINITY) : ggml_scale(ctx, row, 0.0f);
-    row = ggml_reshape_2d(ctx, row, t->ne[0], 1);
-    return dsv4_concat_named(ctx, t, row, 1, "dsv4_append_zero_row");
+static ggml_tensor * dsv4_append_zero_row(ggml_context * ctx, ggml_tensor * t, ggml_tensor **append_row, bool neg_inf) {
+    if (*append_row == nullptr) {
+        ggml_tensor * row = ggml_view_1d(ctx, t, t->ne[0], 0);
+        row = neg_inf ? ggml_scale_bias(ctx, row, 0.0f, -INFINITY) : ggml_scale(ctx, row, 0.0f);
+        row = ggml_reshape_2d(ctx, row, t->ne[0], 1);
+        *append_row = row;
+    }
+    return dsv4_concat_named(ctx, t, *append_row, 1, "dsv4_append_zero_row");
 }
 
 static ggml_tensor * dsv4_cache_view_2d(
@@ -797,11 +800,6 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     GGML_ASSERT(n_blocks > 0);
     GGML_ASSERT(state_read_idxs != nullptr);
 
-    // TODO: remove this. With a specialized op we can store -1 into the index for negative positions
-    //       and then set the appropriate values (0 or inf) in the kernel.
-    kv_state = dsv4_append_zero_row(ctx0, kv_state, false);
-    score_state = dsv4_append_zero_row(ctx0, score_state, true);
-
     ggml_tensor * comp = ggml_ds4_comp(ctx0, kv_state, score_state, state_read_idxs, ratio, 0);
 
     llm.cb(comp, tag, il);
@@ -1036,6 +1034,11 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
     cb(inpL, "hc_init", -1);
 
+    ggml_tensor * append_csa_state = nullptr;
+    ggml_tensor * append_csa_score = nullptr;
+    ggml_tensor * append_lid_state = nullptr;
+    ggml_tensor * append_lid_score = nullptr;
+
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * residual = inpL;
         ggml_tensor * post = nullptr;
@@ -1143,6 +1146,9 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             csa_state_score = ggml_add(ctx0, csa_state_score, csa_ape_rows);
             ggml_tensor * csa_dep = nullptr;
 
+            csa_state_kv = dsv4_append_zero_row(ctx0, csa_state_kv, &append_csa_state, false);
+            csa_state_score = dsv4_append_zero_row(ctx0, csa_state_score, &append_csa_score, true);
+
             if (lctx.dsv4.inputs.csa.state_write_idxs != nullptr && lctx.dsv4.csa_plan.state_write_idxs.size() > 0) {
                 ggml_tensor * csa_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.csa_state_kv[il], csa_state_kv, 1, "dsv4_csa_source_kv");
                 ggml_tensor * csa_source_score = dsv4_concat_named(ctx0, lctx.dsv4.cache.csa_state_score[il], csa_state_score, 1, "dsv4_csa_source_score");
@@ -1185,6 +1191,9 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             cb(lid_ape_rows, "lid_ape", il);
             lid_state_score = ggml_add(ctx0, lid_state_score, lid_ape_rows);
             ggml_tensor * lid_dep = nullptr;
+
+            lid_state_kv = dsv4_append_zero_row(ctx0, lid_state_kv, &append_lid_state, false);
+            lid_state_score = dsv4_append_zero_row(ctx0, lid_state_score, &append_lid_score, true);
 
             if (lctx.dsv4.inputs.lid.state_write_idxs != nullptr && lctx.dsv4.lid_plan.state_write_idxs.size() > 0) {
                 ggml_tensor * lid_source_kv = dsv4_concat_named(ctx0, lctx.dsv4.cache.lid_state_kv[il], lid_state_kv, 1, "dsv4_lid_source_kv");
