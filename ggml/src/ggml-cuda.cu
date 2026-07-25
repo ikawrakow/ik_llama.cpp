@@ -60,6 +60,7 @@
 #include "ggml-cuda/latent_attn.cuh"
 #include "ggml-cuda/blend.cuh"
 #include "ggml-cuda/indexer_topk.cuh"
+#include "ggml-cuda/ds4_comp.cuh"
 
 #include <algorithm>
 #include <array>
@@ -4156,6 +4157,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_MASK_TO_IDX:
             ggml_cuda_op_mask_to_index(ctx, dst);
             break;
+        case GGML_OP_DS4_COMP:
+            ggml_cuda_op_ds4_comp(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -5065,6 +5069,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
         case GGML_OP_MASK_TO_IDX:
+        case GGML_OP_DS4_COMP:
             return true;
         case GGML_OP_HC_PRE:
         case GGML_OP_HC_POST:

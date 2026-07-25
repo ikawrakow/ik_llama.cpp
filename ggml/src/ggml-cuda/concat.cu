@@ -199,6 +199,10 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
+    if (src0->type != src1->type) {
+        printf("%s: %s is type %s, %s is type %s\n", __func__, src0->name, ggml_type_name(src0->type),
+                src1->name, ggml_type_name(src1->type));
+    }
     GGML_ASSERT(src0->type == src1->type && src0->type == dst->type);
 
     cudaStream_t stream = ctx.stream();
