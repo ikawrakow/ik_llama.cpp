@@ -349,6 +349,46 @@ int main(int argc, char * argv[]) {
         if (ctx_x) llama_free(ctx_x);
     }
 
+    // ------------------------------------------- deep tail rewind is refused, then safe
+    // This is the contract every caller that rewinds a sequence relies on (the server's
+    // ban-phrase rewind in rewind_context(), main.cpp's session trim, speculative trim):
+    //   1. a partial tail removal that rewinds past the resident window returns FALSE
+    //      -- the cells are still populated, so pretending they are gone would make the
+    //      next decode attend to rows the ring has overwritten;
+    //   2. the whole-sequence removal those callers fall back to always succeeds;
+    //   3. and reprocessing from scratch afterwards is CORRECT, not just crash-free.
+    //
+    // What flips it red: return true from the refusal (check 1), or leave stale occupancy
+    // behind after the whole-sequence removal (check 3 diverges, or the occupancy guard
+    // aborts on the reprocess).
+    {
+        llama_context * ctx_r = make_ctx(model, cfg_ring);
+        const int32_t n_deep = std::min<int32_t>(n_prompt, (int32_t) ring_size_swa * 2);
+        bool ok = ctx_r != nullptr && ring_size_swa > 0 && n_deep > (int32_t) ring_size_swa &&
+                  decode_tokens(ctx_r, tokens.data(), n_deep, 0);
+        check(ok, "context filled well past the ring for the rewind test");
+
+        // rewind to the very beginning: everything behind it left the ring long ago
+        const bool refused = ok && !llama_kv_cache_seq_rm(ctx_r, 0, 1, -1);
+        check(refused, "a tail rewind deeper than the resident window is refused");
+
+        const bool cleared = ok && llama_kv_cache_seq_rm(ctx_r, 0, -1, -1);
+        check(cleared, "the whole-sequence removal callers fall back to is accepted");
+
+        // reprocess from scratch on the same context and compare against a fresh one
+        llama_context * ctx_c = make_ctx(model, cfg_ring);
+        const int32_t n_short = std::min<int32_t>(n_deep, 96);
+        std::vector<float> l_reused = (ok && cleared && decode_tokens(ctx_r, tokens.data(), n_short, 0))
+                ? decode_one(ctx_r, next_tok, n_short, n_vocab) : std::vector<float>();
+        std::vector<float> l_fresh = (ctx_c && decode_tokens(ctx_c, tokens.data(), n_short, 0))
+                ? decode_one(ctx_c, next_tok, n_short, n_vocab) : std::vector<float>();
+        const float d = max_abs_diff(l_reused, l_fresh);
+        check(d <= 2e-3f, "reprocessing after the refusal matches a fresh context");
+        printf("     max |logit diff| after refused-rewind reprocess: %g\n", d);
+        if (ctx_r) llama_free(ctx_r);
+        if (ctx_c) llama_free(ctx_c);
+    }
+
     // ---------------------------------------------------- explicit defrag request
     // llama_kv_cache_defrag() is public API: any caller can request a defrag on a ring
     // context. Defrag moves cells, which the ring's row mapping cannot follow, so the

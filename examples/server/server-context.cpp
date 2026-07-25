@@ -4480,7 +4480,11 @@ inline void rewind_context(server_slot& slot, int32_t ban_pos) {
     // sequence instead and let the prompt be reprocessed. A whole-sequence
     // removal is always accepted.
     if (!llama_kv_cache_seq_rm(slot.ctx, slot.id, slot.cache_tokens.pos_next(slot.n_past), -1)) {
-        LLAMA_LOG_DEBUG("rewind to pos %d is deeper than the resident KV window; clearing the sequence and reprocessing\n",
+        // WARN, not DEBUG: this costs a full prompt reprocess, and it is the one ring
+        // fallback that cannot be reached deterministically from the API (the rewind depth
+        // is bounded by a token buffer sized from the ban-pattern string), so if it ever
+        // does fire in the field it must be visible rather than silently slow.
+        LLAMA_LOG_WARN("rewind to pos %d is deeper than the resident SWA ring window; clearing the sequence and reprocessing\n",
             ban_pos);
         llama_kv_cache_seq_rm(slot.ctx, slot.id, -1, -1);
         slot.cache_tokens.keep_first(0);
