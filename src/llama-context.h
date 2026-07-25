@@ -79,14 +79,49 @@ struct llama_kv_cache {
     // computed before each graph build
     uint32_t n = 0;
 
-    // SWA ring (Laguna): sliding-window layers allocate only size_swa rows and are
-    // written at cell % size_swa. ring_occ[r] = index of the cell whose K/V currently
-    // occupy ring slot r (-1 = never written). Cell bookkeeping (cells/head/n) stays
-    // full-sized; only tensor storage, views and the SWA mask are ring-aware.
+    // SWA ring (Laguna): sliding-window layers allocate size_swa rows instead of
+    // kv_size. The row is derived from the token's SEQUENCE and POSITION, not from its
+    // cell index: sequence s owns the stripe [s*ring_w, (s+1)*ring_w) and a token at
+    // position p lands on row s*ring_w + p % ring_w. So size_swa = n_seq_max*ring_w.
+    //
+    // Deriving the row from pos (rather than the cell index) is what makes the ring
+    // multi-sequence: each sequence's eviction distance is then measured in its OWN
+    // positions, so an idle sequence cannot have its window evicted by a busy one. It
+    // also makes tail rewinds self-consistent -- re-appending at position p rewrites
+    // exactly the row p held before.
+    //
+    // ring_occ[r] = index of the cell whose K/V currently occupy row r (-1 = never
+    // written). Cell bookkeeping (cells/head/n) stays full-sized and untouched; only
+    // tensor storage, the write offsets, the SWA mask and state IO are ring-aware.
     bool     swa_ring = false;
-    uint32_t size_swa = 0;
+    uint32_t size_swa = 0; // total ring rows = n_seq_ring * ring_w
+    uint32_t ring_w   = 0; // rows per sequence (the padded window)
     uint32_t ring_n_swa = 0; // hparams.n_swa, needed by seq_rm rewind-safety check
     std::vector<int32_t> ring_occ;
+
+    // Destination row runs for the ubatch currently being written, computed by
+    // llama_kv_cache_find_slot. One part per (sequence, wrap) segment: rows
+    // [row, row+n) receive ubatch tokens [src_off, src_off+n). A single part covering
+    // the whole ubatch is the fast path (one contiguous view copy, graph reuse stays
+    // possible); anything else is emitted as several copies with reuse refused.
+    struct ring_part {
+        uint32_t src_off;
+        uint32_t n;
+        uint32_t row;
+    };
+    std::vector<ring_part> ring_parts;
+
+    // Ring row for a token of sequence `s` at position `p`.
+    uint32_t ring_row(llama_seq_id s, llama_pos p) const {
+        return (uint32_t) s * ring_w + (uint32_t) (p % (llama_pos) ring_w);
+    }
+
+    // Ring row of a resident cell. The ring requires exactly one seq_id per cell (see
+    // llama_kv_cache_find_slot), so the first is the only one.
+    uint32_t ring_row_of_cell(uint32_t c) const {
+        const auto & cell = cells[c];
+        return ring_row(cell.seq_id.empty() ? 0 : *cell.seq_id.begin(), cell.pos);
+    }
 
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;

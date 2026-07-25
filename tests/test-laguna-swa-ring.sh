@@ -212,6 +212,34 @@ else
     echo "SKIP: test-swa-ring-state not built in $BIN"
 fi
 
+echo "== multi-sequence unit test (per-sequence row stripes, mixed ubatches, cross-stripe state) =="
+# The ring stripes rows per sequence (row = seq*ring_w + pos % ring_w), which is what makes
+# -np > 1 sound: eviction is measured in each sequence's own positions. This pins that a
+# parked sequence survives another running a full window past it, that mixed-sequence
+# ubatches write the right stripes (row-major and transposed V), that a blob moves between
+# stripes and across --parallel values, and that a whole-context save of two striped
+# sequences is refused rather than written wrong.
+if [ -x "$BIN/test-swa-ring-multiseq" ]; then
+    "$BIN/test-swa-ring-multiseq" "$MODEL" 2>&1 | tee "$WORK_DIR/ring-multiseq.log"
+    grep -q "SWA ring multi-sequence OK" "$WORK_DIR/ring-multiseq.log" \
+        || { echo "FAIL: SWA ring multi-sequence unit test did not report OK"; exit 1; }
+else
+    echo "SKIP: test-swa-ring-multiseq not built in $BIN"
+fi
+
+echo "== end-to-end: the ring must engage with -np > 1 =="
+# The gate used to refuse n_seq_max > 1 outright. A 4-slot server must now get a striped
+# ring (4 x the per-sequence window) instead of silently falling back to dense KV.
+NP_LOG="$WORK_DIR/np4.log"
+"$BIN/llama-cli" -m "$MODEL" -c 2048 -b 512 -ub 48 --swa-compress -np 4 \
+    --seed 7 -t 4 --no-warmup -n 8 -p "hello" > "$NP_LOG" 2>&1 || {
+    echo "FAIL: -np 4 with --swa-compress did not run"; tail -20 "$NP_LOG"; exit 1; }
+grep -q "SWA ring KV: n_swa" "$NP_LOG" \
+    || { echo "FAIL: ring did not engage with -np 4"; grep -i swa "$NP_LOG"; exit 1; }
+grep -q "per sequence x 4 sequences" "$NP_LOG" \
+    || { echo "FAIL: ring was not sized for 4 sequences"; grep -i "SWA ring" "$NP_LOG"; exit 1; }
+echo "-np 4 ring engagement OK"
+
 echo "== end-to-end: --prompt-cache must round-trip with the ring =="
 # Until the ring-aware serialization landed, every llama_state_* call refused on a ring
 # context and this leg asserted the refusal instead. Now the first run must WRITE a

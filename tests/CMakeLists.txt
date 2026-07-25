@@ -221,6 +221,12 @@ target_include_directories(test-cache-size-estimator PRIVATE ${CMAKE_SOURCE_DIR}
 llama_target_and_test(test-swa-ring-state.cpp LABEL "model")
 target_include_directories(test-swa-ring-state PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
+# Pins the ring with n_seq_max > 1: per-sequence row stripes survive one sequence
+# running a full window past another, mixed-sequence ubatches write the right stripes,
+# and a sequence blob restores into a different stripe. Same model gating as above.
+llama_target_and_test(test-swa-ring-multiseq.cpp LABEL "model")
+target_include_directories(test-swa-ring-multiseq PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)

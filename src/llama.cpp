@@ -692,11 +692,17 @@ bool llama_context::update_cache_copies() {
             // null cache_copies entries and are refused by the checks below)
             size_t head_il = kv_self.head;
             if (kv_self.swa_ring && model.hparams.swa_layers[il]) {
+                // A reusable graph has exactly one baked K/V copy per layer, so it can only
+                // serve a ubatch whose ring write is a single contiguous run covering all of
+                // it. Several runs (a mixed-sequence ubatch, or one that wraps its stripe)
+                // change the graph shape -- and the reuse key does not distinguish sequence
+                // mixes, so accepting one here would patch a foreign sequence's offset in.
                 const auto * rp = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
-                head_il = kv_self.head % kv_self.size_swa;
-                if (!rp || head_il + (uint32_t) rp->n_tokens > kv_self.size_swa) {
+                if (!rp || kv_self.ring_parts.size() != 1 ||
+                    kv_self.ring_parts[0].n != (uint32_t) rp->n_tokens) {
                     return false;
                 }
+                head_il = kv_self.ring_parts[0].row;
             }
             for (int id = 0; id < kl->n_device; ++id) {
                 if (!kl->splits[id]) continue;
@@ -724,11 +730,17 @@ bool llama_context::update_cache_copies() {
             // SWA ring: patch with the ring offset; refuse reuse if the write would wrap
             size_t head_il = kv_self.head;
             if (kv_self.swa_ring && model.hparams.swa_layers[il]) {
+                // A reusable graph has exactly one baked K/V copy per layer, so it can only
+                // serve a ubatch whose ring write is a single contiguous run covering all of
+                // it. Several runs (a mixed-sequence ubatch, or one that wraps its stripe)
+                // change the graph shape -- and the reuse key does not distinguish sequence
+                // mixes, so accepting one here would patch a foreign sequence's offset in.
                 const auto * rp = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
-                head_il = kv_self.head % kv_self.size_swa;
-                if (!rp || head_il + (uint32_t) rp->n_tokens > kv_self.size_swa) {
+                if (!rp || kv_self.ring_parts.size() != 1 ||
+                    kv_self.ring_parts[0].n != (uint32_t) rp->n_tokens) {
                     return false;
                 }
+                head_il = kv_self.ring_parts[0].row;
             }
             auto& c = cache_copies[2*il+0];
             if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) {
@@ -1106,13 +1118,19 @@ static bool llama_kv_cache_init(
     cache.cells.clear();
     cache.cells.resize(kv_size);
 
-    // SWA ring (Laguna): sliding-window layers store K/V in a kv_size_swa-cell ring
+    // SWA ring (Laguna): sliding-window layers store K/V in a kv_size_swa-row ring,
+    // striped per sequence (see llama_kv_cache::ring_row). kv_size_swa is the total,
+    // n_seq_max stripes of ring_w rows each.
     cache.swa_ring = kv_size_swa > 0 && kv_size_swa < kv_size;
     cache.size_swa = cache.swa_ring ? kv_size_swa : 0;
+    cache.ring_w   = cache.swa_ring ? kv_size_swa / std::max(1u, ctx->cparams.n_seq_max) : 0;
     cache.ring_n_swa = cache.swa_ring ? model.hparams.n_swa : 0;
     cache.ring_occ.clear();
+    cache.ring_parts.clear();
     if (cache.swa_ring) {
+        GGML_ASSERT(cache.ring_w > 0 && cache.ring_w * ctx->cparams.n_seq_max == cache.size_swa);
         cache.ring_occ.assign(cache.size_swa, -1);
+        cache.ring_parts.reserve(2*ctx->cparams.n_seq_max);
     }
 
     if (cache.recurrent || llm_arch_is_hybrid(model.arch)) {
@@ -1625,9 +1643,29 @@ static bool llama_kv_cache_find_slot(
     }
 
     if (cache.swa_ring) {
-        // record which cell's K/V now physically occupy each ring slot
+        // Plan this ubatch's ring writes and record the new occupancy. Rows come from
+        // (sequence, position), so a run has to break whenever either the sequence
+        // changes or the positions stop being consecutive; each run then breaks once
+        // more if it wraps its stripe. The server appends each slot's tokens as one
+        // consecutive block, so in practice this is one part per active sequence.
+        cache.ring_parts.clear();
         for (uint32_t i = 0; i < n_tokens; i++) {
-            cache.ring_occ[(cache.head + i) % cache.size_swa] = (int32_t)(cache.head + i);
+            // Striping is only well defined with one sequence per token. The server never
+            // emits more (prompt sharing goes through seq_cp, which the ring refuses).
+            GGML_ASSERT(batch.n_seq_id[i] == 1 && "SWA ring KV requires exactly one seq_id per token");
+            const llama_seq_id seq = batch.seq_id[i][0];
+            const uint32_t     row = cache.ring_row(seq, batch.pos[i]);
+
+            auto & parts = cache.ring_parts;
+            const bool extends = !parts.empty() &&
+                    parts.back().src_off + parts.back().n == i &&
+                    parts.back().row     + parts.back().n == row; // same stripe, no wrap
+            if (extends) {
+                parts.back().n++;
+            } else {
+                parts.push_back({i, 1, row});
+            }
+            cache.ring_occ[row] = (int32_t) (cache.head + i);
         }
     }
 
@@ -2169,7 +2207,7 @@ static bool llama_kv_cache_seq_rm(
                 if (cell.pos < 0 || cell.pos >= p0) continue;
                 if (seq_id >= 0 && !cell.has_seq_id(seq_id)) continue;
                 if (p0 - cell.pos <= (llama_pos) cache.ring_n_swa &&
-                    cache.ring_occ[i % cache.size_swa] != (int32_t) i) {
+                    cache.ring_occ[cache.ring_row_of_cell(i)] != (int32_t) i) {
                     return false;
                 }
             }
@@ -2203,11 +2241,15 @@ static bool llama_kv_cache_seq_rm(
     // If we freed up a slot, set head to it so searching can start there.
     if (new_head != cache.size && new_head < cache.head) cache.head = new_head;
 
-    if (cache.swa_ring && cache.used == 0) {
-        // nothing is resident any more, so no ring slot has a valid occupant: drop the
-        // recorded occupancy rather than let it outlive the cells it points at (the same
-        // thing llama_kv_cache_clear does).
-        std::fill(cache.ring_occ.begin(), cache.ring_occ.end(), -1);
+    if (cache.swa_ring) {
+        // Drop occupancy that now points at freed cells rather than let it outlive them.
+        // With several sequences live this cannot wait for used == 0: one sequence
+        // finishing must clear its own stripe while the others keep theirs.
+        for (auto & occ : cache.ring_occ) {
+            if (occ >= 0 && cache.cells[occ].pos < 0) {
+                occ = -1;
+            }
+        }
     }
 
     return true;
@@ -5126,13 +5168,20 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 float     * data_ring     = data_swa;     data_swa     = nullptr;
                 ggml_half * data_ring_f16 = data_swa_f16; data_swa_f16 = nullptr;
 
-                const int64_t   W      = mask_kv_self.size_swa;
+                const int64_t   W      = mask_kv_self.size_swa;  // all stripes
+                const int64_t   Wseq   = mask_kv_self.ring_w;    // one stripe
                 const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
                 const ggml_half h_zero = ggml_fp32_to_fp16(0.0f);
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_pos    pos    = batch.pos[j];
                     const llama_seq_id seq_id = batch.seq_id[j][0];
-                    for (int64_t r = 0; r < W; ++r) {
+                    // A token can only ever see its own sequence's stripe, so mask the rest
+                    // out wholesale instead of testing each foreign row's occupant.
+                    const int64_t r_lo = (int64_t) seq_id * Wseq;
+                    const int64_t r_hi = r_lo + Wseq;
+                    if (data_ring)     std::fill(data_ring     + j*W, data_ring     + (j+1)*W, -INFINITY);
+                    if (data_ring_f16) std::fill(data_ring_f16 + j*W, data_ring_f16 + (j+1)*W, h_inf);
+                    for (int64_t r = r_lo; r < r_hi; ++r) {
                         bool visible = false;
                         const int32_t c = mask_kv_self.ring_occ[r];
                         if (c >= 0) {
@@ -5154,20 +5203,33 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     }
                 }
 
-                // occupancy guard: every cell still inside some query's window must be
-                // its slot's occupant, otherwise its K/V were overwritten and the result
-                // would be silently wrong (non-append-only cache use)
-                llama_pos pos_min = std::numeric_limits<llama_pos>::max();
-                llama_pos pos_max = std::numeric_limits<llama_pos>::min();
+                // Occupancy guard: every cell still inside some query's window must be its
+                // row's occupant, otherwise its K/V were overwritten and the result would be
+                // silently wrong (non-append-only cache use). The comparison is PER SEQUENCE:
+                // positions of different sequences are unrelated, so mixing them would both
+                // false-abort and false-pass.
+                const uint32_t n_seq_ring = (uint32_t) (W / Wseq);
+                std::vector<llama_pos> pos_min(n_seq_ring, std::numeric_limits<llama_pos>::max());
+                std::vector<llama_pos> pos_max(n_seq_ring, std::numeric_limits<llama_pos>::min());
                 for (int j = 0; j < n_tokens; ++j) {
-                    pos_min = std::min(pos_min, batch.pos[j]);
-                    pos_max = std::max(pos_max, batch.pos[j]);
+                    const llama_seq_id s = batch.seq_id[j][0];
+                    GGML_ASSERT(s >= 0 && (uint32_t) s < n_seq_ring);
+                    pos_min[s] = std::min(pos_min[s], batch.pos[j]);
+                    pos_max[s] = std::max(pos_max[s], batch.pos[j]);
                 }
                 for (int64_t i = 0; i < n_kv; ++i) {
                     const auto & cell = mask_kv_self.cells[i];
-                    if (cell.pos < 0 || cell.pos > pos_max || cell.is_empty()) continue;
-                    if (pos_min - cell.pos < (int32_t) n_swa_eff && mask_kv_self.ring_occ[i % W] != (int32_t) i) {
-                        GGML_ABORT("SWA ring KV: a cell inside the attention window was overwritten; run without --swa-compress");
+                    if (cell.pos < 0 || cell.is_empty()) continue;
+                    for (uint32_t s = 0; s < n_seq_ring; ++s) {
+                        if (pos_min[s] > pos_max[s] || !cell.has_seq_id((llama_seq_id) s)) continue;
+                        if (cell.pos > pos_max[s]) continue;
+                        const uint32_t row = mask_kv_self.ring_row((llama_seq_id) s, cell.pos);
+                        if (pos_min[s] - cell.pos < (int32_t) n_swa_eff &&
+                            mask_kv_self.ring_occ[row] != (int32_t) i) {
+                            GGML_ABORT("SWA ring KV: cell %d (seq %u, pos %d) inside the attention window "
+                                    "[%d, %d] was overwritten: row %u now holds cell %d; run without --swa-compress",
+                                    (int) i, s, cell.pos, pos_min[s], pos_max[s], row, mask_kv_self.ring_occ[row]);
+                        }
                     }
                 }
             }
@@ -8130,19 +8192,20 @@ struct llama_context * llama_init_from_model(
         LLAMA_LOG_WARN("%s: --swa-compress requested but this arch does not support the SWA ring -> using full-size KV\n", __func__);
     }
     if (model->supports_swa_ring() && cparams.swa_compress) {
-        if (cparams.n_seq_max > 1) {
-            LLAMA_LOG_WARN("%s: SWA ring KV needs n_seq_max == 1 (got %u) -> using full-size SWA KV\n",
-                    __func__, cparams.n_seq_max);
-        } else if (cparams.defrag_thold >= 0.0f) {
+        if (cparams.defrag_thold >= 0.0f) {
             LLAMA_LOG_WARN("%s: SWA ring KV is incompatible with KV defrag -> using full-size SWA KV\n", __func__);
         } else {
-            const uint32_t pad = std::max<uint32_t>(llama_kv_cache_get_padding(cparams), 256u);
-            kv_size_swa = GGML_PAD(hparams.n_swa + cparams.n_ubatch, pad);
+            // One stripe of ring_w rows per sequence. The +n_ubatch slack is what makes
+            // eviction exact: a row is only overwritten by a token n_seq positions later,
+            // by which point the oldest query in that ubatch is already past the window.
+            const uint32_t pad    = std::max<uint32_t>(llama_kv_cache_get_padding(cparams), 256u);
+            const uint32_t ring_w = GGML_PAD(hparams.n_swa + cparams.n_ubatch, pad);
+            kv_size_swa = ring_w * cparams.n_seq_max;
             if (kv_size_swa >= kv_size) {
                 kv_size_swa = 0; // window does not undercut the full context; dense is not larger
             } else {
-                LLAMA_LOG_INFO("%s: SWA ring KV: n_swa = %u -> ring size %u cells (full context %u); omit --swa-compress to disable\n",
-                        __func__, hparams.n_swa, kv_size_swa, kv_size);
+                LLAMA_LOG_INFO("%s: SWA ring KV: n_swa = %u -> ring size %u cells (%u per sequence x %u sequences, full context %u); omit --swa-compress to disable\n",
+                        __func__, hparams.n_swa, kv_size_swa, ring_w, cparams.n_seq_max, kv_size);
             }
         }
     }
@@ -9443,7 +9506,8 @@ static inline bool llama_kv_ring_layer(const struct llama_kv_cache & kv, const s
 
 // number of logical cells a ring layer keeps rows for
 static inline uint32_t llama_kv_ring_rows(const struct llama_kv_cache & kv, uint32_t cell_count) {
-    return std::min(kv.size_swa, cell_count);
+    // one sequence's window, not the whole striped ring
+    return std::min(kv.ring_w, cell_count);
 }
 
 // TODO: replace all non-fatal assertions with returned errors or exceptions
@@ -9525,28 +9589,28 @@ struct llama_data_write {
         }
     }
 
-    // Write `n_rows` rows of a ring layer, oldest first. Logical cell c lives at row
-    // c % size_swa, so a contiguous run of cells is at most two contiguous runs of
-    // rows (one before the wrap, one after).
-    void write_ring_rows(const struct ggml_tensor * tensor, uint32_t first_cell, uint32_t n_rows,
-            uint32_t size_swa, uint64_t row_size, int il) {
+    // Write `n_rows` rows of a ring layer, oldest first, starting at offset `first` inside
+    // the sequence's stripe (base row `base`, `w` rows). The rows are contiguous except
+    // where they wrap the stripe, so this is at most two runs.
+    void write_ring_rows(const struct ggml_tensor * tensor, uint32_t base, uint32_t first, uint32_t n_rows,
+            uint32_t w, uint64_t row_size, int il) {
         for (uint32_t done = 0; done < n_rows; ) {
-            const uint32_t slot = (first_cell + done) % size_swa;
-            const uint32_t run  = std::min(n_rows - done, size_swa - slot);
-            write_tensor_data(tensor, (size_t) slot * row_size, (size_t) run * row_size, il);
+            const uint32_t slot = (first + done) % w;
+            const uint32_t run  = std::min(n_rows - done, w - slot);
+            write_tensor_data(tensor, (size_t) (base + slot) * row_size, (size_t) run * row_size, il);
             done += run;
         }
     }
 
-    // Same, for a transposed V cache: element j of every cell sits in row j, whose
-    // stride is the layer's own row count (size_swa for a ring layer, not kv_self.size).
-    void write_ring_elems(const struct ggml_tensor * tensor, uint32_t first_cell, uint32_t n_rows,
-            uint32_t size_swa, uint32_t n_embd_v_gqa, uint32_t v_size_el, int il) {
+    // Same, for a transposed V cache: element j of every row sits in tensor row j, whose
+    // stride is the layer's total row count (size_swa for a ring layer, not kv_self.size).
+    void write_ring_elems(const struct ggml_tensor * tensor, uint32_t base, uint32_t first, uint32_t n_rows,
+            uint32_t w, uint32_t size_swa, uint32_t n_embd_v_gqa, uint32_t v_size_el, int il) {
         for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
             for (uint32_t done = 0; done < n_rows; ) {
-                const uint32_t slot = (first_cell + done) % size_swa;
-                const uint32_t run  = std::min(n_rows - done, size_swa - slot);
-                write_tensor_data(tensor, ((size_t) slot + (size_t) j * size_swa) * v_size_el,
+                const uint32_t slot = (first + done) % w;
+                const uint32_t run  = std::min(n_rows - done, w - slot);
+                write_tensor_data(tensor, ((size_t) (base + slot) + (size_t) j * size_swa) * v_size_el,
                         (size_t) run * v_size_el, il);
                 done += run;
             }
@@ -9596,22 +9660,40 @@ struct llama_data_write {
         // ring geometry, plus where a ring layer's window starts in the source cells
         // (see LLAMA_KV_RING_MAGIC above)
         uint32_t ring_rows  = 0;
-        uint32_t ring_first = 0;
+        uint32_t ring_base  = 0; // first row of the sequence's stripe
+        uint32_t ring_first = 0; // offset of the oldest saved row inside that stripe
         if (kv_self.swa_ring) {
+            // The descriptor carries the PER-SEQUENCE window, so a blob stays portable
+            // across --parallel values (the stripe base is a property of the destination,
+            // not of the data).
             write(&LLAMA_KV_RING_MAGIC, sizeof(LLAMA_KV_RING_MAGIC));
-            write(&kv_self.size_swa,    sizeof(kv_self.size_swa));
+            write(&kv_self.ring_w,      sizeof(kv_self.ring_w));
             write(&kv_self.ring_n_swa,  sizeof(kv_self.ring_n_swa));
 
             ring_rows = llama_kv_ring_rows(kv_self, cell_count);
             if (ring_rows > 0 && need_kv) {
                 // The window tail is only well defined while the saved cells form one
-                // contiguous ascending block -- which is all the ring supports anyway
-                // (single sequence, append-only, no defrag and no context shift). Refuse
+                // contiguous ascending block of ONE sequence -- which is all the ring
+                // supports anyway (append-only, no defrag and no context shift). Refuse
                 // rather than silently serialize rows in the wrong order.
                 if (cell_ranges.size() != 1) {
                     throw std::runtime_error("SWA ring KV: cannot serialize a fragmented cell layout");
                 }
-                ring_first = cell_ranges[0].second - ring_rows;
+                if (seq_id < 0) {
+                    // A whole-context blob packs cells from index 0 with no sequence of
+                    // their own, so it cannot describe striped rows. Sequence-scoped
+                    // save/restore is the supported path once the ring is striped.
+                    for (uint32_t i = cell_ranges[0].first; i < cell_ranges[0].second; ++i) {
+                        if (kv_self.cells[i].seq_id.size() != 1 ||
+                            *kv_self.cells[i].seq_id.begin() != *kv_self.cells[cell_ranges[0].first].seq_id.begin()) {
+                            throw std::runtime_error("SWA ring KV: cannot serialize a whole context holding several sequences");
+                        }
+                    }
+                }
+                const uint32_t last = cell_ranges[0].second - 1;
+                const uint32_t first_saved = cell_ranges[0].second - ring_rows;
+                ring_base  = kv_self.ring_row_of_cell(last) - (kv_self.ring_row_of_cell(last) % kv_self.ring_w);
+                ring_first = kv_self.ring_row_of_cell(first_saved) % kv_self.ring_w;
             }
         }
 
@@ -9640,7 +9722,7 @@ struct llama_data_write {
             }
 
             if (llama_kv_ring_layer(kv_self, hparams, il)) {
-                write_ring_rows(kv_self.k_l[il], ring_first, ring_rows, kv_self.size_swa, k_size_row, il);
+                write_ring_rows(kv_self.k_l[il], ring_base, ring_first, ring_rows, kv_self.ring_w, k_size_row, il);
                 continue;
             }
 
@@ -9670,7 +9752,7 @@ struct llama_data_write {
                 }
 
                 if (llama_kv_ring_layer(kv_self, hparams, il)) {
-                    write_ring_rows(kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa, v_size_row, il);
+                    write_ring_rows(kv_self.v_l[il], ring_base, ring_first, ring_rows, kv_self.ring_w, v_size_row, il);
                     continue;
                 }
 
@@ -9706,8 +9788,8 @@ struct llama_data_write {
                 }
 
                 if (llama_kv_ring_layer(kv_self, hparams, il)) {
-                    write_ring_elems(kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa,
-                            n_embd_v_gqa, v_size_el, il);
+                    write_ring_elems(kv_self.v_l[il], ring_base, ring_first, ring_rows, kv_self.ring_w,
+                            kv_self.size_swa, n_embd_v_gqa, v_size_el, il);
                     continue;
                 }
 
@@ -9925,32 +10007,32 @@ struct llama_data_read {
         }
     }
 
-    // Mirrors write_ring_rows: place n_rows rows of a ring layer, oldest first, at the
-    // slots the destination cell indices imply (cell c -> row c % size_swa).
-    void read_ring_rows(struct llama_context * ctx, struct ggml_tensor * tensor, uint32_t first_cell,
-            uint32_t n_rows, uint32_t size_swa, size_t row_size, int il) {
+    // Mirrors write_ring_rows: place n_rows rows of a ring layer, oldest first, inside the
+    // DESTINATION sequence's stripe (base row `base`, `w` rows) starting at offset `first`.
+    void read_ring_rows(struct llama_context * ctx, struct ggml_tensor * tensor, uint32_t base,
+            uint32_t first, uint32_t n_rows, uint32_t w, size_t row_size, int il) {
         for (uint32_t done = 0; done < n_rows; ) {
-            const uint32_t slot = (first_cell + done) % size_swa;
-            const uint32_t run  = std::min(n_rows - done, size_swa - slot);
+            const uint32_t slot = (first + done) % w;
+            const uint32_t run  = std::min(n_rows - done, w - slot);
             const uint8_t * src = read((size_t) run * row_size);
             if (tensor->extra) {
-                read_kv_cache_data_split(ctx, tensor, src, slot, row_size, run, il);
+                read_kv_cache_data_split(ctx, tensor, src, base + slot, row_size, run, il);
             } else {
-                ggml_backend_tensor_set(tensor, src, (size_t) slot * row_size, (size_t) run * row_size);
+                ggml_backend_tensor_set(tensor, src, (size_t) (base + slot) * row_size, (size_t) run * row_size);
             }
             done += run;
         }
     }
 
-    // Mirrors write_ring_elems (transposed V: row stride is the layer's own row count).
-    void read_ring_elems(struct ggml_tensor * tensor, uint32_t first_cell, uint32_t n_rows,
-            uint32_t size_swa, uint32_t n_embd_v_gqa, uint32_t v_size_el) {
+    // Mirrors write_ring_elems (transposed V: row stride is the layer's total row count).
+    void read_ring_elems(struct ggml_tensor * tensor, uint32_t base, uint32_t first, uint32_t n_rows,
+            uint32_t w, uint32_t size_swa, uint32_t n_embd_v_gqa, uint32_t v_size_el) {
         for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
             for (uint32_t done = 0; done < n_rows; ) {
-                const uint32_t slot = (first_cell + done) % size_swa;
-                const uint32_t run  = std::min(n_rows - done, size_swa - slot);
+                const uint32_t slot = (first + done) % w;
+                const uint32_t run  = std::min(n_rows - done, w - slot);
                 ggml_backend_tensor_set(tensor, read((size_t) run * v_size_el),
-                        ((size_t) slot + (size_t) j * size_swa) * v_size_el, (size_t) run * v_size_el);
+                        ((size_t) (base + slot) + (size_t) j * size_swa) * v_size_el, (size_t) run * v_size_el);
                 done += run;
             }
         }
@@ -10120,29 +10202,37 @@ struct llama_data_read {
         // restoring a dense state into a ring cache; the reverse direction fails the key
         // type/row-size checks below, since a dense reader consumes the magic as a type.
         uint32_t ring_rows  = 0;
+        uint32_t ring_base  = 0;
         uint32_t ring_first = 0;
         if (kv_self.swa_ring) {
-            uint32_t ring_magic = 0, size_swa = 0, n_swa = 0;
+            uint32_t ring_magic = 0, ring_w = 0, n_swa = 0;
             read_to(&ring_magic, sizeof(ring_magic));
-            read_to(&size_swa,   sizeof(size_swa));
+            read_to(&ring_w,     sizeof(ring_w));
             read_to(&n_swa,      sizeof(n_swa));
 
             if (ring_magic != LLAMA_KV_RING_MAGIC) {
                 LLAMA_LOG_ERROR("%s: state was not saved from a SWA ring KV cache; load it without --swa-compress\n", __func__);
                 return false;
             }
-            if (size_swa != kv_self.size_swa || n_swa != kv_self.ring_n_swa) {
+            // Only the per-sequence window has to match: the number of stripes (--parallel)
+            // is a property of this context, not of the blob.
+            if (ring_w != kv_self.ring_w || n_swa != kv_self.ring_n_swa) {
                 LLAMA_LOG_ERROR("%s: mismatched SWA ring geometry (window %u, n_swa %u instead of %u, %u)\n",
-                        __func__, size_swa, n_swa, kv_self.size_swa, kv_self.ring_n_swa);
+                        __func__, ring_w, n_swa, kv_self.ring_w, kv_self.ring_n_swa);
                 return false;
             }
 
             ring_rows = llama_kv_ring_rows(kv_self, cell_count);
             if (ring_rows > 0 && need_kv) {
-                ring_first = kv_self.head + cell_count - ring_rows;
+                // Rows land in the DESTINATION sequence's stripe, at the offsets the
+                // restored positions imply.
+                const uint32_t last  = kv_self.head + cell_count - 1;
+                const uint32_t row_l = kv_self.ring_row_of_cell(last);
+                ring_base  = row_l - (row_l % kv_self.ring_w);
+                ring_first = kv_self.ring_row_of_cell(kv_self.head + cell_count - ring_rows) % kv_self.ring_w;
 
-                // Replaying every restored cell's slot makes ring_occ agree with the rows
-                // written below: slot r ends up holding the newest restored cell mapping to
+                // Replaying every restored cell's row makes ring_occ agree with the rows
+                // written below: a row ends up holding the newest restored cell mapping to
                 // it, which is exactly what the tail carries. Needed because the whole-cache
                 // path cleared ring_occ (llama_kv_cache_clear) before repopulating cells;
                 // the single-sequence path went through llama_kv_cache_find_slot, which
@@ -10150,7 +10240,7 @@ struct llama_data_read {
                 // the process if this ever disagrees with the tensor contents.
                 for (uint32_t i = 0; i < cell_count; ++i) {
                     const uint32_t c = kv_self.head + i;
-                    kv_self.ring_occ[c % kv_self.size_swa] = (int32_t) c;
+                    kv_self.ring_occ[kv_self.ring_row_of_cell(c)] = (int32_t) c;
                 }
             }
         }
@@ -10196,7 +10286,7 @@ struct llama_data_read {
             }
 
             if (llama_kv_ring_layer(kv_self, hparams, il)) {
-                read_ring_rows(ctx, kv_self.k_l[il], ring_first, ring_rows, kv_self.size_swa, k_size_row, il);
+                read_ring_rows(ctx, kv_self.k_l[il], ring_base, ring_first, ring_rows, kv_self.ring_w, k_size_row, il);
                 continue;
             }
 
@@ -10248,7 +10338,7 @@ struct llama_data_read {
                 }
 
                 if (llama_kv_ring_layer(kv_self, hparams, il)) {
-                    read_ring_rows(ctx, kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa, v_size_row, il);
+                    read_ring_rows(ctx, kv_self.v_l[il], ring_base, ring_first, ring_rows, kv_self.ring_w, v_size_row, il);
                     continue;
                 }
 
@@ -10319,8 +10409,8 @@ struct llama_data_read {
                     if (kv_self.v_l[il]->extra) {
                         throw std::runtime_error("Transposed V cache is not sypported with split mode 'graph'");
                     }
-                    read_ring_elems(kv_self.v_l[il], ring_first, ring_rows, kv_self.size_swa,
-                            n_embd_v_gqa, (uint32_t) ggml_type_size(kv_self.v_l[il]->type));
+                    read_ring_elems(kv_self.v_l[il], ring_base, ring_first, ring_rows, kv_self.ring_w,
+                            kv_self.size_swa, n_embd_v_gqa, (uint32_t) ggml_type_size(kv_self.v_l[il]->type));
                     continue;
                 }
 

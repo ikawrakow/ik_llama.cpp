@@ -56,12 +56,11 @@ int main(int argc, char * argv[]) {
     const size_t swa_off = size(il_swa, false, 1);
     const size_t full_on  = size(il_full, true, 1);
     const size_t full_off = size(il_full, false, 1);
-    // The runtime falls back to full-size dense KV whenever n_seq_max > 1 (ring
-    // requires single-sequence append-only use). The estimator must agree, or
-    // --fit under-budgets a multi-slot (-np > 1) run: src/llama.cpp's runtime
-    // gate logs "SWA ring KV needs n_seq_max == 1" and skips the shrink in that
-    // case; this pins that cache_size() does the same.
-    const size_t swa_on_multiseq = size(il_swa, true, 2);
+    // The ring stripes one padded window per sequence, so its size scales with n_seq_max.
+    // The estimator must scale identically or --fit misbudgets a multi-slot (-np > 1) run:
+    // too small and the load OOMs, too large and it needlessly offloads fewer layers.
+    const size_t swa_on_2 = size(il_swa, true, 2);
+    const size_t swa_on_4 = size(il_swa, true, 4);
     // The runtime ALSO falls back to dense whenever defrag is enabled
     // (cparams.defrag_thold >= 0): "SWA ring KV is incompatible with KV defrag".
     // Without this the estimator budgets a window-sized cache while the runtime
@@ -78,10 +77,19 @@ int main(int argc, char * argv[]) {
         rc = EXIT_FAILURE;
     }
 
-    // swa_compress must be a no-op when n_seq_max > 1, matching the runtime's fallback.
-    if (swa_on_multiseq != swa_off) {
-        fprintf(stderr, "FAIL: swa_compress shrank an SWA layer despite n_seq_max=2 (%zu vs dense %zu)\n",
-                swa_on_multiseq, swa_off);
+    // Exactly one stripe per sequence, up to the point where the striped ring reaches the
+    // dense size -- there the runtime stops engaging the ring at all ("window does not
+    // undercut the full context") and the estimator clamps to dense, which must match.
+    if (swa_on_2 != std::min(2*swa_on, swa_off) || swa_on_4 != std::min(4*swa_on, swa_off)) {
+        fprintf(stderr, "FAIL: ring size does not scale with n_seq_max (1:%zu 2:%zu 4:%zu, dense %zu)\n",
+                swa_on, swa_on_2, swa_on_4, swa_off);
+        rc = EXIT_FAILURE;
+    }
+    // ...and the two-sequence point must be BELOW that clamp, or the check above is
+    // vacuous: a context small enough to clamp everything would satisfy it trivially.
+    if (swa_on_2 >= swa_off) {
+        fprintf(stderr, "FAIL: two-sequence ring is not smaller than dense (%zu vs %zu); test is vacuous\n",
+                swa_on_2, swa_off);
         rc = EXIT_FAILURE;
     }
 
