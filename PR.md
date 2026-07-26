@@ -86,8 +86,32 @@ context with many slots correctly declines to engage and stays dense. Verified
 end-to-end on Laguna, on GEMMA3 (`gemma-3-4b-it`, real weights, CUDA) and on
 (as a synthetic non-Laguna fixture) GEMMA2, whose alternating
 SWA layers are populated via a new periodic-pattern helper
-(`llama_hparams_set_swa_layers_periodic()`); several other archs generalize
-structurally the same way but are not yet test-covered (tracked follow-up).
+(`llama_hparams_set_swa_layers_periodic()`).
+
+Archs beyond those are no longer admitted on the strength of "they route
+through the same helpers" -- that claim turned out to be false. Several
+builders hand-roll their KV access instead (`grep cache_copies src/graphs`),
+and `build_gemma4_graph_parallel()` writes at a dense `llm.kv_head` offset and
+reads back `llm.n_kv` rows, neither of which the ring's row geometry survives.
+A hand-rolled *write* is also the one violation the occupancy guard cannot
+catch: `ring_occ` is recorded by `find_slot` wherever the write was *meant* to
+land, so a write that goes elsewhere is silently wrong rather than loud.
+
+So the graph is audited instead of the arch name being trusted
+(`llama_kv_ring_audit_graph()`, once, at reservation): for every attention node
+whose K roots at a ring layer's cache tensor, the mask must root at the SWA
+mask and the K view must span all `size_swa` rows, and every ring layer must be
+reached by at least one such node. Operands are traced through `view_src` plus
+the materialization/shape hops; the layer map includes each per-device split, so
+`-sm graph` resolves. It covers `FLASH_ATTN_EXT`, `SOFT_MAX`, the fused
+`SOFT_CAP_MAX` (gemma-family logit softcapping -- a `SOFT_MAX`-only walk sees
+*no* attention node on those layers and the audit correctly refused GEMMA2
+until it was added) and `LATENT_ATTN`. A failed audit refuses context creation:
+the ring's tensors are allocated by then, so there is no falling back to dense.
+
+The denylist stays, because it encodes what a graph walk cannot see: LLAMA4's
+chunk sentinel and openPangu's per-layer windows differ at *mask-fill* time with
+identical wiring, and DFLASH_DRAFT never touches `kv_self` at all.
 Context shift (K-shift), `seq_cp` and `seq_keep` are incompatible with a ring and
 fail with errors pointing at `--swa-compress` (disengage to restore the dense
 behavior). Defrag is incompatible too, but it LOSES to the ring rather than
@@ -266,6 +290,27 @@ consistency hardening, not a reachable path today.
   window; VRAM flat under sustained full-window load; cache rewinds, prompt
   switches, and slot reuse exercised against the exact traffic that
   previously aborted the server.
+
+### Graph audit, verified on 2x L40 (`-sm graph`, CUDA)
+
+The audit's own risk is a *false* refusal -- an opt-in user whose setup worked
+yesterday getting a refused context today. Swept under both `-sm graph` and
+`-sm layer` with `--swa-compress -fa on`: Laguna-S 36 SWA layers audited,
+GEMMA2 13, GEMMA4 12, cohere2 24, zero refusals, and the live 180k-context
+production config starts and serves unchanged. (phi3 still fails to load at all
+-- #2183, unrelated, ring never engages.)
+
+Two honest limits on this. First, `build_gemma4_graph_parallel()` is a *latent*
+defect, not a demonstrated one: `-sm graph` is downgraded to `layer` for
+GEMMA4 whenever `hparams.n_embd_per_layer > 0` (`llama.cpp:4081`), which is true
+of every GEMMA4 GGUF I have, so I could not reach the hand-rolled builder to
+show it misbehaving. It is reachable in principle by a GEMMA4 variant without
+per-layer embeddings; the audit is what would refuse it there. Second, the
+`op_params[4]` gate added to that same builder is therefore **defensive, not
+measured** -- it applies the identical single-sequence contract the shared
+builders already carry (upstream #2186, which *was* measured on gemma-2), to a
+path I could not exercise. It changes dense behaviour only for
+`--parallel > 1` on that unreachable-here variant.
 
 Refs #1607: implements the window-sized SWA KV storage requested there. The
 ring approach (single shared cache, per-layer ring storage, occupancy-guarded
