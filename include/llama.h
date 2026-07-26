@@ -882,6 +882,15 @@ extern "C" {
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
+    // With SWA ring KV (--swa-compress, see llama_kv_self_is_swa_ring) this behaves differently,
+    // because a ring cell's row is derived from its sequence and only one sequence can own it:
+    //   - the tokens are COPIED into the destination's own rows, so the cache does grow
+    //   - only a full-range copy is supported; a sub-range is refused and does nothing
+    //   - the destination is REPLACED rather than united with the source
+    //   - seq_id_src and seq_id_dst must both be < n_seq_max
+    //   - on failure the destination is left EMPTY. Since this returns void, a caller that
+    //     needs to know can test llama_kv_cache_seq_pos_min(ctx, seq_id_dst) != -1 (note that
+    //     llama_kv_cache_seq_pos_max returns 0 for an empty sequence and cannot be used).
     LLAMA_API void llama_kv_cache_seq_cp(
             struct llama_context * ctx,
                     llama_seq_id   seq_id_src,

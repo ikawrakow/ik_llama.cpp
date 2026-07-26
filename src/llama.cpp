@@ -9568,11 +9568,86 @@ static bool llama_kv_cache_refuse_if_ring(const struct llama_context * ctx, cons
     return false;
 }
 
+// Copy a whole sequence into another sequence's ring stripe.
+//
+// A dense cache shares cells: it inserts the destination's seq_id into the source's cells and
+// both sequences then read the same rows. A ring cannot do that -- a cell's row is derived from
+// its sequence (row = seq_id * ring_w + pos % ring_w) and exactly one seq_id owns a cell, so
+// the destination needs its OWN rows holding the same K/V. That is a clone, and the state
+// serializer already knows how to write one sequence's stripe and read it back into another's
+// (it derives the destination rows from the restored positions and the destination stripe base).
+//
+// Contract differences a caller must know about, both documented in include/llama.h:
+//   - the destination is REPLACED, not united with the source. Every in-tree caller empties the
+//     destination immediately beforehand, so this is not observable today.
+//   - failure leaves the destination EMPTY. seq_cp returns void, so a caller that needs to know
+//     must check llama_kv_cache_seq_pos_min(dst) != -1 afterwards. Note seq_pos_MAX cannot be
+//     used for this: it returns 0 for an empty sequence, which is indistinguishable from one
+//     holding only position 0. An empty source also yields an empty destination, so the check
+//     tells success from failure only when the source is known non-empty.
+static void llama_kv_cache_seq_cp_ring(struct llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst) {
+    const uint32_t n_seq_max = ctx->cparams.n_seq_max;
+
+    // A dense cache tolerates any seq_id because it only grows a std::set. Here the id picks a
+    // stripe, so one past the end would address rows the ring does not own.
+    if (seq_id_src < 0 || (uint32_t) seq_id_src >= n_seq_max ||
+        seq_id_dst < 0 || (uint32_t) seq_id_dst >= n_seq_max) {
+        LLAMA_LOG_ERROR("%s: sequence id out of range for the SWA ring (src %d, dst %d, n_seq_max %u)\n",
+                __func__, (int) seq_id_src, (int) seq_id_dst, n_seq_max);
+        return;
+    }
+
+    // An empty source clones to an empty destination. This has to short-circuit rather than go
+    // through the serializer: a zero-cell blob reaches the restore's
+    // GGML_ASSERT(cells[head].pos == batch.pos[0]), which reads position 0 of an empty batch.
+    if (llama_kv_cache_seq_pos_min(ctx, seq_id_src) == -1) {
+        llama_kv_cache_seq_rm(ctx, seq_id_dst, -1, -1);
+        return;
+    }
+
+    const size_t size = llama_state_seq_get_size(ctx, seq_id_src, 0);
+    if (size == 0) {
+        LLAMA_LOG_ERROR("%s: could not measure sequence %d; destination %d left unchanged\n",
+                __func__, (int) seq_id_src, (int) seq_id_dst);
+        return;
+    }
+
+    std::vector<uint8_t> buf(size);
+    const size_t written = llama_state_seq_get_data(ctx, buf.data(), buf.size(), seq_id_src, 0);
+    if (written == 0) {
+        LLAMA_LOG_ERROR("%s: could not serialize sequence %d; destination %d left unchanged\n",
+                __func__, (int) seq_id_src, (int) seq_id_dst);
+        return;
+    }
+
+    // The restore clears the destination first, so from here on a failure means "empty", never
+    // "half of the source". Nothing is left claiming rows it does not own.
+    if (llama_state_seq_set_data(ctx, buf.data(), written, seq_id_dst, 0) == 0) {
+        LLAMA_LOG_ERROR("%s: could not copy sequence %d into %d; the destination is now empty\n",
+                __func__, (int) seq_id_src, (int) seq_id_dst);
+    }
+}
+
 void llama_kv_cache_seq_cp(struct llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     if (seq_id_src == seq_id_dst) {
         return;
     }
-    if (llama_kv_cache_refuse_if_ring(ctx, __func__)) {
+    if (ctx->kv_self.swa_ring) {
+        // Only a whole-sequence copy has a mechanism. A sub-range would have to rewind the
+        // destination's rows without rewriting them, which is exactly why a PARTIAL_ONLY state
+        // restore is refused under the ring: find_slot would re-record those cells as their
+        // rows' occupants and the occupancy guard would then confirm a placement the rows no
+        // longer match -- wrong attention rather than an abort.
+        if (p0 > 0 || p1 >= 0) {
+            LLAMA_LOG_ERROR("%s: only a full-range copy is supported with SWA ring KV "
+                    "(got p0 %d, p1 %d); run without --swa-compress\n", __func__, (int) p0, (int) p1);
+            return;
+        }
+        if (llama_kv_cache_seq_pos_min(ctx, seq_id_dst) != -1) {
+            LLAMA_LOG_WARN("%s: destination sequence %d is not empty; the SWA ring REPLACES it "
+                    "rather than sharing the source's cells\n", __func__, (int) seq_id_dst);
+        }
+        llama_kv_cache_seq_cp_ring(ctx, seq_id_src, seq_id_dst);
         return;
     }
     llama_kv_cache_seq_cp(ctx->kv_self, seq_id_src, seq_id_dst, p0, p1);

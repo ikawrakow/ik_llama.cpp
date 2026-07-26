@@ -276,6 +276,127 @@ int main(int argc, char ** argv) {
         if (dst) llama_free(dst);
     }
 
+    // --------------------------------------- (3b) full-range seq_cp as a stripe clone
+    // One seq_id per ring cell is structural, so seq_cp cannot tag a cell into a second
+    // sequence the way a dense cache does -- it has to CLONE the source stripe into the
+    // destination's rows. The observable contract: after the copy both sequences continue
+    // identically, and the destination holds exactly the source (not its own prior cells).
+    {
+        // (a) parity on an unwrapped window
+        llama_context * ctx = make_ctx(model, true, n_ctx, n_seq);
+        bool ok = ctx && decode_seq(ctx, p0.data(), n_prompt, 0, 0);
+        if (ok) {
+            llama_kv_cache_seq_cp(ctx, 0, 1, -1, -1);
+        }
+        check(ok && llama_kv_cache_seq_pos_min(ctx, 1) >= 0,
+              "full-range seq_cp populated the destination stripe under the ring");
+        std::vector<float> l_a = ok ? decode_one(ctx, probe, n_prompt, 0, n_vocab) : std::vector<float>();
+        std::vector<float> l_b = ok ? decode_one(ctx, probe, n_prompt, 1, n_vocab) : std::vector<float>();
+        const float d_cp = max_abs_diff(l_a, l_b);
+        check(!l_a.empty() && !l_b.empty() && d_cp <= 2e-3f,
+              "a cloned sequence continues exactly like its source");
+        printf("     max |logit diff| after full-range seq_cp: %g\n", d_cp);
+        if (ctx) llama_free(ctx);
+    }
+    {
+        // (b) the source window has WRAPPED: rows are not position-ordered, so a clone that
+        // copied rows verbatim instead of by position would land them in the wrong slots.
+        // Continuing past a full window afterwards is what trips the occupancy guard.
+        llama_context * ctx = make_ctx(model, true, n_ctx, n_seq);
+        bool ok = ctx && decode_seq(ctx, skew.data(), n_skew, 0, 0);
+        if (ok) {
+            llama_kv_cache_seq_cp(ctx, 0, 1, -1, -1);
+        }
+        std::vector<float> l_a = ok ? decode_one(ctx, probe, n_skew, 0, n_vocab) : std::vector<float>();
+        std::vector<float> l_b = ok ? decode_one(ctx, probe, n_skew, 1, n_vocab) : std::vector<float>();
+        const float d_wrap = max_abs_diff(l_a, l_b);
+        check(!l_a.empty() && !l_b.empty() && d_wrap <= 2e-3f,
+              "a clone of a WRAPPED window continues exactly like its source");
+        printf("     max |logit diff| after cloning a wrapped window: %g\n", d_wrap);
+        // keep decoding the clone past a whole window: a stale ring_occ entry in a slot the
+        // clone never rewrote would only surface here, as the mask guard's abort
+        bool cont = ok;
+        for (int32_t i = 0; cont && i < (int32_t) win + 8; ++i) {
+            cont = decode_seq(ctx, &skew[i % n_skew], 1, n_skew + 1 + i, 1);
+        }
+        check(cont, "a cloned sequence keeps decoding past a full window without an occupancy abort");
+        if (ctx) llama_free(ctx);
+    }
+    {
+        // (c) the destination's OWN cells must be gone: dense seq_cp yields dst united with
+        // src, a ring clone yields exactly src. Every in-tree caller empties dst first, so
+        // this pins the divergence rather than blessing it.
+        llama_context * ctx = make_ctx(model, true, n_ctx, n_seq);
+        bool ok = ctx && decode_seq(ctx, p0.data(), n_prompt, 0, 0);
+        ok = ok && decode_seq(ctx, p1.data(), n_prompt, 0, 1);
+        if (ok) {
+            llama_kv_cache_seq_cp(ctx, 0, 1, -1, -1);
+        }
+        std::vector<float> l_a = ok ? decode_one(ctx, probe, n_prompt, 0, n_vocab) : std::vector<float>();
+        std::vector<float> l_b = ok ? decode_one(ctx, probe, n_prompt, 1, n_vocab) : std::vector<float>();
+        const float d_clob = max_abs_diff(l_a, l_b);
+        check(!l_a.empty() && !l_b.empty() && d_clob <= 2e-3f,
+              "seq_cp replaced the destination's own cells with the source's");
+        if (ctx) llama_free(ctx);
+    }
+    {
+        // (d) an empty source clones to an empty destination rather than failing
+        llama_context * ctx = make_ctx(model, true, n_ctx, n_seq);
+        if (ctx) {
+            llama_kv_cache_seq_cp(ctx, 0, 1, -1, -1);
+        }
+        check(ctx && llama_kv_cache_seq_pos_min(ctx, 1) == -1,
+              "cloning an empty sequence leaves the destination empty");
+        if (ctx) llama_free(ctx);
+    }
+    {
+        // (e) a PARTIAL range has no mechanism under the ring (a partial restore is refused
+        // because it would rewind cells without rewriting rows), so it must stay refused --
+        // and refused means the destination is untouched, not half-written.
+        llama_context * ctx = make_ctx(model, true, n_ctx, n_seq);
+        bool ok = ctx && decode_seq(ctx, p0.data(), n_prompt, 0, 0);
+        if (ok) {
+            llama_kv_cache_seq_cp(ctx, 0, 1, 2, n_prompt - 2);
+        }
+        check(ok && llama_kv_cache_seq_pos_min(ctx, 1) == -1,
+              "a partial-range seq_cp is refused and leaves the destination untouched");
+        if (ok) {
+            check(llama_kv_cache_seq_pos_min(ctx, 0) >= 0,
+                  "a refused partial-range seq_cp left the source intact");
+        }
+        if (ctx) llama_free(ctx);
+    }
+    {
+        // (f) a destination outside [0, n_seq_max) would index a stripe past the end of the
+        // ring (row = seq * ring_w), which a dense cache tolerates because it only inserts a
+        // set entry. It must be refused, not computed.
+        llama_context * ctx = make_ctx(model, true, n_ctx, n_seq);
+        bool ok = ctx && decode_seq(ctx, p0.data(), n_prompt, 0, 0);
+        if (ok) {
+            llama_kv_cache_seq_cp(ctx, 0, (llama_seq_id) n_seq, -1, -1);
+            llama_kv_cache_seq_cp(ctx, (llama_seq_id) n_seq, 1, -1, -1);
+        }
+        check(ok && llama_kv_cache_seq_pos_min(ctx, 0) >= 0,
+              "an out-of-range seq_cp is refused without disturbing the ring");
+        std::vector<float> l = ok ? decode_one(ctx, probe, n_prompt, 0, n_vocab) : std::vector<float>();
+        check(!l.empty(), "the ring still decodes after a refused out-of-range seq_cp");
+        if (ctx) llama_free(ctx);
+    }
+    {
+        // (g) the dense path must be untouched by all of the above
+        llama_context * ctx = make_ctx(model, false, n_ctx, n_seq);
+        bool ok = ctx && !llama_kv_self_is_swa_ring(ctx);
+        ok = ok && decode_seq(ctx, p0.data(), n_prompt, 0, 0);
+        if (ok) {
+            llama_kv_cache_seq_cp(ctx, 0, 1, -1, -1);
+        }
+        std::vector<float> l_a = ok ? decode_one(ctx, probe, n_prompt, 0, n_vocab) : std::vector<float>();
+        std::vector<float> l_b = ok ? decode_one(ctx, probe, n_prompt, 1, n_vocab) : std::vector<float>();
+        check(!l_a.empty() && !l_b.empty() && max_abs_diff(l_a, l_b) <= 2e-3f,
+              "dense seq_cp still shares a sequence to another slot");
+        if (ctx) llama_free(ctx);
+    }
+
     // ------------------- (2b) mixed ubatches must REUSE the graph, not rebuild it
     // With several slots decoding, EVERY step is a mixed ubatch. If those refuse graph
     // reuse, a multi-slot server rebuilds its graph once per token -- measured at ~20%
