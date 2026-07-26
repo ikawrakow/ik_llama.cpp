@@ -465,10 +465,7 @@ int main(int argc, char ** argv) {
 
         // remove any "future" tokens that we might have inherited from the previous session
         if (!llama_kv_cache_seq_rm(ctx, -1, n_matching_session_tokens, -1)) {
-            // A windowed cache (--swa-compress) refuses to rewind behind what it still
-            // holds. Reuse nothing rather than continue on cells whose K/V are gone --
-            // silently keeping them yields wrong attention, or trips the ring's own
-            // occupancy guard mid-generation.
+            // reuse nothing rather than continue on cells that were not removed
             LOG_TEE("%s: cannot trim the session to %zu tokens; reprocessing the prompt\n",
                     __func__, n_matching_session_tokens);
             llama_kv_cache_clear(ctx);

@@ -79,7 +79,7 @@ struct llama_kv_cache {
     // computed before each graph build
     uint32_t n = 0;
 
-    // SWA ring (Laguna): sliding-window layers allocate size_swa rows instead of
+    // SWA ring: sliding-window layers allocate size_swa rows instead of
     // kv_size. The row is derived from the token's SEQUENCE and POSITION, not from its
     // cell index: sequence s owns the stripe [s*ring_w, (s+1)*ring_w) and a token at
     // position p lands on row s*ring_w + p % ring_w. So size_swa = n_seq_max*ring_w.

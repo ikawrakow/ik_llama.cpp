@@ -210,7 +210,7 @@ llama_target_and_test(test-autorelease.cpp        LABEL "model")
 # Unit-tests llama_model::cache_size()'s SWA-ring formula directly against a
 # loaded model, since its only real caller (the --fit multi-device split-mode-graph
 # estimator) needs 2+ devices to reach at all. Skips (via get_model_or_exit) unless
-# invoked with a model path or LLAMACPP_TEST_MODELFILE -- tests/test-laguna-swa-ring.sh
+# invoked with a model path or LLAMACPP_TEST_MODELFILE -- tests/test-swa-ring.sh
 # invokes it directly against its generated tiny GGUF.
 llama_target_and_test(test-cache-size-estimator.cpp LABEL "model")
 target_include_directories(test-cache-size-estimator PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -235,9 +235,9 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 
 
-# Laguna SWA ring KV parity (needs python3 + numpy; generates its own tiny GGUF)
+# SWA ring KV parity (needs python3 + numpy; generates its own tiny GGUFs)
 add_test(
-    NAME test-laguna-swa-ring
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test-laguna-swa-ring.sh ${CMAKE_BINARY_DIR}
+    NAME test-swa-ring
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test-swa-ring.sh ${CMAKE_BINARY_DIR}
 )
-set_property(TEST test-laguna-swa-ring PROPERTY LABELS main)
+set_property(TEST test-swa-ring PROPERTY LABELS main)

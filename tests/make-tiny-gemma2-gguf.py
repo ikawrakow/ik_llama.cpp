@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a tiny random GEMMA2 GGUF for tests/test-laguna-swa-ring.sh.
+"""Generate a tiny random GEMMA2 GGUF for tests/test-swa-ring.sh.
 
 Validates the generalized supports_swa_ring() gate (src/llama-model.cpp) on a
 real non-Laguna upstream architecture. GEMMA2 alternates SWA on even-indexed

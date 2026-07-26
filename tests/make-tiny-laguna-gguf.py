@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a tiny random Laguna GGUF for tests/test-laguna-swa-ring.sh.
+"""Generate a tiny random Laguna GGUF for tests/test-swa-ring.sh.
 
 Dense-FFN Laguna (no MoE, no attention gate) with an explicit sliding-window
 pattern: 3 SWA layers + 1 global layer, n_swa = 64. Deterministic given --seed.

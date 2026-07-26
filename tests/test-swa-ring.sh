@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parity test for the Laguna SWA ring KV cache.
+# Parity test for the SWA ring KV cache.
 #
 # The ring allocates window-sized K/V for sliding-window layers and must be
 # numerically equivalent to the dense (default) allocation. Ring is opt-in via
@@ -25,7 +25,7 @@
 # with only a different -t diverges from the second token. Scoring parity
 # (perplexity) is the tie-robust oracle; it matched to 7 significant digits.
 #
-# Usage: tests/test-laguna-swa-ring.sh [BUILD_DIR]   (default: ./build)
+# Usage: tests/test-swa-ring.sh [BUILD_DIR]   (default: ./build)
 # All ring-mode invocations below pass --swa-compress explicitly.
 set -euo pipefail
 
@@ -106,13 +106,10 @@ fi
 echo "== ppl leg 1b: -mqkv, no-FA, ub=48 (fused-QKV strided-view wrap split, v_trans branch) =="
 # -mqkv fuses Q/K/V into one weight, making Kcur/Vcur strided views into the combined
 # qkv tensor (row stride spans Q+K+V) -- non-contiguous by ggml's definition. Under
-# -no-fa the V cache is transposed (v_trans=true), which takes llm_build_kv_store's
-# view_2d-by-nb[1] wrap-split branch -- that branch already respects the real row
-# stride and needs no ggml_cont, and K is RoPE'd back to contiguous before storage,
-# so this leg does NOT exercise the ggml_cont fix itself. It still pins the strided
-# v_trans wrap path is correct for a non-owned-stride source. The actual fix (the
-# non-transposed V branch, only reachable with flash attention) is pinned by leg 2b
-# below.
+# -no-fa the V cache is transposed (v_trans=true), so this leg pins the transposed
+# wrap-split store against a source whose row stride it does not own. K is RoPE'd back
+# to contiguous before storage, so the non-transposed strided store is pinned by leg 2b
+# below instead.
 run_ppl "-no-fa -ub 48 -mqkv --swa-compress"  ring-mqkv
 run_ppl "-no-fa -ub 48 -mqkv"                 full-mqkv
 check_ppl_pair ring-mqkv full-mqkv
@@ -122,12 +119,13 @@ if run_ppl "-fa on -ub 48 --swa-compress" ring-fa 2>/dev/null && [ -s "$WORK_DIR
     run_ppl "-fa on -ub 48" full-fa
     check_ppl_pair ring-fa full-fa
 
-    echo "== ppl leg 2b: FA + -mqkv, ub=48 (the actual fused-QKV ggml_cont wrap-split fix) =="
+    echo "== ppl leg 2b: FA + -mqkv, ub=48 (fused-QKV strided store, non-transposed V) =="
     # With flash attention, v_trans is false (src/llama.cpp: cache.v_trans =
     # !cache.recurrent && !cparams.flash_attn && ...), so llm_build_kv_store's
-    # NON-transposed V branch handles the wrap split -- the one that assumed a
-    # flat contiguous buffer and asserted/aborted on -mqkv's strided Vcur view
-    # before the W3 fix. This is the leg leg 1b (no-FA) cannot exercise.
+    # NON-transposed V branch handles the wrap split. That branch slices -mqkv's
+    # strided Vcur view along the token axis using Vcur's own nb[] rather than
+    # materializing a contiguous copy, and this is the leg that pins it -- leg 1b
+    # (no-FA) reaches the transposed branch instead.
     run_ppl "-fa on -ub 48 -mqkv --swa-compress" ring-fa-mqkv
     run_ppl "-fa on -ub 48 -mqkv"                full-fa-mqkv
     check_ppl_pair ring-fa-mqkv full-fa-mqkv
@@ -626,5 +624,74 @@ for f in build_gemma3.cpp build_cohere2.cpp build_openai.cpp; do
     fi
 done
 echo "dual-codification guard OK (gemma3/cohere2/openai_moe all read hparams.n_swa_pattern)"
+
+echo "== end-to-end: -mqkv with -np 2 (strided fused-QKV source, multi-sequence stores) =="
+# Two slots interleaved in one ubatch produce several ring_parts per store, and -mqkv
+# makes the source a strided view into the fused QKV tensor. Together that is the
+# multi-part strided store path; the perplexity legs above only reach it with a single
+# sequence, where the parts come from a wrap split alone.
+MQKV_NP_LOG="$WORK_DIR/cli-mqkv-np2.log"
+"$BIN/llama-cli" -m "$MODEL" -c 2048 -b 512 -ub 48 -mqkv --swa-compress -np 2 \
+    --seed 7 -t 4 --no-warmup -n 24 -p "alpha bravo charlie delta" > "$MQKV_NP_LOG" 2>&1 || {
+    echo "FAIL: -mqkv with -np 2 and --swa-compress did not run"; tail -20 "$MQKV_NP_LOG"; exit 1; }
+grep -q "SWA ring KV: n_swa" "$MQKV_NP_LOG" || {
+    echo "FAIL: the ring did not engage for -mqkv -np 2"; grep -i swa "$MQKV_NP_LOG"; exit 1; }
+echo "-mqkv -np 2 multi-part strided store OK"
+
+echo "== guard: ring K/V stores share one helper and slice strided sources in place =="
+# A ring write is a scatter: one ggml_cpy per destination row run. Every source part
+# is a view built from the source tensor's OWN strides, so a fused-QKV (-mqkv) Kcur
+# -- a strided view into the combined QKV tensor -- is sliced without materializing a
+# contiguous copy first. This leg pins both properties: the four store branches route
+# through the single helper, and none of them reintroduces a ggml_cont on the source.
+BC="$REPO_DIR/src/llama-build-context.cpp"
+N_RING_STORE=$(grep -c 'llm_build_ring_store(' "$BC" || true)
+# 1 definition + 6 call sites (K, V-flat, V-transposed) x (llm_build_kv_store,
+# build_std_attention); a store branch that stops calling it is a silent duplicate.
+if [ "$N_RING_STORE" -lt 7 ]; then
+    echo "FAIL: expected the definition + 6 ring store call sites of llm_build_ring_store(), found $N_RING_STORE"
+    exit 1
+fi
+# note: match 'ggml_cont(' with the paren -- a bare 'ggml_cont' also hits the
+# 'ggml_context * ctx' parameter, which no correct implementation can drop
+if awk '/^static void llm_build_ring_store\(/,/^}/' "$BC" | grep -q 'ggml_cont('; then
+    echo "FAIL: llm_build_ring_store() materializes its source with ggml_cont instead of slicing it with the source's own strides"
+    exit 1
+fi
+for fn in llm_build_kv_store build_std_attention; do
+    if awk -v fn="$fn" '$0 ~ ("^(void|ggml_tensor \\* )?llm_build_context::" fn "\\(") ,/^}/' "$BC" \
+            | grep -q 'ggml_cont(ctx0*, *[KkVv]'; then
+        echo "FAIL: $fn still calls ggml_cont on a K/V source; ring parts must be strided views"
+        exit 1
+    fi
+done
+echo "ring store guard OK ($N_RING_STORE llm_build_ring_store references, no source ggml_cont)"
+
+echo "== guard: every CUDA fattn n_swa cell-slice goes through can_use_kv_swa_reduction() =="
+# ggml-cuda's fattn wrapper reads op_params[4] (n_swa) as licence to keep only the
+# newest pad(n_swa + n_tokens) CELLS of the cache and drop the rest outright. That
+# is a superset of the window only for ONE append-only sequence over a
+# position-ordered cache: ring layers are not position-ordered (rows are
+# seq*ring_w + pos % ring_w), and with n_seq_max > 1 interleaved slots spread a
+# sequence's window over more cells than the slice keeps -- those cells are absent
+# from the tensor rather than masked, i.e. silently wrong output (upstream #2186).
+# The predicate lives in exactly one place; this leg pins that no graph builder
+# sets the slice without asking it.
+mapfile -t SLICE_SITES < <(grep -rnE 'op_params\)?\[4\] = n_swa' "$REPO_DIR/src" || true)
+if [ ${#SLICE_SITES[@]} -eq 0 ]; then
+    echo "FAIL: no op_params[4] = n_swa site found at all -- this guard has gone stale"
+    exit 1
+fi
+for site in "${SLICE_SITES[@]}"; do
+    f="${site%%:*}"; rest="${site#*:}"; ln="${rest%%:*}"
+    guard=$(sed -n "$((ln-1))p" "$f")
+    case "$guard" in
+        *can_use_kv_swa_reduction*) ;;
+        *) echo "FAIL: $f:$ln sets the fattn n_swa cell-slice without can_use_kv_swa_reduction()"
+           echo "      guard line was: $guard"
+           exit 1 ;;
+    esac
+done
+echo "n_swa cell-slice guard OK (${#SLICE_SITES[@]} sites, all gated)"
 
 echo "PASS: SWA ring (--swa-compress) parity"

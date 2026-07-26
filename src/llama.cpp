@@ -1134,7 +1134,7 @@ static bool llama_kv_cache_init(
     cache.cells.clear();
     cache.cells.resize(kv_size);
 
-    // SWA ring (Laguna): sliding-window layers store K/V in a kv_size_swa-row ring,
+    // SWA ring: sliding-window layers store K/V in a kv_size_swa-row ring,
     // striped per sequence (see llama_kv_cache::ring_row). kv_size_swa is the total,
     // n_seq_max stripes of ring_w rows each.
     cache.swa_ring = kv_size_swa > 0 && kv_size_swa < kv_size;
@@ -5176,7 +5176,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
-            // SWA ring (Laguna): the SWA mask is [size_swa, n_tokens_padded], indexed by
+            // SWA ring: the SWA mask is [size_swa, n_tokens_padded], indexed by
             // ring slot. Fill it from ring occupancy here and exclude it from the dense
             // n_kv-wide fill loops below.
             if (mask_kv_self.swa_ring && (data_swa || data_swa_f16)) {
