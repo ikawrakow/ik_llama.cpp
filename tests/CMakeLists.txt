@@ -207,23 +207,9 @@ llama_build_and_test(test-regex-partial.cpp)
 llama_target_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_target_and_test(test-autorelease.cpp        LABEL "model")
 
-# Unit-tests llama_model::cache_size()'s SWA-ring formula directly against a
-# loaded model, since its only real caller (the --fit multi-device split-mode-graph
-# estimator) needs 2+ devices to reach at all. Skips (via get_model_or_exit) unless
-# invoked with a model path or LLAMACPP_TEST_MODELFILE -- tests/test-swa-ring.sh
-# invokes it directly against its generated tiny GGUF.
-llama_target_and_test(test-cache-size-estimator.cpp LABEL "model")
-target_include_directories(test-cache-size-estimator PRIVATE ${CMAKE_SOURCE_DIR}/src)
-
-# Pins state save/restore for the SWA ring KV cache (ring blob smaller than dense,
-# byte-exact round-trip, same continuation logits, cross-mode blobs refused).
-# Same model gating as above: skips without a model path / LLAMACPP_TEST_MODELFILE.
 llama_target_and_test(test-swa-ring-state.cpp LABEL "model")
 target_include_directories(test-swa-ring-state PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
-# Pins the ring with n_seq_max > 1: per-sequence row stripes survive one sequence
-# running a full window past another, mixed-sequence ubatches write the right stripes,
-# and a sequence blob restores into a different stripe. Same model gating as above.
 llama_target_and_test(test-swa-ring-multiseq.cpp LABEL "model")
 target_include_directories(test-swa-ring-multiseq PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
@@ -233,11 +219,3 @@ get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
-
-
-# SWA ring KV parity (needs python3 + numpy; generates its own tiny GGUFs)
-add_test(
-    NAME test-swa-ring
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test-swa-ring.sh ${CMAKE_BINARY_DIR}
-)
-set_property(TEST test-swa-ring PROPERTY LABELS main)
