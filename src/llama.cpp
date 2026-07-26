@@ -9212,6 +9212,19 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
     return kv;
 }
 
+// Compute per-stream byte offset and size for a DSV4 cache tensor.
+// stream_idx >= 0 gives that stream's portion; use -1 for the full tensor.
+// Tensors are laid out as [ne0, ne1, ...] with ne1 = per_stream_rows * n_stream.
+static void dsv4_stream_offset_size(const struct ggml_tensor * tensor, uint32_t n_stream, int32_t stream_idx, size_t & out_offset, size_t & out_size) {
+    GGML_ASSERT(stream_idx >= 0);
+    GGML_ASSERT(n_stream > 0);
+    GGML_ASSERT(tensor->ne[1] % n_stream == 0);
+    const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+    const uint32_t rows_per_stream = (uint32_t)(tensor->ne[1] / n_stream);
+    out_offset = (size_t)stream_idx * rows_per_stream * row_size;
+    out_size   = (size_t)rows_per_stream * row_size;
+}
+
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
@@ -9484,6 +9497,13 @@ struct llama_data_write {
         if (has_dsv4_cache) {
             const uint32_t dsv4_n_layer = n_layer;
             write(&dsv4_n_layer, sizeof(dsv4_n_layer));
+
+            // Per-sequence save: only the stream for this seq_id
+            // Full save: all streams
+            const uint32_t dsv4_single_stream = (seq_id != -1) ? 1 : 0;
+            write(&dsv4_single_stream, sizeof(dsv4_single_stream));
+            const int32_t dsv4_stream_idx = (seq_id != -1) ? seq_id : -1;
+            write(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
             write(&ctx->dsv4.cache.n_stream, sizeof(ctx->dsv4.cache.n_stream));
 
             for (uint32_t il = 0; il < n_layer; ++il) {
@@ -9495,25 +9515,35 @@ struct llama_data_write {
                 }
                 write(&layer_type, sizeof(layer_type));
                 if (layer_type != 0) {
-                    write_dsv4_cache(ctx, il);
+                    write_dsv4_cache(ctx, il, dsv4_stream_idx);
                 }
             }
         }
     }
 
-    void write_dsv4_cache(const struct llama_context * ctx, int il) {
+    void write_dsv4_cache(const struct llama_context * ctx, int il, int32_t stream_idx) {
         const auto & cache = ctx->dsv4.cache;
+        const uint32_t n_stream = cache.n_stream;
+        auto write_tensor_stream = [&](const struct ggml_tensor * tensor, int layer_il) {
+            if (stream_idx < 0) {
+                write_tensor_data(tensor, 0, ggml_nbytes(tensor), layer_il);
+            } else {
+                size_t offset, size;
+                dsv4_stream_offset_size(tensor, n_stream, stream_idx, offset, size);
+                write_tensor_data(tensor, offset, size, layer_il);
+            }
+        };
         if (il < (int)cache.csa_k.size() && cache.csa_k[il] != nullptr) {
-            write_tensor_data(cache.csa_k[il], 0, ggml_nbytes(cache.csa_k[il]), il);
-            write_tensor_data(cache.lid_k[il], 0, ggml_nbytes(cache.lid_k[il]), il);
-            write_tensor_data(cache.csa_state_kv[il], 0, ggml_nbytes(cache.csa_state_kv[il]), il);
-            write_tensor_data(cache.csa_state_score[il], 0, ggml_nbytes(cache.csa_state_score[il]), il);
-            write_tensor_data(cache.lid_state_kv[il], 0, ggml_nbytes(cache.lid_state_kv[il]), il);
-            write_tensor_data(cache.lid_state_score[il], 0, ggml_nbytes(cache.lid_state_score[il]), il);
+            write_tensor_stream(cache.csa_k[il], il);
+            write_tensor_stream(cache.lid_k[il], il);
+            write_tensor_stream(cache.csa_state_kv[il], il);
+            write_tensor_stream(cache.csa_state_score[il], il);
+            write_tensor_stream(cache.lid_state_kv[il], il);
+            write_tensor_stream(cache.lid_state_score[il], il);
         } else if (il < (int)cache.hca_k.size() && cache.hca_k[il] != nullptr) {
-            write_tensor_data(cache.hca_k[il], 0, ggml_nbytes(cache.hca_k[il]), il);
-            write_tensor_data(cache.hca_state_kv[il], 0, ggml_nbytes(cache.hca_state_kv[il]), il);
-            write_tensor_data(cache.hca_state_score[il], 0, ggml_nbytes(cache.hca_state_score[il]), il);
+            write_tensor_stream(cache.hca_k[il], il);
+            write_tensor_stream(cache.hca_state_kv[il], il);
+            write_tensor_stream(cache.hca_state_score[il], il);
         }
     }
 
@@ -10111,6 +10141,12 @@ struct llama_data_read {
                 return false;
             }
 
+            uint32_t dsv4_single_stream;
+            read_to(&dsv4_single_stream, sizeof(dsv4_single_stream));
+
+            int32_t dsv4_stream_idx;
+            read_to(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
+
             uint32_t dsv4_n_stream;
             read_to(&dsv4_n_stream, sizeof(dsv4_n_stream));
             if (dsv4_n_stream != cache.n_stream) {
@@ -10118,21 +10154,44 @@ struct llama_data_read {
                 return false;
             }
 
+            // Consistency check: per-stream data requires a destination seq_id
+            if (dsv4_single_stream && seq_id == -1) {
+                LLAMA_LOG_ERROR("%s: per-stream DSV4 cache cannot be restored to full KV cache\n", __func__);
+                return false;
+            }
+            if (!dsv4_single_stream && seq_id != -1) {
+                LLAMA_LOG_ERROR("%s: full-stream DSV4 cache cannot be restored to single sequence\n", __func__);
+                return false;
+            }
+
+            // Destination stream: when restoring per-stream, write to seq_id's slot
+            const int32_t dsv4_dst_stream = dsv4_single_stream ? (int32_t)seq_id : -1;
+
             for (uint32_t il = 0; il < n_layer; ++il) {
                 uint32_t layer_type;
                 read_to(&layer_type, sizeof(layer_type));
 
+                auto set_tensor_stream = [&](struct ggml_tensor * tensor) {
+                    if (dsv4_single_stream) {
+                        size_t dst_offset, stream_size;
+                        dsv4_stream_offset_size(tensor, cache.n_stream, dsv4_dst_stream, dst_offset, stream_size);
+                        ggml_backend_tensor_set(tensor, read(stream_size), dst_offset, stream_size);
+                    } else {
+                        ggml_backend_tensor_set(tensor, read(ggml_nbytes(tensor)), 0, ggml_nbytes(tensor));
+                    }
+                };
+
                 if (layer_type == 1) {
-                    ggml_backend_tensor_set(cache.csa_k[il], read(ggml_nbytes(cache.csa_k[il])), 0, ggml_nbytes(cache.csa_k[il]));
-                    ggml_backend_tensor_set(cache.lid_k[il], read(ggml_nbytes(cache.lid_k[il])), 0, ggml_nbytes(cache.lid_k[il]));
-                    ggml_backend_tensor_set(cache.csa_state_kv[il], read(ggml_nbytes(cache.csa_state_kv[il])), 0, ggml_nbytes(cache.csa_state_kv[il]));
-                    ggml_backend_tensor_set(cache.csa_state_score[il], read(ggml_nbytes(cache.csa_state_score[il])), 0, ggml_nbytes(cache.csa_state_score[il]));
-                    ggml_backend_tensor_set(cache.lid_state_kv[il], read(ggml_nbytes(cache.lid_state_kv[il])), 0, ggml_nbytes(cache.lid_state_kv[il]));
-                    ggml_backend_tensor_set(cache.lid_state_score[il], read(ggml_nbytes(cache.lid_state_score[il])), 0, ggml_nbytes(cache.lid_state_score[il]));
+                    set_tensor_stream(cache.csa_k[il]);
+                    set_tensor_stream(cache.lid_k[il]);
+                    set_tensor_stream(cache.csa_state_kv[il]);
+                    set_tensor_stream(cache.csa_state_score[il]);
+                    set_tensor_stream(cache.lid_state_kv[il]);
+                    set_tensor_stream(cache.lid_state_score[il]);
                 } else if (layer_type == 2) {
-                    ggml_backend_tensor_set(cache.hca_k[il], read(ggml_nbytes(cache.hca_k[il])), 0, ggml_nbytes(cache.hca_k[il]));
-                    ggml_backend_tensor_set(cache.hca_state_kv[il], read(ggml_nbytes(cache.hca_state_kv[il])), 0, ggml_nbytes(cache.hca_state_kv[il]));
-                    ggml_backend_tensor_set(cache.hca_state_score[il], read(ggml_nbytes(cache.hca_state_score[il])), 0, ggml_nbytes(cache.hca_state_score[il]));
+                    set_tensor_stream(cache.hca_k[il]);
+                    set_tensor_stream(cache.hca_state_kv[il]);
+                    set_tensor_stream(cache.hca_state_score[il]);
                 }
             }
         }
