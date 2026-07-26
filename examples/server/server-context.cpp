@@ -3615,7 +3615,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rbegin(),
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
-                    return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                    return cur.pos_max < pos_min_thold;
                 }
             );
 
@@ -3632,11 +3632,11 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     do_reset = true;
                     //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else {
-                    pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                    pos_next = std::min(pos_next, it->pos_max);
                     slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
 
                     pos_next = slot.prompt_tokens.pos_next(slot.n_past_prompt);
-                    pos_next = std::min(pos_next, std::max(it->pos_min_prompt + 1, it->pos_max_prompt));
+                    pos_next = std::min(pos_next, it->pos_max_prompt);
                     slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next);
                     SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
                 }
@@ -3909,18 +3909,23 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                 // try to restore from the newest checkpoint before the divergence point
                                 if (llama_model_supports_state_checkpoints(model) &&
                                     !slot.server_cached_prompt.checkpoints.empty()) {
+                                    // Find the newest checkpoint that ends BEFORE the divergence point.
+                                    // Using pos_max instead of pos_min prevents restoring a checkpoint
+                                    // whose compressed state extends past the intended rewind (all DSV4
+                                    // checkpoints have pos_min=0, so pos_min-based search always picks
+                                    // the newest, regardless of how far past it extends).
                                     const auto it = std::find_if(
                                         slot.server_cached_prompt.checkpoints.rbegin(),
                                         slot.server_cached_prompt.checkpoints.rend(),
                                         [&](const auto & cur) {
-                                            return cur.pos_min < (llama_pos)slot.n_past || cur.pos_min == 0;
+                                            return cur.pos_max < (llama_pos)slot.n_past;
                                         });
                                     if (it != slot.server_cached_prompt.checkpoints.rend()) {
                                         const size_t checkpoint_size = it->data.size();
                                         const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         if (n == checkpoint_size) {
-                                            slot.n_past = slot.cache_tokens.size_up_to_pos(std::max(it->pos_min + 1, it->pos_max));
-                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(std::max(it->pos_min_prompt + 1, it->pos_max_prompt));
+                                            slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max);
+                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt);
                                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
                                             slot.n_discarded_prompt = 0;
                                             restored = true;
