@@ -467,38 +467,47 @@ if [ -x "$BIN/llama-server" ]; then
         -d "{\"prompt\": \"$SRV_PROMPT\", \"n_predict\": 16, \"cache_prompt\": true, \"ignore_eos\": true}" > "$WORK_DIR/srv4.json" || true
     curl -s -m 5 "http://127.0.0.1:$SRV_PORT/health" | grep -q '"ok"' \
         || { echo "FAIL: server unhealthy after generating from a restored slot"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
-    grep -qi "a cell inside the attention window was overwritten" "$WORK_DIR/server.log" \
+    # NOTE: match the abort's own wording. The guard prints "cell %d (seq %u, pos %d) inside the
+    # attention window [%d, %d] was overwritten", so a pattern that spells out a sentence around
+    # "attention window" can never match and the check is vacuous.
+    grep -aq "was overwritten" "$WORK_DIR/server.log" \
         && { echo "FAIL: restored slot left the ring occupancy inconsistent"; kill $SRV_PID 2>/dev/null; exit 1; }
     # A server system prompt is fanned out to every slot with llama_kv_cache_seq_cp, which the
-    # ring refuses. The refusal must reach the CLIENT, and it must say why: the message used to
-    # be hardcoded to DeepSeek4 (the other reason system_prompt_set can fail), so a
-    # --swa-compress user was told to debug an arch they were not running.
-    curl -s -m 30 -X POST "http://127.0.0.1:$SRV_PORT/completion" -H 'Content-Type: application/json' \
-        -d '{"prompt": "hello", "system_prompt": "You are a helpful assistant.", "n_predict": 4}' \
+    # ring implements as a stripe clone, so it must be ACCEPTED -- and the slot must keep
+    # generating afterwards. That second part is the real assertion: a generated token's position
+    # is system_tokens.size() + the slot-relative one, and dropping that offset placed every
+    # generated token on the ring rows the system prompt itself occupies. Here the occupancy
+    # guard turns that into an abort; on the dense path it is silently wrong attention instead,
+    # which no oracle available to this suite can see.
+    curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT/completion" -H 'Content-Type: application/json' \
+        -d '{"prompt": "hello", "system_prompt": "You are a helpful assistant.", "n_predict": 8, "ignore_eos": true}' \
         > "$WORK_DIR/srv-sysprompt.json" || true
-    # NOTE: do NOT assert merely that the body contains "error" -- format_error_response emits
+    kill -0 $SRV_PID 2>/dev/null \
+        || { echo "FAIL: server died generating with a system prompt under the ring"; tail -30 "$WORK_DIR/server.log"; exit 1; }
+    grep -aq "was overwritten" "$WORK_DIR/server.log" \
+        && { echo "FAIL: generated tokens landed on the system prompt's ring rows"; tail -30 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
+    # NOTE: do NOT assert on the response body -- format_error_response emits
     # "type": "invalid_request_error", and this random-weight model answers ordinary requests
-    # with an error envelope too, so such a check passes whatever the server does. The reason
-    # string is the only discriminating part of the body.
-    grep -q 'swa-compress' "$WORK_DIR/srv-sysprompt.json" \
-        || { echo "FAIL: system-prompt refusal did not tell the client the real reason (--swa-compress)"; cat "$WORK_DIR/srv-sysprompt.json"; kill $SRV_PID 2>/dev/null; exit 1; }
-    grep -qi 'deepseek4' "$WORK_DIR/srv-sysprompt.json" \
-        && { echo "FAIL: system-prompt refusal blamed DeepSeek4 on a non-DeepSeek4 model"; kill $SRV_PID 2>/dev/null; exit 1; }
-    # a refused system prompt must leave the server serving, not wedged
+    # with an error envelope too, so such a check passes whatever the server does. The server log
+    # is the discriminating signal: release_slots reports n_system_tokens, nonzero only if the
+    # prompt was encoded AND survived the fan-out verification (system_prompt_disable clears it).
+    grep -aq "n_system_tokens=[1-9]" "$WORK_DIR/server.log" \
+        || { echo "FAIL: ring server served slots with no system prompt resident"; tail -30 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
+    grep -aq 'swa-compress' "$WORK_DIR/srv-sysprompt.json" \
+        && { echo "FAIL: a system prompt is still refused under --swa-compress"; cat "$WORK_DIR/srv-sysprompt.json"; kill $SRV_PID 2>/dev/null; exit 1; }
     curl -s -m 5 "http://127.0.0.1:$SRV_PORT/health" | grep -q '"ok"' \
-        || { echo "FAIL: server unhealthy after refusing a system prompt"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
-    # and it must not have armed the deferred update: system_prompt_update() opens with an
-    # unconditional kv_cache_clear() and re-runs on every update_slots() tick while
-    # system_need_update stays set, so a refusal that armed it would wedge the server.
-    # A plain completion served afterwards is the observable proof it did not.
+        || { echo "FAIL: server unhealthy after a system prompt under the ring"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
+    # a further request must still be served: system_prompt_update() opens with an unconditional
+    # kv_cache_clear() and re-runs on every update_slots() tick while system_need_update stays
+    # set, so a prompt left half-applied would wedge the server.
     curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT/completion" -H 'Content-Type: application/json' \
         -d '{"prompt": "hello again", "n_predict": 4, "ignore_eos": true}' > "$WORK_DIR/srv-postsys.json" \
-        || { echo "FAIL: server stopped serving after a refused system prompt"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
+        || { echo "FAIL: server stopped serving after a system prompt"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
     kill -0 $SRV_PID 2>/dev/null \
-        || { echo "FAIL: server died after a refused system prompt"; tail -20 "$WORK_DIR/server.log"; exit 1; }
+        || { echo "FAIL: server died after a system prompt"; tail -20 "$WORK_DIR/server.log"; exit 1; }
 
     kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null || true
-    echo "server cache-rewind fallback + slot checkpointing + system-prompt refusal OK"
+    echo "server cache-rewind fallback + slot checkpointing + system prompt under the ring OK"
 
     # DENSE control for the fan-out check: the ring leg above can only prove a REFUSAL is
     # reported. system_prompt_update() now verifies the fan-out landed by counting the seq_ids
@@ -538,6 +547,36 @@ if [ -x "$BIN/llama-server" ]; then
         || { echo "FAIL: dense server unhealthy after a system-prompt fan-out"; tail -20 "$WORK_DIR/server-dense-sys.log"; kill $SRV2_PID 2>/dev/null; exit 1; }
     kill $SRV2_PID 2>/dev/null; wait $SRV2_PID 2>/dev/null || true
     echo "dense multi-slot system-prompt fan-out OK"
+
+    # RING multi-slot: the leg above runs the fan-out on the dense path, where seq_cp only tags
+    # cells. Under the ring it CLONES the source stripe into each destination's own rows, and a
+    # clone that lands on the wrong rows shows up as the occupancy guard aborting once a slot
+    # generates -- so both slots must serve after the fan-out, not just accept it.
+    SRV_PORT3=18733
+    "$BIN/llama-server" -m "$MODEL" -c 1024 -ub 128 --swa-compress --port $SRV_PORT3 --host 127.0.0.1 \
+        -np 2 --no-context-shift -t 4 > "$WORK_DIR/server-ring-sys.log" 2>&1 &
+    SRV3_PID=$!
+    for _ in $(seq 1 60); do
+        curl -s -m 2 "http://127.0.0.1:$SRV_PORT3/health" 2>/dev/null | grep -q '"ok"' && break
+        sleep 1
+    done
+    curl -s -m 5 "http://127.0.0.1:$SRV_PORT3/health" | grep -q '"ok"' \
+        || { echo "FAIL: ring multi-slot server did not come up"; tail -20 "$WORK_DIR/server-ring-sys.log"; kill $SRV3_PID 2>/dev/null; exit 1; }
+    curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT3/completion" -H 'Content-Type: application/json' \
+        -d '{"prompt": "hello", "system_prompt": "You are a helpful assistant.", "n_predict": 8, "ignore_eos": true}' \
+        > "$WORK_DIR/srv-ring-sys.json" || true
+    curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT3/completion" -H 'Content-Type: application/json' \
+        -d '{"prompt": "second slot please", "n_predict": 8, "ignore_eos": true}' > "$WORK_DIR/srv-ring-sys2.json" || true
+    kill -0 $SRV3_PID 2>/dev/null \
+        || { echo "FAIL: ring server died serving slots after a system-prompt fan-out"; tail -30 "$WORK_DIR/server-ring-sys.log"; exit 1; }
+    grep -aq "was overwritten" "$WORK_DIR/server-ring-sys.log" \
+        && { echo "FAIL: system-prompt stripe clone left the ring occupancy inconsistent"; tail -30 "$WORK_DIR/server-ring-sys.log"; kill $SRV3_PID 2>/dev/null; exit 1; }
+    grep -aq "system prompt fan-out did not reach every slot" "$WORK_DIR/server-ring-sys.log" \
+        && { echo "FAIL: the ring stripe clone did not reach every slot"; tail -30 "$WORK_DIR/server-ring-sys.log"; kill $SRV3_PID 2>/dev/null; exit 1; }
+    grep -aq "n_system_tokens=[1-9]" "$WORK_DIR/server-ring-sys.log" \
+        || { echo "FAIL: ring multi-slot server served slots with no system prompt resident"; tail -30 "$WORK_DIR/server-ring-sys.log"; kill $SRV3_PID 2>/dev/null; exit 1; }
+    kill $SRV3_PID 2>/dev/null; wait $SRV3_PID 2>/dev/null || true
+    echo "ring multi-slot system-prompt stripe clone OK"
 else
     echo "SKIP: server rewind leg (llama-server not built in $BIN)"
 fi

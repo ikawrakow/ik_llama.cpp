@@ -2134,16 +2134,12 @@ bool server_context::system_prompt_set(const std::string& sys_prompt, std::strin
         LOG_ERROR("server system prompt refused", {{"reason", why_not}});
         return false;
     }
-    // Same class of problem for the SWA ring: system_prompt_update() fans the prompt out
-    // to every slot with llama_kv_cache_seq_cp(), which the ring refuses (it cannot copy
-    // one sequence's window rows into another's). seq_cp returns void, so that refusal is
-    // invisible to the caller -- accepting the prompt here would leave every slot but 0
-    // believing it holds a system prompt whose K/V were never written. Refuse up front.
-    if (!sys_prompt.empty() && ctx != nullptr && llama_kv_self_is_swa_ring(ctx)) {
-        why_not = "server system prompts are unsupported with --swa-compress: the SWA ring cannot copy a sequence's window to another slot";
-        LOG_ERROR("server system prompt refused", {{"reason", why_not}});
-        return false;
-    }
+    // The SWA ring used to be refused here, because system_prompt_update() fans the prompt out
+    // with llama_kv_cache_seq_cp() and the ring could not honour it. It now does, as a stripe
+    // clone, and the fan-out verification in system_prompt_update() observes whether it landed
+    // -- so there is nothing left to refuse here. Note the ring gives a system prefix no special
+    // protection: like everything else in the context it is only visible while it is inside the
+    // attention window.
 
     system_prompt = sys_prompt;
 
@@ -3576,7 +3572,13 @@ void server_context::add_sampled_tokens() {
                 : slot.cache_tokens.get_text_tokens();
 
             auto & params_spec = slot.params.speculative;
-            const llama_pos draft_base_pos = slot.uses_mtp() ? slot.cache_tokens.pos_next() : -1;
+            // cache_tokens holds only this slot's own tokens, so pos_next() is slot-relative;
+            // every position handed to the cache is system_tokens.size() + that (see the p0
+            // computations in the prompt path). MTP compares this base against the TARGET
+            // cache's max position, so it needs the same absolute frame.
+            const llama_pos draft_base_pos = slot.uses_mtp()
+                ? (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next()
+                : -1;
             common_speculative_draft_result draft_result = common_speculative_draft_ex(
                 slot.spec,
                 ctx,
@@ -3602,7 +3604,7 @@ void server_context::add_sampled_tokens() {
 
             // add the sampled token to the batch
             slot.i_batch_dft.push_back(batch.n_tokens);
-            common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
+            common_batch_add(batch, slot.sampled, (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next(), { slot.id }, true);
             slot.cache_tokens.push_back(slot.sampled);
 
             const int min_usable_draft = slot.params.speculative.get_min_usable_stage_n_min();
@@ -3628,7 +3630,7 @@ void server_context::add_sampled_tokens() {
                 // add all drafted tokens to the batch
                 for (size_t i = 0; i < draft.size(); i++) {
                     slot.i_batch_dft.push_back(batch.n_tokens);
-                    common_batch_add(batch, draft[i], slot.cache_tokens.pos_next(), { slot.id }, true);
+                    common_batch_add(batch, draft[i], (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next(), { slot.id }, true);
                     slot.cache_tokens.push_back(draft[i]);
                 }
                 slot.drafted = std::move(draft);
@@ -3638,7 +3640,7 @@ void server_context::add_sampled_tokens() {
             // no speculative decoding
             slot.i_batch = batch.n_tokens;
 
-            common_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
+            common_batch_add(batch, slot.sampled, (llama_pos) system_tokens.size() + slot.cache_tokens.pos_next(), { slot.id }, true);
 
             slot.cache_tokens.push_back(slot.sampled);
 
