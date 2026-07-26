@@ -13,6 +13,7 @@ enum llm_expert_gating_func_type {
     LLM_EXPERT_GATING_FUNC_SOFTMAX               = 1,
     LLM_EXPERT_GATING_FUNC_SIGMOID               = 2,
     LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT = 3,
+    LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS  = 4,
 };
 
 struct llama_hparams {
@@ -140,6 +141,16 @@ struct llama_hparams {
     // (larger) window, applied when the graph is built with an MTP op type.
     uint32_t n_swa_mtp = 0;
     std::array<uint32_t, LLAMA_MAX_LAYERS> openpangu_window = {};
+
+    // DeepSeek-V4
+    uint32_t dsv4_o_group_count     = 0;
+    uint32_t dsv4_o_lora_rank       = 0;
+    uint32_t dsv4_hc_mult           = 0;
+    uint32_t dsv4_hc_sinkhorn_iters = 0;
+    uint32_t dsv4_hash_layer_count  = 0;
+    float    dsv4_compress_rope_base = 0.0f;
+    float    dsv4_hc_eps             = 0.0f;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios = {};
 
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;

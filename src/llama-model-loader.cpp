@@ -1078,7 +1078,9 @@ bool llama_model_loader::load_all_data(
     std::vector<void*> host_ptrs;
     std::vector<ggml_backend_event_t> events;
 
+#if !defined(_WIN32)
     std::vector<std::unique_ptr<llama_mmap>> split_mappings(files.size());
+#endif
 
     ggml_backend_t cuda_backend = nullptr;
     if (!use_mmap && !check_tensors) {
@@ -1199,6 +1201,7 @@ bool llama_model_loader::load_all_data(
         const char * buffer_name = ggml_backend_buffer_name(cur->buffer);
         const bool   is_probably_split_mode_graph = std::strncmp(buffer_name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
         if (is_probably_split_mode_graph) {
+#if !defined(_WIN32)
             llama_mmap * mapping;
             {
                 std::lock_guard<std::mutex> lock(load_mutex);
@@ -1215,6 +1218,20 @@ bool llama_model_loader::load_all_data(
             }
             mapping->dontneed_fragment(weight->offs, weight->offs + n_size);
             return n_size;
+#else
+            auto & read_buf = read_bufs[thread_idx];
+            if (read_buf.capacity() > n_size) {
+                read_buf = std::vector<no_init<uint8_t>>();
+            }
+            read_buf.resize(n_size);
+            file->seek(weight->offs, SEEK_SET);
+            file->read_raw(read_buf.data(), n_size);
+            ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+            if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
+                throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+            }
+            return n_size;
+#endif
         }
 #endif
         // rest. Serialized.
@@ -1374,6 +1391,6 @@ template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum ll
 
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(const std::string &, unsigned int &, bool);
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
+template bool llama_model_loader::get_arr<uint32_t>(const std::string &, std::vector<uint32_t> &, bool);
 template bool llama_model_loader::get_arr<int32_t, 8>(const std::string &, std::array<int32_t, 8> &, bool);
 template bool llama_model_loader::get_arr<uint32_t, 8>(const std::string &, std::array<uint32_t, 8> &, bool);
-template bool llama_model_loader::get_arr<uint32_t>(const std::string &, std::vector<uint32_t> &, bool);

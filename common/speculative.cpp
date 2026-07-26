@@ -1884,30 +1884,13 @@ bool common_speculative_load_draft_model(
         return true;
     }
 
-    gpt_params params_dft;
+    gpt_params params_dft = params_base;
     params_dft.devices          = params.devices;
     params_dft.model            = params.model;
-    params_dft.main_gpu         = params_base.main_gpu;
     params_dft.n_gpu_layers     = params.n_gpu_layers;
-    params_dft.rpc_servers      = params_base.rpc_servers;
     params_dft.cache_type_k     = params.cache_type_k.empty() ? params_base.cache_type_k : params.cache_type_k;
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
-    params_dft.flash_attn       = params_base.flash_attn;
-    params_dft.k_cache_hadamard = params_base.k_cache_hadamard;
-    params_dft.v_cache_hadamard = params_base.v_cache_hadamard;
 
-    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH)) {
-        params_dft.split_mode = params_base.split_mode;
-        for (size_t i = 0; i < std::size(params_dft.tensor_split); ++i) {
-            params_dft.tensor_split[i] = params_base.tensor_split[i];
-        }
-        params_dft.attn_max_batch = params_base.attn_max_batch;
-        params_dft.graph_reuse = params_base.graph_reuse;
-        params_dft.split_mode_graph_scheduling = params_base.split_mode_graph_scheduling;
-        params_dft.scheduler_async = params_base.scheduler_async;
-        params_dft.max_extra_alloc_MiB = params_base.max_extra_alloc_MiB;
-        params_dft.reduce_type = params_base.reduce_type;
-    }
 
     if (!params.params.empty()) {
         auto [argc, argv] = parse_command_line("llama-server " + params.params);
@@ -1929,7 +1912,6 @@ bool common_speculative_load_draft_model(
     }
     params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
     params_dft.n_parallel = 1;
-    params_dft.n_batch = params_dft.n_ctx;
 
     params.mparams_dft.path = params_dft.model;
 

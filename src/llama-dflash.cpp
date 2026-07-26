@@ -9,6 +9,10 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#ifdef GGML_USE_METAL
+#  include "ggml-metal.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>

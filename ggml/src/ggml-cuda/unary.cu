@@ -740,6 +740,10 @@ static __device__ __forceinline__ float op_softplus(float x) {
     return (x > 20.0f) ? x : logf(1.0f + expf(x));
 }
 
+static __device__ __forceinline__ float op_sqrt_softplus(float x) {
+    return (x > 20.0f) ? sqrtf(x) : sqrtf(logf(1.0f + expf(x)));
+}
+
 static __device__ __forceinline__ float op_sin(float x) {
     return sinf(x);
 }
@@ -838,6 +842,10 @@ void ggml_cuda_op_exp(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_softplus>(ctx, dst);
+}
+
+void ggml_cuda_op_sqrt_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_sqrt_softplus>(ctx, dst);
 }
 
 // === gated ops

@@ -12,6 +12,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 
 
 // ------------------------------------------------------------------
@@ -145,6 +146,65 @@ static bool is_original_snapshot_buffer(llama_model & model, ggml_backend_buffer
 }
 
 // ------------------------------------------------------------------
+// Guard: tensors that were transformed, merged or fused at load time cannot
+// be hot-swapped by writing raw file bytes over them - the compute graph
+// either consumes transformed data (so raw bytes would be WRONG) or consumes
+// something else entirely (so the swap would be silently ineffective).
+// Refuse loudly so external drivers can quarantine the attempt.
+// ------------------------------------------------------------------
+static const char * hotswap_unsupported_reason(const llama_model & model, const char * name, const struct ggml_tensor * tensor) {
+    if (tensor->view_src) {
+        // -mqkv / -muge merge wq/wk/wv (or ffn_gate/up_exps) into one parent
+        // tensor consumed by the graph; the parent may additionally be
+        // re-interleaved per expert at context creation, so writing raw bytes
+        // through the view offset can corrupt the merged layout
+        return "it is a view into a merged tensor (e.g. -mqkv / -muge)";
+    }
+    std::string n(name);
+    if (model.khad_pretransformed &&
+        (n.find(".attn_k_b.weight")  != std::string::npos ||
+         n.find(".attn_v_b.weight")  != std::string::npos ||
+         n.find(".attn_kv_b.weight") != std::string::npos)) {
+        // llm_apply_khad_pretransform folded the 64-block Hadamard into
+        // wv_b/wk_b_pp in place and the graph permanently skips the runtime
+        // un-Hadamard; raw file bytes would produce garbage attention output
+        return "the Hadamard transform was folded into the MLA weights at load time (khad)";
+    }
+    if (n.find(".ffn_gate_inp_s.") != std::string::npos) {
+        // llm_scale_gate_inp_s scales this tensor in place at load time
+        return "it was scaled in place at load time (llm_scale_gate_inp_s)";
+    }
+    if (model.arch == LLM_ARCH_BITNET && n.size() > 6 && n.compare(n.size() - 6, 6, ".scale") == 0) {
+        // the scalar was copied into the paired weight's op_params at load
+        // time and the graph reads it from there
+        return "its value was fused into the paired weight's op_params at load time (BitNet)";
+    }
+    if (model.arch == LLM_ARCH_OPENPANGU &&
+        (n.find("param_sink") != std::string::npos || n.find(".attn_kv_a_norm.") != std::string::npos)) {
+        // llm_prepare_openpangu_param_sinks derives sink tensors from these
+        // at load time; the derived tensors would not be refreshed
+        return "it feeds load-time-derived parameter sink tensors (OpenPangu)";
+    }
+    return nullptr;
+}
+
+// ------------------------------------------------------------------
+// mmap guard: tensors whose data lives inside a (read-only) file mapping
+// must not be written to in place
+// ------------------------------------------------------------------
+static bool tensor_data_in_mmap(const llama_model & model, const void * data) {
+    if (!data) return false;
+    for (const auto & mapping : model.mappings) {
+        if (!mapping) continue;
+        const char * base = (const char *) mapping->addr();
+        if ((const char *) data >= base && (const char *) data < base + mapping->size()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ------------------------------------------------------------------
 // Final size estimator
 // ------------------------------------------------------------------
 static size_t llama_model_compute_final_nbytes(struct ggml_tensor * tensor, ggml_type new_type) {
@@ -272,6 +332,13 @@ static void snapshot_tensor_source(struct ggml_tensor * tensor,
 // Constructor
 // ------------------------------------------------------------------
 reload_info::reload_info(const llama_model_loader & ml) {
+    if (ml.repack_tensors) {
+        // -rtr repacks host tensors in place (type changes to the interleaved
+        // _R4/_R8/_R16 variants); a later restore writes the plain file type,
+        // which is mathematically equivalent for lossless repacks but cannot
+        // reproduce the repacked state (and F16 -> BF16_R16 is lossy)
+        LLAMA_LOG_WARN("hotswap: run-time repacking (-rtr) is enabled; restored tensors cannot reproduce the repacked state and results may be inconsistent\n");
+    }
     for (const auto & w : ml.weights) {
         if (!w.tensor || w.idx >= (int)ml.files.size()) continue;
 
@@ -633,6 +700,17 @@ static bool reload_tensor_split_path(
         for (const auto & sib : src.sibling_names) {
             reattach_split_tensor_to_shared(model, sib.c_str());
         }
+        // Refresh the data from the current file bytes: the file changed on
+        // disk even though its dtype matches the original snapshot. For a
+        // restored original file this copies identical bytes; for a same-dtype
+        // swap it loads the real new data instead of keeping stale weights.
+        if (!host_buf.empty()) {
+            if (tensor_data_in_mmap(model, tensor->data)) {
+                LLAMA_LOG_WARN("%s: tensor '%s' is mmap-backed; skipping in-place data refresh\n", __func__, name);
+            } else {
+                ggml_backend_tensor_set(tensor, host_buf.data(), 0, host_buf.size());
+            }
+        }
         return true;
     }
 
@@ -673,7 +751,6 @@ static bool reload_tensor_non_split_path(
         bool returning_to_original,
         ggml_backend_buffer_t old_buf)
 {
-		(void)model;
 		(void)curr_type;
 #ifndef NDEBUG
     const char * name = ggml_get_name(tensor);
@@ -689,6 +766,17 @@ static bool reload_tensor_non_split_path(
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             tensor->ne[i] = src.original_ne[i];
             tensor->nb[i] = src.original_nb[i];
+        }
+        // Refresh the data from the current file bytes: the file changed on
+        // disk even though its dtype matches the original snapshot. For a
+        // restored original file this copies identical bytes; for a same-dtype
+        // swap it loads the real new data instead of keeping stale weights.
+        if (!host_buf.empty()) {
+            if (tensor_data_in_mmap(model, tensor->data)) {
+                LLAMA_LOG_WARN("%s: tensor '%s' is mmap-backed; skipping in-place data refresh\n", __func__, ggml_get_name(tensor));
+            } else {
+                ggml_backend_tensor_set(tensor, host_buf.data(), 0, host_buf.size());
+            }
         }
         src.state = tensor_reload_source::reload_state::ON_ORIGINAL;
         return true;
@@ -848,8 +936,22 @@ bool reload_info::reload_tensor(const char * name, llama_model & model) {
         }
     }
 
+    // Refuse tensors that were transformed/merged/fused at load time
+    if (const char * reason = hotswap_unsupported_reason(model, name, tensor)) {
+        LLAMA_LOG_WARN("hotswap: tensor '%s' cannot be hot-swapped: %s; skipping\n", name, reason);
+        return false;
+    }
+
     ggml_backend_buffer_t old_buf = tensor->buffer;
     bool returning = (curr_type == src.original_type);
+
+    // A same-dtype swap reattaches the original buffer and refreshes its data;
+    // that is impossible when the original data lives inside a read-only file
+    // mapping, so refuse instead of silently keeping the old weights
+    if (returning && tensor_data_in_mmap(model, src.original_data)) {
+        LLAMA_LOG_WARN("hotswap: tensor '%s' cannot be hot-swapped: its original data is mmap-backed (read-only); skipping\n", name);
+        return false;
+    }
 
     std::vector<char> host_buf;
     if (!returning) {
@@ -857,6 +959,16 @@ bool reload_info::reload_tensor(const char * name, llama_model & model) {
             if (!apply_tensor_type_change(model, tensor, src, curr_type)) return false;
         }
         size_t need = ggml_nbytes(tensor);
+        if (file_nbytes < need) return false;
+        host_buf.resize(need);
+        file.read(host_buf.data(), (std::streamsize)need);
+        if (!file || (size_t)file.gcount() != need) return false;
+    } else {
+        // The on-disk dtype matches the original snapshot, but the bytes may
+        // still differ (the file did change on disk, e.g. a same-dtype tensor
+        // quantized with a different imatrix). Read them so the returning path
+        // can refresh the tensor data after reattaching the original buffers.
+        size_t need = src.original_nbytes;
         if (file_nbytes < need) return false;
         host_buf.resize(need);
         file.read(host_buf.data(), (std::streamsize)need);
@@ -871,6 +983,27 @@ bool reload_info::reload_tensor(const char * name, llama_model & model) {
     }
 
     if (ok) {
+        // Some tensors are physically DUPLICATED at load time under the same
+        // name (tied lm_head copy of token_embd, per-layer rope_freqs /
+        // rope_factors copies, expert-bias *_dup copies): propagate the new
+        // data to every other instance, or fail loudly when that is
+        // impossible so external drivers can quarantine the result.
+        for (auto & p : model.tensors_by_name) {
+            if (p.second == tensor || p.first != name) continue;
+            auto dup = p.second;
+            bool same_meta = dup && dup->type == tensor->type;
+            for (int i = 0; i < GGML_MAX_DIMS && same_meta; ++i) {
+                same_meta = dup->ne[i] == tensor->ne[i];
+            }
+            if (same_meta && !dup->view_src && dup->buffer && !host_buf.empty() &&
+                !tensor_data_in_mmap(model, dup->data)) {
+                ggml_backend_tensor_set(dup, host_buf.data(), 0, host_buf.size());
+                LLAMA_LOG_INFO("hotswap: propagated reloaded data to a duplicate instance of '%s'\n", name);
+            } else {
+                LLAMA_LOG_WARN("hotswap: failed to refresh derived tensor '%s' (duplicate instance); evaluation results would be stale\n", name);
+            }
+        }
+
         src.last_mtime = st.st_mtime;
 #ifdef __linux__
         src.last_mtime_ns = st.st_mtim.tv_nsec;
@@ -930,10 +1063,56 @@ bool reload_info::reload_changed_tensors(llama_model & model) {
     });
 
     bool r = false;
+    std::vector<int> mla_refresh_layers;
     for (auto & j : jobs) {
         if (reload_tensor(j.name, model)) {
             r = true;
             LLAMA_LOG_INFO("reloaded tensor '%s'\n", j.name);
+
+            // MLA models may derive tensors at load time (llm_prepare_mla):
+            // when the GGUF ships attn_k_b/attn_v_b, a combined attn_kv_b is
+            // computed from them, and the mla>1 prompt-processing path consumes
+            // the DERIVED tensor. It must be refreshed after a reload, or
+            // evaluations would keep using weights derived from the old data.
+            int il = -1;
+            std::string n(j.name);
+            if (sscanf(j.name, "blk.%d.", &il) == 1 && il >= 0 && il < (int) model.layers.size()) {
+                if (n.find(".attn_k_b.weight") != std::string::npos ||
+                    n.find(".attn_v_b.weight") != std::string::npos) {
+                    if (model.layers[il].computed_wkv_b &&
+                        std::find(mla_refresh_layers.begin(), mla_refresh_layers.end(), il) == mla_refresh_layers.end()) {
+                        mla_refresh_layers.push_back(il);
+                    }
+                    // Under -sm graph/attn a pre-transposed wk_b_pp (and
+                    // per-rank replicas) is derived from wk_b for the
+                    // prompt-processing path; it cannot be refreshed here.
+                    if (model.layers[il].wk_b_pp || model.layers[il].computed_wk_b_pp) {
+                        LLAMA_LOG_WARN("hotswap: failed to refresh derived tensor 'blk.%d.attn_kv_b.weight' (pre-transposed wk_b_pp); evaluation results would be stale\n", il);
+                    }
+                } else if (n.find(".attn_kv_b.weight") != std::string::npos) {
+                    // The reverse derivation (attn_k_b/attn_v_b computed from
+                    // attn_kv_b, e.g. mainline-converted models) is not
+                    // refreshable here; make the staleness loud so external
+                    // drivers can quarantine the benchmark.
+                    if (model.layers[il].computed_wk_b || model.layers[il].computed_wv_b) {
+                        LLAMA_LOG_WARN("hotswap: failed to refresh derived tensor 'blk.%d.attn_k_b/attn_v_b.weight' after attn_kv_b reload; evaluation results would be stale\n", il);
+                    }
+                }
+            }
+
+            // The runtime-requantized MTP head (output_extra.weight) is
+            // derived from output.weight at load time and is not refreshed
+            if (n == "output.weight" && model.output_mtp && model.output_mtp != model.output) {
+                LLAMA_LOG_WARN("hotswap: failed to refresh derived tensor 'output_extra.weight' (requantized MTP head); MTP evaluation results would be stale\n");
+            }
+        }
+    }
+
+    for (int il : mla_refresh_layers) {
+        if (llm_refresh_computed_wkv_b(model, il)) {
+            LLAMA_LOG_INFO("hotswap: refreshed derived tensor 'blk.%d.attn_kv_b.weight' from the reloaded attn_k_b/attn_v_b\n", il);
+        } else {
+            LLAMA_LOG_WARN("hotswap: failed to refresh derived tensor 'blk.%d.attn_kv_b.weight'; evaluation results would be stale\n", il);
         }
     }
 

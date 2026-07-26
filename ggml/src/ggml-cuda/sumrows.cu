@@ -75,9 +75,86 @@ static void sum_rows_div_f32_cuda(const float * x, float * dst, const int ncols,
     k_sum_rows_div_f32<<<block_nums, block_dims, 0, stream>>>(x, dst, ncols, s, b);
 }
 
+static __global__ void k_sum_rows_any_f32(const char * x, char * y, const int ncols,
+        const int nsum, const int ne1,
+        size_t nbsum, size_t nb01, size_t nb02, size_t nb1, size_t nb2) {
+
+    int col = blockIdx.y*blockDim.x + threadIdx.x;
+    if (col >= ncols) {
+        return;
+    }
+    int row = blockIdx.x;
+    int i2  = row/ne1;
+    int i1  = row%ne1;
+
+    //x += i1*nb01 + i2*nb02 + col*sizeof(float);
+    //y += i1*nb1  + i2*nb2  + col*sizeof(float);
+
+    //float sum = 0.0f;
+    //for (int is = 0; is < nsum; ++is) {
+    //    sum += *(const float *)x;
+    //    x += nbsum;
+    //}
+
+    //*y = sum;
+
+    const float * xf = (const float *)(x + i1*nb01 + i2*nb02);
+    float * yf = (float *)(y + i1*nb1  + i2*nb2);
+
+    float sum = 0.0f;
+    for (int is = 0; is < nsum; ++is) {
+        sum += xf[is*nbsum + col];
+    }
+
+    yf[col] = sum;
+}
+
 void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     cudaStream_t stream = ctx.stream();
+
+    int dim = dst->op_params[0];
+    if (dim > 0) {
+        //printf("I'm here (%d): %ld x %ld x %ld x %ld -> %ld x %ld x %ld x %ld\n", dim,
+        //        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+        GGML_ASSERT(src0->nb[0] == sizeof(float) && dst->nb[0] == sizeof(float));
+        constexpr int kBlockSize = 256;
+        int nblock = (dst->ne[0] + kBlockSize - 1)/kBlockSize;
+        // Note: we use dim y as the number of blocks because we do not expect
+        //       tensors that may overflow the 65536 limit for this dim, i.e.,
+        //       we do not expect tensors to have row sizes > 16777216.
+        if (dim == 1) {
+            GGML_ASSERT(dst->ne[1] == 1);
+            GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->ne[2] == dst->ne[2] && src0->ne[3] == dst->ne[3]);
+            int nrows = dst->ne[2]*dst->ne[3];
+            dim3 grid(nrows, nblock, 1);
+            k_sum_rows_any_f32<<<grid, kBlockSize, 0, ctx.stream()>>>(
+                    (const char *)src0->data, (char *)dst->data, dst->ne[0],
+                    src0->ne[1], src0->ne[2],
+                    src0->nb[1]/sizeof(float), src0->nb[2], src0->nb[3], dst->nb[2], dst->nb[3]);
+                    //src0->nb[1], src0->nb[2], src0->nb[3], dst->nb[2], dst->nb[3]);
+        }
+        else if (dim == 2) {
+            int nrows = dst->ne[1]*dst->ne[3];
+            dim3 grid(nrows, nblock, 1);
+            k_sum_rows_any_f32<<<grid, kBlockSize, 0, ctx.stream()>>>(
+                    (const char *)src0->data, (char *)dst->data, dst->ne[0],
+                    src0->ne[2], src0->ne[1],
+                    src0->nb[2]/sizeof(float), src0->nb[1], src0->nb[3], dst->nb[1], dst->nb[3]);
+        }
+        else if (dim == 3) {
+            int nrows = dst->ne[1]*dst->ne[2];
+            dim3 grid(nrows, nblock, 1);
+            k_sum_rows_any_f32<<<grid, kBlockSize, 0, ctx.stream()>>>(
+                    (const char *)src0->data, (char *)dst->data, dst->ne[0],
+                    src0->ne[3], src0->ne[1],
+                    src0->nb[3]/sizeof(float), src0->nb[1], src0->nb[2], dst->nb[1], dst->nb[2]);
+        }
+        else {
+            GGML_ABORT("Unsupported sum_rows dimension");
+        }
+        return;
+    }
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
