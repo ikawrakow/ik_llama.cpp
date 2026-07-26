@@ -1,5 +1,16 @@
 # SWA ring KV cache (`--swa-compress` to opt in)
 
+**Ready for review.** Opt-in and default-off, so a build without the flag behaves
+exactly as before. Verified on 2x L40 under `-sm graph -fa on` on real weights
+across Laguna, GEMMA2/3, cohere2 and mellum, and serving Laguna-S at 180k
+context in production. Two disclosures a reviewer should weigh rather than
+discover: the GEMMA4 `op_params[4]` gate is defensive, not measured -- `-sm graph`
+downgrades to `layer` for GEMMA4 whenever `n_embd_per_layer > 0`, true of every
+GGUF available to me, so its hand-rolled builder could not be reached to
+demonstrate the bug -- and the graph audit has no negative test; its refusal
+behaviour is evidenced only by the episode where it correctly refused GEMMA2
+until fused `SOFT_CAP_MAX` was added to the walk.
+
 ## Problem
 
 Laguna marks most layers as sliding-window attention (`n_swa = 512`; 36 of 48
