@@ -221,7 +221,12 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 
     if (indexer->ne[0] % 256 != 0) return false; // lazyness to add checks and handle tails in case of not multiple of 256
                                                  // But are there DSA variants where top_k is not a multiple of 256?
-    if (K->ne[1] < 4*indexer->ne[0]) return false; // for efficiency
+    //if (K->ne[1] < 4*indexer->ne[0]) return false; // for efficiency
+    if (Q->ne[1] <= 16) {
+        if (indexer->ne[0] >= K->ne[1]) return false;
+    } else {
+        if (K->ne[1] < 4*indexer->ne[0]) return false; // for efficiency
+    }
     if (K->ne[2] > 1 || K->ne[3] > 1 || mask->ne[2] > 1 || mask->ne[3] > 1 || Q->ne[3] > 1) return false;
     if (K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16 || mask->type != GGML_TYPE_F16 || Q->type != GGML_TYPE_F32) return false;
     if (K->ne[0] != Q->ne[0]) return false;
