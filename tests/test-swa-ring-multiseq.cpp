@@ -527,6 +527,33 @@ int main(int argc, char ** argv) {
         printf("     max |logit diff| for the surviving sequence: %g\n", d);
     }
 
+    // (2c) seq_keep stays REFUSED under the ring, on purpose. A ring could honour it --
+    // it is a whole-sequence seq_rm of every other sequence, which section (2b) just
+    // showed works -- but its in-tree callers (lookahead, speculative) would then reach
+    // a per-token full-range seq_cp, and under the ring each of those copies a stripe
+    // through the state API, device to host to device. lookahead fans out to W+G+1 == 31
+    // sequences PER TOKEN. The refusal is the feature; this pins it so a later change
+    // cannot quietly turn it into a correct-but-unusable path.
+    //
+    // What flips it red: dropping seq_keep from llama_kv_cache_refuse_if_ring. Sequence 1
+    // would then lose its cells and stop decoding like dense.
+    {
+        // both contexts currently hold sequence 0 (fresh, from the reuse above) and
+        // sequence 1 (the long-lived one). Ask each to keep ONLY sequence 0.
+        llama_kv_cache_seq_keep(ring,  0);
+        check(llama_kv_cache_seq_pos_min(ring, 1) != -1,
+              "seq_keep is refused under the ring: the other sequence is untouched");
+
+        llama_kv_cache_seq_keep(dense, 0);
+        check(llama_kv_cache_seq_pos_min(dense, 1) == -1,
+              "dense seq_keep really does drop the other sequence (the test is not vacuous)");
+
+        // and the ring's spared sequence still decodes -- a refusal that half-applied
+        // would leave its rows claiming cells that no longer exist
+        std::vector<float> l_after = decode_one(ring, probe, n_prompt + n_skew + 18, 1, n_vocab);
+        check(!l_after.empty(), "the ring keeps decoding the sequence seq_keep did not remove");
+    }
+
     // ------------------------------------------ (5) transposed V, mixed ubatch
     // Without flash attention the V cache is transposed, so a mixed ubatch's writes are
     // strided 2-D copies into several stripes -- a separate branch from the row-major one.

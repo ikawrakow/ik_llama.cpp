@@ -112,15 +112,44 @@ the ring's tensors are allocated by then, so there is no falling back to dense.
 The denylist stays, because it encodes what a graph walk cannot see: LLAMA4's
 chunk sentinel and openPangu's per-layer windows differ at *mask-fill* time with
 identical wiring, and DFLASH_DRAFT never touches `kv_self` at all.
-Context shift (K-shift), `seq_cp` and `seq_keep` are incompatible with a ring and
+Context shift (K-shift) and `seq_keep` are incompatible with a ring and
 fail with errors pointing at `--swa-compress` (disengage to restore the dense
-behavior). Defrag is incompatible too, but it LOSES to the ring rather than
+behavior).
+
+`seq_cp` **is** supported, for a full range only, and its semantics necessarily
+differ from dense: a ring cell's row is derived from its sequence and only one
+sequence can own it, so the tokens are COPIED into the destination's own rows
+(the cache grows) and the destination is REPLACED rather than united with the
+source. A sub-range is refused -- it would have to rewind the destination's rows
+without rewriting them, the same reason a `PARTIAL_ONLY` state restore is
+refused. Both ids must be `< n_seq_max`, since an out-of-range id addresses a
+stripe the ring does not own (dense tolerates it: it only grows a `std::set`).
+`seq_cp` returns void, so a caller that needs to know tests
+`llama_kv_cache_seq_pos_min(ctx, dst) != -1` -- note `seq_pos_max` returns 0 for
+an empty sequence and cannot serve here.
+
+`seq_keep` stays refused deliberately, not for want of a mechanism: under the
+ring it is just a whole-sequence `seq_rm` of every other sequence, which the
+ring already supports. Its only in-tree callers are `examples/lookahead` and
+`examples/speculative`, and unlocking it would make them *correct but unusable*.
+`lookahead` fans out to `W + G + 1 == 31` sequences per generated token, each a
+full-range `seq_cp`, and the copy above moves a stripe through
+`llama_state_seq_get_data`/`set_data` -- device to host to device. An honest
+refusal beats roughly a gigabyte of PCIe traffic per token. The escape, if those
+programs are ever wanted under `--swa-compress`, is an internal device-side
+stripe copy (contiguous `[seq*ring_w, (seq+1)*ring_w)` slabs, `ggml_cpy` for K, a
+strided view over `size_swa` for transposed V) behind the same void API, with no
+blob; `seq_keep` then follows for free.
+
+Defrag is incompatible too, but it LOSES to the ring rather than
 changing the layout: `--defrag-thold` is ignored with a warning when the ring
 engages, and an explicit `llama_kv_cache_defrag()` is dropped with an error rather
 than aborting the process. Keeping the layout independent of a context-time-only
 setting is what lets the model-load-time `--fit` estimator stay correct without
-being told about it. Server system prompts are refused too, because fanning one out to
-every slot goes through `seq_cp`. State save/load is supported per sequence, but
+being told about it. Server system prompts work, now that the fan-out's `seq_cp` does: the server
+verifies the fan-out landed by counting the seq_ids it added, and drops the
+prompt with a reported reason rather than serving slots whose K/V never received
+it. State save/load is supported per sequence, but
 only for the append-only layout the ring itself supports: a fragmented cell layout,
 or a whole-context save holding several sequences (its cells are packed from index
 0 with no sequence of their own), is refused rather than serialized in the wrong

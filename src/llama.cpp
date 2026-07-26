@@ -9562,7 +9562,12 @@ bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llam
 // reason to fire on a ring context; refuse loudly instead of corrupting.
 static bool llama_kv_cache_refuse_if_ring(const struct llama_context * ctx, const char * func) {
     if (ctx->kv_self.swa_ring) {
-        LLAMA_LOG_ERROR("%s: sequence mutation is not supported with SWA ring KV; run without --swa-compress\n", func);
+        // seq_keep is the only caller. A ring could honour it -- it is a whole-sequence
+        // seq_rm of every other sequence -- but its in-tree callers (lookahead,
+        // speculative) then reach a per-token full-range seq_cp, which copies a stripe
+        // through the state API on every token. Refusing is kinder than that.
+        LLAMA_LOG_ERROR("%s: not supported with SWA ring KV; run without --swa-compress "
+                "(programs relying on this, such as lookahead and speculative, need the dense cache)\n", func);
         return true;
     }
     return false;
