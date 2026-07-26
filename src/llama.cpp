@@ -618,6 +618,10 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     return result;
 }
 
+uint64_t llama_context_n_graph_rebuilds(const llama_context * ctx) {
+    return ctx ? ctx->n_graph_rebuilds : 0;
+}
+
 bool llama_context::update_cache_copies() {
     if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) return true;
     auto patch_dsa_cache_copies = [&]() -> bool {
@@ -5196,16 +5200,27 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     const int64_t r_hi = r_lo + Wseq;
                     if (data_ring)     std::fill(data_ring     + j*W, data_ring     + (j+1)*W, -INFINITY);
                     if (data_ring_f16) std::fill(data_ring_f16 + j*W, data_ring_f16 + (j+1)*W, h_inf);
-                    for (int64_t r = r_lo; r < r_hi; ++r) {
-                        bool visible = false;
+                    // Only positions in [pos - n_swa_eff + 1, pos] can be visible, and each
+                    // maps to exactly one row. Walking those positions instead of every row
+                    // in the stripe makes the fill O(window) rather than O(ring_w) -- with
+                    // n_swa 512 and ubatch 4096 that is 512 steps per row-set instead of
+                    // 4608. Each candidate is still resolved through ring_occ and matched
+                    // against its row's actual occupant, so a position that is not resident
+                    // (a removed range, a stripe the sequence never wrote) stays masked --
+                    // the bulk -INFINITY fill above is what every unvisited row keeps.
+                    const llama_pos q_lo = pos >= (llama_pos) n_swa_eff ? pos - (llama_pos) n_swa_eff + 1 : 0;
+                    for (llama_pos q = q_lo; q <= pos; ++q) {
+                        const int64_t r = r_lo + (q % Wseq);
                         const int32_t c = mask_kv_self.ring_occ[r];
-                        if (c >= 0) {
-                            const auto & cell = mask_kv_self.cells[c];
-                            visible = cell.pos >= 0 && cell.has_seq_id(seq_id) && cell.pos <= pos &&
-                                      pos - cell.pos < (int32_t) n_swa_eff;
+                        if (c < 0) {
+                            continue;
                         }
-                        if (data_ring)     data_ring[j*W + r]     = visible ? 0.0f : -INFINITY;
-                        if (data_ring_f16) data_ring_f16[j*W + r] = visible ? h_zero : h_inf;
+                        const auto & cell = mask_kv_self.cells[c];
+                        if (cell.pos != q || !cell.has_seq_id(seq_id)) {
+                            continue;
+                        }
+                        if (data_ring)     data_ring[j*W + r]     = 0.0f;
+                        if (data_ring_f16) data_ring_f16[j*W + r] = h_zero;
                     }
                 }
                 const int64_t n_tokens_padded = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
@@ -6335,6 +6350,7 @@ static int llama_decode_internal(
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         if (!lctx.can_reuse_graph(u_batch)) {
+            lctx.n_graph_rebuilds++;
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING

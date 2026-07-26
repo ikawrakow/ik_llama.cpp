@@ -621,6 +621,11 @@ struct llama_context {
         uint32_t      n    = 0;
     };
     std::vector<std::vector<RingCopy>> ring_copies;
+    // Number of times llama_decode had to rebuild the graph instead of reusing the
+    // previous one. Diagnostic only: a ring layer that is invisible to
+    // patch_ring_copies still produces correct output, it just rebuilds per token,
+    // so throughput is the only symptom and this counter the only cheap witness.
+    uint64_t n_graph_rebuilds = 0;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
     // the K/V cache_copies fixup does NOT cover. Under graph reuse (FA pads KV to 256, so n_kv
     // stays constant across consecutive decode ubatches and the graph IS reused) its view_offs
@@ -647,3 +652,7 @@ struct llama_context {
 
     int max_nodes(int n_tokens, int n_kv) const;
 };
+
+// Graph rebuild count, for tests that need to prove reuse actually happens.
+// Deliberately not part of the public llama.h surface.
+uint64_t llama_context_n_graph_rebuilds(const llama_context * ctx);

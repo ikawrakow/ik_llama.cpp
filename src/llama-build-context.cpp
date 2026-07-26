@@ -850,30 +850,42 @@ static void llm_build_ring_store(
         size_t trans_row_stride = 0) {
     GGML_ASSERT(!parts.empty());
 
+    // A single run covering the whole source needs no slicing at all -- which is just as
+    // well, because the axis sniffing below cannot identify the token axis when n_tokens
+    // is 1 (a decode step): every dimension of [n_embd_head, n_head_kv, 1] is degenerate
+    // except the embedding ones.
+    const bool whole = parts.size() == 1 && parts[0].src_off == 0 && parts[0].n == (uint32_t) n_tokens;
+
     // The token axis is the outermost non-degenerate dimension: K/V sources are either
     // [n_embd, n_tokens] or [n_embd_head, n_head_kv, n_tokens]. A multi-run store needs
     // n_tokens > 1, so a size-1 outer dimension can never be the token axis.
     int axis = 0;
-    for (int d = GGML_MAX_DIMS - 1; d > 0; --d) {
-        if (src->ne[d] > 1) {
-            axis = d;
-            break;
+    if (!whole) {
+        for (int d = GGML_MAX_DIMS - 1; d > 0; --d) {
+            if (src->ne[d] > 1) {
+                axis = d;
+                break;
+            }
         }
+        GGML_ASSERT(src->ne[axis] == n_tokens);
     }
-    GGML_ASSERT(src->ne[axis] == n_tokens);
 
     const bool trans = trans_ne1 > 0;
     // transposing is only meaningful for a 2D [n_embd, n_tokens] source
-    GGML_ASSERT(!trans || (axis == 1 && src->ne[0] == trans_ne1));
+    GGML_ASSERT(!trans || src->ne[0] == trans_ne1);
+    GGML_ASSERT(!trans || whole || axis == 1);
 
     lctx.cache_copies[copy_idx].cpy = nullptr;
     auto & recorded = lctx.ring_copies[copy_idx];
     recorded.clear();
     for (const auto & p : parts) {
-        int64_t ne[GGML_MAX_DIMS] = { src->ne[0], src->ne[1], src->ne[2], src->ne[3] };
-        ne[axis] = p.n;
-        ggml_tensor * src_p = ggml_view_4d(ctx, src, ne[0], ne[1], ne[2], ne[3],
-                src->nb[1], src->nb[2], src->nb[3], p.src_off*src->nb[axis]);
+        ggml_tensor * src_p = src;
+        if (!whole) {
+            int64_t ne[GGML_MAX_DIMS] = { src->ne[0], src->ne[1], src->ne[2], src->ne[3] };
+            ne[axis] = p.n;
+            src_p = ggml_view_4d(ctx, src, ne[0], ne[1], ne[2], ne[3],
+                    src->nb[1], src->nb[2], src->nb[3], p.src_off*src->nb[axis]);
+        }
         ggml_tensor * dst_p = trans
             ? ggml_view_2d(ctx, dst, p.n, trans_ne1, trans_row_stride, p.row*dst_step)
             : ggml_view_1d(ctx, dst, ggml_nelements(src_p), p.row*dst_step);
@@ -910,10 +922,8 @@ void llm_build_context::llm_build_kv_store(
     // SWA ring: sliding-window layers store K/V in a per-sequence stripe of a
     // window-sized tensor, at row seq*ring_w + pos % ring_w. find_slot precomputed this
     // ubatch's destination row runs (kv.ring_parts): one per sequence, split again where
-    // a run wraps its stripe. A single run covering the whole ubatch keeps the fast path
-    // (one contiguous view copy, registered for graph reuse); anything else is emitted as
-    // one copy per run with the cache_copies entry left null, which makes
-    // update_cache_copies refuse the reuse and forces a rebuild.
+    // a run wraps its stripe. Each run is emitted as its own copy and recorded in
+    // ring_copies, which is what patch_ring_copies re-points on a reused graph.
     const bool    ring      = kv.swa_ring && hparams.swa_layers[il];
     // Graph *reservation* builds with a synthetic batch that never went through
     // find_slot, so there is no plan to follow. Nothing is executed there -- only the
@@ -923,9 +933,14 @@ void llm_build_context::llm_build_kv_store(
         parts_reserve.push_back({0, (uint32_t) n_tokens, 0});
     }
     const auto &  parts     = parts_reserve.empty() ? kv.ring_parts : parts_reserve;
-    const bool    multi     = ring && !(parts.size() == 1 && parts[0].n == (uint32_t) n_tokens);
+    // Every ring layer stores through llm_build_ring_store, even when the ubatch lands in
+    // a single run. update_cache_copies routes all ring layers to patch_ring_copies, which
+    // only knows about the records left in ring_copies; a ring layer that registered a
+    // cache_copies entry instead would be invisible to it, reuse would be refused, and the
+    // graph rebuilt for every generated token.
+    const bool    multi     = ring;
     const int64_t kv_size_l = ring ? kv.size_swa : kv.size;
-    const int32_t kv_head_l = ring ? (int32_t) parts[0].row : kv_head;   // only used when !multi
+    const int32_t kv_head_l = kv_head;   // only used when !multi, i.e. never on the ring path
 
     GGML_ASSERT(ring || kv.size == n_ctx);
 
@@ -3190,8 +3205,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT(kv_self.size == cparams.n_ctx);
 
                 // SWA ring: same treatment as llm_build_kv_store — window-sized split
-                // tensors, per-sequence row stripes, one copy per destination row run
-                // (multi-run graphs are not registered for reuse)
+                // tensors, per-sequence row stripes, one copy per destination row run,
+                // always through llm_build_ring_store so patch_ring_copies can see it
                 const bool    ring      = kv_self.swa_ring && hparams.swa_layers[il];
                 // see llm_build_kv_store: graph reservation has no plan to follow
                 std::vector<llama_kv_cache::ring_part> parts_reserve;
@@ -3199,9 +3214,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     parts_reserve.push_back({0, (uint32_t) n_tokens, 0});
                 }
                 const auto &  parts     = parts_reserve.empty() ? kv_self.ring_parts : parts_reserve;
-                const bool    multi     = ring && !(parts.size() == 1 && parts[0].n == (uint32_t) n_tokens);
+                const bool    multi     = ring;
                 const int64_t kv_size_l = ring ? kv_self.size_swa : kv_self.size;
-                const int32_t kv_head_l = ring ? (int32_t) parts[0].row : kv_head; // only used when !multi
+                const int32_t kv_head_l = kv_head; // only used when !multi, i.e. never on the ring path
 
                 auto idx = 2*wq->n_device*il + 2*id;
                 GGML_ASSERT(idx+1 < (int)lctx.cache_copies.size());
