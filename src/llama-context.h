@@ -79,6 +79,50 @@ struct llama_kv_cache {
     // computed before each graph build
     uint32_t n = 0;
 
+    // SWA ring: sliding-window layers allocate size_swa rows instead of
+    // kv_size. The row is derived from the token's SEQUENCE and POSITION, not from its
+    // cell index: sequence s owns the stripe [s*ring_w, (s+1)*ring_w) and a token at
+    // position p lands on row s*ring_w + p % ring_w. So size_swa = n_seq_max*ring_w.
+    //
+    // Deriving the row from pos (rather than the cell index) is what makes the ring
+    // multi-sequence: each sequence's eviction distance is then measured in its OWN
+    // positions, so an idle sequence cannot have its window evicted by a busy one. It
+    // also makes tail rewinds self-consistent -- re-appending at position p rewrites
+    // exactly the row p held before.
+    //
+    // ring_occ[r] = index of the cell whose K/V currently occupy row r (-1 = never
+    // written). Cell bookkeeping (cells/head/n) stays full-sized and untouched; only
+    // tensor storage, the write offsets, the SWA mask and state IO are ring-aware.
+    bool     swa_ring = false;
+    uint32_t size_swa = 0; // total ring rows = n_seq_ring * ring_w
+    uint32_t ring_w   = 0; // rows per sequence (the padded window)
+    uint32_t ring_n_swa = 0; // hparams.n_swa, needed by seq_rm rewind-safety check
+    std::vector<int32_t> ring_occ;
+
+    // Destination row runs for the ubatch currently being written, computed by
+    // llama_kv_cache_find_slot. One part per (sequence, wrap) segment: rows
+    // [row, row+n) receive ubatch tokens [src_off, src_off+n). A single part covering
+    // the whole ubatch is the fast path (one contiguous view copy, graph reuse stays
+    // possible); anything else is emitted as several copies with reuse refused.
+    struct ring_part {
+        uint32_t src_off;
+        uint32_t n;
+        uint32_t row;
+    };
+    std::vector<ring_part> ring_parts;
+
+    // Ring row for a token of sequence `s` at position `p`.
+    uint32_t ring_row(llama_seq_id s, llama_pos p) const {
+        return (uint32_t) s * ring_w + (uint32_t) (p % (llama_pos) ring_w);
+    }
+
+    // Ring row of a resident cell. The ring requires exactly one seq_id per cell (see
+    // llama_kv_cache_find_slot), so the first is the only one.
+    uint32_t ring_row_of_cell(uint32_t c) const {
+        const auto & cell = cells[c];
+        return ring_row(cell.seq_id.empty() ? 0 : *cell.seq_id.begin(), cell.pos);
+    }
+
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;
 
@@ -564,6 +608,24 @@ struct llama_context {
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+
+    // SWA ring: a ring layer's write is one copy per destination row run (see
+    // llama_kv_cache::ring_parts), so it needs one CacheCopy per run rather than one per
+    // layer. `n` is the run length the graph was BUILT with: reuse is sound only while the
+    // run structure repeats, because the source views are baked at cumulative offsets.
+    // Indexed exactly like cache_copies. With -np > 1 every decode step is a mixed ubatch,
+    // so refusing reuse for them would rebuild the graph once per token.
+    struct RingCopy {
+        ggml_tensor * cpy = nullptr;
+        size_t        step = 0;
+        uint32_t      n    = 0;
+    };
+    std::vector<std::vector<RingCopy>> ring_copies;
+    // Number of times llama_decode had to rebuild the graph instead of reusing the
+    // previous one. Diagnostic only: a ring layer that is invisible to
+    // patch_ring_copies still produces correct output, it just rebuilds per token,
+    // so throughput is the only symptom and this counter the only cheap witness.
+    uint64_t n_graph_rebuilds = 0;
     // GLM-DSA lightning indexer: the indexer-key cache (kr_l) write is a separate ggml_cpy that
     // the K/V cache_copies fixup does NOT cover. Under graph reuse (FA pads KV to 256, so n_kv
     // stays constant across consecutive decode ubatches and the graph IS reused) its view_offs
@@ -590,3 +652,7 @@ struct llama_context {
 
     int max_nodes(int n_tokens, int n_kv) const;
 };
+
+// Graph rebuild count, for tests that need to prove reuse actually happens.
+// Deliberately not part of the public llama.h surface.
+uint64_t llama_context_n_graph_rebuilds(const llama_context * ctx);

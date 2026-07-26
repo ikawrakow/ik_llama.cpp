@@ -15,6 +15,17 @@ static const std::map<llama_rope_scaling_type, const char *> LLAMA_ROPE_SCALING_
     { LLAMA_ROPE_SCALING_TYPE_YARN,   "yarn"   },
 };
 
+// Marks layer i as SWA whenever (i % pattern) < (pattern - 1) — the "N-1 local, 1 global"
+// interleave several archs hardcode directly in their graph build (build_gemma2.cpp,
+// build_gemma3.cpp, build_cohere2.cpp, build_openai.cpp), without ever populating
+// hparams.swa_layers. The ring KV cache and cache_size() estimator key off swa_layers, not
+// n_swa alone, so without this the ring silently never shrinks these archs' layers.
+static void llama_hparams_set_swa_layers_periodic(llama_hparams & hparams, uint32_t pattern) {
+    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+        hparams.swa_layers[i] = (i % pattern) < (pattern - 1);
+    }
+}
+
 static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::string & name) {
     for (const auto & kv : LLAMA_ROPE_SCALING_TYPES) {
         if (kv.second == name) {
@@ -749,6 +760,11 @@ void llm_load_hparams(
                 if (!found_swa && hparams.n_swa == 0) {
                     throw std::runtime_error("invalid value for sliding_window");
                 }
+                // build_phi3.cpp applies one global SWA mask to every layer whenever
+                // n_swa > 0 (no per-layer branching), unlike the periodic-interleave archs.
+                if (hparams.n_swa > 0) {
+                    std::fill(hparams.swa_layers.begin(), hparams.swa_layers.begin() + hparams.n_layer, true);
+                }
             } break;
         case LLM_ARCH_PLAMO:
             {
@@ -815,6 +831,10 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
                 hparams.attn_soft_cap = true;
 
+                // build_gemma2() hardcodes SWA on even-indexed layers (il % 2 == 0), matching
+                // the periodic pattern below with period 2.
+                llama_hparams_set_swa_layers_periodic(hparams, 2);
+
                 switch (hparams.n_layer) {
                     case 26: model.type = e_model::MODEL_2B; break;
                     case 42: model.type = e_model::MODEL_9B; break;
@@ -831,6 +851,10 @@ void llm_load_hparams(
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // build_gemma3.cpp: "5-to-1 interleaved attention" — 5 local (SWA) layers
+                // followed by 1 global layer, period == hparams.n_swa_pattern (6).
+                llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
 
                 switch (hparams.n_layer) {
                     case 26: model.type = e_model::MODEL_2B; break;
@@ -1348,6 +1372,8 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
                 ml.get_key(LLM_KV_LOGIT_SCALE, hparams.f_logit_scale);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
+                // build_cohere2.cpp: is_sliding = il % sliding_window_pattern < (pattern - 1).
+                llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_8B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
@@ -1447,7 +1473,13 @@ void llm_load_hparams(
 
                 //TODO OAI_MOE: SWA
                 //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                //hparams.set_swa_pattern(2);
+
+                // build_openai.cpp reads sliding_window_pattern from hparams.n_swa_pattern
+                // (no longer a graph-local hardcoded literal -- see build_openai.cpp).
+                if (hparams.n_swa > 0) {
+                    hparams.n_swa_pattern = 2;
+                    llama_hparams_set_swa_layers_periodic(hparams, hparams.n_swa_pattern);
+                }
 
                 // TODO: switch (hparams.n_layer)
 

@@ -37,6 +37,15 @@ enum llm_norm_type {
     LLM_NORM_RMS,
 };
 
+// ggml-cuda's flash-attention wrapper reads n_swa (op_params[4]) as licence to keep
+// only the newest pad(n_swa + n_tokens) CELLS of the K/V cache and drop the rest
+// outright. That is a superset of the sliding window only for ONE append-only
+// sequence over a position-ordered cache: a ring layer is not position-ordered at all
+// (rows are seq*ring_w + pos % ring_w), and with n_seq_max > 1 interleaved slots
+// spread one sequence's window over more cells than the slice keeps -- those cells are
+// absent from the tensor rather than masked, i.e. silently wrong (upstream #2186).
+bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv);
+
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;

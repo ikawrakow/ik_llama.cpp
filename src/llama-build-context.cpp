@@ -523,15 +523,17 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask(bool causal) {
 
 ggml_tensor * llm_build_context::build_inp_KQ_mask_swa(bool causal) {
     GGML_ASSERT(hparams.n_swa > 0);
+    // SWA ring: the mask spans the ring slots, not the full cache
+    const int64_t n_kv_swa = lctx.kv_self.swa_ring ? (int64_t) lctx.kv_self.size_swa : n_kv;
     if (causal && flash_attn) {
-        lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv_swa, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
         ggml_set_input(lctx.inp_KQ_mask_swa);
         return lctx.inp_KQ_mask_swa;
     }
 
     lctx.inp_KQ_mask_swa = causal
-        ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
+        ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_swa, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
         : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
     cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
     ggml_set_input(lctx.inp_KQ_mask_swa);
@@ -819,6 +821,83 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
     return inpL;
 }
 
+bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv) {
+    return cparams.n_seq_max == 1 && !kv.swa_ring;
+}
+
+// A ring write is a scatter, not an append: find_slot's plan (kv.ring_parts) gives one
+// destination row run per sequence, split again where a run wraps its stripe. Emit one
+// ggml_cpy per run, slicing the source along its token axis with the source tensor's
+// OWN strides -- that way a fused-QKV (-mqkv) k_cur, which is a strided view into the
+// combined QKV tensor, needs no materialized copy. The cache_copies entry is left null
+// so update_cache_copies re-patches one destination offset per run through ring_copies
+// instead of taking the single-copy fast path.
+//
+// trans_ne1 > 0 selects the transposed-V layout (cells along ne[0]); trans_row_stride
+// is that destination's row stride in bytes. dst_step is the byte distance between
+// consecutive destination cells, i.e. what patch_ring_copies multiplies p.row by.
+static void llm_build_ring_store(
+        llama_context & lctx,
+        ggml_context * ctx,
+        ggml_cgraph * graph,
+        ggml_tensor * src,
+        ggml_tensor * dst,
+        const std::vector<llama_kv_cache::ring_part> & parts,
+        int32_t n_tokens,
+        size_t copy_idx,
+        size_t dst_step,
+        int64_t trans_ne1 = 0,
+        size_t trans_row_stride = 0) {
+    GGML_ASSERT(!parts.empty());
+
+    // A single run covering the whole source needs no slicing at all -- which is just as
+    // well, because the axis sniffing below cannot identify the token axis when n_tokens
+    // is 1 (a decode step): every dimension of [n_embd_head, n_head_kv, 1] is degenerate
+    // except the embedding ones.
+    const bool whole = parts.size() == 1 && parts[0].src_off == 0 && parts[0].n == (uint32_t) n_tokens;
+
+    // The token axis is the outermost non-degenerate dimension: K/V sources are either
+    // [n_embd, n_tokens] or [n_embd_head, n_head_kv, n_tokens]. A multi-run store needs
+    // n_tokens > 1, so a size-1 outer dimension can never be the token axis.
+    int axis = 0;
+    if (!whole) {
+        for (int d = GGML_MAX_DIMS - 1; d > 0; --d) {
+            if (src->ne[d] > 1) {
+                axis = d;
+                break;
+            }
+        }
+        GGML_ASSERT(src->ne[axis] == n_tokens);
+    }
+
+    const bool trans = trans_ne1 > 0;
+    // transposing is only meaningful for a 2D [n_embd, n_tokens] source
+    GGML_ASSERT(!trans || src->ne[0] == trans_ne1);
+    GGML_ASSERT(!trans || whole || axis == 1);
+
+    lctx.cache_copies[copy_idx].cpy = nullptr;
+    auto & recorded = lctx.ring_copies[copy_idx];
+    recorded.clear();
+    for (const auto & p : parts) {
+        ggml_tensor * src_p = src;
+        if (!whole) {
+            int64_t ne[GGML_MAX_DIMS] = { src->ne[0], src->ne[1], src->ne[2], src->ne[3] };
+            ne[axis] = p.n;
+            src_p = ggml_view_4d(ctx, src, ne[0], ne[1], ne[2], ne[3],
+                    src->nb[1], src->nb[2], src->nb[3], p.src_off*src->nb[axis]);
+        }
+        ggml_tensor * dst_p = trans
+            ? ggml_view_2d(ctx, dst, p.n, trans_ne1, trans_row_stride, p.row*dst_step)
+            : ggml_view_1d(ctx, dst, ggml_nelements(src_p), p.row*dst_step);
+        if (trans) {
+            src_p = ggml_transpose(ctx, src_p);
+        }
+        ggml_tensor * cpy = ggml_cpy(ctx, src_p, dst_p);
+        recorded.push_back({cpy, dst_step, p.n});
+        ggml_build_forward_expand(graph, cpy);
+    }
+}
+
 void llm_build_context::llm_build_kv_store(
        struct llama_context & lctx,
         struct ggml_context * ctx,
@@ -840,44 +919,84 @@ void llm_build_context::llm_build_kv_store(
     const int64_t n_head_kv     = hparams.n_head_kv(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
 
-    GGML_ASSERT(kv.size == n_ctx);
+    // SWA ring: sliding-window layers store K/V in a per-sequence stripe of a
+    // window-sized tensor, at row seq*ring_w + pos % ring_w. find_slot precomputed this
+    // ubatch's destination row runs (kv.ring_parts): one per sequence, split again where
+    // a run wraps its stripe. Each run is emitted as its own copy and recorded in
+    // ring_copies, which is what patch_ring_copies re-points on a reused graph.
+    const bool    ring      = kv.swa_ring && hparams.swa_layers[il];
+    // Graph *reservation* builds with a synthetic batch that never went through
+    // find_slot, so there is no plan to follow. Nothing is executed there -- only the
+    // shape is measured -- so stand in for it with a single run at row 0.
+    std::vector<llama_kv_cache::ring_part> parts_reserve;
+    if (ring && kv.ring_parts.empty()) {
+        parts_reserve.push_back({0, (uint32_t) n_tokens, 0});
+    }
+    const auto &  parts     = parts_reserve.empty() ? kv.ring_parts : parts_reserve;
+    // Every ring layer stores through llm_build_ring_store, even when the ubatch lands in
+    // a single run. update_cache_copies routes all ring layers to patch_ring_copies, which
+    // only knows about the records left in ring_copies; a ring layer that registered a
+    // cache_copies entry instead would be invisible to it, reuse would be refused, and the
+    // graph rebuilt for every generated token.
+    const bool    multi     = ring;
+    const int64_t kv_size_l = ring ? kv.size_swa : kv.size;
+    const int32_t kv_head_l = kv_head;   // only used when !multi, i.e. never on the ring path
 
-    //struct ggml_tensor * k_cache_view = ggml_view_1d(ctx, kv.k_l[il], n_tokens*n_embd_k_gqa,
-    //        (ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa))*kv_head);
-    //cb(k_cache_view, "k_cache_view", il);
+    GGML_ASSERT(ring || kv.size == n_ctx);
 
     if (k_cur) {
         GGML_ASSERT(2*il+1 < (int)lctx.cache_copies.size());
         auto k_row_size = ggml_row_size(kv.k_l[il]->type, n_embd_head_k);
-        ggml_tensor * k_cache_view = ggml_view_2d(ctx, kv.k_l[il], n_embd_head_k, n_tokens*n_head_kv,
-                k_row_size, k_row_size*n_head_kv*kv_head);
+        if (multi) {
+            llm_build_ring_store(lctx, ctx, graph, k_cur, kv.k_l[il], parts, n_tokens,
+                    2*il+0, (size_t) (k_row_size*n_head_kv));
+        } else {
+            ggml_tensor * k_cache_view = ggml_view_2d(ctx, kv.k_l[il], n_embd_head_k, n_tokens*n_head_kv,
+                    k_row_size, k_row_size*n_head_kv*kv_head_l);
 
-        lctx.cache_copies[2*il+0].cpy  = ggml_cpy(ctx, k_cur, k_cache_view);
-        lctx.cache_copies[2*il+0].step = k_row_size*n_head_kv;
+            lctx.cache_copies[2*il+0].cpy  = ggml_cpy(ctx, k_cur, k_cache_view);
+            lctx.cache_copies[2*il+0].step = k_row_size*n_head_kv;
 
-        // note: storing RoPE-ed version of K in the KV cache
-        ggml_build_forward_expand(graph, lctx.cache_copies[2*il+0].cpy);
+            // note: storing RoPE-ed version of K in the KV cache
+            ggml_build_forward_expand(graph, lctx.cache_copies[2*il+0].cpy);
+        }
     }
 
     if (v_cur) {
-        ggml_tensor * v_cache_view = nullptr;
         if (!kv.v_trans) {
-            v_cache_view = ggml_view_1d(ctx, kv.v_l[il], n_tokens*n_embd_v_gqa,
-                    (kv_head)*ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa));
+            if (multi) {
+                llm_build_ring_store(lctx, ctx, graph, v_cur, kv.v_l[il], parts, n_tokens,
+                        2*il+1, (size_t) ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa));
+                return;
+            }
+            ggml_tensor * v_cache_view = ggml_view_1d(ctx, kv.v_l[il], n_tokens*n_embd_v_gqa,
+                    (kv_head_l)*ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa));
             lctx.cache_copies[2*il+1].step = ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa);
+            cb(v_cache_view, "v_cache_view", il);
+
+            lctx.cache_copies[2*il+1].cpy  = ggml_cpy(ctx, v_cur, v_cache_view);
+            ggml_build_forward_expand(graph, lctx.cache_copies[2*il+1].cpy);
         } else {
             // note: the V cache is transposed for legacy non-FA layouts
-            v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
-                    (  n_ctx)*ggml_element_size(kv.v_l[il]),
-                    (kv_head)*ggml_element_size(kv.v_l[il]));
+            if (multi) {
+                // slice the source by token FIRST, then transpose each part: a view of an
+                // already-transposed tensor would read the wrong elements
+                const size_t esz = ggml_element_size(kv.v_l[il]);
+                llm_build_ring_store(lctx, ctx, graph, v_cur, kv.v_l[il], parts, n_tokens,
+                        2*il+1, esz, n_embd_v_gqa, kv_size_l*esz);
+                return;
+            }
+            ggml_tensor * v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
+                    (kv_size_l)*ggml_element_size(kv.v_l[il]),
+                    (kv_head_l)*ggml_element_size(kv.v_l[il]));
             lctx.cache_copies[2*il+1].step = ggml_element_size(kv.v_l[il]);
 
             v_cur = ggml_transpose(ctx, v_cur);
-        }
-        cb(v_cache_view, "v_cache_view", il);
+            cb(v_cache_view, "v_cache_view", il);
 
-        lctx.cache_copies[2*il+1].cpy  = ggml_cpy(ctx, v_cur, v_cache_view);
-        ggml_build_forward_expand(graph, lctx.cache_copies[2*il+1].cpy);
+            lctx.cache_copies[2*il+1].cpy  = ggml_cpy(ctx, v_cur, v_cache_view);
+            ggml_build_forward_expand(graph, lctx.cache_copies[2*il+1].cpy);
+        }
     }
 }
 
@@ -1876,6 +1995,11 @@ static ggml_tensor * llm_build_kqv(
     const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa(il);
     const int     kv_layer      = kv_il >= 0 ? kv_il : il;
 
+    // SWA ring: sliding-window layers read the whole (small) ring; the mask carries
+    // the causal/window structure per ring slot
+    const bool    ring   = kv.swa_ring && hparams.swa_layers[il];
+    const int32_t n_kv_l = ring ? (int32_t) kv.size_swa : n_kv;
+
     struct ggml_tensor * q = ggml_permute(ctx, q_cur, 0, 2, 1, 3);
     cb(q, "q", il);
 
@@ -1892,7 +2016,7 @@ static ggml_tensor * llm_build_kqv(
     struct ggml_tensor * k = k_cache_view ? *k_cache_view : nullptr;
     if (!k) {
         k = ggml_view_3d(ctx, k_cache,
-                    n_embd_head_k, n_kv, n_head_kv,
+                    n_embd_head_k, n_kv_l, n_head_kv,
                     ggml_row_size(k_cache->type, n_embd_head_k)*n_head_kv, //n_embd_k_gqa),
                     ggml_row_size(k_cache->type, n_embd_head_k),
                     0);
@@ -1932,7 +2056,7 @@ static ggml_tensor * llm_build_kqv(
         struct ggml_tensor * v = v_cache_view ? *v_cache_view : nullptr;
         if (!v) {
             v = ggml_view_3d(ctx, v_cache,
-                        n_embd_head_v, n_kv, n_head_kv,
+                        n_embd_head_v, n_kv_l, n_head_kv,
                         ggml_row_size(v_cache->type, n_embd_v_gqa),
                         ggml_row_size(v_cache->type, n_embd_head_v),
                         0);
@@ -1946,7 +2070,7 @@ static ggml_tensor * llm_build_kqv(
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, "fa", il);
         ggml_flash_attn_ext_add_sinks(cur, sinks);
-        if (n_swa > 0) {
+        if (n_swa > 0 && can_use_kv_swa_reduction(cparams, kv)) {
             ((int32_t *)cur->op_params)[4] = n_swa;
         }
 
@@ -1971,14 +2095,15 @@ static ggml_tensor * llm_build_kqv(
         struct ggml_tensor * v = v_cache_view ? *v_cache_view : nullptr;
         if (!v) {
             if (kv.v_trans) {
+                const int64_t v_stride = ring ? (int64_t) kv.size_swa : n_ctx;
                 v = ggml_view_3d(ctx, v_cache,
-                        n_kv, n_embd_head_v, n_head_kv,
-                        ggml_element_size(v_cache)*n_ctx,
-                        ggml_element_size(v_cache)*n_ctx*n_embd_head_v,
+                        n_kv_l, n_embd_head_v, n_head_kv,
+                        ggml_element_size(v_cache)*v_stride,
+                        ggml_element_size(v_cache)*v_stride*n_embd_head_v,
                         0);
             } else {
                 v = ggml_view_3d(ctx, v_cache,
-                        n_embd_head_v, n_kv, n_head_kv,
+                        n_embd_head_v, n_kv_l, n_head_kv,
                         ggml_row_size(v_cache->type, n_embd_v_gqa),
                         ggml_row_size(v_cache->type, n_embd_head_v),
                         0);
@@ -3079,47 +3204,79 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
                 GGML_ASSERT(kv_self.size == cparams.n_ctx);
 
+                // SWA ring: same treatment as llm_build_kv_store — window-sized split
+                // tensors, per-sequence row stripes, one copy per destination row run,
+                // always through llm_build_ring_store so patch_ring_copies can see it
+                const bool    ring      = kv_self.swa_ring && hparams.swa_layers[il];
+                // see llm_build_kv_store: graph reservation has no plan to follow
+                std::vector<llama_kv_cache::ring_part> parts_reserve;
+                if (ring && kv_self.ring_parts.empty()) {
+                    parts_reserve.push_back({0, (uint32_t) n_tokens, 0});
+                }
+                const auto &  parts     = parts_reserve.empty() ? kv_self.ring_parts : parts_reserve;
+                const bool    multi     = ring;
+                const int64_t kv_size_l = ring ? kv_self.size_swa : kv_self.size;
+                const int32_t kv_head_l = kv_head; // only used when !multi, i.e. never on the ring path
+
                 auto idx = 2*wq->n_device*il + 2*id;
                 GGML_ASSERT(idx+1 < (int)lctx.cache_copies.size());
                 auto k_row_size = ggml_row_size(split_kl->type, n_embd_head_k);
-                ggml_tensor * k_cache_view = ggml_view_2d(ctx0, split_kl, n_embd_head_k, n_tokens*n_head_kv,
-                        k_row_size, k_row_size*n_head_kv*kv_head);
-
-                lctx.cache_copies[idx+0].cpy  = ggml_cpy(ctx0, Kcur, k_cache_view);
-                lctx.cache_copies[idx+0].step = k_row_size*n_head_kv;
-
-                // note: storing RoPE-ed version of K in the KV cache
-                ggml_build_forward_expand(gf, lctx.cache_copies[idx+0].cpy);
-
-                struct ggml_tensor * v_cache_view = nullptr;
-
-                if (cparams.flash_attn) {
-                    v_cache_view = ggml_view_1d(ctx0, split_vl, n_tokens*split_wv->ne[1],
-                            kv_head*ggml_row_size(split_vl->type, split_wv->ne[1]));
-                    lctx.cache_copies[idx+1].step = ggml_row_size(split_vl->type, split_wv->ne[1]);
+                if (multi) {
+                    llm_build_ring_store(lctx, ctx0, gf, Kcur, split_kl, parts, n_tokens,
+                            idx+0, (size_t) (k_row_size*n_head_kv));
                 } else {
-                    // note: the V cache is transposed when not using flash attention
-                    v_cache_view = ggml_view_2d(ctx0, split_vl, n_tokens, split_wv->ne[1],
-                            (  n_ctx)*ggml_element_size(split_vl),
-                            (kv_head)*ggml_element_size(split_vl));
-                    lctx.cache_copies[idx+1].step = ggml_element_size(split_vl);
+                    ggml_tensor * k_cache_view = ggml_view_2d(ctx0, split_kl, n_embd_head_k, n_tokens*n_head_kv,
+                            k_row_size, k_row_size*n_head_kv*kv_head_l);
 
-                    Vcur = ggml_transpose(ctx0, Vcur);
+                    lctx.cache_copies[idx+0].cpy  = ggml_cpy(ctx0, Kcur, k_cache_view);
+                    lctx.cache_copies[idx+0].step = k_row_size*n_head_kv;
+
+                    // note: storing RoPE-ed version of K in the KV cache
+                    ggml_build_forward_expand(gf, lctx.cache_copies[idx+0].cpy);
                 }
-                cb(v_cache_view, "v_cache_view", il_cb);
 
-                lctx.cache_copies[idx+1].cpy  = ggml_cpy(ctx0, Vcur, v_cache_view);
-                ggml_build_forward_expand(gf, lctx.cache_copies[idx+1].cpy);
+                if (cparams.flash_attn && multi) {
+                    llm_build_ring_store(lctx, ctx0, gf, Vcur, split_vl, parts, n_tokens,
+                            idx+1, (size_t) ggml_row_size(split_vl->type, split_wv->ne[1]));
+                } else if (multi) {
+                    // transposed V (no flash attention): slice the source per token range
+                    // BEFORE transposing — a view of a transposed tensor reads the wrong
+                    // elements (same discipline as llm_build_kv_store)
+                    const size_t esz = ggml_element_size(split_vl);
+                    llm_build_ring_store(lctx, ctx0, gf, Vcur, split_vl, parts, n_tokens,
+                            idx+1, esz, split_wv->ne[1], kv_size_l*esz);
+                } else {
+                    struct ggml_tensor * v_cache_view = nullptr;
+
+                    if (cparams.flash_attn) {
+                        v_cache_view = ggml_view_1d(ctx0, split_vl, n_tokens*split_wv->ne[1],
+                                kv_head_l*ggml_row_size(split_vl->type, split_wv->ne[1]));
+                        lctx.cache_copies[idx+1].step = ggml_row_size(split_vl->type, split_wv->ne[1]);
+                    } else {
+                        // note: the V cache is transposed when not using flash attention
+                        v_cache_view = ggml_view_2d(ctx0, split_vl, n_tokens, split_wv->ne[1],
+                                (kv_size_l)*ggml_element_size(split_vl),
+                                (kv_head_l)*ggml_element_size(split_vl));
+                        lctx.cache_copies[idx+1].step = ggml_element_size(split_vl);
+
+                        Vcur = ggml_transpose(ctx0, Vcur);
+                    }
+                    cb(v_cache_view, "v_cache_view", il_cb);
+
+                    lctx.cache_copies[idx+1].cpy  = ggml_cpy(ctx0, Vcur, v_cache_view);
+                    ggml_build_forward_expand(gf, lctx.cache_copies[idx+1].cpy);
+                }
 
                 auto q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
                 cb(q, "q", il_cb);
 
-                auto k = ggml_view_3d(ctx0, split_kl, n_embd_head_k, n_kv, n_head_kv,
+                const int32_t n_kv_l = ring ? (int32_t) kv_size_l : n_kv;
+                auto k = ggml_view_3d(ctx0, split_kl, n_embd_head_k, n_kv_l, n_head_kv,
                              ggml_row_size(split_kl->type, n_embd_head_k)*n_head_kv, //n_embd_k_gqa),
                              ggml_row_size(split_kl->type, n_embd_head_k), 0);
                 cb(k, "k", il_cb);
 
-                auto v = ggml_view_3d(ctx0, split_vl, n_embd_head_v, n_kv, n_head_kv,
+                auto v = ggml_view_3d(ctx0, split_vl, n_embd_head_v, n_kv_l, n_head_kv,
                              ggml_row_size(split_vl->type, split_wv->ne[1]),
                              ggml_row_size(split_vl->type, n_embd_head_v), 0);
                 cb(v, "v", il_cb);
@@ -3135,7 +3292,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 } else {
                     ggml_flash_attn_ext_add_sinks(cur, sinks);
                 }
-                if (n_swa > 0) {
+                if (n_swa > 0 && can_use_kv_swa_reduction(cparams, kv_self)) {
                     ((int32_t *)cur->op_params)[4] = n_swa;
                 }
                 // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA

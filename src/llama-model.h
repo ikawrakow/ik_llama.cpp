@@ -593,7 +593,16 @@ struct llama_model {
         return hadamard_size(hparams.n_embd_head_v(il));
     }
 
-    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const;
+    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn, uint32_t n_ubatch, bool swa_compress) const;
+
+    // true when this arch's sliding-window layers are a plain trailing window the
+    // ring KV cache can compress (excludes LLAMA4's chunked-attention n_swa sentinel,
+    // OPENPANGU's per-layer variable windows, DEEPSEEK4's CSA/HCA attention whose
+    // per-layer swa_layers correspondence to the ring's sizing is unaudited, and
+    // DFLASH_DRAFT which bypasses the shared kv_self ring machinery entirely with
+    // its own hand-rolled cache), none of which fit the ring's append-only
+    // "last n_swa+n_ubatch positions" invariant
+    bool supports_swa_ring() const;
 
     void set_tensor_overrides(const llama_model_params& params);
 

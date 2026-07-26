@@ -475,7 +475,15 @@ int main(int argc, char ** argv) {
     server_context ctx_server;
 
     if (!params.system_prompt.empty()) {
-        ctx_server.system_prompt_set(params.system_prompt);
+        // NOTE: this runs before the model and context exist, so system_prompt_set() cannot yet
+        // check the cache type -- a --system-prompt that the KV cache turns out not to support
+        // is caught later by the fan-out verification in system_prompt_update(), which reports
+        // it and drops the prompt rather than serving slots that never received it.
+        std::string why_not;
+        if (!ctx_server.system_prompt_set(params.system_prompt, why_not)) {
+            LOG_ERROR("--system-prompt rejected", {{"reason", why_not}});
+            return 1;
+        }
     }
 
     if (params.model_alias == "unknown") {

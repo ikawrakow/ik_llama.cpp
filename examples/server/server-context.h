@@ -307,9 +307,12 @@ struct server_context {
 
     void kv_cache_clear();
 
-    void system_prompt_update();
+    bool system_prompt_disable(const char * reason);
 
-    bool system_prompt_set(const std::string& sys_prompt);
+    bool system_prompt_update();
+
+    // on failure, why_not carries the client-facing reason
+    bool system_prompt_set(const std::string& sys_prompt, std::string & why_not);
 
     bool process_token(completion_token_output& result, server_slot& slot);
 

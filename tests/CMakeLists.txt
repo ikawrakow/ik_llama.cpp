@@ -207,10 +207,18 @@ llama_build_and_test(test-regex-partial.cpp)
 llama_target_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_target_and_test(test-autorelease.cpp        LABEL "model")
 
+llama_target_and_test(test-swa-ring-state.cpp LABEL "model")
+target_include_directories(test-swa-ring-state PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+llama_target_and_test(test-swa-ring-multiseq.cpp LABEL "model")
+target_include_directories(test-swa-ring-multiseq PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+llama_target_and_test(test-swa-ring-reuse.cpp LABEL "model")
+target_include_directories(test-swa-ring-reuse PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
-
 

@@ -382,6 +382,7 @@ extern "C" {
         uint32_t max_ctx_size;
         int32_t  n_seq_max;
         int32_t  n_ubatch;
+        bool     swa_compress; // mirrors llama_context_params.swa_compress; needed by the --fit KV-size estimator
         int32_t  amb;
         int32_t  fit_margin;
         bool     fit;
@@ -491,6 +492,7 @@ extern "C" {
         bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
         bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
         bool graph_reuse;       // whether to reuse graphs when possible [EXPERIMENTAL]
+        bool swa_compress;      // opt-in: window-sized SWA ring KV cache for sliding-window layers (default: dense) [EXPERIMENTAL]
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (off by default) [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
@@ -868,10 +870,27 @@ extern "C" {
                        llama_pos   p0,
                        llama_pos   p1);
 
+    // Returns true when the context uses the SWA ring KV cache for its
+    // sliding-window layers (pass --swa-compress to enable it). State IO works in
+    // that mode -- a ring layer serializes only its window, so the blob is smaller
+    // and restores only into a cache with the same window geometry. Still
+    // unsupported with the ring: context shift, KV defrag, seq_cp/seq_keep, and a
+    // partial llama_kv_cache_seq_rm that rewinds behind the resident window.
+    LLAMA_API bool llama_kv_self_is_swa_ring(const struct llama_context * ctx);
+
     // Copy all tokens that belong to the specified sequence to another sequence
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
+    // With SWA ring KV (--swa-compress, see llama_kv_self_is_swa_ring) this behaves differently,
+    // because a ring cell's row is derived from its sequence and only one sequence can own it:
+    //   - the tokens are COPIED into the destination's own rows, so the cache does grow
+    //   - only a full-range copy is supported; a sub-range is refused and does nothing
+    //   - the destination is REPLACED rather than united with the source
+    //   - seq_id_src and seq_id_dst must both be < n_seq_max
+    //   - on failure the destination is left EMPTY. Since this returns void, a caller that
+    //     needs to know can test llama_kv_cache_seq_pos_min(ctx, seq_id_dst) != -1 (note that
+    //     llama_kv_cache_seq_pos_max returns 0 for an empty sequence and cannot be used).
     LLAMA_API void llama_kv_cache_seq_cp(
             struct llama_context * ctx,
                     llama_seq_id   seq_id_src,
