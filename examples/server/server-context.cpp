@@ -3637,10 +3637,15 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 } else {
                     pos_next = std::min(pos_next, it->pos_max);
                     slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
+                    const llama_pos pos_next_cache = pos_next;
 
                     pos_next = slot.prompt_tokens.pos_next(slot.n_past_prompt);
                     pos_next = std::min(pos_next, it->pos_max_prompt);
                     slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next);
+
+                    // Restore cache-aligned pos_next for checkpoint erasure below
+                    pos_next = pos_next_cache;
+
                     SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
                 }
             }
@@ -3660,10 +3665,14 @@ void server_context::apply_checkpoint(server_slot & slot) {
     }
 
     {
-        // erase any checkpoints with pos_min > pos_min_thold
+        // erase checkpoints whose data extends past the next write position
+        // (pos_max > pos_next means the checkpoint was created beyond where
+        //  we are — it may contain stale per-position state).
+        // A checkpoint at pos_max == pos_next is exactly at our position and
+        // should be kept (e.g. the one we just restored from).
         for (auto it = slot.server_cached_prompt.checkpoints.begin(); it != slot.server_cached_prompt.checkpoints.end();) {
             const auto & cur = *it;
-            if (cur.pos_max > pos_min_thold) {
+            if (cur.pos_max > pos_next) {
                 SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
                 it = slot.server_cached_prompt.checkpoints.erase(it);
             } else {
