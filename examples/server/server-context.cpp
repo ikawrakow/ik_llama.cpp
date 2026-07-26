@@ -3940,8 +3940,13 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                 }
 
                                 if (!restored) {
-                                    LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
-                                            __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
+                                    if (llama_model_supports_state_checkpoints(model)) {
+                                        LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d - no checkpoint before divergence point, reprocessing from scratch\n",
+                                                __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
+                                    } else {
+                                        LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
+                                                __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
+                                    }
                                     slot.n_past = 0;
                                     slot.n_past_prompt = 0;
                                     slot.n_past_offset = 0;
