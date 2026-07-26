@@ -2042,7 +2042,22 @@ static inline int server_decode(llama_context * ctx, const llama_batch & batch) 
 #endif
 }
 
-void server_context::system_prompt_update() {
+// Abandon the system prompt after a failure that has already destroyed the old one.
+// Leaving system_prompt set would re-arm this whole function on the next update_slots()
+// tick -- and it opens with kv_cache_clear(), so the retry loop would wipe every slot's KV
+// forever. Leaving system_tokens populated is worse than clearing it: slot position
+// arithmetic adds system_tokens.size() as a fixed prefix offset (see the p0 computations
+// below in update_slots()), so a token count the KV cache does not actually hold shifts
+// every subsequent slot by that many positions -- silently wrong rather than merely degraded.
+bool server_context::system_prompt_disable(const char * reason) {
+    LOG_ERROR("system prompt disabled", {{"reason", reason}});
+    system_prompt.clear();
+    system_tokens.clear();
+    system_need_update = false;
+    return false;
+}
+
+bool server_context::system_prompt_update() {
     LOG_VERBOSE("system prompt update", {
         {"system_prompt", system_prompt},
         });
@@ -2067,22 +2082,56 @@ void server_context::system_prompt_update() {
 
             if (server_decode(ctx, batch) != 0) {
                 LOG_ERROR("llama_decode() failed", {});
-                return;
+                return system_prompt_disable("the system prompt could not be encoded");
             }
         }
 
-        // assign the system KV cache to all parallel sequences
-        for (int32_t i = 1; i <= params_base.n_parallel; ++i) {
+        // The cache was cleared above and only sequence 0 has been decoded since, so every
+        // cell the counter sees belongs to the system prompt; each fan-out below must add one
+        // more seq_id to each of those cells. Recurrent caches count cells differently (seq_cp
+        // takes an entirely separate branch there), so they are not measured this way.
+        // -np is not validated (common.cpp just stoi's it), and a non-positive value would make
+        // the expected count zero while the cache legitimately holds the prompt.
+        const bool countable = !llama_model_is_recurrent(model) && params_base.n_parallel > 0;
+        const int32_t n_before = countable ? llama_get_kv_cache_token_count(ctx) : 0;
+
+        // assign the system KV cache to all parallel sequences.
+        // Slot ids run 0..n_parallel-1 (see the slot setup above) and cparams.n_seq_max is
+        // n_parallel, so the destinations are 1..n_parallel-1: sequence 0 already holds the
+        // prompt, and the old bound of i <= n_parallel tagged every cell with seq_id
+        // n_parallel, which belongs to no slot and is out of range for the cache.
+        for (int32_t i = 1; i < params_base.n_parallel; ++i) {
             llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
+        }
+
+        // llama_kv_cache_seq_cp returns void and does nothing at all when it cannot honour the
+        // copy (the SWA ring refuses it outright), so the only way a caller can know the
+        // fan-out landed is to observe the cells it was supposed to tag. Without this check a
+        // refusal is invisible and every slot but 0 generates against a system prompt whose
+        // K/V were never written for it.
+        if (countable) {
+            const int32_t n_after    = llama_get_kv_cache_token_count(ctx);
+            const int32_t n_expected = n_before * params_base.n_parallel;
+            if (n_after != n_expected) {
+                LOG_ERROR("system prompt fan-out did not reach every slot", {
+                    {"n_parallel",   params_base.n_parallel},
+                    {"n_cells_seq0", n_before},
+                    {"n_cells_after", n_after},
+                    {"n_cells_expected", n_expected},
+                    });
+                return system_prompt_disable("the system prompt could not be copied to every slot");
+            }
         }
     }
 
     system_need_update = false;
+    return true;
 }
 
-bool server_context::system_prompt_set(const std::string& sys_prompt) {
+bool server_context::system_prompt_set(const std::string& sys_prompt, std::string & why_not) {
     if (!sys_prompt.empty() && model != nullptr && std::strcmp(llama_model_arch_string(model), "deepseek4") == 0) {
-        LOG_ERROR("DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state", {});
+        why_not = "DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state";
+        LOG_ERROR("server system prompt refused", {{"reason", why_not}});
         return false;
     }
     // Same class of problem for the SWA ring: system_prompt_update() fans the prompt out
@@ -2091,7 +2140,8 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
     // invisible to the caller -- accepting the prompt here would leave every slot but 0
     // believing it holds a system prompt whose K/V were never written. Refuse up front.
     if (!sys_prompt.empty() && ctx != nullptr && llama_kv_self_is_swa_ring(ctx)) {
-        LOG_ERROR("server system prompts are unsupported with --swa-compress: the SWA ring cannot copy a sequence's window to another slot", {});
+        why_not = "server system prompts are unsupported with --swa-compress: the SWA ring cannot copy a sequence's window to another slot";
+        LOG_ERROR("server system prompt refused", {{"reason", why_not}});
         return false;
     }
 
@@ -2821,8 +2871,9 @@ void server_context::process_single_task(server_task&& task) {
 
         if (task.data.contains("system_prompt")) {
             std::string sys_prompt = json_value(task.data, "system_prompt", std::string());
-            if (!system_prompt_set(sys_prompt)) {
-                send_error(task, "DeepSeek4 server system prompts are unsupported", ERROR_TYPE_INVALID_REQUEST);
+            std::string why_not;
+            if (!system_prompt_set(sys_prompt, why_not)) {
+                send_error(task, why_not, ERROR_TYPE_INVALID_REQUEST);
                 break;
             }
 
@@ -3995,7 +4046,15 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
 
                     p0 = (int)system_tokens.size();
                     if (p0 != 0) {
-                        // copy over the system prompt when there is one
+                        // copy over the system prompt when there is one.
+                        // This is a second, unverified fan-out: seq_cp is void, so a cache that
+                        // refuses the copy leaves this slot believing it holds a system prompt
+                        // prefix it does not have. It is safe today only because system_tokens
+                        // is necessarily empty (p0 == 0) whenever the copy would be refused --
+                        // system_prompt_set() rejects the prompt up front and
+                        // system_prompt_disable() clears system_tokens on a failed fan-out.
+                        // Anything that makes a refusing cache reach here with a non-empty
+                        // system prompt must give this call site an outcome it can observe.
                         llama_kv_cache_seq_cp(ctx, 0, slot.id, -1, -1);
                     }
 

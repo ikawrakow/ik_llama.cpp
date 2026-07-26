@@ -469,8 +469,75 @@ if [ -x "$BIN/llama-server" ]; then
         || { echo "FAIL: server unhealthy after generating from a restored slot"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
     grep -qi "a cell inside the attention window was overwritten" "$WORK_DIR/server.log" \
         && { echo "FAIL: restored slot left the ring occupancy inconsistent"; kill $SRV_PID 2>/dev/null; exit 1; }
+    # A server system prompt is fanned out to every slot with llama_kv_cache_seq_cp, which the
+    # ring refuses. The refusal must reach the CLIENT, and it must say why: the message used to
+    # be hardcoded to DeepSeek4 (the other reason system_prompt_set can fail), so a
+    # --swa-compress user was told to debug an arch they were not running.
+    curl -s -m 30 -X POST "http://127.0.0.1:$SRV_PORT/completion" -H 'Content-Type: application/json' \
+        -d '{"prompt": "hello", "system_prompt": "You are a helpful assistant.", "n_predict": 4}' \
+        > "$WORK_DIR/srv-sysprompt.json" || true
+    # NOTE: do NOT assert merely that the body contains "error" -- format_error_response emits
+    # "type": "invalid_request_error", and this random-weight model answers ordinary requests
+    # with an error envelope too, so such a check passes whatever the server does. The reason
+    # string is the only discriminating part of the body.
+    grep -q 'swa-compress' "$WORK_DIR/srv-sysprompt.json" \
+        || { echo "FAIL: system-prompt refusal did not tell the client the real reason (--swa-compress)"; cat "$WORK_DIR/srv-sysprompt.json"; kill $SRV_PID 2>/dev/null; exit 1; }
+    grep -qi 'deepseek4' "$WORK_DIR/srv-sysprompt.json" \
+        && { echo "FAIL: system-prompt refusal blamed DeepSeek4 on a non-DeepSeek4 model"; kill $SRV_PID 2>/dev/null; exit 1; }
+    # a refused system prompt must leave the server serving, not wedged
+    curl -s -m 5 "http://127.0.0.1:$SRV_PORT/health" | grep -q '"ok"' \
+        || { echo "FAIL: server unhealthy after refusing a system prompt"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
+    # and it must not have armed the deferred update: system_prompt_update() opens with an
+    # unconditional kv_cache_clear() and re-runs on every update_slots() tick while
+    # system_need_update stays set, so a refusal that armed it would wedge the server.
+    # A plain completion served afterwards is the observable proof it did not.
+    curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT/completion" -H 'Content-Type: application/json' \
+        -d '{"prompt": "hello again", "n_predict": 4, "ignore_eos": true}' > "$WORK_DIR/srv-postsys.json" \
+        || { echo "FAIL: server stopped serving after a refused system prompt"; tail -20 "$WORK_DIR/server.log"; kill $SRV_PID 2>/dev/null; exit 1; }
+    kill -0 $SRV_PID 2>/dev/null \
+        || { echo "FAIL: server died after a refused system prompt"; tail -20 "$WORK_DIR/server.log"; exit 1; }
+
     kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null || true
-    echo "server cache-rewind fallback + slot checkpointing OK"
+    echo "server cache-rewind fallback + slot checkpointing + system-prompt refusal OK"
+
+    # DENSE control for the fan-out check: the ring leg above can only prove a REFUSAL is
+    # reported. system_prompt_update() now verifies the fan-out landed by counting the seq_ids
+    # it added (n_cells_seq0 * (n_parallel + 1)); if that arithmetic is wrong it would reject
+    # perfectly good system prompts on the dense path, which is every ordinary user. This leg
+    # is the one that catches that -- multi-slot, no --swa-compress, prompt must be ACCEPTED.
+    # It also covers the fan-out loop bound: slot ids are 0..n_parallel-1 and n_seq_max is
+    # n_parallel, so copying to 1..n_parallel tagged every cell with an out-of-range seq_id.
+    SRV_PORT2=18732
+    "$BIN/llama-server" -m "$MODEL" -c 2048 -ub 128 --port $SRV_PORT2 --host 127.0.0.1 \
+        -np 2 --no-context-shift -t 4 > "$WORK_DIR/server-dense-sys.log" 2>&1 &
+    SRV2_PID=$!
+    for _ in $(seq 1 60); do
+        curl -s -m 2 "http://127.0.0.1:$SRV_PORT2/health" 2>/dev/null | grep -q '"ok"' && break
+        sleep 1
+    done
+    curl -s -m 5 "http://127.0.0.1:$SRV_PORT2/health" | grep -q '"ok"' \
+        || { echo "FAIL: dense multi-slot server did not come up"; tail -20 "$WORK_DIR/server-dense-sys.log"; kill $SRV2_PID 2>/dev/null; exit 1; }
+    curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT2/completion" -H 'Content-Type: application/json' \
+        -d '{"prompt": "hello", "system_prompt": "You are a helpful assistant.", "n_predict": 4, "ignore_eos": true}' \
+        > "$WORK_DIR/srv-dense-sys.json" || true
+    # ORACLE NOTE: per the note on the ring leg above, this random-weight model returns HTTP
+    # 500 bodies, so the RESPONSE cannot say whether the prompt was accepted -- a body check
+    # here is red for every implementation, correct or not. The server log is the discriminating
+    # signal: release_slots reports n_system_tokens, which is nonzero only if the system prompt
+    # was encoded AND survived the fan-out verification (system_prompt_disable clears it).
+    grep -aq "n_system_tokens=[1-9]" "$WORK_DIR/server-dense-sys.log" \
+        || { echo "FAIL: dense server served slots with no system prompt resident"; tail -20 "$WORK_DIR/server-dense-sys.log"; kill $SRV2_PID 2>/dev/null; exit 1; }
+    grep -aq "system prompt fan-out did not reach every slot" "$WORK_DIR/server-dense-sys.log" \
+        && { echo "FAIL: fan-out verification miscounted on the dense path"; tail -20 "$WORK_DIR/server-dense-sys.log"; kill $SRV2_PID 2>/dev/null; exit 1; }
+    grep -aq "system prompt disabled" "$WORK_DIR/server-dense-sys.log" \
+        && { echo "FAIL: dense server disabled a valid system prompt"; tail -20 "$WORK_DIR/server-dense-sys.log"; kill $SRV2_PID 2>/dev/null; exit 1; }
+    # both slots must still serve with the system prompt resident
+    curl -s -m 300 -X POST "http://127.0.0.1:$SRV_PORT2/completion" -H 'Content-Type: application/json' \
+        -d '{"prompt": "second slot please", "n_predict": 4, "ignore_eos": true}' > "$WORK_DIR/srv-dense-sys2.json" || true
+    curl -s -m 5 "http://127.0.0.1:$SRV_PORT2/health" | grep -q '"ok"' \
+        || { echo "FAIL: dense server unhealthy after a system-prompt fan-out"; tail -20 "$WORK_DIR/server-dense-sys.log"; kill $SRV2_PID 2>/dev/null; exit 1; }
+    kill $SRV2_PID 2>/dev/null; wait $SRV2_PID 2>/dev/null || true
+    echo "dense multi-slot system-prompt fan-out OK"
 else
     echo "SKIP: server rewind leg (llama-server not built in $BIN)"
 fi
