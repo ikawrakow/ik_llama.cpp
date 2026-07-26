@@ -3646,6 +3646,10 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     // Restore cache-aligned pos_next for checkpoint erasure below
                     pos_next = pos_next_cache;
 
+                    // Remember we have a checkpoint at this position so the
+                    // interval gate doesn't immediately create a new one.
+                    slot.checkpoint_pos = it->pos_max;
+
                     SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
                 }
             }
@@ -3940,6 +3944,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                             slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt);
                                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
                                             slot.n_discarded_prompt = 0;
+                                            slot.checkpoint_pos = it->pos_max;
                                             restored = true;
                                             SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
                                                 it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
