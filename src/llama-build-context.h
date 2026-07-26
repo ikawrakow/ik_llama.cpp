@@ -44,7 +44,7 @@ enum llm_norm_type {
 // (rows are seq*ring_w + pos % ring_w), and with n_seq_max > 1 interleaved slots
 // spread one sequence's window over more cells than the slice keeps -- those cells are
 // absent from the tensor rather than masked, i.e. silently wrong (upstream #2186).
-bool can_use_kv_swa_reduction(const llama_cparams & cparams, bool ring_layer);
+bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv);
 
 struct llm_build_context {
     const llama_model    & model;

@@ -692,6 +692,14 @@ for site in "${SLICE_SITES[@]}"; do
            exit 1 ;;
     esac
 done
+# The predicate must read the cache itself, not a per-site boolean: a bool argument
+# lets each call site compute its own notion of "is this the ring" and drift apart,
+# which is the duplication the predicate exists to remove.
+if ! grep -q 'bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv)' "$BC"; then
+    echo "FAIL: can_use_kv_swa_reduction() no longer derives ring-ness from the kv cache it is given"
+    grep -n 'can_use_kv_swa_reduction' "$BC"
+    exit 1
+fi
 echo "n_swa cell-slice guard OK (${#SLICE_SITES[@]} sites, all gated)"
 
 echo "PASS: SWA ring (--swa-compress) parity"

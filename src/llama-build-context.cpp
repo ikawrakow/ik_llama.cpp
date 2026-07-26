@@ -821,8 +821,8 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
     return inpL;
 }
 
-bool can_use_kv_swa_reduction(const llama_cparams & cparams, bool ring_layer) {
-    return cparams.n_seq_max == 1 && !ring_layer;
+bool can_use_kv_swa_reduction(const llama_cparams & cparams, const llama_kv_cache & kv) {
+    return cparams.n_seq_max == 1 && !kv.swa_ring;
 }
 
 // A ring write is a scatter, not an append: find_slot's plan (kv.ring_parts) gives one
@@ -2055,7 +2055,7 @@ static ggml_tensor * llm_build_kqv(
                 hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         cb(cur, "fa", il);
         ggml_flash_attn_ext_add_sinks(cur, sinks);
-        if (n_swa > 0 && can_use_kv_swa_reduction(cparams, ring)) {
+        if (n_swa > 0 && can_use_kv_swa_reduction(cparams, kv)) {
             ((int32_t *)cur->op_params)[4] = n_swa;
         }
 
@@ -3277,7 +3277,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 } else {
                     ggml_flash_attn_ext_add_sinks(cur, sinks);
                 }
-                if (n_swa > 0 && can_use_kv_swa_reduction(cparams, ring)) {
+                if (n_swa > 0 && can_use_kv_swa_reduction(cparams, kv_self)) {
                     ((int32_t *)cur->op_params)[4] = n_swa;
                 }
                 // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA

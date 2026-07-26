@@ -361,7 +361,7 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, hparams.f_max_alibi_bias,
                     hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
             cb(cur, "fa", il_cb);
-            if (can_use_kv_swa_reduction(cparams, kv_self.swa_ring && is_sliding)) {
+            if (is_sliding && can_use_kv_swa_reduction(cparams, kv_self)) {
                 cur->op_params[4] = n_swa;
             }
             if (cparams.v_cache_hadamard) {
@@ -695,7 +695,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head)*n_head_kv,
                     ggml_row_size(split_vl->splits[id]->type, n_embd_head), 0);
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask_l, hparams.f_attention_scale, 0.0f, 0.0f);
-                if (can_use_kv_swa_reduction(target_cparams, target_kv.swa_ring && is_sliding)) {
+                if (is_sliding && can_use_kv_swa_reduction(target_cparams, target_kv)) {
                     cur->op_params[4] = n_swa;
                 }
                 cb(cur, "fa", il_cb);
