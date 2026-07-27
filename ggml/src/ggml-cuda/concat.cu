@@ -262,7 +262,6 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         auto row_size_dst  = ggml_row_size(dst->type, dst->ne[0]);
         if (row_size_src0 % sizeof(float) == 0 && row_size_src1 % sizeof(float) == 0 && row_size_dst % sizeof(float) == 0) {
             auto ne00_eff = row_size_src0/sizeof(float);
-            auto ne10_eff = row_size_src1/sizeof(float);
             auto ne0_eff  = row_size_dst /sizeof(float);
             dim3 grid(dst->ne[1], dst->ne[2], dst->ne[3]);
             k_concat_dim0<<<grid, CUDA_CONCAT_BLOCK_SIZE, 0, ctx.stream()>>>(ne0_eff, ne00_eff,
