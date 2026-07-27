@@ -230,6 +230,30 @@ static bool validate_dflash_graph_contract(const llama_context & lctx) {
     const auto & model = lctx.model;
     const auto & hparams = model.hparams;
 
+    if (hparams.dflash_laguna) {
+        if (!hparams.causal_attn || hparams.n_swa == 0) {
+            LLAMA_LOG_ERROR("%s: Laguna DFlash requires causal SWA metadata\n", __func__);
+            return false;
+        }
+        if (hparams.dflash_n_target_layers == 0 ||
+                hparams.dflash_n_target_features % hparams.dflash_n_target_layers != 0 ||
+                model.dflash_aux_hidden_norms.size() != hparams.dflash_n_target_layers) {
+            LLAMA_LOG_ERROR("%s: Laguna DFlash requires one auxiliary norm per target feature slice\n", __func__);
+            return false;
+        }
+        const int64_t aux_width = hparams.dflash_n_target_features / hparams.dflash_n_target_layers;
+        for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+            const ggml_tensor * aux_norm = model.dflash_aux_hidden_norms[i];
+            if (aux_norm == nullptr || aux_norm->ne[0] != aux_width) {
+                LLAMA_LOG_ERROR("%s: Laguna DFlash auxiliary norm %u has invalid width\n", __func__, i);
+                return false;
+            }
+        }
+    } else if (!model.dflash_aux_hidden_norms.empty()) {
+        LLAMA_LOG_ERROR("%s: generic DFlash must not carry Laguna auxiliary norms\n", __func__);
+        return false;
+    }
+
     auto rope_dim_for_layer = [&hparams](int32_t il) -> uint32_t {
         if (hparams.rope_dim_per_layer[il] != 0) {
             return hparams.rope_dim_per_layer[il];
@@ -270,6 +294,20 @@ static bool validate_dflash_graph_contract(const llama_context & lctx) {
                     hparams.n_head_kv((uint32_t) il), ref_n_head_kv,
                     hparams.n_embd_head_k(il), ref_n_embd_head_k,
                     hparams.n_embd_head_v(il), ref_n_embd_head_v);
+            return false;
+        }
+
+        if (hparams.dflash_laguna) {
+            const ggml_tensor * gate = model.layers[il].wqkv_gate;
+            if (!hparams.swa_layers[il] || gate == nullptr ||
+                    gate->ne[0] != (int64_t) hparams.n_embd ||
+                    gate->ne[1] != (int64_t) hparams.n_head((uint32_t) il)) {
+                LLAMA_LOG_ERROR("%s: Laguna DFlash layer %d requires SWA and a head-wise attention gate\n",
+                        __func__, il);
+                return false;
+            }
+        } else if (model.layers[il].wqkv_gate != nullptr) {
+            LLAMA_LOG_ERROR("%s: generic DFlash layer %d has an unsupported attention gate\n", __func__, il);
             return false;
         }
 

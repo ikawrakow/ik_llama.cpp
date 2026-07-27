@@ -171,6 +171,7 @@ struct llama_hparams {
     uint32_t dflash_n_target_layers = 0;
     uint32_t dflash_target_layer_ids[8] = {};
     float    dflash_backbone_rotary_base = 0.0f;
+    bool     dflash_laguna = false;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
@@ -195,6 +196,7 @@ struct llama_hparams {
         if (this->dflash_mask_token_id != other.dflash_mask_token_id) return true;
         if (this->dflash_n_target_features != other.dflash_n_target_features) return true;
         if (this->dflash_n_target_layers != other.dflash_n_target_layers) return true;
+        if (this->dflash_laguna != other.dflash_laguna) return true;
         if (this->n_layer       != other.n_layer)       return true;
         if (this->n_rot         != other.n_rot)         return true;
         if (this->n_swa         != other.n_swa)         return true;

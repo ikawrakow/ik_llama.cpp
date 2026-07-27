@@ -30,7 +30,39 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     ggml_set_input(lctx.dflash.kv.cache_input_pos_ctx);
     cb(lctx.dflash.kv.cache_input_pos_ctx, "dflash_kv_input_pos_ctx", -1);
 
-    ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, lctx.dflash.kv.cache_input_target_features);
+    ggml_tensor * target_features = lctx.dflash.kv.cache_input_target_features;
+    if (hparams.dflash_laguna) {
+        GGML_ASSERT(model.dflash_aux_hidden_norms.size() == hparams.dflash_n_target_layers);
+        const int64_t slice_width = n_target_features / hparams.dflash_n_target_layers;
+        ggml_tensor * normalized_features = nullptr;
+        for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+            ggml_tensor * slice = ggml_view_2d(
+                    ctx0,
+                    target_features,
+                    slice_width,
+                    update_rows,
+                    target_features->nb[1],
+                    i * slice_width * target_features->nb[0]);
+            slice = llm_build_norm(
+                    ctx0,
+                    slice,
+                    hparams,
+                    model.dflash_aux_hidden_norms[i],
+                    nullptr,
+                    LLM_NORM_RMS,
+                    cb,
+                    -1);
+            cb(slice, "dflash_kv_aux_norm", (int) i);
+            normalized_features = normalized_features == nullptr
+                    ? slice
+                    : ggml_concat(ctx0, normalized_features, slice, 0);
+        }
+        GGML_ASSERT(normalized_features != nullptr);
+        target_features = normalized_features;
+        cb(target_features, "dflash_kv_normalized_target_features", -1);
+    }
+
+    ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, target_features);
     fused_target = llm_build_norm(ctx0, fused_target, hparams, model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
     cb(fused_target, "dflash_kv_fused_target", -1);
 
@@ -38,7 +70,21 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.k_ctx_cache.size());
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.v_ctx_cache.size());
 
-        ggml_tensor * Kcur_ctx_proj = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, fused_target);
+        ggml_tensor * layer_target = fused_target;
+        if (hparams.dflash_laguna) {
+            layer_target = llm_build_norm(
+                    ctx0,
+                    layer_target,
+                    hparams,
+                    model.layers[il].attn_norm,
+                    nullptr,
+                    LLM_NORM_RMS,
+                    cb,
+                    il);
+            cb(layer_target, "dflash_kv_attn_norm", il);
+        }
+
+        ggml_tensor * Kcur_ctx_proj = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, layer_target);
         if (model.layers[il].bk) { Kcur_ctx_proj = ggml_add(ctx0, Kcur_ctx_proj, model.layers[il].bk); }
         cb(Kcur_ctx_proj, "dflash_kv_k_proj", il);
 
@@ -54,7 +100,7 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
         Kcur_ctx = ggml_cont(ctx0, ggml_permute(ctx0, Kcur_ctx, 0, 2, 1, 3));
         cb(Kcur_ctx, "dflash_kv_k_physical", il);
 
-        ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, fused_target);
+        ggml_tensor * Vcur_ctx = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, layer_target);
         if (model.layers[il].bv) { Vcur_ctx = ggml_add(ctx0, Vcur_ctx, model.layers[il].bv); }
         cb(Vcur_ctx, "dflash_kv_v_proj", il);
         if (std::abs(hparams.f_attn_v_scale - 1.0f) > 1e-4f) {
@@ -232,6 +278,7 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
         ggml_tensor * cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
+        ggml_tensor * input_normed = cur;
 
         ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
         ggml_tensor * Kcur_noise = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
@@ -338,6 +385,17 @@ ggml_cgraph * llm_build_context::build_dflash() {
         //if (use_swa) {
         //    cur->op_params[4] = hparams.n_swa;
         //}
+
+        if (hparams.dflash_laguna) {
+            GGML_ASSERT(model.layers[il].wqkv_gate != nullptr);
+            ggml_tensor * gate = llm_build_lora_mm(lctx, ctx0, model.layers[il].wqkv_gate, input_normed);
+            gate = ggml_softplus(ctx0, gate);
+            cb(gate, "attn_gate", il);
+            GGML_ASSERT(gate->ne[0] == n_head);
+            gate = ggml_reshape_3d(ctx0, gate, 1, n_head, n_tokens);
+            cur = ggml_mul(ctx0, cur, gate);
+            cb(cur, "attn_gated", il);
+        }
 
         cur = ggml_reshape_2d(ctx0, cur, model.layers[il].wo->ne[0], n_tokens);
         cb(cur, "flash_attn_reshaped", il);
