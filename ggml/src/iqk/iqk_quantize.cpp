@@ -4175,29 +4175,9 @@ static void quantize_row_mxfp4_impl(int n_per_row, const float * x, char * cy,
 
     block_mxfp4 * y = (block_mxfp4 *)cy;
 
-    //int last_ibl = -1;
-    //float sigma2 = 0;
-
-    //const uint8_t e = (uint8_t) (floorf(log2f(amax)) - 2 + 127);
-    // -> log2f(amax) ~ e - 125 -> amax = 2^(e - 125)
-    //const float d = GGML_E8M0_TO_FP32_HALF(e);
-
     for (int ib = 0; ib < n_per_row/QK_MXFP4; ++ib) {
         memset(&y[ib], 0, sizeof(block_mxfp4));
         const float * xb = x + ib*QK_MXFP4;
-        //if (int ibl = ib/(QK_K/QK_MXFP4); ibl != last_ibl) {
-        //    int n = std::min(QK_K, n_per_row - ib*QK_MXFP4);
-        //    float sumx2 = 0;
-        //    for (int j = 0; j < n; ++j) sumx2 += xb[j]*xb[j];
-        //    sigma2 = 2.0f*sumx2/n;
-        //    last_ibl = ibl;
-        //}
-        //if (quant_weights) {
-        //    const float * qw = quant_weights + ib*QK_MXFP4;
-        //    for (int j = 0; j < QK_MXFP4; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
-        //} else {
-        //    for (int j = 0; j < QK_MXFP4; ++j) weight[j] = xb[j]*xb[j];
-        //}
         float amax = 0;
         for (int j = 0; j < QK_MXFP4; ++j) {
             float ax = fabsf(xb[j]);
@@ -4292,6 +4272,97 @@ void  vec_dot_mxfp4_q8_0_x4(int n, float * s, size_t bs, const void * vx, size_t
     //    //sumf += d * y[ibl].d * sumi;
     //}
     //*s = sumf;
+}
+
+void quantize_row_mxfp4_r8_ref(const float * x, block_mxfp4_r8 * y, int64_t k) {
+    quantize_mxfp4_r8(x, (void *)y, 8, k/8, nullptr, nullptr);
+}
+
+void quantize_row_mxfp4_r8(const float * x, void * y, int64_t k) {
+    quantize_mxfp4_r8(x, (void *)y, 8, k/8, nullptr, nullptr);
+}
+
+size_t quantize_mxfp4_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row,
+         [[maybe_unused]] const float * imatrix,
+         [[maybe_unused]] const quantize_user_data * user_data) {
+    GGML_ASSERT(nrows % 8 == 0);
+    constexpr int kBlockSize = QK_MXFP4;
+    GGML_ASSERT(n_per_row%kBlockSize == 0);
+    auto row_size = ggml_row_size(GGML_TYPE_MXFP4, n_per_row);
+
+    block_mxfp4_r8 * y = (block_mxfp4_r8 *)dst;
+
+    int nblock = n_per_row/QK_MXFP4;
+
+    for (int row = 0; row < nrows; row += 8) {
+        for (int ib = 0; ib < nblock; ++ib) {
+            memset(&y[ib], 0, sizeof(block_mxfp4_r8));
+            for (int k = 0; k < 8; ++k) {
+                const float * xb = src + (row + k)*n_per_row + ib*QK_MXFP4;
+                float amax = 0;
+                for (int j = 0; j < QK_MXFP4; ++j) {
+                    float ax = fabsf(xb[j]);
+                    amax = std::max(amax, ax);
+                }
+                if (!amax) {
+                    continue;
+                }
+                const uint8_t e = (uint8_t) (floorf(log2f(amax)) - 2 + 127);
+                const float d = GGML_E8M0_TO_FP32_HALF(e);
+                y[ib].e[k] = e;
+                for (int j1 = 0; j1 < QK_MXFP4/8; ++j1) {
+                    for (int j2 = 0; j2 < 4; ++j2) {
+                        uint8_t v0 = best_index_mxfp4(d, kvalues_mxfp4, xb[4*j1+j2]);
+                        uint8_t v1 = best_index_mxfp4(d, kvalues_mxfp4, xb[4*j1+j2+QK_MXFP4/2]);
+                        // for each j1 we have 4 values per row with 8 interleaved rows
+                        y[ib].qs[32*j1 + 4*k + j2] = v0 | (v1 << 4);
+                    }
+                }
+            }
+        }
+        y += nblock;
+    }
+
+    return nrows * row_size;
+}
+
+void dequantize_row_mxfp4_r8(const block_mxfp4_r8 * x, float * y, int64_t k) {
+    constexpr int kBlockSize = QK_MXFP4;
+    int n_per_row = k/8;
+    GGML_ASSERT(n_per_row%kBlockSize == 0);
+    int nblock = k/kBlockSize;
+    float d[8];
+    uint32_t aux32[2];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
+    float * y8[8];
+    for (int k = 0; k < 8; ++k) y8[k] = y + k*n_per_row;
+    for (int ib = 0; ib < nblock; ++ib) {
+        for (int k = 0; k < 8; ++k) d[k] = GGML_E8M0_TO_FP32_HALF(x[ib].e[k]);
+        auto qs = (const uint32_t *)x[ib].qs;
+        for (int j = 0; j < kBlockSize/8; ++j) {
+            for (int k = 0; k < 8; ++k) {
+                aux32[0] = qs[8*j+k] & 0x0f0f0f0f;
+                aux32[1] = (qs[8*j+k] >> 4) & 0x0f0f0f0f;
+                for (int i = 0; i < 4; ++i) {
+                    y8[k][kBlockSize*ib + 4*j + i               ] = d[k] * kvalues_mxfp4[aux8[i+0]];
+                    y8[k][kBlockSize*ib + 4*j + i + kBlockSize/2] = d[k] * kvalues_mxfp4[aux8[i+4]];
+                }
+            }
+        }
+    }
+}
+
+void vec_dot_mxfp4_r8_q8_2_x4(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_MXFP4_R8, vx, 0, GGML_TYPE_Q8_2_X4, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK_MXFP4 == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
 }
 
 namespace {
@@ -5275,6 +5346,28 @@ static void modify_q4_0_r8(int64_t k, char * cy) {
     }
 }
 #endif
+
+static void repack_mxfp4(int nrows, int n_per_row, const block_mxfp4 * x, block_mxfp4_r8 * y, [[maybe_unused]] bool online) {
+    GGML_ASSERT(nrows%8 == 0);
+    GGML_ASSERT(n_per_row%QK_MXFP4 == 0);
+    int nblock = n_per_row/QK_MXFP4;
+    const block_mxfp4 * x8[8];
+    for (int row = 0; row < nrows; row += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = x + nblock*k;
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int k = 0; k < 8; ++k) {
+                y[ib].e[k] = x8[k][ib].e;
+                for (int l = 0; l < 4; ++l) {
+                    for (int i = 0; i < 4; ++i) {
+                        y[ib].qs[32*l+4*k+i] = x8[k][ib].qs[4*l + i];
+                    }
+                }
+            }
+        }
+        x += 8*nblock;
+        y += nblock;
+    }
+}
 
 size_t quantize_q4_0_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix,
         const quantize_user_data * user_data) {
@@ -8421,6 +8514,7 @@ const Repack * get_repack_info(ggml_type type) {
         { GGML_TYPE_Q8_0,   { GGML_TYPE_Q8_0_R8,   8,  (Repack::repack_func)repack_q8_0}    },
         { GGML_TYPE_Q8_K,   { GGML_TYPE_Q8_K_R8,   8,  (Repack::repack_func)repack_q8_k}    },
         { GGML_TYPE_Q8_KV,  { GGML_TYPE_Q8_KV_R8,  8,  (Repack::repack_func)repack_q8_KV}   },
+        { GGML_TYPE_MXFP4,  { GGML_TYPE_MXFP4_R8,  8,  (Repack::repack_func)repack_mxfp4}   },
 #ifdef __AVX512BF16__
         { GGML_TYPE_BF16,   { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_bf16_t>}},
         { GGML_TYPE_F16,    { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_half>}  },
