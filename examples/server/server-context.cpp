@@ -3949,6 +3949,12 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                             SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
                                                 it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
                                                 (float)checkpoint_size / 1024.0f / 1024.0f);
+                                            // The PP batch loop below processes tokens sequentially
+                                            // from n_past_prompt in chunks of n_batch.  Because the
+                                            // loop is stateless (no carry-over from earlier batches)
+                                            // the chunk boundaries at and after the restore point are
+                                            // identical to a full-reprocess control, ensuring
+                                            // float-reduction-order reproducibility between arms.
                                         }
                                     }
                                 }
