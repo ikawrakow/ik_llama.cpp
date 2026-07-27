@@ -3975,11 +3975,12 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                                     it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
                                                     (float)checkpoint_size / 1024.0f / 1024.0f);
                                                 // The PP batch loop below processes tokens sequentially
-                                                // from n_past_prompt in chunks of n_batch.  Because the
-                                                // loop is stateless (no carry-over from earlier batches)
-                                                // the chunk boundaries at and after the restore point are
-                                                // identical to a full-reprocess control, ensuring
-                                                // float-reduction-order reproducibility between arms.
+                                                // from n_past_prompt in n_batch chunks.  A full-reprocess
+                                                // control chunks from 0, so boundaries diverge unless the
+                                                // restore point lands on an n_batch multiple — meaning
+                                                // float reduction order differs between arms.
+                                                // For validation, use bit-exact token-stream comparison
+                                                // against a control rather than relying on logit deltas.
                                             }
                                         }
                                     }
