@@ -3635,22 +3635,35 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     do_reset = true;
                     //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else {
-                    pos_next = std::min(pos_next, it->pos_max);
-                    slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
-                    const llama_pos pos_next_cache = pos_next;
+                    // Verify the restored KV cache ends at the expected position.
+                    // A size-matched but misplaced restore (wrong stream offset,
+                    // partial overwrite) produces a pos_max mismatch here.
+                    {
+                        const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+                        if (check_pos != it->pos_max) {
+                            SLT_ERR(slot, "restore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted, forcing reset\n",
+                                check_pos, it->pos_max);
+                            do_reset = true;
+                        }
+                    }
+                    if (!do_reset) {
+                        pos_next = std::min(pos_next, it->pos_max);
+                        slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
+                        const llama_pos pos_next_cache = pos_next;
 
-                    pos_next = slot.prompt_tokens.pos_next(slot.n_past_prompt);
-                    pos_next = std::min(pos_next, it->pos_max_prompt);
-                    slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next);
+                        pos_next = slot.prompt_tokens.pos_next(slot.n_past_prompt);
+                        pos_next = std::min(pos_next, it->pos_max_prompt);
+                        slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next);
 
-                    // Restore cache-aligned pos_next for checkpoint erasure below
-                    pos_next = pos_next_cache;
+                        // Restore cache-aligned pos_next for checkpoint erasure below
+                        pos_next = pos_next_cache;
 
-                    // Remember we have a checkpoint at this position so the
-                    // interval gate doesn't immediately create a new one.
-                    slot.checkpoint_pos = it->pos_max;
+                        // Remember we have a checkpoint at this position so the
+                        // interval gate doesn't immediately create a new one.
+                        slot.checkpoint_pos = it->pos_max;
 
-                    SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
+                        SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
+                    }
                 }
             }
 
@@ -3940,21 +3953,34 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                         const size_t checkpoint_size = it->data.size();
                                         const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         if (n == checkpoint_size) {
-                                            slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max);
-                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt);
-                                            slot.n_past_offset = slot.n_past_prompt - slot.n_past;
-                                            slot.n_discarded_prompt = 0;
-                                            slot.checkpoint_pos = it->pos_max;
-                                            restored = true;
-                                            SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
-                                                it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
-                                                (float)checkpoint_size / 1024.0f / 1024.0f);
-                                            // The PP batch loop below processes tokens sequentially
-                                            // from n_past_prompt in chunks of n_batch.  Because the
-                                            // loop is stateless (no carry-over from earlier batches)
-                                            // the chunk boundaries at and after the restore point are
-                                            // identical to a full-reprocess control, ensuring
-                                            // float-reduction-order reproducibility between arms.
+                                            restored = true;  // byte-level restore succeeded
+                                            // Verify the restored KV cache ends at the expected position.
+                                            // A size-matched but misplaced restore (wrong stream offset,
+                                            // partial overwrite) produces a pos_max mismatch here.
+                                            {
+                                                const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+                                                if (check_pos != it->pos_max) {
+                                                    SLT_ERR(slot, "DSV4 restore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",
+                                                        check_pos, it->pos_max);
+                                                    restored = false;  // treat as failed restore
+                                                }
+                                            }
+                                            if (restored) {
+                                                slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max);
+                                                slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt);
+                                                slot.n_past_offset = slot.n_past_prompt - slot.n_past;
+                                                slot.n_discarded_prompt = 0;
+                                                slot.checkpoint_pos = it->pos_max;
+                                                SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
+                                                    it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
+                                                    (float)checkpoint_size / 1024.0f / 1024.0f);
+                                                // The PP batch loop below processes tokens sequentially
+                                                // from n_past_prompt in chunks of n_batch.  Because the
+                                                // loop is stateless (no carry-over from earlier batches)
+                                                // the chunk boundaries at and after the restore point are
+                                                // identical to a full-reprocess control, ensuring
+                                                // float-reduction-order reproducibility between arms.
+                                            }
                                         }
                                     }
                                 }
