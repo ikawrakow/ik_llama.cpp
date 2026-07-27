@@ -18,6 +18,16 @@
 #include <regex>
 #include <exception>
 
+// FNV-1a 64-bit hash for checkpoint integrity verification
+static uint64_t fnv1a_hash(const uint8_t * data, size_t len) {
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= 0x100000001b3ULL;
+    }
+    return hash;
+}
+
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1, int32_t offset = 0) {
     if (pos_min == -1) {
         pos_min = llama_kv_cache_seq_pos_min(ctx, id);
@@ -38,6 +48,7 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
+    ckpt.data_hash = fnv1a_hash(ckpt.data.data(), ckpt.data.size());
 }
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
@@ -2670,14 +2681,17 @@ void server_context::split_multiprompt_task(int id_multi, server_task& multiprom
 
 
 
+static const uint32_t CKPT_FILE_MAGIC   = 0x434b5054; // "CKPT"
+static const uint32_t CKPT_FILE_VERSION = 2;
+
 static size_t save_checkpoints_to_file(const std::string & filename, const std::list<server_prompt_checkpoint> & checkpoints) {
     if (checkpoints.size() == 0) {
         return 0;
     }
     std::ofstream file(filename, std::ios::binary);
-    uint32_t magic = LLAMA_STATE_SEQ_MAGIC;
+    uint32_t magic = CKPT_FILE_MAGIC;
     file.write(reinterpret_cast<const char *>(&magic), sizeof(magic));
-    uint32_t version = LLAMA_STATE_SEQ_VERSION;
+    uint32_t version = CKPT_FILE_VERSION;
     file.write(reinterpret_cast<const char *>(&version), sizeof(version));
     size_t count = checkpoints.size();
     file.write(reinterpret_cast<const char *>(&count), sizeof(count));
@@ -2687,6 +2701,7 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_min_prompt), sizeof(checkpoint.pos_min_prompt));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_max_prompt), sizeof(checkpoint.pos_max_prompt));
+        file.write(reinterpret_cast<const char *>(&checkpoint.data_hash), sizeof(checkpoint.data_hash));
         size_t data_len = checkpoint.data.size();
         file.write(reinterpret_cast<const char *>(&data_len), sizeof(data_len));
         if (data_len > 0) {
@@ -2704,29 +2719,37 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
         return 0;
     }
     checkpoints.clear();
-    // version checks
+    // version checks (accept both old LLAMA_STATE_SEQ_ format and new CKPT_ format)
     {
         uint32_t magic;
         file.read(reinterpret_cast<char *>(&magic), sizeof(magic));
         uint32_t version;
         file.read(reinterpret_cast<char *>(&version), sizeof(version));
 
-        if (magic != LLAMA_STATE_SEQ_MAGIC || version != LLAMA_STATE_SEQ_VERSION) {
+        bool has_hash = false;
+        if (magic == CKPT_FILE_MAGIC && version == CKPT_FILE_VERSION) {
+            has_hash = true;
+        } else if (magic == LLAMA_STATE_SEQ_MAGIC && version == LLAMA_STATE_SEQ_VERSION) {
+            has_hash = false;
+        } else {
             LLAMA_LOG_ERROR("%s: unknown (magic, version) for checkpoint file: %08x, %08x\n", __func__, magic, version);
             return 0;
         }
-    }
-    // load the checkpoints
-    {
+        (void)has_hash;
+
         size_t count;
         file.read(reinterpret_cast<char *>(&count), sizeof(count));
 
-        for (int i = 0; i < count; i++) {
+        for (size_t i = 0; i < count; i++) {
             server_prompt_checkpoint checkpoint;
             file.read(reinterpret_cast<char *>(&checkpoint.pos_min), sizeof(checkpoint.pos_min));
             file.read(reinterpret_cast<char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
             file.read(reinterpret_cast<char *>(&checkpoint.pos_min_prompt), sizeof(checkpoint.pos_min_prompt));
             file.read(reinterpret_cast<char *>(&checkpoint.pos_max_prompt), sizeof(checkpoint.pos_max_prompt));
+
+            if (has_hash) {
+                file.read(reinterpret_cast<char *>(&checkpoint.data_hash), sizeof(checkpoint.data_hash));
+            }
 
             size_t data_len;
             file.read(reinterpret_cast<char *>(&data_len), sizeof(data_len));
@@ -2734,6 +2757,12 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
                 checkpoint.data.resize(data_len);
                 file.read(reinterpret_cast<char *>(checkpoint.data.data()), data_len * sizeof(uint8_t));
             }
+
+            // Compute hash for checkpoints loaded from old-format files
+            if (!has_hash && !checkpoint.data.empty()) {
+                checkpoint.data_hash = fnv1a_hash(checkpoint.data.data(), checkpoint.data.size());
+            }
+
             checkpoints.push_back(checkpoint);
         }
     }
@@ -3635,14 +3664,28 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     do_reset = true;
                     //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else {
-                    // Verify the restored KV cache ends at the expected position.
-                    // A size-matched but misplaced restore (wrong stream offset,
-                    // partial overwrite) produces a pos_max mismatch here.
+                    // Sanity check: verify the restored cache ends at the expected
+                    // position.  Catches misplaced restores (wrong stream offset,
+                    // partial overwrite).
                     {
                         const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
                         if (check_pos != it->pos_max) {
                             SLT_ERR(slot, "restore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted, forcing reset\n",
                                 check_pos, it->pos_max);
+                            do_reset = true;
+                        }
+                    }
+                    // Correctness check: verify the serialized data checksum.
+                    // Catches in-memory corruption of the checkpoint data between
+                    // creation and restore.  Does NOT catch serialization bugs that
+                    // produce internally-consistent but wrong values — for that,
+                    // use bit-exact token-stream comparison against a control per
+                    // Joel's methodology.
+                    if (!do_reset) {
+                        const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
+                        if (loaded_hash != it->data_hash) {
+                            SLT_ERR(slot, "restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted, forcing reset\n",
+                                loaded_hash, it->data_hash);
                             do_reset = true;
                         }
                     }
@@ -3954,15 +3997,24 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                         const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         if (n == checkpoint_size) {
                                             restored = true;  // byte-level restore succeeded
-                                            // Verify the restored KV cache ends at the expected position.
-                                            // A size-matched but misplaced restore (wrong stream offset,
-                                            // partial overwrite) produces a pos_max mismatch here.
+                                            // Sanity check: verify the restored cache ends at the expected
+                                            // position.  Catches misplaced restores (wrong stream offset,
+                                            // partial overwrite).
                                             {
                                                 const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
                                                 if (check_pos != it->pos_max) {
                                                     SLT_ERR(slot, "DSV4 restore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",
                                                         check_pos, it->pos_max);
                                                     restored = false;  // treat as failed restore
+                                                }
+                                            }
+                                            // Correctness check: verify the serialized data checksum.
+                                            if (restored) {
+                                                const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
+                                                if (loaded_hash != it->data_hash) {
+                                                    SLT_ERR(slot, "DSV4 restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted\n",
+                                                        loaded_hash, it->data_hash);
+                                                    restored = false;
                                                 }
                                             }
                                             if (restored) {
