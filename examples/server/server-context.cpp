@@ -1795,7 +1795,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         do_checkpoint = do_checkpoint && task.type == SERVER_TASK_TYPE_COMPLETION;
         // make a checkpoint of the parts of the memory that cannot be rolled back.
         // checkpoints are created only if:
-        // - the model architecture is marked as recurrent or hybrid
+        // - the model architecture is marked as recurrent or hybrid, or has private per-position state (DSV4)
         //
         // TODO: try to make this conditional on the context or the memory module, instead of the model type
         params_base.do_checkpoint = do_checkpoint;
