@@ -352,12 +352,12 @@ struct MulMat {
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_KV_R8:
-            case GGML_TYPE_MXFP4_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q8_K_R16:
+            case GGML_TYPE_MXFP4_R8:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
