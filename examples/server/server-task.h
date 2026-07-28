@@ -359,7 +359,8 @@ struct server_prompt_checkpoint {
 
     int64_t n_tokens;
 
-    uint64_t data_hash = 0;
+    mutable uint64_t data_hash = 0;
+    mutable bool hash_computed = false;
 
     std::vector<uint8_t> data;
 
