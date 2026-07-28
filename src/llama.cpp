@@ -3707,10 +3707,14 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         if (name == "output.weight") {
-            ow_size = size;
+            ow_size += size;
             continue;
         }
         if (name == "output_norm.weight") {
+            continue;
+        }
+        if (auto pos = name.find("output_hc_"); pos == 0) {
+            ow_size += size;
             continue;
         }
         if (model.arch == LLM_ARCH_GEMMA4) {
