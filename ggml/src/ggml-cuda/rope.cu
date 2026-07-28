@@ -152,56 +152,6 @@ static __global__ void rope_norm_fast(const float * src0, const float * src1, fl
     dst[idst + 1] = x0*sin_theta + x1*cos_theta;
 }
 
-//template<bool forward, bool has_ff, typename T>
-//static __global__ void rope_neox(
-//        const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
-//        const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
-//        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors, bool is_flipped) {
-//    const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
-//
-//    if (i0 >= ne0) {
-//        return;
-//    }
-//
-//    const int row_dst = blockDim.x*blockIdx.x + threadIdx.x;
-//
-//    const int row_x     = row_dst % ne1;
-//    const int channel_x = row_dst / ne1;
-//
-//    const int idst = row_dst*ne0 + i0/2;
-//    const int ix   = channel_x*s2 + row_x*s1 + i0/2;
-//
-//    const int rope_offset = is_flipped ? ne0 - n_dims : 0;
-//
-//    if (is_flipped) {
-//        if (i0 < rope_offset) {
-//            dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
-//            dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
-//        }
-//    } else {
-//        if (i0 >= n_dims) {
-//            dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
-//            dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
-//            return;
-//        }
-//    }
-//
-//    const float theta_base = pos[channel_x]*powf(theta_scale, i0/2.0f);
-//
-//    const float freq_factor = has_ff ? freq_factors[i0/2] : 1.0f;
-//
-//    float cos_theta;
-//    float sin_theta;
-//
-//    rope_yarn<forward>(theta_base/freq_factor, freq_scale, corr_dims, i0, ext_factor, attn_factor, cos_theta, sin_theta);
-//
-//    const float x0 = x[ix + 0 + rope_offset];
-//    const float x1 = x[ix + n_dims/2 + rope_offset];
-//
-//    dst[idst + 0 + rope_offset]        = x0*cos_theta - x1*sin_theta;
-//    dst[idst + n_dims/2 + rope_offset] = x0*sin_theta + x1*cos_theta;
-//}
-
 template<bool forward, bool has_ff, typename T>
 static __global__ void rope_neox(
         const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
