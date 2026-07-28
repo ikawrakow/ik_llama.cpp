@@ -674,40 +674,7 @@ static ggml_tensor * build_hc_head(
     return llm.build_mhc_weighted_sum(x, pre, n_embd, hc);
 }
 
-static ggml_tensor * build_hca_compressed_kv_from_state(
-        ggml_context * ctx0,
-        llm_build_context & llm,
-        ggml_tensor * kv_state,
-        ggml_tensor * score_state,
-        ggml_tensor * state_read_idxs,
-        ggml_tensor * comp_pos,
-        ggml_tensor * norm,
-        int64_t n_embd_head,
-        int il) {
-    const int64_t n_embd_head_rope = llm.hparams.n_rot;
-    const int64_t n_blocks = comp_pos ? comp_pos->ne[0] : 0;
-
-    GGML_ASSERT(n_blocks > 0);
-    GGML_ASSERT(state_read_idxs != nullptr);
-
-    auto comp = ggml_ds4_comp(ctx0, kv_state, score_state, state_read_idxs, llama_context::dsv4_runtime::HCA_RATIO, 1);
-
-    llm.cb(comp, "hca_comp_merge", il);
-
-    comp = llm.llm_build_norm(ctx0, comp, llm.hparams, norm, nullptr, LLM_NORM_RMS, llm.cb, il);
-    llm.cb(comp, "hca_comp_norm", il);
-
-    comp = ggml_reshape_3d(ctx0, comp, n_embd_head, 1, n_blocks);
-    comp = ggml_rope_ext_inplace(ctx0, comp, comp_pos, nullptr, n_embd_head_rope, llm.rope_type, llm.n_ctx_orig,
-            llm.hparams.dsv4_compress_rope_base, llm.freq_scale, llm.ext_factor,
-            dsv4_rope_attn_factor(llm.freq_scale, llm.ext_factor), llm.beta_fast, llm.beta_slow);
-    comp->op_params[15] = 1;
-    llm.cb(comp, "hca_comp_out", il);
-
-    return comp;
-}
-
-static ggml_tensor * build_overlap_compressed_kv_from_state(
+static ggml_tensor * build_compressed_kv_from_state(
         ggml_context * ctx0,
         llm_build_context & llm,
         ggml_tensor * kv_state,
@@ -725,7 +692,8 @@ static ggml_tensor * build_overlap_compressed_kv_from_state(
     GGML_ASSERT(n_blocks > 0);
     GGML_ASSERT(state_read_idxs != nullptr);
 
-    ggml_tensor * comp = ggml_ds4_comp(ctx0, kv_state, score_state, state_read_idxs, ratio, 0);
+    int type = ratio == llama_context::dsv4_runtime::HCA_RATIO ? 1 : 0;
+    ggml_tensor * comp = ggml_ds4_comp(ctx0, kv_state, score_state, state_read_idxs, ratio, type);
 
     llm.cb(comp, tag, il);
 
@@ -939,19 +907,13 @@ static void ds4_build_comp(ggml_tensor * cur, llm_build_context & llm, ggml_cont
     if (inputs.state_write_idxs != nullptr && plan.state_write_idxs.size() > 0) {
         ggml_tensor * source_kv = dsv4_concat_named(ctx0, cache_state, state_kv, 1, (tag + "_source_kv").c_str());
         ggml_tensor * source_score = dsv4_concat_named(ctx0, cache_score, state_score, 1, (tag + "_source_score").c_str());
-        ggml_tensor * comp = !is_hca ? build_overlap_compressed_kv_from_state(ctx0, llm,
+        auto ratio = is_hca ? llama_context::dsv4_runtime::HCA_RATIO : llama_context::dsv4_runtime::CSA_RATIO;
+        ggml_tensor * comp = build_compressed_kv_from_state(ctx0, llm,
                                            source_kv, source_score,
                                            inputs.state_read_idxs,
                                            inputs.state_write_pos,
-                                           norm,
-                                           llama_context::dsv4_runtime::CSA_RATIO,
-                                           head_size, il,
-                                           (tag + "_state_compress").c_str()) :
-                                       build_hca_compressed_kv_from_state(ctx0, llm,
-                                           source_kv, source_score,
-                                           inputs.state_read_idxs,
-                                           inputs.state_write_pos,
-                                           norm, head_size, il);
+                                           norm, ratio, head_size, il,
+                                           (tag + "_state_compress").c_str());
         if (do_hadamard) {
             const int hadamard_block = llama_model::hadamard_size(head_size);
             GGML_ASSERT(hadamard_block > 0);
