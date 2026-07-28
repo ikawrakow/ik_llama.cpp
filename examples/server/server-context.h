@@ -389,6 +389,10 @@ struct server_context {
     // Re-aggregates all active vectors and updates the model state
     bool apply_control_vectors_internal();
 
+    // Reusable scratch buffer for checkpoint serialization (avoids per-checkpoint alloc + zero-init)
+    std::vector<uint8_t> _ckpt_scratch;
+    size_t _ckpt_max_size = 0;
+
     bool create_checkpoint(server_slot & slot);
 
     void apply_checkpoint(server_slot & slot);

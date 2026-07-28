@@ -35,26 +35,35 @@ static void ensure_checkpoint_hash(const server_prompt_checkpoint & ckpt) {
     }
 }
 
-static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min = -1, llama_pos pos_max = -1, int32_t offset = 0) {
-    if (pos_min == -1) {
-        pos_min = llama_kv_cache_seq_pos_min(ctx, id);
-    }
-    if (pos_max == -1) {
-        pos_max = llama_kv_cache_seq_pos_max(ctx, id);
-    }
-    const size_t checkpoint_size = llama_state_seq_get_size(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-
+static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max, int32_t offset, std::vector<uint8_t> & scratch, size_t & max_size) {
     ckpt.pos_min = pos_min;
     ckpt.pos_max = pos_max;
     ckpt.pos_max_prompt = pos_max + offset;
     ckpt.pos_min_prompt = pos_min + offset;
     ckpt.n_tokens = n_tokens;
-    ckpt.data.resize(checkpoint_size);
 
-    const size_t n = llama_state_seq_get_data(ctx, ckpt.data.data(), checkpoint_size, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    // Get the required checkpoint size
+    const size_t checkpoint_size = llama_state_seq_get_size(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+    // Ensure scratch is large enough (grows as needed, never zeroes on re-use)
+    if (scratch.size() < checkpoint_size) {
+        scratch.resize(checkpoint_size);
+    }
+
+    const size_t n = llama_state_seq_get_data(ctx, scratch.data(), scratch.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
+
+    // Move scratch into checkpoint (zero-copy, avoids re-allocation)
+    ckpt.data.swap(scratch);
+    ckpt.data.resize(n);
+
+    // Update max size hint
+    if (n > max_size) {
+        max_size = n;
+    }
+
     ckpt.data_hash = 0;
     ckpt.hash_computed = false;
 }
@@ -3826,7 +3835,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
         }
 
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
-        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max, slot.n_past_offset);
+        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max, slot.n_past_offset, _ckpt_scratch, _ckpt_max_size);
 
         SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
