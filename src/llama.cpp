@@ -9216,9 +9216,12 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 // stream_idx >= 0 gives that stream's portion; use -1 for the full tensor.
 // Tensors are laid out as [ne0, ne1, ...] with ne1 = per_stream_rows * n_stream.
 static void dsv4_stream_offset_size(const struct ggml_tensor * tensor, uint32_t n_stream, int32_t stream_idx, size_t & out_offset, size_t & out_size) {
-    GGML_ASSERT(stream_idx >= 0 && (uint32_t)stream_idx < n_stream);
-    GGML_ASSERT(n_stream > 0);
-    GGML_ASSERT(tensor->ne[1] % n_stream == 0);
+    if (stream_idx < 0 || (uint32_t)stream_idx >= n_stream || n_stream == 0 || tensor->ne[1] % n_stream != 0) {
+        LLAMA_LOG_ERROR("%s: invalid stream_idx=%d n_stream=%u ne[1]=%lld\n", __func__, stream_idx, n_stream, (long long)tensor->ne[1]);
+        out_offset = 0;
+        out_size   = 0;
+        return;
+    }
     const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
     const uint32_t rows_per_stream = (uint32_t)(tensor->ne[1] / n_stream);
     out_offset = (size_t)stream_idx * rows_per_stream * row_size;
