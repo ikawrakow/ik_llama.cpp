@@ -3657,13 +3657,15 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 }
 
                 if (!do_reset) {
-                    pos_next = std::min(pos_next, it->pos_max);
+                    // The checkpoint encodes positions [pos_min, pos_max];
+                    // advance n_past past the restored range.
+                    pos_next = std::min(pos_next, it->pos_max + 1);
                     slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
 
                     {
                         const llama_pos pos_next_prompt = std::min(
                             slot.prompt_tokens.pos_next(slot.n_past_prompt),
-                            it->pos_max_prompt);
+                            it->pos_max_prompt + 1);
                         slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next_prompt);
                     }
 
@@ -3962,8 +3964,10 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                             restored = verify_restored_checkpoint(*it, slot, "DSV4 ");
                                         }
                                         if (restored) {
-                                            slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max);
-                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt);
+                                            // The checkpoint encodes positions [0, pos_max];
+                                            // advance n_past past the restored range.
+                                            slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max + 1);
+                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt + 1);
                                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
                                             slot.n_discarded_prompt = 0;
                                             slot.checkpoint_pos = it->pos_max;
