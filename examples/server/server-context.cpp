@@ -42,7 +42,6 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
 
     // Move scratch into checkpoint (zero-copy, avoids re-allocation)
     ckpt.data.swap(scratch);
-    ckpt.data.resize(n);
 }
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
