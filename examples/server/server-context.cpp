@@ -33,9 +33,7 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
         scratch.resize(checkpoint_size);
     }
 
-    // Hash is computed incrementally during serialization (streaming FNV-1a)
-    ckpt.data_hash = 0xcbf29ce484222325ULL; // FNV-1a offset basis
-    const size_t n = llama_state_seq_get_data(ctx, scratch.data(), scratch.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, &ckpt.data_hash);
+    const size_t n = llama_state_seq_get_data(ctx, scratch.data(), scratch.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
@@ -466,7 +464,7 @@ void server_slot::prompt_save(server_prompt_cache& prompt_cache) const {
         return;
     }
 
-    llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0, nullptr);
+    llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0);
 }
 
 void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction) {
@@ -2674,17 +2672,14 @@ void server_context::split_multiprompt_task(int id_multi, server_task& multiprom
 
 
 
-static const uint32_t CKPT_FILE_MAGIC   = 0x434b5054; // "CKPT"
-static const uint32_t CKPT_FILE_VERSION = 2;
-
 static size_t save_checkpoints_to_file(const std::string & filename, const std::list<server_prompt_checkpoint> & checkpoints) {
     if (checkpoints.size() == 0) {
         return 0;
     }
     std::ofstream file(filename, std::ios::binary);
-    uint32_t magic = CKPT_FILE_MAGIC;
+    uint32_t magic = LLAMA_STATE_SEQ_MAGIC;
     file.write(reinterpret_cast<const char *>(&magic), sizeof(magic));
-    uint32_t version = CKPT_FILE_VERSION;
+    uint32_t version = LLAMA_STATE_SEQ_VERSION;
     file.write(reinterpret_cast<const char *>(&version), sizeof(version));
     size_t count = checkpoints.size();
     file.write(reinterpret_cast<const char *>(&count), sizeof(count));
@@ -2694,7 +2689,6 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_min_prompt), sizeof(checkpoint.pos_min_prompt));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_max_prompt), sizeof(checkpoint.pos_max_prompt));
-        file.write(reinterpret_cast<const char *>(&checkpoint.data_hash), sizeof(checkpoint.data_hash));
         size_t data_len = checkpoint.data.size();
         file.write(reinterpret_cast<const char *>(&data_len), sizeof(data_len));
         if (data_len > 0) {
@@ -2706,38 +2700,25 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
     return pos;
 }
 
-// FNV-1a 64-bit hash for checkpoint data integrity verification
-static uint64_t fnv1a_hash(const uint8_t * data, size_t len) {
-    uint64_t hash = 0xcbf29ce484222325ULL;
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= 0x100000001b3ULL;
-    }
-    return hash;
-}
-
 static size_t load_checkpoints_from_file(const std::string & filename, std::list<server_prompt_checkpoint> & checkpoints) {
     std::ifstream file(filename, std::ios::binary);
     if (!file.is_open()) {
         return 0;
     }
     checkpoints.clear();
-    // version checks (accept both old LLAMA_STATE_SEQ_ format and new CKPT_ format)
     {
         uint32_t magic;
         file.read(reinterpret_cast<char *>(&magic), sizeof(magic));
         uint32_t version;
         file.read(reinterpret_cast<char *>(&version), sizeof(version));
 
-        bool has_hash = false;
-        if (magic == CKPT_FILE_MAGIC && version == CKPT_FILE_VERSION) {
-            has_hash = true;
-        } else if (magic == LLAMA_STATE_SEQ_MAGIC && version == LLAMA_STATE_SEQ_VERSION) {
-            has_hash = false;
-        } else {
+        if (magic != LLAMA_STATE_SEQ_MAGIC || version != LLAMA_STATE_SEQ_VERSION) {
             LLAMA_LOG_ERROR("%s: unknown (magic, version) for checkpoint file: %08x, %08x\n", __func__, magic, version);
             return 0;
         }
+    }
+    // load the checkpoints
+    {
         size_t count;
         file.read(reinterpret_cast<char *>(&count), sizeof(count));
 
@@ -2748,20 +2729,11 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
             file.read(reinterpret_cast<char *>(&checkpoint.pos_min_prompt), sizeof(checkpoint.pos_min_prompt));
             file.read(reinterpret_cast<char *>(&checkpoint.pos_max_prompt), sizeof(checkpoint.pos_max_prompt));
 
-            if (has_hash) {
-                file.read(reinterpret_cast<char *>(&checkpoint.data_hash), sizeof(checkpoint.data_hash));
-            }
-
             size_t data_len;
             file.read(reinterpret_cast<char *>(&data_len), sizeof(data_len));
             if (data_len > 0) {
                 checkpoint.data.resize(data_len);
                 file.read(reinterpret_cast<char *>(checkpoint.data.data()), data_len * sizeof(uint8_t));
-            }
-
-            // Compute hash for checkpoints loaded from old-format files
-            if (!has_hash && !checkpoint.data.empty()) {
-                checkpoint.data_hash = fnv1a_hash(checkpoint.data.data(), checkpoint.data.size());
             }
 
             checkpoints.push_back(checkpoint);
@@ -3619,56 +3591,20 @@ void server_context::add_sampled_tokens() {
     }
 }
 
-// Runs pos_max sanity, FNV-1a hash, and round-trip verification on a restored checkpoint.
-// Returns true if all checks pass.  Logs via SLT_ERR with an optional label prefix.
+// Verifies that a restored checkpoint reaches the expected cache position.
+// Logs via SLT_ERR with an optional label prefix (e.g. "DSV4 ").
+// Returns true if the position matches.
 static bool verify_restored_checkpoint(
-    llama_context * ctx,
-    llama_seq_id seq_id,
     const server_prompt_checkpoint & ckpt,
-    std::vector<uint8_t> & scratch,
     server_slot & slot,
     const char * label)
 {
-    // Sanity check: verify restored cache position
-    {
-        const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-        if (check_pos != ckpt.pos_max) {
-            SLT_ERR(slot, "%srestore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",
-                label, check_pos, ckpt.pos_max);
-            return false;
-        }
+    const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+    if (check_pos != ckpt.pos_max) {
+        SLT_ERR(slot, "%srestore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",
+            label, check_pos, ckpt.pos_max);
+        return false;
     }
-
-    // FNV-1a checksum check
-    {
-        const uint64_t loaded_hash = fnv1a_hash(ckpt.data.data(), ckpt.data.size());
-        if (loaded_hash != ckpt.data_hash) {
-            SLT_ERR(slot, "%srestore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted\n",
-                label, loaded_hash, ckpt.data_hash);
-            return false;
-        }
-    }
-
-    // Round-trip check: re-serialize and compare byte-for-byte
-    {
-        const size_t ckpt_size = ckpt.data.size();
-        const size_t re_size = llama_state_seq_get_size(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        if (re_size != ckpt_size) {
-            SLT_ERR(slot, "%srestore round-trip size mismatch: %zu != %zu — state corrupted\n",
-                label, re_size, ckpt_size);
-            return false;
-        }
-        if (scratch.size() < re_size) {
-            scratch.resize(re_size);
-        }
-        const size_t n = llama_state_seq_get_data(ctx, scratch.data(), scratch.size(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, nullptr);
-        if (n != re_size || memcmp(ckpt.data.data(), scratch.data(), re_size) != 0) {
-            SLT_ERR(slot, "%srestore round-trip mismatch: re-serialized state differs from original — serialization bug or state corrupted\n",
-                label);
-            return false;
-        }
-    }
-
     return true;
 }
 
@@ -3716,7 +3652,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 if (n != checkpoint_size) {
                     SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float)checkpoint_size / 1024 / 1024);
                     do_reset = true;
-                } else if (!verify_restored_checkpoint(ctx, slot.id, *it, _ckpt_scratch, slot, "")) {
+                } else if (!verify_restored_checkpoint(*it, slot, "")) {
                     do_reset = true;
                 }
 
@@ -4023,7 +3959,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                         const size_t checkpoint_size = it->data.size();
                                         const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         if (n == checkpoint_size) {
-                                            restored = verify_restored_checkpoint(ctx, slot.id, *it, _ckpt_scratch, slot, "DSV4 ");
+                                            restored = verify_restored_checkpoint(*it, slot, "DSV4 ");
                                         }
                                         if (restored) {
                                             slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max);

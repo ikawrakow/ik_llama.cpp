@@ -9066,7 +9066,7 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
             const size_t need = llama_state_seq_get_size(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             kv.ckpt.cpu_state_data.resize(need);
             const size_t written = llama_state_seq_get_data(
-                ctx, kv.ckpt.cpu_state_data.data(), need, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, nullptr);
+                ctx, kv.ckpt.cpu_state_data.data(), need, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             kv.ckpt.cpu_state_data.resize(written);
             return written > 0;
         }
@@ -10240,29 +10240,16 @@ struct llama_data_write_buffer : llama_data_write {
 
     const llama_model & model;
 
-    // Optional streaming FNV-1a hash of all bytes written into the buffer
-    uint64_t * fnv_hash = nullptr;
-
     std::vector<uint8_t> aux_buffer;
 
-    llama_data_write_buffer(uint8_t * p, size_t len, const llama_model & _model, uint64_t * hash_out = nullptr)
-        : ptr(p), buf_size(len), model(_model), fnv_hash(hash_out) {}
-
-    static void fnv_update(uint64_t & hash, const uint8_t * data, size_t size) {
-        for (size_t i = 0; i < size; ++i) {
-            hash ^= data[i];
-            hash *= 0x100000001b3ULL;
-        }
-    }
+    llama_data_write_buffer(uint8_t * p, size_t len, const llama_model & _model)
+        : ptr(p), buf_size(len), model(_model) {}
 
     void write(const void * src, size_t size) override {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
         memcpy(ptr, src, size);
-        if (fnv_hash) {
-            fnv_update(*fnv_hash, (const uint8_t *)src, size);
-        }
         ptr += size;
         size_written += size;
         buf_size -= size;
@@ -10272,14 +10259,10 @@ struct llama_data_write_buffer : llama_data_write {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
-        uint8_t * const write_start = ptr;
         if (tensor->extra) {
             get_tensor_data_split(tensor, offset, size, il);
         } else {
             ggml_backend_tensor_get(tensor, ptr, offset, size);
-        }
-        if (fnv_hash) {
-            fnv_update(*fnv_hash, write_start, size);
         }
         ptr += size;
         size_written += size;
@@ -10680,8 +10663,8 @@ size_t llama_state_seq_get_size(struct llama_context * ctx, llama_seq_id seq_id,
     return llama_state_seq_get_data_internal(ctx, data_ctx, seq_id, flags);
 }
 
-size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags, uint64_t * hash_out) {
-    llama_data_write_buffer data_ctx(dst, size, ctx->model, hash_out);
+size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    llama_data_write_buffer data_ctx(dst, size, ctx->model);
     try {
         return llama_state_seq_get_data_internal(ctx, data_ctx, seq_id, flags);
     } catch (const std::exception & err) {
