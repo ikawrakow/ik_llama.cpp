@@ -2706,7 +2706,7 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
     return pos;
 }
 
-// Compute FNV-1a hash for checkpoint data (used for backward-compat file loading)
+// FNV-1a 64-bit hash for checkpoint data integrity verification
 static uint64_t fnv1a_hash(const uint8_t * data, size_t len) {
     uint64_t hash = 0xcbf29ce484222325ULL;
     for (size_t i = 0; i < len; ++i) {
@@ -3754,7 +3754,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
     {
         // erase checkpoints whose data extends past the next write position
         // (pos_max > pos_next means the checkpoint was created beyond where
-        //  we are — it may contain stale per-position state).
+        //  we are — its per-position state is stale after the rewind).
         // A checkpoint at pos_max == pos_next is exactly at our position and
         // should be kept (e.g. the one we just restored from).
         for (auto it = slot.server_cached_prompt.checkpoints.begin(); it != slot.server_cached_prompt.checkpoints.end();) {
