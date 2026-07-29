@@ -139,7 +139,7 @@ static void spec_bench_print_usage(const char * argv0) {
     LOG_TEE("  --repeat N            repeat each task N times (default: 1)\n");
     LOG_TEE("  --retry N             retry each failed task up to N times (default: 0)\n");
     LOG_TEE("  --output-format md|jsonl emit Markdown by default, or JSONL\n");
-    LOG_TEE("  --output-details     include prompt/output/provenance/runtime details\n");
+    LOG_TEE("  --output-details     include prompt/output and detailed metrics\n");
     LOG_TEE("\n");
 }
 
@@ -1018,6 +1018,7 @@ static void spec_bench_print_markdown(const spec_bench_options & opts, const std
         std::ostringstream out; out << std::fixed << std::setprecision(precision) << value; return out.str();
     };
     auto fit = [](const std::string & value, size_t width) { return value.size() <= width ? value : value.substr(0, width - 3) + "..."; };
+    constexpr int stage_width = 14;
     auto error_text = [&](const std::string & value) {
         std::string result = value;
         for (char & ch : result) { if (ch == 10 || ch == 13 || ch == 9) { ch = 32; } }
@@ -1051,12 +1052,12 @@ static void spec_bench_print_markdown(const spec_bench_options & opts, const std
     }
 
     std::cout << "\n| " << std::left << std::setw(8) << "task" << " | " << std::right << std::setw(3) << "run"
-              << " | " << std::left << std::setw(7) << "stage" << " | " << std::right << std::setw(7) << "tokens"
+              << " | " << std::left << std::setw(stage_width) << "stage" << " | " << std::right << std::setw(7) << "tokens"
               << " | " << std::left << std::setw(5) << "stop" << " | " << std::right << std::setw(7) << "time(s)"
               << " | " << std::setw(7) << "tok/s" << " | " << std::setw(6) << "rounds"
               << " | " << std::setw(11) << "accepted" << " | " << std::setw(7) << "rate"
               << " | " << std::setw(6) << "a.len" << " | " << std::left << std::setw(28) << "pos accept" << " |\n";
-    std::cout << "|----------|-----|---------|---------|-------|---------|---------|--------|-------------|---------|--------|------------------------------|\n";
+    std::cout << "|----------|" << std::string(stage_width + 2, '-') << "|---------|-------|---------|---------|--------|-------------|---------|--------|------------------------------|\n";
 
     auto position_percentages = [&](const spec_bench_stage_delta & stage) {
         std::ostringstream out;
@@ -1080,7 +1081,7 @@ static void spec_bench_print_markdown(const spec_bench_options & opts, const std
         auto row = [&](const std::string & stage_name, uint64_t rounds, uint64_t drafted, uint64_t accepted, const std::string & positions) {
             const bool has_metrics = drafted > 0 || rounds > 0;
             std::cout << "| " << std::left << std::setw(8) << fit(record.task.name, 8) << " | " << std::right << std::setw(3) << run
-                      << " | " << std::left << std::setw(7) << fit(stage_name, 7) << " | " << std::right << std::setw(7) << fit(tokens, 7)
+                      << " | " << std::left << std::setw(stage_width) << fit(stage_name, stage_width) << " | " << std::right << std::setw(7) << fit(tokens, 7)
                       << " | " << std::left << std::setw(5) << stop << " | " << std::right << std::setw(7) << (result.ok ? number(result.decode_s, 3) : "-")
                       << " | " << std::setw(7) << (result.ok ? number(tps, 2) : "-") << " | " << std::setw(6) << (has_metrics ? std::to_string(rounds) : "-")
                       << " | " << std::setw(11) << (has_metrics ? std::to_string(accepted) + "/" + std::to_string(drafted) : "-")
@@ -1108,17 +1109,17 @@ static void spec_bench_print_markdown(const spec_bench_options & opts, const std
         std::cout << "## Detailed metrics\n\n";
         std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::right << std::setw(3) << "run"
                   << " | " << std::setw(10) << "prompt tok" << " | " << std::setw(9) << "prompt s"
-                  << " | " << std::setw(9) << "total s" << " | " << std::left << std::setw(7) << "stage"
+                  << " | " << std::setw(9) << "total s" << " | " << std::left << std::setw(stage_width) << "stage"
                   << " | " << std::right << std::setw(9) << "draft s" << " | " << std::setw(9) << "accept s"
                   << " | " << std::left << std::setw(raw_position_width) << "accepted/drafted by position" << " |\n";
-        std::cout << "|----------|-----|------------|-----------|-----------|---------|-----------|-----------|"
+        std::cout << "|----------|-----|------------|-----------|-----------|" << std::string(stage_width + 2, '-') << "|-----------|-----------|"
                   << std::string(raw_position_width + 2, '-') << "|\n";
         for (const auto & record : records) {
             const auto & result = record.result;
             auto metric_row = [&](const std::string & stage_name, double draft_s, double accept_s, const std::string & positions) {
                 std::cout << "| " << std::left << std::setw(8) << fit(record.task.name, 8) << " | " << std::right << std::setw(3) << (record.repeat_index + 1)
                           << " | " << std::setw(10) << result.prompt_tokens << " | " << std::setw(9) << number(result.prompt_s, 3)
-                          << " | " << std::setw(9) << number(result.total_s, 3) << " | " << std::left << std::setw(7) << fit(stage_name, 7)
+                          << " | " << std::setw(9) << number(result.total_s, 3) << " | " << std::left << std::setw(stage_width) << fit(stage_name, stage_width)
                           << " | " << std::right << std::setw(9) << number(draft_s, 6) << " | " << std::setw(9) << number(accept_s, 6)
                           << " | " << std::left << std::setw(raw_position_width) << (positions.empty() ? "-" : positions) << " |\n";
             };
@@ -1159,13 +1160,15 @@ static void spec_bench_print_markdown(const spec_bench_options & opts, const std
             return std::pair<double, double>{mean, std::sqrt(variance / values.size())};
         };
         std::cout << "Repeat summary (" << opts.repeat << " runs/task)\n\n";
-        std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::setw(7) << "stage" << " | " << std::right << std::setw(4) << "runs"
+        std::cout << "| " << std::left << std::setw(8) << "task" << " | " << std::setw(stage_width) << "stage" << " | " << std::right << std::setw(4) << "runs"
+                  << " | " << std::setw(8) << "metric n"
                   << " | " << std::setw(15) << "tok/s mean/std" << " | " << std::setw(15) << "rate mean/std" << " | " << std::setw(15) << "a.len mean/std" << " |\n";
-        std::cout << "|----------|---------|------|-----------------|-----------------|-----------------|\n";
+        std::cout << "|----------|" << std::string(stage_width + 2, '-') << "|------|----------|-----------------|-----------------|-----------------|\n";
         for (const auto & group : groups) {
             const auto speed = mean_std(group.speed); const auto rate = mean_std(group.rate); const auto length = mean_std(group.length);
-            std::cout << "| " << std::left << std::setw(8) << fit(group.task, 8) << " | " << std::setw(7) << fit(group.stage, 7)
-                      << " | " << std::right << std::setw(4) << group.speed.size() << " | " << std::setw(15) << number(speed.first, 2) + "/" + number(speed.second, 2)
+            std::cout << "| " << std::left << std::setw(8) << fit(group.task, 8) << " | " << std::setw(stage_width) << fit(group.stage, stage_width)
+                      << " | " << std::right << std::setw(4) << group.speed.size() << " | " << std::setw(8) << group.rate.size()
+                      << " | " << std::setw(15) << number(speed.first, 2) + "/" + number(speed.second, 2)
                       << " | " << std::setw(15) << (group.rate.empty() ? "-" : number(100.0 * rate.first, 2) + "%/" + number(100.0 * rate.second, 2) + "%")
                       << " | " << std::setw(15) << (group.length.empty() ? "-" : number(length.first, 2) + "/" + number(length.second, 2)) << " |\n";
         }

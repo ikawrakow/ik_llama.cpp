@@ -59,6 +59,15 @@ no preceding position.
 
 Acceptance length is defined consistently as `1 + accepted_tokens / num_drafts` in detailed JSON, compact JSON, Markdown, and repeat summaries.
 
+Repeated attempts are executed in one process. Stateful drafting stages, including
+adaptive n-gram stages and lookup caches, may therefore carry learned state from an
+earlier task or repeat; use `--repeat 1` and separate invocations when independent
+samples are required. Pin the chat-template mode (`--jinja` or `--no-jinja`) when
+comparing runs because it changes the effective prompt. Speculative verification can
+also diverge from a baseline after a near-tie because batched evaluation changes
+floating-point reduction order, so this tool is a performance and acceptance benchmark,
+not a bit-identical output checker.
+
 ## Example
 
 ```bash
