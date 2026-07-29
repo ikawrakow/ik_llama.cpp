@@ -3687,14 +3687,10 @@ void server_context::apply_checkpoint(server_slot & slot) {
     }
 
     {
-        // erase checkpoints whose data extends past the next write position
-        // (pos_max > pos_next means the checkpoint was created beyond where
-        //  we are — its per-position state is stale after the rewind).
-        // A checkpoint at pos_max == pos_next is exactly at our position and
-        // should be kept (e.g. the one we just restored from).
+        // erase checkpoints whose data extends at or past the next write position
         for (auto it = slot.server_cached_prompt.checkpoints.begin(); it != slot.server_cached_prompt.checkpoints.end();) {
             const auto & cur = *it;
-            if (cur.pos_max > pos_next) {
+            if (cur.pos_max > pos_min_thold) {
                 SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, (float)cur.data.size() / 1024 / 1024);
                 it = slot.server_cached_prompt.checkpoints.erase(it);
             } else {
