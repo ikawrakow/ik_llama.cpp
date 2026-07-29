@@ -4383,7 +4383,9 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
 
 void server_context::release_slot_after_final_response(server_slot & slot) {
     slot.print_timings();
-    create_checkpoint_at_interval(slot);
+    if (params_base.do_checkpoint) {
+        create_checkpoint(slot);
+    }
     slot.release();
     slot.released = true;
     metrics.on_prediction(slot);
