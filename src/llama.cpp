@@ -9490,11 +9490,9 @@ struct llama_data_write {
             }
         }
 
-        // DSV4 compressed indexer cache
-        const uint32_t has_dsv4_cache = ctx->model.arch == LLM_ARCH_DEEPSEEK4 && ctx->dsv4.cache.cache_ctx != nullptr ? 1 : 0;
-        write(&has_dsv4_cache, sizeof(has_dsv4_cache));
-
-        if (has_dsv4_cache) {
+        // DSV4 compressed indexer cache (only for DSV4 models — preserves
+        // the old file layout for all other architectures)
+        if (ctx->model.arch == LLM_ARCH_DEEPSEEK4 && ctx->dsv4.cache.cache_ctx != nullptr) {
             const uint32_t dsv4_n_layer = n_layer;
             write(&dsv4_n_layer, sizeof(dsv4_n_layer));
 
@@ -10117,16 +10115,8 @@ struct llama_data_read {
             }
         }
 
-        // DSV4 compressed indexer cache
-        uint32_t has_dsv4_cache = 0;
-        read_to(&has_dsv4_cache, sizeof(has_dsv4_cache));
-
-        if (has_dsv4_cache) {
-            const bool is_dsv4 = ctx->model.arch == LLM_ARCH_DEEPSEEK4;
-            if (!is_dsv4) {
-                LLAMA_LOG_ERROR("%s: DSV4 cache present but model is not DEEPSEEK4\n", __func__);
-                return false;
-            }
+        // DSV4 compressed indexer cache (only present for DSV4 models)
+        if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
 
             auto & cache = ctx->dsv4.cache;
             if (cache.cache_ctx == nullptr) {
