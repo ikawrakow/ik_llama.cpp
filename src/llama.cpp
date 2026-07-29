@@ -9216,7 +9216,7 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 // stream_idx >= 0 gives that stream's portion; use -1 for the full tensor.
 // Tensors are laid out as [ne0, ne1, ...] with ne1 = per_stream_rows * n_stream.
 static void dsv4_stream_offset_size(const struct ggml_tensor * tensor, uint32_t n_stream, int32_t stream_idx, size_t & out_offset, size_t & out_size) {
-    GGML_ASSERT(stream_idx >= 0);
+    GGML_ASSERT(stream_idx >= 0 && (uint32_t)stream_idx < n_stream);
     GGML_ASSERT(n_stream > 0);
     GGML_ASSERT(tensor->ne[1] % n_stream == 0);
     const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
