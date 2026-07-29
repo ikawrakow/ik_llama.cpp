@@ -3619,6 +3619,59 @@ void server_context::add_sampled_tokens() {
     }
 }
 
+// Runs pos_max sanity, FNV-1a hash, and round-trip verification on a restored checkpoint.
+// Returns true if all checks pass.  Logs via SLT_ERR with an optional label prefix.
+static bool verify_restored_checkpoint(
+    llama_context * ctx,
+    llama_seq_id seq_id,
+    const server_prompt_checkpoint & ckpt,
+    std::vector<uint8_t> & scratch,
+    server_slot & slot,
+    const char * label)
+{
+    // Sanity check: verify restored cache position
+    {
+        const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
+        if (check_pos != ckpt.pos_max) {
+            SLT_ERR(slot, "%srestore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",
+                label, check_pos, ckpt.pos_max);
+            return false;
+        }
+    }
+
+    // FNV-1a checksum check
+    {
+        const uint64_t loaded_hash = fnv1a_hash(ckpt.data.data(), ckpt.data.size());
+        if (loaded_hash != ckpt.data_hash) {
+            SLT_ERR(slot, "%srestore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted\n",
+                label, loaded_hash, ckpt.data_hash);
+            return false;
+        }
+    }
+
+    // Round-trip check: re-serialize and compare byte-for-byte
+    {
+        const size_t ckpt_size = ckpt.data.size();
+        const size_t re_size = llama_state_seq_get_size(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if (re_size != ckpt_size) {
+            SLT_ERR(slot, "%srestore round-trip size mismatch: %zu != %zu — state corrupted\n",
+                label, re_size, ckpt_size);
+            return false;
+        }
+        if (scratch.size() < re_size) {
+            scratch.resize(re_size);
+        }
+        const size_t n = llama_state_seq_get_data(ctx, scratch.data(), scratch.size(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, nullptr);
+        if (n != re_size || memcmp(ckpt.data.data(), scratch.data(), re_size) != 0) {
+            SLT_ERR(slot, "%srestore round-trip mismatch: re-serialized state differs from original — serialization bug or state corrupted\n",
+                label);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void server_context::create_checkpoint_at_interval(server_slot & slot) {
     if (this->params_base.do_checkpoint) {
         auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
@@ -3663,68 +3716,24 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 if (n != checkpoint_size) {
                     SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float)checkpoint_size / 1024 / 1024);
                     do_reset = true;
-                    //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
-                } else {
-                    // Sanity check: verify the restored cache ends at the expected
-                    // position.  Catches misplaced restores (wrong stream offset,
-                    // partial overwrite).
+                } else if (!verify_restored_checkpoint(ctx, slot.id, *it, _ckpt_scratch, slot, "")) {
+                    do_reset = true;
+                }
+
+                if (!do_reset) {
+                    pos_next = std::min(pos_next, it->pos_max);
+                    slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
+
                     {
-                        const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-                        if (check_pos != it->pos_max) {
-                            SLT_ERR(slot, "restore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted, forcing reset\n",
-                                check_pos, it->pos_max);
-                            do_reset = true;
-                        }
+                        const llama_pos pos_next_prompt = std::min(
+                            slot.prompt_tokens.pos_next(slot.n_past_prompt),
+                            it->pos_max_prompt);
+                        slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next_prompt);
                     }
-                    // Correctness check: verify the serialized data checksum.
-                    // Catches in-memory corruption of the checkpoint data between
-                    // creation and restore.
-                    if (!do_reset) {
-                        const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
-                        if (loaded_hash != it->data_hash) {
-                            SLT_ERR(slot, "restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted, forcing reset\n",
-                                loaded_hash, it->data_hash);
-                            do_reset = true;
-                        }
-                    }
-                    // Round-trip check: re-serialize and compare byte-for-byte.
-                    // Catches serialization bugs that produce internally-consistent
-                    // but wrong values (correct position, corrupted tensor data).
-                    if (!do_reset) {
-                        const size_t re_size = llama_state_seq_get_size(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                        if (re_size != checkpoint_size) {
-                            SLT_ERR(slot, "restore round-trip size mismatch: %zu != %zu — state corrupted, forcing reset\n",
-                                re_size, checkpoint_size);
-                            do_reset = true;
-                        } else {
-                            if (_ckpt_scratch.size() < re_size) {
-                                _ckpt_scratch.resize(re_size);
-                            }
-                            const size_t n = llama_state_seq_get_data(ctx, _ckpt_scratch.data(), _ckpt_scratch.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, nullptr);
-                            if (n != re_size || memcmp(it->data.data(), _ckpt_scratch.data(), re_size) != 0) {
-                                SLT_ERR(slot, "restore round-trip mismatch: re-serialized state differs from original — serialization bug or state corrupted, forcing reset\n");
-                                do_reset = true;
-                            }
-                        }
-                    }
-                    if (!do_reset) {
-                        pos_next = std::min(pos_next, it->pos_max);
-                        slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
-                        const llama_pos pos_next_cache = pos_next;
 
-                        pos_next = slot.prompt_tokens.pos_next(slot.n_past_prompt);
-                        pos_next = std::min(pos_next, it->pos_max_prompt);
-                        slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(pos_next);
+                    slot.checkpoint_pos = it->pos_max;
 
-                        // Restore cache-aligned pos_next for checkpoint erasure below
-                        pos_next = pos_next_cache;
-
-                        // Remember we have a checkpoint at this position so the
-                        // interval gate doesn't immediately create a new one.
-                        slot.checkpoint_pos = it->pos_max;
-
-                        SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
-                    }
+                    SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
                 }
             }
 
@@ -4014,65 +4023,24 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                         const size_t checkpoint_size = it->data.size();
                                         const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         if (n == checkpoint_size) {
-                                            restored = true;  // byte-level restore succeeded
-                                            // Sanity check: verify the restored cache ends at the expected
-                                            // position.  Catches misplaced restores (wrong stream offset,
-                                            // partial overwrite).
-                                            {
-                                                const llama_pos check_pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-                                                if (check_pos != it->pos_max) {
-                                                    SLT_ERR(slot, "DSV4 restore position mismatch: cache pos_max=%d != checkpoint pos_max=%d — state corrupted\n",
-                                                        check_pos, it->pos_max);
-                                                    restored = false;  // treat as failed restore
-                                                }
-                                            }
-                                            // Correctness check: verify the serialized data checksum.
-                                            // Catches in-memory corruption of the checkpoint data.
-                                            if (restored) {
-                                                const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
-                                                if (loaded_hash != it->data_hash) {
-                                                    SLT_ERR(slot, "DSV4 restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted\n",
-                                                        loaded_hash, it->data_hash);
-                                                    restored = false;
-                                                }
-                                            }
-                                            // Round-trip check: re-serialize and compare byte-for-byte.
-                                            // Catches serialization bugs that produce internally-consistent
-                                            // but wrong values (correct position, corrupted tensor data).
-                                            if (restored) {
-                                                const size_t re_size = llama_state_seq_get_size(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                                if (re_size != checkpoint_size) {
-                                                    SLT_ERR(slot, "DSV4 restore round-trip size mismatch: %zu != %zu — state corrupted\n",
-                                                        re_size, checkpoint_size);
-                                                    restored = false;
-                                                } else {
-                                                    if (_ckpt_scratch.size() < re_size) {
-                                                        _ckpt_scratch.resize(re_size);
-                                                    }
-                                                    const size_t n = llama_state_seq_get_data(ctx, _ckpt_scratch.data(), _ckpt_scratch.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, nullptr);
-                                                    if (n != re_size || memcmp(it->data.data(), _ckpt_scratch.data(), re_size) != 0) {
-                                                        SLT_ERR(slot, "DSV4 restore round-trip mismatch: re-serialized state differs from original — serialization bug or state corrupted\n");
-                                                        restored = false;
-                                                    }
-                                                }
-                                            }
-                                            if (restored) {
-                                                slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max);
-                                                slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt);
-                                                slot.n_past_offset = slot.n_past_prompt - slot.n_past;
-                                                slot.n_discarded_prompt = 0;
-                                                slot.checkpoint_pos = it->pos_max;
-                                                SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
-                                                    it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
-                                                    (float)checkpoint_size / 1024.0f / 1024.0f);
-                                                // The PP batch loop below processes tokens sequentially
-                                                // from n_past_prompt in n_batch chunks.  A full-reprocess
-                                                // control chunks from 0, so boundaries diverge unless the
-                                                // restore point lands on an n_batch multiple — meaning
-                                                // float reduction order differs between arms.
-                                                // For validation, use bit-exact token-stream comparison
-                                                // against a control rather than relying on logit deltas.
-                                            }
+                                            restored = verify_restored_checkpoint(ctx, slot.id, *it, _ckpt_scratch, slot, "DSV4 ");
+                                        }
+                                        if (restored) {
+                                            slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max);
+                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt);
+                                            slot.n_past_offset = slot.n_past_prompt - slot.n_past;
+                                            slot.n_discarded_prompt = 0;
+                                            slot.checkpoint_pos = it->pos_max;
+                                            SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
+                                                it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
+                                                (float)checkpoint_size / 1024.0f / 1024.0f);
+                                            // The PP batch loop below processes tokens sequentially
+                                            // from n_past_prompt in n_batch chunks.  A full-reprocess
+                                            // control chunks from 0, so boundaries diverge unless the
+                                            // restore point lands on an n_batch multiple — meaning
+                                            // float reduction order differs between arms.
+                                            // For validation, use bit-exact token-stream comparison
+                                            // against a control rather than relying on logit deltas.
                                         }
                                     }
                                 }
