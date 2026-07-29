@@ -367,7 +367,7 @@ struct server_prompt_checkpoint {
         return data.size();
     }
 
-    json to_json() {
+    json to_json() const {
         json j;
         j["pos_min"] = pos_min;
         j["pos_max"] = pos_max;
@@ -416,7 +416,7 @@ struct server_prompt {
         };
     }
 
-    json to_json()
+    json to_json() const
     {
         json j;
         j["tokens"] = tokens.to_json();
