@@ -3619,13 +3619,13 @@ void server_context::add_sampled_tokens() {
     }
 }
 
-void  server_context::create_checkpoint_at_interval(server_slot & slot, const gpt_params & params_base) {
-    if (params_base.do_checkpoint) {
+void server_context::create_checkpoint_at_interval(server_slot & slot) {
+    if (this->params_base.do_checkpoint) {
         auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
         // When ctx_checkpoints_interval <= 0, no gating (compatible with recurrent models).
         // When > 0, throttle creation to prevent ~145 MiB DSV4 checkpoints at every transition.
-        if (params_base.ctx_checkpoints_interval <= 0 ||
-            slot.checkpoint_pos + params_base.ctx_checkpoints_interval <= 1 + pos) {
+        if (this->params_base.ctx_checkpoints_interval <= 0 ||
+            slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= 1 + pos) {
             bool created = create_checkpoint(slot);
             if (created) {
                 slot.checkpoint_pos = pos;
@@ -4398,7 +4398,7 @@ void server_context::speculative_decoding_accept() {
         const int64_t t_current = ggml_time_us();
 
         if (slot.n_decoded > 1) {
-            create_checkpoint_at_interval(slot, params_base);
+            create_checkpoint_at_interval(slot);
         }
 
         slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
@@ -4483,7 +4483,7 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
 void server_context::release_slot_after_final_response(server_slot & slot) {
     slot.print_timings();
     if (params_base.do_checkpoint) {
-        create_checkpoint_at_interval(slot, params_base);
+        create_checkpoint_at_interval(slot);
     }
     slot.release();
     slot.released = true;
@@ -4839,7 +4839,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (!is_active_slot || slot.i_batch < (int)i || slot.i_batch >= (int)(i + n_tokens)) {
                 // save checkpoint during prompt processing
                 if (slot.command == SLOT_COMMAND_LOAD_PROMPT) {
-                    create_checkpoint_at_interval(slot, params_base);
+                    create_checkpoint_at_interval(slot);
                 }
                 continue; // continue loop of slots
             }
@@ -4909,13 +4909,13 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 metrics.on_prompt_eval(slot);
                 // create checkpoint after prompt processing ends
                 if (params_base.do_checkpoint) {
-                    create_checkpoint_at_interval(slot, params_base);
+                    create_checkpoint_at_interval(slot);
                 }
             }
 
             // create checkpoint during generation
             if (slot.n_decoded > 1) {
-                create_checkpoint_at_interval(slot, params_base);
+                create_checkpoint_at_interval(slot);
             }
 
             slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;

@@ -396,7 +396,7 @@ struct server_context {
 
     void apply_checkpoint(server_slot & slot);
 
-    void create_checkpoint_at_interval(server_slot & slot, const gpt_params & params_base);
+    void create_checkpoint_at_interval(server_slot & slot);
 
     void release_slot_after_final_response(server_slot & slot);
 };
