@@ -38,8 +38,9 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
 
-    // Move scratch into checkpoint (zero-copy, avoids re-allocation)
-    ckpt.data.swap(scratch);
+    // Copy into checkpoint; scratch retains size and capacity, so the
+    // next call's resize (if any) is an in-place extension, not a re-allocation.
+    ckpt.data = scratch;
 }
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
