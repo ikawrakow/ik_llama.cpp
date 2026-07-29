@@ -2738,8 +2738,6 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
             LLAMA_LOG_ERROR("%s: unknown (magic, version) for checkpoint file: %08x, %08x\n", __func__, magic, version);
             return 0;
         }
-        (void)has_hash;
-
         size_t count;
         file.read(reinterpret_cast<char *>(&count), sizeof(count));
 
