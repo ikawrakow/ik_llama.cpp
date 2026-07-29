@@ -3686,16 +3686,33 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     }
                     // Correctness check: verify the serialized data checksum.
                     // Catches in-memory corruption of the checkpoint data between
-                    // creation and restore.  Does NOT catch serialization bugs that
-                    // produce internally-consistent but wrong values — for that,
-                    // use bit-exact token-stream comparison against a control per
-                    // Joel's methodology.
+                    // creation and restore.
                     if (!do_reset) {
                         const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
                         if (loaded_hash != it->data_hash) {
                             SLT_ERR(slot, "restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted, forcing reset\n",
                                 loaded_hash, it->data_hash);
                             do_reset = true;
+                        }
+                    }
+                    // Round-trip check: re-serialize and compare byte-for-byte.
+                    // Catches serialization bugs that produce internally-consistent
+                    // but wrong values (correct position, corrupted tensor data).
+                    if (!do_reset) {
+                        const size_t re_size = llama_state_seq_get_size(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                        if (re_size != checkpoint_size) {
+                            SLT_ERR(slot, "restore round-trip size mismatch: %zu != %zu — state corrupted, forcing reset\n",
+                                re_size, checkpoint_size);
+                            do_reset = true;
+                        } else {
+                            if (_ckpt_scratch.size() < re_size) {
+                                _ckpt_scratch.resize(re_size);
+                            }
+                            const size_t n = llama_state_seq_get_data(ctx, _ckpt_scratch.data(), _ckpt_scratch.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, nullptr);
+                            if (n != re_size || memcmp(it->data.data(), _ckpt_scratch.data(), re_size) != 0) {
+                                SLT_ERR(slot, "restore round-trip mismatch: re-serialized state differs from original — serialization bug or state corrupted, forcing reset\n");
+                                do_reset = true;
+                            }
                         }
                     }
                     if (!do_reset) {
@@ -4018,12 +4035,33 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                                 }
                                             }
                                             // Correctness check: verify the serialized data checksum.
+                                            // Catches in-memory corruption of the checkpoint data.
                                             if (restored) {
                                                 const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
                                                 if (loaded_hash != it->data_hash) {
                                                     SLT_ERR(slot, "DSV4 restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted\n",
                                                         loaded_hash, it->data_hash);
                                                     restored = false;
+                                                }
+                                            }
+                                            // Round-trip check: re-serialize and compare byte-for-byte.
+                                            // Catches serialization bugs that produce internally-consistent
+                                            // but wrong values (correct position, corrupted tensor data).
+                                            if (restored) {
+                                                const size_t re_size = llama_state_seq_get_size(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                                if (re_size != checkpoint_size) {
+                                                    SLT_ERR(slot, "DSV4 restore round-trip size mismatch: %zu != %zu — state corrupted\n",
+                                                        re_size, checkpoint_size);
+                                                    restored = false;
+                                                } else {
+                                                    if (_ckpt_scratch.size() < re_size) {
+                                                        _ckpt_scratch.resize(re_size);
+                                                    }
+                                                    const size_t n = llama_state_seq_get_data(ctx, _ckpt_scratch.data(), _ckpt_scratch.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, nullptr);
+                                                    if (n != re_size || memcmp(it->data.data(), _ckpt_scratch.data(), re_size) != 0) {
+                                                        SLT_ERR(slot, "DSV4 restore round-trip mismatch: re-serialized state differs from original — serialization bug or state corrupted\n");
+                                                        restored = false;
+                                                    }
                                                 }
                                             }
                                             if (restored) {
