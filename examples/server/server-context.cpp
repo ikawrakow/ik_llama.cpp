@@ -18,7 +18,7 @@
 #include <regex>
 #include <exception>
 
-static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max, int32_t offset, std::vector<uint8_t> & scratch, size_t & max_size) {
+static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max, int32_t offset, std::vector<uint8_t> & scratch) {
     ckpt.pos_min = pos_min;
     ckpt.pos_max = pos_max;
     ckpt.pos_max_prompt = pos_max + offset;
@@ -43,11 +43,6 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
     // Move scratch into checkpoint (zero-copy, avoids re-allocation)
     ckpt.data.swap(scratch);
     ckpt.data.resize(n);
-
-    // Update max size hint
-    if (n > max_size) {
-        max_size = n;
-    }
 }
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
@@ -3840,7 +3835,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
         }
 
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
-        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max, slot.n_past_offset, _ckpt_scratch, _ckpt_max_size);
+        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), pos_min, pos_max, slot.n_past_offset, _ckpt_scratch);
 
         SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,

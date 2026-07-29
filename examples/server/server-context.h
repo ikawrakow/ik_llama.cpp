@@ -391,7 +391,6 @@ struct server_context {
 
     // Reusable scratch buffer for checkpoint serialization (avoids per-checkpoint alloc + zero-init)
     std::vector<uint8_t> _ckpt_scratch;
-    size_t _ckpt_max_size = 0;
 
     bool create_checkpoint(server_slot & slot);
 
