@@ -1005,12 +1005,14 @@ extern "C" {
            llama_state_seq_flags   flags);
 
     // Copy the KV cache of a single sequence into the specified buffer
+    // If hash_out is non-null, a streaming FNV-1a hash of the serialized bytes is written to *hash_out
     LLAMA_API size_t llama_state_seq_get_data(
             struct llama_context * ctx,
                          uint8_t * dst,
                           size_t   size,
                     llama_seq_id   seq_id,
-           llama_state_seq_flags   flags);
+           llama_state_seq_flags   flags,
+                      uint64_t *   hash_out);
 
     // Copy the sequence data (originally copied with `llama_state_seq_get_data`) into the specified sequence
     // Returns:

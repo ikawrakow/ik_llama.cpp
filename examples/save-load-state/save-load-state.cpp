@@ -189,7 +189,7 @@ int main(int argc, char ** argv) {
     {
         // save kv of seq 0
         std::vector<uint8_t> seq_store(llama_state_seq_get_size(ctx3, 0, 0));
-        const size_t ncopy = llama_state_seq_get_data(ctx3, seq_store.data(), seq_store.size(), 0, 0);
+        const size_t ncopy = llama_state_seq_get_data(ctx3, seq_store.data(), seq_store.size(), 0, 0, nullptr);
         if (ncopy != seq_store.size()) {
             fprintf(stderr, "\n%s : seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
             llama_free(ctx3);

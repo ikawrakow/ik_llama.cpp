@@ -18,23 +18,6 @@
 #include <regex>
 #include <exception>
 
-// FNV-1a 64-bit hash for checkpoint integrity verification
-static uint64_t fnv1a_hash(const uint8_t * data, size_t len) {
-    uint64_t hash = 0xcbf29ce484222325ULL;
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= 0x100000001b3ULL;
-    }
-    return hash;
-}
-
-static void ensure_checkpoint_hash(const server_prompt_checkpoint & ckpt) {
-    if (!ckpt.hash_computed && !ckpt.data.empty()) {
-        ckpt.data_hash = fnv1a_hash(ckpt.data.data(), ckpt.data.size());
-        ckpt.hash_computed = true;
-    }
-}
-
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max, int32_t offset, std::vector<uint8_t> & scratch, size_t & max_size) {
     ckpt.pos_min = pos_min;
     ckpt.pos_max = pos_max;
@@ -50,7 +33,9 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
         scratch.resize(checkpoint_size);
     }
 
-    const size_t n = llama_state_seq_get_data(ctx, scratch.data(), scratch.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    // Hash is computed incrementally during serialization (streaming FNV-1a)
+    ckpt.data_hash = 0xcbf29ce484222325ULL; // FNV-1a offset basis
+    const size_t n = llama_state_seq_get_data(ctx, scratch.data(), scratch.size(), id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, &ckpt.data_hash);
     if (n != checkpoint_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", checkpoint_size, n);
     }
@@ -63,9 +48,6 @@ static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, lla
     if (n > max_size) {
         max_size = n;
     }
-
-    ckpt.data_hash = 0;
-    ckpt.hash_computed = false;
 }
 
 static void log_text(const gpt_params & params_base, const std::string & text) {
@@ -490,7 +472,7 @@ void server_slot::prompt_save(server_prompt_cache& prompt_cache) const {
         return;
     }
 
-    llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0);
+    llama_state_seq_get_data(ctx, cur->data.data(), cur_size, id, 0, nullptr);
 }
 
 void server_slot::prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction) {
@@ -2714,7 +2696,6 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
     file.write(reinterpret_cast<const char *>(&count), sizeof(count));
 
     for (const auto & checkpoint : checkpoints) {
-        ensure_checkpoint_hash(checkpoint);
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_min), sizeof(checkpoint.pos_min));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_min_prompt), sizeof(checkpoint.pos_min_prompt));
@@ -2729,6 +2710,16 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
     size_t pos = file.tellp();
     file.close();
     return pos;
+}
+
+// Compute FNV-1a hash for checkpoint data (used for backward-compat file loading)
+static uint64_t fnv1a_hash(const uint8_t * data, size_t len) {
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= 0x100000001b3ULL;
+    }
+    return hash;
 }
 
 static size_t load_checkpoints_from_file(const std::string & filename, std::list<server_prompt_checkpoint> & checkpoints) {
@@ -2767,7 +2758,6 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
 
             if (has_hash) {
                 file.read(reinterpret_cast<char *>(&checkpoint.data_hash), sizeof(checkpoint.data_hash));
-                checkpoint.hash_computed = true;
             }
 
             size_t data_len;
@@ -2780,7 +2770,6 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
             // Compute hash for checkpoints loaded from old-format files
             if (!has_hash && !checkpoint.data.empty()) {
                 checkpoint.data_hash = fnv1a_hash(checkpoint.data.data(), checkpoint.data.size());
-                checkpoint.hash_computed = true;
             }
 
             checkpoints.push_back(checkpoint);
@@ -3702,7 +3691,6 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     // use bit-exact token-stream comparison against a control per
                     // Joel's methodology.
                     if (!do_reset) {
-                        ensure_checkpoint_hash(*it);
                         const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
                         if (loaded_hash != it->data_hash) {
                             SLT_ERR(slot, "restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted, forcing reset\n",
@@ -4031,7 +4019,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                             }
                                             // Correctness check: verify the serialized data checksum.
                                             if (restored) {
-                                                ensure_checkpoint_hash(*it);
                                                 const uint64_t loaded_hash = fnv1a_hash(it->data.data(), it->data.size());
                                                 if (loaded_hash != it->data_hash) {
                                                     SLT_ERR(slot, "DSV4 restore checksum mismatch: loaded hash=%016" PRIx64 " != stored hash=%016" PRIx64 " — data corrupted\n",
