@@ -119,7 +119,7 @@ struct server_slot {
 
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens, float min_reusable_fraction);
 
-    size_t checkpoint_pos = 0;
+    llama_pos checkpoint_pos = -1;
     bool do_checkpoint = false;
     bool image_just_processed = false;
 

@@ -508,7 +508,7 @@ void server_slot::reset() {
     rewind_status = false;
 
     generated_token_probs.clear();
-    checkpoint_pos = 0;
+    checkpoint_pos = -1;
     image_just_processed = false;
     do_checkpoint = false;
     if (spec != nullptr) {
@@ -2106,7 +2106,7 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
         slot.n_kept_prompt = 0;
         slot.n_prompt_tokens_cache = 0;
         slot.server_cached_prompt.checkpoints.clear();
-        slot.checkpoint_pos = 0;
+        slot.checkpoint_pos = -1;
         slot.do_checkpoint = false;
         if (slot.ctx_sampling != nullptr) {
             common_sampler_reset(slot.ctx_sampling);
@@ -3620,7 +3620,7 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
         return;
     }
     auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-    if (slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= 1 + pos) {
+    if (slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= pos) {
         bool created = create_checkpoint(slot);
         if (created) {
             slot.checkpoint_pos = pos;
