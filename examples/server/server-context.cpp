@@ -3602,20 +3602,19 @@ static bool verify_restored_checkpoint(
 
 // Interval-gated checkpoint creation.
 // When ctx_checkpoints_interval <= 0 the gate is disabled (no-op);
-// slot.do_checkpoint (tolerance mechanism) bypasses the interval gate.
+// slot.do_checkpoint (tolerance) is handled by the caller.
 void server_context::create_checkpoint_at_interval(server_slot & slot) {
     if (!this->params_base.do_checkpoint) {
         return;
     }
-    if (this->params_base.ctx_checkpoints_interval <= 0 && !slot.do_checkpoint) {
+    if (this->params_base.ctx_checkpoints_interval <= 0) {
         return;
     }
     auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
-    if (slot.do_checkpoint || slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= pos) {
+    if (slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= pos) {
         bool created = create_checkpoint(slot);
         if (created) {
             slot.checkpoint_pos = pos;
-            slot.do_checkpoint = false;
         }
     }
 }
@@ -4740,7 +4739,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             if (!is_active_slot || slot.i_batch < (int)i || slot.i_batch >= (int)(i + n_tokens)) {
                 // save checkpoint during prompt processing
                 if (slot.command == SLOT_COMMAND_LOAD_PROMPT) {
-                    create_checkpoint_at_interval(slot);
+                    if (slot.do_checkpoint) {
+                        create_checkpoint(slot);
+                    } else {
+                        create_checkpoint_at_interval(slot);
+                    }
                 }
                 continue; // continue loop of slots
             }
