@@ -429,7 +429,6 @@ struct server_prompt {
         tokens.from_json(j.at("tokens"));
         n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
         n_discarded_prompt = j.value<llama_pos>("n_discarded_prompt", 0);
-        n_kept_prompt = j.value<llama_pos>("n_kept_prompt", 0);
     }
 };
 
