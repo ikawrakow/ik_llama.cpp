@@ -8532,13 +8532,35 @@ int iqk_repacked_type(const struct ggml_tensor * tensor) {
     return rptr && tensor->ne[1] % rptr->num_rows == 0 ? (int)rptr->new_type : (int)tensor->type;
 }
 
+uint64_t iqk_repack_workspace_size(const struct ggml_tensor * tensor) {
+    constexpr int kChunk = 8;
+    if (!tensor || iqk_repacked_type(tensor) == (int) tensor->type) {
+        return 0;
+    }
+
+    const auto rptr = get_repack_info(tensor->type);
+    if (!rptr) {
+        return 0;
+    }
+
+    const int64_t nrows = ggml_nrows(tensor);
+    const int64_t rows_per_chunk = (int64_t) kChunk * rptr->num_rows;
+    const int64_t num_chunks = (nrows + rows_per_chunk - 1) / rows_per_chunk;
+    const uint64_t max_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+    const uint64_t nthreads = std::min<uint64_t>((uint64_t) num_chunks, max_threads);
+    const uint64_t row_size = (uint64_t) ggml_row_size(tensor->type, tensor->ne[0]);
+    const uint64_t rows_in_workspace = nthreads * (uint64_t) rptr->num_rows;
+    if (row_size != 0 && rows_in_workspace > UINT64_MAX / row_size) {
+        return UINT64_MAX;
+    }
+    return rows_in_workspace * row_size;
+}
+
 void iqk_repack_tensor(struct ggml_tensor * tensor) {
     constexpr int kChunk = 8;
     if (!tensor) return;
     if (!ggml_is_contiguous(tensor)) return;
     if (is_forbidden_tensor(tensor->name)) return;
-    if (tensor->ne[1] % 4) return;
-
     auto rptr = get_repack_info(tensor->type);
     if (!rptr) return;
     if (tensor->ne[1] % rptr->num_rows) return;

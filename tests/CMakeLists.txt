@@ -201,6 +201,9 @@ llama_build_and_test(
     peg-parser/tests.h
 )
 llama_build_and_test(test-regex-partial.cpp)
+llama_build_and_test(test-rtr-params.cpp)
+llama_build_and_test(test-cgroup-resolver.cpp)
+llama_build_and_test(test-rtr-auto-peak.cpp)
 
 # llama_target_and_test(test-opt.cpp) # SLOW
 
@@ -212,5 +215,3 @@ llama_target_and_test(test-autorelease.cpp        LABEL "model")
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
-
-

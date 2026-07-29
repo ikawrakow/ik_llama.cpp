@@ -2182,8 +2182,44 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-rtr" || arg == "--run-time-repack") {
-        params.repack_tensors = true;
-        params.use_mmap = false;
+        // Optional value: 0|off to disable, 1|on to force on, auto to enable
+        // with a safety-first memory headroom check. No value (legacy form)
+        // behaves like "1".
+        bool repack      = true;
+        bool repack_auto = false;
+
+        if (i + 1 < argc) {
+            std::string v = argv[i + 1];
+            std::transform(v.begin(), v.end(), v.begin(),
+                    [](unsigned char c) { return (char)std::tolower(c); });
+            const bool is_mode_token =
+                    v == "0" || v == "1" || v == "off" || v == "on" || v == "auto";
+            if (is_mode_token) {
+                ++i;  // consume the value
+                if (v == "0" || v == "off") {
+                    repack      = false;
+                    repack_auto = false;
+                } else if (v == "1" || v == "on") {
+                    repack      = true;
+                    repack_auto = false;
+                } else { // "auto"
+                    repack      = true;
+                    repack_auto = true;
+                }
+            }
+        }
+
+        params.repack_tensors      = repack;
+        params.repack_tensors_auto = repack_auto;
+        // Do not couple repack and mmap in the parser. The model loader resolves
+        // the final mmap state after all CLI arguments have been parsed. This
+        // makes repeated options obey last-option-wins semantics, e.g.
+        // "-rtr 1 -rtr auto" can still preserve mmap when auto disables repack.
+        return true;
+    }
+    if (arg == "-rtra" || arg == "--run-time-repack-auto") {
+        params.repack_tensors      = true;
+        params.repack_tensors_auto = true;
         return true;
     }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
@@ -3271,7 +3307,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     if (llama_supports_mmap()) {
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
-    options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
+    options.push_back({ "*",           "-rtr,  --run-time-repack [0|1|auto]",
+                                                                        "repack tensors if interleaved variant is available.\n"
+                                                                        "0/off = disable, 1/on = always (legacy), auto = enable with auto-disable\n"
+                                                                        "when estimated peak memory exceeds safe headroom. Default: 0."});
+    options.push_back({ "*",           "-rtra, --run-time-repack-auto", "alias for --run-time-repack auto" });
     options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
     options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
@@ -4237,6 +4277,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
+    mparams.repack_tensors_auto = params.repack_tensors_auto;
     mparams.use_thp         = params.use_thp;
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
@@ -4244,6 +4285,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mtp             = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     mparams.flash_attn      = params.flash_attn;
     mparams.defer_experts   = params.defer_experts;
+    mparams.prefetch_experts = params.prefetch_experts;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {

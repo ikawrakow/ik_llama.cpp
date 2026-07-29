@@ -240,42 +240,12 @@ $ ./llama-bench -o json
 
 ### SQL
 
-SQL output is suitable for importing into a SQLite database. The output can be piped into the `sqlite3` command line tool to add the results to a database.
+SQL output is suitable for importing into a SQLite database. The current writer uses the immutable versioned `test_v3` table; it can be piped into the `sqlite3` command line tool to add results to a database. `use_mmap` remains the requested compatibility field. `use_mmap_requested`, `use_mmap_effective`, and `mmap_backed_buffers` record the requested setting, loader decision, and actual mmap-backed buffers separately.
 
 ```sh
-$ ./llama-bench -o sql
+$ ./llama-bench -o sql | sqlite3 llama-bench.sqlite
+$ sqlite3 llama-bench.sqlite '.schema test_v3'
+$ ./scripts/compare-llama-bench.py -i llama-bench.sqlite
 ```
 
-```sql
-CREATE TABLE IF NOT EXISTS test (
-  build_commit TEXT,
-  build_number INTEGER,
-  cuda INTEGER,
-  metal INTEGER,
-  gpu_blas INTEGER,
-  blas INTEGER,
-  cpu_info TEXT,
-  gpu_info TEXT,
-  model_filename TEXT,
-  model_type TEXT,
-  model_size INTEGER,
-  model_n_params INTEGER,
-  n_batch INTEGER,
-  n_threads INTEGER,
-  f16_kv INTEGER,
-  n_gpu_layers INTEGER,
-  main_gpu INTEGER,
-  mul_mat_q INTEGER,
-  tensor_split TEXT,
-  n_prompt INTEGER,
-  n_gen INTEGER,
-  test_time TEXT,
-  avg_ns INTEGER,
-  stddev_ns INTEGER,
-  avg_ts REAL,
-  stddev_ts REAL
-);
-
-INSERT INTO test (build_commit, build_number, cuda, metal, gpu_blas, blas, cpu_info, gpu_info, model_filename, model_type, model_size, model_n_params, n_batch, n_threads, f16_kv, n_gpu_layers, main_gpu, mul_mat_q, tensor_split, n_prompt, n_gen, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('3469684', '1275', '1', '0', '0', '1', '1', '13th Gen Intel(R) Core(TM) i9-13900K', 'NVIDIA GeForce RTX 3090 Ti', 'models/7B/ggml-model-q4_0.gguf', 'llama 7B mostly Q4_0', '3825065984', '6738415616', '512', '16', '1', '99', '0', '1', '0.00', '512', '0', '2023-09-23T12:10:30Z', '212693772', '743623', '2407.240204', '8.409634');
-INSERT INTO test (build_commit, build_number, cuda, metal, gpu_blas, blas, cpu_info, gpu_info, model_filename, model_type, model_size, model_n_params, n_batch, n_threads, f16_kv, n_gpu_layers, main_gpu, mul_mat_q, tensor_split, n_prompt, n_gen, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('3469684', '1275', '1', '0', '0', '1', '1', '13th Gen Intel(R) Core(TM) i9-13900K', 'NVIDIA GeForce RTX 3090 Ti', 'models/7B/ggml-model-q4_0.gguf', 'llama 7B mostly Q4_0', '3825065984', '6738415616', '512', '16', '1', '99', '0', '1', '0.00', '0', '128', '2023-09-23T12:10:31Z', '977925003', '4037361', '130.891159', '0.537692');
-```
+The compare script reads legacy `test`, historical `test_v2`, and current `test_v3` data. It compares rows only within the same schema generation: `test_v2` has no effective-mmap semantics and is never compared with `test_v3`. The schema column is therefore always included in comparison output, including when `--show` is specified. A future dual-write schema must provide a stable run identifier and deduplication.

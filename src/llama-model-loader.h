@@ -32,6 +32,10 @@ static const char * llama_file_version_name(llama_fver version) {
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
+// Keep RTR auto peak accounting in sync with load_all_data().
+constexpr int    LLAMA_MODEL_LOADER_N_LOAD_WORKERS       = 8;
+constexpr size_t LLAMA_MODEL_LOADER_CUDA_STAGING_BYTES   = 16 * 1024 * 1024;
+
 struct llama_layer;
 
 struct llama_model_loader {

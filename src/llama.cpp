@@ -12,6 +12,7 @@
 #include "llama-arch.h"
 #include "llama-mmap.h"
 #include "llama-model-loader.h"
+#include "llama-rtr-auto.h"
 #include "llama-model.h"
 #include "llama-build-context.h"
 #include "llama-cparams.h"
@@ -92,6 +93,7 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <cerrno>
 #include <cfloat>
 #include <cinttypes>
 #include <climits>
@@ -107,6 +109,7 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #include <functional>
 #include <future>
 #include <initializer_list>
+#include <iterator>
 #include <locale>
 #include <map>
 #include <memory>
@@ -4466,6 +4469,7 @@ static bool llm_load_tensors(
                     throw std::runtime_error("unable to allocate backend CPU buffer");
                 }
                 model.bufs.push_back(buf);
+                model.has_mmap_backed_buffers = true;
                 bufs.emplace(idx, buf);
 #ifdef GGML_USE_CUDA
                 if (n_layer >= n_gpu_layers) {
@@ -4491,6 +4495,7 @@ static bool llm_load_tensors(
                     throw std::runtime_error("unable to allocate backend metal buffer");
                 }
                 model.bufs.push_back(buf);
+                model.has_mmap_backed_buffers = true;
                 bufs.emplace(idx, buf);
             }
         }
@@ -4631,6 +4636,7 @@ static bool llm_load_tensors(
     }
 
     if (!ml.use_mmap && ml.repack_tensors) {
+        model.repack_pass_executed = true;
         int n_repacked = 0;
         for (auto& it : model.tensors_by_name) {
             if (ggml_backend_buffer_is_host(it.second->buffer)) {
@@ -4640,6 +4646,7 @@ static bool llm_load_tensors(
                 if (it.second->type != orig_type) ++n_repacked;
             }
         }
+        model.n_repacked = n_repacked;
         if (n_repacked > 0) LLAMA_LOG_INFO("============ Repacked %d tensors\n", n_repacked);
     }
 
@@ -4682,9 +4689,694 @@ static bool llm_load_tensors(
     return true;
 }
 
+// --- run-time-repack auto policy ----------------------------------------------------
+//
+// `--run-time-repack auto` (a.k.a. `-rtr auto`) flips repacking on by default, but
+// disables it when CPU-resident tensors that would lose mmap are known to exceed
+// available memory. The check is metadata-only: probe tensor metadata, resolve
+// simple CPU/GPU placement, and compare CPU-resident repackable bytes against
+// ~90% of available memory.
+//
+// The decision is tri-state (KEEP / DISABLE / UNKNOWN). DISABLE also fires
+// when no CPU-resident tensor would actually be repacked, since keeping
+// repack=true in that case only forces the loader's mmap=false coupling
+// without any benefit. On uncertainty (probe exception, OS query failure,
+// unsupported placement) the policy is safety-first: disable repack with a
+// WARN log and preserve the user/default mmap setting.
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#elif defined(__linux__)
+#  include <unistd.h>
+#elif defined(__APPLE__)
+#  include <sys/sysctl.h>
+#  include <mach/mach.h>
+#  include <mach/vm_statistics.h>
+#endif
+
+#if defined(__linux__)
+// Read a single uint64_t from a path. Returns true on success. Treats the
+// cgroup v2 sentinel "max" as success returning UINT64_MAX so the caller
+// can detect "no limit" without re-reading the file.
+static bool llama_read_uint64_file(const std::string & path, uint64_t & out) {
+    FILE * f = std::fopen(path.c_str(), "r");
+    if (!f) return false;
+    char buf[64] = {0};
+    bool ok = std::fgets(buf, sizeof(buf), f) != nullptr;
+    std::fclose(f);
+    if (!ok) return false;
+    std::string s(buf);
+    while (!s.empty() && (s.back() == '\n' || s.back() == ' ' || s.back() == '\t')) {
+        s.pop_back();
+    }
+    if (s == "max") {
+        out = UINT64_MAX;
+        return true;
+    }
+    try {
+        out = std::stoull(s);
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+#include "llama-cgroup-resolver.h"
+struct llama_cgroup_memory_result {
+    bool     ok;
+    bool     limited;
+    uint64_t bytes;
+};
+
+
+static bool llama_cgroup_file_exists(const std::string & path, bool & exists) {
+    errno = 0;
+    if (access(path.c_str(), F_OK) == 0) {
+        exists = true;
+        return true;
+    }
+    exists = false;
+    return errno == ENOENT || errno == ENOTDIR;
+}
+
+static bool llama_read_cgroup_controllers(const std::string & mountpoint, bool & has_memory) {
+    std::ifstream file(mountpoint + "/cgroup.controllers");
+    if (!file.is_open()) return false;
+    std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (file.bad()) return false;
+    std::istringstream stream(contents);
+    std::string controller;
+    has_memory = false;
+    while (stream >> controller) {
+        if (controller == "memory") {
+            has_memory = true;
+            break;
+        }
+    }
+    return true;
+}
+
+static bool llama_get_v2_cgroup_headroom(const llama_resolved_cgroup_mount & resolved, bool & limited, uint64_t & bytes) {
+    uint64_t headroom = UINT64_MAX;
+    std::string cur = resolved.path;
+    while (true) {
+        const std::string limit_path = cur + "/memory.max";
+        const std::string used_path  = cur + "/memory.current";
+        bool limit_exists = false;
+        bool used_exists  = false;
+        if (!llama_cgroup_file_exists(limit_path, limit_exists) ||
+            !llama_cgroup_file_exists(used_path, used_exists)) return false;
+
+        bool skip_level = false;
+        if (!llama_cgroup_v2_level_files(
+                limit_exists, used_exists, cur == resolved.mountpoint, skip_level)) return false;
+        if (skip_level) break;
+
+        uint64_t limit = 0;
+        uint64_t used = 0;
+        if (!llama_read_uint64_file(limit_path, limit) ||
+            !llama_read_uint64_file(used_path, used)) return false;
+        if (limit != UINT64_MAX) headroom = std::min(headroom, limit > used ? limit - used : 0);
+        if (cur == resolved.mountpoint) break;
+        std::string parent;
+        if (!llama_cgroup_parent_path(cur, resolved.mountpoint, parent)) return false;
+        cur = parent;
+    }
+    limited = headroom != UINT64_MAX;
+    bytes = limited ? headroom : 0;
+    return true;
+}
+
+static bool llama_get_v1_cgroup_headroom(const llama_resolved_cgroup_mount & resolved, bool & limited, uint64_t & bytes) {
+    const uint64_t v1_unlimited_floor = 1ull << 62;
+    uint64_t headroom = UINT64_MAX;
+    std::string cur = resolved.path;
+    while (true) {
+        uint64_t limit = 0;
+        uint64_t used = 0;
+        if (!llama_read_uint64_file(cur + "/memory.limit_in_bytes", limit) ||
+            !llama_read_uint64_file(cur + "/memory.usage_in_bytes", used)) return false;
+        if (limit < v1_unlimited_floor) headroom = std::min(headroom, limit > used ? limit - used : 0);
+
+        const std::string memsw_limit_path = cur + "/memory.memsw.limit_in_bytes";
+        const std::string memsw_used_path = cur + "/memory.memsw.usage_in_bytes";
+        bool memsw_limit_exists = false;
+        bool memsw_used_exists = false;
+        if (!llama_cgroup_file_exists(memsw_limit_path, memsw_limit_exists) ||
+            !llama_cgroup_file_exists(memsw_used_path, memsw_used_exists) ||
+            memsw_limit_exists != memsw_used_exists) return false;
+        if (memsw_limit_exists) {
+            uint64_t memsw_limit = 0;
+            uint64_t memsw_used = 0;
+            if (!llama_read_uint64_file(memsw_limit_path, memsw_limit) ||
+                !llama_read_uint64_file(memsw_used_path, memsw_used)) return false;
+            if (memsw_limit < v1_unlimited_floor) headroom = std::min(headroom, memsw_limit > memsw_used ? memsw_limit - memsw_used : 0);
+        }
+        if (cur == resolved.mountpoint) break;
+        std::string parent;
+        if (!llama_cgroup_parent_path(cur, resolved.mountpoint, parent)) return false;
+        cur = parent;
+    }
+    limited = headroom != UINT64_MAX;
+    bytes = limited ? headroom : 0;
+    return true;
+}
+
+// Resolve membership through the actual mount namespace. A declared memory
+// hierarchy that cannot be mapped or read remains unknown (never host fallback).
+static llama_cgroup_memory_result llama_get_cgroup_available_bytes() {
+    std::vector<llama_cgroup_membership> memberships;
+    std::vector<llama_cgroup_mount> mounts;
+    if (!llama_read_cgroup_memberships(memberships) || !llama_read_cgroup_mounts(mounts)) {
+        return { false, false, 0 };
+    }
+
+    std::vector<llama_resolved_cgroup_mount> candidates;
+    for (const llama_cgroup_membership & membership : memberships) {
+        std::vector<llama_resolved_cgroup_mount> resolved;
+        if (!llama_resolve_cgroup_mounts(membership, mounts, resolved)) return { false, false, 0 };
+        candidates.insert(candidates.end(), resolved.begin(), resolved.end());
+    }
+    bool limited = false;
+    uint64_t headroom = 0;
+    const bool ok = llama_intersect_cgroup_headrooms(candidates,
+            [] (const llama_resolved_cgroup_mount & candidate, bool & candidate_limited, uint64_t & candidate_headroom) {
+                if (candidate.v2) {
+                    bool has_memory = false;
+                    if (!llama_read_cgroup_controllers(candidate.mountpoint, has_memory)) return false;
+                    // Unified hierarchy without the memory controller is not a
+                    // memory constraint; a v1 membership may still constrain it.
+                    return !has_memory || llama_get_v2_cgroup_headroom(candidate, candidate_limited, candidate_headroom);
+                }
+                return llama_get_v1_cgroup_headroom(candidate, candidate_limited, candidate_headroom);
+            }, limited, headroom);
+    return { ok, limited, headroom };
+}
+#endif // __linux__
+
+struct llama_available_memory_result {
+    bool     ok;
+    uint64_t bytes;
+};
+
+// Returns currently-available memory for "would this allocation succeed"
+// decisions. A successful result may contain zero bytes. On Linux this honors
+// cgroup v2/v1 limits by taking min(MemAvailable, cgroup headroom).
+static llama_available_memory_result llama_get_available_ram_bytes() {
+#if defined(_WIN32)
+    // The public Job Object APIs cannot generally prove that every parent or
+    // nested memory limit is visible to this process. Treat any job membership
+    // as unknown rather than risking AUTO_KEEP from host-wide headroom.
+    BOOL in_job = FALSE;
+    if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job)) {
+        LLAMA_LOG_WARN("%s: could not determine Windows Job Object membership; RTR auto memory headroom is unknown\n", __func__);
+        return { false, 0 };
+    }
+    if (in_job) {
+        LLAMA_LOG_INFO("%s: process is in a Windows Job Object; RTR auto memory headroom is unknown\n", __func__);
+        return { false, 0 };
+    }
+
+    MEMORYSTATUSEX mem_info = {};
+    mem_info.dwLength = sizeof(mem_info);
+    if (GlobalMemoryStatusEx(&mem_info)) {
+        // Anonymous model buffers consume commit as well as physical pages.
+        return { true, std::min((uint64_t) mem_info.ullAvailPhys,
+                                (uint64_t) mem_info.ullAvailPageFile) };
+    }
+    return { false, 0 };
+#elif defined(__linux__)
+    uint64_t mem_avail = 0;
+    {
+        FILE * f = std::fopen("/proc/meminfo", "r");
+        if (f) {
+            char line[256];
+            while (std::fgets(line, sizeof(line), f)) {
+                unsigned long long kb = 0;
+                if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
+                    mem_avail = (uint64_t) kb * 1024ull;
+                    break;
+                }
+            }
+            std::fclose(f);
+        }
+    }
+    if (mem_avail == 0) {
+        // Fallback to sysconf for older kernels without MemAvailable
+        long avail_pages = sysconf(_SC_AVPHYS_PAGES);
+        long page_size   = sysconf(_SC_PAGE_SIZE);
+        if (avail_pages > 0 && page_size > 0) {
+            mem_avail = (uint64_t) avail_pages * (uint64_t) page_size;
+        }
+    }
+    if (mem_avail == 0) {
+        return { false, 0 };
+    }
+    const llama_cgroup_memory_result cg = llama_get_cgroup_available_bytes();
+    if (!cg.ok) {
+        return { false, 0 };
+    }
+    return { true, cg.limited ? std::min(mem_avail, cg.bytes) : mem_avail };
+#elif defined(__APPLE__)
+    mach_port_t host_port = mach_host_self();
+    vm_size_t   page_size = 0;
+    if (host_page_size(host_port, &page_size) != KERN_SUCCESS || page_size == 0) {
+        int    mib[2] = { CTL_HW, HW_PAGESIZE };
+        int    ps = 0;
+        size_t plen = sizeof(ps);
+        if (sysctl(mib, 2, &ps, &plen, nullptr, 0) == 0 && ps > 0) {
+            page_size = (vm_size_t) ps;
+        } else {
+            mach_port_deallocate(mach_task_self(), host_port);
+            return { false, 0 };
+        }
+    }
+    vm_statistics64_data_t vm_stat = {};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(host_port, HOST_VM_INFO64, (host_info64_t) &vm_stat, &count) != KERN_SUCCESS) {
+        mach_port_deallocate(mach_task_self(), host_port);
+        return { false, 0 };
+    }
+    const uint64_t free_pages     = (uint64_t) vm_stat.free_count;
+    const uint64_t inactive_pages = (uint64_t) vm_stat.inactive_count;
+    const uint64_t result = (free_pages + inactive_pages) * (uint64_t) page_size;
+    mach_port_deallocate(mach_task_self(), host_port);
+    return { true, result };
+#else
+    return { false, 0 };
+#endif
+}
+
+enum class llama_rtr_auto_decision {
+    KEEP,    // Repack is safe for this load.
+    DISABLE, // Repack is unsafe or has no work to do; turn it off, log INFO.
+    UNKNOWN, // Could not determine; safety-first disable, log WARN.
+};
+
+struct llama_rtr_auto_override {
+    std::regex pattern;
+    bool       cpu;
+};
+
+static bool llama_rtr_auto_parse_layer(const std::string & name, int & il) {
+    int parsed = -1;
+    int nchars = 0;
+    if (std::sscanf(name.c_str(), "blk.%d.%n", &parsed, &nchars) == 1 && nchars > 0) {
+        il = parsed;
+        return true;
+    }
+    return false;
+}
+
+static bool llama_rtr_auto_is_output_tensor(const std::string & name) {
+    return name == "output.weight" ||
+           name == "output.bias"   ||
+           name.rfind("output_norm", 0) == 0;
+}
+
+static bool llama_rtr_auto_is_expert_tensor(const std::string & name) {
+    return name.find(".ffn_") != std::string::npos &&
+           name.find("_exps.") != std::string::npos;
+}
+
+static bool llama_rtr_auto_compile_overrides(
+        const llama_model_tensor_buft_override * overrides,
+        std::vector<llama_rtr_auto_override>   & out,
+        std::string                            & reason) {
+    if (!overrides) {
+        return true;
+    }
+    try {
+        for (const auto * o = overrides; o->pattern != nullptr; ++o) {
+            out.push_back({ std::regex(o->pattern), ggml_backend_buft_is_host(o->buft) });
+        }
+    } catch (const std::regex_error & e) {
+        reason = format("tensor override regex failed (%s)", e.what());
+        return false;
+    }
+    return true;
+}
+
+static bool llama_rtr_auto_manual_override_cpu(
+        const std::vector<llama_rtr_auto_override> & overrides,
+        const std::string                          & name,
+        bool                                       & cpu) {
+    for (const auto & o : overrides) {
+        if (std::regex_search(name, o.pattern)) {
+            cpu = o.cpu;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool llama_rtr_auto_ncmoe_cpu_override(
+        const std::string        & name,
+        const llama_hparams      & hparams,
+        const llama_model        & model,
+        const llama_model_params & params,
+        bool                     & cpu,
+        std::string              & reason) {
+    if (params.ncmoe <= 0 || !llama_rtr_auto_is_expert_tensor(name)) {
+        return true;
+    }
+
+    int il = -1;
+    if (!llama_rtr_auto_parse_layer(name, il)) {
+        return true;
+    }
+
+    const int n_layer = (int) hparams.n_layer;
+    if (params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
+        params.ncmoe < n_layer &&
+        model.devices.size() >= 2) {
+        // The loader distributes the requested CPU-MoE layers proportionally
+        // across devices and then selects layers by walking backwards. A simple
+        // first-N rule can undercount models with dense leading layers.
+        reason = "-ncmoe with multi-device layer split needs loader placement";
+        return false;
+    }
+
+    cpu = il < std::min(params.ncmoe, n_layer);
+    return true;
+}
+
+static bool llama_rtr_auto_tensor_is_cpu(
+        const std::string                          & name,
+        const std::string                          * override_name,
+        const llama_hparams                        & hparams,
+        const llama_model                          & model,
+        const llama_model_params                   & params,
+        const std::vector<llama_rtr_auto_override> & overrides,
+        bool                                       & cpu,
+        std::string                                & reason) {
+    if (llama_rtr_auto_manual_override_cpu(overrides, override_name ? *override_name : name, cpu)) {
+        return true;
+    }
+
+    if (!llama_rtr_auto_ncmoe_cpu_override(name, hparams, model, params, cpu, reason)) {
+        return false;
+    }
+    if (cpu) {
+        return true;
+    }
+
+    if (model.devices.empty() || params.n_gpu_layers <= 0) {
+        cpu = true;
+        return true;
+    }
+
+#ifdef GGML_USE_METAL
+    // Metal buffers are host-accessible unified memory and the repack pass
+    // treats them as host buffers. Account them as committed host memory even
+    // when the layer is nominally offloaded.
+    cpu = true;
+    return true;
+#endif
+
+    const int n_layer = (int) hparams.n_layer;
+    const int i_gpu_start = std::max(n_layer - params.n_gpu_layers, 0);
+
+    int il = -1;
+    if (llama_rtr_auto_parse_layer(name, il)) {
+        cpu = il < i_gpu_start;
+        return true;
+    }
+
+    if (llama_rtr_auto_is_output_tensor(name)) {
+        cpu = params.n_gpu_layers <= n_layer;
+        return true;
+    }
+
+    // Input embeddings and miscellaneous metadata tensors are kept on CPU.
+    cpu = true;
+    return true;
+}
+
+static void llama_rtr_auto_log_mmap_override_note(const llama_model_params & params) {
+    if (!params.tensor_buft_overrides || std::getenv("GGML_CUDA_NO_PINNED") != nullptr) {
+        return;
+    }
+    for (const auto * o = params.tensor_buft_overrides; o->pattern != nullptr; ++o) {
+        if (ggml_backend_buft_is_host(o->buft)) {
+            LLAMA_LOG_WARN("%s: --run-time-repack auto: CPU tensor overrides may still disable mmap unless GGML_CUDA_NO_PINNED=1 is set\n",
+                    __func__);
+            return;
+        }
+    }
+}
+
+// Decide whether `--run-time-repack auto` should disable repack for this load.
+// If anything goes wrong (probe exception, OS query failure, unsupported
+// placement mode) the result is UNKNOWN, which the caller treats as
+// safety-first disable.
+static llama_rtr_auto_decision llama_rtr_auto_should_disable(
+        const std::string         & fname,
+        const llama_model         & model,
+        const llama_model_params  & params,
+        std::string               & reason) {
+    if (!params.repack_tensors || !params.repack_tensors_auto) {
+        return llama_rtr_auto_decision::KEEP;
+    }
+
+    // Early UNKNOWN exits — modes whose placement we cannot accurately
+    // simulate from probe metadata alone. Resolve before the probe so we
+    // do not pay the metadata-load cost just to bail out anyway.
+    if (params.fit) {
+        reason = "--fit changes tensor placement during load";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+    if (params.merge_qkv || params.merge_up_gate_exps) {
+        reason = "merged tensor placement is resolved during load";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+    if (params.defer_experts) {
+        // Deferred expert loading requires mmap. KEEP would force mmap off
+        // globally and silently turn the requested deferral into a full
+        // committed-RAM load.
+        reason = "--defer-experts requires mmap and is incompatible with run-time repack";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+#if defined(__linux__)
+    if (params.prefetch_experts) {
+        // Expert prefetch registers the model mmap ranges with the backend.
+        // AUTO_KEEP would remove those ranges, turning the requested feature
+        // into a silent no-op.
+        reason = "--prefetch-experts requires mmap and is incompatible with run-time repack";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+#endif
+    if (params.split_mode == LLAMA_SPLIT_MODE_ATTN || params.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        reason = "split-mode graph/attention tensor placement is not modeled";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
+    const llama_available_memory_result available = llama_get_available_ram_bytes();
+    if (!available.ok) {
+        reason = "could not query available memory";
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+    const uint64_t avail_ram = available.bytes;
+
+    std::vector<llama_rtr_auto_override> overrides;
+    if (!llama_rtr_auto_compile_overrides(params.tensor_buft_overrides, overrides, reason)) {
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+
+    try {
+        // Metadata-only probe: mmap + no repack to inspect arch/hparams cheaply.
+        llama_model_loader probe(
+                fname,
+                params.ncmoe,
+                /*use_mmap*/      true,
+                /*check_tensors*/ false,
+                /*repack_tensors*/false,
+                params.use_thp,
+                params.merge_qkv,
+                params.merge_up_gate_exps,
+                params.defer_experts,
+                params.kv_overrides,
+                params.tensor_buft_overrides);
+
+        llama_model probe_model;
+        probe_model.hparams.vocab_only = params.vocab_only;
+        llm_load_arch(probe, probe_model);
+        llm_load_hparams(probe, probe_model);
+
+#ifdef GGML_USE_KOMPUTE
+        if (params.n_gpu_layers > 0 &&
+            ((probe_model.arch != LLM_ARCH_LLAMA && probe_model.arch != LLM_ARCH_FALCON) ||
+             probe_model.ftype < LLAMA_FTYPE_MOSTLY_Q4_0 ||
+             probe_model.ftype > LLAMA_FTYPE_MOSTLY_BF16)) {
+            // The real loader will fall back to CPU after this decision.
+            // Its resulting placement is not represented by the requested
+            // n_gpu_layers value used by the probe.
+            reason = "Kompute will change tensor placement during load";
+            return llama_rtr_auto_decision::UNKNOWN;
+        }
+#endif
+
+        uint64_t cpu_total_bytes      = 0;
+        uint64_t cpu_repackable_bytes = 0;
+        uint64_t max_repack_temp_bytes = 0;
+        uint64_t max_loader_read_buffer_bytes = 0;
+        const ggml_tensor * token_embd = nullptr;
+        bool has_output_weight = false;
+
+        for (const auto & w : probe.weights) {
+            const ggml_tensor * tensor = w.tensor;
+            if (!tensor) {
+                continue;
+            }
+            const std::string tensor_name = tensor->name;
+            if (tensor_name == "token_embd.weight") {
+                token_embd = tensor;
+            } else if (tensor_name == "output.weight") {
+                has_output_weight = true;
+            }
+            const uint64_t nbytes = (uint64_t) ggml_nbytes(tensor);
+            max_loader_read_buffer_bytes = std::max(max_loader_read_buffer_bytes, nbytes);
+            bool is_cpu = false;
+            if (!llama_rtr_auto_tensor_is_cpu(tensor_name, nullptr, probe_model.hparams, model, params, overrides, is_cpu, reason)) {
+                return llama_rtr_auto_decision::UNKNOWN;
+            }
+            if (!is_cpu) {
+                continue;
+            }
+
+            if (nbytes > UINT64_MAX - cpu_total_bytes) {
+                reason = "CPU-resident tensor byte count overflow";
+                return llama_rtr_auto_decision::UNKNOWN;
+            }
+            cpu_total_bytes += nbytes;
+            const uint64_t workspace_bytes = iqk_repack_workspace_size(tensor);
+            if (workspace_bytes > 0) {
+                if (nbytes > UINT64_MAX - cpu_repackable_bytes) {
+                    reason = "CPU-resident repackable tensor byte count overflow";
+                    return llama_rtr_auto_decision::UNKNOWN;
+                }
+                cpu_repackable_bytes += nbytes;
+                max_repack_temp_bytes = std::max(max_repack_temp_bytes, workspace_bytes);
+            }
+        }
+
+        // Many decoder models synthesize a tied output tensor when
+        // output.weight is absent from the GGUF. The probe only sees on-disk
+        // tensors, while the real loader can allocate a second output buffer.
+        if (token_embd && !has_output_weight) {
+            bool output_is_cpu = false;
+            const std::string tied_source_name = ggml_get_name(token_embd);
+            if (!llama_rtr_auto_tensor_is_cpu(
+                        "output.weight", &tied_source_name, probe_model.hparams, model, params, overrides, output_is_cpu, reason)) {
+                return llama_rtr_auto_decision::UNKNOWN;
+            }
+            if (output_is_cpu) {
+                const uint64_t tied_output_bytes = (uint64_t) ggml_nbytes(token_embd);
+                if (tied_output_bytes > UINT64_MAX - cpu_total_bytes) {
+                    reason = "CPU-resident tied output byte count overflow";
+                    return llama_rtr_auto_decision::UNKNOWN;
+                }
+                cpu_total_bytes += tied_output_bytes;
+            }
+        }
+
+        // If no CPU-resident tensor would actually be repacked, keeping
+        // repack=true buys nothing but still forces the loader's mmap=false
+        // coupling. Strictly safer to disable in this case.
+        if (cpu_repackable_bytes == 0) {
+            reason = "no CPU-resident tensors need repacking";
+            return llama_rtr_auto_decision::DISABLE;
+        }
+
+        const uint64_t threshold = avail_ram - avail_ram / 10;
+        if (cpu_repackable_bytes > threshold) {
+            reason = format("CPU-resident repackable tensors %.1f GiB > 90%% of available memory %.1f GiB",
+                    cpu_repackable_bytes / 1073741824.0, avail_ram / 1073741824.0);
+            return llama_rtr_auto_decision::DISABLE;
+        }
+        // load_all_data() keeps one read buffer per worker.  A conservative
+        // max-tensor bound covers backend and Windows split paths where several
+        // worker capacities can coexist. CUDA may additionally allocate one
+        // 16 MiB staging buffer per worker for asynchronous uploads.
+        bool cuda_staging_may_apply = false;
+#if defined(GGML_USE_CUDA)
+        cuda_staging_may_apply = !params.check_tensors && params.n_gpu_layers > 0 && !model.devices.empty();
+#endif
+        uint64_t peak_load_bytes = 0;
+        if (!llama_rtr_auto_peak_bytes({
+                    cpu_total_bytes,
+                    max_repack_temp_bytes,
+                    max_loader_read_buffer_bytes,
+                    LLAMA_MODEL_LOADER_N_LOAD_WORKERS,
+                    LLAMA_MODEL_LOADER_CUDA_STAGING_BYTES,
+                    cuda_staging_may_apply,
+                }, peak_load_bytes)) {
+            reason = "CPU-resident load plus loader transient byte count overflow";
+            return llama_rtr_auto_decision::UNKNOWN;
+        }
+        if (peak_load_bytes > threshold) {
+            reason = format("CPU-resident tensors plus repack workspace %.1f GiB > 90%% of available memory %.1f GiB",
+                    peak_load_bytes / 1073741824.0, avail_ram / 1073741824.0);
+            return llama_rtr_auto_decision::DISABLE;
+        }
+
+        LLAMA_LOG_INFO("%s: --run-time-repack auto: CPU-resident repackable %.1f GiB, total CPU-resident %.1f GiB, peak load estimate %.1f GiB, available %.1f GiB\n",
+                __func__,
+                cpu_repackable_bytes / 1073741824.0,
+                cpu_total_bytes / 1073741824.0,
+                peak_load_bytes / 1073741824.0,
+                avail_ram / 1073741824.0);
+        return llama_rtr_auto_decision::KEEP;
+    } catch (const std::exception & e) {
+        reason = format("probe failed (%s)", e.what());
+        return llama_rtr_auto_decision::UNKNOWN;
+    }
+}
+
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
+        model.use_mmap_requested = params.use_mmap;
+        model.rtr_status = params.repack_tensors ?
+                LLAMA_RTR_STATUS_ENABLED : LLAMA_RTR_STATUS_DISABLED;
+        if (params.repack_tensors && params.repack_tensors_auto) {
+            std::string reason;
+            const auto d = llama_rtr_auto_should_disable(fname, model, params, reason);
+            switch (d) {
+                case llama_rtr_auto_decision::DISABLE:
+                    // Auto policy turns repack off — leave use_mmap as the
+                    // user configured it (default true, or whatever
+                    // --no-mmap chose).
+                    params.repack_tensors = false;
+                    model.rtr_status = LLAMA_RTR_STATUS_AUTO_DISABLE;
+                    LLAMA_LOG_INFO("%s: --run-time-repack auto: disabled (%s)\n",
+                            __func__, reason.c_str());
+                    llama_rtr_auto_log_mmap_override_note(params);
+                    break;
+                case llama_rtr_auto_decision::UNKNOWN:
+                    // Could not determine. Safety-first: disable repack and
+                    // keep mmap so a swap-bound load still has a chance.
+                    params.repack_tensors = false;
+                    model.rtr_status = LLAMA_RTR_STATUS_AUTO_UNKNOWN;
+                    LLAMA_LOG_WARN("%s: --run-time-repack auto: disabled (uncertainty: %s)\n",
+                            __func__, reason.c_str());
+                    llama_rtr_auto_log_mmap_override_note(params);
+                    break;
+                case llama_rtr_auto_decision::KEEP:
+                    // Auto keeps repack enabled — match the legacy `-rtr 1`
+                    // coupling and force use_mmap=false so the repack pass
+                    // can write back into the tensor buffers.
+                    params.use_mmap = false;
+                    model.rtr_status = LLAMA_RTR_STATUS_AUTO_KEEP;
+                    LLAMA_LOG_INFO("%s: --run-time-repack auto: keeping repack enabled\n",
+                            __func__);
+                    break;
+            }
+        }
+
         llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
                 params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
                 params.defer_experts,
@@ -4713,11 +5405,17 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 throw std::runtime_error(error_msg);
             }
         }
-        if (params.defer_experts && params.use_mmap) {
+        if (params.defer_experts) {
 #ifdef __linux__
-            ml.build_expert_tensor_index(model.hparams);
+            if (ml.use_mmap) {
+                ml.build_expert_tensor_index(model.hparams);
+            } else {
+                LLAMA_LOG_WARN("%s: deferred expert loading requires effective mmap; disabling defer_experts\n", __func__);
+                params.defer_experts = false;
+            }
 #else
             LLAMA_LOG_WARN("%s: deferred expert loading is only supported on Linux; ignoring defer_experts\n", __func__);
+            params.defer_experts = false;
 #endif
         }
         try {
@@ -4733,6 +5431,11 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             model.hparams.n_vocab != model.vocab.n_tokens()) {
             throw std::runtime_error("vocab size mismatch");
         }
+
+        // The loader has resolved mmap policy even for a vocabulary-only
+        // model.  Publish it before the early return so the effective-state
+        // API remains truthful for every successful load mode.
+        model.use_mmap_loader_enabled = ml.use_mmap;
 
         if (params.vocab_only) {
             LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
@@ -4751,11 +5454,14 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
         )) {
             return -2;
         }
-
+        // Tensor creation can still disable mmap (for example, when a runtime
+        // tensor merge requires writable buffers), so refresh this after a
+        // successful full load.
+        model.use_mmap_loader_enabled = ml.use_mmap;
         // ---- populate reload registry ONLY when hot-swap is requested ----
         if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
             model.reload = std::make_unique<reload_info>(ml);
-				}
+        }
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return -1;
@@ -7236,6 +7942,8 @@ struct llama_model_params llama_model_default_params() {
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
+        /*.repack_tensors_auto         =*/ false,
+        /*.prefetch_experts             =*/ false,
     };
 
 #ifdef GGML_USE_METAL
@@ -8303,11 +9011,29 @@ struct llama_context * llama_init_from_model(
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
     if (params.prefetch_experts) {
-        LLAMA_LOG_INFO("%s: enabling MoE expert read-ahead (prefetch_experts), %s\n", __func__,
-                ggml_backend_prefetch_init(params.prefetch_experts_threads) ? "threaded populate engine" : "madvise fallback");
-        for (const auto & mapping : model->mappings) {
-            ggml_backend_prefetch_register_mapping(mapping->addr(), mapping->size());
+#if !defined(__linux__)
+        // The prefetch backend is currently implemented only on Linux. Do not
+        // advertise a fallback or let an unsupported request affect RTR auto.
+        LLAMA_LOG_WARN("%s: --prefetch-experts is only supported on Linux; disabling expert prefetch\n", __func__);
+        cparams.prefetch_experts = false;
+#else
+        // Model mappings are the exact address ranges the prefetch backend can
+        // register. Do not use mmap-backed-buffer metadata here: a model can
+        // have such buffers without retaining mapping ranges for prefetch.
+        if (model->mappings.empty()) {
+            LLAMA_LOG_WARN("%s: --prefetch-experts requested, but the model has no mmap ranges; disabling expert prefetch\n", __func__);
+            // cparams is consumed later by graph execution. Clearing it here
+            // prevents the legacy madvise hook from running on non-mmap
+            // buffers after this feature has been declared unavailable.
+            cparams.prefetch_experts = false;
+        } else {
+            LLAMA_LOG_INFO("%s: enabling MoE expert read-ahead (prefetch_experts), %s\n", __func__,
+                    ggml_backend_prefetch_init(params.prefetch_experts_threads) ? "threaded populate engine" : "madvise fallback");
+            for (const auto & mapping : model->mappings) {
+                ggml_backend_prefetch_register_mapping(mapping->addr(), mapping->size());
+            }
         }
+#endif
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);
@@ -8579,6 +9305,30 @@ uint64_t llama_model_size(const struct llama_model * model) {
         size += ggml_nbytes(it.second);
     }
     return size;
+}
+
+enum llama_rtr_status llama_model_rtr_status(const struct llama_model * model) {
+    return model ? model->rtr_status : LLAMA_RTR_STATUS_DISABLED;
+}
+
+bool llama_model_mmap_requested(const struct llama_model * model) {
+    return model && model->use_mmap_requested;
+}
+
+bool llama_model_loader_mmap_enabled(const struct llama_model * model) {
+    return model && model->use_mmap_loader_enabled;
+}
+
+bool llama_model_has_mmap_buffers(const struct llama_model * model) {
+    return model && model->has_mmap_backed_buffers;
+}
+
+bool llama_model_repack_pass_executed(const struct llama_model * model) {
+    return model && model->repack_pass_executed;
+}
+
+uint64_t llama_model_n_repacked(const struct llama_model * model) {
+    return model ? model->n_repacked : 0;
 }
 
 const char* llama_model_chat_template(const struct llama_model* model, const char* name) {

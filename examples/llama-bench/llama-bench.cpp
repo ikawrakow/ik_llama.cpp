@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <cinttypes>
 #include <clocale>
@@ -262,6 +263,7 @@ struct cmd_params {
     bool verbose;
     bool warmup;
     bool repack = false;
+    bool repack_auto = false;
     bool fmoe = true;
     bool ger = false;     // ger = Grouped Expert Routing
     bool no_fug = false;
@@ -311,6 +313,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* warmup               */ true,
     /* repack               */ false,
+    /* repack_auto          */ false,
     /* fmoe                 */ true,
     /* ger                  */ false,
     /* no_fug               */ false,
@@ -365,7 +368,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -oe, --output-err <csv|json|md|sql> (default: %s)\n", output_format_str(cmd_params_defaults.output_format_stderr));
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
-    printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -rtr, --run-time-repack <0|1|auto>  (default: %s)\n", cmd_params_defaults.repack ? (cmd_params_defaults.repack_auto ? "auto" : "1") : "0");
     printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.cuda_params.c_str());
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
     printf("  -muge, --merge-up-gate-experts      (default: %s)\n", cmd_params_defaults.muge ? "1" : "0");
@@ -797,7 +800,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 invalid_param = true;
                 break;
             }
-            params.repack = std::stoi(argv[i]);
+            std::string v = argv[i];
+            std::transform(v.begin(), v.end(), v.begin(),
+                    [](unsigned char c) { return (char)std::tolower(c); });
+            if (v == "auto") {
+                params.repack = true;
+                params.repack_auto = true;
+            } else if (v == "1" || v == "on") {
+                params.repack = true;
+                params.repack_auto = false;
+            } else if (v == "0" || v == "off") {
+                params.repack = false;
+                params.repack_auto = false;
+            } else {
+                // numeric fallback (legacy `0|1`)
+                params.repack = std::stoi(argv[i]) != 0;
+                params.repack_auto = false;
+            }
         } else if (arg == "-cuda" || arg == "--cuda-params") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -979,6 +998,7 @@ struct cmd_params_instance {
     bool use_mmap;
     bool embeddings;
     bool repack = false;
+    bool repack_auto = false;
     bool fmoe = true;
     bool ger = false;
     bool no_fug = false;
@@ -1006,6 +1026,7 @@ struct cmd_params_instance {
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap = use_mmap;
         mparams.repack_tensors = repack;
+        mparams.repack_tensors_auto = repack_auto;
         mparams.use_thp = use_thp;
         mparams.merge_qkv = mqkv;
         mparams.merge_up_gate_exps = muge;
@@ -1029,6 +1050,7 @@ struct cmd_params_instance {
                main_gpu == other.main_gpu &&
                use_mmap == other.use_mmap &&
                repack == other.repack &&
+               repack_auto == other.repack_auto &&
                mqkv == other.mqkv &&
                muge == other.muge &&
                defer_experts == other.defer_experts &&
@@ -1120,6 +1142,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
@@ -1167,6 +1190,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
@@ -1214,6 +1238,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
@@ -1261,6 +1286,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .repack_auto  = */ params.repack_auto,
                 /* .fmoe         = */ params.fmoe,
                 /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
@@ -1315,9 +1341,18 @@ struct test {
     Ser  ser;
     std::vector<float> tensor_split;
     std::string cuda_params;
+    // `use_mmap` is retained as the command-line request for compatibility
+    // with historical SQL output.  The other three fields describe what the
+    // successfully loaded model actually did.
     bool use_mmap;
+    bool use_mmap_requested = false;
+    bool use_mmap_effective = false;
+    bool mmap_backed_buffers = false;
     bool embeddings;
     bool repack = false;
+    bool repack_auto = false;
+    bool repack_effective = false;
+    std::string repack_status;
     bool fmoe = false;
     bool ger = false;
     bool no_fug = false;
@@ -1364,8 +1399,31 @@ struct test {
         tensor_split = inst.tensor_split;
         cuda_params = inst.cuda_params;
         use_mmap = inst.use_mmap;
+        use_mmap_requested = llama_model_mmap_requested(lmodel);
+        use_mmap_effective = llama_model_loader_mmap_enabled(lmodel);
+        mmap_backed_buffers = llama_model_has_mmap_buffers(lmodel);
         embeddings = inst.embeddings;
         repack = inst.repack;
+        repack_auto = inst.repack_auto;
+        repack_effective = llama_model_n_repacked(lmodel) > 0;
+        switch (llama_model_rtr_status(lmodel)) {
+            case LLAMA_RTR_STATUS_ENABLED:
+                repack_status = "enabled";
+                break;
+            case LLAMA_RTR_STATUS_AUTO_KEEP:
+                repack_status = "auto_keep";
+                break;
+            case LLAMA_RTR_STATUS_AUTO_DISABLE:
+                repack_status = "auto_disable";
+                break;
+            case LLAMA_RTR_STATUS_AUTO_UNKNOWN:
+                repack_status = "auto_unknown";
+                break;
+            case LLAMA_RTR_STATUS_DISABLED:
+            default:
+                repack_status = "disabled";
+                break;
+        }
         mqkv = inst.mqkv;
         muge = inst.muge;
         defer_experts = inst.defer_experts;
@@ -1482,7 +1540,9 @@ struct test {
         }
         if (field == "cuda" || field == "vulkan" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
-            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
+            field == "flash_attn" || field == "use_mmap" || field == "use_mmap_requested" ||
+            field == "use_mmap_effective" || field == "mmap_backed_buffers" || field == "embeddings" || field == "repack" ||
+            field == "repack_auto" || field == "repack_effective" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse" || field == "muge" || field == "defer_experts" || field == "sas") {
             return BOOL;
@@ -1526,8 +1586,10 @@ struct test {
             std::to_string(n_gpu_layers), split_mode_str(split_mode),
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
-            tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
+            tensor_split_str, std::to_string(use_mmap), std::to_string(use_mmap_requested),
+            std::to_string(use_mmap_effective), std::to_string(mmap_backed_buffers), std::to_string(embeddings),
+            std::to_string(repack), std::to_string(repack_auto), std::to_string(repack_effective), repack_status,
+            std::to_string(mqkv), std::to_string(muge), std::to_string(defer_experts), std::to_string(fmoe), std::to_string(ger),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache), std::to_string(sas),
             std::to_string(max_gpu),
             cuda_params, override_tensor,
@@ -1549,7 +1611,8 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
-            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
+            "tensor_split", "use_mmap", "use_mmap_requested", "use_mmap_effective", "mmap_backed_buffers", "embeddings", "repack", "repack_auto", "repack_effective", "repack_status",
+            "mqkv", "muge", "defer_experts", "fused_moe", "grouped_er",
             "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "sas", "max_gpu", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
@@ -1730,6 +1793,15 @@ struct markdown_printer : public printer {
         if (field == "repack") {
             return 3;
         }
+        if (field == "repack_auto") {
+            return 8;
+        }
+        if (field == "repack_effective") {
+            return 7;
+        }
+        if (field == "repack_status") {
+            return -12;
+        }
         if (field == "mqkv") {
             return 4;
         }
@@ -1808,6 +1880,15 @@ struct markdown_printer : public printer {
         }
         if (field == "repack") {
             return "rtr";
+        }
+        if (field == "repack_auto") {
+            return "rtr_auto";
+        }
+        if (field == "repack_effective") {
+            return "rtr_eff";
+        }
+        if (field == "repack_status") {
+            return "rtr_status";
         }
         if (field == "mqkv") {
             return "mqkv";
@@ -1927,6 +2008,9 @@ struct markdown_printer : public printer {
         }
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
+            fields.emplace_back("repack_auto");
+            fields.emplace_back("repack_effective");
+            fields.emplace_back("repack_status");
         }
         if (params.mqkv != cmd_params_defaults.mqkv) {
             fields.emplace_back("mqkv");
@@ -2044,6 +2128,13 @@ struct markdown_printer : public printer {
 };
 
 struct sql_printer : public printer {
+    // Schema v3 adds requested/effective mmap state. Keep a versioned table
+    // name so SQL output can be appended to databases created by older builds
+    // without failing on missing columns in the legacy `test` table.
+    static const char * table_name() {
+        return "test_v3";
+    }
+
     static std::string escape_sql(const std::string & value) {
         std::string escaped;
         for (auto c : value) {
@@ -2072,7 +2163,7 @@ struct sql_printer : public printer {
 
     void print_header(const cmd_params & params) override {
         std::vector<std::string> fields = test::get_fields();
-        fprintf(fout, "CREATE TABLE IF NOT EXISTS test (\n");
+        fprintf(fout, "CREATE TABLE IF NOT EXISTS %s (\n", table_name());
         for (size_t i = 0; i < fields.size(); i++) {
             fprintf(fout, "  %s %s%s\n", fields.at(i).c_str(), get_sql_field_type(fields.at(i)).c_str(),  i < fields.size() - 1 ? "," : "");
         }
@@ -2082,7 +2173,7 @@ struct sql_printer : public printer {
     }
 
     void print_test(const test & t) override {
-        fprintf(fout, "INSERT INTO test (%s) ", join(test::get_fields(), ", ").c_str());
+        fprintf(fout, "INSERT INTO %s (%s) ", table_name(), join(test::get_fields(), ", ").c_str());
         fprintf(fout, "VALUES (");
         std::vector<std::string> values = t.get_values();
         std::transform(values.begin(), values.end(), values.begin(), escape_sql);

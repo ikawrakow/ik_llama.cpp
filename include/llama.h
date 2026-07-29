@@ -284,6 +284,15 @@ extern "C" {
         LLAMA_SPLIT_MODE_GRAPH   = 3, // splits computations across GPUs
     };
 
+    // Effective run-time repack state recorded by the model loader.
+    enum llama_rtr_status {
+        LLAMA_RTR_STATUS_DISABLED     = 0,
+        LLAMA_RTR_STATUS_ENABLED      = 1,
+        LLAMA_RTR_STATUS_AUTO_KEEP    = 2,
+        LLAMA_RTR_STATUS_AUTO_DISABLE = 3,
+        LLAMA_RTR_STATUS_AUTO_UNKNOWN = 4,
+    };
+
     enum llama_mtp_op_type {
         MTP_OP_NONE             = 0,
         MTP_OP_WARMUP           = 1,
@@ -433,6 +442,12 @@ extern "C" {
         bool dry_run;       // skip loading tensors
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
+        // Appended to preserve the source layout of all pre-existing fields.
+        // The C ABI still requires callers and the library to use matching headers.
+        bool repack_tensors_auto; // if true, may auto-disable run-time repack
+        // Appended to preserve the source layout of all pre-existing fields.
+        // The C ABI still requires callers and the library to use matching headers.
+        bool prefetch_experts; // if true, auto RTR preserves mmap for expert prefetch
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -678,6 +693,24 @@ extern "C" {
 
     // Returns the total number of parameters in the model
     LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);
+
+    // Returns the effective run-time repack decision used for this model load.
+    LLAMA_API enum llama_rtr_status llama_model_rtr_status(const struct llama_model * model);
+
+    // Returns the mmap setting requested before loader fallbacks.
+    LLAMA_API bool llama_model_mmap_requested(const struct llama_model * model);
+
+    // Returns the mmap setting used by the model loader after its own fallbacks.
+    LLAMA_API bool llama_model_loader_mmap_enabled(const struct llama_model * model);
+
+    // Returns true if at least one model buffer was created from a mmap region.
+    LLAMA_API bool llama_model_has_mmap_buffers(const struct llama_model * model);
+
+    // Returns true if the loader entered the run-time repack pass.
+    LLAMA_API bool llama_model_repack_pass_executed(const struct llama_model * model);
+
+    // Returns the number of tensors whose type changed in the run-time repack pass.
+    LLAMA_API uint64_t llama_model_n_repacked(const struct llama_model * model);
 
     // Get a llama model tensor
     LLAMA_API struct ggml_tensor * llama_get_model_tensor(struct llama_model * model, const char * name);
