@@ -4841,6 +4841,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             } break;
         case GGML_OP_GET_ROWS:
             {
+                if (op->type == op->src[0]->type) {
+                    return true;
+                }
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
