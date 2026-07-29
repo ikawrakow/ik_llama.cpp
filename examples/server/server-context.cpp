@@ -3622,10 +3622,13 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
 void server_context::apply_checkpoint(server_slot & slot) {
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
     const auto pos_min_thold = std::max(0, pos_next - 1);
+    const bool is_state_ckpt_model = llama_model_supports_state_checkpoints(model);
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
 
-        if (pos_min >= pos_min_thold) {
+        // DSV4 has pos_min=0 (no eviction) so the guard always blocks it;
+        // state-checkpoint models keep the full cache, so bypass the guard.
+        if (pos_min >= pos_min_thold || is_state_ckpt_model) {
             SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", slot.n_past, (int)slot.cache_tokens.size(), slot.id, pos_min);
 
             // search for a context checkpoint
@@ -3633,7 +3636,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rbegin(),
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
-                    return cur.pos_max < pos_min_thold;
+                    return cur.pos_max < (is_state_ckpt_model ? pos_next : pos_min_thold);
                 }
             );
 
@@ -3672,8 +3675,12 @@ void server_context::apply_checkpoint(server_slot & slot) {
             }
 
             if (do_reset) {
-                SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
-                    "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                if (is_state_ckpt_model) {
+                    SLT_WRN(slot, "no checkpoint before divergence point - reprocessing from scratch\n");
+                } else {
+                    SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
+                        "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                }
                 slot.n_past = 0;
                 slot.n_past_prompt = 0;
                 slot.n_past_se = 0;
@@ -3929,62 +3936,12 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
                             if (!llama_model_supports_partial_kv_reuse(model) &&
                                 slot.n_past < (int32_t) slot.cache_tokens.size()) {
-                                // the cache diverges from the new prompt mid-sequence; this
-                                // model can only extend or reset a cached sequence (per-position
-                                // side state past the divergence point is already lost)
-
-                                bool restored = false;
-                                // DSV4 supports state checkpoints that include the private cache;
-                                // try to restore from the newest checkpoint before the divergence point
-                                if (llama_model_supports_state_checkpoints(model) &&
-                                    !slot.server_cached_prompt.checkpoints.empty()) {
-                                    // Find the newest checkpoint that ends BEFORE the divergence point.
-                                    // Using pos_max instead of pos_min prevents restoring a checkpoint
-                                    // whose compressed state extends past the intended rewind (all DSV4
-                                    // checkpoints have pos_min=0, so pos_min-based search always picks
-                                    // the newest, regardless of how far past it extends).
-                                    const auto it = std::find_if(
-                                        slot.server_cached_prompt.checkpoints.rbegin(),
-                                        slot.server_cached_prompt.checkpoints.rend(),
-                                        [&](const auto & cur) {
-                                            return cur.pos_max < (llama_pos)slot.n_past;
-                                        });
-                                    if (it != slot.server_cached_prompt.checkpoints.rend()) {
-                                        const size_t checkpoint_size = it->data.size();
-                                        const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        if (n == checkpoint_size) {
-                                            restored = verify_restored_checkpoint(*it, slot, "DSV4 ");
-                                        }
-                                        if (restored) {
-                                            // The checkpoint encodes positions [0, pos_max];
-                                            // advance n_past past the restored range.
-                                            slot.n_past = slot.cache_tokens.size_up_to_pos(it->pos_max + 1);
-                                            slot.n_past_prompt = slot.prompt_tokens.size_up_to_pos(it->pos_max_prompt + 1);
-                                            slot.n_past_offset = slot.n_past_prompt - slot.n_past;
-                                            slot.n_discarded_prompt = 0;
-                                            slot.checkpoint_pos = it->pos_max;
-                                            SLT_WRN(slot, "restored DSV4 checkpoint (pos_min=%d, pos_max=%d, n_past=%d, n_past_prompt=%d, size=%.3f MiB)\n",
-                                                it->pos_min, it->pos_max, slot.n_past, slot.n_past_prompt,
-                                                (float)checkpoint_size / 1024.0f / 1024.0f);
-                                            // The PP batch loop below processes tokens sequentially
-                                            // from n_past_prompt in n_batch chunks.  A full-reprocess
-                                            // control chunks from 0, so boundaries diverge unless the
-                                            // restore point lands on an n_batch multiple — meaning
-                                            // float reduction order differs between arms.
-                                            // For validation, use bit-exact token-stream comparison
-                                            // against a control rather than relying on logit deltas.
-                                        }
-                                    }
-                                }
-
-                                if (!restored) {
-                                    if (llama_model_supports_state_checkpoints(model)) {
-                                        LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d - no checkpoint before divergence point, reprocessing from scratch\n",
-                                                __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
-                                    } else {
-                                        LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
-                                                __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
-                                    }
+                                // the cache diverges; models with state checkpoints
+                                // can restore from a checkpoint (handled by apply_checkpoint below),
+                                // others must reprocess from scratch
+                                if (!llama_model_supports_state_checkpoints(model)) {
+                                    LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
+                                            __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
                                     slot.n_past = 0;
                                     slot.n_past_prompt = 0;
                                     slot.n_past_offset = 0;
@@ -4031,6 +3988,8 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         }
                     }
                     apply_checkpoint(slot);
+                    slot.n_past_offset = slot.n_past_prompt - slot.n_past;
+                    slot.n_discarded_prompt = 0;
                     slot.n_prompt_tokens_cache = slot.n_past_prompt;
                     slot.n_prompt_tokens_processed = 0;
                 }
