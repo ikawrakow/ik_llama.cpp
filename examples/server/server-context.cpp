@@ -4811,7 +4811,10 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 slot.t_start_generation = ggml_time_us();
                 slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                 metrics.on_prompt_eval(slot);
-                create_checkpoint_at_interval(slot);
+                // create checkpoint after prompt processing ends
+                if (params_base.ctx_checkpoints_tolerance <= 0 && params_base.do_checkpoint) {
+                    create_checkpoint(slot);
+                }
             }
 
             // create checkpoint during generation
