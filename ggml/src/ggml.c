@@ -18207,6 +18207,7 @@ static void ggml_compute_forward_mul_mat_id(
     ggml_barrier(params->shared);
 
 #if GGML_USE_IQK_MULMAT
+#if defined GGML_EXPERT_CHUNKING
     if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
         const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
@@ -18251,6 +18252,7 @@ IQK_MulMat_Not_Available0:;
         atomic_store(&params->shared->current_chunk, 0);
     }
     ggml_barrier(params->shared);
+#endif
 #endif
 
     // compute each matrix multiplication in sequence
@@ -18527,7 +18529,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         }
     }
 
-#if 1
+#if defined GGML_EXPERT_CHUNKING
 
     if (ith == 0) {
         atomic_store(&params->shared->current_chunk, nth);

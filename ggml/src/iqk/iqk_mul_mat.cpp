@@ -1928,7 +1928,9 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             std::partial_sort(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
             std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
         }
-        barrier(barrier_data);
+        if (iq + 1 < q->ne[2]) {
+            barrier(barrier_data);
+        }
     }
 
     return true;
