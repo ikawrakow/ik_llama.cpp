@@ -1177,7 +1177,7 @@ static bool dsv4_per_step_alloc(llama_context & ctx, int max_tokens) {
         ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors_from_buft(graph_ctx, buft);
         if (buffer == nullptr) {
             ggml_free(graph_ctx);
-        ctx.kv_self.ckpt.release_dsv4_per_step();
+            ctx.kv_self.ckpt.release_dsv4_per_step();
             return false;
         }
         ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_COMPUTE);
