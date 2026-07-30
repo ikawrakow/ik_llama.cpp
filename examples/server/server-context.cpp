@@ -3658,7 +3658,11 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 if (!do_reset) {
                     // The checkpoint encodes positions [pos_min, pos_max];
                     // advance n_past past the restored range.
-                    pos_next = std::min(pos_next, it->pos_max + 1);
+                    if (is_state_ckpt_model) {
+                        pos_next = std::min(pos_next, it->pos_max + 1);
+                    } else {
+                        pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                    }
                     slot.n_past = slot.cache_tokens.size_up_to_pos(pos_next);
 
                     {
