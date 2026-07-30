@@ -3258,7 +3258,7 @@ common_speculative_round_result common_speculative_run_round(
         return result;
     }
 
-    if (llama_model_has_recurrent(model) || llama_model_is_openpangu(model)) {
+    if (common_speculative_needs_checkpoint(model)) {
         if (!common_speculative_before_draft(
                 spec,
                 model,
