@@ -3623,6 +3623,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
     const auto pos_min_thold = std::max(0, pos_next - 1);
     const bool is_state_ckpt_model = llama_model_supports_state_checkpoints(model);
+    const bool is_dsv4 = std::strcmp(llama_model_arch_string(model), "deepseek4") == 0;
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
 
@@ -3636,7 +3637,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rbegin(),
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
-                    return cur.pos_max < (is_state_ckpt_model ? pos_next : pos_min_thold);
+                    return cur.pos_max < (is_dsv4 ? pos_next : pos_min_thold);
                 }
             );
 
@@ -3656,9 +3657,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 }
 
                 if (!do_reset) {
-                    // The checkpoint encodes positions [pos_min, pos_max];
-                    // advance n_past past the restored range.
-                    if (is_state_ckpt_model) {
+                    if (is_dsv4) {
                         pos_next = std::min(pos_next, it->pos_max + 1);
                     } else {
                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
