@@ -1906,7 +1906,7 @@ bool common_speculative_load_draft_model(
     }
 
     gpt_params params_dft = params_base;
-    params_dft.devices          = params.devices;
+    params_dft.devices          = params.devices.empty() ? params_base.devices : params.devices;
     params_dft.model            = params.model;
     params_dft.n_gpu_layers     = params.n_gpu_layers;
     params_dft.cache_type_k     = params.cache_type_k.empty() ? params_base.cache_type_k : params.cache_type_k;
@@ -1921,6 +1921,15 @@ bool common_speculative_load_draft_model(
             return false;
         }
         free_command_line(argc, argv);
+    }
+
+    // MTP uses independent placement; do not inherit target overrides.
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+        params_dft.ncmoe = 0;
+        params_dft.tensor_buft_overrides.clear();
+        params_dft.offload_policy.clear();
+        LOG_INF("%s: MTP draft ignores target CPU-MoE/tensor placement overrides\n",
+                __func__);
     }
 
     LOG_INF("%s: loading draft model '%s'\n", __func__, params_dft.model.c_str());
@@ -2033,6 +2042,15 @@ bool common_speculative_finalize_startup(
         const llama_model * model) {
     auto & params = params_base.speculative;
 
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+        model != nullptr &&
+        llama_model_is_deepseek4(model) &&
+        llama_model_n_nextn_layer(model) > 1) {
+        LOG_ERR("%s: DeepSeek-V4 MTP supports exactly one NextN predictor layer, got %d.\n",
+                __func__, llama_model_n_nextn_layer(model));
+        return false;
+    }
+
     if (!params.needs_dft_model()) {
         params.clear_dft();
     }
@@ -2042,11 +2060,22 @@ bool common_speculative_finalize_startup(
         if (!common_speculative_load_draft_model(params, params_base)) {
             return false;
         }
+
+        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            params.model_dft != nullptr &&
+            llama_model_is_deepseek4(params.model_dft) &&
+            llama_model_n_nextn_layer(params.model_dft) != 1) {
+            LOG_ERR("%s: DeepSeek-V4 MTP draft requires exactly one NextN predictor layer, got %d.\n",
+                    __func__, llama_model_n_nextn_layer(params.model_dft));
+            return false;
+        }
     }
 
     params_base.has_mtp = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
-    const bool has_external_mtp = params_base.has_mtp &&
-        llama_model_is_gemma4_mtp_assistant(params.model_dft);
+    const bool has_external_mtp = params_base.has_mtp && params.model_dft &&
+        (llama_model_is_gemma4_mtp_assistant(params.model_dft) ||
+         (llama_model_is_deepseek4(params.model_dft) &&
+          llama_model_n_nextn_layer(params.model_dft) == 1));
 
     params_base.has_mtp = common_speculative_prepare_mtp_runtime(
         params,
@@ -2336,7 +2365,7 @@ bool common_speculative_checkpoint_restore(
         const std::vector<llama_token> & ids,
         int n_draft,
         const std::vector<float> & mtp_hidden_state_pre,
-        int32_t mtp_n_past_base) {
+    int32_t mtp_n_past_base) {
     if (!ckpt.valid) {
         return true;
     }
@@ -2385,6 +2414,7 @@ bool common_speculative_checkpoint_restore(
 
         if (!ids.empty()) {
             const int n_re = (int) ids.size();
+            std::vector<float> redecoded_hidden;
             llama_batch re_batch = llama_batch_init(n_re, 0, 1);
             common_batch_add(re_batch, ckpt.sampled, ckpt.n_past, { seq_id }, n_re == 1);
             for (int j = 0; j < n_re - 1; ++j) {
