@@ -3627,9 +3627,8 @@ void server_context::apply_checkpoint(server_slot & slot) {
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
 
-        // DSV4 has pos_min=0 (no eviction) so the guard always blocks it;
-        // state-checkpoint models keep the full cache, so bypass the guard.
-        if (pos_min >= pos_min_thold || is_state_ckpt_model) {
+        // DSV4 has pos_min=0 (no eviction) so the guard always blocks it
+        if (pos_min >= pos_min_thold || is_dsv4) {
             SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", slot.n_past, (int)slot.cache_tokens.size(), slot.id, pos_min);
 
             // search for a context checkpoint
