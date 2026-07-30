@@ -3622,7 +3622,6 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
 void server_context::apply_checkpoint(server_slot & slot) {
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
     const auto pos_min_thold = std::max(0, pos_next - 1);
-    const bool is_state_ckpt_model = llama_model_supports_state_checkpoints(model);
     const bool is_dsv4 = std::strcmp(llama_model_arch_string(model), "deepseek4") == 0;
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
@@ -3677,7 +3676,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
             }
 
             if (do_reset) {
-                if (is_state_ckpt_model) {
+                if (is_dsv4) {
                     SLT_WRN(slot, "no checkpoint before divergence point - reprocessing from scratch\n");
                 } else {
                     SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
