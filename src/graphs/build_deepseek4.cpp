@@ -1118,7 +1118,10 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             ggml_tensor * cache, const auto & extra_ctx,
             const std::string & tag, int n_swa_eff) {
         auto n_stream = std::max<uint32_t>(1, lctx.dsv4.cache.n_stream);
-        auto extra_k = dsv4_comp_get_k(ctx0, cache, extra_ctx, n_embd_head, cache->ne[1]/n_stream);
+        auto extra_k = cache;
+        if (extra_k->ne[1] > 1) {
+            extra_k = dsv4_comp_get_k(ctx0, cache, extra_ctx, n_embd_head, cache->ne[1]/n_stream);
+        }
         if (cparams.flash_attn) {
             extra_mask = dsv4_pad_mask_tokens(ctx0, extra_mask, n_tokens);
         }
@@ -1146,7 +1149,6 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         auto attn = dsv4_build_attn(ctx0, hparams, cparams, q, k_all, k_all, kq_mask,
                 model.layers[il].attn_sinks, kq_scale, cb, il, n_swa_eff, gf);
         return attn;
-        //return std::make_pair(k_all, kq_mask);
     };
 
     auto num_streams = [] (const auto & comp) {
@@ -1160,16 +1162,24 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             lctx.dsv4.lid_plan.n_kv > 0 &&
             !cparams.k_cache_hadamard) {
         auto csa_mask = lctx.dsv4.inputs.csa.kq_mask;
+        auto csa_kv   = lctx.dsv4.cache.csa_k[il];
         if (hparams.indexer_top_k < lctx.dsv4.inputs.csa.kq_mask->ne[0]) {
             auto top_k = dsv4_build_lid_top_k(ctx0, llm, qr, cur, inp_pos, il, gf, cb);
-            csa_mask = build_top_k_mask(ctx0,
-                    dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, nullptr,
-                        lctx.dsv4.csa_plan.n_kv, n_tokens, num_streams(lctx.dsv4.csa_ctx), cb, il),
-                    top_k);
-            cb(csa_mask, "csa_mask", il);
+            if (n_tokens == 1) {
+                // When we are dealing with a single token, we can just use ggml_get_rows_ext to get the
+                // selected rows from the CSA cache and setup the corresponding mask. This makes the
+                // raw_kv and csa_kv concetenation much less expensive for long context.
+                csa_kv = ggml_get_rows_ext(ctx0, csa_kv, top_k, true, false);
+                csa_kv = ggml_reshape_3d(ctx0, csa_kv, csa_kv->ne[0], 1, csa_kv->ne[1]);
+                csa_mask = ggml_get_rows_ext(ctx0, csa_mask, top_k, true, true);
+            } else {
+                csa_mask = build_top_k_mask(ctx0, dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, nullptr,
+                            lctx.dsv4.csa_plan.n_kv, n_tokens, num_streams(lctx.dsv4.csa_ctx), cb, il), top_k);
+                cb(csa_mask, "csa_mask", il);
+            }
         }
         int n_csa = hparams.n_swa + hparams.indexer_top_k;
-        attn = build_the_attn(raw_k, raw_mask, csa_mask, lctx.dsv4.cache.csa_k[il], lctx.dsv4.csa_ctx, "csa", n_csa);
+        attn = build_the_attn(raw_k, raw_mask, csa_mask, csa_kv, lctx.dsv4.csa_ctx, "csa", n_csa);
         cb(attn, "attn_csa", il);
     } else if (ratio == llama_context::dsv4_runtime::HCA_RATIO &&
             lctx.dsv4.inputs.hca.kq_mask != nullptr &&
