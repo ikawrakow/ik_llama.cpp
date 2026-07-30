@@ -3239,7 +3239,7 @@ common_speculative_round_result common_speculative_run_round(
                 n_past,
                 result.sampled_before,
                 (int) draft.size() + 1,
-                params.recurrent_ckpt_mode)) {
+                params.spec_ckpt_mode)) {
             draft.clear();
         }
     }
