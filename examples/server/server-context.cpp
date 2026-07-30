@@ -1782,7 +1782,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     } while (false);
     slot.allow_ruless_prev = slot.allow_ruless;
 
-    if (llama_model_supports_state_checkpoints(llama_get_model(slot.ctx))) {
+    if (llama_model_has_recurrent(llama_get_model(slot.ctx)) || llama_model_is_deepseek4(llama_get_model(slot.ctx))) {
         params_base.can_ban_phrases = false;
         bool do_checkpoint = params_base.ctx_checkpoints_n > 0;
         // make checkpoints only for completion tasks
