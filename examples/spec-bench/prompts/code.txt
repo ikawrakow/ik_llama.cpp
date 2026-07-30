@@ -1,1 +1,0 @@
-Write a quick sort python algorithm, answer only the code.
