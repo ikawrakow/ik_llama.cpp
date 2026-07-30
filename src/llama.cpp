@@ -9296,6 +9296,23 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
     return kv;
 }
 
+// Compute per-stream byte offset and size for a DSV4 cache tensor.
+// stream_idx >= 0 gives that stream's portion; use -1 for the full tensor.
+// Tensors are laid out as [ne0, ne1, ...] with ne1 = per_stream_rows * n_stream.
+static bool dsv4_stream_offset_size(const struct ggml_tensor * tensor, uint32_t n_stream, int32_t stream_idx, size_t & out_offset, size_t & out_size) {
+    if (stream_idx < 0 || (uint32_t)stream_idx >= n_stream || n_stream == 0 || tensor->ne[1] % n_stream != 0) {
+        LLAMA_LOG_ERROR("%s: invalid stream_idx=%d n_stream=%u ne[1]=%lld\n", __func__, stream_idx, n_stream, (long long)tensor->ne[1]);
+        out_offset = 0;
+        out_size   = 0;
+        return false;
+    }
+    const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+    const uint32_t rows_per_stream = (uint32_t)(tensor->ne[1] / n_stream);
+    out_offset = (size_t)stream_idx * rows_per_stream * row_size;
+    out_size   = (size_t)rows_per_stream * row_size;
+    return true;
+}
+
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
@@ -9559,6 +9576,60 @@ struct llama_data_write {
                     write_tensor_data(kv_self.kr_l[il], range.first * kr_size_row, buf_size, il);
                 }
             }
+        }
+
+        // DSV4 compressed indexer cache (only for DSV4 models — preserves
+        // the old file layout for all other architectures)
+        if (ctx->model.arch == LLM_ARCH_DEEPSEEK4 && ctx->dsv4.cache.cache_ctx != nullptr) {
+            const uint32_t dsv4_n_layer = n_layer;
+            write(&dsv4_n_layer, sizeof(dsv4_n_layer));
+
+            // Per-sequence save: only the stream for this seq_id
+            // Full save: all streams
+            const uint32_t dsv4_single_stream = (seq_id != -1) ? 1 : 0;
+            write(&dsv4_single_stream, sizeof(dsv4_single_stream));
+            const int32_t dsv4_stream_idx = (seq_id != -1) ? seq_id : -1;
+            write(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
+            write(&ctx->dsv4.cache.n_stream, sizeof(ctx->dsv4.cache.n_stream));
+
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                uint32_t layer_type = 0;
+                if (il < ctx->dsv4.cache.csa_k.size() && ctx->dsv4.cache.csa_k[il] != nullptr) {
+                    layer_type = 1; // CSA+LID layer
+                } else if (il < ctx->dsv4.cache.hca_k.size() && ctx->dsv4.cache.hca_k[il] != nullptr) {
+                    layer_type = 2; // HCA layer
+                }
+                write(&layer_type, sizeof(layer_type));
+                if (layer_type != 0) {
+                    write_dsv4_cache(ctx, il, dsv4_stream_idx);
+                }
+            }
+        }
+    }
+
+    void write_dsv4_cache(const struct llama_context * ctx, int il, int32_t stream_idx) {
+        const auto & cache = ctx->dsv4.cache;
+        const uint32_t n_stream = cache.n_stream;
+        auto write_tensor_stream = [&](const struct ggml_tensor * tensor, int layer_il) {
+            if (stream_idx < 0) {
+                write_tensor_data(tensor, 0, ggml_nbytes(tensor), layer_il);
+            } else {
+                size_t offset, size;
+                GGML_ASSERT(dsv4_stream_offset_size(tensor, n_stream, stream_idx, offset, size));
+                write_tensor_data(tensor, offset, size, layer_il);
+            }
+        };
+        if (il < (int)cache.csa_k.size() && cache.csa_k[il] != nullptr) {
+            write_tensor_stream(cache.csa_k[il], il);
+            write_tensor_stream(cache.lid_k[il], il);
+            write_tensor_stream(cache.csa_state_kv[il], il);
+            write_tensor_stream(cache.csa_state_score[il], il);
+            write_tensor_stream(cache.lid_state_kv[il], il);
+            write_tensor_stream(cache.lid_state_score[il], il);
+        } else if (il < (int)cache.hca_k.size() && cache.hca_k[il] != nullptr) {
+            write_tensor_stream(cache.hca_k[il], il);
+            write_tensor_stream(cache.hca_state_kv[il], il);
+            write_tensor_stream(cache.hca_state_score[il], il);
         }
     }
 
@@ -10131,6 +10202,85 @@ struct llama_data_read {
                 }
             }
         }
+
+        // DSV4 compressed indexer cache (only present for DSV4 models)
+        if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+
+            auto & cache = ctx->dsv4.cache;
+            if (cache.cache_ctx == nullptr) {
+                LLAMA_LOG_ERROR("%s: DSV4 cache not initialized\n", __func__);
+                return false;
+            }
+
+            uint32_t dsv4_n_layer;
+            read_to(&dsv4_n_layer, sizeof(dsv4_n_layer));
+            if (dsv4_n_layer != n_layer) {
+                LLAMA_LOG_ERROR("%s: DSV4 cache layer count mismatch (%u != %u)\n", __func__, dsv4_n_layer, n_layer);
+                return false;
+            }
+
+            uint32_t dsv4_single_stream;
+            read_to(&dsv4_single_stream, sizeof(dsv4_single_stream));
+
+            int32_t dsv4_stream_idx;
+            read_to(&dsv4_stream_idx, sizeof(dsv4_stream_idx));
+
+            uint32_t dsv4_n_stream;
+            read_to(&dsv4_n_stream, sizeof(dsv4_n_stream));
+            if (dsv4_n_stream != cache.n_stream) {
+                LLAMA_LOG_ERROR("%s: DSV4 cache stream count mismatch (%u != %u)\n", __func__, dsv4_n_stream, cache.n_stream);
+                return false;
+            }
+
+            // Consistency check: per-stream data requires a destination seq_id
+            if (dsv4_single_stream && seq_id == -1) {
+                LLAMA_LOG_ERROR("%s: per-stream DSV4 cache cannot be restored to full KV cache\n", __func__);
+                return false;
+            }
+            if (!dsv4_single_stream && seq_id != -1) {
+                LLAMA_LOG_ERROR("%s: full-stream DSV4 cache cannot be restored to single sequence\n", __func__);
+                return false;
+            }
+
+            // Destination stream: when restoring per-stream, write to seq_id's slot
+            const int32_t dsv4_dst_stream = dsv4_single_stream ? (int32_t)seq_id : -1;
+
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                uint32_t layer_type;
+                read_to(&layer_type, sizeof(layer_type));
+
+                bool set_ok = true;
+                auto set_tensor_stream = [&](struct ggml_tensor * tensor) {
+                    if (!set_ok) return;
+                    if (dsv4_single_stream) {
+                        size_t dst_offset, stream_size;
+                        if (!dsv4_stream_offset_size(tensor, cache.n_stream, dsv4_dst_stream, dst_offset, stream_size)) {
+                            set_ok = false;
+                            return;
+                        }
+                        ggml_backend_tensor_set(tensor, read(stream_size), dst_offset, stream_size);
+                    } else {
+                        ggml_backend_tensor_set(tensor, read(ggml_nbytes(tensor)), 0, ggml_nbytes(tensor));
+                    }
+                };
+
+                if (layer_type == 1) {
+                    set_tensor_stream(cache.csa_k[il]);
+                    set_tensor_stream(cache.lid_k[il]);
+                    set_tensor_stream(cache.csa_state_kv[il]);
+                    set_tensor_stream(cache.csa_state_score[il]);
+                    set_tensor_stream(cache.lid_state_kv[il]);
+                    set_tensor_stream(cache.lid_state_score[il]);
+                } else if (layer_type == 2) {
+                    set_tensor_stream(cache.hca_k[il]);
+                    set_tensor_stream(cache.hca_state_kv[il]);
+                    set_tensor_stream(cache.hca_state_score[il]);
+                }
+                if (!set_ok) {
+                    return false;
+                }
+            }
+        }
         return true;
     }
 
@@ -10403,9 +10553,8 @@ struct llama_data_read_file : llama_data_read {
 
 // Public state I/O excludes private DSV4 state, speculation uses an internal checkpoint.
 static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
-    if (ctx->model.arch == LLM_ARCH_OPENPANGU || ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
-        const char * arch = ctx->model.arch == LLM_ARCH_OPENPANGU ? "openPangu" : "DeepSeek4";
-        LLAMA_LOG_ERROR("%s: state save/restore is not supported for %s (private cache and side state are not serialized)\n", func, arch);
+    if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
+        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (private cache and side state are not serialized)\n", func);
         return false;
     }
     return true;

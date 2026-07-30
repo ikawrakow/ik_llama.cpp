@@ -2219,8 +2219,9 @@ bool llama_model_supports_ctx_shift(const struct llama_model * model) {
 }
 
 bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {
-    // These architectures cannot reconstruct their private per-position state after a mid-sequence rewind.
-    return model && model->arch != LLM_ARCH_OPENPANGU && model->arch != LLM_ARCH_DEEPSEEK4;
+    // OpenPangu has position-dependent private state outside the generic KV cache.
+    // DSV4 also has private per-position state, but uses state checkpoints to restore.
+    return model && model->arch != LLM_ARCH_OPENPANGU;
 }
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
