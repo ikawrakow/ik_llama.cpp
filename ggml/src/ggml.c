@@ -20806,6 +20806,7 @@ static void ggml_compute_forward_rope_f32(
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
     const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE; // qwen3vl apply interleaved mrope
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+    const bool is_inplace = src0->data == dst->data;
 
     if (is_mrope) {
         GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
@@ -20828,6 +20829,9 @@ static void ggml_compute_forward_rope_f32(
     const float sin_sign = forward ? 1.0f : -1.0f;
 
     const int32_t * pos = (const int32_t *) src1->data;
+
+    const bool is_flipped = dst->op_params[15] == 1 && !is_vision && !is_mrope;
+    const int  rope_offset = is_flipped ? ne0 - n_dims : 0;
 
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
@@ -20870,7 +20874,7 @@ static void ggml_compute_forward_rope_f32(
                         }
                     } else {
                         for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0/2;
+                            const int64_t ic = i0/2 + rope_offset;
 
                             const float cos_theta = cache[i0 + 0];
                             const float sin_theta = cache[i0 + 1];
@@ -20889,9 +20893,10 @@ static void ggml_compute_forward_rope_f32(
                     for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
                         const float cos_theta = cache[i0 + 0];
                         const float sin_theta = cache[i0 + 1];
+                        const int ic = i0 + rope_offset;
 
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                              float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
+                              float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
 
                         const float x0 = src[0];
                         const float x1 = src[1];
@@ -20899,6 +20904,10 @@ static void ggml_compute_forward_rope_f32(
                         dst_data[0] = x0*cos_theta - x1*sin_theta;
                         dst_data[1] = x0*sin_theta + x1*cos_theta;
                     }
+                }
+
+                if (is_inplace) {
+                    continue;
                 }
 
                 if (is_vision) {
@@ -20919,12 +20928,22 @@ static void ggml_compute_forward_rope_f32(
                     }
                 } else {
                     // fill the remain channels with data from src tensor
-                    for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                    if (is_flipped) {
+                        for (int64_t i0 = 0; i0 < rope_offset; i0 += 2) {
+                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                        dst_data[0] = src[0];
-                        dst_data[1] = src[1];
+                            dst_data[0] = src[0];
+                            dst_data[1] = src[1];
+                        }
+                    } else {
+                        for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
+                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+
+                            dst_data[0] = src[0];
+                            dst_data[1] = src[1];
+                        }
                     }
                 }
             }
@@ -20958,11 +20977,13 @@ static void ggml_compute_forward_rope_f16(
     memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
     memcpy(&sections,    (int32_t *) dst->op_params + 11, sizeof(int)*4);
 
+    const bool is_flipped = dst->op_params[15] != 0;
+    if (is_flipped) {
+        // TODO: implement it
+        GGML_ABORT("Flipped RoPE is not implemented for f16");
+    }
 
     GGML_TENSOR_UNARY_OP_LOCALS
-
-    //printf("ne0: %d, ne1: %d, ne2: %d, ne3: %d\n", ne0, ne1, ne2, ne3);
-    //printf("n_past = %d, ne2 = %d\n", n_past, ne2);
 
     GGML_ASSERT(nb0 == sizeof(ggml_fp16_t));
 
