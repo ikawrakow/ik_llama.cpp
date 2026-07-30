@@ -1952,7 +1952,9 @@ std::string LLM_TN::operator()(llm_tensor tensor, const std::string & suffix, in
 }
 
 void llama_model::set_tensor_overrides(const llama_model_params& params) {
-    tensor_overrides = params.tensor_buft_overrides && params.tensor_buft_overrides[0].pattern;
+    if (params.n_gpu_layers > 0) {
+        tensor_overrides = params.tensor_buft_overrides && params.tensor_buft_overrides[0].pattern;
+    }
 }
 
 std::string llama_model_ftype_name(llama_ftype ftype) {

@@ -452,6 +452,23 @@ static size_t llama_get_device_count(const llama_model & model) {
     GGML_UNUSED(model);
 }
 
+static size_t llama_get_device_count_no_cpu() {
+    size_t count = 0;
+#if defined(GGML_USE_CUDA)
+    count = ggml_backend_cuda_get_device_count();
+#elif defined(GGML_USE_SYCL)
+    count = ggml_backend_sycl_get_device_count();
+#elif defined(GGML_USE_VULKAN)
+    count = ggml_backend_vk_get_device_count();
+#elif defined(GGML_USE_CANN)
+    return ggml_backend_cann_get_device_count();
+#endif
+#if defined(GGML_USE_RPC)
+    count += model.rpc_servers.size();
+#endif
+    return count;
+}
+
 static ggml_backend_buffer_type_t llama_default_buffer_type_offload(const llama_model & model, int gpu) {
     ggml_backend_buffer_type_t buft = nullptr;
 
@@ -4740,8 +4757,6 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             return 0;
         }
 
-
-
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.idx_type_k, params.extra_output_type,
@@ -7198,7 +7213,7 @@ void llama_lora_adapter_free(struct llama_lora_adapter * adapter) {
 struct llama_model_params llama_model_default_params() {
     struct llama_model_params result = {
         /*.devices                 =*/ nullptr,
-        /*.n_gpu_layers                =*/ 0,
+        /*.n_gpu_layers                =*/ -1,
         /*.mla                         =*/ 0,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
@@ -7432,6 +7447,17 @@ struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params   params) {
     ggml_time_init();
+
+    auto n_gpu = llama_get_device_count_no_cpu();
+    if (params.n_gpu_layers < 0) {
+        params.n_gpu_layers = n_gpu > 0 ? 999 : 0;
+    } else if (n_gpu == 0) {
+        params.n_gpu_layers = 0;
+    }
+    if (params.n_gpu_layers == 0) {
+        params.tensor_buft_overrides = nullptr;
+        params.ncmoe = 0;
+    }
 
     llama_model * model = new llama_model;
 
