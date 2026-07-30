@@ -6222,6 +6222,7 @@ static int llama_decode_internal(
                                                       lctx.model.arch == LLM_ARCH_GEMMA4_MTP||
                                                       lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
                                                       lctx.model.arch == LLM_ARCH_DEEPSEEK4);
+            // For DSV4 we want to extract the 16,384-dim embedding first
             if (cparams.embeddings || has_mtp) {
                 if (use_raw_mtp_embd) {
                     for (int i = gf->n_nodes - 1; i >= 0; --i) {

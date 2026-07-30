@@ -1923,7 +1923,7 @@ bool common_speculative_load_draft_model(
         free_command_line(argc, argv);
     }
 
-    // MTP uses independent placement; do not inherit target overrides.
+    // We likely dont want to inehit offload policy for MTP
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.ncmoe = 0;
         params_dft.tensor_buft_overrides.clear();
@@ -2365,7 +2365,7 @@ bool common_speculative_checkpoint_restore(
         const std::vector<llama_token> & ids,
         int n_draft,
         const std::vector<float> & mtp_hidden_state_pre,
-    int32_t mtp_n_past_base) {
+        int32_t mtp_n_past_base) {
     if (!ckpt.valid) {
         return true;
     }

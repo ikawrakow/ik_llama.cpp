@@ -415,9 +415,9 @@ class MODEL_TENSOR(IntEnum):
     HC_FFN_SCALE         = auto()
     # openPangu-2.0 (DSA lightning indexer)
     ATTN_INDEXER_K_NORM          = auto()
-    ATTN_INDEXER_WEIGHTS_PROJ    = auto()
-    ATTN_INDEXER_K               = auto()
-    ATTN_INDEXER_Q_B             = auto()
+    ATTN_INDEXER_WEIGHTS_PROJ    = auto() # weights_proj
+    ATTN_INDEXER_K               = auto() # wk
+    ATTN_INDEXER_Q_B             = auto() # wq_b
     # openPangu-2.0 (MoME causal-conv on MLA latents)
     ATTN_QA_CONV         = auto()
     ATTN_KV_CONV         = auto()   # compresskv_conv
