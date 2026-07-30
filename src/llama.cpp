@@ -10235,8 +10235,7 @@ struct llama_data_write_buffer : llama_data_write {
 
     std::vector<uint8_t> aux_buffer;
 
-    llama_data_write_buffer(uint8_t * p, size_t len, const llama_model & _model)
-        : ptr(p), buf_size(len), model(_model) {}
+    llama_data_write_buffer(uint8_t * p, size_t len, const llama_model & _model) : ptr(p), buf_size(len), model(_model) {}
 
     void write(const void * src, size_t size) override {
         if (size > buf_size) {

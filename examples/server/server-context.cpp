@@ -2698,6 +2698,7 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
         return 0;
     }
     checkpoints.clear();
+    // version checks
     {
         uint32_t magic;
         file.read(reinterpret_cast<char *>(&magic), sizeof(magic));
@@ -2727,7 +2728,6 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
                 checkpoint.data.resize(data_len);
                 file.read(reinterpret_cast<char *>(checkpoint.data.data()), data_len * sizeof(uint8_t));
             }
-
             checkpoints.push_back(checkpoint);
         }
     }
@@ -4252,7 +4252,6 @@ void server_context::speculative_decoding_accept() {
         slot.n_past += ids.size();
         slot.n_decoded += ids.size();
         const int64_t t_current = ggml_time_us();
-
         slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
 
         // update how many tokens out of those tested were accepted
@@ -4764,7 +4763,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                 metrics.on_prompt_eval(slot);
                 // create checkpoint after prompt processing ends
-                if (params_base.ctx_checkpoints_tolerance <= 0 && params_base.do_checkpoint) {
+                if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
                     create_checkpoint(slot);
                 }
             }
