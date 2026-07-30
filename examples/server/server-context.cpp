@@ -3675,7 +3675,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
 
             if (do_reset) {
                 if (is_dsv4) {
-                    SLT_WRN(slot, "no checkpoint before divergence point - reprocessing from scratch\n");
+                    SLT_WRN(slot, "%s", "no checkpoint before divergence point - reprocessing from scratch\n");
                 } else {
                     SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
                         "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
