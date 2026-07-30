@@ -8952,6 +8952,45 @@ struct ggml_tensor * ggml_get_rows(
     return result;
 }
 
+struct ggml_tensor * ggml_get_rows_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            bool                  same_type,
+            bool                  dim0) {
+    if (dim0) {
+        GGML_ASSERT(same_type);
+        GGML_ASSERT(!ggml_is_quantized(a->type));
+        GGML_ASSERT(ggml_type_size(a->type) % 2 == 0); // we do not support dim0 get_rows on int8, fp8 data
+    }
+    if (!dim0 && !same_type) {
+        return ggml_get_rows(ctx, a, b);
+    }
+    GGML_ASSERT(b->type == GGML_TYPE_I32);
+    if (dim0) {
+        GGML_ASSERT(a->ne[1] == b->ne[1] && a->ne[2] == b->ne[2] && a->ne[3] == b->ne[3]);
+        GGML_ASSERT(a->ne[0] >= b->ne[0]);
+
+        struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, b->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+        result->op   = GGML_OP_GET_ROWS;
+        result->op_params[0] = 1;
+        result->src[0] = a;
+        result->src[1] = b;
+        return result;
+    }
+    GGML_ASSERT(a->ne[2] == b->ne[1]);
+    GGML_ASSERT(a->ne[3] == b->ne[2]);
+    GGML_ASSERT(b->ne[3] == 1);
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, a->ne[0], b->ne[0], b->ne[1], b->ne[2]);
+    result->op   = GGML_OP_GET_ROWS;
+    result->src[0] = a;
+    result->src[1] = b;
+    return result;
+
+}
+
+
 // ggml_get_rows_back
 
 struct ggml_tensor * ggml_get_rows_back(
@@ -18161,7 +18200,60 @@ static void ggml_compute_forward_mul_mat_id(
         }
     }
 
+    if (ith == 0) {
+        atomic_store(&params->shared->current_chunk, nth);
+    }
+
     ggml_barrier(params->shared);
+
+#if GGML_USE_IQK_MULMAT
+#if defined GGML_EXPERT_CHUNKING
+    if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
+        const void * wdata_mm    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+        const size_t row_size_mm = ggml_row_size(vec_dot_type, ne10);
+
+        const int chunks_per_expert = MAX(1, MIN(nth, (int)(ne01 / 32)));
+
+        int total_chunks = 0;
+        for (int a = 0; a < n_as; a++) {
+            if (matrix_row_counts[a] > 0) total_chunks += chunks_per_expert;
+        }
+
+        int chunk_id = ith;
+        while (chunk_id < total_chunks) {
+            // Map global chunk_id to (expert_index, local_chunk_index)
+            int acc = 0, cur_a = -1, local_chunk = 0;
+            for (int a = 0; a < n_as; a++) {
+                if (matrix_row_counts[a] == 0) continue;
+                if (chunk_id < acc + chunks_per_expert) {
+                    cur_a = a;
+                    local_chunk = chunk_id - acc;
+                    break;
+                }
+                acc += chunks_per_expert;
+            }
+
+            const char * src0_cur = (const char *) src0->data + cur_a*nb02;
+
+            if (!iqk_mul_mat_moe(ne01, matrix_row_counts[cur_a], ne00, ne11,
+                        src0->type, src0_cur, nb01,
+                        vec_dot_type, (const char *)wdata_mm, row_size_mm,
+                        (float *)dst->data, nb1, nb2,
+                        matrix_rows + cur_a*ne12, local_chunk, chunks_per_expert)) goto IQK_MulMat_Not_Available0;
+
+            chunk_id = atomic_fetch_add(&params->shared->current_chunk, 1);
+        }
+        return;
+    }
+IQK_MulMat_Not_Available0:;
+
+    // Reset counter for fallback path
+    if (ith == 0) {
+        atomic_store(&params->shared->current_chunk, 0);
+    }
+    ggml_barrier(params->shared);
+#endif
+#endif
 
     // compute each matrix multiplication in sequence
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
@@ -18437,6 +18529,75 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         }
     }
 
+#if defined GGML_EXPERT_CHUNKING
+
+    if (ith == 0) {
+        atomic_store(&params->shared->current_chunk, nth);
+    }
+
+    ggml_barrier(params->shared);
+
+    const float limit = *(const float *)(dst->op_params + 1);
+
+    const void * wdata_ug    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const size_t row_size_ug = ggml_row_size(vec_dot_type, ne10);
+    const int64_t nr0_base = src0_2 ? ne01 : ne01/2;
+
+    const int chunks_per_expert_ug = MAX(1, MIN(nth, (int)(nr0_base / 32)));
+
+    int total_chunks_ug = 0;
+    for (int a = 0; a < n_as; a++) {
+        if (matrix_row_counts[a] > 0) total_chunks_ug += chunks_per_expert_ug;
+    }
+
+    int last_a = 0;
+    int last_acc = 0;
+    int chunk_id_ug = ith;
+    while (chunk_id_ug < total_chunks_ug) {
+        int acc = last_acc, cur_a = -1, local_chunk = 0;
+        for (int a = last_a; a < n_as; a++) {
+            if (matrix_row_counts[a] == 0) continue;
+            if (chunk_id_ug < acc + chunks_per_expert_ug) {
+                cur_a = a;
+                local_chunk = chunk_id_ug - acc;
+                break;
+            }
+            acc += chunks_per_expert_ug;
+        }
+        if (cur_a < 0) {
+            return;
+        }
+        last_a = cur_a;
+        last_acc = acc;
+
+        const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
+        if (src0_2) {
+            src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
+            up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
+            gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
+        } else {
+            src0_2_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_1_cur = src0_2_cur + nb02/2;
+            if (up_b) {
+                GGML_ASSERT(!gate_b);
+                gate_b_cur = (const char *)up_b->data + cur_a*nb41;
+                up_b_cur   = gate_b_cur + nb41/2;
+            }
+        }
+
+        if (!iqk_moe_fused_up_gate(nr0_base, matrix_row_counts[cur_a], ne00, ne11, dst->op_params[0],
+                            type, src0_1_cur, src0_2_cur, nb01,
+                            vec_dot_type, (const char *)wdata_ug, row_size_ug,
+                            up_b_cur, gate_b_cur,
+                            (float *)dst->data, nb1, nb2,
+                            matrix_rows + cur_a*ne12, limit, local_chunk, chunks_per_expert_ug)) GGML_ABORT("fatal error");
+
+        chunk_id_ug = atomic_fetch_add(&params->shared->current_chunk, 1);
+    }
+
+#else
+
     ggml_barrier(params->shared);
 
     const float limit = *(const float *)(dst->op_params + 1);
@@ -18481,7 +18642,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             matrix_rows + cur_a*ne12, limit, ith, nth)) GGML_ABORT("fatal error");
 
     }
-
+#endif
 #undef MMID_MATRIX_ROW
 }
 
@@ -19572,11 +19733,84 @@ static void ggml_compute_forward_get_rows_f32(
     }
 }
 
+static void ggml_compute_forward_get_rows_any(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(src1->type == GGML_TYPE_I32);
+    GGML_ASSERT(src0->type == dst->type);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    int nrows = ggml_nrows(dst);
+    int npt = (nrows + nth - 1)/nth;
+    int first = npt*ith;
+    int last  = MIN(first + npt, nrows);
+
+    if (dst->op_params[0] == 1) {
+        size_t type_size = ggml_type_size(dst->type);
+        GGML_ASSERT(type_size == 2 || type_size == 4);
+        GGML_ASSERT(src0->ne[1] == src1->ne[1] && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3]);
+        GGML_ASSERT(src0->ne[0] >= src1->ne[0]);
+        GGML_ASSERT(dst->ne[0] == src1->ne[0]);
+        for (int ir = first; ir < last; ++ir) {
+            int i3 = ir/(dst->ne[1]*dst->ne[2]);
+            int i2 = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int i1 = ir -  i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+            const int * idx = (const  int *)((const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3]);
+            const char * cx = (const char *)((const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]);
+                  char * cy = (      char *)((      char *) dst->data + i1* dst->nb[1] + i2* dst->nb[2] + i3* dst->nb[3]);
+            if (type_size == 2) {
+                const uint16_t * x = (const uint16_t *)cx;
+                      uint16_t * y = (      uint16_t *)cy;
+                for (int j = 0; j < (int)dst->ne[0]; ++j) {
+                    y[j] = x[idx[j]];
+                }
+            } else {
+                const uint32_t * x = (const uint32_t *)cx;
+                      uint32_t * y = (      uint32_t *)cy;
+                for (int j = 0; j < (int)dst->ne[0]; ++j) {
+                    y[j] = x[idx[j]];
+                }
+            }
+        }
+        return;
+    }
+
+    GGML_ASSERT(src0->ne[2] == src1->ne[1]);
+    GGML_ASSERT(src0->ne[3] == src1->ne[2]);
+    GGML_ASSERT(src0->ne[3] == 1);
+    GGML_ASSERT(dst->ne[0] == src0->ne[0] && dst->ne[1] == src1->ne[0] && dst->ne[2] == src1->ne[1] && dst->ne[2]);
+
+    size_t row_size = ggml_row_size(dst->type, dst->ne[0]);
+    //GGML_ASSERT(row_size % 2 == 0);
+    //size_t type_size = row_size % 4 == 0 ? 4 : 2;
+
+    for (int ir = first; ir < last; ++ir) {
+        int i3 = ir/(dst->ne[1]*dst->ne[2]);
+        int i2 = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+        int i1 =  ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+        const int * idx = (const int *)((const char *)src1->data + i2*src1->nb[1] + i3*src1->nb[2]);
+        const char * cx = (const char *)src0->data + idx[i1]*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
+              char * cy = (      char *) dst->data +     i1 * dst->nb[1] + i2* dst->nb[2] + i3* dst->nb[3];
+        memcpy(cy, cx, row_size);
+    }
+}
+
 static void ggml_compute_forward_get_rows(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
 
     const struct ggml_tensor * src0 = dst->src[0];
+
+    if (dst->type != GGML_TYPE_F32) {
+        ggml_compute_forward_get_rows_any(params, dst);
+        return;
+    }
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:

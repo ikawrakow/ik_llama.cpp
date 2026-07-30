@@ -141,12 +141,38 @@ struct llama_kv_cache {
         int64_t per_step_conv_dim = 0;
         int32_t per_step_d_conv = 0;
 
+        // DSV4 per-step compressor-state base and per-row deltas.
+        std::vector<ggml_tensor *> dsv4_per_step_state;
+        std::vector<ggml_tensor *> dsv4_per_step_state_shadow;
+        std::vector<ggml_tensor *> dsv4_per_step_delta;
+        std::vector<ggml_context *> dsv4_per_step_shadow_ctxs;
+        std::vector<ggml_backend_buffer_t> dsv4_per_step_shadow_bufs;
+        std::vector<int32_t> dsv4_per_step_csa_dst;
+        std::vector<int32_t> dsv4_per_step_hca_dst;
+        std::vector<int32_t> dsv4_per_step_lid_dst;
+        std::vector<int32_t> dsv4_per_step_csa_src;
+        std::vector<int32_t> dsv4_per_step_hca_src;
+        std::vector<int32_t> dsv4_per_step_lid_src;
+        bool dsv4_per_step_allocated = false;
+        bool dsv4_per_step_saved = false;
+        int32_t dsv4_per_step_max_tokens = 0;
+        size_t dsv4_per_step_base_bytes = 0;
+        size_t dsv4_per_step_delta_bytes = 0;
+
         int selected_spec_mode = -1;
         int fixed_spec_mode = LLAMA_SPEC_CKPT_NONE;
         int32_t fixed_max_tokens = 0;
 
         // Serialised sequence state for CPU mode
         std::vector<uint8_t> cpu_state_data;
+
+        // Private DSV4 state snapshot used by GPU/CPU fallback modes.
+        std::vector<std::vector<uint8_t>> dsv4_state_data;
+        std::vector<ggml_tensor *> dsv4_state_shadow;
+        std::vector<struct ggml_context *> dsv4_shadow_ctxs;
+        std::vector<ggml_backend_buffer_t> dsv4_shadow_bufs;
+        bool dsv4_shadow_allocated = false;
+        bool dsv4_shadow_saved = false;
 
         // Separate storage for per-step allocations
         std::vector<struct ggml_context *>   per_step_ctxs;
@@ -159,19 +185,41 @@ struct llama_kv_cache {
         bool shadow_conv_only = false;
         bool saved     = false;
 
-        ~gpu_checkpoint() {
+        void release_dsv4_per_step();
+        void release_dsv4_snapshot();
+
+        void release() {
+            release_dsv4_per_step();
+            release_dsv4_snapshot();
+
             for (struct ggml_context * ctx : shadow_ctxs) {
                 ggml_free(ctx);
             }
+            shadow_ctxs.clear();
             for (ggml_backend_buffer_t buf : shadow_bufs) {
                 ggml_backend_buffer_free(buf);
             }
+            shadow_bufs.clear();
+            s_l_shadow.clear();
+            split_s_l_shadow.clear();
+            allocated = false;
+            saved = false;
+
             for (struct ggml_context * ctx : per_step_ctxs) {
                 ggml_free(ctx);
             }
+            per_step_ctxs.clear();
             for (ggml_backend_buffer_t buf : per_step_bufs) {
                 ggml_backend_buffer_free(buf);
             }
+            per_step_bufs.clear();
+            per_step_ssm.clear();
+            per_step_conv.clear();
+            per_step_max_allocated = 0;
+        }
+
+        ~gpu_checkpoint() {
+            release();
         }
     };
 
@@ -450,6 +498,8 @@ struct llama_context {
 
         struct comp_plan {
             std::vector<int32_t> state_pos;
+            std::vector<int32_t> state_delta_src_idxs;
+            std::vector<int32_t> state_delta_dst_idxs;
             std::vector<int32_t> state_persist_src_idxs;
             std::vector<int32_t> state_persist_dst_idxs;
             std::vector<int32_t> state_read_idxs;

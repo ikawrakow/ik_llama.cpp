@@ -984,7 +984,7 @@ int main(int argc, char ** argv) {
 
                 const int min_usable_draft = params.speculative.get_min_usable_stage_n_min();
                 if ((int) draft.size() >= min_usable_draft && (!draft.empty() || n_predict_budget > 1)) {
-                    if (llama_model_has_recurrent(model) || llama_model_is_openpangu(model)) {
+                    if (common_speculative_needs_checkpoint(model)) {
                         if (!common_speculative_before_draft(
                             spec,
                             model,
@@ -995,7 +995,7 @@ int main(int argc, char ** argv) {
                             n_past,
                             sampled_before,
                             (int) draft.size() + 1,
-                            params.speculative.recurrent_ckpt_mode)) {
+                            params.speculative.spec_ckpt_mode)) {
                             LOG_TEE("%s: speculative checkpoint setup failed, falling back to one-token decode\n", __func__);
                             draft.clear();
                         }
@@ -1033,7 +1033,7 @@ int main(int argc, char ** argv) {
                             accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
                         }
 
-                        common_speculative_commit(
+                        if (!common_speculative_commit(
                             spec,
                             ctx,
                             ctx_sampling,
@@ -1042,7 +1042,11 @@ int main(int argc, char ** argv) {
                             ids,
                             (int) draft.size(),
                             n_past + 1,
-                            accepted_output_indices);
+                            accepted_output_indices)) {
+                            llama_batch_free(verify_batch);
+                            LOG_TEE("%s: speculative checkpoint restore/commit failed\n", __func__);
+                            return 1;
+                        }
 
                         llama_batch_free(verify_batch);
 
