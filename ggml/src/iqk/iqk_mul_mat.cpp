@@ -1930,24 +1930,26 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     auto score_th = score + first;
     auto sorted = (int32_t *)(score + k->ne[1]);
     for (int iq = 0; iq < q->ne[2]; ++iq) {
-        auto this_q = q_data + iq*qnb2;
-        auto this_m = (const char *)m->data + iq*m->nb[1];
-        auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
-        DataInfo info{kq_th, this_q, (size_t)n_this_thread, (size_t)row_size_q, 0, 1, nullptr, 0};
-        mm.mul_mat_NxM(k->ne[0], (const char *)k->data + first*k->nb[1], k->nb[1], info, n_this_thread, q->ne[1]);
-        if (m->type == GGML_TYPE_F32) {
-            std::memcpy(score_th, this_m + first*sizeof(float), n_this_thread*sizeof(float));
-        } else {
-            iqk_f16_to_f32(n_this_thread, (const ggml_fp16_t *)this_m + first, score_th);
-        }
-        auto kq_i = kq_th;
-        for (int i = 0; i < int(q->ne[1]); ++i) {
-            float wi = this_w[i];
-            for (int j = 0; j < n_this_thread; ++j) {
-                float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
-                score_th[j] += wi * relu;
+        if (n_this_thread > 0) {
+            auto this_q = q_data + iq*qnb2;
+            auto this_m = (const char *)m->data + iq*m->nb[1];
+            auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
+            DataInfo info{kq_th, this_q, (size_t)n_this_thread, (size_t)row_size_q, 0, 1, nullptr, 0};
+            mm.mul_mat_NxM(k->ne[0], (const char *)k->data + first*k->nb[1], k->nb[1], info, n_this_thread, q->ne[1]);
+            if (m->type == GGML_TYPE_F32) {
+                std::memcpy(score_th, this_m + first*sizeof(float), n_this_thread*sizeof(float));
+            } else {
+                iqk_f16_to_f32(n_this_thread, (const ggml_fp16_t *)this_m + first, score_th);
             }
-            kq_i += n_this_thread;
+            auto kq_i = kq_th;
+            for (int i = 0; i < int(q->ne[1]); ++i) {
+                float wi = this_w[i];
+                for (int j = 0; j < n_this_thread; ++j) {
+                    float relu = kq_i[j] > 0.0f ? kq_i[j] : 0.0f;
+                    score_th[j] += wi * relu;
+                }
+                kq_i += n_this_thread;
+            }
         }
         barrier(barrier_data);
         if (ith == 0) {
