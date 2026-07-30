@@ -9273,17 +9273,18 @@ static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor
 // Compute per-stream byte offset and size for a DSV4 cache tensor.
 // stream_idx >= 0 gives that stream's portion; use -1 for the full tensor.
 // Tensors are laid out as [ne0, ne1, ...] with ne1 = per_stream_rows * n_stream.
-static void dsv4_stream_offset_size(const struct ggml_tensor * tensor, uint32_t n_stream, int32_t stream_idx, size_t & out_offset, size_t & out_size) {
+static bool dsv4_stream_offset_size(const struct ggml_tensor * tensor, uint32_t n_stream, int32_t stream_idx, size_t & out_offset, size_t & out_size) {
     if (stream_idx < 0 || (uint32_t)stream_idx >= n_stream || n_stream == 0 || tensor->ne[1] % n_stream != 0) {
         LLAMA_LOG_ERROR("%s: invalid stream_idx=%d n_stream=%u ne[1]=%lld\n", __func__, stream_idx, n_stream, (long long)tensor->ne[1]);
         out_offset = 0;
         out_size   = 0;
-        return;
+        return false;
     }
     const size_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
     const uint32_t rows_per_stream = (uint32_t)(tensor->ne[1] / n_stream);
     out_offset = (size_t)stream_idx * rows_per_stream * row_size;
     out_size   = (size_t)rows_per_stream * row_size;
+    return true;
 }
 
 // TODO: replace all non-fatal assertions with returned errors or exceptions
@@ -9588,7 +9589,7 @@ struct llama_data_write {
                 write_tensor_data(tensor, 0, ggml_nbytes(tensor), layer_il);
             } else {
                 size_t offset, size;
-                dsv4_stream_offset_size(tensor, n_stream, stream_idx, offset, size);
+                GGML_ASSERT(dsv4_stream_offset_size(tensor, n_stream, stream_idx, offset, size));
                 write_tensor_data(tensor, offset, size, layer_il);
             }
         };
@@ -10222,10 +10223,15 @@ struct llama_data_read {
                 uint32_t layer_type;
                 read_to(&layer_type, sizeof(layer_type));
 
+                bool set_ok = true;
                 auto set_tensor_stream = [&](struct ggml_tensor * tensor) {
+                    if (!set_ok) return;
                     if (dsv4_single_stream) {
                         size_t dst_offset, stream_size;
-                        dsv4_stream_offset_size(tensor, cache.n_stream, dsv4_dst_stream, dst_offset, stream_size);
+                        if (!dsv4_stream_offset_size(tensor, cache.n_stream, dsv4_dst_stream, dst_offset, stream_size)) {
+                            set_ok = false;
+                            return;
+                        }
                         ggml_backend_tensor_set(tensor, read(stream_size), dst_offset, stream_size);
                     } else {
                         ggml_backend_tensor_set(tensor, read(ggml_nbytes(tensor)), 0, ggml_nbytes(tensor));
@@ -10243,6 +10249,9 @@ struct llama_data_read {
                     set_tensor_stream(cache.hca_k[il]);
                     set_tensor_stream(cache.hca_state_kv[il]);
                     set_tensor_stream(cache.hca_state_score[il]);
+                }
+                if (!set_ok) {
+                    return false;
                 }
             }
         }
