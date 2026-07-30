@@ -774,6 +774,7 @@ llama_context::~llama_context() {
     if (dflash.kv.cache_sched != nullptr) {
         ggml_backend_sched_free(dflash.kv.cache_sched);
     }
+    kv_self.ckpt.release();
     free_dflash_kv_cache_tensors();
     free_dsv4_cache_tensors();
     ggml_backend_sched_free(sched);
@@ -6248,6 +6249,12 @@ static int llama_decode_internal(
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
         llama_graph_compute(lctx, gf, n_threads);
 
+        if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 &&
+            lctx.kv_self.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP &&
+            !llama_dsv4_spec_ckpt_capture_rows(&lctx)) {
+            return GGML_STATUS_FAILED;
+        }
+
 #if IK_PRINT_TIMING
         llama_synchronize(&lctx);
         tim2 = ggml_time_us();
@@ -8973,11 +8980,12 @@ static const char * llama_spec_ckpt_mode_name(int mode) {
 
 int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
     auto & kv = ctx->kv_self;
+    const bool is_dsv4 = ctx->model.arch == LLM_ARCH_DEEPSEEK4;
 
     kv.save_per_step_ssm     = false;
     kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_NONE;
 
-    if (!kv.checkpoint_supported()) {
+    if (!kv.checkpoint_supported() && !is_dsv4) {
         return (int)LLAMA_SPEC_CKPT_NONE;
     }
 
@@ -8992,8 +9000,26 @@ int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
         return kv.ckpt.selected_spec_mode;
     }
 
+    if (is_dsv4 && mode != LLAMA_SPEC_CKPT_AUTO &&
+        mode != LLAMA_SPEC_CKPT_PER_STEP && mode != LLAMA_SPEC_CKPT_GPU_FALLBACK &&
+        mode != LLAMA_SPEC_CKPT_CPU) {
+        LLAMA_LOG_ERROR("%s: unsupported DSV4 checkpoint mode %d\n", __func__, mode);
+        return (int)LLAMA_SPEC_CKPT_NONE;
+    }
+
     int requested = mode;
     int resolved = LLAMA_SPEC_CKPT_NONE;
+
+    const auto prepare_per_step = [&]() {
+        return is_dsv4
+            ? llama_dsv4_spec_ckpt_prepare(ctx, LLAMA_SPEC_CKPT_PER_STEP, max_tokens)
+            : spec_ckpt_try_per_step(kv, ctx->model, max_tokens);
+    };
+    const auto prepare_gpu_fallback = [&]() {
+        return is_dsv4
+            ? llama_dsv4_spec_ckpt_prepare(ctx, LLAMA_SPEC_CKPT_GPU_FALLBACK, max_tokens)
+            : kv.checkpoint_alloc_shadows();
+    };
 
     // prefer PER_STEP → GPU_FALLBACK → CPU
     if (requested == LLAMA_SPEC_CKPT_AUTO) {
@@ -9001,10 +9027,10 @@ int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
     }
 
     if (requested == LLAMA_SPEC_CKPT_PER_STEP) {
-        if (spec_ckpt_try_per_step(kv, ctx->model, max_tokens)) {
+        if (prepare_per_step()) {
             resolved = LLAMA_SPEC_CKPT_PER_STEP;
         } else if (mode == LLAMA_SPEC_CKPT_PER_STEP) {
-            LLAMA_LOG_ERROR("%s: failed to preallocate per-step checkpoint buffers for max_tokens=%d; --recurrent-ckpt-mode=%s requires startup allocation\n",
+            LLAMA_LOG_ERROR("%s: failed to preallocate per-step checkpoint buffers for max_tokens=%d; --spec-ckpt-mode=%s requires startup allocation\n",
                     __func__, max_tokens, llama_spec_ckpt_mode_name(mode));
             return (int)LLAMA_SPEC_CKPT_NONE;
         } else {
@@ -9015,10 +9041,10 @@ int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
     }
 
     if (resolved == LLAMA_SPEC_CKPT_NONE && requested == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
-        if (kv.checkpoint_alloc_shadows()) {
+        if (prepare_gpu_fallback()) {
             resolved = LLAMA_SPEC_CKPT_GPU_FALLBACK;
         } else if (mode == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
-            LLAMA_LOG_ERROR("%s: failed to preallocate gpu-fallback checkpoint shadows at startup; --recurrent-ckpt-mode=%s requires startup allocation\n",
+            LLAMA_LOG_ERROR("%s: failed to preallocate gpu-fallback checkpoint shadows at startup; --spec-ckpt-mode=%s requires startup allocation\n",
                     __func__, llama_spec_ckpt_mode_name(mode));
             return (int)LLAMA_SPEC_CKPT_NONE;
         } else {
@@ -9032,7 +9058,7 @@ int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
         resolved = LLAMA_SPEC_CKPT_CPU;
     }
 
-    if (resolved == LLAMA_SPEC_CKPT_CPU) {
+    if (resolved == LLAMA_SPEC_CKPT_CPU && !is_dsv4) {
         const size_t cpu_reserve = llama_spec_ckpt_cpu_state_reserve(ctx, 0);
         kv.ckpt.cpu_state_data.clear();
         kv.ckpt.cpu_state_data.reserve(cpu_reserve);
@@ -9044,8 +9070,8 @@ int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens) {
     kv.ckpt.fixed_max_tokens = resolved == LLAMA_SPEC_CKPT_PER_STEP ? max_tokens : 0;
     kv.ckpt.selected_spec_mode = resolved;
 
-    LLAMA_LOG_INFO("%s: fixed recurrent checkpoint mode = %s%s\n",
-            __func__, llama_spec_ckpt_mode_name(resolved),
+    LLAMA_LOG_INFO("%s: fixed %s checkpoint mode = %s%s\n",
+            __func__, is_dsv4 ? "DSV4" : "recurrent", llama_spec_ckpt_mode_name(resolved),
             resolved == LLAMA_SPEC_CKPT_PER_STEP ? (std::string(" (max_tokens=") + std::to_string(max_tokens) + ")").c_str() : "");
 
     return resolved;
@@ -9056,13 +9082,22 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
 
     switch (kv.ckpt.selected_spec_mode) {
         case LLAMA_SPEC_CKPT_PER_STEP:
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+                return llama_dsv4_spec_ckpt_save(ctx, true);
+            }
             kv.save_per_step_ssm = true;
             return true;
 
         case LLAMA_SPEC_CKPT_GPU_FALLBACK:
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+                return llama_dsv4_spec_ckpt_save(ctx, true);
+            }
             return kv.checkpoint_save(ctx->sched);
 
         case LLAMA_SPEC_CKPT_CPU: {
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+                return llama_dsv4_spec_ckpt_save(ctx, false);
+            }
             const size_t need = llama_state_seq_get_size(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             kv.ckpt.cpu_state_data.resize(need);
             const size_t written = llama_state_seq_get_data(
@@ -9076,40 +9111,61 @@ bool llama_spec_ckpt_save(struct llama_context * ctx, llama_seq_id seq_id) {
     }
 }
 
-bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
-                              llama_pos n_past, int accepted_step) {
+enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
+        struct llama_context * ctx, llama_seq_id seq_id,
+        llama_pos n_past, int accepted_step) {
     auto & kv = ctx->kv_self;
 
     switch (kv.ckpt.selected_spec_mode) {
         case LLAMA_SPEC_CKPT_PER_STEP: {
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+                const llama_pos accepted_pos = n_past + accepted_step;
+                llama_kv_cache_seq_rm(kv, seq_id, accepted_pos + 1, -1);
+                return llama_dsv4_spec_ckpt_restore(ctx, true, accepted_step);
+            }
             if (!kv.per_step_restore(ctx->model, ctx->sched, accepted_step)) {
-                return false;
+                return LLAMA_SPEC_CKPT_RESTORE_FAILED;
             }
             const llama_pos accepted_pos = n_past + accepted_step;
             if (seq_id >= 0 && (uint32_t)seq_id < kv.size) {
                 kv.cells[seq_id].pos = accepted_pos;
             }
             llama_kv_cache_seq_rm(kv, seq_id, accepted_pos + 1, -1);
-            return true;
+            return LLAMA_SPEC_CKPT_RESTORE_DIRECT;
         }
 
         case LLAMA_SPEC_CKPT_GPU_FALLBACK:
-            kv.checkpoint_restore(ctx->sched);
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+                llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
+                return llama_dsv4_spec_ckpt_restore(ctx, true, 0);
+            }
+            if (!kv.checkpoint_restore(ctx->sched)) {
+                return LLAMA_SPEC_CKPT_RESTORE_FAILED;
+            }
             llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
-            return false;
+            return LLAMA_SPEC_CKPT_RESTORE_BASE_REPLAY_REQUIRED;
 
         case LLAMA_SPEC_CKPT_CPU:
+            if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
+                llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
+                return llama_dsv4_spec_ckpt_restore(ctx, false, 0);
+            }
             if (!kv.ckpt.cpu_state_data.empty()) {
                 llama_state_seq_set_data(ctx, kv.ckpt.cpu_state_data.data(),
                                          kv.ckpt.cpu_state_data.size(), seq_id,
                                          LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             }
             llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
-            return false;
+            return LLAMA_SPEC_CKPT_RESTORE_BASE_REPLAY_REQUIRED;
 
         default:
-            return false;
+            return LLAMA_SPEC_CKPT_RESTORE_FAILED;
     }
+}
+
+bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
+                              llama_pos n_past, int accepted_step) {
+    return llama_spec_ckpt_restore_ex(ctx, seq_id, n_past, accepted_step) != LLAMA_SPEC_CKPT_RESTORE_FAILED;
 }
 
 void llama_spec_ckpt_discard(struct llama_context * ctx) {
@@ -9118,12 +9174,14 @@ void llama_spec_ckpt_discard(struct llama_context * ctx) {
     if (kv.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP) {
         kv.save_per_step_ssm = false;
         kv.checkpoint_delete();
-    } else if (kv.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_GPU_FALLBACK) {
+    } else if (kv.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_GPU_FALLBACK &&
+               ctx->model.arch != LLM_ARCH_DEEPSEEK4) {
         kv.checkpoint_delete();
     }
 
     kv.ckpt.selected_spec_mode = LLAMA_SPEC_CKPT_NONE;
     kv.ckpt.cpu_state_data.clear();
+    llama_dsv4_spec_ckpt_discard(ctx);
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -10317,7 +10375,7 @@ struct llama_data_read_file : llama_data_read {
     }
 };
 
-// Refuse state I/O when private per-position state is not part of the format.
+// Public state I/O excludes private DSV4 state, speculation uses an internal checkpoint.
 static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
     if (ctx->model.arch == LLM_ARCH_OPENPANGU || ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
         const char * arch = ctx->model.arch == LLM_ARCH_OPENPANGU ? "openPangu" : "DeepSeek4";

@@ -281,7 +281,7 @@ bool server_context::load_model(const gpt_params& params_) {
 void server_context::init() {
     const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
 
-    if (!system_prompt.empty() && std::strcmp(llama_model_arch_string(model), "deepseek4") == 0) {
+    if (!system_prompt.empty() && llama_model_is_deepseek4(model)) {
         throw std::runtime_error("DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state");
     }
 
@@ -2081,7 +2081,7 @@ void server_context::system_prompt_update() {
 }
 
 bool server_context::system_prompt_set(const std::string& sys_prompt) {
-    if (!sys_prompt.empty() && model != nullptr && std::strcmp(llama_model_arch_string(model), "deepseek4") == 0) {
+    if (!sys_prompt.empty() && llama_model_is_deepseek4(model)) {
         LOG_ERROR("DeepSeek4 server system prompts are unsupported because seq_cp does not copy private cache state", {});
         return false;
     }
@@ -4238,7 +4238,7 @@ void server_context::speculative_decoding_accept() {
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
 
-        common_speculative_commit(
+        if (!common_speculative_commit(
             slot.spec,
             ctx,
             slot.ctx_sampling,
@@ -4247,7 +4247,18 @@ void server_context::speculative_decoding_accept() {
             ids,
             n_draft,
             spec_pos_base,
-            accepted_output_indices);
+            accepted_output_indices)) {
+            LOG_ERROR("speculative checkpoint restore/commit failed, releasing slot", {
+                {"id_slot", slot.id},
+                {"id_task", slot.id_task},
+            });
+            send_error(slot, "speculative checkpoint restore failed", ERROR_TYPE_SERVER);
+            slot.release();
+            slot.i_batch = -1;
+            slot.i_batch_dft.clear();
+            slot.drafted.clear();
+            continue;
+        }
         slot.spec_target_only = false;
 
         for (size_t i = 0; i < ids.size(); ++i) {
@@ -4830,8 +4841,54 @@ void server_context::update_slots() {
     // make sure we're in the right embedding mode
     llama_set_embeddings(ctx, batch_type == 1);
 
-    if (llama_model_has_recurrent(model) || llama_model_is_openpangu(model)) {
-        const int ckpt_mode = params_base.speculative.recurrent_ckpt_mode;
+    if (common_speculative_needs_checkpoint(model)) {
+        const int ckpt_mode = params_base.speculative.spec_ckpt_mode;
+
+        // Remove draft rows if checkpoint setup fails, otherwise rejection is unsafe.
+        auto make_root_only = [&](server_slot & slot) {
+            if (slot.i_batch_dft.empty()) {
+                return;
+            }
+
+            const int32_t root_index = slot.i_batch_dft.front();
+            const int32_t old_n_tokens = batch.n_tokens;
+            std::vector<uint8_t> remove(old_n_tokens, 0);
+            for (size_t i = 1; i < slot.i_batch_dft.size(); ++i) {
+                const int32_t index = slot.i_batch_dft[i];
+                if (index >= 0 && index < old_n_tokens) {
+                    remove[index] = 1;
+                }
+            }
+
+            std::vector<int32_t> remap(old_n_tokens, -1);
+            int32_t write = 0;
+            for (int32_t read = 0; read < old_n_tokens; ++read) {
+                if (remove[read]) {
+                    continue;
+                }
+                if (write != read) {
+                    batch.token[write] = batch.token[read];
+                    batch.pos[write] = batch.pos[read];
+                    batch.n_seq_id[write] = batch.n_seq_id[read];
+                    for (size_t seq = 0; seq < batch.n_seq_id[read]; ++seq) {
+                        batch.seq_id[write][seq] = batch.seq_id[read][seq];
+                    }
+                    batch.logits[write] = batch.logits[read];
+                }
+                remap[read] = write++;
+            }
+            batch.n_tokens = write;
+
+            if (root_index >= 0 && root_index < old_n_tokens) {
+                slot.i_batch = remap[root_index];
+            }
+            slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - (int32_t) slot.drafted.size());
+            slot.drafted.clear();
+            slot.i_batch_dft.clear();
+            slot.n_past = slot.cache_tokens.n_tokens();
+            slot.spec_target_only = false;
+            SLT_WRN(slot, "%s", "spec checkpoint unavailable; removed draft rows and continuing root-only\n");
+        };
 
         for (auto & slot : slots) {
             if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch_dft.empty()) {
@@ -4853,11 +4910,13 @@ void server_context::update_slots() {
                     ckpt_mode)) {
                 const common_speculative_checkpoint * ckpt = common_speculative_get_checkpoint(slot.spec);
                 GGML_ASSERT(ckpt != nullptr);
-                const char * mode_name = ckpt->per_step_enabled ? "per-step" : "shadow/cpu";
+                const char * mode_name = ckpt->mode == LLAMA_SPEC_CKPT_PER_STEP ? "per-step" :
+                    ckpt->mode == LLAMA_SPEC_CKPT_GPU_FALLBACK ? "gpu-fallback" : "cpu";
                 SLT_DBG(slot, "spec checkpoint saved (mode=%s), n_past_pre_spec=%d\n",
                     mode_name, ckpt->n_past);
             } else {
                 SLT_WRN(slot, "%s", "failed to save spec checkpoint\n");
+                make_root_only(slot);
             }
         }
     }

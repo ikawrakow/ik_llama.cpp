@@ -7,6 +7,8 @@
 
 struct common_speculative;
 
+bool common_speculative_needs_checkpoint(const llama_model * model);
+
 enum common_speculative_init_status {
     COMMON_SPECULATIVE_INIT_SKIPPED,
     COMMON_SPECULATIVE_INIT_READY,
@@ -24,7 +26,7 @@ static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_HIDD
 
 struct common_speculative_checkpoint {
     bool valid = false;
-    bool per_step_enabled = false;
+    int mode = LLAMA_SPEC_CKPT_NONE;
     llama_pos n_past = 0;
     llama_token sampled = LLAMA_TOKEN_NULL;
     common_sampler * sampler = nullptr;
@@ -170,7 +172,7 @@ void common_speculative_checkpoint_discard(
     common_speculative_checkpoint & ckpt,
     llama_context * ctx);
 
-void common_speculative_checkpoint_restore(
+bool common_speculative_checkpoint_restore(
     common_speculative_checkpoint & ckpt,
     common_speculative * spec,
     llama_context * ctx,
@@ -183,16 +185,16 @@ void common_speculative_checkpoint_restore(
     const std::vector<float> & mtp_hidden_state_pre,
     int32_t mtp_n_past_base);
 
-void common_speculative_commit(
-    common_speculative * spec,
-    llama_context * ctx,
-    common_sampler * sampler_dst,
-    llama_seq_id seq_id,
-    llama_token sampled_before,
-    const std::vector<llama_token> & ids,
-    int n_draft,
-    llama_pos pos_base,
-    const std::vector<int32_t> & accepted_output_indices);
+bool common_speculative_commit(
+        common_speculative * spec,
+        llama_context * ctx,
+        common_sampler * sampler_dst,
+        llama_seq_id seq_id,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        int n_draft,
+        llama_pos pos_base,
+        const std::vector<int32_t> & accepted_output_indices);
 
 bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id);
 

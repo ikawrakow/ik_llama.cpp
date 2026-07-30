@@ -1553,20 +1553,23 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         throw common_speculative_legacy_option_error(arg,
             "the value inside the relevant repeated --spec-type entry using the canonical key p_min, e.g. --spec-type mtp:p_min=" + std::string(argv[i]));
     }
-    if (arg == "--recurrent-ckpt-mode") {
+    if (arg == "--spec-ckpt-mode" || arg == "--recurrent-ckpt-mode") {
         CHECK_ARG
         const std::string val = argv[i];
         if (val == "auto" || val == "AUTO") {
-            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_AUTO;
+            params.speculative.spec_ckpt_mode = LLAMA_SPEC_CKPT_AUTO;
         } else if (val == "per-step" || val == "PER_STEP") {
-            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_PER_STEP;
+            params.speculative.spec_ckpt_mode = LLAMA_SPEC_CKPT_PER_STEP;
         } else if (val == "gpu-fallback" || val == "GPU_FALLBACK") {
-            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_GPU_FALLBACK;
+            params.speculative.spec_ckpt_mode = LLAMA_SPEC_CKPT_GPU_FALLBACK;
         } else if (val == "cpu" || val == "CPU") {
-            params.speculative.recurrent_ckpt_mode = LLAMA_SPEC_CKPT_CPU;
+            params.speculative.spec_ckpt_mode = LLAMA_SPEC_CKPT_CPU;
         } else {
-            throw std::invalid_argument("unknown --recurrent-ckpt-mode value: " + val +
+            throw std::invalid_argument("unknown " + std::string(arg) + " value: " + val +
                 "; expected auto, per-step, gpu-fallback, or cpu");
+        }
+        if (arg == "--recurrent-ckpt-mode") {
+            fprintf(stderr, "warning: --recurrent-ckpt-mode is deprecated; use --spec-ckpt-mode\n");
         }
         return true;
     }
@@ -3337,11 +3340,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
-    options.push_back({ "*", "--recurrent-ckpt-mode MODE",    "checkpoint strategy for recurrent/hybrid speculative decoding\n"
+    options.push_back({ "*", "--spec-ckpt-mode MODE",         "checkpoint strategy for speculative decoding\n"
                                                               "  auto         auto-select: per-step if CUDA full-GPU, gpu-fallback otherwise (default)\n"
-                                                              "  per-step     save SSM state per draft step in VRAM; no re-decode on rejection\n"
-                                                              "  gpu-fallback copy state to GPU buffer; re-decode on rejection\n"
-                                                              "  cpu          serialise state via llama_state_seq; re-decode on rejection" });
+                                                              "  per-step     save architecture state per draft step; no re-decode on rejection\n"
+                                                              "  gpu-fallback copy architecture state to a device buffer; re-decode on rejection\n"
+                                                              "  cpu          serialise architecture state via host storage; re-decode on rejection\n"
+                                                              "  --recurrent-ckpt-mode remains as a deprecated alias" });
     options.push_back({ "*", "--spec-type SPEC[:k=v,...]",      "canonical speculative stage entry; repeat for a supported two-stage chain.\n"
                                                               "types: none, draft, dflash, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
                                                               "canonical keys: n_max,n_min,p_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
