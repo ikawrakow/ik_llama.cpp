@@ -3600,9 +3600,6 @@ static bool verify_restored_checkpoint(
     return true;
 }
 
-// Interval-gated checkpoint creation.
-// When ctx_checkpoints_interval <= 0 the gate is disabled (no-op);
-// slot.do_checkpoint (tolerance) is handled by the caller.
 void server_context::create_checkpoint_at_interval(server_slot & slot) {
     if (!this->params_base.do_checkpoint) {
         return;
