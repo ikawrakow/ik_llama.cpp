@@ -3992,8 +3992,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         }
                     }
                     apply_checkpoint(slot);
-                    slot.n_past_offset = slot.n_past_prompt - slot.n_past;
-                    slot.n_discarded_prompt = 0;
                     slot.n_prompt_tokens_cache = slot.n_past_prompt;
                     slot.n_prompt_tokens_processed = 0;
                 }
