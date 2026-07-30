@@ -57,8 +57,10 @@
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/delta-net.cuh"
 #include "ggml-cuda/sinkhorn.cuh"
+#include "ggml-cuda/latent_attn.cuh"
 #include "ggml-cuda/blend.cuh"
 #include "ggml-cuda/indexer_topk.cuh"
+#include "ggml-cuda/ds4_comp.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3836,6 +3838,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_SOFTPLUS:
                     ggml_cuda_op_softplus(ctx, dst);
                     break;
+                case GGML_UNARY_OP_SQRT_SOFTPLUS:
+                    ggml_cuda_op_sqrt_softplus(ctx, dst);
+                    break;
                 default:
                     return -1;
             }
@@ -4131,6 +4136,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SINKHORN:
             ggml_cuda_op_sinkhorn(ctx, dst);
             break;
+        case GGML_OP_LATENT_ATTN:
+            ggml_cuda_op_latent_attn(ctx, dst);
+            break;
+        case GGML_OP_HC_PRE:
+            ggml_cuda_op_hc_pre(ctx, dst);
+            break;
+        case GGML_OP_HC_POST:
+            ggml_cuda_op_hc_post(ctx, dst);
+            break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
             break;
@@ -4139,6 +4153,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_MASK_TOPK:
             ggml_cuda_op_indexer_mask(ctx, dst);
+            break;
+        case GGML_OP_MASK_TO_IDX:
+            ggml_cuda_op_mask_to_index(ctx, dst);
+            break;
+        case GGML_OP_DS4_COMP:
+            ggml_cuda_op_ds4_comp(ctx, dst);
             break;
         default:
             return false;
@@ -4469,7 +4489,7 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
         }
     }
 
-    if (node->op == GGML_OP_SCALE &&
+    if ((node->op == GGML_OP_SCALE || node->op == GGML_OP_LATENT_ATTN) &&
         memcmp(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
         return false;
     }
@@ -4718,6 +4738,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SOFTPLUS:
+                case GGML_UNARY_OP_SQRT_SOFTPLUS:
                 case GGML_UNARY_OP_NEG:
                     return ggml_is_contiguous(op->src[0]);
                 default:
@@ -4820,6 +4841,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             } break;
         case GGML_OP_GET_ROWS:
             {
+                if (op->type == op->src[0]->type) {
+                    return true;
+                }
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
@@ -4829,6 +4853,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                         return true;
+                    case GGML_TYPE_I32:
+                        return op->src[0]->type == op->type;
                     default:
                         return false;
                 }
@@ -5045,12 +5071,19 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_DELTA_NET:
         case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
+        case GGML_OP_MASK_TO_IDX:
+        case GGML_OP_DS4_COMP:
+            return true;
+        case GGML_OP_HC_PRE:
+        case GGML_OP_HC_POST:
             return true;
         case GGML_OP_SINKHORN: {
             const int sink_s = op->op_params[0];
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
                    sink_s >= 1 && sink_s <= 8 && op->src[0]->ne[0] == (int64_t) sink_s*sink_s;
         }
+        case GGML_OP_LATENT_ATTN:
+            return ggml_cuda_latent_attn_is_supported(op);
         case GGML_OP_FLASH_ATTN_EXT:
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;

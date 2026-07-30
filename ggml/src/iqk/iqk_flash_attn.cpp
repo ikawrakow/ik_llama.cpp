@@ -52,12 +52,15 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
     auto K = dst->src[1];
     auto V = dst->src[2];
     auto indexer = dst->src[5];
-    if (indexer && indexer->type == GGML_TYPE_I32 && indexer->ne[0] < K->ne[1] && Q->ne[1] >= nth &&
+    if (indexer && indexer->type == GGML_TYPE_I32 && indexer->ne[0] < K->ne[1] &&
         Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && K->ne[2] == 1) {
         auto row_size_k = ggml_row_size(K->type, K->ne[0]);
         auto row_size_v = ggml_row_size(V->type, V->ne[0]);
         auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
-        return work_size * nth;
+        size_t result = work_size * nth;
+        if (Q->ne[1]== 1) result += 512*sizeof(float);
+        return result;
+        //return work_size * nth;
     }
     int rk2 = Q->ne[2]/K->ne[2];
     size_t size = 0;
@@ -176,7 +179,66 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     if (type_q != 0 || type_mask != 1 || max_bias > 0) return false;
 
     if (indexer && indexer->type == GGML_TYPE_I32) {
-        if (indexer->ne[0] < nek1 && neq1 >= nth && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 == 1) {
+        //if (indexer->ne[0] < nek1 && neq1 >= nth && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 == 1) {
+        if (indexer->ne[0] < nek1 && neq3 == 1 && nek3 == 1 && nev3 == 1 && nek2 == 1) {
+            // Workbuffer: we need
+            // * indexer->ne[0] * sizeof(ggml_half) to extract the mask for a row
+            // * indexer->ne[0] * ggml_row_size(int_type_k_in, Dk) to extract the selected K cache entries
+            // * indexer->ne[0] * ggml_row_size(int_type_v, Dv) to extract the selected V cache entries
+            auto row_size_k = ggml_row_size(ggml_type(int_type_k_in), Dk);
+            auto row_size_v = ggml_row_size(ggml_type(int_type_v   ), Dv);
+            auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
+            ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);
+            int  nkv = indexer->ne[0];
+            if (neq1 == 1) {
+                GGML_ASSERT(neq2 <= 256);
+                int npt = (neq2 + nth - 1)/nth;
+                int ith_mid = nth;
+                int neq2_this_thread = npt;
+                int first = ith*npt;
+                if (npt*nth > neq2) {
+                    ith_mid = neq2 - nth*(npt - 1);
+                    if (ith >= ith_mid) {
+                        --neq2_this_thread;
+                        //if (neq2_this_thread < 1) return true;
+                        first = ith_mid*npt + (ith - ith_mid)*neq2_this_thread;
+                    }
+                }
+                auto idx = (const int *)indexer->data;
+                auto M = (const ggml_fp16_t *)mask;
+                auto work_k = (char *)work_buffer_in;
+                auto work_v = work_k + row_size_k*indexer->ne[0];
+                auto work_m = (ggml_fp16_t *)(work_v + row_size_v*indexer->ne[0]) + indexer->ne[0]*ith;
+                int last_found = -1;
+                for (int j = 0; j < nkv; ++j) {
+                    if (idx[j] >= 0) {
+                        last_found = j;
+                        work_m[j] = M[idx[j]];
+                        if (j % nth == ith) {
+                            std::memcpy(work_k + row_size_k*j, ((const char *)k + idx[j]*stride_k), row_size_k);
+                            std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
+                        }
+                    } else {
+                        work_m[j] = h_inf;
+                        if (j % nth == ith) {
+                            std::memset(work_k + row_size_k*j, 0, row_size_k);
+                            std::memset(work_v + row_size_v*j, 0, row_size_v);
+                        }
+                    }
+                }
+                barrier(barrier_data);
+                if (last_found < 0 || neq2_this_thread < 1) return true;
+                ++last_found;
+                int this_nkv = 32*((last_found + 31)/32);
+                auto this_q = (const char *)q + first*nbq2;
+                auto this_qkv = qkv + first*nb1/sizeof(float);
+                if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
+                         Dk, Dv, neq2_this_thread, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
+                         (const float *)this_q, work_k, work_v, work_m, (const float *)sinks, 1,
+                         scale, softcap,
+                         this_qkv, nullptr, nullptr)) return false;
+                return true;
+            }
             int npt = (neq1 + nth - 1)/nth;
             int ith_mid = nth;
             int neq1_this_thread = npt;
@@ -185,33 +247,37 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 ith_mid = neq1 - nth*(npt - 1);
                 if (ith >= ith_mid) {
                     --neq1_this_thread;
+                    if (neq1_this_thread < 1) return true;
                     first = ith_mid*npt + (ith - ith_mid)*neq1_this_thread;
                 }
             }
-            // Workbuffer: we need
-            // * indexer->ne[0] * sizeof(ggml_half) to extract the mask for a row
-            // * indexer->ne[0] * ggml_row_size(int_type_k_in, Dk) to extract the selected K cache entries
-            // * indexer->ne[0] * ggml_row_size(int_type_v, Dv) to extract the selected V cache entries
-            auto row_size_k = ggml_row_size(ggml_type(int_type_k_in), Dk);
-            auto row_size_v = ggml_row_size(ggml_type(int_type_v   ), Dv);
-            auto work_size  = (row_size_k + row_size_v + 64) * indexer->ne[0];
             auto work_k = (char *)work_buffer_in + ith*work_size;
             auto work_v = work_k + row_size_k*indexer->ne[0];
-            auto work_m = (uint16_t *)(work_v + row_size_v*indexer->ne[0]);
-            int  nkv = indexer->ne[0];
+            auto work_m = (ggml_fp16_t *)(work_v + row_size_v*indexer->ne[0]);
             for (int iq = first; iq < first + neq1_this_thread; ++iq) {
                 auto idx = (const int *)((const char *)indexer->data + iq*indexer->nb[1]);
-                auto M = (const uint16_t *)((const char *)mask + iq*stride_m);
+                auto M = (const ggml_fp16_t *)((const char *)mask + iq*stride_m);
+                int last_found = -1;
                 for (int j = 0; j < nkv; ++j) {
-                    std::memcpy(work_k + row_size_k*j, ((const char *)k + idx[j]*stride_k), row_size_k);
-                    std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
-                    work_m[j] = M[idx[j]];
+                    if (idx[j] >= 0) {
+                        std::memcpy(work_k + row_size_k*j, ((const char *)k + idx[j]*stride_k), row_size_k);
+                        std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
+                        work_m[j] = M[idx[j]];
+                        last_found = j;
+                    } else {
+                        std::memset(work_k + row_size_k*j, 0, row_size_k);
+                        std::memset(work_v + row_size_v*j, 0, row_size_v);
+                        work_m[j] = h_inf;
+                    }
                 }
+                if (last_found < 0) continue;
+                ++last_found;
+                int this_nkv = 32*((last_found + 31)/32);
                 auto this_q = (const char *)q + iq*stride_q;
                 auto this_qkv = qkv + iq*ne1*nb1/sizeof(float);
                 if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
-                         Dk, Dv, neq2, nkv, nbq2, row_size_k, row_size_v, 0, Dv,
-                         (const float *)this_q, work_k, work_v, work_m, nullptr, 0,
+                         Dk, Dv, neq2, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
+                         (const float *)this_q, work_k, work_v, work_m, (const float *)sinks, 1,
                          scale, softcap,
                          this_qkv, nullptr, nullptr)) return false;
             }
@@ -536,7 +602,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                         (const float *)((const char *)q + iq2*nbq2 + iq3*nbq3 + iq1*stride_q),
                         (const void  *)((const char *)k + iq2/rk2*nbk2 + iq3/rk3*nbk3),
                         (const void  *)((const char *)v + iq2/rv2*nbv2 + iq3/rv3*nbv3),
-                        mask ? (const void  *)((const char *)mask + iq1*stride_m) : nullptr, sinksf, 1,
+                        mask ? (const void  *)((const char *)mask + iq1*stride_m) : nullptr, sinksf, 0,
                         scale, softcap,
                         (float *)((char *)qkv + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1), nullptr, nullptr)) return false;
                 }

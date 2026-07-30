@@ -95,6 +95,7 @@ option(GGML_LASX        "ggml: enable lasx"             ON)
 option(GGML_LSX         "ggml: enable lsx"              ON)
 option(GGML_SVE         "ggml: enable SVE"              OFF)
 option(GGML_NCCL        "ggml: enable NCCL"             ON)
+option(GGML_EXPERT_CHUNKING "ggml: enable expert chunking" ON)
 
 if (WIN32)
     # Default to Windows 10 (0x0A00). Windows 8 / 8.1 reached end of support in

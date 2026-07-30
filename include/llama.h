@@ -241,6 +241,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ5_K_R4      = 341, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KS_R4     = 345, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ5_KS_R4     = 350, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_MXFP4_R8      = 351, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_KV_R8      = 398, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_K_R8       = 399, // except 1d tensors
 
@@ -699,6 +700,9 @@ extern "C" {
 
     LLAMA_API bool llama_model_has_recurrent(const struct llama_model * model);
 
+    // Returns whether the model uses the DeepSeek-V4 architecture.
+    LLAMA_API bool llama_model_is_deepseek4(const struct llama_model * model);
+
     // Returns true if the model is openPangu (conv-only recurrent state that rides the spec-rollback checkpoint)
     LLAMA_API bool llama_model_is_openpangu(const struct llama_model * model);
 
@@ -844,6 +848,12 @@ extern "C" {
         LLAMA_SPEC_CKPT_CPU         =  3,
     };
 
+    enum llama_spec_ckpt_restore_result {
+        LLAMA_SPEC_CKPT_RESTORE_FAILED = 0,
+        LLAMA_SPEC_CKPT_RESTORE_DIRECT = 1,
+        LLAMA_SPEC_CKPT_RESTORE_BASE_REPLAY_REQUIRED = 2,
+    };
+
     // Initialise the checkpoint system for the upcoming speculation window.
     LLAMA_API int llama_spec_ckpt_init(struct llama_context * ctx, int mode, int max_tokens);
 
@@ -853,6 +863,10 @@ extern "C" {
     // Restore the recurrent state after speculative decode.
     LLAMA_API bool llama_spec_ckpt_restore(struct llama_context * ctx, llama_seq_id seq_id,
                                             llama_pos n_past, int accepted_step);
+
+    LLAMA_API enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
+            struct llama_context * ctx, llama_seq_id seq_id,
+            llama_pos n_past, int accepted_step);
 
     // Discard the saved checkpoint and reset internal mode state.
     LLAMA_API void llama_spec_ckpt_discard(struct llama_context * ctx);

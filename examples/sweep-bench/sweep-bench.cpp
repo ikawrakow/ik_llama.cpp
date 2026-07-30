@@ -56,7 +56,13 @@ static void llama_selective_log_callback(ggml_log_level level, const char * text
     LOG_TEE("%s", text);
 }
 
-static void print_usage(int, char ** argv) {
+static void print_usage(int argc, char ** argv) {
+    gpt_params_print_usage(argc, argv, gpt_params());
+
+    LOG_TEE("\nsweep-bench specific options:\n\n");
+    LOG_TEE("  -nrep, --n-repetitions N        number of repetitions for each context size (default: 1)\n");
+    LOG_TEE("  -wb,   --warmup-batch           run a warmup batch before measurement\n");
+    LOG_TEE("         --output-format FORMAT    output format: table (default) or jsonl\n");
     LOG_TEE("\nexample usage:\n");
     LOG_TEE("\n    %s -m model.gguf -c 8192 -b 2048 -ub 512\n", argv[0]);
     LOG_TEE("\n");
@@ -191,6 +197,8 @@ int main(int argc, char ** argv) {
 
         // first measure token generation performance at this context size
         const auto t_tg_start = ggml_time_us();
+        //printf("======================================== tg_start for n_kv = %u\n", n_kv);
+        //fprintf(stderr, "======================================== tg_start for n_kv = %u\n", n_kv);
 
         for (int irep = 0; irep < nrep; ++irep) {
 
@@ -207,6 +215,8 @@ int main(int argc, char ** argv) {
             }
 
         }
+        //printf("======================================== tg_end for n_kv = %u\n", n_kv);
+        //fprintf(stderr, "======================================== tg_end for n_kv = %u\n", n_kv);
 
         const auto t_tg_end = ggml_time_us();
 

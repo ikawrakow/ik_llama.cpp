@@ -497,8 +497,10 @@ ggml_tensor * llm_build_context::build_deepseek2_dsa_indexer(
             ggml_build_forward_expand(gf, indexer_score);
         }
         auto topk = ggml_indexer_topk(ctx0, indexer_k_b, indexer_q, indexer_weights, indexer_score, GGML_UNARY_OP_RELU, n_top_k);
-        ggml_build_forward_expand(gf, topk);
-        return topk;
+        if (supports_op(topk)) {
+            ggml_build_forward_expand(gf, topk);
+            return topk;
+        }
     }
 
     if (indexer_q->ne[2] <= 8) {

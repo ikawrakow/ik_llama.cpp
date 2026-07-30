@@ -403,15 +403,41 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
     if (capture.layer_seen_batch_id.size() != capture.layer_ids.size()) {
         capture.layer_seen_batch_id.assign(capture.layer_ids.size(), 0);
     }
+    if (capture.layer_rows_written.size() != capture.layer_ids.size() || capture.expected_rows <= 0) {
+        capture.invalid = true;
+        LLAMA_LOG_WARN("%s: DFlash capture state is not initialized (expected_rows=%d layers=%zu written=%zu)\n",
+                __func__, capture.expected_rows, capture.layer_ids.size(), capture.layer_rows_written.size());
+        return 2;
+    }
+    if (capture.row_width != 0 && capture.row_width != row_width) {
+        capture.invalid = true;
+        LLAMA_LOG_WARN("%s: DFlash capture width mismatch for layer %d: got=%d expected=%d\n",
+                __func__, layer_id, row_width, capture.row_width);
+        return 2;
+    }
 
     auto & rows = capture.layer_rows[(size_t) layer_idx];
-    rows.resize((size_t) row_count * (size_t) row_width);
+    auto & rows_written = capture.layer_rows_written[(size_t) layer_idx];
+    if (rows_written + row_count > capture.expected_rows) {
+        capture.invalid = true;
+        LLAMA_LOG_WARN("%s: DFlash capture rows overflow for layer %d: written=%d add=%d expected=%d\n",
+                __func__, layer_id, rows_written, row_count, capture.expected_rows);
+        return 2;
+    }
+    const size_t expected_floats = (size_t) capture.expected_rows * (size_t) row_width;
+    if (rows.size() != expected_floats) {
+        rows.resize(expected_floats);
+    }
     auto backend = ggml_backend_sched_get_tensor_backend(ctx->sched, tensor);
     GGML_ASSERT(backend);
-    ggml_backend_tensor_get_async(backend, tensor, rows.data(), 0, ggml_nbytes(tensor));
+    ggml_backend_tensor_get_async(backend, tensor,
+            rows.data() + (size_t) rows_written * (size_t) row_width,
+            0, (size_t) row_count * (size_t) row_width * sizeof(float));
+    rows_written += row_count;
     capture.row_width = row_width;
-    capture.row_count = row_count;
+    capture.row_count = std::max(capture.row_count, rows_written);
     capture.layer_seen_batch_id[(size_t) layer_idx] = capture.capture_batch_id;
+    capture.readback_pending = true;
     return 2;
 }
 
@@ -423,9 +449,14 @@ bool llama_set_dflash_capture_layers(
         return false;
     }
 
+    if (ctx->dflash.capture && ctx->dflash.capture->readback_pending) {
+        llama_synchronize(ctx);
+    }
+
     auto capture = std::make_unique<llama_context::dflash_runtime::capture_state>();
     capture->layer_ids.assign(layer_ids, layer_ids + n_layers);
     capture->layer_rows.resize((size_t) n_layers);
+    capture->layer_rows_written.assign((size_t) n_layers, 0);
     capture->layer_seen_batch_id.assign((size_t) n_layers, 0);
     capture->prev_cb_eval = ctx->cparams.cb_eval;
     capture->prev_cb_eval_user_data = ctx->cparams.cb_eval_user_data;
@@ -449,6 +480,9 @@ void llama_clear_dflash_capture(struct llama_context * ctx) {
     ggml_backend_sched_eval_callback prev_cb_eval = nullptr;
     void * prev_cb_eval_user_data = nullptr;
     if (ctx->dflash.capture) {
+        if (ctx->dflash.capture->readback_pending) {
+            llama_synchronize(ctx);
+        }
         prev_cb_eval = ctx->dflash.capture->prev_cb_eval;
         prev_cb_eval_user_data = ctx->dflash.capture->prev_cb_eval_user_data;
     }
@@ -465,15 +499,22 @@ void llama_clear_dflash_capture(struct llama_context * ctx) {
     }
 }
 
-void llama_begin_dflash_capture_batch(struct llama_context * ctx) {
+void llama_begin_dflash_capture_batch(struct llama_context * ctx, int32_t expected_rows) {
     if (ctx == nullptr || !ctx->dflash.capture) {
         return;
     }
 
     auto & capture = *ctx->dflash.capture;
+    if (capture.readback_pending) {
+        llama_synchronize(ctx);
+        capture.readback_pending = false;
+    }
     capture.capture_batch_id++;
     capture.row_count = 0;
     capture.row_width = 0;
+    capture.expected_rows = expected_rows;
+    capture.invalid = expected_rows <= 0;
+    std::fill(capture.layer_rows_written.begin(), capture.layer_rows_written.end(), 0);
     std::fill(capture.layer_seen_batch_id.begin(), capture.layer_seen_batch_id.end(), 0);
 }
 
@@ -504,10 +545,18 @@ static bool llama_spec_prepare_dflash_capture(
     llama_synchronize(ctx);
 
     auto & capture = *ctx->dflash.capture;
+    capture.readback_pending = false;
     row_count = capture.row_count;
     row_width = capture.row_width;
     n_layers = (int32_t) capture.layer_ids.size();
-    if (row_count <= 0 || row_width <= 0 || n_layers <= 0 || capture.layer_rows.size() != (size_t) n_layers) {
+    if (capture.invalid || row_count <= 0 || row_width <= 0 || n_layers <= 0 ||
+            capture.expected_rows <= 0 || capture.layer_rows.size() != (size_t) n_layers ||
+            capture.layer_rows_written.size() != (size_t) n_layers) {
+        return false;
+    }
+    if (row_count != capture.expected_rows) {
+        LLAMA_LOG_WARN("%s: DFlash capture rows incomplete: got=%d expected=%d\n",
+                __func__, row_count, capture.expected_rows);
         return false;
     }
 
@@ -533,9 +582,11 @@ static bool llama_spec_prepare_dflash_capture(
         }
 
         const auto & rows = capture.layer_rows[(size_t) layer_idx];
-        if (rows.size() != (size_t) row_count * (size_t) row_width) {
-            LLAMA_LOG_WARN("%s: DFlash capture rows mismatch for layer %d: got=%zu expected=%zu (rows=%d width=%d)\n",
-                    __func__, capture.layer_ids[(size_t) layer_idx], rows.size(),
+        if (capture.layer_rows_written[(size_t) layer_idx] != row_count ||
+                rows.size() != (size_t) row_count * (size_t) row_width) {
+            LLAMA_LOG_WARN("%s: DFlash capture rows mismatch for layer %d: got=%d/%zu expected=%d/%zu (rows=%d width=%d)\n",
+                    __func__, capture.layer_ids[(size_t) layer_idx],
+                    capture.layer_rows_written[(size_t) layer_idx], rows.size(), row_count,
                     (size_t) row_count * (size_t) row_width, row_count, row_width);
             return false;
         }

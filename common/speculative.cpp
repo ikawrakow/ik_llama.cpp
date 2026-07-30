@@ -17,7 +17,6 @@
 #include <iomanip>
 #include <limits>
 #include <map>
-#include <sstream>
 #include <unordered_map>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
@@ -55,9 +54,16 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"suffix",        COMMON_SPECULATIVE_TYPE_SUFFIX}
 };
 
+bool common_speculative_needs_checkpoint(const llama_model * model) {
+    return model != nullptr &&
+        (llama_model_has_recurrent(model) ||
+         llama_model_is_openpangu(model) ||
+         llama_model_is_deepseek4(model));
+}
+
 void common_speculative_checkpoint::clear() {
     valid = false;
-    per_step_enabled = false;
+    mode = LLAMA_SPEC_CKPT_NONE;
     n_past = 0;
     sampled = LLAMA_TOKEN_NULL;
 
@@ -1342,16 +1348,16 @@ common_speculative * common_speculative_init(
         configs.push_back(common_speculative_config(stage, stage_params));
     }
 
-    if (!configs.empty() && (llama_model_has_recurrent(llama_get_model(ctx_tgt)) ||
-                             llama_model_is_openpangu(llama_get_model(ctx_tgt)))) {
+    const llama_model * target_model = llama_get_model(ctx_tgt);
+    if (!configs.empty() && common_speculative_needs_checkpoint(target_model)) {
         const int ckpt_tokens = std::max(1, params.get_max_stage_n_max() + 1);
-        const int actual_mode = llama_spec_ckpt_init(ctx_tgt, params.recurrent_ckpt_mode, ckpt_tokens);
+        const int actual_mode = llama_spec_ckpt_init(ctx_tgt, params.spec_ckpt_mode, ckpt_tokens);
         if (actual_mode == LLAMA_SPEC_CKPT_NONE) {
-            LOG_ERR("%s: failed to prepare recurrent checkpoint mode '%s' during speculative init (max_tokens=%d)\n",
+            LOG_ERR("%s: failed to prepare speculative checkpoint mode '%s' during speculative init (max_tokens=%d)\n",
                     __func__,
-                    params.recurrent_ckpt_mode == LLAMA_SPEC_CKPT_PER_STEP ? "per-step" :
-                    params.recurrent_ckpt_mode == LLAMA_SPEC_CKPT_GPU_FALLBACK ? "gpu-fallback" :
-                    params.recurrent_ckpt_mode == LLAMA_SPEC_CKPT_CPU ? "cpu" : "auto",
+                    params.spec_ckpt_mode == LLAMA_SPEC_CKPT_PER_STEP ? "per-step" :
+                    params.spec_ckpt_mode == LLAMA_SPEC_CKPT_GPU_FALLBACK ? "gpu-fallback" :
+                    params.spec_ckpt_mode == LLAMA_SPEC_CKPT_CPU ? "cpu" : "auto",
                     ckpt_tokens);
             if (ctx_dft != nullptr) {
                 llama_free(ctx_dft);
@@ -1359,7 +1365,7 @@ common_speculative * common_speculative_init(
             return nullptr;
         }
         llama_spec_ckpt_discard(ctx_tgt);
-        params.recurrent_ckpt_mode = actual_mode;
+        params.spec_ckpt_mode = actual_mode;
     }
 
     std::vector<std::unique_ptr<common_speculative_state>> impls = {};
@@ -1899,30 +1905,13 @@ bool common_speculative_load_draft_model(
         return true;
     }
 
-    gpt_params params_dft;
+    gpt_params params_dft = params_base;
     params_dft.devices          = params.devices;
     params_dft.model            = params.model;
-    params_dft.main_gpu         = params_base.main_gpu;
     params_dft.n_gpu_layers     = params.n_gpu_layers;
-    params_dft.rpc_servers      = params_base.rpc_servers;
     params_dft.cache_type_k     = params.cache_type_k.empty() ? params_base.cache_type_k : params.cache_type_k;
     params_dft.cache_type_v     = params.cache_type_v.empty() ? params_base.cache_type_v : params.cache_type_v;
-    params_dft.flash_attn       = params_base.flash_attn;
-    params_dft.k_cache_hadamard = params_base.k_cache_hadamard;
-    params_dft.v_cache_hadamard = params_base.v_cache_hadamard;
 
-    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH)) {
-        params_dft.split_mode = params_base.split_mode;
-        for (size_t i = 0; i < std::size(params_dft.tensor_split); ++i) {
-            params_dft.tensor_split[i] = params_base.tensor_split[i];
-        }
-        params_dft.attn_max_batch = params_base.attn_max_batch;
-        params_dft.graph_reuse = params_base.graph_reuse;
-        params_dft.split_mode_graph_scheduling = params_base.split_mode_graph_scheduling;
-        params_dft.scheduler_async = params_base.scheduler_async;
-        params_dft.max_extra_alloc_MiB = params_base.max_extra_alloc_MiB;
-        params_dft.reduce_type = params_base.reduce_type;
-    }
 
     if (!params.params.empty()) {
         auto [argc, argv] = parse_command_line("llama-server " + params.params);
@@ -1944,7 +1933,6 @@ bool common_speculative_load_draft_model(
     }
     params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
     params_dft.n_parallel = 1;
-    params_dft.n_batch = params_dft.n_ctx;
 
     params.mparams_dft.path = params_dft.model;
 
@@ -2305,7 +2293,7 @@ static bool common_speculative_checkpoint_save(
     if (actual_mode == LLAMA_SPEC_CKPT_NONE) {
         return false;
     }
-    ckpt.per_step_enabled = (actual_mode == LLAMA_SPEC_CKPT_PER_STEP);
+    ckpt.mode = actual_mode;
 
     ckpt.valid = llama_spec_ckpt_save(ctx, seq_id);
     if (!ckpt.valid) {
@@ -2337,7 +2325,7 @@ void common_speculative_checkpoint_discard(
     llama_spec_ckpt_discard(ctx);
 }
 
-void common_speculative_checkpoint_restore(
+bool common_speculative_checkpoint_restore(
         common_speculative_checkpoint & ckpt,
         common_speculative * spec,
         llama_context * ctx,
@@ -2350,13 +2338,19 @@ void common_speculative_checkpoint_restore(
         const std::vector<float> & mtp_hidden_state_pre,
         int32_t mtp_n_past_base) {
     if (!ckpt.valid) {
-        return;
+        return true;
     }
 
-    if (ckpt.per_step_enabled) {
-        const int step = (int) ids.size() - 1;
-        llama_spec_ckpt_restore(ctx, seq_id, ckpt.n_past, step);
+    const int step = (int) ids.size() - 1;
+    const enum llama_spec_ckpt_restore_result restore_result = llama_spec_ckpt_restore_ex(
+            ctx, seq_id, ckpt.n_past, ckpt.mode == LLAMA_SPEC_CKPT_PER_STEP ? step : 0);
+    if (restore_result == LLAMA_SPEC_CKPT_RESTORE_FAILED) {
+        LOG_ERR("%s: seq_id=%d speculative checkpoint restore failed\n", __func__, (int) seq_id);
+        common_speculative_checkpoint_discard(ckpt, ctx);
+        return false;
+    }
 
+    if (restore_result == LLAMA_SPEC_CKPT_RESTORE_DIRECT) {
         if (ckpt.sampler != nullptr && sampler_dst != nullptr) {
             common_sampler_clone(ckpt.sampler, sampler_dst);
         }
@@ -2385,8 +2379,6 @@ void common_speculative_checkpoint_restore(
         LOG_DBG("%s: seq_id=%d per-step restore: step=%d (rejected %d drafts)\n",
                 __func__, (int) seq_id, step, (int) (n_draft - (ids.size() - 1)));
     } else {
-        llama_spec_ckpt_restore(ctx, seq_id, ckpt.n_past, 0);
-
         if (ckpt.sampler != nullptr && sampler_dst != nullptr) {
             common_sampler_clone(ckpt.sampler, sampler_dst);
         }
@@ -2410,6 +2402,9 @@ void common_speculative_checkpoint_restore(
             if (ret != 0) {
                 LOG_ERR("%s: seq_id=%d failed to re-decode accepted tokens after checkpoint restore: %d\n",
                         __func__, (int) seq_id, ret);
+                llama_batch_free(re_batch);
+                common_speculative_checkpoint_discard(ckpt, ctx);
+                return false;
             }
 
             if (common_speculative_has_target_features(spec)) {
@@ -2430,6 +2425,7 @@ void common_speculative_checkpoint_restore(
                     common_speculative_clear_sequence_hidden(spec, seq_id);
                 }
             }
+            llama_batch_free(re_batch);
 
             if (sampler_dst != nullptr) {
                 for (llama_token id : ids) {
@@ -2437,16 +2433,16 @@ void common_speculative_checkpoint_restore(
                 }
             }
 
-            llama_batch_free(re_batch);
             LOG_DBG("%s: seq_id=%d spec checkpoint restored: re-decoded %d tokens (rejected %d drafts)\n",
                     __func__, (int) seq_id, n_re, (int) (n_draft - (ids.size() - 1)));
         }
     }
 
     common_speculative_checkpoint_discard(ckpt, ctx);
+    return true;
 }
 
-void common_speculative_commit(
+bool common_speculative_commit(
         common_speculative * spec,
         llama_context * ctx,
         common_sampler * sampler_dst,
@@ -2464,10 +2460,11 @@ void common_speculative_commit(
         ? spec->curr_impl->type
         : COMMON_SPECULATIVE_TYPE_NONE;
 
-    const bool any_rejected = (int) ids.size() - 1 < n_draft;
+    const int n_accepted = (int) ids.size() - 1;
+    const bool any_rejected = n_accepted < n_draft;
     std::vector<float> mtp_hidden_state_pre;
 
-    common_speculative_accept(spec, ids.size() - 1);
+    common_speculative_accept(spec, n_accepted);
 
     if (common_speculative_has_target_features(spec) &&
             any_rejected &&
@@ -2479,7 +2476,7 @@ void common_speculative_commit(
     }
 
     if (any_rejected && ckpt.valid) {
-        common_speculative_checkpoint_restore(
+        const bool restored = common_speculative_checkpoint_restore(
             ckpt,
             spec,
             ctx,
@@ -2491,7 +2488,7 @@ void common_speculative_commit(
             n_draft,
             mtp_hidden_state_pre,
             pos_base);
-        return;
+        return restored;
     }
 
     if (common_speculative_has_target_features(spec) && !accepted_output_indices.empty()) {
@@ -2513,6 +2510,7 @@ void common_speculative_commit(
 
     llama_kv_cache_seq_rm(ctx, seq_id, pos_base + (llama_pos) (ids.size() - 1), -1);
     common_speculative_checkpoint_discard(ckpt, ctx);
+    return true;
 }
 
 void common_speculative_print_stats(const common_speculative * spec, double slot_tps, int n_decoded, int n_past, common_params_speculative * active_params) {

@@ -357,6 +357,7 @@ struct MulMat {
             case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q8_K_R16:
+            case GGML_TYPE_MXFP4_R8:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
@@ -390,6 +391,7 @@ struct MulMat {
             case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_KV_R8:
             case GGML_TYPE_Q8_1:
+            case GGML_TYPE_MXFP4_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_BF16_R16: return 16;
@@ -933,6 +935,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_NL_R4:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
             return iqk_set_kernels_legacy_quants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:
@@ -1377,7 +1380,7 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
                          const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                          const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
                          const float * sinksf,   // mask. If not null, assumed to be fp16. nq x nk elements
-                         [[maybe_unused]] int nsinks,
+                         int      sink_stride,   // stride between sinks (used if sinksf is not null)
                          float         scale,    // scale applied before softmax
                          float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                          float       * qkv,      // v*softmax(scale*(k*q))
@@ -1387,45 +1390,45 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 
     if (Dk == 576 && Dv == 512) {
         return iqk_fa_576_512(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
     if (Dk == 512 && Dv == 512) {
         return iqk_fa_512_512(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
     if (Dk == 320 && Dv == 256) {
         return iqk_fa_320_256(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
 
     if (Dk == 192 && Dv == 128) {
         return iqk_fa_192_128(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
 
     if (Dk == 192 && Dv == 192) {
         return iqk_fa_192_192(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
 
     if (Dk == 256 && Dv == 256) {
         return iqk_fa_256_256(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
 
     if (Dk == 128 && Dv == 128) {
         return iqk_fa_128_128(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
 
     if (Dk == 96 && Dv == 96) {
         return iqk_fa_96_96(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
 
     if (Dk == 64 && Dv == 64) {
         return iqk_fa_64_64(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+                q, k, v, mask, scale, softcap, qkv, sinksf, sink_stride, M, S);
     }
 
     return false;
@@ -1925,7 +1928,9 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             std::partial_sort(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
             std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
         }
-        barrier(barrier_data);
+        if (iq + 1 < q->ne[2]) {
+            barrier(barrier_data);
+        }
     }
 
     return true;

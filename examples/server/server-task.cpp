@@ -120,11 +120,6 @@ json server_task_result_cmpl_partial::to_json_oaicompat_partial() {
         {"created",            t},
         {"model",              oaicompat_model},
         {"object",             "text_completion"},
-        {"usage", json {
-            {"completion_tokens", n_decoded},
-            {"prompt_tokens",     n_prompt_tokens},
-            {"total_tokens",      n_decoded + n_prompt_tokens}
-        }},
         {"id",                 oaicompat_cmpl_id}
     };
 
@@ -207,11 +202,6 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat_partial() {
             {"id", oaicompat_cmpl_id},
             {"model", oaicompat_model},
             {"object", "chat.completion.chunk"},
-            {"usage", json {
-                {"completion_tokens", n_decoded},
-                {"prompt_tokens",     n_prompt_tokens},
-                {"total_tokens",      n_decoded + n_prompt_tokens},
-            }},
             });
     };
     // We have to send an initial update to conform to openai behavior
