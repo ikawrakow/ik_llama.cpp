@@ -3647,6 +3647,7 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 if (n != checkpoint_size) {
                     SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float)checkpoint_size / 1024 / 1024);
                     do_reset = true;
+                    //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
                 } else if (!verify_restored_checkpoint(*it, slot, "")) {
                     do_reset = true;
                 }
