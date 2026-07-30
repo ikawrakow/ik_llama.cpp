@@ -4258,10 +4258,6 @@ void server_context::speculative_decoding_accept() {
         slot.n_decoded += ids.size();
         const int64_t t_current = ggml_time_us();
 
-        if (slot.n_decoded > 1) {
-            create_checkpoint_at_interval(slot);
-        }
-
         slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
 
         // update how many tokens out of those tested were accepted
