@@ -3939,16 +3939,14 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             slot.n_past_offset = slot.n_past_prompt - slot.n_past;
                             if (!llama_model_supports_partial_kv_reuse(model) &&
                                 slot.n_past < (int32_t) slot.cache_tokens.size()) {
-                                // the cache diverges; models with state checkpoints
-                                // can restore from a checkpoint (handled by apply_checkpoint below),
-                                // others must reprocess from scratch
-                                if (!llama_model_supports_state_checkpoints(model)) {
-                                    LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
-                                            __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
-                                    slot.n_past = 0;
-                                    slot.n_past_prompt = 0;
-                                    slot.n_past_offset = 0;
-                                }
+                                // the cache diverges from the new prompt mid-sequence; this
+                                // model can only extend or reset a cached sequence (per-position
+                                // side state past the divergence point is already lost)
+                                LLAMA_LOG_INFO("%s: cached sequence diverges at %d/%d and this model does not support partial KV reuse - reprocessing from scratch\n",
+                                        __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
+                                slot.n_past = 0;
+                                slot.n_past_prompt = 0;
+                                slot.n_past_offset = 0;
                             }
 
                             if (slot.n_past > 0 && slot.spec != nullptr &&
