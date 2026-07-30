@@ -398,6 +398,7 @@ class MODEL_TENSOR(IntEnum):
     MTP_CENTROIDS        = auto()
     DFLASH_FC            = auto()
     DFLASH_HIDDEN_NORM   = auto()
+    DFLASH_AUX_HIDDEN_NORM = auto()
     # openPangu-2.0 (DSA lightning indexer)
     INDEXER_K_NORM       = auto()
     INDEXER_PROJ         = auto()   # weights_proj
@@ -608,6 +609,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MTP_CENTROIDS:             "mtp_centroids",
     MODEL_TENSOR.DFLASH_FC:                 "dflash_fc",
     MODEL_TENSOR.DFLASH_HIDDEN_NORM:        "dflash_hidden_norm",
+    MODEL_TENSOR.DFLASH_AUX_HIDDEN_NORM:    "dflash_aux_hidden_norm.{bid}",
     # openPangu-2.0
     MODEL_TENSOR.INDEXER_K_NORM:            "blk.{bid}.attn_indexer_k_norm",
     MODEL_TENSOR.INDEXER_PROJ:              "blk.{bid}.attn_indexer_weights_proj",
@@ -1498,6 +1500,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_K_NORM,
         MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_GATE,
         MODEL_TENSOR.ATTN_SINKS,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.ATTN_POST_NORM,
@@ -1506,6 +1509,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.DFLASH_FC,
         MODEL_TENSOR.DFLASH_HIDDEN_NORM,
+        MODEL_TENSOR.DFLASH_AUX_HIDDEN_NORM,
     ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,

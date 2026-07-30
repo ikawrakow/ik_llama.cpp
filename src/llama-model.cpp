@@ -857,6 +857,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_ATTN_K,               "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_K_NORM,          "blk.%d.attn_k_norm" },
             { LLM_TENSOR_ATTN_V,               "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_GATE,            "blk.%d.attn_gate" },
             { LLM_TENSOR_ATTN_SINKS,           "blk.%d.attn_sinks" },
             { LLM_TENSOR_ATTN_OUT,             "blk.%d.attn_output" },
             { LLM_TENSOR_ATTN_POST_NORM,       "blk.%d.post_attention_norm" },
@@ -865,6 +866,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_UP,               "blk.%d.ffn_up" },
             { LLM_TENSOR_DFLASH_FC,            "dflash_fc" },
             { LLM_TENSOR_DFLASH_HIDDEN_NORM,   "dflash_hidden_norm" },
+            { LLM_TENSOR_DFLASH_AUX_HIDDEN_NORM, "dflash_aux_hidden_norm.%d" },
         },
     },
     {

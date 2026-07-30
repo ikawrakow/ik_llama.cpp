@@ -1344,6 +1344,23 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_MXFP4_R8] = {
+        .type_name                = "mxfp4_r8",
+        .blck_size                = QK_MXFP4,
+        .type_size                = sizeof(block_mxfp4),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_mxfp4_r8,
+        .from_float               = quantize_row_mxfp4_r8,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_mxfp4_r8_ref,
+        .vec_dot                  = vec_dot_mxfp4_r8_q8_2_x4,
+#if defined __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
+        .vec_dot_type             = GGML_TYPE_Q8_0_X4,
+#endif
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_IQ4_KS] = {
         .type_name                = "iq4_ks",
         .blck_size                = QK_K,
@@ -4940,6 +4957,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_Q8_0_R8:       wtype = GGML_TYPE_Q8_0_R8;  break;
         case GGML_FTYPE_MOSTLY_IQ4_XS:        wtype = GGML_TYPE_IQ4_XS;   break;
         case GGML_FTYPE_MOSTLY_MXFP4:         wtype = GGML_TYPE_MXFP4;    break;
+        case GGML_FTYPE_MOSTLY_MXFP4_R8:      wtype = GGML_TYPE_MXFP4_R8; break;
         case GGML_FTYPE_MOSTLY_IQ4_KS:        wtype = GGML_TYPE_IQ4_KS;   break;
         case GGML_FTYPE_MOSTLY_IQ4_KS_R4:     wtype = GGML_TYPE_IQ4_KS_R4;break;
         case GGML_FTYPE_MOSTLY_IQ5_KS_R4:     wtype = GGML_TYPE_IQ5_KS_R4;break;
@@ -13434,6 +13452,7 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -13988,6 +14007,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -14168,6 +14188,7 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -18846,6 +18867,7 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -19270,6 +19292,7 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -19600,6 +19623,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -20367,6 +20391,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP4_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -20781,6 +20806,7 @@ static void ggml_compute_forward_rope_f32(
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
     const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE; // qwen3vl apply interleaved mrope
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+    const bool is_inplace = src0->data == dst->data;
 
     if (is_mrope) {
         GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
@@ -20803,6 +20829,9 @@ static void ggml_compute_forward_rope_f32(
     const float sin_sign = forward ? 1.0f : -1.0f;
 
     const int32_t * pos = (const int32_t *) src1->data;
+
+    const bool is_flipped = dst->op_params[15] == 1 && !is_vision && !is_mrope;
+    const int  rope_offset = is_flipped ? ne0 - n_dims : 0;
 
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
@@ -20845,7 +20874,7 @@ static void ggml_compute_forward_rope_f32(
                         }
                     } else {
                         for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0/2;
+                            const int64_t ic = i0/2 + rope_offset;
 
                             const float cos_theta = cache[i0 + 0];
                             const float sin_theta = cache[i0 + 1];
@@ -20864,9 +20893,10 @@ static void ggml_compute_forward_rope_f32(
                     for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
                         const float cos_theta = cache[i0 + 0];
                         const float sin_theta = cache[i0 + 1];
+                        const int ic = i0 + rope_offset;
 
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                              float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + ic*nb00);
+                              float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + ic*nb0);
 
                         const float x0 = src[0];
                         const float x1 = src[1];
@@ -20874,6 +20904,10 @@ static void ggml_compute_forward_rope_f32(
                         dst_data[0] = x0*cos_theta - x1*sin_theta;
                         dst_data[1] = x0*sin_theta + x1*cos_theta;
                     }
+                }
+
+                if (is_inplace) {
+                    continue;
                 }
 
                 if (is_vision) {
@@ -20894,12 +20928,22 @@ static void ggml_compute_forward_rope_f32(
                     }
                 } else {
                     // fill the remain channels with data from src tensor
-                    for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
-                        const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                        float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                    if (is_flipped) {
+                        for (int64_t i0 = 0; i0 < rope_offset; i0 += 2) {
+                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                        dst_data[0] = src[0];
-                        dst_data[1] = src[1];
+                            dst_data[0] = src[0];
+                            dst_data[1] = src[1];
+                        }
+                    } else {
+                        for (int64_t i0 = n_dims; i0 < ne0; i0 += 2) {
+                            const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                            float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+
+                            dst_data[0] = src[0];
+                            dst_data[1] = src[1];
+                        }
                     }
                 }
             }
@@ -20933,11 +20977,13 @@ static void ggml_compute_forward_rope_f16(
     memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
     memcpy(&sections,    (int32_t *) dst->op_params + 11, sizeof(int)*4);
 
+    const bool is_flipped = dst->op_params[15] != 0;
+    if (is_flipped) {
+        // TODO: implement it
+        GGML_ABORT("Flipped RoPE is not implemented for f16");
+    }
 
     GGML_TENSOR_UNARY_OP_LOCALS
-
-    //printf("ne0: %d, ne1: %d, ne2: %d, ne3: %d\n", ne0, ne1, ne2, ne3);
-    //printf("n_past = %d, ne2 = %d\n", n_past, ne2);
 
     GGML_ASSERT(nb0 == sizeof(ggml_fp16_t));
 
@@ -30368,6 +30414,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q6_0_R4: result = quantize_q6_0_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_Q8_0_R8: result = quantize_q8_0_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_MXFP4:   result = quantize_mxfp4  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
+        case GGML_TYPE_MXFP4_R8:result = quantize_mxfp4_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_IQ4_KS:  result = quantize_iq4_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
         case GGML_TYPE_IQ4_KS_R4:result = quantize_iq4_ks_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix, user_data); break;
