@@ -3619,7 +3619,7 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
 void server_context::apply_checkpoint(server_slot & slot) {
     llama_pos pos_next = slot.cache_tokens.pos_next(slot.n_past);
     const auto pos_min_thold = std::max(0, pos_next - 1);
-    const bool is_dsv4 = std::strcmp(llama_model_arch_string(model), "deepseek4") == 0;
+    const bool is_dsv4 = llama_model_is_deepseek4(model);
     if (slot.n_past > 0 && slot.n_past < slot.cache_tokens.n_tokens()) {
         int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
 
