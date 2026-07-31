@@ -2074,7 +2074,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif
         return true;
     }
-    if (arg == "--override-kv") {
+    if (arg == "-okv" || arg == "--override-kv") {
         CHECK_ARG
             if (!string_parse_kv_override(argv[i], params.kv_overrides)) {
                 fprintf(stderr, "error: Invalid type for KV override: %s\n", argv[i]);
@@ -3062,16 +3062,16 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
-    options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
-    options.push_back({ "*",         "-muge,  --merge-up-gate-experts,","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
-    options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
-    options.push_back({ "*",         "-vhad,  --v-cache-hadamard,",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
-    options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", true});
-    options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", false});
+    options.push_back({ "*",         "-mqkv,  --merge-qkv",            "merge Q,K,V (default: %d)", params.merge_qkv});
+    options.push_back({ "*",         "-muge,  --merge-up-gate-experts","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
+    options.push_back({ "*",         "-khad,  --k-cache-hadamard",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
+    options.push_back({ "*",         "-vhad,  --v-cache-hadamard",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
+    options.push_back({ "*",         "-smf16, --split-mode-f16",       "Use f16 for data exchange between GPUs (default: %d)", true});
+    options.push_back({ "*",         "-smf32, --split-mode-f32",       "Use f32 for data exchange between GPUs (default: %d)", false});
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
-    options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling,", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
-    options.push_back({ "*",         "-sas,  --scheduler_async,",       "Async evaluation of compute graphs: %d)", params.scheduler_async});
+    options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
+    options.push_back({ "*",         "-sas,  --scheduler-async",        "Async evaluation of compute graphs (default: %d)", params.scheduler_async});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
@@ -3135,7 +3135,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --dry-allowed-length N", "DRY sampling allowed length (default: %d)", sparams.dry_allowed_length });
     options.push_back({ "*",           "       --dry-penalty-last-n N", "DRY sampling penalty last N tokens (default: %d, 0 = disabled, -1 = context size)", sparams.dry_penalty_last_n });
     options.push_back({ "*",           "       --dry-sequence-breaker STR",  "DRY sampling sequence breaker characters (each char becomes a breaker) or 'none' to clear" });
-    options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
+    options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parameter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
     options.push_back({ "*",           "       --adaptive-target",      "adaptive-p sampling: (default: %.2f, <0.0 = disabled)", (double)sparams.adaptive_target});
     options.push_back({ "*",           "       --adaptive-decay",       "adaptive-p sampling: (default: %.2f)", (double)sparams.adaptive_decay});
     options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
@@ -3224,9 +3224,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ictk, --indexer-cache-type-k TYPE", "indexer K-cache data type (default: %s)", params.indexer_cache_type_k.c_str() });
     options.push_back({ "*",           "-ctv,  --cache-type-v TYPE",    "KV cache data type for V (default: %s)", params.cache_type_v.c_str() });
     options.push_back({ "*",           "-ctk-first, --cache-type-k-first TYPE,N", "KV cache data type for the first N layers of K (default: %s,-1)", params.type_k_first.c_str() });
-    options.push_back({ "*",           "-ctv-last,  --cache-type-k-last  TYPE,N", "KV cache data type for the last N layers of K  (default: %s,-1)", params.type_k_last.c_str() });
+    options.push_back({ "*",           "-ctv-last,  --cache-type-v-last  TYPE,N", "KV cache data type for the last N layers of V  (default: %s,-1)", params.type_v_last.c_str() });
     options.push_back({ "*",           "-ctv-first, --cache-type-v-first TYPE,N", "KV cache data type for the first N layers of V (default: %s,-1)", params.type_v_first.c_str() });
-    options.push_back({ "*",           "-ctk-last,  --cache-type-v-last  TYPE,N", "KV cache data type for the last N layers of V  (default: %s,-1)", params.type_v_last.c_str() });
+    options.push_back({ "*",           "-ctk-last,  --cache-type-k-last  TYPE,N", "KV cache data type for the last N layers of K  (default: %s,-1)", params.type_k_last.c_str() });
     options.push_back({ "*",           "-mtprot, --mtp-requantize-output-tensor type", "Use output requantized to type for MTP (default: %s)", params.extra_output_type.c_str() });
     options.push_back({ "*",           "-ctkd, --cache-type-k-draft TYPE", "KV cache data type for K for the draft model" });
     options.push_back({ "*",           "-ctvd, --cache-type-v-draft TYPE", "KV cache data type for V for the draft model" });
@@ -3274,9 +3274,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     if (llama_supports_mmap()) {
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
-    options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
-    options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
-    options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "-rtr,   --run-time-repack",      "repack tensors if interleaved variant is available"});
+    options.push_back({ "*",           "-cmoe,  --cpu-moe",              "keep all MoE weights in CPU memory"});
+    options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
+    options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
     options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "       --prefetch-experts-threads N",
@@ -3321,9 +3322,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "model" });
     options.push_back({ "*",           "       --check-tensors",        "check model tensor data for invalid values (default: %s)", params.check_tensors ? "true" : "false" });
     options.push_back({ "*",           "-ot,   --override-tensor NAME",  "override tensor buffer type as tensor_name=buft, comma-separated" });
-    options.push_back({ "*",           "       --override-kv KEY=TYPE:VALUE",
-                                                                        "advanced option to override model metadata by key. may be specified multiple times.\n"
-                                                                        "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false" });
+    options.push_back({ "*",           "-okv,   --override-kv KEY=TYPE:VALUE",
+                                                                         "advanced option to override model metadata by key. may be specified multiple times.\n"
+                                                                         "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false" });
     options.push_back({ "*",           "       --lora FNAME",           "apply LoRA adapter (can be repeated to use multiple adapters)" });
     options.push_back({ "*",           "       --lora-scaled FNAME S",  "apply LoRA adapter with user defined scaling S (can be repeated to use multiple adapters)" });
     options.push_back({ "*",           "       --control-vector FNAME", "add a control vector\n"
@@ -3372,7 +3373,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "imatrix" });
     options.push_back({ "imatrix",     "-o,    --output FNAME",         "output file (default: '%s')", params.out_file.c_str() });
     options.push_back({ "imatrix",     "       --output-draft FNAME",   "paired draft output file (default: derived from --output)" });
-    options.push_back({ "imatrix",     "       --output-frequency N",   "output the imatrix every N iterations (default: %d)", params.n_out_freq });
+    options.push_back({ "imatrix",     "-ofreq, --output-frequency N",   "output the imatrix every N iterations (default: %d)", params.n_out_freq });
     options.push_back({ "imatrix",     "       --save-frequency N",     "save an imatrix copy every N iterations (default: %d)", params.n_save_freq });
     options.push_back({ "imatrix",     "       --process-output",       "collect data for the output tensor (default: %s)", params.process_output ? "true" : "false" });
     options.push_back({ "imatrix",     "       --no-ppl",               "do not compute perplexity (default: %s)", params.compute_ppl ? "true" : "false" });
@@ -3389,9 +3390,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "bench",       "       --output-format FORMAT",  "output format: table, jsonl, or csv (default: table)" });
 
     options.push_back({ "embedding" });
-    options.push_back({ "embedding",   "       --embd-normalize",       "normalisation for embendings (default: %d) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)", params.embd_normalize });
+    options.push_back({ "embedding",   "       --embd-normalize",       "normalisation for embeddings (default: %d) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)", params.embd_normalize });
     options.push_back({ "embedding",   "       --embd-output-format",   "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix" });
-    options.push_back({ "embedding",   "       --embd-separator",       "separator of embendings (default \\n) for example \"<#sep#>\"" });
+    options.push_back({ "embedding",   "       --embd-separator",       "separator of embeddings (default \\n) for example \"<#sep#>\"" });
 
     options.push_back({ "server" });
     options.push_back({ "server",      "       --host HOST",            "ip address to listen (default: %s)", params.hostname.c_str() });
@@ -3409,10 +3410,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "server",      "       --api-key-file FNAME",   "path to file containing API keys (default: none)" });
     options.push_back({ "server",      "       --ssl-key-file FNAME",   "path to file a PEM-encoded SSL private key" });
     options.push_back({ "server",      "       --ssl-cert-file FNAME",  "path to file a PEM-encoded SSL certificate" });
-    options.push_back({ "server",      "       --timeout N",            "server read/write timeout in seconds (default: %d)", params.timeout_read });
+    options.push_back({ "server",      "-to,    --timeout N",            "server read/write timeout in seconds (default: %d)", params.timeout_read });
     options.push_back({ "server",      "       --threads-http N",       "number of threads used to process HTTP requests (default: %d)", params.n_threads_http });
-    options.push_back({ "server",      "       --system-prompt-file FNAME",
-                                                                        "set a file to load a system prompt (initial prompt of all slots), this is useful for chat applications" });
+    options.push_back({ "server",      "-spf,   --system-prompt-file FNAME",
+                                                                         "set a file to load a system prompt (initial prompt of all slots), this is useful for chat applications" });
     options.push_back({ "server",      "       --log-format {text,json}",
                                                                         "log output format: json or text (default: json)" });
     options.push_back({ "server",      "       --metrics",              "enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled" });
