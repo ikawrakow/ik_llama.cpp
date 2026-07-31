@@ -180,7 +180,7 @@ static bool llama_env_flag_enabled(const char * name) {
 }
 
 // extract ip and port from RPC[ip:port] for rpc and keep other device names
-static std::vector<rpc_device>  extract_device_from_rpc_device(std::vector<std::string> devices) {
+static std::vector<rpc_device>  extract_device_from_rpc_device(const std::vector<std::string> & devices) {
     std::vector<rpc_device> rpc_servers;
     for (auto & device : devices) {
         rpc_device rpc;
@@ -434,8 +434,8 @@ llama_model::~llama_model() {
     }
 }
 
-static size_t llama_get_device_count(const llama_model & model) {
-    size_t count = 1;
+static size_t llama_get_device_count(const llama_model & model, int initial_count = 1) {
+    size_t count = initial_count;
 #if defined(GGML_USE_CUDA)
     count = ggml_backend_cuda_get_device_count();
 #elif defined(GGML_USE_SYCL)
@@ -450,23 +450,6 @@ static size_t llama_get_device_count(const llama_model & model) {
 #endif
     return count;
     GGML_UNUSED(model);
-}
-
-static size_t llama_get_device_count_no_cpu() {
-    size_t count = 0;
-#if defined(GGML_USE_CUDA)
-    count = ggml_backend_cuda_get_device_count();
-#elif defined(GGML_USE_SYCL)
-    count = ggml_backend_sycl_get_device_count();
-#elif defined(GGML_USE_VULKAN)
-    count = ggml_backend_vk_get_device_count();
-#elif defined(GGML_USE_CANN)
-    return ggml_backend_cann_get_device_count();
-#endif
-#if defined(GGML_USE_RPC)
-    count += model.rpc_servers.size();
-#endif
-    return count;
 }
 
 static ggml_backend_buffer_type_t llama_default_buffer_type_offload(const llama_model & model, int gpu) {
@@ -7454,7 +7437,14 @@ struct llama_model * llama_model_load_from_file(
         struct llama_model_params   params) {
     ggml_time_init();
 
-    auto n_gpu = llama_get_device_count_no_cpu();
+    llama_model * model = new llama_model;
+
+    bool has_rpc = params.rpc_servers != nullptr && params.rpc_servers[0] != '\0';
+    if (has_rpc) {
+        model->rpc_servers = extract_device_from_rpc_device(string_split(params.rpc_servers, ","));
+    }
+
+    auto n_gpu = llama_get_device_count(*model, 0);
     if (params.n_gpu_layers < 0) {
         params.n_gpu_layers = n_gpu > 0 ? 999 : 0;
     } else if (n_gpu == 0) {
@@ -7464,8 +7454,6 @@ struct llama_model * llama_model_load_from_file(
         params.tensor_buft_overrides = nullptr;
         params.ncmoe = 0;
     }
-
-    llama_model * model = new llama_model;
 
     unsigned cur_percentage = 0;
     if (params.progress_callback == NULL) {
@@ -7496,7 +7484,6 @@ struct llama_model * llama_model_load_from_file(
 
     std::map<std::string, int32_t> buffer_names;
     std::vector<std::string> gpu_names;
-    bool has_rpc = params.rpc_servers != nullptr && params.rpc_servers[0] != '\0';
     int32_t idx = 0;
     int dev_count = (int)llama_get_device_count(*model);
     // list all buffer type names
@@ -7507,7 +7494,6 @@ struct llama_model * llama_model_load_from_file(
         gpu_names.push_back(std::string(name));
     }
     if (has_rpc) {
-        model->rpc_servers = extract_device_from_rpc_device(string_split(params.rpc_servers, ","));
         for (auto rpc : model->rpc_servers) {
             buffer_names.insert({ create_rpc_name(rpc.endpoint, rpc.device), idx});
             idx++;
