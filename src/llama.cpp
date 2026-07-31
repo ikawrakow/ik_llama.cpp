@@ -180,7 +180,7 @@ static bool llama_env_flag_enabled(const char * name) {
 }
 
 // extract ip and port from RPC[ip:port] for rpc and keep other device names
-static std::vector<rpc_device>  extract_device_from_rpc_device(std::vector<std::string> devices) {
+static std::vector<rpc_device>  extract_device_from_rpc_device(const std::vector<std::string> & devices) {
     std::vector<rpc_device> rpc_servers;
     for (auto & device : devices) {
         rpc_device rpc;
