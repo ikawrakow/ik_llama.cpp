@@ -1246,12 +1246,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.n_ctx = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--grp-attn-n" || arg == "-gan") {
+    if (arg == "-gan" || arg == "--grp-attn-n") {
         CHECK_ARG
         params.grp_attn_n = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--grp-attn-w" || arg == "-gaw") {
+    if (arg == "-gaw" || arg == "--grp-attn-w") {
         CHECK_ARG
         params.grp_attn_w = std::stoi(argv[i]);
         return true;
@@ -1323,12 +1323,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         else { invalid_param = true; }
         return true;
     }
-    if (arg == "--defrag-thold" || arg == "-dt") {
+    if (arg == "-dt" || arg == "--defrag-thold") {
         CHECK_ARG
         params.defrag_thold = std::stof(argv[i]);
         return true;
     }
-    if (arg == "--max-extra-alloc" || arg == "-mea") {
+    if (arg == "-mea" || arg == "--max-extra-alloc") {
         CHECK_ARG
         params.max_extra_alloc_MiB = std::stoi(argv[i]);
         return true;
@@ -1592,7 +1592,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_sequences = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--p-split" || arg == "-ps") {
+    if (arg == "-ps" || arg == "--p-split") {
         CHECK_ARG
         params.p_split = std::stof(argv[i]);
         return true;
@@ -1856,7 +1856,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--mtp-requantize-output-tensor" || arg == "-mtprot") {
+    if (arg == "-mtprot" || arg == "--mtp-requantize-output-tensor") {
         CHECK_ARG
         params.extra_output_type = argv[i];
         return true;
@@ -2000,7 +2000,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--main-gpu" || arg == "-mg") {
+    if (arg == "-mg" || arg == "--main-gpu") {
         CHECK_ARG
         params.main_gpu = std::stoi(argv[i]);
 #ifndef GGML_USE_CUDA_SYCL_VULKAN
@@ -2013,7 +2013,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.max_gpu = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--split-mode" || arg == "-sm") {
+    if (arg == "-sm" || arg == "--split-mode") {
         CHECK_ARG
         std::string arg_next = argv[i];
         if (arg_next == "none") {
@@ -2037,7 +2037,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
 #endif // GGML_USE_CUDA_SYCL_VULKAN
         return true;
     }
-    if (arg == "--tensor-split" || arg == "-ts") {
+    if (arg == "-ts" || arg == "--tensor-split") {
         CHECK_ARG
         std::string arg_next = argv[i];
 
@@ -2083,7 +2083,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             }
         return true;
     }
-    if (arg == "--override-tensor" || arg == "-ot") {
+    if (arg == "-ot" || arg == "--override-tensor") {
         CHECK_ARG
         if (!parse_buft_overrides(std::string{ argv[i] }, params.tensor_buft_overrides)) {
             fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
@@ -2091,7 +2091,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--gpu-fit-margin" || arg == "-gfm") {
+    if (arg == "-gfm" || arg == "--gpu-fit-margin") {
         CHECK_ARG
         auto p = string_split_pairs<int,int>(argv[i], ',');
         if (p.empty()) {
@@ -2126,12 +2126,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.params = argv[i];
         return true;
     }
-    if (arg == "--cpu-moe" || arg == "-cmoe") {
+    if (arg == "-cmoe" || arg == "--cpu-moe") {
         params.ncmoe = 999;
         //params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate|gate_up)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
     }
-    if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
+    if (arg == "-ncmoe" || arg == "--n-cpu-moe") {
         CHECK_ARG
         int32_t n_layers = std::stoi(argv[i]);
         if (n_layers < 0) {
@@ -2453,7 +2453,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
         exit(0);
     }
-    if (arg == "--dry-run" || arg == "-dr") {
+    if (arg == "-dr" || arg == "--dry-run") {
         params.dry_run = true;
         return true;
     }
@@ -2500,7 +2500,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
 
-    if (arg == "--offload-policy" || arg == "-op") {
+    if (arg == "-op" || arg == "--offload-policy") {
         CHECK_ARG
         auto p = string_split_pairs<int,int>(argv[i], ',');
         if (p.empty()) {
@@ -2511,7 +2511,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--no-offload-only-active-experts" || arg == "-no-ooae") {
+    if (arg == "-no-ooae" || arg == "--no-offload-only-active-experts") {
         params.only_active_exps = false;
         return true;
     }
@@ -2575,7 +2575,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ssl_file_cert = argv[i];
         return true;
     }
-    if (arg == "--timeout" || arg == "-to") {
+    if (arg == "-to" || arg == "--timeout") {
         CHECK_ARG
         params.timeout_read  = std::stoi(argv[i]);
         params.timeout_write = std::stoi(argv[i]);
@@ -2735,7 +2735,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.parallel_tool_calls = true;
         return true;
     }
-    if (arg == "--slot-prompt-similarity" || arg == "-sps") {
+    if (arg == "-sps" || arg == "--slot-prompt-similarity") {
         CHECK_ARG
         params.slot_prompt_similarity = std::stof(argv[i]);
         return true;
@@ -2923,7 +2923,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
-    if (arg == "--warmup-batch" || arg == "-wb") {
+    if (arg == "-wb" || arg == "--warmup-batch") {
         params.batch_warmup = true;
         return true;
     }
