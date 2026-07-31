@@ -399,11 +399,6 @@ class MODEL_TENSOR(IntEnum):
     DFLASH_FC            = auto()
     DFLASH_HIDDEN_NORM   = auto()
     DFLASH_AUX_HIDDEN_NORM = auto()
-    # openPangu-2.0 (DSA lightning indexer)
-    INDEXER_K_NORM       = auto()
-    INDEXER_PROJ         = auto()   # weights_proj
-    INDEXER_ATTN_K       = auto()   # wk
-    INDEXER_ATTN_Q_B     = auto()   # wq_b
     # openPangu-2.0 (MoME causal-conv on MLA latents)
     ATTN_QA_CONV         = auto()
     ATTN_KV_CONV         = auto()   # compresskv_conv
