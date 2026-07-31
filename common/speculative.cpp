@@ -2872,6 +2872,15 @@ int32_t common_speculative_on_target_batch(
         return -1;
     }
 
+    // snapshot the previous call's last hidden before the store below overwrites it (row-0 conditioning needs it)
+    std::vector<float> prev_call_last_hidden;
+    {
+        const auto prev_it = mtp_state->target_hidden_by_seq.find(seq_id);
+        if (prev_it != mtp_state->target_hidden_by_seq.end()) {
+            prev_call_last_hidden = prev_it->second;
+        }
+    }
+
     const float * last_hidden = hidden_rows_storage.data() + (size_t) (batch.n_tokens - 1) * features.width;
     mtp_store_target_hidden(*mtp_state, seq_id, last_hidden, features.width);
 
@@ -2899,9 +2908,8 @@ int32_t common_speculative_on_target_batch(
     const bool uses_shifted_hidden_rows = mtp_model_uses_recurrent_conditioning(*mtp_state);
     std::vector<float> previous_hidden_storage;
     if (uses_shifted_hidden_rows) {
-        const auto hidden_it = mtp_state->target_hidden_by_seq.find(seq_id);
-        if (hidden_it != mtp_state->target_hidden_by_seq.end() && (int32_t) hidden_it->second.size() == features.width) {
-            previous_hidden_storage = hidden_it->second;
+        if ((int32_t) prev_call_last_hidden.size() == features.width) {
+            previous_hidden_storage = std::move(prev_call_last_hidden);
         } else {
             previous_hidden_storage.assign(features.width, 0.0f);
         }
