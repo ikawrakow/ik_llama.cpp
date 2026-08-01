@@ -158,13 +158,14 @@ static __global__ void k_hc_post(int ne0, const float * __restrict__ x, const fl
 
     #pragma unroll
     for (int i = 0; i < S; ++i) {
-        float sum = x_r[i0] * post_r[i];
+        // fold x*post in last: seeding with it costs the comb terms their low bits
+        float sum = comb_r[i] * r[0];
         #pragma unroll
-        for (int j = 0; j < S; ++j) {
+        for (int j = 1; j < S; ++j) {
             sum += comb_r[j*S + i] * r[j];
         }
         float * dst_r = (float *)((char *)dst + i1*nb2 + i*nb1);
-        dst_r[i0] = sum;
+        dst_r[i0] = x_r[i0] * post_r[i] + sum;
     }
 
 }

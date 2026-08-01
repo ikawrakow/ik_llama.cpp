@@ -24264,12 +24264,12 @@ static void ggml_compute_forward_hc_post_f32(
                     r[j] = res_r[i0];
                 }
                 for (int i = 0; i < S; ++i) {
-                    float sum = x_r[i0] * post_r[i];
-                    for (int j = 0; j < S; ++j) {
+                    float sum = comb_r[i] * r[0];
+                    for (int j = 1; j < S; ++j) {
                         sum += comb_r[j*S + i] * r[j];
                     }
                     float * dst_r = (float *)((char *)dst->data + i*dst->nb[1]);
-                    dst_r[i0] = sum;
+                    dst_r[i0] = x_r[i0] * post_r[i] + sum;
                 }
             }
         }
@@ -24293,13 +24293,13 @@ static void ggml_compute_forward_hc_post_f32(
                 r[j] = res_r[i0];
             }
             for (int i = 0; i < S; ++i) {
-                float sum = x_r[i0] * post_r[i];
-                for (int j = 0; j < S; ++j) {
+                float sum = comb_r[i] * r[0];
+                for (int j = 1; j < S; ++j) {
                     //sum += comb_r[i*S + j] * r[j];
                     sum += comb_r[j*S + i] * r[j];
                 }
                 float * dst_r = (float *)((char *)dst->data + t*dst->nb[2] + i*dst->nb[1]);
-                dst_r[i0] = sum;
+                dst_r[i0] = x_r[i0] * post_r[i] + sum;
             }
         }
     }
