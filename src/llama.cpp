@@ -125,9 +125,6 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
-// bump if necessary
-#define LLAMA_MAX_LAYERS  512
-
 //
 // helpers
 //

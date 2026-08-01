@@ -74,7 +74,6 @@
 #define TN_ATTN_K_NORM     "%s.blk.%d.attn_k_norm.%s"
 #define TN_ATTN_Q_NORM     "%s.blk.%d.attn_q_norm.%s"
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
-#define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_FFN_UP          "%s.blk.%d.ffn_up.%s"
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s" // layer norm
