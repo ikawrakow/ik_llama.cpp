@@ -440,8 +440,10 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
             if (is_moe) {
                 cur = llm_build_context::do_split_norm(ctx0, ffn_inp[id], model.layers[il].ffn_pre_norm_2, hparams, cb, id, il_cb, false);
                 cb(cur, "ffn_moe_inp", il_cb);
-                auto tmp = ggml_fused_rms_norm(ctx0, ffn_inp[id],
-                        ((const ggml_split_tensor_t *)model.layers[il].ffn_gate_inp_s->extra)->splits[id], hparams.f_norm_rms_eps);
+                auto tmp = ggml_rms_norm(ctx0, ffn_inp[id], hparams.f_norm_rms_eps);
+                tmp = ggml_scale(ctx0, tmp, 1.0f / sqrtf((float) llm.n_embd));
+                tmp = ggml_mul(ctx0, tmp,
+                        ((const ggml_split_tensor_t *)model.layers[il].ffn_gate_inp_s->extra)->splits[id]);
                 cb(tmp, "tmp", il_cb);
                 auto logits = llm.llm_build_lora_mm(lctx, ctx0, ((const ggml_split_tensor_t *)model.layers[il].ffn_gate_inp->extra)->splits[id], tmp);
                 cb(logits, "logits", il_cb);
@@ -1046,7 +1048,9 @@ ggml_cgraph * llm_build_context::build_gemma4() {
             cb(cur_moe, "ffn_norm_2", il);
 
             // custom MoE logits calculation (router operates on attn_out, not cur)
-            auto tmp = ggml_fused_rms_norm(ctx0, attn_out, model.layers[il].ffn_gate_inp_s, hparams.f_norm_rms_eps);
+            auto tmp = ggml_rms_norm(ctx0, attn_out, hparams.f_norm_rms_eps);
+            tmp = ggml_scale(ctx0, tmp, 1.0f / sqrtf((float) n_embd));
+            tmp = ggml_mul(ctx0, tmp, model.layers[il].ffn_gate_inp_s);
             cb(tmp, "tmp", il);
             auto logits = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
             cb(logits, "ffn_moe_logits", il);
