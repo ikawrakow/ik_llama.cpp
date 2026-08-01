@@ -577,7 +577,7 @@ struct llama_model {
     static inline int hadamard_size(int head_size) {
         if ((head_size & ~(head_size - 1)) == head_size) return head_size;
         // Note: we do not include 32 as an option because the CUDA Hadamard implementation
-        //       does not hcurrently andle a block size of 32.
+        //       does not currently handle a block size of 32.
         for (int i = 512; i >= 64; i >>= 1) {
             if (head_size % i == 0) return i;
         }

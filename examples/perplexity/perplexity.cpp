@@ -1103,7 +1103,7 @@ static void hellaswag_score(llama_context * ctx, const gpt_params & params) {
 
             //printf("max logprob ending idx %lu, gold ending idx %lu\n", ending_logprob_max_idx, hs_cur.gold_ending_idx);
 
-            // If the gold ending got the maximum logprobe add one accuracy point
+            // If the gold ending got the maximum logprob add one accuracy point
             if (ending_logprob_max_idx == hs_cur.gold_ending_idx) {
                 acc += 1.0;
             }

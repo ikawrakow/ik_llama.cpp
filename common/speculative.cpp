@@ -1923,7 +1923,7 @@ bool common_speculative_load_draft_model(
         free_command_line(argc, argv);
     }
 
-    // We likely dont want to inehit offload policy for MTP
+    // We likely don't want to inherit offload policy for MTP
     if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
         params_dft.ncmoe = 0;
         params_dft.tensor_buft_overrides.clear();
