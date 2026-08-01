@@ -9907,9 +9907,14 @@ struct llama_data_read {
             return false;
         }
 
-	// Currently the only way there is no V cache (and thus v_state is 2) requires flash_attn, and flash_attn sets kv_self.v_trans to false
-        if (kv_self.v_trans != (v_state == 1)) {
-            LLAMA_LOG_ERROR("%s: incompatible V transposition\n", __func__);
+        // v_state == 2 means the writer had no V cache at all. Transposition is meaningless in that
+        // case, and kv_self.v_trans is independent of whether v_l was ever allocated, so it says
+        // nothing about compatibility here. V cache presence has to match in both directions;
+        // transposition only has to match when there actually is a V cache on both sides.
+        if (((v_state == 2) != kv_self.v_l.empty()) ||
+            (v_state != 2 && kv_self.v_trans != (v_state == 1))) {
+            LLAMA_LOG_ERROR("%s: incompatible V cache state (v_state = %u, v_l %s, v_trans = %d)\n",
+                    __func__, v_state, kv_self.v_l.empty() ? "empty" : "present", (int) kv_self.v_trans);
             return false;
         }
 
