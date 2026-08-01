@@ -2310,10 +2310,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--allowlist-unicode-rule") {
         CHECK_ARG
-        if (params.allow_ruless.size() == 0) {
-            params.allow_ruless.push_back({});
+        if (params.allow_rules.size() == 0) {
+            params.allow_rules.push_back({});
         }
-        params.allow_ruless.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
+        params.allow_rules.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
         return true;
     }
     if (arg == "--allowlist-pieces") {
@@ -2324,7 +2324,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--allowlist-keyword") {
         CHECK_ARG
         params.allow_kws.push_back(argv[i]);
-        params.allow_ruless.push_back({});
+        params.allow_rules.push_back({});
         return true;
     }
     if (arg == "--allowlist-keyword-delay") {
@@ -4266,7 +4266,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     }
     if (!params.fit_margin_array.empty()) {
         GGML_ASSERT(params.fit_margin_array.size() % 2 == 0 && "Fit margin array does not have even number of elements");
-        GGML_ASSERT(params.fit_margin_array[params.fit_margin_array.size()-2] == -1 && "Fit margin array is not correctly termionated");
+        GGML_ASSERT(params.fit_margin_array[params.fit_margin_array.size()-2] == -1 && "Fit margin array is not correctly terminated");
         mparams.fit_margin_array = params.fit_margin_array.data();
     }
 
@@ -5382,7 +5382,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
-    fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
+    fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());

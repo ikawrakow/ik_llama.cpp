@@ -498,7 +498,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     const float * x = (const float *)((const char *)data + i11*src1->nb[1] + i12*src1->nb[2]);
 
                     if (add_and_check_nans(src1->ne[0], x, e.values.data() + e_start, e.counts.data() + e_start)) {
-                        fprintf(stderr, "etected NaNs in %s\n", wname.c_str());
+                        fprintf(stderr, "detected NaNs in %s\n", wname.c_str());
                         exit(1);
                     }
                     //for (int j = 0; j < (int)src1->ne[0]; ++j) {

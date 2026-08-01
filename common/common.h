@@ -364,7 +364,7 @@ struct gpt_params {
         ,uint32_t       // upper codepoint
         ,std::string    // unicode script name
         ,float          // bias
-    >>> allow_ruless;
+    >>> allow_rules;
     std::vector<std::string> allow_pieces;  // each token to allowlist
     std::vector<std::string> allow_kws;     // keywords
     size_t allow_kw_delay;  // minimum n_decoded before first keyword is active
