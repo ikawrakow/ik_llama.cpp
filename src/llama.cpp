@@ -2534,7 +2534,9 @@ static void llm_requantize_output_tensor(llama_model & model, ggml_type new_type
     if (model.output->type == new_type) {
         LLAMA_LOG_WARN("%s: output tensor is already of type %s => not requantizing\n", __func__, ggml_type_name(new_type));
     }
-    auto [other_type, n_interleaved] = interleaved_properties(new_type);
+    auto interleaved = interleaved_properties(new_type);
+    auto other_type     = interleaved.first;
+    auto n_interleaved  = interleaved.second;
     if (model.output->ne[1] % n_interleaved != 0) {
         LLAMA_LOG_WARN("%s: number of rows %ld is not a multiple of %d row interleaving for %s\n", __func__,
                 model.output->ne[1], n_interleaved, ggml_type_name(new_type));
