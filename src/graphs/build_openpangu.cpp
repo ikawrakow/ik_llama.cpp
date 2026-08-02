@@ -1195,69 +1195,27 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         if (!ggml_is_contiguous(Rin)) {
             Rin = ggml_cont(ctx0, Rin);
         }
-        ggml_tensor * flat = ggml_reshape_2d(ctx0, Rin, n_embd * S, n_tokens);
-        ggml_tensor * normed = ggml_fused_rms_norm(ctx0, flat, gamma, hparams.f_norm_rms_eps);
-        ggml_tensor * mixes = ggml_mul_mat(ctx0, phi, normed);        // [(S+2)*S, T]
-        ggml_tensor * h_pre  = ggml_view_2d(ctx0, mixes, S, n_tokens, mixes->nb[1], 0);
-        ggml_tensor * h_post = ggml_view_2d(ctx0, mixes, S, n_tokens, mixes->nb[1], S*ggml_element_size(mixes));
-        ggml_tensor * h_res  = ggml_view_2d(ctx0, mixes, S*S, n_tokens, mixes->nb[1], 2*S*ggml_element_size(mixes));
-
-        // alpha = [a_pre, a_post, a_res]; beta = [b_pre(S), b_post(S), b_res(S*S)]
-        ggml_tensor * a_pre  = ggml_view_1d(ctx0, alpha, 1, 0);
-        ggml_tensor * b_pre  = ggml_view_1d(ctx0, beta, S, 0);
-        // cont is required: the CUDA broadcast-mul path misreads strided views (h_pre is a
-        // row-slice of mixes), while CPU handles the strides — token 0 right, tokens 1+ garbage
-        h_pre = ggml_add(ctx0, ggml_mul(ctx0, ggml_cont(ctx0, h_pre), a_pre), b_pre);  // broadcast scalar + [S]
-        h_pre = ggml_sigmoid(ctx0, h_pre);                            // [S,T] (+eps omitted, inert)
+        ggml_tensor * mixes = build_mhc_pre_projection(
+                Rin, phi, gamma, n_embd, S, hparams.f_norm_rms_eps, true); // [(S+2)*S, T]
+        ggml_tensor * all = ggml_hc_pre(ctx0, mixes, alpha, beta, (int) S, sink_iters, 0.0f);
+        ggml_tensor * h_pre  = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), 0);
+        ggml_tensor * h_post = ggml_view_2d(ctx0, all, S, n_tokens, S*sizeof(float), S*n_tokens*sizeof(float));
+        ggml_tensor * h_res  = ggml_view_3d(ctx0, all, S, S, n_tokens,
+                S*sizeof(float), S*S*sizeof(float), 2*S*n_tokens*sizeof(float));
 
         //// combine: x[h,t] = sum_s h_pre[s,t] * R[h,s,t]
-        ggml_tensor * hpre3 = ggml_reshape_3d(ctx0, h_pre, 1, S, n_tokens);
-        auto x = ggml_mul_multi_add(ctx0, Rin, hpre3);
-        //ggml_tensor * weighted = ggml_mul(ctx0, Rin, hpre3);          // [H,S,T]
-        //ggml_tensor * x = ggml_reshape_2d(ctx0, ggml_sum_rows_ext(ctx0, weighted, 1), n_embd, n_tokens);
+        auto x = build_mhc_weighted_sum(Rin, h_pre, n_embd, S);
         ggml_build_forward_expand(gf, x);
 
-        *h_post_out = ggml_cont(ctx0, h_post);
-        *h_res_out  = ggml_cont(ctx0, h_res);
+        *h_post_out = h_post;
+        *h_res_out  = h_res;
         return x;
     };
 
-    ggml_tensor repeater;
-    repeater.ne[0] = n_embd; repeater.ne[1] = S; repeater.ne[2] = n_tokens; repeater.ne[3] = 1;
-
-    // mHC post: R_new[h,s,t] = h_post[s,t]*y[h,t] + sum_j m[s,j,t]*R[h,j,t]
+    // mHC post: R_new[h,s,t] = h_post[s,t]*y[h,t] + sum_j h_res[s,j,t]*R[h,j,t]
     auto mhc_post = [&](ggml_tensor * y, ggml_tensor * h_post, ggml_tensor * Rin,
-                        ggml_tensor * alpha, ggml_tensor * beta, ggml_tensor * h_res) {
-        ggml_tensor * a_post = ggml_view_1d(ctx0, alpha, 1, 1*ggml_element_size(alpha));
-        ggml_tensor * a_res  = ggml_view_1d(ctx0, alpha, 1, 2*ggml_element_size(alpha));
-        ggml_tensor * b_post = ggml_view_1d(ctx0, beta, S,   S*ggml_element_size(beta));
-        ggml_tensor * b_res  = ggml_view_1d(ctx0, beta, S*S, 2*S*ggml_element_size(beta));
-
-        h_post = ggml_add(ctx0, ggml_mul(ctx0, h_post, a_post), b_post);
-        h_post = ggml_scale(ctx0, ggml_sigmoid(ctx0, h_post), 2.0f);  // 2*sigmoid, [S,T]
-
-        ggml_tensor * m = ggml_add(ctx0, ggml_mul(ctx0, h_res, a_res), b_res); // [S*S,T]
-        m = ggml_sinkhorn(ctx0, m, (int) S, sink_iters, 0.0f, /*output_transposed=*/true); // [row S, col S, T]
-
-        // term1: h_post[s,t]*y[h,t] -> [H,S,T]
-        ggml_tensor * y3 = ggml_reshape_3d(ctx0, y, n_embd, 1, n_tokens);
-        ggml_tensor * hpost3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, h_post), 1, S, n_tokens);
-        ggml_tensor * term1 = ggml_mul(ctx0, ggml_repeat(ctx0, y3, &repeater), hpost3);
-
-        // term2: sum_j m[s,j,t]*R[h,j,t]. For each out-stream s, weight over input streams j.
-        // Build via: for stream axis, matmul R[H, j, t] with m[j, s, t] batched over t.
-        // R_perm [j(S), H, T] ; m as [j(S), s(S), T]; batched mul_mat over T -> [H? ] messy.
-        // Simpler explicit loop over S output streams (S=4, cheap):
-        ggml_tensor * term2 = nullptr;
-        for (int64_t s = 0; s < S; ++s) {
-            // m_s = m[:, s, :] -> weights over input streams j: [S, T]
-            ggml_tensor * m_s = ggml_cont(ctx0, ggml_view_2d(ctx0, m, S, n_tokens, m->nb[2], s*m->nb[1]));
-            ggml_tensor * m_s3 = ggml_reshape_3d(ctx0, m_s, 1, S, n_tokens);      // [1,S,T]
-            ggml_tensor * acc = ggml_mul(ctx0, Rin, m_s3);                        // [H,S,T]
-            ggml_tensor * summed = ggml_sum_rows_ext(ctx0, acc, 1);               // [H,1,T]
-            term2 = term2 ? ggml_concat(ctx0, term2, summed, 1) : summed;         // -> [H,S,T]
-        }
-        return ggml_add(ctx0, term1, term2); // [H,S,T]
+                        ggml_tensor * h_res) {
+        return build_mhc_post(y, h_post, Rin, h_res, n_embd, S, true);
     };
 
     // Base generation uses only the transformer layers; the trailing NextN/MTP layers are skipped.
@@ -1285,7 +1243,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         if (il == 0) ggml_set_name(cur, "opg0_attn_postnorm");
 
         // mHC post -> scatter back to S streams
-        R = mhc_post(cur, h_post_a, R, layer.mhc_attn_alpha, layer.mhc_attn_beta, h_res_a);
+        R = mhc_post(cur, h_post_a, R, h_res_a);
         if (il == 0) ggml_set_name(R, "opg0_R_attn");
 
         // ================= ffn sublayer =================
@@ -1312,7 +1270,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         cur = llm_build_norm(ctx0, cur, hparams, layer.ffn_post_norm, NULL, LLM_NORM_RMS, cb, il);
         if (il == 0) ggml_set_name(cur, "opg0_ffn_postnorm");
 
-        R = mhc_post(cur, h_post_m, R, layer.mhc_mlp_alpha, layer.mhc_mlp_beta, h_res_m);
+        R = mhc_post(cur, h_post_m, R, h_res_m);
 
         // block post-norm on the layer subset (RMSNorm over the concatenated S*H)
         if (layer.block_post_norm) {
