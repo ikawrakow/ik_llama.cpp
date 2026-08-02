@@ -2224,6 +2224,12 @@ bool llama_model_supports_partial_kv_reuse(const struct llama_model * model) {
     return model && model->arch != LLM_ARCH_OPENPANGU;
 }
 
+bool llama_model_requires_uniform_seq_batch(const struct llama_model * model) {
+    // DeepSeek-V4 keeps per-stream KV/side-state in a rectangular layout, so all
+    // sequences in a batch must contribute the same number of tokens.
+    return model && model->arch == LLM_ARCH_DEEPSEEK4;
+}
+
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il) {
     auto it = LLM_TENSOR_NAMES.find(arch);
     if (it == LLM_TENSOR_NAMES.end()) {
