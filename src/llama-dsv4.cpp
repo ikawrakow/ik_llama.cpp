@@ -1664,6 +1664,31 @@ bool llama_prepare_dsv4_graph_inputs(llama_context & lctx, const llama_batch & b
         return false;
     }
 
+    // Standalone companions contain only the predictor block, skip target state planning.
+    const bool is_dsv4_mtp = lctx.model.mtp &&
+        lctx.cparams.mtp_op_type != MTP_OP_NONE &&
+        lctx.model.hparams.nextn_predict_layers > 0 &&
+        lctx.model.hparams.dsv4_compress_ratios[(size_t) (lctx.model.hparams.n_layer - lctx.model.hparams.nextn_predict_layers)] == 0;
+    if (is_dsv4_mtp) {
+        lctx.dsv4.raw = {};
+        if (!reserve_plan && !dsv4_build_raw_context(lctx, batch, lctx.dsv4.raw)) {
+            return false;
+        }
+        lctx.dsv4.csa_plan = {};
+        lctx.dsv4.hca_plan = {};
+        lctx.dsv4.lid_plan = {};
+        lctx.dsv4.csa_ctx = {};
+        lctx.dsv4.hca_ctx = {};
+        lctx.dsv4.lid_ctx = {};
+
+        if (set_tensors) {
+            dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_write_src_idxs, lctx.dsv4.raw.write_src_idxs);
+            dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_write_idxs, lctx.dsv4.raw.write_dst_idxs);
+            dsv4_set_input_tensor(lctx.dsv4.inputs.raw_k_read_idxs, lctx.dsv4.raw.read_dst_idxs);
+        }
+        return true;
+    }
+
     if (!lctx.ensure_dsv4_cache_tensors()) {
         return false;
     }

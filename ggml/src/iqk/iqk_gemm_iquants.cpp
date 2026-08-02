@@ -550,7 +550,7 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
         make4_unsigned(qs, bits.values);
         sign_2_values(signs+0, bits.values+0);
         sign_2_values(signs+4, bits.values+2);
-        for (int k = 0; k < 4; ++k) bits.values[k] = _mm256_add_epi32(bits.values[k], min_value);
+        for (int k = 0; k < 4; ++k) bits.values[k] = _mm256_add_epi8(bits.values[k], min_value);
     }
     inline void prepare(int i, int j, const Q8<1>& q8, __m256i * q8_quants) {
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);

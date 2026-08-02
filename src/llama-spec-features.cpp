@@ -15,6 +15,10 @@ uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
         return hparams.mtp_backbone_n_embd;
     }
 
+    if (ctx->cparams.mtp && ctx->model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_embd_out > hparams.n_embd) {
+        return hparams.n_embd_out;
+    }
+
     return hparams.n_embd;
 }
 

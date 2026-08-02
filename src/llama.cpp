@@ -3714,7 +3714,7 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
         if (name == "output_norm.weight") {
             continue;
         }
-        if (auto pos = name.find("output_hc_"); pos == 0) {
+        if (name.find("output_hc_") == 0 || name.find("hc_head_") == 0) {
             ow_size += size;
             continue;
         }
@@ -5653,7 +5653,8 @@ static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
         lctx.model.hparams.nextn_predict_layers > 0 ||
         lctx.model.arch == LLM_ARCH_GEMMA4 ||
         lctx.model.arch == LLM_ARCH_GEMMA4_MTP ||
-        lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT);
+        lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
+        lctx.model.arch == LLM_ARCH_DEEPSEEK4);
 }
 
 static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
@@ -6202,24 +6203,28 @@ static int llama_decode_internal(
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
             const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_GEMMA4    ||
                                                       lctx.model.arch == LLM_ARCH_GEMMA4_MTP||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT);
+                                                      lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
+                                                      lctx.model.arch == LLM_ARCH_DEEPSEEK4);
+            // For DSV4 we want to extract the 16,384-dim embedding first
             if (cparams.embeddings || has_mtp) {
-                for (int i = gf->n_nodes - 1; i >= 0; --i) {
-                    if (use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
-                        // MTP recurrent state can be wider/different than the logits head hidden state.
-                        embd = gf->nodes[i];
-                        break;
+                if (use_raw_mtp_embd) {
+                    for (int i = gf->n_nodes - 1; i >= 0; --i) {
+                        if (strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
+                            embd = gf->nodes[i];
+                            break;
+                        }
                     }
-                    if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
-                        embd = gf->nodes[i];
-                        break;
-                    }
-                    // Strictly speaking we should use if (!use_raw_mtp_embd && strcmp(gf->nodes[i]->name, "result_norm") == 0)
-                    // as Gemma4 MTP is supposed to be using embeddings before rms_norm.
-                    // I don't see any significant difference between this and what we had before, so not making the change (yet).
-                    if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
-                        embd = gf->nodes[i];
-                        break;
+                }
+                if (!embd) {
+                    for (int i = gf->n_nodes - 1; i >= 0; --i) {
+                        if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
+                            embd = gf->nodes[i];
+                            break;
+                        }
+                        if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
+                            embd = gf->nodes[i];
+                            break;
+                        }
                     }
                 }
             }
@@ -6248,6 +6253,7 @@ static int llama_decode_internal(
         llama_graph_compute(lctx, gf, n_threads);
 
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 &&
+            lctx.cparams.mtp_op_type == MTP_OP_NONE &&
             lctx.kv_self.ckpt.selected_spec_mode == LLAMA_SPEC_CKPT_PER_STEP &&
             !llama_dsv4_spec_ckpt_capture_rows(&lctx)) {
             return GGML_STATUS_FAILED;
@@ -8337,10 +8343,10 @@ struct llama_context * llama_init_from_model(
         }
     }
 
-    if (cparams.mtp && hparams.nextn_predict_layers > 0) {
+    if (cparams.mtp && (hparams.nextn_predict_layers > 0 || model->arch == LLM_ARCH_DEEPSEEK4)) {
         const auto n_batch = cparams.n_batch;
         const auto n_vocab = hparams.n_vocab;
-        const auto n_embd  = hparams.n_embd;
+        const auto n_embd  = llama_output_embd_width(*ctx);
 
         const size_t logits_size = n_vocab*n_batch;
         const size_t embd_size   = n_embd*n_batch;
@@ -9907,9 +9913,14 @@ struct llama_data_read {
             return false;
         }
 
-	// Currently the only way there is no V cache (and thus v_state is 2) requires flash_attn, and flash_attn sets kv_self.v_trans to false
-        if (kv_self.v_trans != (v_state == 1)) {
-            LLAMA_LOG_ERROR("%s: incompatible V transposition\n", __func__);
+        // v_state == 2 means the writer had no V cache at all. Transposition is meaningless in that
+        // case, and kv_self.v_trans is independent of whether v_l was ever allocated, so it says
+        // nothing about compatibility here. V cache presence has to match in both directions;
+        // transposition only has to match when there actually is a V cache on both sides.
+        if (((v_state == 2) != kv_self.v_l.empty()) ||
+            (v_state != 2 && kv_self.v_trans != (v_state == 1))) {
+            LLAMA_LOG_ERROR("%s: incompatible V cache state (v_state = %u, v_l %s, v_trans = %d)\n",
+                    __func__, v_state, kv_self.v_l.empty() ? "empty" : "present", (int) kv_self.v_trans);
             return false;
         }
 
@@ -12323,7 +12334,7 @@ void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float 
     ctx->draft_input_hidden_state = hidden_state;
     ctx->draft_input_hidden_state_n_floats = ctx->inp_mtp_states
         ? ggml_nbytes(ctx->inp_mtp_states) / sizeof(float)
-        : 0;
+        : llama_mtp_state_n_embd(ctx);
 }
 
 void llama_set_mtp_target_context(struct llama_context * ctx, struct llama_context * target_ctx) {
