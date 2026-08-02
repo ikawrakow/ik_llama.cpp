@@ -1946,6 +1946,13 @@ extern "C" {
             struct ggml_tensor  * b,
             struct ggml_tensor  * c);
 
+    GGML_API struct ggml_tensor * ggml_get_rows_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            bool                  same_type,
+            bool                  dim0);
+
     // a TD  [n_embd, ne1,    ne2,    ne3]
     // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3
     // c I64 [n_rows, ne11,   ne12,   1]    | c[i] in [0, ne1)

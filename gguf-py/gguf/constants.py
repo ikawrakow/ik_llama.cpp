@@ -78,6 +78,7 @@ class Keys:
         VOCAB_SIZE                        = "{arch}.vocab_size"
         CONTEXT_LENGTH                    = "{arch}.context_length"
         EMBEDDING_LENGTH                  = "{arch}.embedding_length"
+        EMBEDDING_LENGTH_OUT              = "{arch}.embedding_length_out"
         BLOCK_COUNT                       = "{arch}.block_count"
         LEADING_DENSE_BLOCK_COUNT         = "{arch}.leading_dense_block_count"
         FEED_FORWARD_LENGTH               = "{arch}.feed_forward_length"
@@ -291,6 +292,9 @@ class MODEL_TENSOR(IntEnum):
     POS_EMBD             = auto()
     OUTPUT               = auto()
     OUTPUT_NORM          = auto()
+    HC_HEAD_FN           = auto()
+    HC_HEAD_BASE         = auto()
+    HC_HEAD_SCALE        = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
     ROPE_FACTORS_SHORT   = auto()
@@ -399,11 +403,16 @@ class MODEL_TENSOR(IntEnum):
     DFLASH_FC            = auto()
     DFLASH_HIDDEN_NORM   = auto()
     DFLASH_AUX_HIDDEN_NORM = auto()
-    # openPangu-2.0 (DSA lightning indexer)
-    INDEXER_K_NORM       = auto()
-    INDEXER_PROJ         = auto()   # weights_proj
-    INDEXER_ATTN_K       = auto()   # wk
-    INDEXER_ATTN_Q_B     = auto()   # wq_b
+    ATTN_KV              = auto()
+    ATTN_KV_NORM         = auto()
+    ATTN_OUT_A           = auto()
+    ATTN_OUT_B           = auto()
+    HC_ATTN_FN           = auto()
+    HC_ATTN_BASE         = auto()
+    HC_ATTN_SCALE        = auto()
+    HC_FFN_FN            = auto()
+    HC_FFN_BASE          = auto()
+    HC_FFN_SCALE         = auto()
     # openPangu-2.0 (MoME causal-conv on MLA latents)
     ATTN_QA_CONV         = auto()
     ATTN_KV_CONV         = auto()   # compresskv_conv
@@ -501,6 +510,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POS_EMBD:             "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:          "output_norm",
     MODEL_TENSOR.OUTPUT:               "output",
+    MODEL_TENSOR.HC_HEAD_FN:           "output_hc_fn",
+    MODEL_TENSOR.HC_HEAD_BASE:         "output_hc_base",
+    MODEL_TENSOR.HC_HEAD_SCALE:        "output_hc_scale",
     MODEL_TENSOR.ROPE_FREQS:           "rope_freqs",
     MODEL_TENSOR.ROPE_FACTORS_LONG:    "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:   "rope_factors_short",
@@ -562,6 +574,16 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_V_B:             "blk.{bid}.attn_v_b",
     MODEL_TENSOR.ATTN_Q_A_NORM:        "blk.{bid}.attn_q_a_norm",
     MODEL_TENSOR.ATTN_KV_A_NORM:       "blk.{bid}.attn_kv_a_norm",
+    MODEL_TENSOR.ATTN_KV:              "blk.{bid}.attn_kv",
+    MODEL_TENSOR.ATTN_KV_NORM:         "blk.{bid}.attn_kv_a_norm",
+    MODEL_TENSOR.ATTN_OUT_A:           "blk.{bid}.attn_output_a",
+    MODEL_TENSOR.ATTN_OUT_B:           "blk.{bid}.attn_output_b",
+    MODEL_TENSOR.HC_ATTN_FN:           "blk.{bid}.hc_attn_fn",
+    MODEL_TENSOR.HC_ATTN_BASE:         "blk.{bid}.hc_attn_base",
+    MODEL_TENSOR.HC_ATTN_SCALE:        "blk.{bid}.hc_attn_scale",
+    MODEL_TENSOR.HC_FFN_FN:            "blk.{bid}.hc_ffn_fn",
+    MODEL_TENSOR.HC_FFN_BASE:          "blk.{bid}.hc_ffn_base",
+    MODEL_TENSOR.HC_FFN_SCALE:         "blk.{bid}.hc_ffn_scale",
     MODEL_TENSOR.ATTN_SUB_NORM:        "blk.{bid}.attn_sub_norm",
     MODEL_TENSOR.FFN_SUB_NORM:         "blk.{bid}.ffn_sub_norm",
     MODEL_TENSOR.DEC_ATTN_NORM:        "dec.blk.{bid}.attn_norm",
@@ -1329,6 +1351,34 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.HC_HEAD_FN,
+        MODEL_TENSOR.HC_HEAD_BASE,
+        MODEL_TENSOR.HC_HEAD_SCALE,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_SINKS,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV,
+        MODEL_TENSOR.ATTN_KV_NORM,
+        MODEL_TENSOR.ATTN_OUT_A,
+        MODEL_TENSOR.ATTN_OUT_B,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_ATTN_BASE,
+        MODEL_TENSOR.HC_ATTN_SCALE,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.HC_FFN_BASE,
+        MODEL_TENSOR.HC_FFN_SCALE,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_Q,
@@ -1939,8 +1989,9 @@ class GGMLQuantizationType(IntEnum):
 
 
 class ExpertGatingFuncType(IntEnum):
-    SOFTMAX  = 1
-    SIGMOID  = 2
+    SOFTMAX       = 1
+    SIGMOID       = 2
+    SQRTSOFTPLUS  = 4
 
 
 # TODO: add GGMLFileType from ggml_ftype in ggml.h

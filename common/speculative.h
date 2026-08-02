@@ -7,6 +7,8 @@
 
 struct common_speculative;
 
+bool common_speculative_needs_checkpoint(const llama_model * model);
+
 enum common_speculative_init_status {
     COMMON_SPECULATIVE_INIT_SKIPPED,
     COMMON_SPECULATIVE_INIT_READY,
@@ -24,7 +26,7 @@ static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_HIDD
 
 struct common_speculative_checkpoint {
     bool valid = false;
-    bool per_step_enabled = false;
+    int mode = LLAMA_SPEC_CKPT_NONE;
     llama_pos n_past = 0;
     llama_token sampled = LLAMA_TOKEN_NULL;
     common_sampler * sampler = nullptr;
@@ -36,6 +38,31 @@ struct common_speculative_draft_result {
     llama_tokens tokens;
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
     bool target_only = false;
+};
+
+struct common_speculative_metrics_stage_snapshot {
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
+
+    uint64_t n_call_begin = 0;
+    uint64_t n_call_draft = 0;
+    uint64_t n_call_accept = 0;
+
+    uint64_t n_gen_drafts = 0;
+    uint64_t n_acc_drafts = 0;
+    uint64_t n_gen_tokens = 0;
+    uint64_t n_acc_tokens = 0;
+
+    // Position zero represents speculative position 1.
+    std::vector<uint64_t> drafted_by_position;
+    std::vector<uint64_t> accepted_by_position;
+
+    int64_t t_begin_us = 0;
+    int64_t t_draft_us = 0;
+    int64_t t_accept_us = 0;
+};
+
+struct common_speculative_metrics_snapshot {
+    std::vector<common_speculative_metrics_stage_snapshot> stages;
 };
 
 // comma separated list of all types
@@ -170,7 +197,7 @@ void common_speculative_checkpoint_discard(
     common_speculative_checkpoint & ckpt,
     llama_context * ctx);
 
-void common_speculative_checkpoint_restore(
+bool common_speculative_checkpoint_restore(
     common_speculative_checkpoint & ckpt,
     common_speculative * spec,
     llama_context * ctx,
@@ -183,16 +210,16 @@ void common_speculative_checkpoint_restore(
     const std::vector<float> & mtp_hidden_state_pre,
     int32_t mtp_n_past_base);
 
-void common_speculative_commit(
-    common_speculative * spec,
-    llama_context * ctx,
-    common_sampler * sampler_dst,
-    llama_seq_id seq_id,
-    llama_token sampled_before,
-    const std::vector<llama_token> & ids,
-    int n_draft,
-    llama_pos pos_base,
-    const std::vector<int32_t> & accepted_output_indices);
+bool common_speculative_commit(
+        common_speculative * spec,
+        llama_context * ctx,
+        common_sampler * sampler_dst,
+        llama_seq_id seq_id,
+        llama_token sampled_before,
+        const std::vector<llama_token> & ids,
+        int n_draft,
+        llama_pos pos_base,
+        const std::vector<int32_t> & accepted_output_indices);
 
 bool common_speculative_has_sequence_hidden(const common_speculative * spec, llama_seq_id seq_id);
 
@@ -234,6 +261,8 @@ void common_speculative_print_stats(const common_speculative * spec, double slot
 
 common_speculative_type common_speculative_current_type(const common_speculative * spec);
 
+common_speculative_metrics_snapshot common_speculative_get_metrics_snapshot(const common_speculative * spec);
+
 // Context shift for MTP to match how server handle main model
 void common_speculative_context_shift(
         common_speculative * spec,
@@ -241,3 +270,29 @@ void common_speculative_context_shift(
         llama_pos            kv_keep,
         llama_pos            kv_discard,
         llama_pos            kv_past);
+
+struct common_speculative_round_result {
+    bool attempted = false;
+    bool sampled_before_ready = false;
+    bool sampled_before_from_carry = false;
+    bool used_speculative = false;
+    bool failed = false;
+    std::string error;
+    llama_token sampled_before = LLAMA_TOKEN_NULL;
+    llama_tokens ids;
+};
+
+common_speculative_round_result common_speculative_run_round(
+    common_speculative * spec,
+    llama_model * model,
+    llama_context * ctx,
+    common_sampler * sampler,
+    llama_context * ctx_guidance,
+    common_params_speculative params,
+    const common_params_sampling & sparams,
+    llama_seq_id seq_id,
+    llama_pos n_past,
+    int n_predict_budget,
+    bool have_carry,
+    const llama_tokens & draft_history,
+    llama_token carry_token);
