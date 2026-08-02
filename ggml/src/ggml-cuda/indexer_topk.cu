@@ -69,7 +69,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     int n_top_k = dst->ne[0];
     int n_kv    = k->ne[1];
     int n_head  = q->ne[1];
-    GGML_ASSERT(k->type == GGML_TYPE_F16 || ggml_is_quantized(k->type));
+    //if (k->type != GGML_TYPE_F16 && !ggml_is_quantized(k->type)) printf("%s: K is %s?\n", __func__, ggml_type_name(k->type));
+    GGML_ASSERT(k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || ggml_is_quantized(k->type));
     GGML_ASSERT(k->ne[2] == 1 || k->ne[3] == 1);
     GGML_ASSERT(k->ne[1] > n_top_k);
     GGML_ASSERT(k->ne[1] == m->ne[0]);
