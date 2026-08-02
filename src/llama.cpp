@@ -4833,7 +4833,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // NOTHING for that sequence and let the (now-)sink token be masked out of top-k, collapsing
         // it. Anchoring on per-sequence min(pos) keeps the sink protection following the sequence's
         // actual first present cell. For a fresh sequence starting at pos 0, min(pos)==0 so the
-        // boosted set is identical to the old behaviour (n_seq==1 byte-identical).
+        // boosted set is identical to the old behavior (n_seq==1 byte-identical).
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_dsa_sink->buffer));
         static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
         const int64_t n_kv      = lctx.inp_dsa_sink->ne[0];
