@@ -7308,6 +7308,7 @@ struct llama_context_params llama_context_default_params() {
         /*.graph_reuse                 =*/ true,
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
+        /*.dsv4_cache_cpu              =*/ false,
         /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
@@ -7797,6 +7798,7 @@ struct llama_context * llama_init_from_model(
     cparams.graph_reuse      = params.graph_reuse;
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
+    cparams.dsv4_cache_cpu   = params.dsv4_cache_cpu;
     cparams.dsa_top_k        = params.dsa_top_k;
     // The DSA lightning indexer is built only in the layer-mode (non-TP) attention path. Under
     // -sm graph / -sm attn the model runs the tensor-parallel attention path, which has no indexer,

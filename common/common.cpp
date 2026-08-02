@@ -2209,6 +2209,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.k_cache_hadamard = true;
         return true;
     }
+    if (arg == "-dsv4cc" || arg == "--dsv4-cache-cpu") {
+        params.dsv4_cache_cpu = true;
+        return true;
+    }
     if (arg == "-vhad" || arg == "--v-cache-hadamard") {
         params.v_cache_hadamard = true;
         return true;
@@ -3065,6 +3069,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-mqkv,  --merge-qkv",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
+    options.push_back({ "*",         "-dsv4cc, --dsv4-cache-cpu",      "Keep DeepSeek-V4 compressed-attention K caches in host memory (default: %d)", params.dsv4_cache_cpu});
     options.push_back({ "*",         "-vhad,  --v-cache-hadamard",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16",       "Use f16 for data exchange between GPUs (default: %d)", true});
     options.push_back({ "*",         "-smf32, --split-mode-f32",       "Use f32 for data exchange between GPUs (default: %d)", false});
@@ -4331,6 +4336,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.fused_idx_topk    = params.fused_idx_topk;
     cparams.dsa_top_k         = params.dsa_top_k;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
+    cparams.dsv4_cache_cpu    = params.dsv4_cache_cpu;
     cparams.v_cache_hadamard  = params.v_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     //cparams.split_mode_f16    = params.split_mode_f16;
