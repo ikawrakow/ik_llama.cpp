@@ -1669,28 +1669,6 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
 #else
             std::memset(v_prime, 0, head_dim*sizeof(float));
             std::memset(out_val, 0, head_dim*sizeof(float));
-#ifdef __AVX2__
-            // Vectorized matrix-vector products: v_prime = state^T * k, out_val = state^T * q
-            // (colibri-style: 8-wide SIMD with independent accumulators instead of scalar loop)
-            __m256 vp_acc[head_dim/8], ov_acc[head_dim/8];
-            for (int row = 0; row < head_dim; row += 8) {
-                vp_acc[row/8] = _mm256_setzero_ps();
-                ov_acc[row/8] = _mm256_setzero_ps();
-            }
-            for (int col = 0; col < head_dim; ++col) {
-                const __m256 vk = _mm256_set1_ps(k_t[col]);
-                const __m256 vq = _mm256_set1_ps(q_t[col]);
-                for (int row = 0; row < head_dim; row += 8) {
-                    const __m256 vs = _mm256_loadu_ps(state + col * head_dim + row);
-                    vp_acc[row/8] = _mm256_fmadd_ps(vs, vk, vp_acc[row/8]);
-                    ov_acc[row/8] = _mm256_fmadd_ps(vs, vq, ov_acc[row/8]);
-                }
-            }
-            for (int row = 0; row < head_dim; row += 8) {
-                _mm256_storeu_ps(v_prime + row, vp_acc[row/8]);
-                _mm256_storeu_ps(out_val + row, ov_acc[row/8]);
-            }
-#else
             for (int col = 0; col < head_dim; ++col) {
                 const float k_col = k_t[col];
                 const float q_col = q_t[col];
@@ -1700,7 +1678,6 @@ void iqk_fused_delta_net_impl(int n_heads, int gqa_ratio, int repeat_type, int n
                     out_val[row] += s * q_col;
                 }
             }
-#endif
             for (int row = 0; row < head_dim; ++row) {
                 const float v_new = v_t[row] * beta_val - v_prime[row] * beta_val * decay;
                 v_new_buf[row] = v_new;
