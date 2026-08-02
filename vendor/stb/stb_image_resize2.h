@@ -6772,7 +6772,7 @@ static void stbir__get_split_info( stbir__per_split_info* split_info, int splits
     //   simply bump up our previous thread split range to include it, and then start this threads
     //   range with the smaller sample. It just moves one scanline from one thread split to another,
     //   so that we end with the unusual one, instead of start with it. To do this, we check 2-4 
-    //   sample at each thread split start and then occassionally move them.
+    //   sample at each thread split start and then occasionally move them.
     
     if ( ( is_gather ) && ( i ) )
     {

@@ -804,7 +804,7 @@ int llama_context::max_nodes(int n_tokens, int n_kv) const {
         model.layers[0].wkv_b) {
         // In this case we perform the attention computation iteratively, and this adds
         // 10 nodes per layer per iteration. Although in many cases the 65536 nodes we
-        // estimate by default are enough to accomodate, to be safe we add the additional
+        // estimate by default are enough to accommodate, to be safe we add the additional
         // number of nodes required for the iterative MLA evaluation.
         int n_head = model.hparams.n_head();
         auto wkv_b = model.layers[0].wkv_b;
