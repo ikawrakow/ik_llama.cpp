@@ -3066,8 +3066,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
     options.push_back({ "*",         "-vhad,  --v-cache-hadamard",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
-    options.push_back({ "*",         "-smf16, --split-mode-f16",       "Use f16 for data exchange between GPUs (default: %s)", params.reduce_type == "f16" ? "enabled" : "disabled"});
-    options.push_back({ "*",         "-smf32, --split-mode-f32",       "Use f32 for data exchange between GPUs (default: %s)", params.reduce_type == "f32" ? "enabled" : "disabled"});
+    options.push_back({ "*",         "-smf16, --split-mode-f16",       "Use f16 for data exchange between GPUs (default: %d)", true});
+    options.push_back({ "*",         "-smf32, --split-mode-f32",       "Use f32 for data exchange between GPUs (default: %d)", false});
     options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
     options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
