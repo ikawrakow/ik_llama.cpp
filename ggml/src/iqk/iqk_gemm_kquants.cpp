@@ -2677,7 +2677,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
     auto expected_type_B = etypeA == GGML_TYPE_IQ4_XS_R8 || etypeA == GGML_TYPE_Q4_K_R4 || etypeA == GGML_TYPE_Q5_K_R4 ? GGML_TYPE_Q8_K32
                          //: etypeA == GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_KR8
                          : etypeA == GGML_TYPE_Q8_KV || etypeA == GGML_TYPE_Q8_KV_R8 ? GGML_TYPE_Q8_KV
-                         : etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K ||
+                         : etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K || etypeA == GGML_TYPE_Q3_K ||
                            etypeA == GGML_TYPE_Q6_K  ? GGML_TYPE_Q8_2_X4
                            //etypeA == GGML_TYPE_Q6_K  || etypeA == GGML_TYPE_Q3_K ? GGML_TYPE_Q8_2_X4
                          //: etypeA == GGML_TYPE_Q4_K  || etypeA == GGML_TYPE_Q5_K ? GGML_TYPE_Q8_2_X4
@@ -2694,8 +2694,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
             set_functions<DequantizerQ2K>(kernels);
             break;
         case GGML_TYPE_Q3_K:
-            set_functions<DequantizerQ3K>(kernels);
-            //IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qY_K_q8_2_X4_T, DequantizerQ3K_AVX2, kernels);
+            IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qY_K_q8_2_X4_T, DequantizerQ3K_AVX2, kernels);
             break;
         case GGML_TYPE_Q4_K:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_2_X4_T, DequantizerQ4K_AVX2, kernels);
