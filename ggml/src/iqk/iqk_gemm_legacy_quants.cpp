@@ -868,12 +868,13 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
         for (int ib = 4*(nb/4); ib < nb; ++ib) {
             auto scales = prepare(iq4l[ib], iq4h[ib]);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto qy = (const block_q8_2 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                ggml_bf16_t d, s; d.bits = qy[ib].d; s.bits = qy[ib].s;
-                auto dy = _mm512_set1_ps(GGML_BF16_TO_FP32(d));
+                float   d = GGML_BF16_TO_FP32(ggml_bf16_t{qy[ib].d});
+                int16_t m = *(const int16_t *)&qy[ib].s;
+                auto dy = _mm512_set1_ps(d);
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_BF16_TO_FP32(s)), acc[2*iy+1]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(d*m), acc[2*iy+1]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
