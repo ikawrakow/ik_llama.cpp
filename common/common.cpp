@@ -3188,10 +3188,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "main",        "       --reasoning-budget-message",  "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)" });
     options.push_back({ "main",        "       --skip-chat-parsing",  "force a pure content parser, even if a Jinja template is specified; model will output everything "
             "in the content section, including any reasoning and/or tool calls (default: disabled)" });
-    options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
     options.push_back({ "main",        "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
             "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
-    options.push_back({ "main",        "       -ptc, --parallel-tool-calls", "enable parallel tool calls\n" });
     options.push_back({ "grammar" });
     options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.grammar.c_str() });
     options.push_back({ "*",           "       --grammar-file FNAME",   "file to read grammar from" });
