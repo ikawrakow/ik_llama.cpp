@@ -352,8 +352,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>             (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
-    printf("  -mla, --mla-use <0|1|2>              (default: %s)\n", join(cmd_params_defaults.mla_attn, ",").c_str());
-    printf("  -amb, --attention-max-batch <i>      (default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
+    printf("  -mla, --mla-use <0|1|2>             (default: %s)\n", join(cmd_params_defaults.mla_attn, ",").c_str());
+    printf("  -amb, --attention-max-batch <i>     (default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -ser, --smart-expert-reduction <i,f>(default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -gr, --graph-reuse <0|1>            (default: %s)\n", join(cmd_params_defaults.reuse, ",").c_str());
     printf("  -mmp, --mmap <0|1>                  (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
