@@ -62,42 +62,34 @@ foreach(asset ${ALT_PUBLIC_ASSETS})
 
 endforeach()
 
+# static library with the server logic (llama_server symbol), reusable by llama-cli
+set(TARGET_IMPL llama-server-impl)
 
-add_executable(${TARGET} ${TARGET_SRCS})
-install(TARGETS ${TARGET} RUNTIME)
-target_compile_definitions(${TARGET} PRIVATE
+add_library(${TARGET_IMPL} STATIC ${TARGET_SRCS})
+set_target_properties(${TARGET_IMPL} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+target_compile_definitions(${TARGET_IMPL} PRIVATE
     SERVER_VERBOSE=$<BOOL:${LLAMA_SERVER_VERBOSE}>
 )
-if (MSVC)
-    target_link_options(${TARGET} PRIVATE
-     $<$<CONFIG:DEBUG>:/STACK:20971520,1048576 >
-      $<$<CONFIG:RELEASE>:/STACK:20971520,1048576>
-      )
-endif()
-# target_link_libraries(${TARGET} PRIVATE "/STACK:104857600")
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-#target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
-
-target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_link_libraries(${TARGET} PRIVATE common mtmd cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+target_include_directories(${TARGET_IMPL} PRIVATE ${CMAKE_SOURCE_DIR} ../mtmd)
+target_link_libraries(${TARGET_IMPL} PRIVATE common mtmd cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_SSL)
     find_package(OpenSSL REQUIRED)
-    target_link_libraries(${TARGET} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-    target_compile_definitions(${TARGET} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(${TARGET_IMPL} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(${TARGET_IMPL} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
     target_compile_definitions(cpp-httplib PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
     target_link_libraries(cpp-httplib PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
 if (LLAMA_SERVER_SQLITE3)
     find_package(SQLite3  REQUIRED)
-    target_link_libraries(${TARGET} PRIVATE SQLite::SQLite3)
-    target_include_directories(${TARGET} PUBLIC ./sqlite_modern_cpp/hdr)
-    target_compile_definitions(${TARGET} PRIVATE SQLITE3_MODERN_CPP_SUPPORT)
+    target_link_libraries(${TARGET_IMPL} PRIVATE SQLite::SQLite3)
+    target_include_directories(${TARGET_IMPL} PUBLIC ./sqlite_modern_cpp/hdr)
+    target_compile_definitions($TARGET_IMPL PRIVATE SQLITE3_MODERN_CPP_SUPPORT)
 endif()
 
-if (WIN32)
-    TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)
-endif()
-
+# llama-server executable
+add_executable(${TARGET} main.cpp)
+install(TARGETS ${TARGET} RUNTIME)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+target_link_libraries(${TARGET} PRIVATE llama-server-impl ${CMAKE_THREAD_LIBS_INIT})

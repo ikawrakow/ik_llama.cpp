@@ -404,6 +404,9 @@ struct gpt_params {
     bool interactive       = false; // interactive mode
     bool interactive_first = false; // wait for user input immediately
     bool conversation      = false; // conversation mode (does not print special tokens and suffix/prefix)
+    bool single_turn       = false; // single turn chat conversation (official CLI compat)
+    bool show_timings      = true;  // show timing information on CLI (official CLI compat)
+    std::string server_base;        // if set, connect to this server instead of starting a new one
     bool prompt_cache_all  = false; // save user input and generations to prompt cache
     bool prompt_cache_ro   = false; // open the prompt cache read-only and do not update it
     bool ctx_shift         = true;
@@ -633,6 +636,16 @@ static bool string_starts_with(const std::string& str,
     const std::string& prefix) {  // While we wait for C++20's std::string::starts_with...
     return str.rfind(prefix, 0) == 0;
 }
+
+static bool string_starts_with(const std::string& str, char prefix) {
+    return !str.empty() && str.front() == prefix;
+}
+
+static bool string_starts_with(std::string_view str, std::string_view prefix) {
+    return str.size() >= prefix.size() && str.substr(0, prefix.size()) == prefix;
+}
+
+bool glob_match(const std::string & pattern, const std::string & str);
 
 std::vector<std::string> string_split(const std::string& str, const std::string& delimiter);
 std::vector<std::string> string_split(const std::string& str, char delim);

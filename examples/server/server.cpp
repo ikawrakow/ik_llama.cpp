@@ -60,6 +60,7 @@ constexpr int HTTP_POLLING_SECONDS = 1;
 
 bool server_verbose = false;
 bool server_log_json = true;
+int  server_log_min_level = 0; // 0 = log everything, 1 = errors only (set by the CLI)
 
 
 enum server_state {
@@ -451,7 +452,15 @@ static void log_prompt(const gpt_params & params_base, const json & body) {
     }
 }
 
-int main(int argc, char ** argv) {
+int llama_server(gpt_params & params, int argc, char ** argv);
+
+void llama_server_terminate() {
+    if (shutdown_handler) {
+        shutdown_handler(0);
+    }
+}
+
+int llama_server(int argc, char ** argv) {
 #if SERVER_VERBOSE != 1
     log_disable();
 #endif
@@ -466,9 +475,24 @@ int main(int argc, char ** argv) {
     // parse arguments from environment variables
     gpt_params_parse_from_env(params);
 
+    return llama_server(params, argc, argv);
+}
+
+int llama_server(gpt_params & params, int argc, char ** argv) {
+    bool is_run_by_cli = (argv == nullptr);
+
+#if SERVER_VERBOSE != 1
+    log_disable();
+#endif
+
     // TODO: not great to use extern vars
     server_log_json = params.log_json;
     server_verbose = params.verbosity > 0;
+    if (is_run_by_cli) {
+        // keep the interactive UI clean: errors only
+        server_log_min_level = 1;
+        server_verbose = false;
+    }
 
 
     // struct that contains llama context and inference
@@ -2238,19 +2262,22 @@ int main(int argc, char ** argv) {
         ctx_server.queue_tasks.terminate();
     };
 
+    // register signal handler only if not run by the CLI (the CLI installs its own)
+    if (!is_run_by_cli) {
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
-    struct sigaction sigint_action;
-    sigint_action.sa_handler = signal_handler;
-    sigemptyset (&sigint_action.sa_mask);
-    sigint_action.sa_flags = 0;
-    sigaction(SIGINT, &sigint_action, NULL);
-    sigaction(SIGTERM, &sigint_action, NULL);
+        struct sigaction sigint_action;
+        sigint_action.sa_handler = signal_handler;
+        sigemptyset (&sigint_action.sa_mask);
+        sigint_action.sa_flags = 0;
+        sigaction(SIGINT, &sigint_action, NULL);
+        sigaction(SIGTERM, &sigint_action, NULL);
 #elif defined (_WIN32)
-    auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
-        return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
-    };
-    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
+        auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
+            return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
+        };
+        SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
+    }
 
     ctx_server.queue_tasks.start_loop();
 

@@ -61,6 +61,7 @@ struct common_log;
 struct common_log* common_log_init();
 struct common_log* common_log_main(); // singleton, automatically destroys itself on exit
 void                common_log_pause(struct common_log* log); // pause  the worker thread, not thread-safe
+void                common_log_flush(struct common_log* log); // flush all pending log messages
 void                common_log_resume(struct common_log* log); // resume the worker thread, not thread-safe
 void                common_log_free(struct common_log* log);
 

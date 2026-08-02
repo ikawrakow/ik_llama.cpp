@@ -26,6 +26,12 @@ json server_grammar_trigger::to_json() const {
 
 
 void server_log(const char* level, const char* function, int line, const char* message, const json& extra) {
+    // when run by the CLI, suppress non-error server logs so they don't
+    // pollute the interactive UI
+    if (server_log_min_level > 0 && strcmp(level, "ERR") != 0) {
+        return;
+    }
+
     std::stringstream ss_tid;
     ss_tid << std::this_thread::get_id();
     json log = json{

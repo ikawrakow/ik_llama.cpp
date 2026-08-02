@@ -376,6 +376,28 @@ public:
 
         this->timestamps = timestamps;
     }
+
+    // flush all pending log messages by draining the queue synchronously
+    void flush() {
+        while (true) {
+            common_log_entry cur;
+            {
+                std::unique_lock<std::mutex> lock(mtx);
+                if (head == tail) {
+                    return;
+                }
+                cur = entries[head];
+                head = (head + 1) % entries.size();
+            }
+            if (cur.is_end) {
+                continue;
+            }
+            cur.print(); // stdout and stderr
+            if (file) {
+                cur.print(file);
+            }
+        }
+    }
 };
 
 //
@@ -399,6 +421,10 @@ struct common_log * common_log_main() {
 
 void common_log_pause(struct common_log * log) {
     log->pause();
+}
+
+void common_log_flush(struct common_log * log) {
+    log->flush();
 }
 
 void common_log_resume(struct common_log * log) {

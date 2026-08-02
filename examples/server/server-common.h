@@ -67,6 +67,7 @@ enum error_type {
 
 extern bool server_verbose;
 extern bool server_log_json;
+extern int  server_log_min_level; // 0 = log everything, 1 = errors only (used by the CLI to keep the UI clean)
 
 #ifndef SERVER_VERBOSE
 #define SERVER_VERBOSE 1

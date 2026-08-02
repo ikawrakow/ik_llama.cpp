@@ -363,7 +363,7 @@ int main(int argc, char ** argv) {
                 const int skipped_tokens = (int) embd.size() - max_embd_size;
                 embd.resize(max_embd_size);
 
-                console::set_display(console::error);
+                console::set_display(DISPLAY_TYPE_ERROR);
                 printf("<<input too long: skipped %d token%s>>", skipped_tokens, skipped_tokens != 1 ? "s" : "");
                 console::set_display(console::reset);
                 fflush(stdout);
