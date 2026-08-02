@@ -2731,7 +2731,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.prefill_assistant = false;
         return true;
     }
-    if (arg == "--parallel-tool-calls") {
+    if (arg == "-ptcall" || arg == "--parallel-tool-calls") {
         params.parallel_tool_calls = true;
         return true;
     }
@@ -3164,7 +3164,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
-    options.push_back({ "main",        "       --parallel-tool-calls",  "enable parallel tool calls\n" });
+    options.push_back({ "main",        "-ptcall, --parallel-tool-calls",  "enable parallel tool calls\n" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
