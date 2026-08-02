@@ -15476,7 +15476,6 @@ static bool ggml_compute_forward_concat_any_opt(
     //if (ggml_is_quantized(src0->type)) return false;
 
     GGML_ASSERT(src0->type == src1->type && src0->type == dst->type);
-    GGML_ASSERT(!ggml_is_quantized(src0->type));
 
     const int ith = params->ith;
     const int nth = params->nth;
