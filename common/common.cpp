@@ -1809,7 +1809,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-ictk" || arg == "--indexer-cache-type-k") {
-        LLAMA_LOG_WARN("================== Quantized inexer cache has been disabled for now => argument '%s' ignored\n", arg.c_str());
+        LLAMA_LOG_WARN("================== Quantized indexer cache has been disabled for now => argument '%s' ignored\n", arg.c_str());
         ++i;
         //params.indexer_cache_type_k = argv[++i];
         return true;
