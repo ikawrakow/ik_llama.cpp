@@ -821,7 +821,8 @@ static inline __m512i load_iq4nl_abs_values_512() {
 }
 template <int nrc_y>
 static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const DataInfo &info, int nrc_x) {
-    GGML_ASSERT(nrc_x%8 == 0);  GGML_ASSERT(n % (2 * QK4_NL) == 0);
+  GGML_ASSERT(nrc_x%8 == 0);
+  GGML_ASSERT(n % (2 * QK4_NL) == 0);
   Q8<nrc_y, block_q8_2_x4> q8(info);
   const __m512i m4 = _mm512_set1_epi8(0x0f);
   const __m512i eight = _mm512_set1_epi8(8);
