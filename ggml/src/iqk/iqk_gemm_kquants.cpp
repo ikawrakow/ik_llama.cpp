@@ -2239,14 +2239,19 @@ void iqk_convert_q4_k_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
             auto vd = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)dh+0));
             auto vm = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)dh+1));
             vm = _mm256_mul_ps(_mm256_set1_ps(-1.f), vm);
+            const __m256 vmin = _mm256_set1_ps(-65504.0f);
+            const __m256 vmax = _mm256_set1_ps( 65504.0f);
             for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
                 auto iscales16 = _mm_loadu_si128((const __m128i *)all_ls + ib32);
                 auto iscales32 = _mm256_cvtepi16_epi32(iscales16);
                 auto scales = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(iscales32));
+                // clamp to f16 range to avoid overflow to inf (NaN downstream)
+                scales = _mm256_min_ps(_mm256_max_ps(scales, vmin), vmax);
                 _mm_storeu_si128((__m128i *)y[ib32].d+0, _mm256_cvtps_ph(scales, _MM_FROUND_TO_NEAREST_INT));
                 iscales16 = _mm_loadu_si128((const __m128i *)all_ls + ib32 + 8);
                 iscales32 = _mm256_cvtepi16_epi32(iscales16);
                 scales = _mm256_mul_ps(vm, _mm256_cvtepi32_ps(iscales32));
+                scales = _mm256_min_ps(_mm256_max_ps(scales, vmin), vmax);
                 _mm_storeu_si128((__m128i *)y[ib32].d+1, _mm256_cvtps_ph(scales, _MM_FROUND_TO_NEAREST_INT));
             }
             y += QK_K/32;
@@ -2308,14 +2313,19 @@ void iqk_convert_q5_k_q8_1_r8(int n, const void * vx, size_t bx, void * vy, int 
             auto vd = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)dh+0));
             auto vm = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)dh+1));
             vm = _mm256_mul_ps(_mm256_set1_ps(-1.f), vm);
+            const __m256 vmin = _mm256_set1_ps(-65504.0f);
+            const __m256 vmax = _mm256_set1_ps( 65504.0f);
             for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
                 auto iscales16 = _mm_loadu_si128((const __m128i *)all_ls + ib32);
                 auto iscales32 = _mm256_cvtepi16_epi32(iscales16);
                 auto scales = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(iscales32));
+                // clamp to f16 range to avoid overflow to inf (NaN downstream)
+                scales = _mm256_min_ps(_mm256_max_ps(scales, vmin), vmax);
                 _mm_storeu_si128((__m128i *)y[ib32].d+0, _mm256_cvtps_ph(scales, _MM_FROUND_TO_NEAREST_INT));
                 iscales16 = _mm_loadu_si128((const __m128i *)all_ls + ib32 + 8);
                 iscales32 = _mm256_cvtepi16_epi32(iscales16);
                 scales = _mm256_mul_ps(vm, _mm256_cvtepi32_ps(iscales32));
+                scales = _mm256_min_ps(_mm256_max_ps(scales, vmin), vmax);
                 _mm_storeu_si128((__m128i *)y[ib32].d+1, _mm256_cvtps_ph(scales, _MM_FROUND_TO_NEAREST_INT));
             }
             y += QK_K/32;
@@ -2400,7 +2410,10 @@ void iqk_convert_q6_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
                 }
             }
             for (int ib32 = 0; ib32 < 8; ++ib32) {
-                _mm_storeu_si128((__m128i *)y[ib32].d, _mm256_cvtps_ph(_mm256_loadu_ps(all_s + 8*ib32), _MM_FROUND_TO_NEAREST_INT));
+                auto vs = _mm256_loadu_ps(all_s + 8*ib32);
+                // clamp to f16 range to avoid overflow to inf (NaN downstream)
+                vs = _mm256_min_ps(_mm256_max_ps(vs, _mm256_set1_ps(-65504.0f)), _mm256_set1_ps(65504.0f));
+                _mm_storeu_si128((__m128i *)y[ib32].d, _mm256_cvtps_ph(vs, _MM_FROUND_TO_NEAREST_INT));
             }
             y += QK_K/32;
         }
@@ -2491,7 +2504,10 @@ void iqk_convert_q3_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int 
                 }
             }
             for (int ib32 = 0; ib32 < 8; ++ib32) {
-                _mm_storeu_si128((__m128i *)y[ib32].d, _mm256_cvtps_ph(_mm256_loadu_ps(all_s + 8*ib32), _MM_FROUND_TO_NEAREST_INT));
+                auto vs = _mm256_loadu_ps(all_s + 8*ib32);
+                // clamp to f16 range to avoid overflow to inf (NaN downstream)
+                vs = _mm256_min_ps(_mm256_max_ps(vs, _mm256_set1_ps(-65504.0f)), _mm256_set1_ps(65504.0f));
+                _mm_storeu_si128((__m128i *)y[ib32].d, _mm256_cvtps_ph(vs, _MM_FROUND_TO_NEAREST_INT));
             }
             y += QK_K/32;
         }
@@ -2568,6 +2584,8 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                     dnew = 1.f; needs_scaling = false;
                 }
                 d *= dnew;
+                // clamp to f16 range to avoid overflow to inf (NaN downstream)
+                d = std::max(-65504.0f, std::min(65504.0f, d));
                 y[i].d[k] = GGML_FP32_TO_FP16(d);
                 auto scale = _mm256_set1_ps(std::abs(dnew) > 1e-9f ? 1/dnew : 0.f);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
@@ -3973,6 +3991,8 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                     dnew = 1.f; needs_scaling = false;
                 }
                 d *= dnew;
+                // clamp to f16 range to avoid overflow to inf (NaN downstream)
+                d = std::max(-65504.0f, std::min(65504.0f, d));
                 y[i].d[k] = GGML_FP32_TO_FP16(d);
                 auto scale = vdupq_n_f32(std::abs(dnew) > 1e-9f ? 1/dnew : 0.f);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
