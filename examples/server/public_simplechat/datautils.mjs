@@ -6,8 +6,8 @@
 /**
  * Given the limited context size of local LLMs and , many a times when context gets filled
  * between the prompt and the response, it can lead to repeating text garbage generation.
- * And many a times setting penalty wrt repeatation leads to over-intelligent garbage
- * repeatation with slight variations. These garbage inturn can lead to overloading of the
+ * And many a times setting penalty wrt repetition leads to over-intelligent garbage
+ * repetition with slight variations. These garbage in turn can lead to overloading of the
  * available model context, leading to less valuable response for subsequent prompts/queries,
  * if chat history is sent to ai model.
  *
@@ -21,10 +21,10 @@
 
 /**
  * Simple minded logic to help remove repeating garbage at end of the string.
- * The repeatation needs to be perfectly matching.
+ * The repetition needs to be perfectly matching.
  *
  * The logic progressively goes on probing for longer and longer substring based
- * repeatation, till there is no longer repeatation. Inturn picks the one with
+ * repetition, till there is no longer repetition. In turn picks the one with
  * the longest chain.
  *
  * @param {string} sIn
@@ -97,10 +97,10 @@ export function trim_repeat_garbage_at_end_loop(sIn, maxSubL, maxMatchLenThresho
 
 /**
  * A simple minded try trim garbage at end using histogram driven characteristics.
- * There can be variation in the repeatations, as long as no new char props up.
+ * There can be variation in the repetitions, as long as no new char props up.
  *
  * This tracks the chars and their frequency in a specified length of substring at the end
- * and inturn checks if moving further into the generated text from the end remains within
+ * and in turn checks if moving further into the generated text from the end remains within
  * the same char subset or goes beyond it and based on that either trims the string at the
  * end or not. This allows to filter garbage at the end, including even if there are certain
  * kind of small variations in the repeated text wrt position of seen chars.
@@ -214,7 +214,7 @@ export class NewLines {
     }
 
     /**
-     * Extracts lines from the passed string and inturn either
+     * Extracts lines from the passed string and in turn either
      * append to a previous partial line or add a new line.
      * @param {string} sLines
      */
