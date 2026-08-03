@@ -722,13 +722,6 @@ extern "C" {
     // (e.g. openPangu keeps only the current recurrent conv state).
     LLAMA_API bool llama_model_supports_partial_kv_reuse(const struct llama_model * model);
 
-    // Returns true for models that process each decode batch as a rectangular
-    // [n_seqs, n_tokens_per_seq] grid, i.e. every sequence in a batch must
-    // contribute the same number of tokens (e.g. DeepSeek-V4 with its
-    // stream-structured KV/side-state caches). Callers building batches for
-    // such models should keep batches uniform across sequences.
-    LLAMA_API bool llama_model_requires_uniform_seq_batch(const struct llama_model * model);
-
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 
     // Returns 0 on success

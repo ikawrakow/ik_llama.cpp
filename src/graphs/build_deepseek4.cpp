@@ -44,6 +44,29 @@ static ggml_tensor * dsv4_concat_named(
     return r;
 }
 
+// Concat along dim 2 (the KV dimension), multi-stream aware: with ne[3] > 1
+// the CUDA backend's type-generic concat fast paths require ne[3] == 1 and the
+// general path is F32-only, so concat per stream (dim 2) and re-assemble (dim 3).
+static ggml_tensor * dsv4_concat_kv(
+        ggml_context * ctx,
+        ggml_tensor  * a,
+        ggml_tensor  * b) {
+    if (a->ne[3] <= 1) {
+        return ggml_concat(ctx, a, b, 2);
+    }
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
+    ggml_tensor * result = nullptr;
+    for (int64_t s = 0; s < a->ne[3]; ++s) {
+        ggml_tensor * a_s = ggml_view_4d(ctx, a, a->ne[0], a->ne[1], a->ne[2], 1,
+                a->nb[1], a->nb[2], a->nb[3], s*a->nb[3]);
+        ggml_tensor * b_s = ggml_view_4d(ctx, b, b->ne[0], b->ne[1], b->ne[2], 1,
+                b->nb[1], b->nb[2], b->nb[3], s*b->nb[3]);
+        ggml_tensor * c_s = dsv4_concat_named(ctx, a_s, b_s, 2, "dsv4_concat_kv_s");
+        result = result == nullptr ? c_s : dsv4_concat_named(ctx, result, c_s, 3, "dsv4_concat_kv");
+    }
+    return result;
+}
+
 static ggml_tensor * dsv4_hc_affine(
         ggml_context * ctx,
         ggml_tensor  * x,
@@ -1170,7 +1193,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         if (raw_k->type != extra_k->type) {
             extra_k = ggml_cast(ctx0, extra_k, raw_k->type);
         }
-        ggml_tensor * k_all = ggml_concat(ctx0, raw_k, extra_k, 2);
+        ggml_tensor * k_all = dsv4_concat_kv(ctx0, raw_k, extra_k);
         ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, extra_mask, 0);
         cb(extra_k, (tag + "_k").c_str(), il);
         cb(k_all, (tag + "_k_all").c_str(), il);

@@ -3487,7 +3487,10 @@ void server_context::context_shift() {
 }
 
 void server_context::add_sampled_tokens() {
-    const bool uniform_seq_batch = llama_model_requires_uniform_seq_batch(model);
+    // DeepSeek-V4 processes each batch as a rectangular [n_seqs, n_tokens_per_seq]
+    // grid (stream-structured KV/side-state caches), so every sequence in a batch
+    // must contribute the same number of tokens.
+    const bool uniform_seq_batch = llama_model_is_deepseek4(model);
     for (auto& slot : slots) {
         slot.released = false;
         if (slot.state == SLOT_STATE_IDLE) {
@@ -3806,7 +3809,8 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
 void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type) {
     if (params_base.cont_batching || batch.n_tokens == 0) {
-        const bool uniform_seq_batch = llama_model_requires_uniform_seq_batch(model);
+        // DeepSeek-V4 requires uniform batches (see add_sampled_tokens).
+        const bool uniform_seq_batch = llama_model_is_deepseek4(model);
         for (auto& slot : slots) {
             slot.prompt_batch_i0 = -1;
             slot.prompt_batch_i1 = -1;
