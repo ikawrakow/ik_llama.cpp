@@ -3281,7 +3281,7 @@ static __device__ __forceinline__ void mmq_write_back_mma_id(
 
 //
 // Strictly speaking, we should bite the bullet and change WARP_SIZE to warp_size or MMQ_TILE_NE_K.
-// But as we basically don't support anything but Nvidia in the CUDA backend, we alays have
+// But as we basically don't support anything but Nvidia in the CUDA backend, we always have
 // WARP_SIZE = MMQ_TILE_NE_K = 32
 //
 

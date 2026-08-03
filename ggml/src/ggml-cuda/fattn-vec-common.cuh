@@ -970,7 +970,7 @@ void launch_fattn(
     const int ntiles_total = ntiles_x * (Q->ne[2] / ncols2) * Q->ne[3];
 
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
-    // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
+    // Only worth the overhead if there is at least one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
     if (mask && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || (n_swa > 0 && K->ne[1] >= FATTN_KQ_STRIDE + n_swa))) {
         const int s31 = mask->nb[1] / sizeof(half2);
