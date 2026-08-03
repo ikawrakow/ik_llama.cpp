@@ -830,9 +830,6 @@ inline std::string LOG_BATCH_TOSTR_PRETTY(const C & ctx, const B & batch)
 #undef LOG_ENABLE
 #define LOG_ENABLE() // dummy stub
 
-#undef LOG_ENABLE
-#define LOG_ENABLE() // dummy stub
-
 #undef LOG_SET_TARGET
 #define LOG_SET_TARGET(...) // dummy stub
 

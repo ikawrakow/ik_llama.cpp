@@ -55,7 +55,7 @@ ggml_cgraph * llm_build_context::build_mamba() {
             // Custom operator which is needed only to ease simultaneous sequence processing.
             // For a single sequence, the equivalent is to concatenate the columns of conv_states and x,
             // then make a self-overlapping view of that over d_conv columns at each stride in the 3rd dimension,
-            // then element-wise multiply that with the conv1d weigth,
+            // then element-wise multiply that with the conv1d weight,
             // then sum the elements of each row,
             // (the last two steps are a dot product over rows (also doable with mul_mat))
             // then permute away the ne[0] dimension,

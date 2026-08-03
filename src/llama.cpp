@@ -125,9 +125,6 @@ void llama_set_mtp_n_heads(struct llama_context * ctx, int32_t mtp_n_heads);
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
-// bump if necessary
-#define LLAMA_MAX_LAYERS  512
-
 //
 // helpers
 //
@@ -807,7 +804,7 @@ int llama_context::max_nodes(int n_tokens, int n_kv) const {
         model.layers[0].wkv_b) {
         // In this case we perform the attention computation iteratively, and this adds
         // 10 nodes per layer per iteration. Although in many cases the 65536 nodes we
-        // estimate by default are enough to accomodate, to be safe we add the additional
+        // estimate by default are enough to accommodate, to be safe we add the additional
         // number of nodes required for the iterative MLA evaluation.
         int n_head = model.hparams.n_head();
         auto wkv_b = model.layers[0].wkv_b;
@@ -4836,7 +4833,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // NOTHING for that sequence and let the (now-)sink token be masked out of top-k, collapsing
         // it. Anchoring on per-sequence min(pos) keeps the sink protection following the sequence's
         // actual first present cell. For a fresh sequence starting at pos 0, min(pos)==0 so the
-        // boosted set is identical to the old behaviour (n_seq==1 byte-identical).
+        // boosted set is identical to the old behavior (n_seq==1 byte-identical).
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_dsa_sink->buffer));
         static const int n_sink = []{ const char * e = getenv("DSA_SINK"); return e ? atoi(e) : 1; }();
         const int64_t n_kv      = lctx.inp_dsa_sink->ne[0];

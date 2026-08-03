@@ -148,7 +148,7 @@ static struct ggml_cgraph * build_graph_piter(
         /*.mem_buffer =*/ buf.data(),
         /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
     };
-    // create a temporally context to build the graph
+    // create a temporary context to build the graph
     struct ggml_context * ctx0 = ggml_init(params0);
     struct ggml_cgraph * gf = ggml_new_graph(ctx0);
 
@@ -189,7 +189,7 @@ static struct ggml_cgraph * build_graph_piter(
         ggml_build_forward_expand(gf, distance);
     }
 
-    // delete the temporally context used to build the graph
+    // delete the temporary context used to build the graph
     ggml_free(ctx0);
     return gf;
 }

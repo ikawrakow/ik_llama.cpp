@@ -352,8 +352,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>             (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
-    printf("  -mla, --mla-attn <0|1|2>            (default: %s)\n", join(cmd_params_defaults.mla_attn, ",").c_str());
-    printf("  -amb, --attn-max-batch <i>          (default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
+    printf("  -mla, --mla-use <0|1|2>             (default: %s)\n", join(cmd_params_defaults.mla_attn, ",").c_str());
+    printf("  -amb, --attention-max-batch <i>     (default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -ser, --smart-expert-reduction <i,f>(default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -gr, --graph-reuse <0|1>            (default: %s)\n", join(cmd_params_defaults.reuse, ",").c_str());
     printf("  -mmp, --mmap <0|1>                  (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
@@ -702,14 +702,14 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<bool>(argv[i], split_delim);
             params.flash_attn.insert(params.flash_attn.end(), p.begin(), p.end());
-        } else if (arg == "-mla" || arg == "--mla-attn") {
+        } else if (arg == "-mla" || arg == "--mla-use" || arg == "--mla-attn") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
             auto p = string_split<int>(argv[i], split_delim);
             params.mla_attn.insert(params.mla_attn.end(), p.begin(), p.end());
-        } else if (arg == "-amb" || arg == "--attn-max-batch") {
+        } else if (arg == "-amb" || arg == "--attention-max-batch" || arg == "--attn-max-batch") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
