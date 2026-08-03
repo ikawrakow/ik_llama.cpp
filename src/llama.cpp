@@ -1027,13 +1027,35 @@ static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) 
 }
 
 static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
-    // openPangu s_l is position-strict conv state, not qnext per-sequence state; keep it
-    // out of qnext seq-copy and state serialization (rollback rides the spec checkpoint).
     if (cache.s_l_position_strict) {
         return false;
     }
     return llama_kv_qnext_state_slots(cache) > 0;
 }
+
+static inline bool llama_kv_has_openpangu_partial_state(
+        const llama_kv_cache & cache,
+                       llm_arch arch,
+          llama_state_seq_flags flags) {
+    return arch == LLM_ARCH_OPENPANGU &&
+           (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) != 0 &&
+           cache.s_l_position_strict &&
+           llama_kv_qnext_state_slots(cache) > 0;
+}
+
+static llama_pos llama_kv_openpangu_state_pos(const llama_kv_cache & cache, llama_seq_id seq_id) {
+    // -1 rather than seq_pos_max's 0, so an empty sequence cannot match a checkpoint saved at position 0
+    llama_pos result = -1;
+    for (uint32_t i = 0; i < cache.size; ++i) {
+        if (cache.cells[i].has_seq_id(seq_id)) {
+            result = std::max(result, cache.cells[i].pos);
+        }
+    }
+    return result;
+}
+
+static constexpr uint32_t LLAMA_OPENPANGU_PARTIAL_LAYOUT_MAGIC = 0x50414732u; // "PAG2"
+static constexpr uint32_t LLAMA_OPENPANGU_PARTIAL_STATE_MAGIC  = 0x50414731u; // "PAG1"
 
 static inline bool llama_kv_qnext_seq_id_in_range(const llama_kv_cache & cache, llama_seq_id seq_id) {
     const uint32_t n_slots = llama_kv_qnext_state_slots(cache);
@@ -1372,9 +1394,6 @@ static bool llama_kv_cache_init(
                 // MoME conv state for ggml_ssm_conv. Each qnext-style slot packs the three
                 // conv sites as two tap-contiguous floats per channel:
                 // [qa 2*n_lora_q | compresskv 2*n_lora_kv | o 2*n_head*v_dim].
-                // s_l_position_strict stays true so qnext seq ops and state serialization
-                // skip this slot; speculative rollback snapshots/restores it via the
-                // whole-slot spec checkpoint.
                 const int64_t conv_col_ne = hparams.n_lora_q + hparams.n_lora_kv
                                             + (int64_t) hparams.n_head(i)*hparams.n_embd_head_v(i);
                 ggml_tensor * s_conv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2*conv_col_ne, qnext_state_slots);
@@ -8935,8 +8954,12 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
     return true;
 }
 
-static size_t llama_spec_ckpt_cpu_state_reserve(const llama_context * ctx, llama_seq_id seq_id) {
+static size_t llama_spec_ckpt_cpu_state_reserve(llama_context * ctx, llama_seq_id seq_id) {
     const auto & kv_self = ctx->kv_self;
+
+    if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
+        return llama_state_seq_get_size(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+    }
 
     size_t size = sizeof(uint32_t); // cell_count
 
@@ -9160,18 +9183,29 @@ enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
             llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
             return LLAMA_SPEC_CKPT_RESTORE_BASE_REPLAY_REQUIRED;
 
-        case LLAMA_SPEC_CKPT_CPU:
+        case LLAMA_SPEC_CKPT_CPU: {
             if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
                 llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
                 return llama_dsv4_spec_ckpt_restore(ctx, false, 0);
             }
-            if (!kv.ckpt.cpu_state_data.empty()) {
-                llama_state_seq_set_data(ctx, kv.ckpt.cpu_state_data.data(),
-                                         kv.ckpt.cpu_state_data.size(), seq_id,
-                                         LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            const bool is_openpangu = ctx->model.arch == LLM_ARCH_OPENPANGU;
+            if (is_openpangu) {
+                // conv state is position-strict, so the tail goes before it is written, with or without state
+                llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
             }
-            llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
+            if (!kv.ckpt.cpu_state_data.empty()) {
+                const size_t restored = llama_state_seq_set_data(
+                    ctx, kv.ckpt.cpu_state_data.data(), kv.ckpt.cpu_state_data.size(),
+                    seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                if (is_openpangu && restored != kv.ckpt.cpu_state_data.size()) {
+                    return LLAMA_SPEC_CKPT_RESTORE_FAILED;
+                }
+            }
+            if (!is_openpangu) {
+                llama_kv_cache_seq_rm(kv, seq_id, n_past, -1);
+            }
             return LLAMA_SPEC_CKPT_RESTORE_BASE_REPLAY_REQUIRED;
+        }
 
         default:
             return LLAMA_SPEC_CKPT_RESTORE_FAILED;
@@ -9401,6 +9435,49 @@ struct llama_data_write {
         }
     }
 
+    void write_openpangu_state(
+            const struct llama_context * ctx,
+                         llama_seq_id seq_id,
+                                  bool write_dsa_marker) {
+        const struct llama_kv_cache & kv_self = ctx->kv_self;
+        const uint32_t n_layer = kv_self.k_l.size();
+        const uint32_t state_magic = LLAMA_OPENPANGU_PARTIAL_STATE_MAGIC;
+        const llama_pos state_pos = llama_kv_openpangu_state_pos(kv_self, seq_id);
+        write(&state_magic, sizeof(state_magic));
+        write(&state_pos, sizeof(state_pos));
+
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            const bool has_s_cache = il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr;
+
+            const int32_t s_type_i = has_s_cache ? (int32_t) kv_self.s_l[il]->type : -1;
+            write(&s_type_i, sizeof(s_type_i));
+
+            const uint64_t s_size_row = has_s_cache ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]) : 0;
+            write(&s_size_row, sizeof(s_size_row));
+
+            const uint32_t n_slots = has_s_cache ? (uint32_t) kv_self.s_l[il]->ne[1] : 0;
+            const uint32_t s_rows = has_s_cache && seq_id >= 0 && (uint32_t) seq_id < n_slots ? 1 : 0;
+            write(&s_rows, sizeof(s_rows));
+        }
+
+        if (write_dsa_marker) {
+            const uint32_t dsa_indexer_state = !kv_self.kr_l.empty() ? 1 : 0;
+            write(&dsa_indexer_state, sizeof(dsa_indexer_state));
+        }
+
+        // seq_id indexes the conv row; openPangu refuses n_seq_max > 1, so this is row 0 as the graph assumes
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            const bool has_s_cache = il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr;
+            if (has_s_cache) {
+                const uint32_t n_slots = (uint32_t) kv_self.s_l[il]->ne[1];
+                if (seq_id >= 0 && (uint32_t) seq_id < n_slots) {
+                    const size_t s_size_row = ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]);
+                    write_tensor_data(kv_self.s_l[il], (size_t) seq_id * s_size_row, s_size_row, il);
+                }
+            }
+        }
+    }
+
     void write_kv_cache_data(const struct llama_context * ctx, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1,
         llama_state_seq_flags flags = 0) {
         const struct llama_kv_cache & kv_self = ctx->kv_self;
@@ -9508,8 +9585,14 @@ struct llama_data_write {
             }
         }
 
-        const uint32_t qnext_state = llama_kv_has_qnext_state_storage(kv_self) ? 1 : 0;
+        const bool openpangu_partial = llama_kv_has_openpangu_partial_state(kv_self, ctx->model.arch, flags);
+        const uint32_t qnext_state = (llama_kv_has_qnext_state_storage(kv_self) || openpangu_partial) ? 1 : 0;
         write(&qnext_state, sizeof(qnext_state));
+
+        if (openpangu_partial) {
+            write_openpangu_state(ctx, seq_id, true);
+            return;
+        }
 
         if (qnext_state != 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
@@ -9565,6 +9648,10 @@ struct llama_data_write {
                     write_tensor_data(kv_self.kr_l[il], range.first * kr_size_row, buf_size, il);
                 }
             }
+        }
+
+        if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
+            write_openpangu_state(ctx, seq_id, false);
         }
 
         // DSV4 compressed indexer cache (only for DSV4 models — preserves
@@ -9624,6 +9711,14 @@ struct llama_data_write {
 
     void write_kv_cache(const struct llama_context * ctx, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
         const struct llama_kv_cache & kv_self = ctx->kv_self;
+
+        if (llama_kv_has_openpangu_partial_state(kv_self, ctx->model.arch, flags)) {
+            write(&LLAMA_OPENPANGU_PARTIAL_LAYOUT_MAGIC, sizeof(LLAMA_OPENPANGU_PARTIAL_LAYOUT_MAGIC));
+            const std::vector<std::pair<uint32_t, uint32_t>> no_ranges;
+            write_kv_cache_data(ctx, no_ranges, seq_id, flags);
+            return;
+        }
+
         std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
         uint32_t cell_count = 0;
 
@@ -9763,6 +9858,11 @@ struct llama_data_read {
         if (dest_seq_id != -1) {
             // single sequence
 
+            if (cell_count == 0 && ctx->model.arch == LLM_ARCH_OPENPANGU) {
+                LLAMA_LOG_ERROR("%s: openPangu sequence state carries no kv cells\n", __func__);
+                return false;
+            }
+
             llama_kv_cache_seq_rm(kv_self, dest_seq_id, -1, -1);
 
             llama_batch batch = llama_batch_init(cell_count, 0, 1);
@@ -9797,6 +9897,7 @@ struct llama_data_read {
             GGML_ASSERT(kv_self.cells[kv_self.head + cell_count - 1].pos == batch.pos[cell_count - 1]);
             GGML_ASSERT(kv_self.cells[kv_self.head].has_seq_id(dest_seq_id));
             GGML_ASSERT(kv_self.cells[kv_self.head + cell_count - 1].has_seq_id(dest_seq_id));
+            GGML_ASSERT(ctx->model.arch != LLM_ARCH_OPENPANGU || kv_self.head == 0);
 
             // Cleanup
             llama_batch_free(batch);
@@ -9887,6 +9988,97 @@ struct llama_data_read {
         }
         GGML_ASSERT(sum_ne == ne);
         GGML_ASSERT(sum_split_row_size == row_size);
+    }
+
+    bool read_openpangu_state(
+            struct llama_context * ctx,
+                 uint32_t n_layer,
+             llama_seq_id seq_id,
+                      bool read_dsa_marker) {
+        struct llama_kv_cache & kv_self = ctx->kv_self;
+
+        uint32_t state_magic_ref = 0;
+        llama_pos state_pos_ref = -1;
+        read_to(&state_magic_ref, sizeof(state_magic_ref));
+        read_to(&state_pos_ref, sizeof(state_pos_ref));
+
+        if (state_magic_ref != LLAMA_OPENPANGU_PARTIAL_STATE_MAGIC) {
+            LLAMA_LOG_ERROR("%s: incompatible openPangu state geometry\n", __func__);
+            return false;
+        }
+
+        const llama_pos state_pos = llama_kv_openpangu_state_pos(kv_self, seq_id);
+        if (state_pos_ref != state_pos) {
+            LLAMA_LOG_ERROR("%s: openPangu state position mismatch (saved at %d, restoring at %d)\n",
+                    __func__, (int) state_pos_ref, (int) state_pos);
+            return false;
+        }
+
+        std::vector<uint64_t> s_size_rows(n_layer, 0);
+        std::vector<uint32_t> s_rows(n_layer, 0);
+
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            const bool has_s_cache = il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr;
+
+            int32_t s_type_i_ref;
+            uint64_t s_size_row_ref;
+            uint32_t s_rows_ref;
+            read_to(&s_type_i_ref, sizeof(s_type_i_ref));
+            read_to(&s_size_row_ref, sizeof(s_size_row_ref));
+            read_to(&s_rows_ref, sizeof(s_rows_ref));
+
+            const int32_t s_type_i = has_s_cache ? (int32_t) kv_self.s_l[il]->type : -1;
+            const uint64_t s_size_row = has_s_cache
+                ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0])
+                : 0;
+            const uint32_t n_slots = has_s_cache ? (uint32_t) kv_self.s_l[il]->ne[1] : 0;
+            const uint32_t expected_rows = has_s_cache && seq_id >= 0 && (uint32_t) seq_id < n_slots ? 1 : 0;
+
+            if (s_type_i_ref != s_type_i ||
+                s_size_row_ref != s_size_row ||
+                s_rows_ref != expected_rows) {
+                LLAMA_LOG_ERROR("%s: incompatible openPangu state geometry at layer %u\n", __func__, il);
+                return false;
+            }
+
+            s_size_rows[il] = s_size_row;
+            s_rows[il] = expected_rows;
+        }
+
+        if (read_dsa_marker) {
+            uint32_t dsa_indexer_state_ref = 0;
+            read_to(&dsa_indexer_state_ref, sizeof(dsa_indexer_state_ref));
+            const uint32_t dsa_indexer_state = !kv_self.kr_l.empty() ? 1 : 0;
+            if (dsa_indexer_state_ref != dsa_indexer_state) {
+                LLAMA_LOG_ERROR("%s: incompatible openPangu state geometry\n", __func__);
+                return false;
+            }
+        }
+
+        size_t payload_size = 0;
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            if (s_rows[il] != 0) {
+                payload_size += (size_t) s_size_rows[il];
+            }
+        }
+        const uint8_t * payload = read(payload_size);
+
+        size_t payload_offset = 0;
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            if (s_rows[il] == 0) {
+                continue;
+            }
+
+            const size_t s_size_row = (size_t) s_size_rows[il];
+            const uint32_t s_dst_row = (uint32_t) seq_id;
+            if (kv_self.s_l[il]->extra) {
+                read_kv_cache_data_split(ctx, kv_self.s_l[il], payload + payload_offset, s_dst_row, s_size_row, 1, il);
+            } else {
+                ggml_backend_tensor_set(kv_self.s_l[il], payload + payload_offset, (size_t) s_dst_row * s_size_row, s_size_row);
+            }
+            payload_offset += s_size_row;
+        }
+        return true;
     }
 
     bool read_kv_cache_data(struct llama_context * ctx, uint32_t cell_count, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
@@ -10088,10 +10280,15 @@ struct llama_data_read {
         uint32_t qnext_state_ref = 0;
         read_to(&qnext_state_ref, sizeof(qnext_state_ref));
 
-        const bool has_qnext_state = llama_kv_has_qnext_state_storage(kv_self);
+        const bool openpangu_partial = llama_kv_has_openpangu_partial_state(kv_self, ctx->model.arch, flags);
+        const bool has_qnext_state = llama_kv_has_qnext_state_storage(kv_self) || openpangu_partial;
         if ((qnext_state_ref != 0) != has_qnext_state) {
             LLAMA_LOG_ERROR("%s: incompatible qwen3next state cache presence\n", __func__);
             return false;
+        }
+
+        if (openpangu_partial) {
+            return read_openpangu_state(ctx, n_layer, seq_id, true);
         }
 
         if (qnext_state_ref != 0) {
@@ -10197,6 +10394,11 @@ struct llama_data_read {
             }
         }
 
+        if (ctx->model.arch == LLM_ARCH_OPENPANGU &&
+            !read_openpangu_state(ctx, n_layer, seq_id, false)) {
+            return false;
+        }
+
         // DSV4 compressed indexer cache (only present for DSV4 models)
         if (ctx->model.arch == LLM_ARCH_DEEPSEEK4) {
 
@@ -10281,6 +10483,19 @@ struct llama_data_read {
     void read_kv_cache(struct llama_context * ctx, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) {
         uint32_t cell_count;
         read_to(&cell_count, sizeof(cell_count));
+
+        const bool openpangu_partial = llama_kv_has_openpangu_partial_state(ctx->kv_self, ctx->model.arch, flags);
+        const bool skip_meta_layout = cell_count == LLAMA_OPENPANGU_PARTIAL_LAYOUT_MAGIC;
+        if (openpangu_partial != skip_meta_layout) {
+            throw std::runtime_error("failed to restore kv cache: incompatible openPangu partial-state layout");
+        }
+
+        if (openpangu_partial) {
+            if (!read_kv_cache_data(ctx, 0, seq_id, flags)) {
+                throw std::runtime_error("failed to restore kv cache: openPangu partial state");
+            }
+            return;
+        }
 
         bool res = read_kv_cache_meta(ctx, cell_count, seq_id) && read_kv_cache_data(ctx, cell_count, seq_id, flags);
 
@@ -10545,10 +10760,21 @@ struct llama_data_read_file : llama_data_read {
     }
 };
 
-// Public state I/O excludes private DSV4 state, speculation uses an internal checkpoint.
-static bool llama_state_io_supported(const struct llama_context * ctx, const char * func) {
+// Public state I/O excludes private DSV4 state, speculation uses an internal checkpoint;
+// openPangu instead carries its private conv state in the per-sequence layouts admitted here.
+static bool llama_state_io_supported(
+        const struct llama_context * ctx,
+                        const char * func,
+             llama_state_seq_flags flags = 0,
+                      llama_seq_id seq_id = -1) {
     if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
-        LLAMA_LOG_ERROR("%s: state save/restore is not supported for openPangu (private cache and side state are not serialized)\n", func);
+        if (seq_id >= 0 &&
+            llama_kv_qnext_seq_id_in_range(ctx->kv_self, seq_id) &&
+            (flags == 0 ||
+             llama_kv_has_openpangu_partial_state(ctx->kv_self, ctx->model.arch, flags))) {
+            return true;
+        }
+        LLAMA_LOG_ERROR("%s: only per-sequence state save/restore is supported for openPangu (whole-context and file-session state are not)\n", func);
         return false;
     }
     return true;
@@ -10727,7 +10953,12 @@ bool llama_state_save_file(struct llama_context * ctx, const char * path_session
 }
 
 static size_t llama_state_seq_get_data_internal(struct llama_context * ctx, llama_data_write & data_ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    if (!llama_state_io_supported(ctx, __func__)) {
+    if (!llama_state_io_supported(ctx, __func__, flags, seq_id)) {
+        return 0;
+    }
+    if (ctx->model.arch == LLM_ARCH_OPENPANGU && flags == 0 &&
+        llama_kv_openpangu_state_pos(ctx->kv_self, seq_id) < 0) {
+        LLAMA_LOG_ERROR("%s: openPangu sequence %d has no kv cells to save\n", __func__, seq_id);
         return 0;
     }
     llama_synchronize(ctx);
@@ -10753,7 +10984,7 @@ size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_
 }
 
 static size_t llama_state_seq_set_data_internal(struct llama_context * ctx, llama_data_read & data_ctx, llama_seq_id dest_seq_id, llama_state_seq_flags flags) {
-    if (!llama_state_io_supported(ctx, __func__)) {
+    if (!llama_state_io_supported(ctx, __func__, flags, dest_seq_id)) {
         return SIZE_MAX;
     }
     llama_synchronize(ctx);

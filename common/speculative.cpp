@@ -2055,6 +2055,11 @@ bool common_speculative_finalize_startup(
         params.clear_dft();
     }
 
+    if (params.has_dft() && model != nullptr && llama_model_is_openpangu(model)) {
+        LOG_ERR("%s: openPangu does not support an external draft model; it has its own MTP heads\n", __func__);
+        return false;
+    }
+
     if (params.has_dft()) {
         LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n");
         if (!common_speculative_load_draft_model(params, params_base)) {
