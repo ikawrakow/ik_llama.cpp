@@ -185,7 +185,7 @@ static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm,
 // this site's two taps packed at float offset 2*site_off. The buffer is zeroed at cache
 // allocation and reset at pos 0, preserving zero history at sequence start (pos-0 graphs
 // are discarded from reuse via reset_previous, so the baked reset never runs at pos > 0).
-// Speculative rollback snapshots/restores the whole slot via the spec checkpoint.
+// Speculative rollback restores the whole slot: GPU mode snapshots it, CPU mode uses the partial layout.
 static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
                                            ggml_tensor * x, ggml_tensor * w,
                                            ggml_tensor * state_all, int64_t site_off,

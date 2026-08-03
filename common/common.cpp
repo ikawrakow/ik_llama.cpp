@@ -1809,7 +1809,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-ictk" || arg == "--indexer-cache-type-k") {
-        LLAMA_LOG_WARN("================== Quantized inexer cache has been disabled for now => argument '%s' ignored\n", arg.c_str());
+        LLAMA_LOG_WARN("================== Quantized indexer cache has been disabled for now => argument '%s' ignored\n", arg.c_str());
         ++i;
         //params.indexer_cache_type_k = argv[++i];
         return true;
@@ -2312,10 +2312,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--allowlist-unicode-rule") {
         CHECK_ARG
-        if (params.allow_ruless.size() == 0) {
-            params.allow_ruless.push_back({});
+        if (params.allow_rules.size() == 0) {
+            params.allow_rules.push_back({});
         }
-        params.allow_ruless.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
+        params.allow_rules.back().push_back(argparse_allowlist_unicode_rule(argv[i]));
         return true;
     }
     if (arg == "--allowlist-pieces") {
@@ -2326,7 +2326,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--allowlist-keyword") {
         CHECK_ARG
         params.allow_kws.push_back(argv[i]);
-        params.allow_ruless.push_back({});
+        params.allow_rules.push_back({});
         return true;
     }
     if (arg == "--allowlist-keyword-delay") {
@@ -2733,7 +2733,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.prefill_assistant = false;
         return true;
     }
-    if (arg == "--parallel-tool-calls") {
+    if (arg == "-ptcall" || arg == "--parallel-tool-calls") {
         params.parallel_tool_calls = true;
         return true;
     }
@@ -3019,7 +3019,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --verbose-prompt",       "print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false" });
     options.push_back({ "*",           "-dr,   --dry-run",       "skip loading tensors in the files"});
     options.push_back({ "*",           "       --no-display-prompt",    "don't print prompt at generation (default: %s)", !params.display_prompt ? "true" : "false" });
-    options.push_back({ "*",           "-co,   --color",                "colorise output to distinguish prompt and user input from generations (default: %s)", params.use_color ? "true" : "false" });
+    options.push_back({ "*",           "-co,   --color",                "colorize output to distinguish prompt and user input from generations (default: %s)", params.use_color ? "true" : "false" });
     options.push_back({ "*",           "-s,    --seed SEED",            "RNG seed (default: %d, use random seed for < 0)", params.seed });
     options.push_back({ "*",           "-t,    --threads N",            "number of threads to use during generation (default: %d)", params.n_threads });
     options.push_back({ "*",           "-tb,   --threads-batch N",      "number of threads to use during batch and prompt processing (default: same as --threads)" });
@@ -3059,7 +3059,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-ger,  --grouped-expert-routing", "enable grouped expert routing (default: %s)", params.grouped_expert_routing ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
-    options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad ? "enabled" : "disabled" });
     //options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
     options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
@@ -3070,7 +3070,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-vhad,  --v-cache-hadamard",     "Use Hadamard transform for V-cache (default: %d)", params.v_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16",       "Use f16 for data exchange between GPUs (default: %d)", true});
     options.push_back({ "*",         "-smf32, --split-mode-f32",       "Use f32 for data exchange between GPUs (default: %d)", false});
-    options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
+    options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f16"});
     options.push_back({ "*",         "-gap, --graph-attn-precision",    "Flash-attn precision under -sm graph (default: %s)", "f16"});
     options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
     options.push_back({ "*",         "-sas,  --scheduler-async",        "Async evaluation of compute graphs (default: %d)", params.scheduler_async});
@@ -3166,7 +3166,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
-    options.push_back({ "main",        "       --parallel-tool-calls",  "enable parallel tool calls\n" });
+    options.push_back({ "main",        "-ptcall, --parallel-tool-calls",  "enable parallel tool calls\n" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
     options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
@@ -3183,17 +3183,15 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
 
     options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
     options.push_back({ "main",        "       --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
-						                                                                                            "none: include all tokens\n"
-                                                                                                                    "auto: exclude all tokens between <think> and </think>\n"
-						                                                                                            "Or comma separated start and end tokens such as [THINK],[/THINK]\n"
-						                                                                                            "(default: auto)" });
+                        "none: include all tokens\n"
+                        "auto: exclude all tokens between <think> and </think>\n"
+                        "Or comma separated start and end tokens such as [THINK],[/THINK]\n"
+                        "(default: auto)" });
     options.push_back({ "main",        "       --reasoning-budget-message",  "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)" });
     options.push_back({ "main",        "       --skip-chat-parsing",  "force a pure content parser, even if a Jinja template is specified; model will output everything "
             "in the content section, including any reasoning and/or tool calls (default: disabled)" });
-    options.push_back({ "main",        "       --reasoning-budget N",  "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)" });
     options.push_back({ "main",        "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
             "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
-    options.push_back({ "main",        "       -ptc, --parallel-tool-calls", "enable parallel tool calls\n" });
     options.push_back({ "grammar" });
     options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.grammar.c_str() });
     options.push_back({ "*",           "       --grammar-file FNAME",   "file to read grammar from" });
@@ -3206,6 +3204,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "pooling type for embeddings, use model default if unspecified" });
     options.push_back({ "embedding",   "       --attention {causal,non-causal}",
                                                                         "attention type for embeddings, use model default if unspecified" });
+    options.push_back({ "embedding",   "       --embd-normalize",       "normalization for embeddings (default: %d) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)", params.embd_normalize });
+    options.push_back({ "embedding",   "       --embd-output-format",   "empty = default, \"array\" = [[],[]...], \"json\" = OpenAI style, \"json+\" = same \"json\" + cosine similarity matrix" });
+    options.push_back({ "embedding",   "       --embd-separator",       "separator of embeddings (default \\n) for example \"<#sep#>\"" });
 
     options.push_back({ "context hacking" });
     options.push_back({ "*",           "       --rope-scaling {none,linear,yarn}",
@@ -3391,11 +3392,6 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "bench",       "-wb,    --warmup-batch",         "run a warmup batch before measurement" });
     options.push_back({ "bench",       "       --output-format FORMAT",  "output format: table, jsonl, or csv (default: table)" });
 
-    options.push_back({ "embedding" });
-    options.push_back({ "embedding",   "       --embd-normalize",       "normalisation for embeddings (default: %d) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)", params.embd_normalize });
-    options.push_back({ "embedding",   "       --embd-output-format",   "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix" });
-    options.push_back({ "embedding",   "       --embd-separator",       "separator of embeddings (default \\n) for example \"<#sep#>\"" });
-
     options.push_back({ "server" });
     options.push_back({ "server",      "       --host HOST",            "ip address to listen (default: %s)", params.hostname.c_str() });
     options.push_back({ "server",      "       --port PORT",            "port to listen (default: %d)", params.port });
@@ -3417,7 +3413,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "server",      "-spf,   --system-prompt-file FNAME",
                                                                          "set a file to load a system prompt (initial prompt of all slots), this is useful for chat applications" });
     options.push_back({ "server",      "       --log-format {text,json}",
-                                                                        "log output format: json or text (default: json)" });
+                                                                        "log output format: json or text (default: text)" });
     options.push_back({ "server",      "       --metrics",              "enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled" });
     options.push_back({ "server",      "       --no-slots",             "disables slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled" });
     options.push_back({ "server",      "       --slot-save-path PATH",  "path to save slot kv cache (default: disabled)" });
@@ -3457,7 +3453,6 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "export-lora", "-m,    --model",                "model path from which to load base model (default '%s')", params.model.c_str() });
     options.push_back({ "export-lora", "       --lora FNAME",           "path to LoRA adapter  (can be repeated to use multiple adapters)" });
     options.push_back({ "export-lora", "       --lora-scaled FNAME S",  "path to LoRA adapter with user defined scaling S  (can be repeated to use multiple adapters)" });
-    options.push_back({ "*",           "-t,    --threads N",            "number of threads to use during computation (default: %d)", params.n_threads });
     options.push_back({ "export-lora", "-o,    --output FNAME",         "output file (default: '%s')", params.lora_outfile.c_str() });
 
     printf("usage: %s [options]\n", argv[0]);
@@ -4268,7 +4263,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     }
     if (!params.fit_margin_array.empty()) {
         GGML_ASSERT(params.fit_margin_array.size() % 2 == 0 && "Fit margin array does not have even number of elements");
-        GGML_ASSERT(params.fit_margin_array[params.fit_margin_array.size()-2] == -1 && "Fit margin array is not correctly termionated");
+        GGML_ASSERT(params.fit_margin_array[params.fit_margin_array.size()-2] == -1 && "Fit margin array is not correctly terminated");
         mparams.fit_margin_array = params.fit_margin_array.data();
     }
 
@@ -4973,7 +4968,7 @@ void common_embd_normalize(const float * inp, float * out, int n, int embd_norm)
     double sum = 0.0;
 
     switch (embd_norm) {
-        case -1: // no normalisation
+        case -1: // no normalization
             sum = 1.0;
             break;
         case 0: // max absolute
@@ -5384,7 +5379,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
     fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
-    fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
+    fprintf(stream, "ser: %d,%g # default: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());

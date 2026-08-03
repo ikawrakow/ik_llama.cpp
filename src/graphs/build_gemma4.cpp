@@ -903,7 +903,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     cb(inpL, "tok_embd", -1);
 
-    // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
+    // important: do not normalize weights for raw embeddings input (i.e. encoded image embeddings)
     if (batch.token) {
         inpL = ggml_scale(ctx0, inpL, sqrtf(n_embd));
         cb(inpL, "inp_scaled", -1);

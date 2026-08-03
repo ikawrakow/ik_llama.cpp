@@ -54,7 +54,7 @@ static std::string extract_content_from_mixed_input(const std::string& content, 
             }
         }
 
-        // Is this the right thing to do? If we have an open thinking tag, we just retrun and do not try to
+        // Is this the right thing to do? If we have an open thinking tag, we just return and do not try to
         // remove function calls.
         if (is_thinking) {
             return result;

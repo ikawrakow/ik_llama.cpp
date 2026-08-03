@@ -233,7 +233,7 @@ struct split_strategy {
             i_split++;
             if (ctx_out != NULL) {
                 if (gguf_get_n_tensors(ctx_out) == 0 && !allow_no_tensors) {
-                    fprintf(stderr, "error: one of splits have 0 tensors. Maybe size or tensors limit is too small\n");
+                    fprintf(stderr, "error: one of the splits has 0 tensors. Maybe size or tensors limit is too small\n");
                     exit(EXIT_FAILURE);
                 }
                 ctx_outs.push_back(ctx_out);
@@ -585,7 +585,7 @@ static void gguf_merge(const split_params & split_params) {
         gguf_free(ctx_out);
     }
 
-    fprintf(stderr, "%s: %s merged from %d split with %d tensors.\n",
+    fprintf(stderr, "%s: %s merged from %d splits with %d tensors.\n",
             __func__, split_params.output.c_str(), n_split, total_tensors);
 }
 

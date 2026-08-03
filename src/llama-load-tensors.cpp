@@ -450,7 +450,7 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
             if (o.second == default_cpu_buft) has_buft_overrides = true;
             const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
             const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
-            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.second));
+            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overridden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(o.second));
             ctx = ctx_for_buft(o.second);
             break;
         }
@@ -461,7 +461,7 @@ ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx,
     //        if (std::regex_search(name, pattern)) {
     //            const struct ggml_tensor * cur = ml.get_tensor_meta(name.c_str());
     //            const size_t nbytes = cur ? ggml_nbytes(cur) : 0;
-    //            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overriden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(overrides->buft));
+    //            LLAMA_LOG_INFO("Tensor %s (size = %.2f MiB) buffer type overridden to %s\n", name.c_str(), nbytes/1024./1024., ggml_backend_buft_name(overrides->buft));
     //            ctx = ctx_for_buft(overrides->buft);
     //            break;
     //        }
@@ -5392,7 +5392,7 @@ bool create_tensors_helper::create_tensors() {
         if (model.output) {
             if (auto it = split_tensors.find(model.output); it != split_tensors.end()) {
                 if (ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
-                    LLAMA_LOG_INFO("%s: not splitting output tensor becausee buffer is host\n", __func__);
+                    LLAMA_LOG_INFO("%s: not splitting output tensor because buffer is host\n", __func__);
                 } else {
                     auto ctx_split = ctx_map[model.buft_output.buft_matrix];
                     auto split = create_split(model.output->ne[1], 16, model.splits, mem_used);

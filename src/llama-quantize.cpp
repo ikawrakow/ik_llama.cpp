@@ -1452,8 +1452,13 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                llama_format_tensor_shape(tensor).c_str(),
                ggml_type_name(tensor->type));
 
+        bool quantize = tensor->type != GGML_TYPE_I32 &&
+                        tensor->type != GGML_TYPE_I64 &&
+                        tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I8; // i.e., do not quantize tensors holding int values
+
         // This used to be a regex, but <regex> has an extreme cost to compile times.
-        bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+        quantize &= name.rfind("weight") == name.size() - 6; // ends with 'weight'?
 
         // quantize only 2D and 3D tensors (experts)
         quantize &= (ggml_n_dims(tensor) >= 2);

@@ -4277,7 +4277,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                             },
                             "replaceAll": {
                                 "type": "boolean",
-                                "description": "Whether to replace all occurences."
+                                "description": "Whether to replace all occurrences."
                             }
                         },
                         "required": ["oldString", "newString"]

@@ -1685,7 +1685,7 @@ int main(int argc, char ** argv) {
         return 0;
     }
 
-    // loop throught quantization types
+    // loop through quantization types
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         const ggml_type type = (ggml_type) i;
         if (!params.include_types.empty() && std::find(params.include_types.begin(), params.include_types.end(), i) == params.include_types.end()) {
