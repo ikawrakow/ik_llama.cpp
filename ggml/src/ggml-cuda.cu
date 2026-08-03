@@ -2516,7 +2516,7 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                 src0->type, stream);
         CUDA_CHECK(cudaGetLastError());
 
-        // The code below handles the case when Q, K, V have a bias applied after the resepctive matrix multiplication.
+        // The code below handles the case when Q, K, V have a bias applied after the respective matrix multiplication.
         // In that case the graph contains mul_mat(Q) -> mul_mat(K) -> mul_mat(V) -> add(Q) -> add(K) -> add(V)
         if (fusion && cgraph && node_n + 5 < cgraph->n_nodes &&
             cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
@@ -5124,7 +5124,7 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
     //
     //           batch_size * active_experts >= min_batch_size * total_experts
     //
-    // as the condition for offloading model weights resinding in RAM to the GPU.
+    // as the condition for offloading model weights residing in RAM to the GPU.
     // In this case, the number of tokens is not as usual in op->ne[1] but rather in op->ne[2].
     if (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE) {
         if (ctx->offload_batch_size_per_byte >= 0) {

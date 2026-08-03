@@ -4011,7 +4011,7 @@ void quantize_row_q8_K(const float * restrict x, void * restrict y, int64_t k) {
 #endif
 }
 
-//===================================== Dot ptoducts =================================
+//===================================== Dot products =================================
 
 //
 // Helper functions
@@ -4385,7 +4385,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, size_t bs, const void * r
         __m128 p2_d = _mm_mul_ps( d_2_3, p2 );
         __m128 p3_d = _mm_mul_ps( d_2_3, p3 );
 
-        // Acummulate
+        // Accumulate
         acc_0 = _mm_add_ps(p0_d, acc_0);
         acc_1 = _mm_add_ps(p1_d, acc_1);
         acc_2 = _mm_add_ps(p2_d, acc_2);
@@ -4552,7 +4552,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, size_t bs, const void * r
         __m128 p2_d = __lsx_vfmul_s( d_2_3, p2 );
         __m128 p3_d = __lsx_vfmul_s( d_2_3, p3 );
 
-        // Acummulate
+        // Accumulate
         acc_0 = __lsx_vfadd_s(p0_d, acc_0);
         acc_1 = __lsx_vfadd_s(p1_d, acc_1);
         acc_2 = __lsx_vfadd_s(p2_d, acc_2);
@@ -14269,7 +14269,7 @@ void iq1s_process_1block(int block_size, const float * xb, const float * weight,
     // With just 3 allowed quant values (-1, 0, 1), we can search exhaustively for the two
     // boundaries that split the weights xb[i] into 3 groups. To do so, we sort the weights
     // in ascending order, compute Si = sum[weight[j] xb[j], j = 0...i] and
-    // Wi = sum[weight[j], j = 0...i], and use these to quckly get get the optimum scale
+    // Wi = sum[weight[j], j = 0...i], and use these to quickly get the optimum scale
     // for each possible and score for each split.
     int * idx = (int *)(pairs + 1);
     for (int j = 0; j < block_size; ++j) {
@@ -14485,7 +14485,7 @@ void iq1m_process_1block(const float * xb, const float * weight, int8_t * L, flo
     // With just 3 allowed quant values (-1, 0, 1), we can search exhaustively for the two
     // boundaries that split the weights xb[i] into 3 groups. To do so, we sort the weights
     // in ascending order, compute Si = sum[weight[j] xb[j], j = 0...i] and
-    // Wi = sum[weight[j], j = 0...i], and use these to quckly get get the optimum scale
+    // Wi = sum[weight[j], j = 0...i], and use these to quickly get the optimum scale
     // for each possible and score for each split.
     int * idx = (int *)(pairs + 1);
     for (int j = 0; j < block_size; ++j) {

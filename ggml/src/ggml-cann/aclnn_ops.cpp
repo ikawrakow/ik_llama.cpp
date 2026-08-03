@@ -1187,7 +1187,7 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ACL_CHECK(aclDestroyTensor(acl_rstd));
 }
 
-// TODO: performace is low.
+// TODO: performance is low.
 void ggml_cann_diag_mask(ggml_backend_cann_context& ctx, ggml_tensor* dst,
                          float value) {
     ggml_tensor* src = dst->src[0];

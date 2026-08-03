@@ -3903,7 +3903,7 @@ static void ggml_vk_instance_init() {
                     vk_instance.device_indices.push_back(i);
                 } else {
                     // There can be two physical devices corresponding to the same GPU if there are 2 different drivers
-                    // This can cause error when splitting layers aross the devices, need to keep only 1
+                    // This can cause error when splitting layers across the devices, need to keep only 1
                     VK_LOG_DEBUG("Device " << i << " and device " << *old_device << " have the same deviceUUID");
 
                     vk::PhysicalDeviceProperties2 old_props;
