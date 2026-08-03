@@ -709,6 +709,8 @@ extern "C" {
     // Returns true if the model is a Gemma 4 MTP assistant (external frozen-KV speculative drafter)
     LLAMA_API bool llama_model_is_gemma4_mtp_assistant(const struct llama_model * model);
 
+    LLAMA_API bool llama_model_is_step35(const struct llama_model * model);
+
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
     LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
@@ -1604,7 +1606,21 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     // MTP
     //
 
+    enum llama_mtp_package {
+        LLAMA_MTP_PACKAGE_NONE = 0,
+        LLAMA_MTP_PACKAGE_EMBEDDED,
+        LLAMA_MTP_PACKAGE_TARGET_ONLY,
+        LLAMA_MTP_PACKAGE_COMPANION,
+        LLAMA_MTP_PACKAGE_INVALID,
+    };
+
     LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
+
+    LLAMA_API enum llama_mtp_package llama_model_mtp_package(const struct llama_model * model);
+
+    LLAMA_API uint32_t llama_model_mtp_feature_width(const struct llama_model * model);
+
+    LLAMA_API bool llama_model_has_nextn_weights(const struct llama_model * model);
 
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);

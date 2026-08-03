@@ -169,7 +169,8 @@ ggml_cgraph * llm_build_context::build_k_shift() {
     cb(lctx.inp_K_shift, "K_shift", -1);
     ggml_set_input(lctx.inp_K_shift);
 
-    for (int il = 0; il < n_layer; ++il) {
+    const int n_kv_layers = model.mtp ? hparams.n_layer : hparams.n_layer - hparams.nextn_predict_layers;
+    for (int il = 0; il < n_kv_layers; ++il) {
         if (llm_arch_is_hybrid(model.arch) && hparams.is_recurrent(il)) {
             continue;
         }
@@ -744,19 +745,34 @@ ggml_tensor * llm_build_context::build_inp_s_seq() {
 }
 
 ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
-    // find result_norm tensor for input
+    // MTP target contexts must expose the pre-output-norm hidden state to the
+    // speculative driver.  The regular result_norm path is the model output
+    // embedding and is not the input expected by a NextN head.  Mainline calls
+    // this tensor h_nextn; Step35 names the equivalent graph node
+    // result_mtp_embd.
     struct ggml_tensor * inp = nullptr;
-    for (int i = gf->n_nodes - 1; i >= 0; --i) {
-        inp = gf->nodes[i];
-
-        if (strcmp(inp->name, "result_norm") == 0 ||
-            strcmp(inp->name, "result_embd") == 0 ||
-            strcmp(inp->name, "output_normed") == 0) {
-            break;
+    if (lctx.cparams.mtp) {
+        for (int i = gf->n_nodes - 1; i >= 0; --i) {
+            if (strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
+                inp = gf->nodes[i];
+                break;
+            }
         }
-        inp = nullptr;
+    }
+    if (!inp) {
+        for (int i = gf->n_nodes - 1; i >= 0; --i) {
+            inp = gf->nodes[i];
+
+            if (strcmp(inp->name, "result_norm") == 0 ||
+                strcmp(inp->name, "result_embd") == 0 ||
+                strcmp(inp->name, "output_normed") == 0) {
+                break;
+            }
+            inp = nullptr;
+        }
     }
     GGML_ASSERT(inp != nullptr && "missing result_norm/result_embd tensor");
+    const bool is_mtp_hidden = strcmp(inp->name, "result_mtp_embd") == 0;
 
     struct ggml_tensor * cur;
 
@@ -774,6 +790,12 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
             } break;
         case LLAMA_POOLING_TYPE_NONE:
             {
+                // Keep the raw NextN feature named and addressable.  Reusing
+                // the same tensor for the generic pooled-output alias would
+                // overwrite result_mtp_embd and make the decode path select
+                // the normalized result instead.  The raw tensor is already
+                // in the graph as the parent of result_output, so no extra
+                // pooling node is needed for MTP.
                 cur = inp;
             } break;
         default:
@@ -782,7 +804,9 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
             }
     }
 
-    cb(cur, "result_embd_pooled", -1);
+    if (!is_mtp_hidden || pooling_type != LLAMA_POOLING_TYPE_NONE) {
+        cb(cur, "result_embd_pooled", -1);
+    }
 
     ggml_build_forward_expand(gf, cur);
 
@@ -2955,7 +2979,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         ggml_tensor * input, ggml_tensor * inp_pos, ggml_tensor * inp_out_ids, ggml_tensor * rope_factors_in,
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
         int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm, bool is_multi,
-        ggml_tensor * post_norm) {
+        ggml_tensor * post_norm, int kv_il) {
 
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
@@ -3323,7 +3347,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     if (auto wqkv_gate = model.layers[il].wqkv_gate; wqkv_gate != nullptr) {
         cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                 nullptr, nullptr,
-                Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa);
+                Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il);
         cb(cur, "wqkv", il);
         auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed);
         if (model.arch == LLM_ARCH_LAGUNA) {
@@ -3357,7 +3381,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     } else {
         if (gate) {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, nullptr, nullptr,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa);
+                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il);
             if (false && cur->ne[1] == 1) { // we need to add GGML_UNARY_OP_SIGMOID to the ops supported by ggml_fused_mul_unary
                 cur = ggml_fused_mul_unary(ctx0, cur, gate, GGML_UNARY_OP_SIGMOID);
             } else {
@@ -3374,7 +3398,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         } else {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                     model.layers[il].wo, model.layers[il].bo,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa);
+                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il);
         }
     }
 
@@ -3401,7 +3425,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 }
 
 int32_t llama_model_n_nextn_layer(const llama_model * model) {
-    return model->hparams.nextn_predict_layers;
+    return model ? model->hparams.nextn_predict_layers : 0;
 }
 
 ggml_cgraph * llm_build_context::new_graph_custom() {

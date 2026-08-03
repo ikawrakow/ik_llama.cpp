@@ -4767,6 +4767,14 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             return -2;
         }
 
+        const enum llama_mtp_package mtp_package = llama_model_mtp_package(&model);
+        if (mtp_package == LLAMA_MTP_PACKAGE_INVALID) {
+            throw std::runtime_error("invalid MTP package: missing target trunk and predictor tail tensors");
+        }
+        if (mtp_package == LLAMA_MTP_PACKAGE_COMPANION && !params.mtp) {
+            throw std::runtime_error("MTP companion GGUF cannot be used as the target model; pass it with -md/--draft");
+        }
+
         // ---- populate reload registry ONLY when hot-swap is requested ----
         if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
             model.reload = std::make_unique<reload_info>(ml);
@@ -5667,6 +5675,7 @@ static uint32_t llama_output_embd_width(const llama_context & lctx) {
 static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
     return lctx.cparams.mtp && (
         lctx.model.hparams.nextn_predict_layers > 0 ||
+        llama_model_mtp_package(&lctx.model) == LLAMA_MTP_PACKAGE_TARGET_ONLY ||
         lctx.model.arch == LLM_ARCH_GEMMA4 ||
         lctx.model.arch == LLM_ARCH_GEMMA4_MTP ||
         lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
@@ -6217,13 +6226,8 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
-            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_GEMMA4    ||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_MTP||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
-                                                      lctx.model.arch == LLM_ARCH_DEEPSEEK4);
-            // For DSV4 we want to extract the 16,384-dim embedding first
             if (cparams.embeddings || has_mtp) {
-                if (use_raw_mtp_embd) {
+                if (has_mtp) {
                     for (int i = gf->n_nodes - 1; i >= 0; --i) {
                         if (strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
                             embd = gf->nodes[i];
@@ -7946,6 +7950,7 @@ struct llama_context * llama_init_from_model(
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
         model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
         model->arch != LLM_ARCH_DEEPSEEK4 &&
+        model->arch != LLM_ARCH_STEP35 &&
         model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
         model->arch != LLM_ARCH_OPENPANGU &&
         cparams.mtp != 0) {

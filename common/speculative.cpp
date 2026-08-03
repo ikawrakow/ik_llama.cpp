@@ -143,6 +143,58 @@ static bool common_speculative_are_compatible(
     return true;
 }
 
+static bool common_speculative_mtp_are_compatible(
+        const llama_model * model_tgt,
+        const llama_model * model_dft) {
+    if (llama_model_mtp_feature_width(model_tgt) != llama_model_mtp_feature_width(model_dft)) {
+        LOG_ERR("%s: MTP target/companion hidden width mismatch: target=%d companion=%d\n",
+                __func__, llama_model_mtp_feature_width(model_tgt), llama_model_mtp_feature_width(model_dft));
+        return false;
+    }
+
+    const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
+    if (llama_vocab_type(vocab_tgt) != llama_vocab_type(vocab_dft) ||
+        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
+        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft) ||
+        llama_vocab_n_tokens(vocab_tgt) != llama_vocab_n_tokens(vocab_dft)) {
+        LOG_ERR("%s: MTP target/companion tokenizer metadata does not match\n", __func__);
+        return false;
+    }
+
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab_tgt);
+    for (int32_t i = 0; i < n_vocab; ++i) {
+        if (std::strcmp(llama_vocab_get_text(vocab_tgt, i), llama_vocab_get_text(vocab_dft, i)) != 0 ||
+            llama_token_get_attr(model_tgt, i) != llama_token_get_attr(model_dft, i) ||
+            llama_token_get_score(model_tgt, i) != llama_token_get_score(model_dft, i)) {
+            LOG_ERR("%s: MTP target/companion vocabulary differs at token %d\n", __func__, i);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
+    return llama_model_is_step35(model) || llama_model_is_deepseek4(model);
+}
+
+static bool common_speculative_has_recognized_mtp_companion(
+        const llama_model * target,
+        const llama_model * companion) {
+    if (target == nullptr || companion == nullptr) {
+        return false;
+    }
+    if (llama_model_is_gemma4_mtp_assistant(companion)) {
+        return llama_model_arch_string(target) != nullptr &&
+               std::strcmp(llama_model_arch_string(target), "gemma4") == 0;
+    }
+    return common_speculative_target_has_appended_mtp_contract(target) &&
+           llama_model_mtp_package(companion) == LLAMA_MTP_PACKAGE_COMPANION;
+}
+
 // state of an implementation of speculative decoding
 //
 // each implementation has a unique type and a state that is implementation-specific
@@ -229,6 +281,19 @@ static std::vector<llama_token> mtp_speculative_gen_draft(
     llama_pos n_past,
     llama_seq_id seq_id,
     bool constant_draft_positions = false);
+
+static std::vector<llama_token> mtp_speculative_gen_chained(
+    common_speculative_state_mtp & state,
+    struct common_sampler * smpl,
+    struct llama_context * ctx,
+    struct llama_batch & mtp_batch,
+    int n_draft,
+    float p_min,
+    int n_embd,
+    llama_token id_last,
+    llama_pos n_past,
+    llama_seq_id seq_id,
+    float * prob_ptr);
 
 static int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup, int32_t mtp_heads);
 
@@ -1906,6 +1971,9 @@ bool common_speculative_load_draft_model(
     }
 
     gpt_params params_dft = params_base;
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+        params_dft.has_mtp = true;
+    }
     params_dft.devices          = params.devices.empty() ? params_base.devices : params.devices;
     params_dft.model            = params.model;
     params_dft.n_gpu_layers     = params.n_gpu_layers;
@@ -1966,13 +2034,28 @@ bool common_speculative_prepare_mtp_runtime(
         return false;
     }
 
-    if (llama_model_n_nextn_layer(model) == 0 && !has_external_mtp) {
-        LOG_WRN("%s: MTP speculative stage requested, but model has 0 NextN layers. Removing MTP from the configured stage chain.\n",
+    const enum llama_mtp_package target_package = llama_model_mtp_package(model);
+    const bool has_embedded_mtp = target_package == LLAMA_MTP_PACKAGE_EMBEDDED;
+    if (target_package == LLAMA_MTP_PACKAGE_COMPANION ||
+        target_package == LLAMA_MTP_PACKAGE_INVALID) {
+        LOG_ERR("%s: the target GGUF is an MTP companion or invalid package; load a complete target model instead\n",
                 __func__);
-        params.remove_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
-        if (!params.needs_dft_model()) {
-            params.clear_dft();
-        }
+        return false;
+    }
+    if (target_package == LLAMA_MTP_PACKAGE_TARGET_ONLY && !has_external_mtp) {
+        LOG_ERR("%s: target GGUF contains no MTP tail; provide a matching predictor-only companion with -md\n",
+                __func__);
+        return false;
+    }
+
+    if (llama_model_is_step35(model) && has_embedded_mtp &&
+        !llama_model_has_nextn_weights(model)) {
+        LOG_ERR("%s: Step target is missing one or more complete MTP heads\n", __func__);
+        return false;
+    }
+    if (!has_external_mtp && !has_embedded_mtp) {
+        LOG_ERR("%s: MTP speculative stage requested, but the target package is not a complete embedded MTP model\n",
+                __func__);
         return false;
     }
 
@@ -2068,25 +2151,61 @@ bool common_speculative_finalize_startup(
 
         if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
             params.model_dft != nullptr &&
+            common_speculative_target_has_appended_mtp_contract(model) &&
+            llama_model_mtp_package(params.model_dft) != LLAMA_MTP_PACKAGE_COMPANION) {
+            LOG_ERR("%s: -md for an MTP stage must be a predictor-only companion GGUF\n", __func__);
+            return false;
+        }
+        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            params.model_dft != nullptr &&
+            llama_model_is_step35(params.model_dft) &&
+            !llama_model_has_nextn_weights(params.model_dft)) {
+            LOG_ERR("%s: Step MTP companion is missing one or more complete predictor heads\n", __func__);
+            return false;
+        }
+        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            params.model_dft != nullptr &&
             llama_model_is_deepseek4(params.model_dft) &&
             llama_model_n_nextn_layer(params.model_dft) != 1) {
-            LOG_ERR("%s: DeepSeek-V4 MTP draft requires exactly one NextN predictor layer, got %d.\n",
+            LOG_ERR("%s: DeepSeek-V4 MTP companion requires exactly one NextN predictor layer, got %d\n",
                     __func__, llama_model_n_nextn_layer(params.model_dft));
+            return false;
+        }
+        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            params.model_dft != nullptr &&
+            llama_model_is_step35(model) &&
+            llama_model_n_nextn_layer(params.model_dft) != 3) {
+            LOG_ERR("%s: Step MTP companion requires exactly three predictor heads, got %d\n",
+                    __func__, llama_model_n_nextn_layer(params.model_dft));
+            return false;
+        }
+        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            model != nullptr && params.model_dft != nullptr &&
+            ((llama_model_is_step35(model) && !llama_model_is_step35(params.model_dft)) ||
+             (llama_model_is_deepseek4(model) && !llama_model_is_deepseek4(params.model_dft)))) {
+            LOG_ERR("%s: MTP companion architecture does not match the target model\n", __func__);
+            return false;
+        }
+        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
+            common_speculative_has_recognized_mtp_companion(model, params.model_dft) &&
+            params.model_dft != nullptr &&
+            !common_speculative_mtp_are_compatible(model, params.model_dft)) {
             return false;
         }
     }
 
     params_base.has_mtp = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     const bool has_external_mtp = params_base.has_mtp && params.model_dft &&
-        (llama_model_is_gemma4_mtp_assistant(params.model_dft) ||
-         (llama_model_is_deepseek4(params.model_dft) &&
-          llama_model_n_nextn_layer(params.model_dft) == 1));
+        common_speculative_has_recognized_mtp_companion(model, params.model_dft);
 
     params_base.has_mtp = common_speculative_prepare_mtp_runtime(
         params,
         params_base,
         model,
         has_external_mtp);
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && !params_base.has_mtp) {
+        return false;
+    }
     if (params_base.has_mtp) {
         params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
     }
@@ -3028,6 +3147,96 @@ void common_speculative_context_shift(
     }
 }
 
+static std::vector<llama_token> mtp_speculative_gen_chained(
+    common_speculative_state_mtp & state,
+    struct common_sampler * smpl,
+    struct llama_context * ctx,
+    struct llama_batch & mtp_batch,
+    int n_draft,
+    float p_min,
+    int n_embd,
+    llama_token id_last,
+    llama_pos n_past,
+    llama_seq_id seq_id,
+    float * prob_ptr) {
+
+    llama_tokens drafts;
+    drafts.reserve(n_draft);
+
+    auto reset_mtp_state = [&]() {
+        llama_batch_free(mtp_batch);
+        llama_set_mtp_step_idx(ctx, 0);
+        llama_set_mtp_n_heads(ctx, 0);
+        llama_set_mtp_op_type(ctx, MTP_OP_NONE);
+    };
+
+    auto hidden_it = state.target_hidden_by_seq.find(seq_id);
+    if (hidden_it == state.target_hidden_by_seq.end() ||
+            (int) hidden_it->second.size() != n_embd) {
+        reset_mtp_state();
+        return drafts;
+    }
+
+    auto & last = mtp_get_last_embd(state, seq_id);
+    std::vector<llama_token> prefix_tokens;
+    prefix_tokens.reserve((size_t) n_draft + 1);
+    prefix_tokens.push_back(id_last);
+
+    std::vector<float> prefix_hidden = hidden_it->second;
+    prefix_hidden.reserve((size_t) (n_draft + 1) * n_embd);
+
+    int i0 = 0;
+    if (last.last_id >= 0) {
+        drafts.push_back(last.last_id);
+        prefix_tokens.push_back(last.last_id);
+        prefix_hidden.insert(prefix_hidden.end(), last.embd.begin(), last.embd.end());
+        last.last_id = -1;
+        i0 = 1;
+    }
+
+    for (int i = i0; i < n_draft; ++i) {
+        llama_kv_cache_seq_rm(ctx, seq_id, n_past, -1);
+
+        mtp_batch.n_tokens = 0;
+        for (size_t t = 0; t < prefix_tokens.size(); ++t) {
+            common_batch_add(mtp_batch, prefix_tokens[t], n_past + (llama_pos) t,
+                    { seq_id }, t + 1 == prefix_tokens.size());
+        }
+
+        llama_set_mtp_step_idx(ctx, i);
+        if (!llama_set_draft_input_hidden_state_copy(ctx, prefix_hidden.data(), prefix_hidden.size())) {
+            break;
+        }
+        const int decode_rc = llama_decode(ctx, mtp_batch);
+        if (decode_rc != 0) {
+            break;
+        }
+
+        llama_token id_next = common_sampler_sample_speculative(
+                smpl, ctx, mtp_batch.n_tokens - 1, prob_ptr);
+        if (i > 0 && prob_ptr && *prob_ptr < p_min) {
+            break;
+        }
+
+        const float * emb = llama_get_embeddings_ith(ctx, mtp_batch.n_tokens - 1);
+        if (!emb) {
+            break;
+        }
+
+        drafts.push_back(id_next);
+        prefix_tokens.push_back(id_next);
+        prefix_hidden.insert(prefix_hidden.end(), emb, emb + n_embd);
+        std::memcpy(last.embd.data(), emb, (size_t) n_embd * sizeof(float));
+        if (prob_ptr && *prob_ptr < p_min) {
+            break;
+        }
+    }
+
+    llama_kv_cache_seq_rm(ctx, seq_id, n_past, -1);
+    reset_mtp_state();
+    return drafts;
+}
+
 std::vector<llama_token> mtp_speculative_gen_draft(
     common_speculative_state_mtp & state,
     struct common_sampler * smpl,
@@ -3066,7 +3275,13 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         ? std::max(1, std::min((int) mtp_heads, n_mtp_heads_model))
         : n_mtp_heads_model;
 
-    llama_batch mtp_batch = llama_batch_init(1, 0, 1);
+    const bool chain_heads = llama_model_is_step35(llama_get_model(ctx)) &&
+        n_mtp_heads > 1 && !constant_draft_positions;
+    if (chain_heads) {
+        n_draft = std::min(n_draft, n_mtp_heads);
+    }
+
+    llama_batch mtp_batch = llama_batch_init(chain_heads ? n_draft + 1 : 1, 0, 1);
     llama_set_mtp_n_heads(ctx, n_mtp_heads);
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
@@ -3075,6 +3290,12 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     llama_token current_input_id = id_last;
     llama_pos current_n_past = n_past;
+
+    if (chain_heads) {
+        return mtp_speculative_gen_chained(
+            state, smpl, ctx, mtp_batch, n_draft, p_min, n_embd,
+            id_last, n_past, seq_id, prob_ptr);
+    }
 
     auto & last = mtp_get_last_embd(state, seq_id);
     int i0 = 0;
