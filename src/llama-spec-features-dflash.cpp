@@ -160,7 +160,7 @@ int32_t llama_model_dflash_io_mode(
 
 static ggml_tensor * llama_dflash_clone_io_tensor(
         llama_model * model,
-        const ggml_tensor * source,
+        ggml_tensor * source,
         ggml_backend_buffer_type_t buft,
         std::unique_ptr<ggml_tensor> & storage,
         const char * name) {
@@ -186,9 +186,7 @@ static ggml_tensor * llama_dflash_clone_io_tensor(
     ggml_set_name(storage.get(), name);
     ggml_backend_buffer_set_usage(storage->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    std::vector<uint8_t> host_data(ggml_nbytes(source));
-    ggml_backend_tensor_get(source, host_data.data(), 0, host_data.size());
-    ggml_backend_tensor_set(storage.get(), host_data.data(), 0, host_data.size());
+    ggml_backend_tensor_copy(source, storage.get());
 
     model->bufs.push_back(storage->buffer);
     return storage.get();
@@ -263,7 +261,7 @@ bool llama_model_share_dflash_io_tensors(
             (output_mtp_is_shared && llama_dflash_io_needs_clone(draft_model->output_mtp, draft_model->buft_output.buft));
 
     if (tok_embd_is_shared && (isolate_shared_io || llama_dflash_io_needs_clone(draft_model->tok_embd, draft_model->buft_input.buft))) {
-        const ggml_tensor * source = draft_model->tok_embd;
+        ggml_tensor * source = draft_model->tok_embd;
         draft_model->tok_embd = llama_dflash_clone_io_tensor(
                 draft_model, source, draft_model->buft_input.buft, draft_model->dflash_tok_embd_ptr,
                 "dflash_tok_embd");
@@ -273,7 +271,7 @@ bool llama_model_share_dflash_io_tensors(
     }
 
     if (output_is_shared && (isolate_shared_io || llama_dflash_io_needs_clone(draft_model->output, draft_model->buft_output.buft))) {
-        const ggml_tensor * source = draft_model->output;
+        ggml_tensor * source = draft_model->output;
         draft_model->output = llama_dflash_clone_io_tensor(
                 draft_model, source, draft_model->buft_output.buft, draft_model->dflash_output_ptr,
                 "dflash_output");
@@ -287,7 +285,7 @@ bool llama_model_share_dflash_io_tensors(
 
     if (!output_mtp_aliases_output && output_mtp_is_shared &&
             (isolate_shared_io || llama_dflash_io_needs_clone(draft_model->output_mtp, draft_model->buft_output.buft))) {
-        const ggml_tensor * source = draft_model->output_mtp;
+        ggml_tensor * source = draft_model->output_mtp;
         draft_model->output_mtp = llama_dflash_clone_io_tensor(
                 draft_model, source, draft_model->buft_output.buft, draft_model->dflash_output_mtp_ptr,
                 "dflash_output_mtp");
