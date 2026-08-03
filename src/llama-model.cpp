@@ -1,4 +1,5 @@
 #include "llama-model.h"
+#include "llama-context.h"
 #include "llama-cparams.h"
 
 #include <map>
@@ -2253,7 +2254,8 @@ llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int i
     return LLM_TENSOR_UNKNOWN;
 }
 
-size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const {
+size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn,
+                               bool swa_compress, uint32_t n_ubatch) const {
     if (il < 0 || il >= hparams.n_layer) return 0;
     if (hparams.recurrent_layer_arr[il]) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
@@ -2263,10 +2265,13 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         // MLA-latent cache: K row [ckv | roped k_pe]. The value-side latent is
         // rederived from K per graph. DSA layers also cache one indexer key per
         // position. The recurrent conv slot is constant-size and negligible here.
-        size_t size = ggml_row_size(type_k, hparams.n_lora_kv + hparams.n_rot) * kv_size;
+        // openPangu forces flash_attn off, so the pad is always the non-FA one
+        const uint32_t pad = llama_kv_cache::get_padding(/* flash_attn = */ false);
+        const uint32_t k_rows = llama_kv_layer_rows(hparams, il, kv_size, swa_compress, n_ubatch, pad);
+        size_t size = ggml_row_size(type_k, hparams.n_lora_kv + hparams.n_rot) * k_rows;
         if (hparams.indexer_head_size > 0 && hparams.n_swa > 0 &&
             il < (int) hparams.n_layer - (int) hparams.nextn_predict_layers &&
-            hparams.openpangu_window[il] == 0) {
+            !hparams.swa_layers[il]) {
             size += ggml_row_size(idx_type_k, hparams.indexer_head_size) * kv_size;
         }
         return size;

@@ -509,6 +509,7 @@ struct llama_model {
     int n_gpu_layers;
 
     bool mtp; // use mtp if is supported by the Model
+    bool swa_compress = false; // value the cache-size fit was computed with
 
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
@@ -579,6 +580,13 @@ struct llama_model {
         return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
     }
 
+    // a compacted sliding-window cache needs the graph to build its KQ mask over the compacted
+    // layout, and the compacted mask keys on position alone, so it also requires K-only cache
+    // rows and a single sequence
+    bool supports_swa_compress() const {
+        return arch == LLM_ARCH_OPENPANGU;
+    }
+
     static inline int hadamard_size(int head_size) {
         if ((head_size & ~(head_size - 1)) == head_size) return head_size;
         // Note: we do not include 32 as an option because the CUDA Hadamard implementation
@@ -599,7 +607,8 @@ struct llama_model {
         return hadamard_size(hparams.n_embd_head_v(il));
     }
 
-    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn) const;
+    size_t cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_type idx_type_k, uint32_t kv_size, int mla_attn, int n_seq_max, bool flash_attn,
+                      bool swa_compress = false, uint32_t n_ubatch = 0) const;
 
     void set_tensor_overrides(const llama_model_params& params);
 

@@ -1178,8 +1178,8 @@ void llm_load_hparams(
                 // DSA/SWA schedule: openpangu.swa_layers lists the sliding-window layer ids and
                 // openpangu.sliding_window_list the per-entry window; the remaining base layers
                 // are DSA (indexer + top-k, no window). The NextN/MTP layers appear in the SWA
-                // list with their own (larger) window, used by the MTP graphs. Absent keys keep
-                // every window at 0 = dense fallback (pre-DSA GGUFs keep working).
+                // list with their own (larger) window, used by the MTP graphs. Absent keys leave
+                // swa_layers cleared = dense fallback (pre-DSA GGUFs keep working).
                 {
                     std::vector<uint32_t> swa_ids, swa_windows;
                     const bool have_ids = ml.get_arr("openpangu.swa_layers",          swa_ids,     false);
@@ -1192,7 +1192,7 @@ void llm_load_hparams(
                             if (il >= hparams.n_layer) {
                                 throw std::runtime_error(format("openpangu.swa_layers contains out-of-range layer %u", il));
                             }
-                            hparams.openpangu_window[il] = swa_windows[i];
+                            hparams.swa_layers[il] = swa_windows[i] > 0 ? 1 : 0;
                             if (il < n_base) {
                                 if (hparams.n_swa != 0 && hparams.n_swa != swa_windows[i]) {
                                     throw std::runtime_error("openpangu: non-uniform base sliding windows are not supported");
@@ -1207,6 +1207,13 @@ void llm_load_hparams(
                         }
                     } else if (have_ids || have_win) {
                         LLAMA_LOG_WARN("%s: openpangu SWA schedule keys are inconsistent - keeping dense fallback\n", __func__);
+                    }
+                    // the graph derives head dims and the MoME conv slot width from layer 0
+                    if (hparams.n_swa > 0 &&
+                        (hparams.n_embd_head_k_swa != hparams.n_embd_head_k_full ||
+                         hparams.n_embd_head_v_swa != hparams.n_embd_head_v_full ||
+                         hparams.n_rot_swa         != hparams.n_rot)) {
+                        throw std::runtime_error("openpangu: per-layer SWA head dimensions are not supported");
                     }
                 }
 

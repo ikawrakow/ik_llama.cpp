@@ -72,6 +72,7 @@ struct llm_build_context {
     const int32_t n_outputs;
     const int32_t n_outputs_enc;
     const int32_t kv_head;  // index of where we store new KV data in the cache
+    const int32_t swa_head; // same, for --swa-compress layers; equals kv_head otherwise
     const int32_t n_ctx_orig;
 
     const bool flash_attn;

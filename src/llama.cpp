@@ -562,6 +562,8 @@ struct llama_context::Prev {
     llama_mtp_op_type mtp_op_type;
     int32_t mtp_step_idx;
     int32_t mtp_n_heads;
+    int64_t swa_w_view;
+    int64_t swa_win_off;
     ggml_cgraph * graph;
 };
 
@@ -599,6 +601,15 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
                           mtp_target_ctx != nullptr ? mtp_target_ctx->kv_self : kv_self;
     if (the_prev->save_per_step_ssm != kv_self_used.save_per_step_ssm ||
         the_prev->per_step_max_allocated != kv_self_used.ckpt.per_step_max_allocated) return false;
+    if (kv_self_used.any_compacted()) {
+        const auto view = llama_swa_calc_window_view_compact(
+                (int64_t) kv_self_used.live_swa() + u_batch.n_tokens, kv_self_used.sink_rows,
+                u_batch.n_tokens, kv_self_used.window_swa,
+                llama_kv_cache::get_padding(cparams.flash_attn));
+        if (view.w_view != the_prev->swa_w_view || view.win_off != the_prev->swa_win_off) {
+            return false;
+        }
+    }
     bool result = u_batch.all_seq_id == the_prev->all_seq_id &&
            kv_self_used.head > 0 &&
            kv_self_used.n == the_prev->n_kv &&
@@ -641,8 +652,10 @@ bool llama_context::update_cache_copies() {
     };
     if (model.arch == LLM_ARCH_OPENPANGU) {
         auto & copies = cparams.mtp_op_type == MTP_OP_NONE ? openpangu_cache_copies : openpangu_cache_copies_mtp;
+        GGML_ASSERT(copies.size() == model.hparams.n_layer);
         bool any = false;
-        for (auto & c : copies) {
+        for (size_t idx = 0; idx < copies.size(); ++idx) {
+            auto & c = copies[idx];
             if (!c.cpy) {
                 continue;
             }
@@ -650,7 +663,8 @@ bool llama_context::update_cache_copies() {
             if (c.cpy->op != GGML_OP_CPY || c.cpy->view_src == nullptr || c.cpy->src[1] == nullptr) {
                 return false;
             }
-            c.cpy->view_offs = kv_self.head*c.step;
+            const uint32_t head = kv_self.is_compacted((int) idx) ? kv_self.head_swa : kv_self.head;
+            c.cpy->view_offs = head*c.step;
             c.cpy->src[1]->data = (char *)c.cpy->view_src->data + c.cpy->view_offs;
             c.cpy->data = c.cpy->src[1]->data;
         }
@@ -896,15 +910,15 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
         hparams.n_layer - hparams.nextn_predict_layers : hparams.n_layer;
     const int64_t n_heads = hparams.n_head(0);
     const int64_t n_sinks = hparams.param_sink_number;
-    const int64_t pad = cparams.flash_attn ? 256 : 32;
+    const int64_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
     const int64_t idx_chunks = idx_chunk > 0 && n_tokens > idx_chunk ? llama_div_ceil_i64(n_tokens, idx_chunk) : 0;
 
     int64_t extra_nodes = 0;
     for (int64_t il = 0; il < n_layer_base; ++il) {
-        const bool is_swa_layer = hparams.n_swa > 0 && hparams.openpangu_window[il] > 0;
-        const bool is_dsa_layer = has_dsa_indexer && hparams.openpangu_window[il] == 0;
+        const bool is_swa_layer = hparams.n_swa > 0 && hparams.swa_layers[il];
+        const bool is_dsa_layer = has_dsa_indexer && !hparams.swa_layers[il];
         const int64_t n_kv_eff = !is_swa_layer ? n_kv :
-            llama_openpangu_calc_swa_window_view(n_kv, n_tokens, hparams.openpangu_window[il], pad).w_view;
+            llama_swa_calc_window_view(n_kv, n_tokens, hparams.n_swa, pad).w_view;
         const double full_kq_bytes =
             (double) (n_kv_eff + n_sinks) * (double) n_heads * (double) n_tokens * (double) sizeof(float);
         const bool att_chunks =
@@ -1099,6 +1113,38 @@ static bool llama_kv_cache_init(
     cache.size = kv_size;
     cache.used = 0;
 
+    cache.row_count.clear();
+    if (cparams.swa_compress && !model.supports_swa_compress()) {
+        LLAMA_LOG_WARN("%s: --swa-compress is not implemented for this model; ignoring\n", __func__);
+    } else if (cparams.swa_compress) {
+        std::vector<uint32_t> plan((size_t) hparams.n_layer, kv_size);
+        bool any = false;
+        for (int il = 0; il < (int) hparams.n_layer; ++il) {
+            plan[il] = llama_kv_layer_rows(hparams, il, kv_size, true, cparams.n_ubatch,
+                                           llama_kv_cache::get_padding(cparams.flash_attn));
+            any = any || plan[il] < kv_size;
+        }
+        if (any) {
+            cache.row_count = std::move(plan);
+            uint32_t rows_compacted = 0;
+            for (int il = 0; il < (int) hparams.n_layer; ++il) {
+                if (cache.row_count[il] >= kv_size) {
+                    continue;
+                }
+                GGML_ASSERT((rows_compacted == 0 || rows_compacted == cache.row_count[il]) &&
+                        "compacted sliding-window layers must share one row count");
+                rows_compacted = cache.row_count[il];
+            }
+            cache.size_swa     = rows_compacted;
+            cache.sink_rows    = hparams.param_sink_number;
+            cache.window_swa   = hparams.n_swa;
+            cache.head_swa     = cache.sink_rows;
+            cache.pos_base_swa = 0;
+        } else {
+            LLAMA_LOG_WARN("%s: --swa-compress had no effect: no compactable sliding-window layers\n", __func__);
+        }
+    }
+
     cache.type_k  = type_k;
     cache.type_v  = type_v;
 
@@ -1128,6 +1174,12 @@ static bool llama_kv_cache_init(
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && is_mla_attn && offload) {
         cache.replicated_k_l.reserve(n_layer);
         replicate_mla = true;
+    }
+
+    if (cache.any_compacted() && (split_cache || replicate_mla)) {
+        LLAMA_LOG_ERROR("%s: --swa-compress is not supported with a split or replicated KV cache "
+                        "(split mode graph/attn); run without --swa-compress or with a single device\n", __func__);
+        return false;
     }
 
     // count used buffer types
@@ -1375,7 +1427,7 @@ static bool llama_kv_cache_init(
                 // MLA-latent cache: k_l holds [ckv_norm 512 | roped k_pe 64] per position.
                 // The value-side latent is rederived from k_l per graph; no persistent V store.
                 const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
-                k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, kv_size);
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, cache.rows(i));
             } else if (is_dsv4_k_only) {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
             } else {
@@ -1401,10 +1453,10 @@ static bool llama_kv_cache_init(
                 cache.s_l[i] = s_conv;
                 cache.s_l_position_strict = true;
 
-                // DSA layers (window == 0, indexer present) also cache the per-position
+                // DSA layers (no window, indexer present) also cache the per-position
                 // 128-d indexer key. Position-indexed like everything else in the cache, so
                 // the same rollback invariant applies: committed columns never change.
-                if (has_openpangu_dsa_indexer && i < n_mtp_first_layer && hparams.openpangu_window[i] == 0) {
+                if (has_openpangu_dsa_indexer && i < n_mtp_first_layer && !hparams.swa_layers[i]) {
                     ggml_tensor * idxk = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, kv_size);
                     ggml_format_name(idxk, "cache_kr_l%d", i);
                     cache.kr_l[i] = idxk;
@@ -1612,6 +1664,58 @@ static bool llama_kv_cache_find_slot(
     cache.used += n_tokens;
 
     return true;
+}
+
+static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_tokens) {
+    llama_kv_cache & cache = lctx.kv_self;
+    std::vector<uint8_t> & scratch = lctx.swa_compact_buf;
+    std::vector<uint8_t> & zeros = lctx.swa_compact_zeros;
+    if (!cache.any_compacted()) {
+        return;
+    }
+
+    const uint32_t W = cache.window_swa;
+    const uint32_t C = cache.size_swa - cache.sink_rows;
+    GGML_ASSERT(n_tokens <= C);
+
+    if (cache.live_swa() + n_tokens <= C) {
+        return;
+    }
+
+    const uint32_t live = cache.live_swa();
+    GGML_ASSERT(live >= W && "the retained window must lie inside the live region");
+
+    // llama_graph_compute submits asynchronously and never waits
+    ggml_backend_sched_synchronize(lctx.sched);
+
+    const uint32_t src_row = cache.sink_rows + live - W;
+    const uint32_t dst_row = cache.sink_rows;
+
+    for (size_t il = 0; il < cache.k_l.size(); ++il) {
+        if (!cache.is_compacted((int) il) || cache.k_l[il] == nullptr) {
+            continue;
+        }
+        ggml_tensor * kl = cache.k_l[il];
+        const size_t stride = kl->nb[1];
+        const size_t nbytes = (size_t) W * stride;
+        if (scratch.size() < nbytes) {
+            scratch.resize(nbytes);
+        }
+        ggml_backend_tensor_get(kl, scratch.data(), (size_t) src_row*stride, nbytes);
+        ggml_backend_tensor_set(kl, scratch.data(), (size_t) dst_row*stride, nbytes);
+
+        // the padded read window covers rows past the live end
+        const size_t tail_rows = (size_t) C - W;
+        if (tail_rows > 0) {
+            if (zeros.size() < tail_rows*stride) {
+                zeros.assign(tail_rows*stride, 0);
+            }
+            ggml_backend_tensor_set(kl, zeros.data(), (size_t) (dst_row + W)*stride, tail_rows*stride);
+        }
+    }
+
+    cache.pos_base_swa += (llama_pos) (live - W);
+    cache.head_swa      = cache.sink_rows + W;
 }
 
 // find how many cells are currently in use
@@ -2085,6 +2189,8 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     }
     cache.head = 0;
     cache.used = 0;
+    cache.head_swa     = cache.sink_rows;
+    cache.pos_base_swa = 0;
 
     for (auto & buf : cache.bufs) {
         ggml_backend_buffer_clear(buf, 0);
@@ -2120,6 +2226,39 @@ static bool llama_kv_cache_seq_rm(
         }
     }
 
+    // a compacted layer holds one contiguous range, so a refusal must leave the cache untouched
+    bool      compact_apply = false;
+    uint32_t  compact_head  = 0;
+    llama_pos compact_base  = 0;
+    // seq_id > 0 owns no compacted rows here (single-sequence arch), so it must not move the map
+    if (cache.any_compacted() && seq_id <= 0 && p1 > p0) {
+        const llama_pos cur_end = cache.pos_base_swa + (llama_pos) cache.live_swa();
+        GGML_ASSERT((cache.live_swa() > 0 || cache.pos_base_swa == 0) &&
+                "compacted window cannot be empty above position 0");
+        if (p0 < cur_end && p1 > cache.pos_base_swa) {
+            if (p1 < cur_end) {
+                LLAMA_LOG_ERROR("%s: --swa-compress cannot remove the interior range [%d, %d): "
+                        "compacted layers hold one contiguous range\n", __func__, p0, p1);
+                return false;
+            }
+            if (p0 == 0) {
+                compact_apply = true;
+                compact_head  = cache.sink_rows;
+                compact_base  = 0;
+            } else if (cache.pos_base_swa == 0 ||
+                       p0 >= cache.pos_base_swa + (llama_pos) cache.window_swa) {
+                compact_apply = true;
+                compact_head  = cache.sink_rows + (uint32_t) (p0 - cache.pos_base_swa);
+                compact_base  = cache.pos_base_swa;
+            } else {
+                LLAMA_LOG_ERROR("%s: --swa-compress cannot rewind to position %d: the compacted "
+                        "window starts at %d and would lose the %u positions before %d\n",
+                        __func__, p0, cache.pos_base_swa, cache.window_swa, p0);
+                return false;
+            }
+        }
+    }
+
     const bool has_qnext_state = llama_kv_has_qnext_state_storage(cache);
 
     for (uint32_t i = 0; i < cache.size; ++i) {
@@ -2146,6 +2285,11 @@ static bool llama_kv_cache_seq_rm(
 
     // If we freed up a slot, set head to it so searching can start there.
     if (new_head != cache.size && new_head < cache.head) cache.head = new_head;
+
+    if (compact_apply) {
+        cache.head_swa     = compact_head;
+        cache.pos_base_swa = compact_base;
+    }
 
     return true;
 }
@@ -2353,11 +2497,6 @@ static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
         return;
     }
     cache.do_defrag = true;
-}
-
-static uint32_t llama_kv_cache_get_padding(const struct llama_cparams & cparams) {
-    // the FA kernels require padding to avoid extra runtime boundary checks
-    return cparams.flash_attn ? 256u : 32u;
 }
 
 //
@@ -3682,7 +3821,7 @@ struct expert_tensors {
 
 static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_loader & ml, const llama_model & model,
         ggml_type cache_type_k, ggml_type cache_type_v, ggml_type idx_type_k, uint32_t max_ctx_size, int mla_attn, int n_seq_max, int n_ubatch,
-        int amb, int worst_case_tokens, bool flash_attn,
+        int amb, int worst_case_tokens, bool flash_attn, bool swa_compress,
         std::vector<expert_tensors> & experts) {
     int n_layer = model.hparams.n_layer;
     std::vector<double> result(n_layer+1, 0);
@@ -3894,7 +4033,8 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
     LLAMA_LOG_INFO("------------------- Layer sizes:\n");
     double tot_model = 0, tot_cache = 0, max_compute = 0;
     for (int il = 0; il < n_layer; ++il) {
-        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn);
+        auto kv_size = model.cache_size(il, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, flash_attn,
+                                        swa_compress, (uint32_t) n_ubatch);
         LLAMA_LOG_INFO("Layer %2d: %9.2f, %9.2f, %9.2f   %9.2f  MiB\n", il, result[il]/1024./1024., kv_size/1024./1024., (result[il] + kv_size)/1024./1024., compute[il]/1024./1024.);
         max_compute = std::max(max_compute, compute[il]);
         tot_model += result[il];
@@ -3935,6 +4075,7 @@ static bool llm_load_tensors(
         const int * fit_margin_array,
         int worst_case_tokens,
         bool flash_attn,
+        bool swa_compress,
         bool use_mlock,
         bool validate_quants,
         bool mtp,
@@ -4032,6 +4173,7 @@ static bool llm_load_tensors(
     model.max_gpu      = max_gpu;
     model.n_gpu_layers = n_gpu_layers;
     model.mtp          = mtp;
+    model.swa_compress = swa_compress;
 
     size_t mem_margin  = fit_margin > 0 ? size_t(fit_margin)*1024*1024 : k_default_mem_margin;
     auto get_mem_margin = [mem_margin, fit_margin_array, n_gpu = int(model.devices.size()), func = __func__] (int gpu) {
@@ -4133,7 +4275,7 @@ static bool llm_load_tensors(
     if (device_count > 0 && !model.devices.empty()) {
         std::vector<expert_tensors> experts;
         auto [layer_sizes, max_compute] = get_layer_sizes(ml, model, cache_type_k, cache_type_v, idx_type_k, max_ctx_size, mla_attn, n_seq_max, n_ubatch,
-                amb, worst_case_tokens, flash_attn, experts);
+                amb, worst_case_tokens, flash_attn, swa_compress, experts);
         size_t required_mem = 0;
         for (int i = 0; i <= n_layer; ++i) {
             required_mem += layer_sizes[i];
@@ -4760,7 +4902,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             ml, model, params.n_gpu_layers, params.mla, params.split_mode, params.main_gpu, params.max_gpu, params.tensor_split,
             params.type_k, params.type_v, params.idx_type_k, params.extra_output_type,
             params.max_ctx_size, params.n_seq_max, params.n_ubatch, params.amb, params.fit_margin, params.fit_margin_array,
-            params.worst_graph_tokens, params.flash_attn,
+            params.worst_graph_tokens, params.flash_attn, params.swa_compress,
             params.use_mlock, params.validate_quants, params.mtp, params.fit, params.dry_run,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -5068,40 +5210,49 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             }
 
             if (data_swa_win || data_swa_win_f16) {
-                const auto & built = lctx.openpangu_swa_window_view;
-                const uint32_t pad = llama_kv_cache_get_padding(cparams);
-                const llama_openpangu_swa_window_view view =
-                    llama_openpangu_calc_swa_window_view(n_kv, n_tokens, built.window, pad);
-                GGML_ASSERT(lctx.model.arch == LLM_ARCH_OPENPANGU &&
-                        "windowed SWA mask input is only valid for OpenPangu");
+                const auto & built = lctx.swa_window_view;
+                const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
+                const int64_t live = built.compacted
+                    ? (int64_t) mask_kv_self.live_swa() + n_tokens : 0;
+                const llama_swa_window_view view = built.compacted
+                    ? llama_swa_calc_window_view_compact(live, mask_kv_self.sink_rows,
+                                                         n_tokens, built.window, pad)
+                    : llama_swa_calc_window_view(n_kv, n_tokens, built.window, pad);
                 GGML_ASSERT(built.active && view.engaged &&
-                        "openPangu SWA window view must be engaged when KQ_mask_swa_win is present");
+                        "SWA window view must be engaged when KQ_mask_swa_win is present");
                 GGML_ASSERT(built.n_kv == n_kv && built.n_tokens == n_tokens &&
                         built.pad == pad && built.w_view == view.w_view &&
                         built.win_off == view.win_off &&
-                        "openPangu SWA window view reuse-key mismatch");
+                        "SWA window view reuse-key mismatch");
 
                 const int64_t W_view  = built.w_view;
                 const int64_t win_off = built.win_off;
+                const bool      compacted    = built.compacted;
+                const int64_t   row_base     = mask_kv_self.sink_rows;
+                const llama_pos pos_base     = mask_kv_self.pos_base_swa;
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_pos    pos    = batch.pos[j];
                     const llama_seq_id seq_id = batch.seq_id[j][0];
                     for (int64_t c = 0; c < W_view; ++c) {
                         const int64_t i = win_off + c;
+                        const llama_pos cell_pos = compacted
+                            ? pos_base + (llama_pos) (i - row_base) : mask_kv_self.cells[i].pos;
+                        const bool in_seq = compacted
+                            ? cell_pos >= pos_base : mask_kv_self.cells[i].has_seq_id(seq_id);
                         float f;
-                        if (!mask_kv_self.cells[i].has_seq_id(seq_id) || mask_kv_self.cells[i].pos > pos) {
+                        if (!in_seq || cell_pos > pos) {
                             f = -INFINITY;
                         } else {
-                            f = hparams.use_alibi ? -std::abs(mask_kv_self.cells[i].pos - pos) : 0.0f;
+                            f = hparams.use_alibi ? -std::abs(cell_pos - pos) : 0.0f;
                         }
 
                         if (f > -INFINITY) {
                             if (hparams.n_attn_chunk) {
                                 llama_pos pos_chunk_start = (pos / hparams.n_attn_chunk) * hparams.n_attn_chunk;
-                                if (mask_kv_self.cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
+                                if (cell_pos < pos_chunk_start || pos < pos_chunk_start) {
                                     f = -INFINITY;
                                 }
-                            } else if (pos - mask_kv_self.cells[i].pos >= (int32_t) built.window) {
+                            } else if (pos - cell_pos >= (int32_t) built.window) {
                                 f = -INFINITY;
                             }
                         }
@@ -6124,10 +6275,13 @@ static int llama_decode_internal(
                 // a heuristic, to avoid attending the full cache if it is not yet utilized
                 // after enough generations, the benefit from this heuristic disappears
                 // if we start defragmenting the cache, the benefit from this will be more important
-                const uint32_t pad = llama_kv_cache_get_padding(cparams);
+                const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
                 auto max_cell = llama_kv_cache_cell_max(kv_self, pad);
                 kv_self.n = std::min(kv_self.size, std::max(pad, GGML_PAD(max_cell, pad)));
             }
+
+            // must run before can_reuse_graph()
+            llama_kv_cache_compact_swa(lctx, u_batch.n_tokens);
         }
 
 #if IK_PRINT_TIMING
@@ -6175,7 +6329,9 @@ static int llama_decode_internal(
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)kv_self_used.n,
                         (int)u_batch.n_tokens,
                         kv_self_used.save_per_step_ssm, kv_self_used.ckpt.per_step_max_allocated,
-                        cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads, gf});
+                        cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads,
+                        lctx.swa_window_view.w_view,
+                        lctx.swa_window_view.win_off, gf});
             }
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
@@ -6288,9 +6444,14 @@ static int llama_decode_internal(
                 reset_previous = true;
             }
             kv_self.head += n_tokens;
+            if (kv_self.any_compacted()) {
+                kv_self.head_swa += n_tokens;
+                GGML_ASSERT(kv_self.head_swa <= kv_self.size_swa);
+            }
 
             // Ensure kv cache head points to a valid index.
             if (kv_self.head >= kv_self.size) {
+                // only the generic head wraps; the compacted rows still hold the live window
                 kv_self.head = 0;
             }
         }
@@ -7263,6 +7424,7 @@ struct llama_model_params llama_model_default_params() {
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
+        /*.swa_compress                =*/ false,
     };
 
 #ifdef GGML_USE_METAL
@@ -7324,6 +7486,7 @@ struct llama_context_params llama_context_default_params() {
         /*.graph_reuse                 =*/ true,
         /*.dsa                         =*/ false,
         /*.fused_idx_topk              =*/ true,
+        /*.swa_compress                =*/ false,
         /*.dsa_top_k                   =*/ -1,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
@@ -7813,7 +7976,16 @@ struct llama_context * llama_init_from_model(
     cparams.graph_reuse      = params.graph_reuse;
     cparams.dsa              = params.dsa;
     cparams.fused_idx_topk   = params.fused_idx_topk;
+    cparams.swa_compress     = params.swa_compress;
     cparams.dsa_top_k        = params.dsa_top_k;
+
+    if (cparams.swa_compress != model->swa_compress) {
+        LLAMA_LOG_ERROR("%s: swa_compress differs between llama_model_params (%d) and llama_context_params (%d); "
+                        "the cache-size fit would not match the allocation\n",
+                        __func__, (int) model->swa_compress, (int) cparams.swa_compress);
+        llama_free(ctx);
+        return nullptr;
+    }
     // The DSA lightning indexer is built only in the layer-mode (non-TP) attention path. Under
     // -sm graph / -sm attn the model runs the tensor-parallel attention path, which has no indexer,
     // so --dsa would silently run dense MLA. Warn instead of degrading silently.
@@ -7857,7 +8029,7 @@ struct llama_context * llama_init_from_model(
     cparams.rope_freq_scale  = params.rope_freq_scale == 0.0f ? hparams.rope_freq_scale_train : params.rope_freq_scale;
 
     // this is necessary due to kv_self.n being padded later during inference
-    cparams.n_ctx            = GGML_PAD(cparams.n_ctx, llama_kv_cache_get_padding(cparams));
+    cparams.n_ctx            = GGML_PAD(cparams.n_ctx, llama_kv_cache::get_padding(cparams.flash_attn));
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch          = hparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -8203,6 +8375,27 @@ struct llama_context * llama_init_from_model(
                 }
             }
 
+            if (ctx->kv_self.any_compacted()) {
+                const auto & kv = ctx->kv_self;
+                uint32_t n_compacted = 0;
+                uint64_t rows_compacted = 0, rows_dense_equiv = 0;
+                uint32_t rows_min = UINT32_MAX, rows_max = 0;
+                for (int il = 0; il < (int) kv.row_count.size(); ++il) {
+                    if (!kv.is_compacted(il)) continue;
+                    const uint32_t r = kv.rows(il);
+                    n_compacted++;
+                    rows_compacted   += r;
+                    rows_dense_equiv += kv.size;
+                    rows_min = std::min(rows_min, r);
+                    rows_max = std::max(rows_max, r);
+                }
+                LLAMA_LOG_INFO("%s: SWA compress = %u of %d layers compacted, %u-%u rows each (dense %u), window %u, n_ubatch %u\n",
+                        __func__, n_compacted, (int) kv.row_count.size(), rows_min, rows_max,
+                        kv.size, hparams.n_swa, cparams.n_ubatch);
+                LLAMA_LOG_INFO("%s: SWA compress = %.2fx fewer rows on compacted layers\n",
+                        __func__, rows_compacted ? (double) rows_dense_equiv / (double) rows_compacted : 0.0);
+            }
+
             if (memory_size_k + memory_size_v) {
 	            if (cparams.mla_attn != 0 && !cparams.flash_attn) {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
@@ -8228,6 +8421,19 @@ struct llama_context * llama_init_from_model(
                 LLAMA_LOG_INFO("%s: KV self indexer size = %7.2f MiB (%s)\n", __func__, memory_size_k_indexer/1024./1024.,
                         ggml_type_name(params.idx_type_k));
             }
+        }
+
+        if (ctx->kv_self.any_compacted() && cparams.mtp) {
+            LLAMA_LOG_ERROR("%s: --swa-compress is not supported together with MTP speculative decoding\n", __func__);
+            llama_free(ctx);
+            return nullptr;
+        }
+
+        if (ctx->kv_self.any_compacted()) {
+            LLAMA_LOG_INFO("%s: --swa-compress: %u rows per compacted layer "
+                    "(%u sink + %u window, window %u)\n", __func__,
+                    ctx->kv_self.size_swa, ctx->kv_self.sink_rows,
+                    ctx->kv_self.size_swa - ctx->kv_self.sink_rows, ctx->kv_self.window_swa);
         }
 
         // graph outputs buffer
@@ -8396,6 +8602,10 @@ struct llama_context * llama_init_from_model(
 
 void llama_free(struct llama_context * ctx) {
     delete ctx;
+}
+
+bool llama_supports_full_state_io(const struct llama_context * ctx) {
+    return ctx != nullptr && !ctx->kv_self.any_compacted();
 }
 
 const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model) {
@@ -10767,6 +10977,12 @@ static bool llama_state_io_supported(
                         const char * func,
              llama_state_seq_flags flags = 0,
                       llama_seq_id seq_id = -1) {
+    if (ctx->kv_self.any_compacted() && flags == 0) {
+        LLAMA_LOG_ERROR("%s: full state save/restore is not supported with --swa-compress "
+                        "(compacted sliding-window layers have no absolute row addressing)\n", func);
+        return false;
+    }
+
     if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
         if (seq_id >= 0 &&
             llama_kv_qnext_seq_id_in_range(ctx->kv_self, seq_id) &&
