@@ -1446,7 +1446,7 @@ struct ggml_tensor * llm_build_context::build_deepseek2_mtp(
         GGML_ABORT("GLM_DSA MTP requires nextn.eh_proj");
     }
 
-    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, 1, nullptr);
+    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, nullptr);
 
     struct ggml_tensor * inpSA = cur;
 

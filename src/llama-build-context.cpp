@@ -480,22 +480,14 @@ struct ggml_tensor * llm_build_context::build_mtp_input(
         struct ggml_tensor * hidden_state,
         struct ggml_tensor * token_embd,
         int il,
-        int64_t n_streams,
-        const char * output_name) {
-    if (n_streams > 1) {
-        hidden_state = ggml_reshape_3d(ctx0, hidden_state, n_embd, n_streams, n_tokens);
-    }
+    const char * output_name) {
+    GGML_ASSERT(hidden_state->ne[0] == n_embd);
+    GGML_ASSERT(ggml_are_same_shape(hidden_state, token_embd));
 
     struct ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, hidden_state, hparams,
             mtp_layer.nextn.hnorm, nullptr, LLM_NORM_RMS, cb, il);
     struct ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_embd, hparams,
             mtp_layer.nextn.enorm, nullptr, LLM_NORM_RMS, cb, il);
-
-    if (n_streams > 1) {
-        token_emb_norm = ggml_reshape_3d(ctx0, token_emb_norm, n_embd, 1, n_tokens);
-        token_emb_norm = ggml_repeat_4d(ctx0, token_emb_norm, n_embd, n_streams, n_tokens, 1);
-    }
-
     struct ggml_tensor * result;
     if (mtp_layer.nextn.eh_proj != nullptr) {
         struct ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);

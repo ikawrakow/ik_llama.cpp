@@ -297,7 +297,7 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
     }
     ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
 
-    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, 1, nullptr);
+    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, nullptr);
 
     // Self-Attention
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));

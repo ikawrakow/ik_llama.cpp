@@ -136,7 +136,6 @@ struct llm_build_context {
             struct ggml_tensor * hidden_state,
             struct ggml_tensor * token_embd,
             int il,
-            int64_t n_streams = 1,
             const char * output_name = "mtp_eh_proj");
 
     ggml_tensor * build_inp_pos();

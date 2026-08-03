@@ -166,7 +166,7 @@ struct ggml_tensor * llm_build_context::build_qwen35moe_mtp(
 
     ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
 
-    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, 1, "mtp_fused");
+    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, "mtp_fused");
 
     GGML_ASSERT(il < (int)kv_self.k_l.size() && il < (int)kv_self.v_l.size());
     if (!kv_self.k_l[il] || !kv_self.v_l[il]) {
@@ -232,7 +232,7 @@ struct ggml_tensor * llm_build_context::build_qwen35_mtp(
 
     ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
 
-    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, 1, "mtp_fused");
+    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, "mtp_fused");
 
     // Self-Attention (wq may be shared from main model's last layer)
     GGML_ASSERT(il < (int)kv_self.k_l.size() && il < (int)kv_self.v_l.size());

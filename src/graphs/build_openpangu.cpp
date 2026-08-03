@@ -922,7 +922,7 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     ggml_tensor * token_emb = ggml_get_rows(ctx0, mtp_embd_weights, inp_tokens);
     cb(token_emb, "inp_embd", il);
 
-    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, 1, nullptr);
+    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, nullptr);
     cb(cur, "mtp_eh_proj", il);
 
     // --- attention sublayer (plain residual) ---

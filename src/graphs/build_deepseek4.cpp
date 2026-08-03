@@ -1276,7 +1276,17 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         const int il_mtp = n_layer - hparams.nextn_predict_layers;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        inpL = build_mtp_input(mtp_layer, hidden_state, tok_embd, il_mtp, hc);
+        hidden_state = ggml_reshape_2d(ctx0, hidden_state, n_embd, hc * n_tokens);
+        tok_embd = ggml_reshape_3d(ctx0, tok_embd, n_embd, 1, n_tokens);
+        tok_embd = ggml_repeat_4d(ctx0, tok_embd, n_embd, hc, n_tokens, 1);
+        tok_embd = ggml_reshape_2d(ctx0, tok_embd, n_embd, hc * n_tokens);
+        inpL = build_mtp_input(mtp_layer, hidden_state, tok_embd, il_mtp);
+        GGML_ASSERT(inpL->ne[0] == n_embd);
+        GGML_ASSERT(inpL->ne[1] == hc * n_tokens);
+        GGML_ASSERT(inpL->ne[2] == 1);
+        GGML_ASSERT(inpL->ne[3] == 1);
+        inpL = ggml_reshape_3d(ctx0, inpL, n_embd, hc, n_tokens);
+        cb(inpL, "mtp_eh_proj", il_mtp);
     } else {
         ggml_tensor * inp = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
         inpL = ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens);
