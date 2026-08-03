@@ -15469,10 +15469,13 @@ static bool ggml_compute_forward_concat_any_opt(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    if (ggml_is_quantized(src0->type)) return false;
+    if (ggml_is_quantized(src0->type)) {
+        size_t row_meta = type_traits[src0->type].row_meta_size;
+        if (row_meta > 0) return false; // We cannot concatenate quants that has per row meta data
+    }
+    //if (ggml_is_quantized(src0->type)) return false;
 
     GGML_ASSERT(src0->type == src1->type && src0->type == dst->type);
-    GGML_ASSERT(!ggml_is_quantized(src0->type));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -15521,7 +15524,7 @@ static bool ggml_compute_forward_concat_any_opt(
             if (d > 0) nrows *= dst->ne[d];
         }
         size_t row_size = ggml_row_size(dst->type, dst->ne[0]);
-        if (src0->nb[1] == row_size && src1->nb[1] == row_size) {
+        if (src0->nb[1] >= row_size && src1->nb[1] >= row_size) {
             int npt = (nrows + nth - 1)/nth;
             int first = ith*npt;
             int last  = MIN(first + npt, nrows);
