@@ -129,6 +129,15 @@ struct llm_build_context {
 
     struct ggml_tensor * build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd);
 
+    struct ggml_tensor * build_inp_mtp_states(int64_t n_hidden);
+
+    struct ggml_tensor * build_mtp_input(
+            const struct llama_layer & mtp_layer,
+            struct ggml_tensor * hidden_state,
+            struct ggml_tensor * token_embd,
+            int il,
+            const char * output_name = "mtp_eh_proj");
+
     ggml_tensor * build_inp_pos();
 
     ggml_tensor * build_input_scale(int n_tokens);
