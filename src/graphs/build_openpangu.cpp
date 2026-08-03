@@ -185,7 +185,7 @@ static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm,
 // this site's two taps packed at float offset 2*site_off. The buffer is zeroed at cache
 // allocation and reset at pos 0, preserving zero history at sequence start (pos-0 graphs
 // are discarded from reuse via reset_previous, so the baked reset never runs at pos > 0).
-// Speculative rollback snapshots/restores the whole slot via the spec checkpoint.
+// Speculative rollback restores the whole slot: GPU mode snapshots it, CPU mode uses the partial layout.
 static ggml_tensor * openpangu_causal_conv(ggml_context * ctx, ggml_cgraph * gf,
                                            ggml_tensor * x, ggml_tensor * w,
                                            ggml_tensor * state_all, int64_t site_off,
@@ -922,12 +922,7 @@ ggml_tensor * llm_build_context::build_openpangu_mtp(
     ggml_tensor * token_emb = ggml_get_rows(ctx0, mtp_embd_weights, inp_tokens);
     cb(token_emb, "inp_embd", il);
 
-    ggml_tensor * emb_norm = llm_build_norm(ctx0, token_emb,       hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
-    ggml_tensor * hid_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
-
-    // reference order: cat([inputs_embeds, previous_hidden_states], -1)
-    ggml_tensor * combined = ggml_concat(ctx0, emb_norm, hid_norm, 0);
-    ggml_tensor * cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
+    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, nullptr);
     cb(cur, "mtp_eh_proj", il);
 
     // --- attention sublayer (plain residual) ---
@@ -1022,15 +1017,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
                     "OpenPangu MTP graph requested without NextN layers loaded");
         GGML_ASSERT(batch.token && "openPangu MTP graphs decode token batches");
 
-        ggml_tensor * hidden_states_from_main_model;
-        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
-            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-        } else {
-            hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
-        }
-        ggml_set_name(hidden_states_from_main_model, "inp_mtp_states");
-        ggml_set_input(hidden_states_from_main_model);
-        lctx.inp_mtp_states = hidden_states_from_main_model;
+        ggml_tensor * hidden_states_from_main_model = build_inp_mtp_states(hparams.n_embd);
 
         // shared batch inputs, created exactly once per graph (see build_openpangu_mtp)
         ggml_tensor * inp_pos = build_inp_pos();

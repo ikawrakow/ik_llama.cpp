@@ -1270,35 +1270,22 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         GGML_ASSERT(n_layer > hparams.nextn_predict_layers);
 
         const int64_t n_hidden = n_embd * hc;
-        ggml_tensor * hidden_state = nullptr;
-        if (lctx.cparams.mtp_op_type == MTP_OP_WARMUP || lctx.cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
-            hidden_state = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_hidden, n_tokens);
-        } else {
-            hidden_state = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_hidden);
-        }
-        ggml_set_name(hidden_state, "inp_mtp_states");
-        ggml_set_input(hidden_state);
-        lctx.inp_mtp_states = hidden_state;
+        ggml_tensor * hidden_state = build_inp_mtp_states(n_hidden);
 
         ggml_tensor * tok_embd = build_inp_embd_mtp(model.tok_embd);
         const int il_mtp = n_layer - hparams.nextn_predict_layers;
         const auto & mtp_layer = model.layers[il_mtp];
 
-        ggml_tensor * h_state = ggml_reshape_3d(ctx0, hidden_state, n_embd, hc, n_tokens);
-        cb(h_state, "mtp_h_state", il_mtp);
-        ggml_tensor * h_norm = llm_build_norm(ctx0, h_state, hparams, mtp_layer.nextn.hnorm,
-                nullptr, LLM_NORM_RMS, cb, il_mtp);
-        cb(h_norm, "mtp_hnorm", il_mtp);
-
-        ggml_tensor * e_norm = llm_build_norm(ctx0, tok_embd, hparams, mtp_layer.nextn.enorm,
-                nullptr, LLM_NORM_RMS, cb, il_mtp);
-        e_norm = ggml_reshape_3d(ctx0, e_norm, n_embd, 1, n_tokens);
-        e_norm = ggml_repeat_4d(ctx0, e_norm, n_embd, hc, n_tokens, 1);
-        cb(e_norm, "mtp_enorm", il_mtp);
-
-        ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
-        cb(concat, "mtp_concat", il_mtp);
-        inpL = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, concat);
+        hidden_state = ggml_reshape_2d(ctx0, hidden_state, n_embd, hc * n_tokens);
+        tok_embd = ggml_reshape_3d(ctx0, tok_embd, n_embd, 1, n_tokens);
+        tok_embd = ggml_repeat_4d(ctx0, tok_embd, n_embd, hc, n_tokens, 1);
+        tok_embd = ggml_reshape_2d(ctx0, tok_embd, n_embd, hc * n_tokens);
+        inpL = build_mtp_input(mtp_layer, hidden_state, tok_embd, il_mtp);
+        GGML_ASSERT(inpL->ne[0] == n_embd);
+        GGML_ASSERT(inpL->ne[1] == hc * n_tokens);
+        GGML_ASSERT(inpL->ne[2] == 1);
+        GGML_ASSERT(inpL->ne[3] == 1);
+        inpL = ggml_reshape_3d(ctx0, inpL, n_embd, hc, n_tokens);
         cb(inpL, "mtp_eh_proj", il_mtp);
     } else {
         ggml_tensor * inp = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);

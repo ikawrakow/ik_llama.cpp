@@ -243,7 +243,7 @@ using chat_template_caps = jinja::caps;
 struct common_chat_templates {
     bool add_bos;
     bool add_eos;
-    bool has_explicit_template;  // Model had builtin template or template overridde was specified.
+    bool has_explicit_template;  // Model had builtin template or template override was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
 };
@@ -2672,7 +2672,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         }
         if (caps.supports_tool_calls && !caps.supports_tools) {
             LOG_WRN(
-                "Template supports tool calls but does not natively describe tools. The fallback behaviour used may "
+                "Template supports tool calls but does not natively describe tools. The fallback behavior used may "
                 "produce bad results, inspect prompt w/ --verbose & consider overriding the template.\n");
         }
     }

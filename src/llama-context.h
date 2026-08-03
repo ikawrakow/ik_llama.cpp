@@ -64,9 +64,8 @@ struct llama_kv_cache {
     bool hybrid    = false;
     bool v_trans   = true;  // the value tensor is transposed
 
-    // openPangu s_l holds position-strict MoME conv state, not per-sequence recurrent
-    // slots; Qwen3Next-style s_l handling (seq ops, state serialization, s_copy) must
-    // skip it. Speculative rollback snapshots/restores it via the whole-slot spec checkpoint.
+    // openPangu s_l holds position-strict MoME conv state, not per-sequence recurrent slots: qnext
+    // seq ops and generic serialization skip it, the openPangu state layouts carry it instead.
     bool s_l_position_strict = false;
 
     // Note: The value of head isn't only used to optimize searching

@@ -416,7 +416,7 @@ void common_ngram_map_draft(common_ngram_map & map,
             continue;
         }
 
-        // Do we haven a existing value m-gram or a new one after the key at index i?
+        // Do we have an existing value m-gram or a new one after the key at index i?
         size_t idx_begin_value_key = i + n;
         int idx_value = -1;
         for (int v = 0; v < COMMON_NGRAM_MAX_VALUES; ++v) {
@@ -461,7 +461,7 @@ void common_ngram_map_draft(common_ngram_map & map,
             slot_max = v;
         }
     }
-    // What is sum of the other occurences?
+    // What is sum of the other occurrences?
     uint32_t sum_occur = 0;
     for (int v = 0; v < COMMON_NGRAM_MAX_VALUES; ++v) {
         if (v == slot_max) {

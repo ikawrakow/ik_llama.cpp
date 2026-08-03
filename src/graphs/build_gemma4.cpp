@@ -541,10 +541,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
 
     GGML_ASSERT(n_backbone > 0);
 
-    ggml_tensor * hidden_state = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_backbone, n_tokens);
-    ggml_set_name(hidden_state, "inp_mtp_states");
-    ggml_set_input(hidden_state);
-    lctx.inp_mtp_states = hidden_state;
+    ggml_tensor * hidden_state = build_inp_mtp_states(n_backbone);
 
     if (!has_target_ctx || !batch.token) {
         ggml_tensor * cur = ggml_view_2d(ctx0, hidden_state, n_embd, n_tokens,
@@ -903,7 +900,7 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     cb(inpL, "tok_embd", -1);
 
-    // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
+    // important: do not normalize weights for raw embeddings input (i.e. encoded image embeddings)
     if (batch.token) {
         inpL = ggml_scale(ctx0, inpL, sqrtf(n_embd));
         cb(inpL, "inp_scaled", -1);

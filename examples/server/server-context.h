@@ -105,8 +105,8 @@ struct server_slot {
 	std::map<int32_t, std::set<llama_token>> positional_bans;
 
     // allowlist
-    std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> allow_ruless_prev;
-    std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> allow_ruless;
+    std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> allow_rules_prev;
+    std::vector<std::vector<std::tuple<uint32_t, uint32_t, std::string, float>>> allow_rules;
     std::vector<std::string> allow_pieces;
     std::vector<std::string> allow_kws;
     size_t allow_kw_delay = 0;
@@ -199,7 +199,7 @@ struct server_slot {
 
     void release();
 
-    json get_formated_timings() const;
+    json get_formatted_timings() const;
 
     result_timings get_timings() const;
 
@@ -315,7 +315,7 @@ struct server_context {
 
     void populate_token_probs(const server_slot& slot, completion_token_output& result, bool post_sampling, bool special, int idx);
 
-    json get_formated_generation(const server_slot& slot) const;
+    json get_formatted_generation(const server_slot& slot) const;
 
     void send_error(const server_task& task, const std::string& error, const enum error_type type = ERROR_TYPE_SERVER);
 
