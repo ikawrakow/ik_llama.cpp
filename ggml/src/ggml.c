@@ -23872,6 +23872,7 @@ static void ggml_compute_forward_delta_net_f32(
     const struct ggml_tensor * src4 = dst->src[4];
     const struct ggml_tensor * src5 = dst->src[5];
     const struct ggml_tensor * src6 = dst->src[6];
+    const struct ggml_tensor * src7 = dst->src[7];
 
     const int64_t head_dim = src0->ne[0];
     const int64_t n_tokens = src0->ne[1];
@@ -23897,7 +23898,18 @@ static void ggml_compute_forward_delta_net_f32(
 
     int repeat_type = dst->op_params[0];
     const int64_t state_step_stride = head_dim * head_dim * n_heads * n_seqs;
-    float * state_working = out_data + output_size;
+    // src7 is the slot the fused-away copy would have written
+    float * state_working = src7 ? (float *) src7->data : out_data + output_size;
+
+    if (src7) {
+        // src7 signals that the copy was fused away, so the op writes the state into its own
+        // input - safe because each thread seeds its heads from state_in before writing them
+        // back, and threads own disjoint heads
+        GGML_ASSERT(src7->data == src5->data);
+        GGML_ASSERT(src7->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_is_contiguous(src7));
+        GGML_ASSERT(ggml_nelements(src7) == state_step_stride);
+    }
 
     if (src6) {
         GGML_ASSERT(src6->type == GGML_TYPE_F32);
@@ -24016,6 +24028,59 @@ static void ggml_compute_forward_delta_net(
         default:
             GGML_ABORT("fatal error");
     }
+}
+
+// inspired by ggml_cuda_try_gdn_cache_fusion in https://github.com/ggml-org/llama.cpp/pull/23940
+// the pattern this matches is built by delta_net::build_qkv() in src/llama-delta-net.cpp
+// - the scan stops at the first real node, so a copy further down is missed
+// - nothing checks that the copy is the tail's only reader
+int ggml_delta_net_find_state_cpy(const struct ggml_cgraph * cgraph, int i) {
+    const struct ggml_tensor * dn = cgraph->nodes[i];
+    assert(dn->op == GGML_OP_DELTA_NET);
+
+    if (dn->type != GGML_TYPE_F32 || !ggml_is_contiguous(dn) || (dn->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return -1;
+    }
+
+    const struct ggml_tensor * q = dn->src[0];
+    const struct ggml_tensor * v = dn->src[2];
+
+    // the sizes ggml_delta_net() allocated the result from - the total ties them to this node
+    const size_t tail_off   = ggml_row_size(GGML_TYPE_F32, v->ne[0] * v->ne[2] * q->ne[1] * q->ne[3]);
+    const size_t state_size = ggml_row_size(GGML_TYPE_F32, v->ne[0] * v->ne[0] * v->ne[2] * q->ne[3]);
+
+    if (tail_off + state_size != ggml_nbytes(dn)) {
+        return -1;
+    }
+
+    for (int j = i + 1; j < cgraph->n_nodes; j++) {
+        const struct ggml_tensor * cpy = cgraph->nodes[j];
+        if (ggml_is_noop(cpy)) {
+            continue;
+        }
+        if (cpy->op != GGML_OP_CPY || (cpy->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+            return -1;
+        }
+
+        // the tail reaches the copy through reshapes, so match on the view root and its offset
+        const struct ggml_tensor * src = cpy->src[0];
+        const struct ggml_tensor * dst = cpy->src[1];
+
+        if (!ggml_is_noop(src) || src->view_src != dn || src->view_offs != tail_off ||
+            !ggml_is_contiguous(src) || ggml_nbytes(src) != state_size ||
+            (src->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+            return -1;
+        }
+        // the destination has to be the slot the state was read from: the fused kernel takes it
+        // as a plain pointer, which on CUDA is only covered by the graph check on src[5]
+        if (dst->type != GGML_TYPE_F32 || !dst->data || !ggml_is_contiguous(dst) ||
+            ggml_nbytes(dst) != state_size || dst->data != dn->src[5]->data) {
+            return -1;
+        }
+        return j;
+    }
+
+    return -1;
 }
 
 // ggml_compute_forward_sinkhorn
@@ -26556,7 +26621,15 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_DELTA_NET:
             {
-                ggml_compute_forward_delta_net(params, tensor);
+                const int j = fusion ? ggml_delta_net_find_state_cpy(cgraph, i) : -1;
+                if (j >= 0) {
+                    struct ggml_tensor fused = *tensor;
+                    fused.src[7] = cgraph->nodes[j]->src[1];
+                    ggml_compute_forward_delta_net(params, &fused);
+                    i = j;
+                } else {
+                    ggml_compute_forward_delta_net(params, tensor);
+                }
             } break;
         case GGML_OP_SINKHORN:
             {
