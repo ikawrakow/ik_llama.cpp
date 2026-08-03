@@ -23878,6 +23878,7 @@ static void ggml_compute_forward_delta_net_f32(
     const int64_t n_heads  = src2->ne[2];
     const int64_t n_seqs   = src0->ne[3];
     GGML_ASSERT(src2->ne[2] % src0->ne[2] == 0);
+    GGML_ASSERT(src2->ne[0] == head_dim);
     const int gqa_ratio    = src2->ne[2]/src0->ne[2];
 
     const int64_t output_size = head_dim * n_tokens * n_heads * n_seqs;
