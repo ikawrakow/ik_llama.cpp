@@ -562,7 +562,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                 exit(1);
             }
             // If we have a 3D tensor as it is the case for the attn_k_b and attn_v_b for DeepSeek MLA models,
-            // than we need to compute the imatrix for each head, and not just one imatrx for all heads.
+            // than we need to compute the imatrix for each head, and not just one imatrix for all heads.
             // Hence, the storage we need is src0->ne[0]*src0->ne[2].
             e.values.resize(src0->ne[0]*src0->ne[2], 0);
             e.counts.resize(src0->ne[0]*src0->ne[2], 0);
@@ -775,7 +775,7 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
             return false;
         }
 
-        // Recreate the state as expected by save_imatrix(), and corerct for weighted sum.
+        // Recreate the state as expected by save_imatrix(), and correct for weighted sum.
         for (int i = 0; i < nval; i++) {
             e.values[i] += tmp[i];
             e.counts[i] += ncall;
