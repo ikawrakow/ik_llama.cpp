@@ -198,7 +198,7 @@ struct clip_hparams {
     float image_std[3];
 
     // for models using dynamic image size, we need to have a smaller image size to warmup
-    // otherwise, user will get OOM everytime they load the model
+    // otherwise, user will get OOM every time they load the model
     int32_t warmup_image_size = 0;
     int32_t warmup_audio_size = 3000;
 
