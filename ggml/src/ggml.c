@@ -8952,45 +8952,6 @@ struct ggml_tensor * ggml_get_rows(
     return result;
 }
 
-struct ggml_tensor * ggml_get_rows_ext(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            bool                  same_type,
-            bool                  dim0) {
-    if (dim0) {
-        GGML_ASSERT(same_type);
-        GGML_ASSERT(!ggml_is_quantized(a->type));
-        GGML_ASSERT(ggml_type_size(a->type) % 2 == 0); // we do not support dim0 get_rows on int8, fp8 data
-    }
-    if (!dim0 && !same_type) {
-        return ggml_get_rows(ctx, a, b);
-    }
-    GGML_ASSERT(b->type == GGML_TYPE_I32);
-    if (dim0) {
-        GGML_ASSERT(a->ne[1] == b->ne[1] && a->ne[2] == b->ne[2] && a->ne[3] == b->ne[3]);
-        GGML_ASSERT(a->ne[0] >= b->ne[0]);
-
-        struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, b->ne[0], a->ne[1], a->ne[2], a->ne[3]);
-        result->op   = GGML_OP_GET_ROWS;
-        result->op_params[0] = 1;
-        result->src[0] = a;
-        result->src[1] = b;
-        return result;
-    }
-    GGML_ASSERT(a->ne[2] == b->ne[1]);
-    GGML_ASSERT(a->ne[3] == b->ne[2]);
-    GGML_ASSERT(b->ne[3] == 1);
-
-    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, a->ne[0], b->ne[0], b->ne[1], b->ne[2]);
-    result->op   = GGML_OP_GET_ROWS;
-    result->src[0] = a;
-    result->src[1] = b;
-    return result;
-
-}
-
-
 // ggml_get_rows_back
 
 struct ggml_tensor * ggml_get_rows_back(
@@ -19736,84 +19697,11 @@ static void ggml_compute_forward_get_rows_f32(
     }
 }
 
-static void ggml_compute_forward_get_rows_any(
-        const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
-
-    const struct ggml_tensor * src0 = dst->src[0];
-    const struct ggml_tensor * src1 = dst->src[1];
-
-    GGML_ASSERT(src1->type == GGML_TYPE_I32);
-    GGML_ASSERT(src0->type == dst->type);
-
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    int nrows = ggml_nrows(dst);
-    int npt = (nrows + nth - 1)/nth;
-    int first = npt*ith;
-    int last  = MIN(first + npt, nrows);
-
-    if (dst->op_params[0] == 1) {
-        size_t type_size = ggml_type_size(dst->type);
-        GGML_ASSERT(type_size == 2 || type_size == 4);
-        GGML_ASSERT(src0->ne[1] == src1->ne[1] && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3]);
-        GGML_ASSERT(src0->ne[0] >= src1->ne[0]);
-        GGML_ASSERT(dst->ne[0] == src1->ne[0]);
-        for (int ir = first; ir < last; ++ir) {
-            int i3 = ir/(dst->ne[1]*dst->ne[2]);
-            int i2 = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
-            int i1 = ir -  i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
-            const int * idx = (const  int *)((const char *)src1->data + i1*src1->nb[1] + i2*src1->nb[2] + i3*src1->nb[3]);
-            const char * cx = (const char *)((const char *)src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]);
-                  char * cy = (      char *)((      char *) dst->data + i1* dst->nb[1] + i2* dst->nb[2] + i3* dst->nb[3]);
-            if (type_size == 2) {
-                const uint16_t * x = (const uint16_t *)cx;
-                      uint16_t * y = (      uint16_t *)cy;
-                for (int j = 0; j < (int)dst->ne[0]; ++j) {
-                    y[j] = x[idx[j]];
-                }
-            } else {
-                const uint32_t * x = (const uint32_t *)cx;
-                      uint32_t * y = (      uint32_t *)cy;
-                for (int j = 0; j < (int)dst->ne[0]; ++j) {
-                    y[j] = x[idx[j]];
-                }
-            }
-        }
-        return;
-    }
-
-    GGML_ASSERT(src0->ne[2] == src1->ne[1]);
-    GGML_ASSERT(src0->ne[3] == src1->ne[2]);
-    GGML_ASSERT(src0->ne[3] == 1);
-    GGML_ASSERT(dst->ne[0] == src0->ne[0] && dst->ne[1] == src1->ne[0] && dst->ne[2] == src1->ne[1] && dst->ne[2]);
-
-    size_t row_size = ggml_row_size(dst->type, dst->ne[0]);
-    //GGML_ASSERT(row_size % 2 == 0);
-    //size_t type_size = row_size % 4 == 0 ? 4 : 2;
-
-    for (int ir = first; ir < last; ++ir) {
-        int i3 = ir/(dst->ne[1]*dst->ne[2]);
-        int i2 = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
-        int i1 =  ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
-        const int * idx = (const int *)((const char *)src1->data + i2*src1->nb[1] + i3*src1->nb[2]);
-        const char * cx = (const char *)src0->data + idx[i1]*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3];
-              char * cy = (      char *) dst->data +     i1 * dst->nb[1] + i2* dst->nb[2] + i3* dst->nb[3];
-        memcpy(cy, cx, row_size);
-    }
-}
-
 static void ggml_compute_forward_get_rows(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
 
     const struct ggml_tensor * src0 = dst->src[0];
-
-    if (dst->type != GGML_TYPE_F32) {
-        ggml_compute_forward_get_rows_any(params, dst);
-        return;
-    }
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
