@@ -7,7 +7,7 @@ https://github.com/ggerganov/llama.cpp/pull/6193
 
 ### How to use
 
-`retieval.cpp` has parameters of its own:
+`retrieval.cpp` has parameters of its own:
 - `--context-file`: file to be embedded - state this option multiple times to embed multiple files
 - `--chunk-size`: minimum size of each text chunk to be embedded
 - `--chunk-separator`: STRING to divide chunks by. newline by default

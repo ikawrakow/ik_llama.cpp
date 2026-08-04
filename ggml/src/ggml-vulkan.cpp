@@ -3903,7 +3903,7 @@ static void ggml_vk_instance_init() {
                     vk_instance.device_indices.push_back(i);
                 } else {
                     // There can be two physical devices corresponding to the same GPU if there are 2 different drivers
-                    // This can cause error when splitting layers aross the devices, need to keep only 1
+                    // This can cause error when splitting layers across the devices, need to keep only 1
                     VK_LOG_DEBUG("Device " << i << " and device " << *old_device << " have the same deviceUUID");
 
                     vk::PhysicalDeviceProperties2 old_props;
@@ -7101,7 +7101,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         z_buf_offset = vk_tensor_offset(src2) + src2->view_offs;
         GGML_ASSERT(d_Z != nullptr);
     }
-    // Compute misalignment offset for descriptors and store it in in push constants, then align the descriptor offsets.
+    // Compute misalignment offset for descriptors and store it in push constants, then align the descriptor offsets.
     init_pushconst_tensor_offsets(ctx, pc, src0, src1, src2, dst);
     x_buf_offset &= ~(ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1);
     y_buf_offset &= ~(ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1);

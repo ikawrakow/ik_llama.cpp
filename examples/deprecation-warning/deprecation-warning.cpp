@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
         filename = filename.substr(pos+1);
     }
 
-    // Append "llama-" to the beginning of filename to get the replacemnt filename
+    // Append "llama-" to the beginning of filename to get the replacement filename
     auto replacement_filename = "llama-" + filename;
 
     // The exception is if the filename is "main", then our replacement filename is "llama-cli"

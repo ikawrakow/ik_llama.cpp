@@ -1565,7 +1565,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
 
-    /// @details Randonly selects a token from the candidates following adaptive p sampler.
+    /// @details Randomly selects a token from the candidates following adaptive p sampler.
     llama_token llama_sample_token_adaptive_p(
             struct llama_context * ctx,
           llama_token_data_array * candidates,

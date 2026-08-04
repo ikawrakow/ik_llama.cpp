@@ -83,7 +83,7 @@ static void aclnn_repeat(ggml_backend_cann_context& ctx, aclTensor* acl_src,
 
     if (workspaceSize > 0) {
         // Memory from allocator will "free" immediately, and this memory
-        // will be alloced to other pointers, but it won't access before
+        // will be allocated to other pointers, but it won't access before
         // this async task end because all tasks in same stream will execute
         // in queue.
         ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
@@ -929,7 +929,7 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             if (ggml_is_contiguous(dst)) {
                 const size_t src_type_size = ggml_type_size(src->type);
                 if (src->nb[0] == src_type_size) {
-                    // src0 is contigous on first dimension, copy by rows
+                    // src0 is contiguous on first dimension, copy by rows
                     int64_t rows_num = ggml_nrows(src);
 
                     aclrtlaunch_ascendc_dup_by_rows_fp16(
@@ -954,7 +954,7 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             if (ggml_is_contiguous(dst)) {
                 const size_t src_type_size = ggml_type_size(src->type);
                 if (src->nb[0] == src_type_size) {
-                    // src0 is contigous on first dimension, copy by rows
+                    // src0 is contiguous on first dimension, copy by rows
                     int64_t rows_num = ggml_nrows(src);
                     aclrtlaunch_ascendc_dup_by_rows_fp16_to_fp32(
                         rows_num, ctx.stream(), src->data, dst->data,
@@ -997,7 +997,7 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             if (ggml_is_contiguous(dst)) {
                 const size_t src_type_size = ggml_type_size(src->type);
                 if (src->nb[0] == src_type_size) {
-                    // src0 is contigous on first dimension, copy by rows
+                    // src0 is contiguous on first dimension, copy by rows
                     int64_t rows_num = ggml_nrows(src);
                     aclrtlaunch_ascendc_dup_by_rows_fp32(
                         rows_num, ctx.stream(), src->data, dst->data,
@@ -1023,7 +1023,7 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             if (ggml_is_contiguous(dst)) {
                 const size_t src_type_size = ggml_type_size(src->type);
                 if (src->nb[0] == src_type_size) {
-                    // src0 is contigous on first dimension, copy by rows
+                    // src0 is contiguous on first dimension, copy by rows
                     int64_t rows_num = ggml_nrows(src);
                     aclrtlaunch_ascendc_dup_by_rows_fp32_to_fp16(
                         rows_num, ctx.stream(), src->data, dst->data,
@@ -1187,7 +1187,7 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ACL_CHECK(aclDestroyTensor(acl_rstd));
 }
 
-// TODO: performace is low.
+// TODO: performance is low.
 void ggml_cann_diag_mask(ggml_backend_cann_context& ctx, ggml_tensor* dst,
                          float value) {
     ggml_tensor* src = dst->src[0];

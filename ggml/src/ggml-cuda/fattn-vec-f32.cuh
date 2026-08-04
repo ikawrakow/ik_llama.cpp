@@ -8,7 +8,7 @@
 #include "common.cuh"
 #include "fattn-vec-common.cuh"
 
-// Currenlty llvm with the amdgcn target dose not support unrolling loops
+// Currently llvm with the amdgcn target does not support unrolling loops
 // that contain a break that can not be resolved at compile time.
 #ifdef __clang__
 #pragma clang diagnostic push

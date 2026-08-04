@@ -2625,7 +2625,7 @@ void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
             auto scales128 = vandq_u16(vshrq_n_u16(qhb, 12), vdupq_n_u16(7));
             scales128 = vaddq_u16(vshlq_n_u16(scales128, 1), vdupq_n_u16(1));
             auto mask = vceqq_u16(vandq_u16(qhb, delta_mask), delta_mask);
-            // Note: we explicitely assume IQ1S_DELTA = 0.125
+            // Note: we explicitly assume IQ1S_DELTA = 0.125
             auto deltas128 = vsubq_s16(vbicq_s16(scales128, mask), vandq_s16(scales128, mask));
             //auto deltas128 = vorrq_s16(vandq_s16(vdupq_n_s16(-1), mask), vbicq_s16(vdupq_n_s16(1), mask));
             //deltas128 = vmulq_s16(scales128, deltas128);

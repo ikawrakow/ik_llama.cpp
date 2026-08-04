@@ -18,17 +18,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
     if (cparams.mtp_op_type != MTP_OP_NONE) {
-        ggml_tensor* hidden_states_from_main_model;
-
-        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
-            hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-        } else {
-            hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
-        }
-        ggml_set_name(hidden_states_from_main_model, "inp_mtp_states");
-        ggml_set_input(hidden_states_from_main_model);
-
-        lctx.inp_mtp_states = hidden_states_from_main_model;
+        ggml_tensor * hidden_states_from_main_model = build_inp_mtp_states(hparams.n_embd);
 
         const int il_mtp = hparams.n_layer - 1;
         const auto & mtp_layer = model.layers[il_mtp];
@@ -307,12 +297,7 @@ struct ggml_tensor * llm_build_context::build_glm4_moe_mtp(
     }
     ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
 
-    ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
-    ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
-
-    ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
-    cb(combined, "mtp_concat", il);
-    ggml_tensor* cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
+    ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, nullptr);
 
     // Self-Attention
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));

@@ -1534,7 +1534,7 @@ char * get_q_storage(size_t size) {
 // Some of the methods in FlashAttn have two identical implementations that only differ by
 // one version using a loop over the template parameter q_step, while the other using a loop
 // over an input parameter nq (these are loops over the rows of q^T). I dislike this a lot,
-// but performance drops signficantly if I remove the version with fixed q_step iterations.
+// but performance drops significantly if I remove the version with fixed q_step iterations.
 // We only instantiate FlashAttn with q_step = 1 and q_step = 4 or 8 (depending on head size D),
 // so when we have to process Nq rows, we process q_step*(Nq/q_step) using fixed q_step loops,
 // and use the variable nq version (with lower performance) only for the remaining i1...q_step-1

@@ -313,7 +313,7 @@ bool preprocess_audio(
     for (size_t off = 0; off < (size_t)out_full.n_len; off += frames_per_chunk) {
         int n_len = std::min(frames_per_chunk, (size_t)out_full.n_len - off);
         if ((size_t)n_len < frames_per_chunk) {
-            break; // last uncomplete chunk will always be a padded chunk, safe to ignore
+            break; // last incomplete chunk will always be a padded chunk, safe to ignore
         }
 
         whisper_mel out_chunk;
