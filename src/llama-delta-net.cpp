@@ -386,9 +386,19 @@ ggml_tensor * delta_net::build_qkv(ggml_context * ctx0, ggml_tensor * state_stor
     cb(new_conv_states_cont, "new_conv_states_cont", il);
     ggml_tensor * new_conv_flat = ggml_reshape_2d(ctx0, new_conv_states_cont, conv_state_dim, 1);
     ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, new_state, ssm_state_dim, 1);
-    auto state_cpy = ggml_concat_inplace(ctx0, new_conv_flat, new_ssm_flat, state_dst, 0);
-    cb(state_cpy, "state_cpy", il);
-    ggml_build_forward_expand(gf, state_cpy);
+    ggml_tensor * conv_state_dst = ggml_view_2d(ctx0, state_dst, conv_state_dim, 1, state_row_size, 0);
+    ggml_tensor * ssm_dst        = ggml_view_2d(ctx0, state_dst, ssm_state_dim, 1, state_row_size,
+            conv_state_dim * ggml_element_size(state_dst));
+
+    // expand this one first: ggml_delta_net_find_state_cpy() matches this copy only while nothing
+    // but view no-ops stands between it and the op, and the backends then write the slot directly
+    auto ssm_cpy = ggml_cpy(ctx0, new_ssm_flat, ssm_dst);
+    cb(ssm_cpy, "ssm_state_cpy", il);
+    ggml_build_forward_expand(gf, ssm_cpy);
+
+    auto conv_cpy = ggml_cpy(ctx0, new_conv_flat, conv_state_dst);
+    cb(conv_cpy, "conv_state_cpy", il);
+    ggml_build_forward_expand(gf, conv_cpy);
 
     return output;
 }

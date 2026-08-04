@@ -8,6 +8,7 @@
 #include "ggml-cuda.h"
 #include "ggml.h"
 #include "ggml-backend-impl.h"
+#include "ggml-impl.h"
 
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -4130,9 +4131,23 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SOLVE_TRI:
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
-        case GGML_OP_DELTA_NET:
-            ggml_cuda_op_delta_net(ctx, dst);
-            break;
+        case GGML_OP_DELTA_NET: {
+            const int j = fusion ? ggml_delta_net_find_state_cpy(cgraph, i) : -1;
+            if (j >= 0) {
+                ggml_tensor fused = *dst;
+                fused.src[7] = cgraph->nodes[j]->src[1];
+                ggml_cuda_op_delta_net(ctx, &fused);
+#ifdef USE_CUDA_GRAPH
+                // claim the entry of the copy that is not going to be launched
+                if (ctx.cur_graph && ctx.cur_graph->use_cpy_indirection) {
+                    ctx.cur_graph->graph_cpynode_index++;
+                }
+#endif
+                i = j;
+            } else {
+                ggml_cuda_op_delta_net(ctx, dst);
+            }
+        } break;
         case GGML_OP_SINKHORN:
             ggml_cuda_op_sinkhorn(ctx, dst);
             break;

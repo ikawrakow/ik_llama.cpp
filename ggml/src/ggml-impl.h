@@ -766,6 +766,10 @@ static size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct g
     GGML_ABORT("fatal error");
 }
 
+// Finds the copy the delta-net fusion can skip: the CPY that writes this node's new recurrent
+// state back into the slot it was read from. Its index in cgraph, or -1 if there is none.
+int ggml_delta_net_find_state_cpy(const struct ggml_cgraph * cgraph, int i);
+
 static int32_t ggml_get_op_params_i32(const struct ggml_tensor * tensor, uint32_t i) {
     assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
     return ((const int32_t *)(tensor->op_params))[i];
