@@ -213,13 +213,13 @@ void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             auto type_size = row_size % 4 == 0 ? 4 : 2;
             dim3 grid(dst->ne[1], dst->ne[2], dst->ne[3]);
             if (type_size == 2) {
-                k_get_rows_dim1<<<grid, k_block_size, 0, ctx.stream()>>>(dst->ne[0],
+                k_get_rows_dim1<<<grid, k_block_size, 0, ctx.stream()>>>(row_size/type_size,
                         src0->nb[1]/type_size, src0->nb[2]/type_size, src0->nb[3]/type_size,
                         src1->nb[1]/type_size, src1->nb[2]/type_size,
                          dst->nb[1]/type_size,  dst->nb[2]/type_size, dst->nb[3]/type_size,
                         (const uint16_t *)src0->data, (const int *)src1->data, (uint16_t *)dst->data);
             } else {
-                k_get_rows_dim1<<<grid, k_block_size, 0, ctx.stream()>>>(dst->ne[0],
+                k_get_rows_dim1<<<grid, k_block_size, 0, ctx.stream()>>>(row_size/type_size,
                         src0->nb[1]/type_size, src0->nb[2]/type_size, src0->nb[3]/type_size,
                         src1->nb[1]/type_size, src1->nb[2]/type_size,
                          dst->nb[1]/type_size,  dst->nb[2]/type_size,  dst->nb[3]/type_size,
