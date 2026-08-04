@@ -1295,7 +1295,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     }
 
     const int n_layer_begin = is_mtp ? n_layer - hparams.nextn_predict_layers : 0;
-    for (int il = n_layer_begin; il < n_layer; ++il) {
+    const int n_layer_end   = is_mtp ? n_layer : n_layer - hparams.nextn_predict_layers;
+    for (int il = n_layer_begin; il < n_layer_end; ++il) {
 
         auto cur = ds4_attention(gf, ctx0, *this, inpL,
                              &append_csa_state, &append_csa_score,
