@@ -152,7 +152,7 @@ void ggml_cuda_op_conv2d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int KW = kernel->ne[0];  // kernel_w
     const int KH = kernel->ne[1];  // kernel_h
     const int IC = input->ne[2];   // input_channels
-    const int OC = kernel->ne[3];  // ouptut_chanles
+    const int OC = kernel->ne[3];  // output_channels
     const int B  = input->ne[3];   // n_batches
 
     const int64_t total  = B * OC * OH * OW;

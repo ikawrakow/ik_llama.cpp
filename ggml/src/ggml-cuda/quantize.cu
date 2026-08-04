@@ -122,7 +122,7 @@ static __global__ void quantize_mmq_q8_1(
     if (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
         sum = xi.x + xi.y + xi.z + xi.w;
 
-        // Exchange calculate sum across vals_per_sum/4 threads.
+        // Calculate sum across vals_per_sum/4 threads.
 #pragma unroll
         for (int mask = vals_per_sum/8; mask > 0; mask >>= 1) {
             sum += __shfl_xor_sync(0xFFFFFFFF, sum, mask, WARP_SIZE);
@@ -137,7 +137,7 @@ static __global__ void quantize_mmq_q8_1(
     q.z = roundf(xi.z*d_inv);
     q.w = roundf(xi.w*d_inv);
 
-    // Write back 4 int8 values as a single 32 bit value for better memroy bandwidth:
+    // Write back 4 int8 values as a single 32 bit value for better memory bandwidth:
     char4 * yqs4 = (char4 *) y[ib].qs;
     yqs4[iqs/4] = q;
 
@@ -216,7 +216,7 @@ static __global__ void quantize_mmq_q8_1_id(
     if (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
         sum = xi.x + xi.y + xi.z + xi.w;
 
-        // Exchange calculate sum across vals_per_sum/4 threads.
+        // Calculate sum across vals_per_sum/4 threads.
 #pragma unroll
         for (int mask = vals_per_sum/8; mask > 0; mask >>= 1) {
             sum += __shfl_xor_sync(0xFFFFFFFF, sum, mask, WARP_SIZE);
@@ -231,7 +231,7 @@ static __global__ void quantize_mmq_q8_1_id(
     q.z = roundf(xi.z*d_inv);
     q.w = roundf(xi.w*d_inv);
 
-    // Write back 4 int8 values as a single 32 bit value for better memroy bandwidth:
+    // Write back 4 int8 values as a single 32 bit value for better memory bandwidth:
     char4 * yqs4 = (char4 *) y[ib].qs;
     yqs4[iqs/4] = q;
 

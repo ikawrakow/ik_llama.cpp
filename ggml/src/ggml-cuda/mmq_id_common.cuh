@@ -132,7 +132,7 @@ struct tile_x_sizes {
 #define GGML_CUDA_CC_VEGA       (GGML_CUDA_CC_OFFSET_AMD + 0x900)  // Vega56/64, minimum for fp16 dual issue
 #define GGML_CUDA_CC_VEGA20     (GGML_CUDA_CC_OFFSET_AMD + 0x906)  // MI50/Radeon VII, minimum for dp4a
 #define GGML_CUDA_CC_CDNA1      (GGML_CUDA_CC_OFFSET_AMD + 0x908)  // MI100, minimum for MFMA, acc registers
-#define GGML_CUDA_CC_CDNA2      (GGML_CUDA_CC_OFFSET_AMD + 0x910)  // MI210, minimum acc register renameing
+#define GGML_CUDA_CC_CDNA2      (GGML_CUDA_CC_OFFSET_AMD + 0x910)  // MI210, minimum acc register renaming
 #define GGML_CUDA_CC_CDNA3      (GGML_CUDA_CC_OFFSET_AMD + 0x942)  // MI300
 
 // RDNA removes MFMA, dp4a, xnack, acc registers, wave size is 32
@@ -3281,7 +3281,7 @@ static __device__ __forceinline__ void mmq_write_back_mma_id(
 
 //
 // Strictly speaking, we should bite the bullet and change WARP_SIZE to warp_size or MMQ_TILE_NE_K.
-// But as we basically don't support anything but Nvidia in the CUDA backend, we alays have
+// But as we basically don't support anything but Nvidia in the CUDA backend, we always have
 // WARP_SIZE = MMQ_TILE_NE_K = 32
 //
 

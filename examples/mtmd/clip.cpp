@@ -198,7 +198,7 @@ struct clip_hparams {
     float image_std[3];
 
     // for models using dynamic image size, we need to have a smaller image size to warmup
-    // otherwise, user will get OOM everytime they load the model
+    // otherwise, user will get OOM every time they load the model
     int32_t warmup_image_size = 0;
     int32_t warmup_audio_size = 3000;
 
@@ -4251,7 +4251,7 @@ static void normalize_image_u8_to_f32(const clip_image_u8 & src, clip_image_f32 
     }
 }
 
-// set of tools to manupulate images
+// set of tools to manipulate images
 // in the future, we can have HW acceleration by allowing this struct to access 3rd party lib like imagick or opencv
 struct img_tool {
     enum resize_algo {
@@ -5469,7 +5469,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                             const int win_h = std::min(grid_window, ph - y);
                             const int win_w = std::min(grid_window, pw - x);
                             const int dst_0 = dst;
-                            // group all tokens belong to the same window togather (to a continue range)
+                            // group all tokens belong to the same window together (to a continue range)
                             for (int dy = 0; dy < win_h; dy++) {
                                 for (int dx = 0; dx < win_w; dx++) {
                                     const int src = (y + dy) * pw + (x + dx);

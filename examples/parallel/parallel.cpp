@@ -137,7 +137,7 @@ int main(int argc, char ** argv) {
 
     // load the prompts from an external file if there are any
     if (params.prompt.empty()) {
-        printf("\n\033[32mNo new questions so proceed with build-in defaults.\033[0m\n");
+        printf("\n\033[32mNo new questions so proceed with built-in defaults.\033[0m\n");
     } else {
         // Output each line of the input params.prompts vector and copy to k_prompts
         int index = 0;

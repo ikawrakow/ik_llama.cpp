@@ -120,8 +120,8 @@ struct ggml_cann_pool {
      *
      * @param ptr   Pointer to the memory block to free.
      * @param size  Size of the memory block to free.
-     * @note Note that all CANN opertors are running async. Make sure memory is
-     *       still avaiable before this operator finished.
+     * @note Note that all CANN operators are running async. Make sure memory is
+     *       still available before this operator finished.
      */
     virtual void free(void* ptr, size_t size) = 0;
 };

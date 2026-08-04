@@ -12,7 +12,7 @@ for each ubatch-sized window in context:
     2. measure generation performance
     3. remove generated tokens from KV cache
     4. prepare a ubatch-sized batch of random tokens
-    4. process prepated batch
+    4. process prepared batch
     5. measure prompt processing performance
 
 The purpose of the benchmark is to visualize how the performance changes with
