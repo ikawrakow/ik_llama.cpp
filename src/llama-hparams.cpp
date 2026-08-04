@@ -1665,6 +1665,11 @@ void llm_load_hparams(
             {
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
                 if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_layer == 43 && hparams.nextn_predict_layers > 0) {
+                    LLAMA_LOG_WARN("===============================================================================================\n");
+                    LLAMA_LOG_WARN("Unexpected number of layers (%d) and nextn_predict_layers (%d) for DeepSeek4-Flash\n",
+                            hparams.n_layer, hparams.nextn_predict_layers);
+                    LLAMA_LOG_WARN("   -> setting nextn_predict_layers to zero\n");
+                    LLAMA_LOG_WARN("===============================================================================================\n");
                     hparams.nextn_predict_layers = 0;
                 }
                 // Probe the first appended predictor block, or n_layer - 1 for base GGUFs.
