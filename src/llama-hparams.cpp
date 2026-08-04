@@ -1664,6 +1664,9 @@ void llm_load_hparams(
         case LLM_ARCH_GLM_DSA:
             {
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_layer == 43 && hparams.nextn_predict_layers > 0) {
+                    hparams.nextn_predict_layers = 0;
+                }
                 // Probe the first appended predictor block, or n_layer - 1 for base GGUFs.
                 const uint32_t dsv4_probe_offset = std::max<uint32_t>(1, hparams.nextn_predict_layers);
                 const uint32_t dsv4_probe_layer = hparams.n_layer > dsv4_probe_offset
