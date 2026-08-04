@@ -714,7 +714,7 @@ int main(int argc, char ** argv) {
                 // - take half of the last (n_ctx - n_keep) tokens and recompute the logits in batches
                 const bool context_full = n_past + (int) embd.size() + std::max<int>(0, guidance_offset) >= n_ctx;
                 if (context_full && !params.ctx_shift) {
-                    LOG_TEE("\n\n%s: context full and context shifting is disabled; stopping\n", __func__);
+                    LOG_TEE("\n\n%s: context full and context shifting is disabled, stopping\n", __func__);
                     break;
                 }
                 if (context_full) {
@@ -729,7 +729,7 @@ int main(int argc, char ** argv) {
                     LOG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d\n",
                             n_past, n_left, n_ctx, params.n_keep, n_discard);
 
-                    llama_kv_cache_seq_rm(ctx, 0, params.n_keep, params.n_keep + n_discard);
+                    llama_kv_cache_seq_rm (ctx, 0, params.n_keep , params.n_keep + n_discard);
                     llama_kv_cache_seq_add(ctx, 0, params.n_keep + n_discard, n_past, -n_discard);
                     if (spec != nullptr) {
                         common_speculative_context_shift(spec, 0, params.n_keep, n_discard, n_past);

@@ -4772,7 +4772,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             throw std::runtime_error("invalid MTP package: missing target trunk and predictor tail tensors");
         }
         if (mtp_package == LLAMA_MTP_PACKAGE_COMPANION && !params.mtp) {
-            throw std::runtime_error("MTP companion GGUF cannot be used as the target model; pass it with -md/--draft");
+            throw std::runtime_error("MTP companion GGUF cannot be used as the target model, pass it with -md/--draft");
         }
 
         // ---- populate reload registry ONLY when hot-swap is requested ----

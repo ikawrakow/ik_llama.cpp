@@ -1191,12 +1191,7 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
-    // Step35 GGUFs can be packaged as a complete target (trunk plus embedded
-    // MTP heads), a trunk-only target, or an MTP-only companion.  The latter
-    // still declares the physical block count and carries the tokenizer/I/O
-    // tensors, but intentionally has no blk.0 trunk tensor.  Do not make the
-    // absent trunk look like a malformed model: skip those physical slots and
-    // load the appended predictor blocks normally.
+    // If, for any reason, an MTP-only GGUF reports a count of physical blocks in addition to the MTP blk, skip them
     const bool mtp_only = hparams.nextn_predict_layers > 0 &&
                           ml.get_tensor_meta("blk.0.attn_norm.weight") == nullptr;
     const int trunk_flags = mtp_only
@@ -1215,9 +1210,6 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         auto & layer = model.layers[i];
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= hparams.n_layer - hparams.nextn_predict_layers;
-        // A target-only Step GGUF may retain the NextN metadata while storing
-        // the MTP blocks in a companion file.  Probe the first required NextN
-        // tensor and make the whole physical tail optional in that layout.
         const std::string mtp_probe_name = tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i);
         const bool mtp_layer_present = !is_mtp_layer || ml.get_tensor_meta(mtp_probe_name.c_str()) != nullptr;
         const int layer_flags = mtp_only && !is_mtp_layer
@@ -1289,9 +1281,6 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         }
 
         if (is_mtp_layer) {
-            // These are required for an embedded MTP block and optional for a
-            // trunk-only GGUF.  The graph will validate the complete three-head
-            // set before enabling speculative execution.
             layer.nextn.eh_proj = create_tensor(ctx_split,
                     tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), {2 * n_embd, n_embd}, nextn_required_flags);
             layer.nextn.embed_tokens = create_tensor(ctx_split,

@@ -745,11 +745,7 @@ ggml_tensor * llm_build_context::build_inp_s_seq() {
 }
 
 ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
-    // MTP target contexts must expose the pre-output-norm hidden state to the
-    // speculative driver.  The regular result_norm path is the model output
-    // embedding and is not the input expected by a NextN head.  Mainline calls
-    // this tensor h_nextn; Step35 names the equivalent graph node
-    // result_mtp_embd.
+    // find result_norm tensor for input
     struct ggml_tensor * inp = nullptr;
     if (lctx.cparams.mtp) {
         for (int i = gf->n_nodes - 1; i >= 0; --i) {
@@ -790,12 +786,6 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
             } break;
         case LLAMA_POOLING_TYPE_NONE:
             {
-                // Keep the raw NextN feature named and addressable.  Reusing
-                // the same tensor for the generic pooled-output alias would
-                // overwrite result_mtp_embd and make the decode path select
-                // the normalized result instead.  The raw tensor is already
-                // in the graph as the parent of result_output, so no extra
-                // pooling node is needed for MTP.
                 cur = inp;
             } break;
         default:

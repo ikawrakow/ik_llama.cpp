@@ -2038,12 +2038,12 @@ bool common_speculative_prepare_mtp_runtime(
     const bool has_embedded_mtp = target_package == LLAMA_MTP_PACKAGE_EMBEDDED;
     if (target_package == LLAMA_MTP_PACKAGE_COMPANION ||
         target_package == LLAMA_MTP_PACKAGE_INVALID) {
-        LOG_ERR("%s: the target GGUF is an MTP companion or invalid package; load a complete target model instead\n",
+        LOG_ERR("%s: the target GGUF is an MTP companion or invalid package, load a complete target model instead\n",
                 __func__);
         return false;
     }
     if (target_package == LLAMA_MTP_PACKAGE_TARGET_ONLY && !has_external_mtp) {
-        LOG_ERR("%s: target GGUF contains no MTP tail; provide a matching predictor-only companion with -md\n",
+        LOG_ERR("%s: target GGUF contains no MTP tail, provide a matching predictor-only companion with -md\n",
                 __func__);
         return false;
     }
