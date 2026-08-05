@@ -395,9 +395,12 @@ struct llama_hparams {
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
 
-// retained window + amortization margin + one u-batch; compaction then fires every C - W tokens
+// retained window + one u-batch; compaction then fires every C - W tokens. The slack floor keeps a
+// small u-batch from compacting every few tokens.
 static inline uint32_t llama_swa_compact_window_rows(uint32_t window, uint32_t pad, uint32_t n_ubatch) {
-    const uint32_t unpadded = 2*window + n_ubatch;
+    const uint32_t min_slack = 256;
+    const uint32_t slack     = n_ubatch > min_slack ? n_ubatch : min_slack;
+    const uint32_t unpadded  = window + slack;
     return pad > 1 ? ((unpadded + pad - 1)/pad)*pad : unpadded;
 }
 

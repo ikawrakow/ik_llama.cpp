@@ -641,7 +641,6 @@ struct llama_context {
     bool mtp_carry_pending = false;
 
     std::vector<uint8_t> swa_compact_buf;
-    std::vector<uint8_t> swa_compact_zeros;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 

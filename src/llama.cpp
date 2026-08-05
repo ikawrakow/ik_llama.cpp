@@ -1669,7 +1669,6 @@ static bool llama_kv_cache_find_slot(
 static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_tokens) {
     llama_kv_cache & cache = lctx.kv_self;
     std::vector<uint8_t> & scratch = lctx.swa_compact_buf;
-    std::vector<uint8_t> & zeros = lctx.swa_compact_zeros;
     if (!cache.any_compacted()) {
         return;
     }
@@ -1703,15 +1702,6 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
         }
         ggml_backend_tensor_get(kl, scratch.data(), (size_t) src_row*stride, nbytes);
         ggml_backend_tensor_set(kl, scratch.data(), (size_t) dst_row*stride, nbytes);
-
-        // the padded read window covers rows past the live end
-        const size_t tail_rows = (size_t) C - W;
-        if (tail_rows > 0) {
-            if (zeros.size() < tail_rows*stride) {
-                zeros.assign(tail_rows*stride, 0);
-            }
-            ggml_backend_tensor_set(kl, zeros.data(), (size_t) (dst_row + W)*stride, tail_rows*stride);
-        }
     }
 
     cache.pos_base_swa += (llama_pos) (live - W);
