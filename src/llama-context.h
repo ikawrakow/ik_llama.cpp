@@ -13,15 +13,15 @@ struct llama_model;
 #include <set>
 #include <memory>
 
-struct llama_openpangu_swa_window_view {
+struct llama_swa_window_view {
     int64_t w_view  = 0;
     int64_t win_off = 0;
     bool engaged    = false;
 };
 
-static inline llama_openpangu_swa_window_view llama_openpangu_calc_swa_window_view(
+static inline llama_swa_window_view llama_swa_calc_window_view(
         int64_t n_kv, int64_t n_tokens, int64_t window, int64_t pad) {
-    llama_openpangu_swa_window_view result;
+    llama_swa_window_view result;
     if (window <= 0 || n_kv <= 0) {
         result.w_view = n_kv;
         return result;
@@ -32,6 +32,19 @@ static inline llama_openpangu_swa_window_view llama_openpangu_calc_swa_window_vi
     result.w_view  = overcovered < n_kv ? overcovered : n_kv;
     result.win_off = n_kv - result.w_view;
     result.engaged = result.w_view < n_kv;
+    return result;
+}
+
+static inline llama_swa_window_view llama_swa_calc_window_view_compact(
+        int64_t live, int64_t sink_rows, int64_t n_tokens, int64_t window, int64_t pad) {
+    llama_swa_window_view result;
+    const int64_t live_padded = pad > 1 ? ((live + pad - 1) / pad) * pad : live;
+
+    const int64_t unpadded = window + pad + n_tokens;
+    const int64_t overcovered = pad > 1 ? ((unpadded + pad - 1) / pad) * pad : unpadded;
+    result.w_view  = overcovered < live_padded ? overcovered : live_padded;
+    result.win_off = sink_rows + live_padded - result.w_view;
+    result.engaged = true;
     return result;
 }
 
@@ -57,6 +70,9 @@ struct llama_kv_cell {
 
 // ring-buffer of cached KV data
 struct llama_kv_cache {
+    // the FA kernels require padding to avoid extra runtime boundary checks
+    static uint32_t get_padding(bool flash_attn) { return flash_attn ? 256u : 32u; }
+
     bool has_shift = false;
     bool do_defrag = false;
     bool do_copy   = false;
@@ -74,6 +90,28 @@ struct llama_kv_cache {
     uint32_t head = 0;
     uint32_t size = 0;
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
+
+    std::vector<uint32_t> row_count;
+
+    bool any_compacted() const { return !row_count.empty(); }
+
+    uint32_t rows(int il) const {
+        return row_count.empty() ? size : row_count[il];
+    }
+
+    bool is_compacted(int il) const {
+        return !row_count.empty() && row_count[il] < size;
+    }
+
+    // rows [sinks|window]; row(pos) = sink_rows + pos - pos_base_swa
+    // sink_rows == hparams.param_sink_number, which only the openPangu loader sets (0 elsewhere)
+    uint32_t  size_swa     = 0;
+    uint32_t  sink_rows    = 0;
+    uint32_t  window_swa   = 0;
+    uint32_t  head_swa     = 0;
+    llama_pos pos_base_swa = 0;
+
+    uint32_t live_swa() const { return head_swa - sink_rows; }
 
     // computed before each graph build
     uint32_t n = 0;
@@ -567,7 +605,7 @@ struct llama_context {
     struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]
     struct ggml_tensor * inp_KQ_mask;     // F32 [kv_size, n_batch]
     struct ggml_tensor * inp_KQ_mask_swa; // F32 [kv_size, n_batch]
-    struct ggml_tensor * inp_KQ_mask_swa_win = nullptr; // F32 [openPangu SWA W_view, n_batch]
+    struct ggml_tensor * inp_KQ_mask_swa_win = nullptr; // F32 [SWA W_view, n_batch]
     struct ggml_tensor * inp_K_shift;     // I32 [kv_size]
     struct ggml_tensor * inp_mean;        // F32 [n_batch, n_batch]
     struct ggml_tensor * inp_cls;         // I32 [n_batch]
@@ -583,15 +621,16 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
 
-    struct openpangu_swa_window_view_state {
+    struct swa_window_view_state {
         bool active       = false;
+        bool compacted    = false;
         int32_t n_kv      = 0;
         int32_t n_tokens  = 0;
         uint32_t window   = 0;
         uint32_t pad      = 0;
         int64_t w_view    = 0;
         int64_t win_off   = 0;
-    } openpangu_swa_window_view;
+    } swa_window_view;
 
     // multi-head MTP chaining state: head k's output row at the last committed position,
     // written back after each warmup/update decode and fed into the next MTP graph through
@@ -600,6 +639,8 @@ struct llama_context {
     // before the host buffer is read or resized.
     std::vector<float> mtp_carry;
     bool mtp_carry_pending = false;
+
+    std::vector<uint8_t> swa_compact_buf;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 

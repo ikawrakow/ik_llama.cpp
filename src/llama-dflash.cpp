@@ -62,7 +62,7 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
     const int32_t target_token_capacity = std::max<int32_t>(
             1,
             std::max<int32_t>((int32_t) model.hparams.dflash_block_size, (int32_t) cparams.n_ubatch));
-    const int32_t target_cache_n_kv_total = GGML_PAD(target_cross_ctx + target_token_capacity, cparams.flash_attn ? 256 : 32);
+    const int32_t target_cache_n_kv_total = GGML_PAD(target_cross_ctx + target_token_capacity, (int32_t) llama_kv_cache::get_padding(cparams.flash_attn));
     const ggml_type target_cache_type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
     const int32_t n_layer = model.hparams.n_layer;
     const int64_t n_embd_head_k = model.hparams.n_embd_head_k(0);
