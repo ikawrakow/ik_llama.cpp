@@ -1968,12 +1968,6 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
         auto row_size_q = ggml_row_size(tt.vec_dot_type, q->ne[0]);
         size = row_size_q * q->ne[1] * q->ne[2];
     }
-#ifdef fixme__AVX2__
-    if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && q->ne[1] % 8 == 0 && k->ne[1] % 32 == 0) {
-        size += k->ne[0] * k->ne[1] * sizeof(float); // repacked K converted to f16
-        size += 32 * q->ne[1] * sizeof(float) * nthread;
-    }
-#endif
     size += k->ne[1] * q->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(int32_t);
@@ -2131,63 +2125,6 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
 
     if (k->ne[1] % 32 != 0) return false; // we can assume cache size is a multiple of at least 32
     int n32 = k->ne[1] / 32;
-
-#ifdef fixme__AVX2__
-    if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && q->ne[1] % 8 == 0) {
-        auto k_repacked_all = (float *)work_buffer;
-        //auto kq = (float *)work_buffer;
-        auto kq = k_repacked_all + k->ne[1]*k->ne[0];
-        auto score = kq + k->ne[1]*q->ne[1];
-        auto sorted = (int32_t *)(score + k->ne[1]);
-        auto idx_inf = sorted + k->ne[1];
-        auto idx_aux = idx_inf + k->ne[1];
-        auto counts  = idx_aux + k->ne[1];
-        auto kq_local = (float *)(counts + k_n_bucket) + ith * 32 * q->ne[1];
-        for (int iq2 = 0; iq2 < q->ne[2]; ++iq2) {
-            auto this_q = (const char *)q->data + iq2*q->nb[2];
-            auto this_m = (const char *)m->data + iq2*m->nb[1];
-            auto this_w = (const float *)((const char *)w->data + iq2*w->nb[1]);
-            for (int i32 = ith; i32 < n32; i32 += nth) {
-                int ik = 32*i32;
-                auto k_repacked = k_repacked_all + ik*k->ne[0];
-                if (iq2 == 0) {
-                    iqk_repack_f16(32, k->ne[0], (const char *)k->data + k->nb[1]*ik, k->nb[1], k_repacked);
-                }
-                for (int iq1 = 0; iq1 < (int)q->ne[1]; iq1 += 8) {
-                    iqk_mul_f32_f32_r<8>(k->ne[0], 32, q->nb[1]/sizeof(float), k_repacked,
-                            (const float *)(this_q + iq1*q->nb[1]), kq_local);
-                }
-                __m256 acc[4];
-                if (m->type == GGML_TYPE_F32) {
-                    auto m32 = (const float *)this_m + ik;
-                    for (int k = 0; k < 4; ++k) acc[k] = _mm256_loadu_ps(m32 + 8*k);
-                } else {
-                    auto m16 = (const ggml_fp16_t *)this_m + ik;
-                    for (int k = 0; k < 4; ++k) acc[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)m16 + k));
-                }
-                auto kq_i = kq_local;
-                for (int iq1 = 0; iq1 < int(q->ne[1]); ++iq1) {
-                    auto vw = _mm256_set1_ps(this_w[iq1]);
-                    for (int k = 0; k < 4; ++k) {
-                        auto relu = _mm256_max_ps(_mm256_setzero_ps(), _mm256_loadu_ps(kq_i + 8*k));
-                        acc[k] = _mm256_fmadd_ps(vw, relu, acc[k]);
-                    }
-                    kq_i += 32;
-                }
-                for (int k = 0; k < 4; ++k) _mm256_storeu_ps(score + ik + 8*k, acc[k]);
-            }
-            barrier(barrier_data);
-            if (ith == 0) {
-                iqk_bucket_topk(k->ne[1], n_top_k, score, sorted, idx_inf, k_n_bucket, counts, idx_aux);
-                std::memcpy((char *)dst->data + dst->nb[1]*iq2, sorted, n_top_k*sizeof(int32_t));
-            }
-            if (iq2 + 1 < q->ne[2]) {
-                barrier(barrier_data);
-            }
-        }
-        return true;
-    }
-#endif
 
     // We have more than 1 thread per q row
     // To not make it too complicated, let's just have all threads process the same row
