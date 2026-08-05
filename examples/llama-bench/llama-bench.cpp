@@ -270,6 +270,9 @@ struct cmd_params {
     bool mqkv = false;
     bool muge = false;
     bool defer_experts = false;
+    bool atsinfer = false;
+    int  atsinfer_vram_budget = 0;
+    bool atsinfer_dynamic = false;
     bool rcache = false;
     bool sas = false;
     int  max_gpu = 0;
@@ -319,6 +322,9 @@ static const cmd_params cmd_params_defaults = {
     /* mqkv                 */ false,
     /* muge                 */ false,
     /* defer_experts        */ false,
+    /* atsinfer             */ false,
+    /* atsinfer_vram_budget */ 0,
+    /* atsinfer_dynamic     */ false,
     /* rcache               */ false,
     /* sas                  */ false,
     /* max_gpu              */ 0,
@@ -370,6 +376,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
     printf("  -muge, --merge-up-gate-experts      (default: %s)\n", cmd_params_defaults.muge ? "1" : "0");
     printf("  --defer-experts                     (Linux only, default: %s)\n", cmd_params_defaults.defer_experts ? "1" : "0");
+    printf("  --atsinfer                          (default: %s)\n", cmd_params_defaults.atsinfer ? "1" : "0");
+    printf("  --atsinfer-vram-budget <MiB>        (default: %d, 0 = auto)\n", cmd_params_defaults.atsinfer_vram_budget);
+    printf("  --atsinfer-dynamic                  (default: %s)\n", cmd_params_defaults.atsinfer_dynamic ? "1" : "0");
     printf("  -rcache, --rope-cache               (default: %s)\n", cmd_params_defaults.rcache ? "1" : "0");
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
     printf("  -ot, --override-tensor pattern      (default: none)\n");
@@ -818,6 +827,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             params.muge = std::stoi(argv[i]);
         } else if (arg == "--defer-experts") {
             params.defer_experts = true;
+        } else if (arg == "--atsinfer") {
+            params.atsinfer = true;
+        } else if (arg == "--atsinfer-vram-budget") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.atsinfer_vram_budget = std::stoi(argv[i]);
+        } else if (arg == "--atsinfer-dynamic") {
+            params.atsinfer_dynamic = true;
         } else if (arg == "-sas" || arg == "--scheduler-async") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -987,6 +1006,9 @@ struct cmd_params_instance {
     bool mqkv = false;
     bool muge = false;
     bool defer_experts = false;
+    bool atsinfer = false;
+    int  atsinfer_vram_budget = 0;
+    bool atsinfer_dynamic = false;
     bool rcache = false;
     bool sas = false;
     int max_gpu = 0;
@@ -1010,6 +1032,9 @@ struct cmd_params_instance {
         mparams.merge_qkv = mqkv;
         mparams.merge_up_gate_exps = muge;
         mparams.defer_experts = defer_experts;
+        mparams.atsinfer_enable      = atsinfer;
+        mparams.atsinfer_vram_budget = atsinfer_vram_budget;
+        mparams.atsinfer_dynamic     = atsinfer_dynamic;
         mparams.tensor_buft_overrides = buft_overrides;
         mparams.mla = mla_attn;
         mparams.max_gpu = max_gpu;
@@ -1032,6 +1057,9 @@ struct cmd_params_instance {
                mqkv == other.mqkv &&
                muge == other.muge &&
                defer_experts == other.defer_experts &&
+               atsinfer == other.atsinfer &&
+               atsinfer_vram_budget == other.atsinfer_vram_budget &&
+               atsinfer_dynamic == other.atsinfer_dynamic &&
                use_thp == other.use_thp &&
                sas == other.sas &&
                fit == other.fit &&
@@ -1128,6 +1156,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
                 /* .defer_experts= */ params.defer_experts,
+                /* .atsinfer     = */ params.atsinfer,
+                /* .atsinfer_vram_budget = */ params.atsinfer_vram_budget,
+                /* .atsinfer_dynamic     = */ params.atsinfer_dynamic,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
@@ -1175,6 +1206,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
                 /* .defer_experts= */ params.defer_experts,
+                /* .atsinfer     = */ params.atsinfer,
+                /* .atsinfer_vram_budget = */ params.atsinfer_vram_budget,
+                /* .atsinfer_dynamic     = */ params.atsinfer_dynamic,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
@@ -1222,6 +1256,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
                 /* .defer_experts= */ params.defer_experts,
+                /* .atsinfer     = */ params.atsinfer,
+                /* .atsinfer_vram_budget = */ params.atsinfer_vram_budget,
+                /* .atsinfer_dynamic     = */ params.atsinfer_dynamic,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,
@@ -1269,6 +1306,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .mqkv         = */ params.mqkv,
                 /* .muge         = */ params.muge,
                 /* .defer_experts= */ params.defer_experts,
+                /* .atsinfer     = */ params.atsinfer,
+                /* .atsinfer_vram_budget = */ params.atsinfer_vram_budget,
+                /* .atsinfer_dynamic     = */ params.atsinfer_dynamic,
                 /* .rcache       = */ params.rcache,
                 /* .sas          = */ params.sas,
                 /* .max_gpu      = */ params.max_gpu,

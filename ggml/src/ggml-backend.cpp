@@ -4,6 +4,7 @@
 #include "ggml-rpc.h"
 #include "ggml-moe-prefetch.h"
 
+#include <algorithm>
 #include <cassert>
 #include <climits>
 #include <cstdarg>
@@ -1203,7 +1204,40 @@ struct ggml_backend_sched {
     bool is_async = false;
     bool debug;
     bool has_reduce = false;
+
+    // per-split timing (see ggml_backend_sched_set_profiling)
+    bool profiling = false;
+    std::vector<ggml_backend_split_timing> split_timings;
 };
+
+int ggml_backend_sched_backend_index(ggml_backend_sched_t sched, ggml_backend_t backend) {
+    if (!sched || !backend) return -1;
+    for (int i = 0; i < sched->n_backends; i++) {
+        if (sched->backends[i] == backend) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void ggml_backend_sched_set_profiling(ggml_backend_sched_t sched, bool enable) {
+    if (!sched) return;
+    sched->profiling = enable;
+    if (!enable) {
+        sched->split_timings.clear();
+    }
+}
+
+bool ggml_backend_sched_get_profiling(ggml_backend_sched_t sched) {
+    return sched ? sched->profiling : false;
+}
+
+int ggml_backend_sched_get_split_timings(ggml_backend_sched_t sched, struct ggml_backend_split_timing * out, int max_timings) {
+    if (!sched || !out || max_timings <= 0) return 0;
+    const int n = std::min((int) sched->split_timings.size(), max_timings);
+    std::copy(sched->split_timings.begin(), sched->split_timings.begin() + n, out);
+    return n;
+}
 
 void ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off) {
     int int_op = (int)op;
@@ -2209,6 +2243,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     for (auto & item : sched->needs_sync) item = true;
 
+    if (sched->profiling) {
+        sched->split_timings.clear();
+        sched->split_timings.reserve(sched->n_splits);
+    }
+
     if (sched->is_async && sched->n_backends > 2 && sched->split_mode_graph && sched->has_reduce) {
 
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
@@ -2496,7 +2535,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         // copy the input tensors to the split backend
+        const int64_t prof_copy_t0 = sched->profiling ? ggml_time_us() : 0;
         ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+        double prof_copy_us = 0.0;
+        if (sched->profiling) {
+            // the copies are issued asynchronously; wait so the number is transfer time rather
+            // than submission time. This is what makes a profiled round serialized.
+            ggml_backend_synchronize(sched->backends[split_backend_id]);
+            prof_copy_us = (double) (ggml_time_us() - prof_copy_t0);
+        }
 
         // ids are now final and host-visible; enqueue the selected expert
         // slices of this split's host-computed MoE matmuls (up/gate and down
@@ -2516,9 +2563,33 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
+        const int64_t prof_t0 = sched->profiling ? ggml_time_us() : 0;
+
         auto ec = ggml_backend_sched_eval(sched, split_backend, split);
         if (ec != GGML_STATUS_SUCCESS) {
             return ec;
+        }
+
+        if (sched->profiling) {
+            // the split was launched asynchronously; wait for it so the elapsed time is the
+            // split's actual execution time rather than its launch overhead. This serializes
+            // the round on purpose -- profiling rounds are calibration, not steady state.
+            ggml_backend_synchronize(split_backend);
+
+            ggml_backend_split_timing t = {};
+            t.backend_id = split_backend_id;
+            t.n_nodes    = split->graph.n_nodes;
+            t.us         = (double) (ggml_time_us() - prof_t0);
+            t.copy_us    = prof_copy_us;
+            if (split->graph.n_nodes > 0 && split->graph.nodes[0]) {
+                snprintf(t.name, sizeof(t.name), "%s", split->graph.nodes[0]->name);
+                // the last node is needed too: a split can span many layers, and an operator
+                // that is not the split's first node would otherwise be invisible to callers
+                // attributing time back to layers
+                snprintf(t.last_name, sizeof(t.last_name), "%s",
+                        split->graph.nodes[split->graph.n_nodes - 1]->name);
+            }
+            sched->split_timings.push_back(t);
         }
 
         // the pages the lookahead streamer just read for this split are one-shot

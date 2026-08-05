@@ -2170,6 +2170,19 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.prefetch_experts_threads = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "--atsinfer") {
+        params.atsinfer_enable = true;
+        return true;
+    }
+    if (arg == "--atsinfer-vram-budget") {
+        CHECK_ARG;
+        params.atsinfer_vram_budget = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--atsinfer-dynamic") {
+        params.atsinfer_dynamic = true;
+        return true;
+    }
     if (arg == "--fit-margin") {
         CHECK_ARG;
         int32_t margin = std::stoi(argv[i]);
@@ -3290,6 +3303,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "       --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
+    options.push_back({ "*",           "       --atsinfer",             "enable ATSInfer tensor-level placement solver at model load"});
+    options.push_back({ "*",           "       --atsinfer-vram-budget N",
+                                                                        "VRAM budget in MiB for the ATSInfer solver (0 = auto-detect)"});
+    options.push_back({ "*",           "       --atsinfer-dynamic",     "enable ATSInfer dynamic rescheduling during inference"});
     options.push_back({ "*",           "       --fit-margin N",         "safety margin in MiB when auto-fitting model offloading"});
     options.push_back({ "*",           "-gfm,  --gpu-fit-margin N",     "per-layer GPU fit margin as layer_id,margin pairs, comma-separated" });
     options.push_back({ "*",           "-wgt, --worst-graph-tokens N",  "number of tokens to use for worst-case graph"});
@@ -4220,6 +4237,9 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.fit             = params.fit;
     mparams.fit_margin      = params.fit_margin;
     mparams.worst_graph_tokens = params.worst_graph_tokens;
+    mparams.atsinfer_enable      = params.atsinfer_enable;
+    mparams.atsinfer_vram_budget = params.atsinfer_vram_budget;
+    mparams.atsinfer_dynamic     = params.atsinfer_dynamic;
     mparams.type_k          = kv_cache_type_from_str(params.cache_type_k);
     mparams.type_v          = kv_cache_type_from_str(params.cache_type_v);
     mparams.idx_type_k      = kv_cache_type_from_str(params.indexer_cache_type_k);

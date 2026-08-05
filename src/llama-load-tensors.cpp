@@ -3,6 +3,12 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "ggml.h"
+#include "atsinfer/atsinfer-profiler.h"
+#include "atsinfer/atsinfer-placement.h"
+
+#ifdef GGML_USE_CUDA
+#  include "ggml-cuda.h"
+#endif
 
 
 #include <set>
@@ -346,6 +352,177 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         [[maybe_unused]] int mtp_first = n_layer - model.hparams.nextn_predict_layers;
         LLAMA_LOG_DEBUG("%s: MTP layer(s) %d-%d: split attention+FFN, nextn on per-device CUDA\n",
                 __func__, mtp_first, n_layer - 1);
+    }
+
+    // ATSInfer: static placement integration — runs DP solver and populates overrides
+    if (ml.atsinfer_enable) {
+        LLAMA_LOG_INFO("%s: ATSInfer enabled — running hardware profiling and DP placement solver\n", __func__);
+
+        // 1. Build tensor list from model loader metadata
+        std::vector<ggml_tensor *> all_tensors;
+        for (int i = 0; i < ml.n_tensors; ++i) {
+            auto * t = ml.get_tensor_meta(i);
+            if (t) all_tensors.push_back(t);
+        }
+
+        // 2. Load or measure hardware bandwidth profile.
+        //    The cache is keyed on the model's tensor count and total size, so a profile written
+        //    for another model is rejected instead of being applied to tensors that do not exist.
+        size_t model_total_bytes = 0;
+        for (const auto * t : all_tensors) {
+            model_total_bytes += ggml_nbytes(t);
+        }
+
+        atsinfer_hardware_profile hw_profile;
+        std::unordered_map<std::string, atsinfer_tensor_profile> cached_profiles;
+        const std::string cache_path = "atsinfer_profile.cache";
+        std::vector<atsinfer_expert_measurement> cached_measurements;
+        bool cache_loaded = atsinfer_load_profile_cache(cache_path, hw_profile, cached_profiles,
+                all_tensors.size(), model_total_bytes, &cached_measurements);
+        if (!cache_loaded) {
+            uint64_t vram_budget_bytes = (uint64_t)ml.atsinfer_vram_budget * 1024ULL * 1024ULL;
+            hw_profile = atsinfer_profile_hardware(vram_budget_bytes);
+            LLAMA_LOG_INFO("%s: ATSInfer H2D bandwidth: %.0f MB/s, D2H: %.0f MB/s\n",
+                __func__, hw_profile.pcie_bandwidth_mbps, hw_profile.pcie_d2h_bandwidth_mbps);
+        } else {
+            LLAMA_LOG_INFO("%s: ATSInfer loaded profile cache from '%s'\n", __func__, cache_path.c_str());
+        }
+
+        // 3. Profile tensors (heuristic latency estimation, or measured from cache)
+        auto tensor_profile_map = cache_loaded
+            ? cached_profiles
+            : atsinfer_profile_tensors(all_tensors, hw_profile.pcie_bandwidth_mbps);
+
+        // If the cache contains V3 EXPERT measurements from a previous profiling
+        // decode round, replace the heuristic t_c / t_g for expert tensors with the
+        // real measured values.  This is what closes the gap between ATSInfer and
+        // manual --n-cpu-moe.
+        if (cache_loaded && !cached_measurements.empty()) {
+            atsinfer_apply_expert_measurements(tensor_profile_map, cached_measurements,
+                    hw_profile.pcie_bandwidth_mbps);
+            LLAMA_LOG_INFO("%s: ATSInfer applied %zu per-layer expert measurements from cache\n",
+                    __func__, cached_measurements.size());
+        }
+
+        // Convert map to vector for the DP solver
+        std::vector<atsinfer_tensor_profile> tensor_profiles;
+        tensor_profiles.reserve(tensor_profile_map.size());
+        for (auto & [name, tp] : tensor_profile_map) {
+            tensor_profiles.push_back(tp);
+        }
+
+        // 4. Determine the VRAM budget for weights.
+        //    atsinfer_profile_hardware() echoes back whatever budget it was handed and
+        //    never queries the device, so both the "0 = auto" path and an over-large
+        //    user value have to be resolved here against real free VRAM. Getting this
+        //    wrong is not a graceful failure: on Windows/WDDM an oversubscribed CUDA
+        //    allocation silently spills to system memory over PCIe. Measured with a
+        //    15000 MiB budget on a 12288 MiB card, the loader placed 14700 MiB of
+        //    weights on CUDA0 and decode collapsed to 5.78 tok/s (vs 37.94 tok/s).
+        //    The budget must also leave room for the KV cache and compute buffers,
+        //    which the solver does not model -- mirror --fit-margin's reservation.
+        uint64_t vram_budget_bytes = (uint64_t)ml.atsinfer_vram_budget * 1024ULL * 1024ULL;
+        {
+            size_t vram_free = 0;
+#ifdef GGML_USE_CUDA
+            if (!model.devices.empty()) {
+                size_t total = 0;
+                ggml_backend_cuda_get_device_memory(model.devices[0], &vram_free, &total);
+            }
+#endif
+            // reserve headroom for KV cache, compute buffers and backend context
+            const uint64_t reserve = 1024ULL * 1024ULL * 1024ULL;
+            const uint64_t usable  = vram_free > reserve ? (uint64_t)vram_free - reserve : 0;
+
+            if (vram_budget_bytes == 0) {
+                vram_budget_bytes = usable;
+                LLAMA_LOG_INFO("%s: ATSInfer auto VRAM budget: %.2f GiB (%.2f GiB free - 1.00 GiB reserved)\n",
+                        __func__, vram_budget_bytes/1073741824.0, vram_free/1073741824.0);
+            } else if (usable > 0 && vram_budget_bytes > usable) {
+                LLAMA_LOG_WARN("%s: ATSInfer VRAM budget %.2f GiB exceeds usable VRAM; clamping to %.2f GiB "
+                        "(%.2f GiB free - 1.00 GiB reserved)\n", __func__,
+                        vram_budget_bytes/1073741824.0, usable/1073741824.0, vram_free/1073741824.0);
+                vram_budget_bytes = usable;
+            }
+        }
+
+        // 5. Run DP placement solver
+        bool is_moe = (model.hparams.n_expert > 0);
+        auto placement = atsinfer_compute_static_placement(tensor_profiles, vram_budget_bytes, is_moe);
+
+        LLAMA_LOG_INFO("%s: ATSInfer placement solver: %zu tensors, %zu GPU / %zu CPU, VRAM used: %.2f GiB\n",
+            __func__,
+            placement.placement.size(),
+            std::count_if(placement.placement.begin(), placement.placement.end(),
+                [](const auto & p){ return p.second == ATSInferBackend::GPU; }),
+            std::count_if(placement.placement.begin(), placement.placement.end(),
+                [](const auto & p){ return p.second == ATSInferBackend::CPU; }),
+            (double)placement.total_vram_used_bytes / (1024.0 * 1024.0 * 1024.0));
+
+        // 6. Convert placement decisions to ggml buffer type overrides
+        //    CPU tensors: place in pinned host memory for fastest H2D transfers
+        //    GPU tensors: reuse the buffer type of an already-offloaded layer.
+        //    NOTE: buft_layer[0] is NOT usable here -- layers [0, i_gpu_start) are
+        //    assigned the CPU buft, so index 0 is CPU whenever the model is only
+        //    partially offloaded. Scan for the first genuinely non-CPU entry instead.
+        auto cpu_buft = llama_default_buffer_type_cpu(true); // pinned
+        ggml_backend_buffer_type_t gpu_buft = cpu_buft;
+        for (const auto & bl : model.buft_layer) {
+            if (bl.buft && bl.buft != cpu_buft) {
+                gpu_buft = bl.buft;
+                break;
+            }
+        }
+        if (gpu_buft == cpu_buft) {
+            LLAMA_LOG_WARN("%s: ATSInfer found no GPU-backed layer buffer type; "
+                    "placement will be a no-op (all tensors stay on CPU)\n", __func__);
+        }
+
+        auto buft_map = atsinfer_map_placement_to_buft(placement, cpu_buft, gpu_buft);
+
+        // Inject ATSInfer decisions as regex overrides (exact name match).
+        // get_context_for_tensor() takes the FIRST matching override and breaks, and the
+        // entries above (-ot, --n-cpu-moe, --fit) were appended earlier, so appending here
+        // means explicit user placement always wins over the ATSInfer solver.
+        // The solver only reasons about repeating transformer layers. Global tensors
+        // (token_embd, output head, final norms) have placement rules of their own that
+        // it does not model: llama_model_load() pins buft_input to the CPU because
+        // "there is very little benefit to offloading the input layer", and buft_output
+        // follows n_gpu_layers. Letting the solver override those measurably hurts --
+        // it drags token_embd.weight (272 MiB) and output.weight (398 MiB) onto the GPU
+        // and costs ~40% decode throughput. Restrict overrides to "blk.N." tensors.
+        size_t n_gpu_overrides = 0, n_skipped_global = 0;
+        for (auto & [tensor_name, buft] : buft_map) {
+            if (tensor_name.compare(0, 4, "blk.") != 0) {
+                ++n_skipped_global;
+                continue;
+            }
+            // Escape regex metacharacters in a SINGLE pass. A per-character loop that
+            // handles '\\' after '.' would re-escape the backslashes it just inserted,
+            // turning "blk.0.x" into "blk\\.0\\.x" (literal backslash + any char), which
+            // matches nothing -- every override would silently be dropped.
+            static const std::string meta = ".[]()*+?^$}{|\\";
+            std::string escaped;
+            escaped.reserve(tensor_name.size() * 2);
+            for (char ch : tensor_name) {
+                if (meta.find(ch) != std::string::npos) {
+                    escaped += '\\';
+                }
+                escaped += ch;
+            }
+            if (buft != cpu_buft) ++n_gpu_overrides;
+            overrides.emplace_back(std::make_pair(std::regex("^" + escaped + "$"), buft));
+        }
+        const size_t n_injected = buft_map.size() - n_skipped_global;
+        LLAMA_LOG_INFO("%s: ATSInfer injected %zu buffer-type overrides (%zu GPU / %zu CPU), "
+                "%zu global tensors left to the model's own placement\n",
+                __func__, n_injected, n_gpu_overrides, n_injected - n_gpu_overrides, n_skipped_global);
+
+        // 7. Persist profile cache if newly measured
+        if (!cache_loaded) {
+            atsinfer_save_profile_cache(cache_path, hw_profile, tensor_profile_map);
+            LLAMA_LOG_INFO("%s: ATSInfer profile cache saved to '%s'\n", __func__, cache_path.c_str());
+        }
     }
 
     auto n_tensors = ml.n_tensors;

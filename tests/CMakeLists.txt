@@ -206,6 +206,7 @@ llama_build_and_test(test-regex-partial.cpp)
 
 llama_target_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_target_and_test(test-autorelease.cpp        LABEL "model")
+llama_target_and_test(test-atsinfer.cpp           LABEL "atsinfer")
 
 
 # dummy executable - not installed

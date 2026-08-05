@@ -210,6 +210,25 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // Per-split execution timing, used by ATSInfer to obtain the measured t_c / t_g.
+    struct ggml_backend_split_timing {
+        int    backend_id;
+        int    n_nodes;
+        double us;                       // execution time of the split
+        double copy_us;                  // time spent copying this split's inputs (H2D weights + activations)
+        char   name[GGML_MAX_NAME];      // name of the split's first node
+        char   last_name[GGML_MAX_NAME]; // name of the split's last node
+    };
+
+    // index of a backend within the scheduler, matching ggml_backend_split_timing::backend_id.
+    // Returns -1 if the backend is not registered with this scheduler.
+    GGML_API int                  ggml_backend_sched_backend_index(ggml_backend_sched_t sched, ggml_backend_t backend);
+
+    GGML_API void                 ggml_backend_sched_set_profiling(ggml_backend_sched_t sched, bool enable);
+    GGML_API bool                 ggml_backend_sched_get_profiling(ggml_backend_sched_t sched);
+    // copies up to max_timings entries into out, returns the number written
+    GGML_API int                  ggml_backend_sched_get_split_timings(ggml_backend_sched_t sched, struct ggml_backend_split_timing * out, int max_timings);
+
     // enable or disable op offload for a given op
     GGML_API void                 ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off);
     GGML_API void                 ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off);
