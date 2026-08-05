@@ -564,8 +564,38 @@ struct llama_context::Prev {
     int32_t mtp_n_heads;
     int64_t swa_w_view;
     int64_t swa_win_off;
+    // Which sequences the cached graph was built for. Hybrid and recurrent graphs
+    // bake the recurrent state row in as a view offset, and update_cache_copies()
+    // re-points ATTENTION layers only, so such a graph is only reusable for the
+    // same sequence composition.
+    uint64_t seq_fingerprint;
     ggml_cgraph * graph;
 };
+
+// Identifies the sequence composition of a ubatch: which sequences, in which
+// order, and which of them start at position 0 (a state reset is baked into the
+// graph as a node, so it is part of the graph's identity too).
+static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b) {
+    uint64_t h = 1469598103934665603ull;                    // FNV-1a
+    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+    mix((uint64_t) (uint32_t) b.n_tokens);
+    for (int32_t i = 0; i < b.n_tokens; ++i) {
+        const int32_t ns = b.n_seq_id ? b.n_seq_id[i] : 0;
+        mix((uint64_t) (uint32_t) ns);
+        if (b.seq_id && b.seq_id[i]) {
+            for (int32_t j = 0; j < ns; ++j) {
+                mix((uint64_t) (uint32_t) b.seq_id[i][j]);
+            }
+        }
+        mix(b.pos && b.pos[i] == 0 ? 1ull : 0ull);
+    }
+    return h;
+}
+
+// Only these architectures bake a recurrent state row into the graph.
+static inline bool llama_graph_bakes_seq_state(const llm_arch & arch) {
+    return llm_arch_is_hybrid(arch) || llm_arch_is_recurrent(arch);
+}
 
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
@@ -597,6 +627,15 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     if (u_batch.embd) return false;
+    // A graph built for sequence A must not be reused to decode sequence B: the
+    // recurrent state row is baked in as a view offset and nothing re-points it,
+    // so every sequence would read and write sequence A's state. Set
+    // IK_LEGACY_GRAPH_REUSE to restore the previous behaviour for A/B testing.
+    static const bool legacy_graph_reuse = getenv("IK_LEGACY_GRAPH_REUSE") != nullptr;
+    if (!legacy_graph_reuse && llama_graph_bakes_seq_state(model.arch) &&
+            llama_ubatch_seq_fingerprint(u_batch) != the_prev->seq_fingerprint) {
+        return false;
+    }
     auto & kv_self_used = (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
                           mtp_target_ctx != nullptr ? mtp_target_ctx->kv_self : kv_self;
     if (the_prev->save_per_step_ssm != kv_self_used.save_per_step_ssm ||
@@ -6321,7 +6360,11 @@ static int llama_decode_internal(
                         kv_self_used.save_per_step_ssm, kv_self_used.ckpt.per_step_max_allocated,
                         cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads,
                         lctx.swa_window_view.w_view,
-                        lctx.swa_window_view.win_off, gf});
+                        lctx.swa_window_view.win_off,
+                        // Only hybrid/recurrent graphs compare this; don't make
+                        // every other architecture pay to compute it.
+                        llama_graph_bakes_seq_state(model.arch)
+                            ? llama_ubatch_seq_fingerprint(u_batch) : 0, gf});
             }
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
