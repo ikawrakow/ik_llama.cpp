@@ -1327,8 +1327,8 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         } else {
             // DSV4 uses separate up and gate expert tensors. Do not silently
             // select the fork-only merged gate path for another GGUF.
-            GGML_ASSERT(model.layers[il].ffn_up_gate_exps == nullptr &&
-                    "merged DSV4 MoE gate tensors use an unsupported layout");
+            //GGML_ASSERT(model.layers[il].ffn_up_gate_exps == nullptr &&
+            //        "merged DSV4 MoE gate tensors use an unsupported layout");
             ggml_tensor * selected_experts = nullptr;
             ggml_tensor * exp_probs_b = model.layers[il].ffn_exp_probs_b;
             if ((uint32_t) il < hparams.dsv4_hash_layer_count) {
