@@ -6,13 +6,21 @@
 #include <vector>
 #include <unordered_map>
 
+// Per-backend-flip penalty charged by the static placement DP (Algoritmo 1). It models the
+// graph-split overhead at a backend boundary (kernel launch + synchronization), NOT the
+// weight transfer time. A transfer is a one-time load cost and in decode the host-resident
+// weights are re-read every round regardless of flips, so charging the full size/B_pcie here
+// made r_i < c_i for every large tensor and the DP degenerated to "everything on CPU" -- on
+// a 122B MoE that left 26/31 GiB of VRAM empty and all expert layers in system RAM.
+inline constexpr float ATSINFER_SPLIT_OVERHEAD_MS = 0.02f; // ~20 us kernel launch + sync
+
 struct atsinfer_tensor_profile {
     std::string tensor_name;
     size_t size_bytes         = 0;     // s_i
     float exec_time_cpu_ms    = 0.0f;  // t_i^c
     float exec_time_gpu_ms    = 0.0f;  // t_i^g
     float latency_reduction   = 0.0f;  // r_i = t_i^c - t_i^g
-    float switching_cost_ms   = 0.0f;  // c_i = S_in,i / B_pcie
+    float switching_cost_ms   = 0.0f;  // c_i = graph-split overhead per backend flip
     float performance_density = 0.0f;  // k_i^b = t_i^b / s_i
 
     // Classification metadata

@@ -130,11 +130,12 @@ atsinfer_hardware_profile atsinfer_profile_hardware(size_t vram_budget_bytes) {
 std::unordered_map<std::string, atsinfer_tensor_profile> atsinfer_profile_tensors(
     const std::vector<struct ggml_tensor *> & tensors,
     float pcie_bandwidth_mbps) {
-
+    
     std::unordered_map<std::string, atsinfer_tensor_profile> profiles;
-    if (pcie_bandwidth_mbps <= 0.0f) {
-        pcie_bandwidth_mbps = 16000.0f;
-    }
+    // B_pcie is no longer used here: the switching cost is a fixed split overhead and the
+    // PCIe cost of host-resident weights is recurring per token, which is captured by the
+    // measured/heuristic t_cpu, not by the placement flip penalty.
+    (void) pcie_bandwidth_mbps;
 
     for (const auto * tensor : tensors) {
         if (!tensor || !tensor->name[0]) continue;
@@ -207,14 +208,18 @@ std::unordered_map<std::string, atsinfer_tensor_profile> atsinfer_profile_tensor
 
         p.latency_reduction = p.exec_time_cpu_ms - p.exec_time_gpu_ms;
 
-        // Defect 2 & 3 fix: switching cost now includes a per-split overhead constant
-        // (~10 µs for kernel launch + synchronisation at a backend boundary) on top of
-        // the raw PCIe transfer time.  Without this the DP underestimates the penalty for
-        // flipping backends and produces schedules with excessive splits.
+        // Switching cost = graph-split overhead only (Defect 2 fix). Charging the full
+        // weight transfer time (size_mb / B_pcie) here degenerated the knapsack: for an
+        // MoE expert group r_i is ~1.9 ms (measured) while c_i was ~50 ms, so the DP's
+        // maximum-scoring solution was "put zero experts on GPU" and every large model ran
+        // with all expert layers in system RAM, leaving the VRAM budget unused.
+        // A transfer is a one-time load cost; per-token decode re-reads host-resident
+        // weights every round no matter how the backends flip, so it must not gate the
+        // placement decision. The flip penalty only reflects kernel launch + sync.
         //
-        // FIXME: calibrate the 0.01 ms constant against observed split overhead from
+        // FIXME: calibrate against observed split overhead from
         // ggml_backend_sched_get_split_timings() / atsinfer_dt_collect().
-        p.switching_cost_ms = 0.01f + (size_mb) / (pcie_bandwidth_mbps / 1000.0f);
+        p.switching_cost_ms = ATSINFER_SPLIT_OVERHEAD_MS;
 
         p.performance_density = p.exec_time_cpu_ms / std::max(1.0f, size_mb);
 
@@ -229,7 +234,7 @@ bool atsinfer_save_profile_cache(
     const atsinfer_hardware_profile & hw,
     const std::unordered_map<std::string, atsinfer_tensor_profile> & profiles,
     const std::vector<atsinfer_expert_measurement> & measurements) {
-
+    
     std::ofstream out(filename);
     if (!out.is_open()) return false;
 
@@ -317,8 +322,7 @@ bool atsinfer_load_profile_cache(
 
             p.latency_reduction = p.exec_time_cpu_ms - p.exec_time_gpu_ms;
             float size_mb = (float)p.size_bytes / (1024.0f * 1024.0f);
-            float bw = hw.pcie_bandwidth_mbps > 0.0f ? hw.pcie_bandwidth_mbps : 16000.0f;
-            p.switching_cost_ms = 0.01f + (size_mb) / (bw / 1000.0f);
+            p.switching_cost_ms = ATSINFER_SPLIT_OVERHEAD_MS;
             p.performance_density = p.exec_time_cpu_ms / std::max(1.0f, size_mb);
 
             profiles[p.tensor_name] = p;
@@ -370,31 +374,51 @@ void atsinfer_apply_expert_measurements(
         }
     }
 
-    // For each layer with measurements, find all expert tensors belonging to that
-    // layer and distribute the measured time proportionally to tensor size.
     // The three expert tensors (up/gate/down) execute as one fused operator, so each
     // individual tensor's latency is its fraction of the group's total bytes.
-    const float bw = pcie_bandwidth_mbps > 0.0f ? pcie_bandwidth_mbps : 16000.0f;
+    (void) pcie_bandwidth_mbps; // bandwidth no longer feeds the split-overhead switching cost
+
+    // The per-layer measurements come from a single profiled round, so layer-to-layer
+    // differences are mostly noise -- MoE layers in the same size class are structurally
+    // identical. Feeding the raw values to the DP made the chosen GPU set shift between
+    // runs (and scatter across the layer sequence), which shows up as run-to-run
+    // inconsistency on large MoE models. Normalize each layer's measured time by its
+    // expert-group size, take the median ratio, and re-derive every layer's time from it:
+    // layers that are genuinely bigger (more compute) keep proportionally bigger times,
+    // the noise is removed, and the placement becomes deterministic.
+    std::vector<float> ratios_c, ratios_g;
+    ratios_c.reserve(lookup.size());
+    ratios_g.reserve(lookup.size());
+    for (const auto & kv : lookup) {
+        const auto it = layer_totals.find(kv.first);
+        const size_t lt = it != layer_totals.end() ? it->second : 0;
+        if (lt == 0) continue;
+        ratios_c.push_back(kv.second.t_cpu_ms / (float) lt);
+        ratios_g.push_back(kv.second.t_gpu_ms / (float) lt);
+    }
+    auto median_of = [](std::vector<float> v) -> float {
+        if (v.empty()) return 0.0f;
+        const size_t mid = v.size() / 2;
+        std::nth_element(v.begin(), v.begin() + mid, v.end());
+        return v[mid];
+    };
+    const float med_c = median_of(ratios_c); // ms per byte of expert weights, CPU
+    const float med_g = median_of(ratios_g); // ms per byte of expert weights, GPU
+    if (med_c <= 0.0f) return;
 
     for (auto & kv : profiles) {
         auto & p = kv.second;
         if (!p.is_moe_expert || p.layer_id < 0) continue;
 
-        auto it = lookup.find(p.layer_id);
-        if (it == lookup.end()) continue;
+        const auto it = layer_totals.find(p.layer_id);
+        if (it == layer_totals.end() || it->second == 0) continue;
 
-        const size_t layer_total = layer_totals[p.layer_id];
-        if (layer_total == 0) continue;
-
-        const float fraction = (float)p.size_bytes / (float)layer_total;
-        const auto & m = it->second;
-
-        p.exec_time_cpu_ms = m.t_cpu_ms * fraction;
-        p.exec_time_gpu_ms = m.t_gpu_ms * fraction;
+        p.exec_time_cpu_ms = med_c * (float) p.size_bytes;
+        p.exec_time_gpu_ms = med_g * (float) p.size_bytes;
         p.latency_reduction = p.exec_time_cpu_ms - p.exec_time_gpu_ms;
 
         const float size_mb = (float)p.size_bytes / (1024.0f * 1024.0f);
-        p.switching_cost_ms = 0.01f + (size_mb) / (bw / 1000.0f);
+        p.switching_cost_ms = ATSINFER_SPLIT_OVERHEAD_MS;
         p.performance_density = p.exec_time_cpu_ms / std::max(1.0f, size_mb);
     }
 }

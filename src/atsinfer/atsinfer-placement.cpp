@@ -7,7 +7,7 @@
 static atsinfer_placement_decision solve_knapsack_dp(
     const std::vector<atsinfer_tensor_profile> & tensors,
     size_t vram_budget_bytes) {
-
+    
     atsinfer_placement_decision result;
     result.total_vram_used_bytes = 0;
     result.expected_total_latency_ms = 0.0f;
@@ -23,7 +23,7 @@ static atsinfer_placement_decision solve_knapsack_dp(
     // last_backend: 0 = CPU, 1 = GPU
     std::vector<std::vector<std::vector<float>>> dp(
         n + 1, std::vector<std::vector<float>>(budget_mb + 1, std::vector<float>(2, -1e9f)));
-
+    
     std::vector<std::vector<std::vector<int>>> parent_w(
         n + 1, std::vector<std::vector<int>>(budget_mb + 1, std::vector<int>(2, 0)));
     std::vector<std::vector<std::vector<int>>> parent_b(
@@ -122,10 +122,21 @@ static std::vector<atsinfer_tensor_profile> atsinfer_group_expert_tensors(
         }
     }
 
+    // Iterate groups in ascending layer order (= graph execution order). unordered_map
+    // iteration order is hash-bucket order, which for > bucket_count layers (53 on libstdc++)
+    // scrambles the sequence and makes the DP's switching penalties apply over a random
+    // order -- a source of non-deterministic, scattered placements on larger MoE models.
+    std::vector<int> layers;
+    layers.reserve(groups.size());
+    for (const auto & kv : groups) {
+        layers.push_back(kv.first);
+    }
+    std::sort(layers.begin(), layers.end());
+
     std::vector<atsinfer_tensor_profile> result;
 
-    for (auto & kv : groups) {
-        auto & members = kv.second;
+    for (int layer : layers) {
+        auto & members = groups[layer];
         if (members.size() <= 1) {
             // Single expert tensor for this layer (e.g., gate-only models): no grouping needed
             for (auto & p : members) {
@@ -138,7 +149,7 @@ static std::vector<atsinfer_tensor_profile> atsinfer_group_expert_tensors(
         // MUST value-initialise: size_bytes, exec_time_cpu_ms, latency_reduction etc.
         // have no default values in the struct and would otherwise be stack garbage.
         atsinfer_tensor_profile combined{};
-        combined.layer_id = kv.first;
+        combined.layer_id = layer;
         combined.is_moe_expert = true;
         combined.is_ffn = true;
 
@@ -150,15 +161,15 @@ static std::vector<atsinfer_tensor_profile> atsinfer_group_expert_tensors(
             combined.exec_time_gpu_ms  += p.exec_time_gpu_ms;
         }
 
-        // The per-split overhead (0.01ms in atsinfer_profile_tensors) is paid once per
-        // backend switch, not once per tensor. Summing N individual switching costs
-        // double-counts it (N-1) times. Remove the excess.
+        // The per-split overhead (ATSINFER_SPLIT_OVERHEAD_MS in atsinfer_profile_tensors)
+        // is paid once per backend switch, not once per tensor. Summing N individual
+        // switching costs double-counts it (N-1) times. Remove the excess.
         if (members.size() > 1) {
-            combined.switching_cost_ms -= 0.01f * (float)(members.size() - 1);
+            combined.switching_cost_ms -= ATSINFER_SPLIT_OVERHEAD_MS * (float)(members.size() - 1);
         }
 
         // Name the group after the layer so placement lookup can fan out to members
-        combined.tensor_name = std::string("blk.") + std::to_string(kv.first) + ".ffn_exps_group";
+        combined.tensor_name = std::string("blk.") + std::to_string(layer) + ".ffn_exps_group";
 
         result.push_back(std::move(combined));
     }
@@ -174,7 +185,7 @@ atsinfer_placement_decision atsinfer_compute_static_placement(
     const std::vector<atsinfer_tensor_profile> & tensor_profiles,
     size_t vram_budget_bytes,
     bool is_moe_model) {
-
+    
     if (!is_moe_model) {
         return solve_knapsack_dp(tensor_profiles, vram_budget_bytes);
     }
@@ -185,7 +196,7 @@ atsinfer_placement_decision atsinfer_compute_static_placement(
     size_t nonexp_size = 0;
 
     for (const auto & p : tensor_profiles) {
-        if (p.tensor_name.find("exps") != std::string::npos ||
+        if (p.tensor_name.find("exps") != std::string::npos || 
             p.tensor_name.find("expert") != std::string::npos) {
             t_exp.push_back(p);
         } else {
@@ -207,10 +218,10 @@ atsinfer_placement_decision atsinfer_compute_static_placement(
             result.placement[p.tensor_name] = ATSInferBackend::GPU;
         }
         result.total_vram_used_bytes += nonexp_size;
-
+        
         size_t remaining_budget = vram_budget_bytes - nonexp_size;
         auto exp_decision = solve_knapsack_dp(t_exp_grouped, remaining_budget);
-
+        
         // Fan out group decisions to individual expert tensors.
         // Group names follow the pattern "blk.N.ffn_exps_group".
         for (const auto & kv : exp_decision.placement) {
