@@ -282,19 +282,6 @@ static std::vector<llama_token> mtp_speculative_gen_draft(
     llama_seq_id seq_id,
     bool constant_draft_positions = false);
 
-static std::vector<llama_token> mtp_speculative_gen_chained(
-    common_speculative_state_mtp & state,
-    struct common_sampler * smpl,
-    struct llama_context * ctx,
-    struct llama_batch & mtp_batch,
-    int n_draft,
-    float p_min,
-    int n_embd,
-    llama_token id_last,
-    llama_pos n_past,
-    llama_seq_id seq_id,
-    float * prob_ptr);
-
 static int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch & batch, bool is_prompt_warmup, int32_t mtp_heads);
 
 struct mtp_last_embd {
@@ -3147,96 +3134,6 @@ void common_speculative_context_shift(
     }
 }
 
-static std::vector<llama_token> mtp_speculative_gen_chained(
-    common_speculative_state_mtp & state,
-    struct common_sampler * smpl,
-    struct llama_context * ctx,
-    struct llama_batch & mtp_batch,
-    int n_draft,
-    float p_min,
-    int n_embd,
-    llama_token id_last,
-    llama_pos n_past,
-    llama_seq_id seq_id,
-    float * prob_ptr) {
-
-    llama_tokens drafts;
-    drafts.reserve(n_draft);
-
-    auto reset_mtp_state = [&]() {
-        llama_batch_free(mtp_batch);
-        llama_set_mtp_step_idx(ctx, 0);
-        llama_set_mtp_n_heads(ctx, 0);
-        llama_set_mtp_op_type(ctx, MTP_OP_NONE);
-    };
-
-    auto hidden_it = state.target_hidden_by_seq.find(seq_id);
-    if (hidden_it == state.target_hidden_by_seq.end() ||
-            (int) hidden_it->second.size() != n_embd) {
-        reset_mtp_state();
-        return drafts;
-    }
-
-    auto & last = mtp_get_last_embd(state, seq_id);
-    std::vector<llama_token> prefix_tokens;
-    prefix_tokens.reserve((size_t) n_draft + 1);
-    prefix_tokens.push_back(id_last);
-
-    std::vector<float> prefix_hidden = hidden_it->second;
-    prefix_hidden.reserve((size_t) (n_draft + 1) * n_embd);
-
-    int i0 = 0;
-    if (last.last_id >= 0) {
-        drafts.push_back(last.last_id);
-        prefix_tokens.push_back(last.last_id);
-        prefix_hidden.insert(prefix_hidden.end(), last.embd.begin(), last.embd.end());
-        last.last_id = -1;
-        i0 = 1;
-    }
-
-    for (int i = i0; i < n_draft; ++i) {
-        llama_kv_cache_seq_rm(ctx, seq_id, n_past, -1);
-
-        mtp_batch.n_tokens = 0;
-        for (size_t t = 0; t < prefix_tokens.size(); ++t) {
-            common_batch_add(mtp_batch, prefix_tokens[t], n_past + (llama_pos) t,
-                    { seq_id }, t + 1 == prefix_tokens.size());
-        }
-
-        llama_set_mtp_step_idx(ctx, i);
-        if (!llama_set_draft_input_hidden_state_copy(ctx, prefix_hidden.data(), prefix_hidden.size())) {
-            break;
-        }
-        const int decode_rc = llama_decode(ctx, mtp_batch);
-        if (decode_rc != 0) {
-            break;
-        }
-
-        llama_token id_next = common_sampler_sample_speculative(
-                smpl, ctx, mtp_batch.n_tokens - 1, prob_ptr);
-        if (i > 0 && prob_ptr && *prob_ptr < p_min) {
-            break;
-        }
-
-        const float * emb = llama_get_embeddings_ith(ctx, mtp_batch.n_tokens - 1);
-        if (!emb) {
-            break;
-        }
-
-        drafts.push_back(id_next);
-        prefix_tokens.push_back(id_next);
-        prefix_hidden.insert(prefix_hidden.end(), emb, emb + n_embd);
-        std::memcpy(last.embd.data(), emb, (size_t) n_embd * sizeof(float));
-        if (prob_ptr && *prob_ptr < p_min) {
-            break;
-        }
-    }
-
-    llama_kv_cache_seq_rm(ctx, seq_id, n_past, -1);
-    reset_mtp_state();
-    return drafts;
-}
-
 std::vector<llama_token> mtp_speculative_gen_draft(
     common_speculative_state_mtp & state,
     struct common_sampler * smpl,
@@ -3275,13 +3172,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         ? std::max(1, std::min((int) mtp_heads, n_mtp_heads_model))
         : n_mtp_heads_model;
 
-    const bool chain_heads = llama_model_is_step35(llama_get_model(ctx)) &&
-        n_mtp_heads > 1 && !constant_draft_positions;
-    if (chain_heads) {
-        n_draft = std::min(n_draft, n_mtp_heads);
-    }
-
-    llama_batch mtp_batch = llama_batch_init(chain_heads ? n_draft + 1 : 1, 0, 1);
+    llama_batch mtp_batch = llama_batch_init(1, 0, 1);
     llama_set_mtp_n_heads(ctx, n_mtp_heads);
     llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
@@ -3290,12 +3181,6 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     llama_token current_input_id = id_last;
     llama_pos current_n_past = n_past;
-
-    if (chain_heads) {
-        return mtp_speculative_gen_chained(
-            state, smpl, ctx, mtp_batch, n_draft, p_min, n_embd,
-            id_last, n_past, seq_id, prob_ptr);
-    }
 
     auto & last = mtp_get_last_embd(state, seq_id);
     int i0 = 0;

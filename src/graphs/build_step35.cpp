@@ -108,9 +108,10 @@ ggml_cgraph * llm_build_context::build_step35() {
     }
 
     if (cparams.mtp) {
-        cb(inpL, "result_mtp_embd", -1);
-        ggml_set_output(inpL);
-        ggml_build_forward_expand(gf, inpL);
+        ggml_tensor * mtp_embd = inpL->type == GGML_TYPE_F32 ? inpL : ggml_cast(ctx0, inpL, GGML_TYPE_F32);
+        cb(mtp_embd, "result_mtp_embd", -1);
+        ggml_set_output(mtp_embd);
+        ggml_build_forward_expand(gf, mtp_embd);
 
         if (inp_out_ids) {
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
@@ -196,8 +197,10 @@ ggml_tensor * llm_build_context::build_step35_mtp(
         }
     }
     if (reduce_output) {
-        cb(output_hidden, "result_mtp_embd", -1);
-        ggml_set_output(output_hidden);
+        ggml_tensor * mtp_embd = output_hidden->type == GGML_TYPE_F32 ? output_hidden : ggml_cast(ctx0, output_hidden, GGML_TYPE_F32);
+        cb(mtp_embd, "result_mtp_embd", -1);
+        ggml_set_output(mtp_embd);
+        ggml_build_forward_expand(gf, mtp_embd);
     }
 
     if (!emit_logits) {
@@ -209,8 +212,7 @@ ggml_tensor * llm_build_context::build_step35_mtp(
     ggml_tensor * head = mtp_layer.nextn.shared_head_head
         ? mtp_layer.nextn.shared_head_head : model.output;
     GGML_ASSERT(head_norm && head);
-    cur = llm_build_norm(ctx0, output_hidden, hparams, head_norm, nullptr, LLM_NORM_RMS, cb, -1);
-    cur = llm_build_lora_mm(lctx, ctx0, head, cur);
+    cur = llm_build_context::build_output(lctx, ctx0, output_hidden, head, head_norm, cb);
     cb(cur, "result_output", -1);
     return cur;
 }
