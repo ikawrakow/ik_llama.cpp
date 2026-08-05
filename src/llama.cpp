@@ -10969,7 +10969,8 @@ static bool llama_state_io_supported(
                       llama_seq_id seq_id = -1) {
     if (ctx->kv_self.any_compacted() && flags == 0) {
         LLAMA_LOG_ERROR("%s: full state save/restore is not supported with --swa-compress "
-                        "(compacted sliding-window layers have no absolute row addressing)\n", func);
+                        "(state I/O addresses cache rows by cell index; compacted layers hold a "
+                        "translated subset)\n", func);
         return false;
     }
 
