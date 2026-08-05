@@ -916,9 +916,22 @@ bool llama_context::ensure_dsv4_cache_tensors() {
         return true;
     };
 
+    // When the compressed-attention K caches live in host memory, only the
+    // context-sized K caches (CSA/HCA/LID K) are moved; the small per-layer
+    // compression state tensors stay next to the layer so ggml_ds4_comp can
+    // keep running on the layer's backend.
+    const ggml_backend_buffer_type_t cpu_buft = (cparams.dsv4_cache_cpu || cparams.dsv4_lid_cache_cpu)
+        ? llama_default_buffer_type_cpu(true) : nullptr;
+
     for (int32_t il = 0; il < n_layer; ++il) {
         const uint32_t ratio = model.hparams.dsv4_compress_ratios[(size_t) il];
         ggml_backend_buffer_type_t buft = llama_dsv4_layer_buft(*this, il);
+        ggml_backend_buffer_type_t k_buft = cpu_buft != nullptr ? cpu_buft : buft;
+        // The LID/indexer K cache is small and is scanned by the indexer top-k
+        // on every step - keep it on the layer's device unless explicitly
+        // requested otherwise. The CSA/HCA K caches are the large ones and are
+        // only read via sparse gathers, so they tolerate host memory well.
+        ggml_backend_buffer_type_t lid_buft = cparams.dsv4_lid_cache_cpu && cpu_buft != nullptr ? cpu_buft : buft;
 
         if (ratio == dsv4_runtime::CSA_RATIO) {
             cache.csa_k[(size_t) il] = ggml_new_tensor_3d(cache.cache_ctx, kv_self.type_k, n_embd_head, csa_kv*n_stream, 1);
@@ -928,8 +941,8 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             cache.lid_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
             cache.lid_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, 2*n_indexer_head, 2*dsv4_runtime::CSA_RATIO*n_stream);
 
-            if (!alloc_tensor(cache.csa_k[(size_t) il], buft) ||
-                !alloc_tensor(cache.lid_k[(size_t) il], buft) ||
+            if (!alloc_tensor(cache.csa_k[(size_t) il], k_buft) ||
+                !alloc_tensor(cache.lid_k[(size_t) il], lid_buft) ||
                 !alloc_tensor(cache.csa_state_kv[(size_t) il], buft) ||
                 !alloc_tensor(cache.csa_state_score[(size_t) il], buft) ||
                 !alloc_tensor(cache.lid_state_kv[(size_t) il], buft) ||
@@ -943,7 +956,7 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             cache.hca_state_kv[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, dsv4_runtime::HCA_RATIO*n_stream);
             cache.hca_state_score[(size_t) il] = ggml_new_tensor_2d(cache.cache_ctx, GGML_TYPE_F32, n_embd_head, dsv4_runtime::HCA_RATIO*n_stream);
 
-            if (!alloc_tensor(cache.hca_k[(size_t) il], buft) ||
+            if (!alloc_tensor(cache.hca_k[(size_t) il], k_buft) ||
                 !alloc_tensor(cache.hca_state_kv[(size_t) il], buft) ||
                 !alloc_tensor(cache.hca_state_score[(size_t) il], buft)) {
                 LLAMA_LOG_ERROR("%s: failed to allocate DSV4 HCA buffers for layer %d\n", __func__, il);
@@ -978,6 +991,9 @@ bool llama_context::ensure_dsv4_cache_tensors() {
             (float) (csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
             (float) (csa_k_bytes + hca_k_bytes + lid_k_bytes + csa_state_bytes + hca_state_bytes + lid_state_bytes) / (1024.0f * 1024.0f),
             n_stream);
+    if (cparams.dsv4_cache_cpu) {
+        LLAMA_LOG_INFO("%s: DSV4 compressed-attention K caches (CSA/HCA/LID) are in host memory\n", __func__);
+    }
 
     return true;
 }
