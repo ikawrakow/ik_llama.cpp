@@ -1344,15 +1344,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                     ? selected_experts->ne[0]
                     : n_expert_used;
 
-            const int64_t dsv4_n_stream = std::max<int64_t>(1, lctx.dsv4.csa_ctx.graph_n_stream);
-            // Wide packed DSV4 fused/IQK MoE diverges above 1024 total tokens.
-            // Evaluate each active stream independently to preserve packed parity.
-            constexpr int64_t dsv4_moe_max_tokens = 1024;
-
-            auto build_dsv4_moe = [&](ggml_tensor * moe_cur,
-                                      ggml_tensor * moe_exp_probs_b,
-                                      ggml_tensor * moe_selected_experts) {
-                return llm_build_moe_ffn(ctx0, lctx, moe_cur,
+            auto moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
                         model.layers[il].ffn_gate_inp,
                         nullptr,
                         model.layers[il].ffn_up_exps,
@@ -1361,37 +1353,14 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
                         nullptr,
                         model.layers[il].ffn_down_exps,
                         nullptr,
-                        moe_exp_probs_b,
+                        exp_probs_b,
                         n_expert, moe_n_expert_used,
                         LLM_FFN_SILU, hparams.expert_weights_norm,
                         true, hparams.expert_weights_scale,
                         (enum llm_expert_gating_func_type) hparams.expert_gating_func,
                         cb, il, gf, false, model.layers[il].ffn_up_gate_exps, nullptr, nullptr, nullptr,
-                        moe_selected_experts);
-            };
+                        selected_experts);
 
-            ggml_tensor * moe_out = nullptr;
-            if (dsv4_n_stream > 1 && cur->ne[1] > dsv4_moe_max_tokens &&
-                    cur->ne[1] % dsv4_n_stream == 0) {
-                const int64_t n_tokens_stream = cur->ne[1]/dsv4_n_stream;
-                auto stream_view = [&](ggml_tensor * tensor, int64_t stream) {
-                    if (tensor == nullptr || tensor->ne[1] != cur->ne[1]) {
-                        return tensor;
-                    }
-                    return ggml_view_2d(ctx0, tensor, tensor->ne[0], n_tokens_stream,
-                            tensor->nb[1], stream*n_tokens_stream*tensor->nb[1]);
-                };
-
-                for (int64_t stream = 0; stream < dsv4_n_stream; ++stream) {
-                    ggml_tensor * stream_result = build_dsv4_moe(
-                            stream_view(cur, stream),
-                            stream_view(exp_probs_b, stream),
-                            stream_view(selected_experts, stream));
-                    moe_out = moe_out == nullptr ? stream_result : ggml_concat(ctx0, moe_out, stream_result, 1);
-                }
-            } else {
-                moe_out = build_dsv4_moe(cur, exp_probs_b, selected_experts);
-            }
             ggml_build_forward_expand(gf, moe_out);
             cb(moe_out, "ffn_moe_out", il);
 
