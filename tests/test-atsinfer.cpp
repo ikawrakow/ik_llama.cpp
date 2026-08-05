@@ -99,7 +99,7 @@ void test_static_placement_dense() {
 
     size_t gpu_count = 0;
     for (const auto & kv : decision.placement) {
-        if (kv.second == ATSInferBackend::GPU) {
+        if (kv.second >= 0) { // device index >= 0 means a GPU
             gpu_count++;
         }
     }
@@ -136,8 +136,123 @@ void test_static_placement_moe() {
     size_t budget = 500 * 1024 * 1024; // 500 MB
     auto decision = atsinfer_compute_static_placement(profiles, budget, true);
 
-    assert(decision.placement["blk.0.attn_q.weight"] == ATSInferBackend::GPU);
+    assert(decision.placement["blk.0.attn_q.weight"] >= 0); // non-experts get GPU priority
+
+    // Budget too small for the non-experts (100 < 200): the priority rule keeps ALL experts
+    // on the CPU and spends the budget on the non-experts (which do not fit either here).
+    {
+        auto small = atsinfer_compute_static_placement(profiles, 100 * 1024 * 1024, true);
+        assert(small.placement["blk.0.exps.0.weight"] == ATSINFER_DEVICE_CPU);
+        assert(small.placement["blk.0.attn_q.weight"] == ATSINFER_DEVICE_CPU);
+        assert(small.total_vram_used_bytes <= 100 * 1024 * 1024);
+    }
+
     std::cout << " -> Static Placement MoE Test PASSED!" << std::endl;
+}
+
+void test_static_placement_multi_device() {
+    std::cout << "[TEST] Running Static Placement Multi-GPU Test..." << std::endl;
+    constexpr size_t MB = 1024ULL * 1024ULL;
+
+    std::vector<atsinfer_tensor_profile> profiles;
+
+    // 4 MoE layers. Each layer: an expert triple (150+150+100 = 400 MB group) and a
+    // 100 MB attention tensor (non-expert) => nonexp_size = 400 MB total.
+    const char * exp_types[3] = { "ffn_up_exps", "ffn_gate_exps", "ffn_down_exps" };
+    const size_t exp_sizes[3] = { 150 * MB, 150 * MB, 100 * MB };
+    for (int l = 0; l < 4; ++l) {
+        for (int e = 0; e < 3; ++e) {
+            atsinfer_tensor_profile p;
+            p.tensor_name = "blk." + std::to_string(l) + "." + exp_types[e] + ".weight";
+            p.size_bytes = exp_sizes[e];
+            p.exec_time_cpu_ms = 30.0f;
+            p.exec_time_gpu_ms = 3.0f;
+            p.latency_reduction = 27.0f;
+            p.switching_cost_ms = 0.5f;
+            p.layer_id = l;
+            p.is_moe_expert = true;
+            profiles.push_back(p);
+        }
+        atsinfer_tensor_profile a;
+        a.tensor_name = "blk." + std::to_string(l) + ".attn_q.weight";
+        a.size_bytes = 100 * MB;
+        a.exec_time_cpu_ms = 15.0f;
+        a.exec_time_gpu_ms = 1.0f;
+        a.latency_reduction = 14.0f;
+        a.switching_cost_ms = 0.5f;
+        a.layer_id = l;
+        profiles.push_back(a);
+    }
+
+    // Two 1000 MB devices. Total 2000 >= nonexp 400 -> all non-experts on GPU, expert
+    // groups placed by per-device knapsack (2 groups fit on each device).
+    std::vector<size_t> budgets = { 1000 * MB, 1000 * MB };
+    auto decision = atsinfer_compute_static_placement_multi(profiles, budgets, true);
+
+    // Every tensor is accounted for.
+    assert(decision.placement.size() == profiles.size());
+
+    // An expert triple is never split across devices.
+    for (int l = 0; l < 4; ++l) {
+        const int dev = decision.placement["blk." + std::to_string(l) + "." + exp_types[0] + ".weight"];
+        for (int e = 1; e < 3; ++e) {
+            assert(decision.placement["blk." + std::to_string(l) + "." + exp_types[e] + ".weight"] == dev);
+        }
+    }
+
+    // Per-device budgets are respected.
+    assert(decision.vram_used_per_device.size() == 2);
+    assert(decision.vram_used_per_device[0] <= budgets[0]);
+    assert(decision.vram_used_per_device[1] <= budgets[1]);
+    assert(decision.total_vram_used_bytes <= budgets[0] + budgets[1]);
+
+    // Both GPUs actually get expert groups.
+    int on_dev0 = 0, on_dev1 = 0;
+    for (int l = 0; l < 4; ++l) {
+        const int dev = decision.placement["blk." + std::to_string(l) + ".ffn_up_exps.weight"];
+        if (dev == 0) ++on_dev0;
+        if (dev == 1) ++on_dev1;
+    }
+    assert(on_dev0 >= 1 && on_dev1 >= 1);
+
+    // Scenario 2: budgets too small for the non-experts (total 200 < 400) -> ALL experts
+    // stay on the CPU and only non-experts get the GPU (single-GPU priority rule).
+    std::vector<size_t> small_budgets = { 100 * MB, 100 * MB };
+    auto small = atsinfer_compute_static_placement_multi(profiles, small_budgets, true);
+    for (int l = 0; l < 4; ++l) {
+        for (int e = 0; e < 3; ++e) {
+            assert(small.placement["blk." + std::to_string(l) + "." + exp_types[e] + ".weight"] == ATSINFER_DEVICE_CPU);
+        }
+    }
+    size_t attn_on_gpu = 0;
+    for (int l = 0; l < 4; ++l) {
+        if (small.placement["blk." + std::to_string(l) + ".attn_q.weight"] >= 0) ++attn_on_gpu;
+    }
+    assert(attn_on_gpu >= 1);
+    assert(attn_on_gpu <= 2); // one 100 MB budget per device: at most one non-expert each
+
+    // Scenario 3: dense model across two devices.
+    std::vector<atsinfer_tensor_profile> dense;
+    for (int i = 0; i < 5; ++i) {
+        atsinfer_tensor_profile p;
+        p.tensor_name = "layer." + std::to_string(i) + ".weight";
+        p.size_bytes = 500 * MB;
+        p.exec_time_cpu_ms = 20.0f;
+        p.exec_time_gpu_ms = 2.0f;
+        p.latency_reduction = 18.0f;
+        p.switching_cost_ms = 1.0f;
+        dense.push_back(p);
+    }
+    auto dense_dec = atsinfer_compute_static_placement_multi(dense, { 600 * MB, 1200 * MB }, false);
+    assert(dense_dec.placement.size() == 5);
+    size_t d0 = 0, d1 = 0;
+    for (const auto & kv : dense_dec.placement) {
+        if (kv.second == 0) ++d0;
+        if (kv.second == 1) ++d1;
+    }
+    assert(d0 == 1 && d1 == 2); // 500 fits 600; 2x500 fits 1200; the rest stays on CPU
+
+    std::cout << " -> Static Placement Multi-GPU Test PASSED!" << std::endl;
 }
 
 static atsinfer_round_unit mk_unit(int layer, bool static_gpu, float t_cpu, float t_gpu, float c, float w) {
@@ -371,6 +486,7 @@ int main() {
     test_profiler();
     test_static_placement_dense();
     test_static_placement_moe();
+    test_static_placement_multi_device();
     test_dynamic_transfer_scheduler();
     test_load_aware_rescheduler();
     test_profile_serialization();
@@ -379,7 +495,7 @@ int main() {
     test_promotion_device_selection();
 
     std::cout << "==========================================" << std::endl;
-    std::cout << "   ALL ATSINFER UNIT TESTS PASSED (9/9)   " << std::endl;
+    std::cout << "   ALL ATSINFER UNIT TESTS PASSED (10/10)  " << std::endl;
     std::cout << "==========================================" << std::endl;
     return 0;
 }

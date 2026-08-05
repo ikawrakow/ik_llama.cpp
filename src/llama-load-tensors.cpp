@@ -411,7 +411,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             tensor_profiles.push_back(tp);
         }
 
-        // 4. Determine the VRAM budget for weights.
+        // 4. Determine the per-device VRAM budgets for weights.
         //    atsinfer_profile_hardware() echoes back whatever budget it was handed and
         //    never queries the device, so both the "0 = auto" path and an over-large
         //    user value have to be resolved here against real free VRAM. Getting this
@@ -421,64 +421,142 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         //    weights on CUDA0 and decode collapsed to 5.78 tok/s (vs 37.94 tok/s).
         //    The budget must also leave room for the KV cache and compute buffers,
         //    which the solver does not model -- mirror --fit-margin's reservation.
-        uint64_t vram_budget_bytes = (uint64_t)ml.atsinfer_vram_budget * 1024ULL * 1024ULL;
-        {
-            size_t vram_free = 0;
-#ifdef GGML_USE_CUDA
-            if (!model.devices.empty()) {
-                size_t total = 0;
-                ggml_backend_cuda_get_device_memory(model.devices[0], &vram_free, &total);
-            }
-#endif
-            // reserve headroom for KV cache, compute buffers and backend context
-            const uint64_t reserve = 1024ULL * 1024ULL * 1024ULL;
-            const uint64_t usable  = vram_free > reserve ? (uint64_t)vram_free - reserve : 0;
+        //
+        //    Multi-device placement is only well-defined under split-mode LAYER, where
+        //    every layer has its own per-device buffer type. GRAPH / ATTN modes use split
+        //    bufts that span all devices; overriding tensors onto individual device bufts
+        //    there would fight the graph split, so those keep the single-GPU solver (device
+        //    0) -- exactly the behaviour this feature replaces.
+        const bool multi_gpu = model.devices.size() > 1 && model.split_mode == LLAMA_SPLIT_MODE_LAYER;
 
+        const uint64_t reserve = 1024ULL * 1024ULL * 1024ULL;
+        std::vector<size_t> device_budgets;
+#ifdef GGML_USE_CUDA
+        for (int dev : model.devices) {
+            size_t vram_free = 0, total = 0;
+            ggml_backend_cuda_get_device_memory(dev, &vram_free, &total);
+            device_budgets.push_back(vram_free > reserve ? (size_t)(vram_free - reserve) : 0);
+        }
+#endif
+        if (device_budgets.empty()) {
+            device_budgets.push_back(0); // no CUDA: the solver becomes a no-op
+        }
+
+        size_t usable_total = 0;
+        for (size_t b : device_budgets) {
+            usable_total += b;
+        }
+
+        uint64_t vram_budget_bytes = (uint64_t)ml.atsinfer_vram_budget * 1024ULL * 1024ULL;
+        if (multi_gpu) {
+            // A user-supplied --atsinfer-vram-budget is a total across all devices and is
+            // split proportionally to each device's free VRAM (like --tensor-split auto).
             if (vram_budget_bytes == 0) {
-                vram_budget_bytes = usable;
-                LLAMA_LOG_INFO("%s: ATSInfer auto VRAM budget: %.2f GiB (%.2f GiB free - 1.00 GiB reserved)\n",
-                        __func__, vram_budget_bytes/1073741824.0, vram_free/1073741824.0);
-            } else if (usable > 0 && vram_budget_bytes > usable) {
-                LLAMA_LOG_WARN("%s: ATSInfer VRAM budget %.2f GiB exceeds usable VRAM; clamping to %.2f GiB "
-                        "(%.2f GiB free - 1.00 GiB reserved)\n", __func__,
-                        vram_budget_bytes/1073741824.0, usable/1073741824.0, vram_free/1073741824.0);
-                vram_budget_bytes = usable;
+                vram_budget_bytes = usable_total;
+                LLAMA_LOG_INFO("%s: ATSInfer auto VRAM budget: %.2f GiB total across %zu device(s)\n",
+                        __func__, vram_budget_bytes / 1073741824.0, device_budgets.size());
+            } else if (vram_budget_bytes < usable_total) {
+                const double scale = (double)vram_budget_bytes / (double)std::max<size_t>(1, usable_total);
+                size_t assigned = 0;
+                for (size_t i = 0; i < device_budgets.size(); ++i) {
+                    device_budgets[i] = (size_t)((double)device_budgets[i] * scale);
+                    assigned += device_budgets[i];
+                }
+                if (assigned < vram_budget_bytes && !device_budgets.empty()) {
+                    device_budgets[0] += vram_budget_bytes - assigned; // absorb rounding
+                }
+                LLAMA_LOG_INFO("%s: ATSInfer VRAM budget %.2f GiB scaled across %zu device(s) "
+                        "(%.2f GiB usable)\n", __func__, vram_budget_bytes / 1073741824.0,
+                        device_budgets.size(), usable_total / 1073741824.0);
+            } else if (vram_budget_bytes > usable_total) {
+                LLAMA_LOG_WARN("%s: ATSInfer VRAM budget %.2f GiB exceeds usable VRAM %.2f GiB; "
+                        "clamping to the usable total\n", __func__, vram_budget_bytes / 1073741824.0,
+                        usable_total / 1073741824.0);
+                vram_budget_bytes = usable_total;
             }
+        } else {
+            // Single-GPU semantics (any split mode, one device): the budget is device 0's
+            // usable VRAM, clamped against the user's value exactly as before this feature.
+            const size_t usable0 = device_budgets[0];
+            if (vram_budget_bytes == 0 || vram_budget_bytes > usable0) {
+                vram_budget_bytes = usable0;
+            }
+            device_budgets[0] = (size_t) vram_budget_bytes; // effective budget, for the log below
+        }
+        for (size_t i = 0; i < device_budgets.size(); ++i) {
+            LLAMA_LOG_INFO("%s:   device %zu budget: %.2f GiB\n", __func__, i,
+                    device_budgets[i] / 1073741824.0);
         }
 
         // 5. Run DP placement solver
         bool is_moe = (model.hparams.n_expert > 0);
-        auto placement = atsinfer_compute_static_placement(tensor_profiles, vram_budget_bytes, is_moe);
 
-        LLAMA_LOG_INFO("%s: ATSInfer placement solver: %zu tensors, %zu GPU / %zu CPU, VRAM used: %.2f GiB\n",
+        atsinfer_placement_decision placement;
+        if (multi_gpu) {
+            placement = atsinfer_compute_static_placement_multi(tensor_profiles, device_budgets, is_moe);
+        } else {
+            placement = atsinfer_compute_static_placement(tensor_profiles, vram_budget_bytes, is_moe);
+        }
+
+        size_t n_cpu = 0;
+        for (const auto & p : placement.placement) {
+            if (p.second < 0) ++n_cpu;
+        }
+        LLAMA_LOG_INFO("%s: ATSInfer placement solver: %zu tensors, %zu GPU / %zu CPU "
+                "(%s), VRAM used: %.2f GiB\n",
             __func__,
             placement.placement.size(),
-            std::count_if(placement.placement.begin(), placement.placement.end(),
-                [](const auto & p){ return p.second == ATSInferBackend::GPU; }),
-            std::count_if(placement.placement.begin(), placement.placement.end(),
-                [](const auto & p){ return p.second == ATSInferBackend::CPU; }),
+            placement.placement.size() - n_cpu, n_cpu,
+            multi_gpu ? "multi-GPU" : "single-GPU",
             (double)placement.total_vram_used_bytes / (1024.0 * 1024.0 * 1024.0));
+        if (multi_gpu) {
+            for (size_t i = 0; i < placement.vram_used_per_device.size() && i < device_budgets.size(); ++i) {
+                LLAMA_LOG_INFO("%s:   device %zu: %.2f GiB weights (budget %.2f GiB)\n", __func__, i,
+                        placement.vram_used_per_device[i] / 1073741824.0,
+                        device_budgets[i] / 1073741824.0);
+            }
+        }
 
         // 6. Convert placement decisions to ggml buffer type overrides
         //    CPU tensors: place in pinned host memory for fastest H2D transfers
-        //    GPU tensors: reuse the buffer type of an already-offloaded layer.
-        //    NOTE: buft_layer[0] is NOT usable here -- layers [0, i_gpu_start) are
-        //    assigned the CPU buft, so index 0 is CPU whenever the model is only
-        //    partially offloaded. Scan for the first genuinely non-CPU entry instead.
+        //    GPU tensors: the buffer type of the device the solver assigned them to,
+        //    built exactly like the LAYER split does (default_buffer_type_offload of each
+        //    model.device). GRAPH/ATTN modes fall back to the legacy scan for the first
+        //    genuinely non-CPU layer buft (which may be a split buft there); buft_layer[0]
+        //    is NOT usable because layers [0, i_gpu_start) are assigned the CPU buft when
+        //    the model is only partially offloaded.
         auto cpu_buft = llama_default_buffer_type_cpu(true); // pinned
-        ggml_backend_buffer_type_t gpu_buft = cpu_buft;
-        for (const auto & bl : model.buft_layer) {
-            if (bl.buft && bl.buft != cpu_buft) {
-                gpu_buft = bl.buft;
-                break;
-            }
+
+        std::vector<ggml_backend_buffer_type_t> gpu_bufts;
+#ifdef GGML_USE_CUDA
+        for (int dev : model.devices) {
+            gpu_bufts.push_back(model.default_buffer_type_offload(dev));
         }
-        if (gpu_buft == cpu_buft) {
-            LLAMA_LOG_WARN("%s: ATSInfer found no GPU-backed layer buffer type; "
-                    "placement will be a no-op (all tensors stay on CPU)\n", __func__);
+#endif
+
+        std::vector<ggml_backend_buffer_type_t> map_bufts;
+        if (multi_gpu) {
+            map_bufts = gpu_bufts;
+            if (map_bufts.empty()) {
+                LLAMA_LOG_WARN("%s: ATSInfer found no GPU-backed device buffer types; "
+                        "placement will be a no-op (all tensors stay on CPU)\n", __func__);
+            }
+        } else {
+            ggml_backend_buffer_type_t gpu_buft = cpu_buft;
+            for (const auto & bl : model.buft_layer) {
+                if (bl.buft && bl.buft != cpu_buft) {
+                    gpu_buft = bl.buft;
+                    break;
+                }
+            }
+            if (gpu_buft == cpu_buft) {
+                LLAMA_LOG_WARN("%s: ATSInfer found no GPU-backed layer buffer type; "
+                        "placement will be a no-op (all tensors stay on CPU)\n", __func__);
+            }
+            map_bufts.push_back(gpu_buft);
         }
 
-        auto buft_map = atsinfer_map_placement_to_buft(placement, cpu_buft, gpu_buft);
+        auto buft_map = atsinfer_map_placement_to_buft(placement, cpu_buft, map_bufts);
 
         // Inject ATSInfer decisions as regex overrides (exact name match).
         // get_context_for_tensor() takes the FIRST matching override and breaks, and the
@@ -2962,63 +3040,13 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN &) {
         return format("blk.%d.%s.weight", i, stem);
     };
 
-    const int mtp_layer = n_layer - (int) hparams.nextn_predict_layers;
-    const bool is_standalone_mtp = hparams.nextn_predict_layers == 1 &&
-        ml.get_tensor_meta("blk.0.attn_norm.weight") == nullptr &&
-        ml.get_tensor_meta(format("blk.%d.nextn.eh_proj.weight", mtp_layer).c_str()) != nullptr;
-
     model.tok_embd    = create_tensor_from_meta(ctx_input,  "token_embd.weight");
     model.output_norm = create_tensor_from_meta(ctx_output, "output_norm.weight");
     model.output      = create_tensor_from_meta(ctx_output, "output.weight");
 
-    const int hc_head_flags = is_standalone_mtp ? 0 : llama_model_loader::TENSOR_NOT_REQUIRED;
-    model.hc_head_base  = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_base.weight", "output_hc_base.weight"}), hc_head_flags);
-    model.hc_head_fn    = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_fn.weight", "output_hc_fn.weight"}), hc_head_flags);
-    model.hc_head_scale = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_scale.weight", "output_hc_scale.weight"}), hc_head_flags);
-
-    // Standalone companions declare the full block count but contain only predictor tensors.
-    if (is_standalone_mtp) {
-        const int i = mtp_layer;
-        ggml_context * ctx_split = ctx_for_layer_split(i);
-        auto & layer = model.layers[i];
-
-        layer.attn_norm      = create_tensor_from_meta(ctx_split, format("blk.%d.attn_norm.weight", i));
-        layer.attn_sinks     = create_tensor_from_meta(ctx_split, format("blk.%d.attn_sinks.weight", i));
-        layer.wq_a           = create_tensor_from_meta(ctx_split, format("blk.%d.attn_q_a.weight", i));
-        layer.attn_q_a_norm  = create_tensor_from_meta(ctx_split, format("blk.%d.attn_q_a_norm.weight", i));
-        layer.wq_b           = create_tensor_from_meta(ctx_split, format("blk.%d.attn_q_b.weight", i));
-        layer.wkv_latent     = create_tensor_from_meta(ctx_split, format("blk.%d.attn_kv.weight", i));
-        layer.wkv_b          = layer.wkv_latent;
-        layer.wkv_a_mqa      = layer.wkv_latent;
-        layer.attn_kv_a_norm = create_tensor_from_meta(ctx_split, format("blk.%d.attn_kv_a_norm.weight", i));
-        layer.attn_kv_norm   = layer.attn_kv_a_norm;
-        layer.wo_a           = create_tensor_from_meta(ctx_split, format("blk.%d.attn_output_a.weight", i));
-        layer.wo_b           = create_tensor_from_meta(ctx_split, format("blk.%d.attn_output_b.weight", i));
-        layer.wo             = layer.wo_b;
-
-        layer.hc_attn_base  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_base.weight", i));
-        layer.hc_attn_fn    = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_fn.weight", i));
-        layer.hc_attn_scale = create_tensor_from_meta(ctx_split, format("blk.%d.hc_attn_scale.weight", i));
-        layer.hc_ffn_base   = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_base.weight", i));
-        layer.hc_ffn_fn     = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_fn.weight", i));
-        layer.hc_ffn_scale  = create_tensor_from_meta(ctx_split, format("blk.%d.hc_ffn_scale.weight", i));
-
-        layer.ffn_norm       = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_norm.weight", i));
-        layer.ffn_gate_inp   = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_gate_inp.weight", i));
-        layer.ffn_exp_probs_b = create_tensor_from_meta(ctx_split, format("blk.%d.exp_probs_b.bias", i));
-        layer.ffn_gate_exps  = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_gate_exps.weight", i));
-        layer.ffn_down_exps  = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_down_exps.weight", i));
-        layer.ffn_up_exps    = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_up_exps.weight", i));
-        layer.ffn_gate_shexp = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_gate_shexp.weight", i));
-        layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_down_shexp.weight", i));
-        layer.ffn_up_shexp   = create_tensor_from_meta(ctx_split, format("blk.%d.ffn_up_shexp.weight", i));
-
-        layer.nextn.eh_proj          = create_tensor_from_meta(ctx_split, format("blk.%d.nextn.eh_proj.weight", i));
-        layer.nextn.enorm            = create_tensor_from_meta(ctx_split, format("blk.%d.nextn.enorm.weight", i));
-        layer.nextn.hnorm            = create_tensor_from_meta(ctx_split, format("blk.%d.nextn.hnorm.weight", i));
-        layer.nextn.shared_head_norm = create_tensor_from_meta(ctx_split, format("blk.%d.nextn.shared_head_norm.weight", i));
-        return use_mmap_buffer;
-    }
+    model.hc_head_base  = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_base.weight", "output_hc_base.weight"}), llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.hc_head_fn    = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_fn.weight", "output_hc_fn.weight"}), llama_model_loader::TENSOR_NOT_REQUIRED);
+    model.hc_head_scale = create_tensor_from_meta(ctx_output, pick_tensor_name({"hc_head_scale.weight", "output_hc_scale.weight"}), llama_model_loader::TENSOR_NOT_REQUIRED);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -5569,7 +5597,7 @@ bool create_tensors_helper::create_tensors() {
         if (model.output) {
             if (auto it = split_tensors.find(model.output); it != split_tensors.end()) {
                 if (ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
-                    LLAMA_LOG_INFO("%s: not splitting output tensor because buffer is host\n", __func__);
+                    LLAMA_LOG_INFO("%s: not splitting output tensor becausee buffer is host\n", __func__);
                 } else {
                     auto ctx_split = ctx_map[model.buft_output.buft_matrix];
                     auto split = create_split(model.output->ne[1], 16, model.splits, mem_used);

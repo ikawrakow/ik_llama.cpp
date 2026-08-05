@@ -208,6 +208,13 @@ llama_target_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_target_and_test(test-autorelease.cpp        LABEL "model")
 llama_target_and_test(test-atsinfer.cpp           LABEL "atsinfer")
 
+# Synthetic multi-GPU validation harness: feeds a real ATSInfer profile cache through the
+# multi-device solver with two simulated budgets and verifies placement invariants.
+# Build-only (no ctest entry): it needs a cache path argument and is run manually.
+add_executable(test-atsinfer-multigpu test-atsinfer-multigpu.cpp)
+target_link_libraries(test-atsinfer-multigpu PRIVATE common)
+install(TARGETS test-atsinfer-multigpu RUNTIME)
+
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
