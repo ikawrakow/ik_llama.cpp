@@ -1755,6 +1755,12 @@ size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth)
         size += k_indexer_chunks * q->ne[1] * sizeof(float);
         size += k->ne[1] * sizeof(float);
         size += k->ne[1] * sizeof(int32_t);
+#ifdef __AVX2__
+        if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && k->ne[1] % 32 == 0 && q->ne[1] % 8 == 0) {
+            size += 32*k->ne[0]*sizeof(float); // K repacked into row-interleaved floats
+            size += 32*q->ne[1]*sizeof(float);
+        }
+#endif
         // We will not use iqk_bucket_sort for batch processing, so
         // no need to allocate the extra work buffers.
         //size += (2*k->ne[1] + k_n_bucket)*sizeof(int);
@@ -1900,7 +1906,54 @@ void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_in
     }
     for (int j = 0; j < n_extra; ++j) idx[nhave + j] = idx_inf[j];
 }
-
+#ifdef __AVX2__
+inline void iqk_repack_f16(int nrows, int n_per_row, const char * k_in, size_t nb, float * k_out) {
+    __m256 xv[4];
+    for (int row = 0; row < nrows; row += 4) {
+        for (int i = 0; i < n_per_row/8; ++i) {
+            for (int k = 0; k < 4; ++k) {
+                xv[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(k_in + (row + k)*nb) + i));
+            }
+            auto t0 = _mm256_unpacklo_ps(xv[0], xv[1]);
+            auto t1 = _mm256_unpacklo_ps(xv[2], xv[3]);
+            auto t2 = _mm256_unpackhi_ps(xv[0], xv[1]);
+            auto t3 = _mm256_unpackhi_ps(xv[2], xv[3]);
+            xv[0] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+            xv[1] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+            xv[2] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+            xv[3] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+            _mm256_storeu_ps(k_out, xv[0]); k_out += 8;
+            _mm256_storeu_ps(k_out, xv[1]); k_out += 8;
+            _mm256_storeu_ps(k_out, xv[2]); k_out += 8;
+            _mm256_storeu_ps(k_out, xv[3]); k_out += 8;
+        }
+    }
+}
+template <int nrc_y> inline void iqk_mul_f32_f32_r(int n_per_row, int n_rows, size_t nby, const float * x, const float * y_in,
+        float * result) {
+    __m256 vx[4];
+    const float * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = y_in + nby*iy;
+    for (int row = 0; row < n_rows; row += 4) {
+        __m256 acc[nrc_y] = {};
+        for (int ib = 0; ib < n_per_row/8; ++ib) {
+            for (int k = 0; k < 4; ++k) vx[k] = _mm256_loadu_ps(x + 8*k);
+            x += 32;
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto vy = _mm256_loadu_ps(y[iy] + 8*ib);
+                acc[iy] = _mm256_fmadd_ps(vx[0], _mm256_shuffle_ps(vy, vy, 0x00), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(vx[1], _mm256_shuffle_ps(vy, vy, 0x55), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(vx[2], _mm256_shuffle_ps(vy, vy, 0xaa), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(vx[3], _mm256_shuffle_ps(vy, vy, 0xff), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sum = _mm_add_ps(_mm256_castps256_ps128(acc[iy]), _mm256_extractf128_ps(acc[iy], 1));
+            _mm_storeu_ps(result + n_rows*iy + row, sum);
+        }
+    }
+}
+#endif
 }
 
 size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread) {
@@ -1978,6 +2031,40 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             auto this_q = (const char *)q->data + iq*q->nb[2];
             auto this_m = (const char *)m->data + iq*m->nb[1];
             auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
+            bool done = false;
+#ifdef __AVX2__
+            if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && k->ne[1] % 32 == 0 && q->ne[1] % 8 == 0) {
+                auto k_repacked = (float *)(sorted + k->ne[1]);
+                auto kq_local = k_repacked + 32*k->ne[0];
+                for (int ik = 0; ik < (int)k->ne[1]; ik += 32) {
+                    iqk_repack_f16(32, k->ne[0], (const char *)k->data + k->nb[1]*ik, k->nb[1], k_repacked);
+                    for (int iq = 0; iq < (int)q->ne[1]; iq += 8) {
+                        iqk_mul_f32_f32_r<8>(k->ne[0], 32, q->nb[1]/sizeof(float), k_repacked,
+                                (const float *)(this_q + iq*q->nb[1]), kq_local + 32*iq);
+                    }
+                    __m256 acc[4];
+                    if (m->type == GGML_TYPE_F32) {
+                        auto m32 = (const float *)this_m + ik;
+                        for (int k = 0; k < 4; ++k) acc[k] = _mm256_loadu_ps(m32 + 8*k);
+                    } else {
+                        auto m16 = (const ggml_fp16_t *)this_m + ik;
+                        for (int k = 0; k < 4; ++k) acc[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)m16 + k));
+                    }
+                    auto kq_i = kq_local;
+                    for (int i = 0; i < int(q->ne[1]); ++i) {
+                        auto vw = _mm256_set1_ps(this_w[i]);
+                        for (int k = 0; k < 4; ++k) {
+                            auto relu = _mm256_max_ps(_mm256_setzero_ps(), _mm256_loadu_ps(kq_i + 8*k));
+                            acc[k] = _mm256_fmadd_ps(vw, relu, acc[k]);
+                        }
+                        kq_i += 32;
+                    }
+                    for (int k = 0; k < 4; ++k) _mm256_storeu_ps(score + ik + 8*k, acc[k]);
+                }
+                done = true;
+            }
+#endif
+            if (!done) {
             if (from_float) {
                 from_float((const float *)this_q, work, q->ne[0] * q->ne[1]);
                 this_q = work;
@@ -2004,9 +2091,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                         for (int i = 0; i < int(q->ne[1]); ++i) {
                             auto wi = _mm256_set1_ps(this_w[i]);
                             for (int j = 0; j < k_indexer_chunks/8; ++j) {
-                                auto relu = _mm256_loadu_ps(kq_i + 8*j);
-                                auto mask = _mm256_cmp_ps(relu, _mm256_setzero_ps(), _CMP_GT_OQ);
-                                relu = _mm256_blendv_ps(_mm256_setzero_ps(), relu, mask);
+                                auto relu = _mm256_max_ps(_mm256_setzero_ps(), _mm256_loadu_ps(kq_i + 8*j));
                                 acc[j] = _mm256_fmadd_ps(wi, relu, acc[j]);
                             }
                             kq_i += k_indexer_chunks;
@@ -2025,6 +2110,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                     kq_i += nk;
                 }
             }
+            }
 
             // Here iqk_bucket_topk is not faster than just using std::partial_sort, so no need to allocate the extra
             // work buffers.
@@ -2038,10 +2124,11 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     }
 
     if (k->ne[1] % 32 != 0) return false; // we can assume cache size is a multiple of at least 32
+    int n32 = k->ne[1] / 32;
 
     // We have more than 1 thread per q row
     // To not make it too complicated, let's just have all threads process the same row
-    int n32 = k->ne[1] / 32;
+
     int npt = (n32 + nth - 1)/nth;
     int ith_mid = nth;
     int n_this_thread = npt;
