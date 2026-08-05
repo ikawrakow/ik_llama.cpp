@@ -19,7 +19,7 @@ def get_system_context():
         "os": sys.platform,
         "python_version": sys.version,
     }
-    
+
     # Try git commit hash
     try:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
@@ -67,11 +67,11 @@ def run_benchmark(executable_path, model_path, prompt, n_predict, vram_budget_mb
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
         elapsed = time.time() - start_t
         output = proc.stdout + "\n" + proc.stderr
-        
+
         # Parse throughput if output contains tokens per second
         decode_tok_per_sec = 0.0
         prefill_tok_per_sec = 0.0
-        
+
         for line in output.splitlines():
             if "eval time =" in line and "ms /" in line:
                 # e.g., llama_print_timings: eval time = 1200.00 ms / 50 runs ( 24.00 ms per token, 41.67 tokens per second)
