@@ -417,7 +417,15 @@ struct llama_context {
     int64_t atsinfer_round_t0_us     = 0;     // start of the current round, for start-to-start TPOT
     int   atsinfer_n_reschedules     = 0;
     int   atsinfer_calib_unit        = -1;    // unit temporarily promoted to sample t_g, -1 when idle
+    bool  atsinfer_calib_failed      = false; // calibration promotion refused (no GPU has room): stop retrying
     bool  atsinfer_measurements_flushed = false; // cache already updated from this load's measurements
+    // Multi-GPU dynamic-transfer state. atsinfer_promoted_device is per unit (-1 = not
+    // promoted) and remembers which GPU backend a promoted unit runs on so consecutive
+    // rounds do not bounce it between devices -- each move changes the node's backend and
+    // forces a graph rebuild. atsinfer_device_promoted_layers is a per-GPU count of layers
+    // ATSInfer has promoted there, used as a load signal when choosing the next target.
+    std::vector<int>    atsinfer_promoted_device;
+    std::vector<size_t> atsinfer_device_promoted_layers;
     // round-level totals from the last profiled round; atsinfer_copy_total_ms is the transfer
     // time currently on the critical path and bounds what async coordination could recover
     float atsinfer_copy_total_ms     = 0.0f;

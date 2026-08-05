@@ -12,9 +12,14 @@
 #include "llama-model.h"
 #include "atsinfer/atsinfer-profiler.h"
 
+#ifdef GGML_USE_CUDA
+#  include "ggml-cuda.h"
+#endif
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 // Nodes emitted by build_moe_ffn() that consume a layer's expert weights. The graph-build
 // callback appends "-<il>", so a split's first node identifies both the operator and the layer.
@@ -43,6 +48,32 @@ static bool atsinfer_is_moe_expert_node(const char * name, int * layer_out) {
     return false;
 }
 
+// Free VRAM on the device a backend runs on, used to pick the promotion target and to
+// refuse promotions that would not fit. CUDA backend names are "CUDA%d" (ggml-cuda.cu
+// names them GGML_CUDA_NAME + device id), so the physical device is recoverable from the
+// backend the scheduler actually holds -- this stays correct regardless of split mode,
+// backend ordering or a filtered --device list. Backends we cannot query (Metal, Vulkan,
+// RPC, ...) report "unknown" as a huge sentinel so the selection never blocks on them;
+// with a single such backend the behaviour degrades to the old "always the first GPU".
+static size_t atsinfer_gpu_free_bytes(const char * backend_name) {
+#if defined(GGML_USE_CUDA)
+    static const char prefix[] = "CUDA";
+    if (strncmp(backend_name, prefix, sizeof(prefix) - 1) == 0 &&
+            backend_name[sizeof(prefix) - 1] != '\0') {
+        char * end = nullptr;
+        const long dev = strtol(backend_name + sizeof(prefix) - 1, &end, 10);
+        if (end && *end == '\0' && dev >= 0) {
+            size_t free_bytes = 0, total_bytes = 0;
+            ggml_backend_cuda_get_device_memory((int) dev, &free_bytes, &total_bytes);
+            return free_bytes;
+        }
+    }
+#else
+    (void) backend_name;
+#endif
+    return std::numeric_limits<size_t>::max() / 2;
+}
+
 bool atsinfer_dt_init(llama_context & lctx) {
     const auto & model   = lctx.model;
     const auto & hparams = model.hparams;
@@ -50,7 +81,8 @@ bool atsinfer_dt_init(llama_context & lctx) {
     lctx.atsinfer_units.clear();
     lctx.atsinfer_run_on_gpu.clear();
     lctx.atsinfer_unit_of_layer.assign(hparams.n_layer, -1);
-    lctx.atsinfer_dt_active = false;
+    lctx.atsinfer_dt_active     = false;
+    lctx.atsinfer_calib_failed  = false;
 
     if (hparams.n_expert == 0) {
         LLAMA_LOG_INFO("%s: ATSInfer dynamic transfer needs an MoE model; disabled\n", __func__);
@@ -94,9 +126,21 @@ bool atsinfer_dt_init(llama_context & lctx) {
         const double moved_bytes = (double) total_bytes * (double) n_expert_used / (double) hparams.n_expert;
         u.w_ms = (float) (moved_bytes / (1024.0 * 1024.0) / bw_mbps * 1000.0);
 
+        // The full group is what a promotion has to fit into the target GPU's VRAM.
+        u.weight_bytes = total_bytes;
+
         lctx.atsinfer_unit_of_layer[il] = (int) lctx.atsinfer_units.size();
         lctx.atsinfer_units.push_back(u);
     }
+
+    // Multi-GPU bookkeeping: remember which GPU each promoted unit runs on (so it does not
+    // bounce between devices) and count layers per GPU as a load signal for the next pick.
+    lctx.atsinfer_promoted_device.assign(lctx.atsinfer_units.size(), -1);
+    size_t n_gpu_backends = 0;
+    for (auto * backend : lctx.backends) {
+        if (backend != lctx.backend_cpu) ++n_gpu_backends;
+    }
+    lctx.atsinfer_device_promoted_layers.assign(n_gpu_backends, 0);
 
     size_t n_cpu_units = 0;
     for (const auto & u : lctx.atsinfer_units) {
@@ -301,6 +345,13 @@ bool atsinfer_dt_plan_round(llama_context & lctx, float last_round_ms) {
     }
 
     if (!have_t_g) {
+        // A calibration promotion was refused because no GPU had room for the expert
+        // group. t_g cannot be measured without a device to promote to, and retrying
+        // would serialize a profiled round + rebuild every other round forever, so give
+        // up on dynamic transfer and stay with the static placement.
+        if (lctx.atsinfer_calib_failed) {
+            return false;
+        }
         if (lctx.atsinfer_calib_unit < 0) {
             for (size_t i = 0; i < lctx.atsinfer_units.size(); ++i) {
                 if (!lctx.atsinfer_units[i].static_gpu) {
@@ -388,27 +439,92 @@ void atsinfer_dt_apply(llama_context & lctx, ggml_tensor * cur, const char * nam
     }
 
     const bool want_gpu = lctx.atsinfer_run_on_gpu[idx] != 0;
-    if (want_gpu == lctx.atsinfer_units[idx].static_gpu) {
-        // nothing to override: the static placement already puts it where we want it
+
+    if (lctx.atsinfer_units[idx].static_gpu) {
+        // The static placement already runs this unit on the GPU; nothing to steer.
         return;
     }
 
-    ggml_backend_t target = nullptr;
-    if (want_gpu) {
-        for (auto * backend : lctx.backends) {
-            if (backend == lctx.backend_cpu) {
-                continue;
-            }
-            if (ggml_backend_supports_op(backend, cur) || ggml_backend_offload_op(backend, cur)) {
-                target = backend;
-                break;
+    if (!want_gpu) {
+        // Demoted (or never-promoted) host-resident unit: return the previously-promoted
+        // device's load counter (the promoted_device slot is cleared here, so only the
+        // first steered node of the layer does the bookkeeping) and keep the node on the
+        // CPU, where its host-resident weights live.
+        if (lctx.atsinfer_promoted_device[idx] >= 0) {
+            const int prev = lctx.atsinfer_promoted_device[idx];
+            lctx.atsinfer_promoted_device[idx] = -1;
+            if ((size_t) prev < lctx.atsinfer_device_promoted_layers.size() &&
+                    lctx.atsinfer_device_promoted_layers[prev] > 0) {
+                --lctx.atsinfer_device_promoted_layers[prev];
             }
         }
-    } else {
-        target = lctx.backend_cpu;
+        ggml_backend_sched_set_tensor_backend(lctx.sched, cur, lctx.backend_cpu);
+        return;
     }
 
-    if (target) {
-        ggml_backend_sched_set_tensor_backend(lctx.sched, cur, target);
+    // Promote the unit. Pick the GPU backend with the most free VRAM after the promotion
+    // instead of always the first one, and keep the unit on the GPU it already used when
+    // that still has room (stability -- a device change forces a graph rebuild). If no
+    // device has room for the expert group, leave it on the CPU rather than risk an OOM.
+    std::vector<atsinfer_device_candidate> candidates;
+    std::vector<ggml_backend_t>            candidate_backends;
+    candidates.reserve(lctx.backends.size());
+    candidate_backends.reserve(lctx.backends.size());
+
+    size_t gpu_index = 0;
+    for (auto * backend : lctx.backends) {
+        if (backend == lctx.backend_cpu) {
+            continue;
+        }
+        if (ggml_backend_supports_op(backend, cur) || ggml_backend_offload_op(backend, cur)) {
+            atsinfer_device_candidate c;
+            c.weight_bytes = lctx.atsinfer_units[idx].weight_bytes;
+            c.free_bytes   = atsinfer_gpu_free_bytes(ggml_backend_name(backend));
+            if (lctx.atsinfer_device_promoted_layers.size() > gpu_index) {
+                c.n_promoted = lctx.atsinfer_device_promoted_layers[gpu_index];
+            }
+            candidates.push_back(c);
+            candidate_backends.push_back(backend);
+        }
+        ++gpu_index;
     }
+
+    const int pick = atsinfer_select_promotion_device(candidates, lctx.atsinfer_promoted_device[idx]);
+    if (pick < 0) {
+        // No GPU has room for the expert group. Align the plan with reality so the
+        // scheduler does not keep re-promoting (and rebuilding the graph for) a unit
+        // that cannot fit, and abort the t_g calibration if this was its probe unit --
+        // without a device to promote to, t_g can never be measured and retrying would
+        // serialize a profiled round every other round forever (atsinfer_calib_failed
+        // latches that and makes atsinfer_dt_plan_round give up on dynamic transfer).
+        lctx.atsinfer_run_on_gpu[idx] = 0;
+        lctx.atsinfer_promoted_device[idx] = -1;
+        if (lctx.atsinfer_calib_unit == idx) {
+            lctx.atsinfer_calib_unit   = -1;
+            lctx.atsinfer_calib_failed = true;
+        }
+        LLAMA_LOG_WARN("%s: no GPU has room for layer %d expert group (%.2f GiB); "
+                       "keeping it on the CPU\n", __func__, il,
+                       lctx.atsinfer_units[idx].weight_bytes / (1024.0 * 1024.0 * 1024.0));
+        return;
+    }
+
+    // Bookkeeping once per unit: the first steered node of the layer moves the unit's
+    // load count to the picked device; the other three nodes see promoted_device already
+    // set and skip. This keeps atsinfer_device_promoted_layers a true count of units
+    // currently promoted to each GPU (a load signal), not a per-node/per-rebuild sum.
+    const int prev = lctx.atsinfer_promoted_device[idx];
+    if (prev != pick) {
+        if (prev >= 0 && (size_t) prev < lctx.atsinfer_device_promoted_layers.size() &&
+                lctx.atsinfer_device_promoted_layers[prev] > 0) {
+            --lctx.atsinfer_device_promoted_layers[prev];
+        }
+        lctx.atsinfer_promoted_device[idx] = pick;
+        if (lctx.atsinfer_device_promoted_layers.size() <= (size_t) pick) {
+            lctx.atsinfer_device_promoted_layers.resize((size_t) pick + 1, 0);
+        }
+        ++lctx.atsinfer_device_promoted_layers[pick];
+    }
+
+    ggml_backend_sched_set_tensor_backend(lctx.sched, cur, candidate_backends[pick]);
 }

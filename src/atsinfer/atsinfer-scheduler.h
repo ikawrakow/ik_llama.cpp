@@ -19,6 +19,10 @@ struct atsinfer_round_unit {
     float t_gpu_ms   = 0.0f;   // t_i^g, measured
     float c_ms       = 0.0f;   // c_i, activation transfer cost at a backend boundary
     float w_ms       = 0.0f;   // w_i, weight transfer time of the ACTIVATED experts only
+    // Full size of the layer's expert group in bytes. A promoted op copies these weights
+    // into the target GPU, so this is the VRAM a promotion must fit into. The required
+    // headroom check in atsinfer_dt_apply() uses it to refuse promotions that would OOM.
+    size_t weight_bytes = 0;
 };
 
 struct atsinfer_round_plan {
@@ -26,6 +30,26 @@ struct atsinfer_round_plan {
     float                estimated_latency_ms = 0.0f;
     int                  n_promoted           = 0;  // units with b_i=CPU but rb_i=GPU
 };
+
+// Candidate GPU backend for promoting a unit, one per backend that can run the op.
+struct atsinfer_device_candidate {
+    size_t free_bytes   = 0; // free VRAM on the device right now
+    size_t weight_bytes = 0; // VRAM the promotion needs (the unit's expert group)
+    size_t n_promoted   = 0; // layers already promoted here (load signal)
+};
+
+// Pick which GPU a promoted unit should run on. Returns the candidate index, or -1 when
+// none has room for weight_bytes -- the unit then stays on the CPU rather than risking
+// an OOM that would take the whole context down mid-decode.
+//
+// Keeps the unit on the device it already used (preferred_index) when that still has room,
+// so a layer does not bounce between GPUs round to round (each move changes the node's
+// backend and forces a graph rebuild). Otherwise picks the candidate with the most
+// headroom after the promotion, ties broken toward the least-loaded device (fewest
+// already-promoted layers) and then the lowest index for determinism.
+int atsinfer_select_promotion_device(
+    const std::vector<atsinfer_device_candidate> & candidates,
+    int preferred_index);
 
 // Algorithm 2: minimize round latency
 //   T = sum t_rb_i + sum c_i*1{rb_{i-1} != rb_i} + sum_{i in G} delta_i

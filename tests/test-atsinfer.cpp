@@ -234,6 +234,78 @@ void test_load_aware_rescheduler() {
     std::cout << " -> Load-Aware Rescheduler Test PASSED!" << std::endl;
 }
 
+void test_promotion_device_selection() {
+    std::cout << "[TEST] Running Promotion Device Selection Test..." << std::endl;
+    constexpr size_t GiB = 1024ULL * 1024ULL * 1024ULL;
+    constexpr size_t MB  = 1024ULL * 1024ULL;
+
+    // No candidates -> nothing to promote to.
+    assert(atsinfer_select_promotion_device({}, -1) == -1);
+
+    // A single GPU with room.
+    {
+        std::vector<atsinfer_device_candidate> c = { { 8*GiB, 2*GiB, 0 } };
+        assert(atsinfer_select_promotion_device(c, -1) == 0);
+    }
+
+    // No GPU has room for the expert group -> refuse (stay on CPU rather than OOM).
+    {
+        std::vector<atsinfer_device_candidate> c = {
+            { 1*GiB, 2*GiB, 0 },
+            { 512*MB, 2*GiB, 2 },
+        };
+        assert(atsinfer_select_promotion_device(c, -1) == -1);
+    }
+
+    // Picks the GPU with the most headroom after the promotion.
+    {
+        std::vector<atsinfer_device_candidate> c = {
+            { 3*GiB,  2*GiB, 1 },  // 1 GiB headroom
+            { 8*GiB,  2*GiB, 0 },  // 6 GiB headroom -> wins
+        };
+        assert(atsinfer_select_promotion_device(c, -1) == 1);
+    }
+
+    // Stability: keeps the previous device when it still has room, even if another
+    // device now has more headroom (avoids a graph rebuild from device churn).
+    {
+        std::vector<atsinfer_device_candidate> c = {
+            { 3*GiB, 2*GiB, 1 },
+            { 8*GiB, 2*GiB, 0 },
+        };
+        assert(atsinfer_select_promotion_device(c, 0) == 0);
+    }
+
+    // ...but not when the previous device no longer fits.
+    {
+        std::vector<atsinfer_device_candidate> c = {
+            { 1*GiB, 2*GiB, 1 },
+            { 8*GiB, 2*GiB, 0 },
+        };
+        assert(atsinfer_select_promotion_device(c, 0) == 1);
+    }
+
+    // Tie-break: equal headroom -> the less-loaded device wins.
+    {
+        std::vector<atsinfer_device_candidate> c = {
+            { 4*GiB, 1*GiB, 5 },
+            { 4*GiB, 1*GiB, 1 },  // fewer layers already promoted here -> wins
+        };
+        assert(atsinfer_select_promotion_device(c, -1) == 1);
+    }
+
+    // Tie-break: equal headroom and equal load -> lowest index (deterministic).
+    {
+        std::vector<atsinfer_device_candidate> c = {
+            { 4*GiB, 1*GiB, 0 },
+            { 4*GiB, 1*GiB, 0 },
+        };
+        assert(atsinfer_select_promotion_device(c, -1) == 0);
+    }
+
+    std::cout << " -> Promotion Device Selection Test PASSED!" << std::endl;
+}
+
 void test_profile_serialization() {
     std::cout << "[TEST] Running Profile Serialization Test..." << std::endl;
     atsinfer_hardware_profile hw_orig;
@@ -304,9 +376,10 @@ int main() {
     test_profile_serialization();
     test_tensor_cache();
     test_cuda_manager();
+    test_promotion_device_selection();
 
     std::cout << "==========================================" << std::endl;
-    std::cout << "   ALL ATSINFER UNIT TESTS PASSED (8/8)   " << std::endl;
+    std::cout << "   ALL ATSINFER UNIT TESTS PASSED (9/9)   " << std::endl;
     std::cout << "==========================================" << std::endl;
     return 0;
 }

@@ -221,3 +221,49 @@ atsinfer_round_plan atsinfer_schedule_round(const std::vector<atsinfer_round_uni
 
     return plan;
 }
+
+// ---------------------------------------------------------------------------
+// Promotion device selection (multi-GPU)
+// ---------------------------------------------------------------------------
+
+int atsinfer_select_promotion_device(
+    const std::vector<atsinfer_device_candidate> & candidates,
+    int preferred_index) {
+
+    const int n = (int) candidates.size();
+    if (n == 0) {
+        return -1;
+    }
+
+    auto eligible = [&](int i) {
+        return candidates[i].free_bytes >= candidates[i].weight_bytes;
+    };
+
+    // Stability first: keep the unit on the GPU it already runs on as long as that device
+    // still has room. Moving it would change the node -> backend assignment and force a
+    // graph rebuild, which costs a full decode round.
+    if (preferred_index >= 0 && preferred_index < n && eligible(preferred_index)) {
+        return preferred_index;
+    }
+
+    // Otherwise pick the GPU with the most headroom after the promotion. Ties go to the
+    // least-loaded device (fewest layers already promoted there), then the lowest index
+    // so the choice is deterministic.
+    int best = -1;
+    for (int i = 0; i < n; ++i) {
+        if (!eligible(i)) {
+            continue;
+        }
+        if (best < 0) {
+            best = i;
+            continue;
+        }
+        const size_t headroom_best = candidates[best].free_bytes - candidates[best].weight_bytes;
+        const size_t headroom_i    = candidates[i].free_bytes  - candidates[i].weight_bytes;
+        if (headroom_i > headroom_best ||
+            (headroom_i == headroom_best && candidates[i].n_promoted < candidates[best].n_promoted)) {
+            best = i;
+        }
+    }
+    return best;
+}
