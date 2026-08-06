@@ -2258,13 +2258,9 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     return LLAMA_MTP_PACKAGE_INVALID;
 }
 
-bool llama_model_has_nextn_weights(const llama_model * model) {
-    if (!model || model->hparams.nextn_predict_layers == 0) {
+bool llama_model_step35_has_nextn_weights(const llama_model * model) {
+    if (!model || !llama_model_is_step35(model) || model->hparams.nextn_predict_layers == 0) {
         return false;
-    }
-
-    if (model->arch != LLM_ARCH_STEP35) {
-        return true;
     }
 
     const size_t n_layers = model->layers.size();

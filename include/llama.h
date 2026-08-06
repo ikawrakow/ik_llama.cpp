@@ -1620,7 +1620,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
 
     LLAMA_API uint32_t llama_model_mtp_feature_width(const struct llama_model * model);
 
-    LLAMA_API bool llama_model_has_nextn_weights(const struct llama_model * model);
+    LLAMA_API bool llama_model_step35_has_nextn_weights(const struct llama_model * model);
 
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);

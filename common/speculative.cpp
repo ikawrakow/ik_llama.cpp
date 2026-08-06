@@ -143,40 +143,6 @@ static bool common_speculative_are_compatible(
     return true;
 }
 
-static bool common_speculative_mtp_are_compatible(
-        const llama_model * model_tgt,
-        const llama_model * model_dft) {
-    if (llama_model_mtp_feature_width(model_tgt) != llama_model_mtp_feature_width(model_dft)) {
-        LOG_ERR("%s: MTP target/companion hidden width mismatch: target=%d companion=%d\n",
-                __func__, llama_model_mtp_feature_width(model_tgt), llama_model_mtp_feature_width(model_dft));
-        return false;
-    }
-
-    const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
-    const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
-    if (llama_vocab_type(vocab_tgt) != llama_vocab_type(vocab_dft) ||
-        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
-        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
-        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
-        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft) ||
-        llama_vocab_n_tokens(vocab_tgt) != llama_vocab_n_tokens(vocab_dft)) {
-        LOG_ERR("%s: MTP target/companion tokenizer metadata does not match\n", __func__);
-        return false;
-    }
-
-    const int32_t n_vocab = llama_vocab_n_tokens(vocab_tgt);
-    for (int32_t i = 0; i < n_vocab; ++i) {
-        if (std::strcmp(llama_vocab_get_text(vocab_tgt, i), llama_vocab_get_text(vocab_dft, i)) != 0 ||
-            llama_token_get_attr(model_tgt, i) != llama_token_get_attr(model_dft, i) ||
-            llama_token_get_score(model_tgt, i) != llama_token_get_score(model_dft, i)) {
-            LOG_ERR("%s: MTP target/companion vocabulary differs at token %d\n", __func__, i);
-            return false;
-        }
-    }
-
-    return true;
-}
-
 static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
     return llama_model_is_step35(model) || llama_model_is_deepseek4(model);
 }
@@ -2036,7 +2002,7 @@ bool common_speculative_prepare_mtp_runtime(
     }
 
     if (llama_model_is_step35(model) && has_embedded_mtp &&
-        !llama_model_has_nextn_weights(model)) {
+        !llama_model_step35_has_nextn_weights(model)) {
         LOG_ERR("%s: Step target is missing one or more complete MTP heads\n", __func__);
         return false;
     }
@@ -2136,48 +2102,63 @@ bool common_speculative_finalize_startup(
             return false;
         }
 
-        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
-            params.model_dft != nullptr &&
-            common_speculative_target_has_appended_mtp_contract(model) &&
-            llama_model_mtp_package(params.model_dft) != LLAMA_MTP_PACKAGE_COMPANION) {
-            LOG_ERR("%s: -md for an MTP stage must be a predictor-only companion GGUF\n", __func__);
-            return false;
-        }
-        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
-            params.model_dft != nullptr &&
-            llama_model_is_step35(params.model_dft) &&
-            !llama_model_has_nextn_weights(params.model_dft)) {
-            LOG_ERR("%s: Step MTP companion is missing one or more complete predictor heads\n", __func__);
-            return false;
-        }
-        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
-            params.model_dft != nullptr &&
-            llama_model_is_deepseek4(params.model_dft) &&
-            llama_model_n_nextn_layer(params.model_dft) != 1) {
-            LOG_ERR("%s: DeepSeek-V4 MTP companion requires exactly one NextN predictor layer, got %d\n",
-                    __func__, llama_model_n_nextn_layer(params.model_dft));
-            return false;
-        }
-        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
-            params.model_dft != nullptr &&
-            llama_model_is_step35(model) &&
-            llama_model_n_nextn_layer(params.model_dft) != 3) {
-            LOG_ERR("%s: Step MTP companion requires exactly three predictor heads, got %d\n",
-                    __func__, llama_model_n_nextn_layer(params.model_dft));
-            return false;
-        }
-        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
-            model != nullptr && params.model_dft != nullptr &&
-            ((llama_model_is_step35(model) && !llama_model_is_step35(params.model_dft)) ||
-             (llama_model_is_deepseek4(model) && !llama_model_is_deepseek4(params.model_dft)))) {
-            LOG_ERR("%s: MTP companion architecture does not match the target model\n", __func__);
-            return false;
-        }
-        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
-            common_speculative_has_recognized_mtp_companion(model, params.model_dft) &&
-            params.model_dft != nullptr &&
-            !common_speculative_mtp_are_compatible(model, params.model_dft)) {
-            return false;
+        const bool mtp_requested = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+        if (mtp_requested && model != nullptr && params.model_dft != nullptr) {
+            const llama_model * companion = params.model_dft;
+            const bool appended_contract = common_speculative_target_has_appended_mtp_contract(model);
+
+            if (appended_contract &&
+                llama_model_mtp_package(companion) != LLAMA_MTP_PACKAGE_COMPANION) {
+                LOG_ERR("%s: -md for an MTP stage must be a predictor-only companion GGUF\n", __func__);
+                return false;
+            }
+
+            if (llama_model_is_step35(model)) {
+                if (!llama_model_is_step35(companion)) {
+                    LOG_ERR("%s: Step MTP requires a Step companion\n", __func__);
+                    return false;
+                }
+
+                const int32_t n_heads = llama_model_n_nextn_layer(companion);
+                if (n_heads != 3) {
+                    LOG_ERR("%s: Step MTP companion requires exactly three predictor heads, got %d\n",
+                            __func__, n_heads);
+                    return false;
+                }
+
+                if (!llama_model_step35_has_nextn_weights(companion)) {
+                    LOG_ERR("%s: Step MTP companion is missing required predictor tensors\n", __func__);
+                    return false;
+                }
+            } else if (llama_model_is_deepseek4(model)) {
+                if (!llama_model_is_deepseek4(companion)) {
+                    LOG_ERR("%s: DeepSeek-V4 MTP requires a DeepSeek-V4 companion\n", __func__);
+                    return false;
+                }
+
+                const int32_t n_heads = llama_model_n_nextn_layer(companion);
+                if (n_heads != 1) {
+                    LOG_ERR("%s: DeepSeek-V4 MTP companion requires exactly one predictor layer, got %d\n",
+                            __func__, n_heads);
+                    return false;
+                }
+            }
+
+            if (common_speculative_has_recognized_mtp_companion(model, companion)) {
+                if (!common_speculative_are_compatible(model, companion)) {
+                    LOG_ERR("%s: MTP target and companion vocabularies are incompatible\n", __func__);
+                    return false;
+                }
+
+                const uint32_t target_width = llama_model_mtp_feature_width(model);
+                const uint32_t companion_width = llama_model_mtp_feature_width(companion);
+
+                if (target_width != companion_width) {
+                    LOG_ERR("%s: MTP feature-width mismatch: target=%u companion=%u\n",
+                            __func__, target_width, companion_width);
+                    return false;
+                }
+            }
         }
     }
 
