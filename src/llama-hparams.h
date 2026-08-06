@@ -137,11 +137,8 @@ struct llama_hparams {
     uint32_t mhc_num_stream    = 1;
     uint32_t mhc_recur_norm    = 0;
     uint32_t param_sink_number = 0;
-    // openPangu DSA/SWA schedule: per-layer sliding window (0 = DSA layer, full causal
-    // attention over the indexer's top-k selection). The NextN/MTP layers carry their own
-    // (larger) window, applied when the graph is built with an MTP op type.
+    // window used by the NextN/MTP layers in place of n_swa
     uint32_t n_swa_mtp = 0;
-    std::array<uint32_t, LLAMA_MAX_LAYERS> openpangu_window = {};
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count     = 0;
@@ -397,3 +394,32 @@ struct llama_hparams {
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
+
+// retained window + one u-batch; compaction then fires every C - W tokens. The slack floor keeps a
+// small u-batch from compacting every few tokens.
+static inline uint32_t llama_swa_compact_window_rows(uint32_t window, uint32_t pad, uint32_t n_ubatch) {
+    const uint32_t min_slack = 256;
+    const uint32_t slack     = n_ubatch > min_slack ? n_ubatch : min_slack;
+    const uint32_t unpadded  = window + slack;
+    return pad > 1 ? ((unpadded + pad - 1)/pad)*pad : unpadded;
+}
+
+static inline uint32_t llama_swa_compact_rows(uint32_t window, uint32_t pad, uint32_t n_ubatch,
+                                              uint32_t sink_rows) {
+    return sink_rows + llama_swa_compact_window_rows(window, pad, n_ubatch);
+}
+
+static inline uint32_t llama_kv_layer_rows(const llama_hparams & hparams, int il, uint32_t kv_size,
+                                           bool swa_compress, uint32_t n_ubatch, uint32_t pad) {
+    if (!swa_compress || il < 0 || il >= (int) hparams.n_layer) {
+        return kv_size;
+    }
+    if (il >= (int) (hparams.n_layer - hparams.nextn_predict_layers)) {
+        return kv_size;
+    }
+    if (!hparams.swa_layers[il]) {
+        return kv_size;
+    }
+    const uint32_t rows = llama_swa_compact_rows(hparams.n_swa, pad, n_ubatch, hparams.param_sink_number);
+    return rows < kv_size ? rows : kv_size;
+}

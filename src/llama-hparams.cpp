@@ -1178,8 +1178,8 @@ void llm_load_hparams(
                 // DSA/SWA schedule: openpangu.swa_layers lists the sliding-window layer ids and
                 // openpangu.sliding_window_list the per-entry window; the remaining base layers
                 // are DSA (indexer + top-k, no window). The NextN/MTP layers appear in the SWA
-                // list with their own (larger) window, used by the MTP graphs. Absent keys keep
-                // every window at 0 = dense fallback (pre-DSA GGUFs keep working).
+                // list with their own (larger) window, used by the MTP graphs. Absent keys leave
+                // swa_layers cleared = dense fallback (pre-DSA GGUFs keep working).
                 {
                     std::vector<uint32_t> swa_ids, swa_windows;
                     const bool have_ids = ml.get_arr("openpangu.swa_layers",          swa_ids,     false);
@@ -1192,7 +1192,7 @@ void llm_load_hparams(
                             if (il >= hparams.n_layer) {
                                 throw std::runtime_error(format("openpangu.swa_layers contains out-of-range layer %u", il));
                             }
-                            hparams.openpangu_window[il] = swa_windows[i];
+                            hparams.swa_layers[il] = swa_windows[i] > 0 ? 1 : 0;
                             if (il < n_base) {
                                 if (hparams.n_swa != 0 && hparams.n_swa != swa_windows[i]) {
                                     throw std::runtime_error("openpangu: non-uniform base sliding windows are not supported");
@@ -1207,6 +1207,13 @@ void llm_load_hparams(
                         }
                     } else if (have_ids || have_win) {
                         LLAMA_LOG_WARN("%s: openpangu SWA schedule keys are inconsistent - keeping dense fallback\n", __func__);
+                    }
+                    // the graph derives head dims and the MoME conv slot width from layer 0
+                    if (hparams.n_swa > 0 &&
+                        (hparams.n_embd_head_k_swa != hparams.n_embd_head_k_full ||
+                         hparams.n_embd_head_v_swa != hparams.n_embd_head_v_full ||
+                         hparams.n_rot_swa         != hparams.n_rot)) {
+                        throw std::runtime_error("openpangu: per-layer SWA head dimensions are not supported");
                     }
                 }
 
@@ -1664,6 +1671,14 @@ void llm_load_hparams(
         case LLM_ARCH_GLM_DSA:
             {
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_layer == 43 && hparams.nextn_predict_layers > 0) {
+                    LLAMA_LOG_WARN("===============================================================================================\n");
+                    LLAMA_LOG_WARN("Unexpected number of layers (%d) and nextn_predict_layers (%d) for DeepSeek4-Flash\n",
+                            hparams.n_layer, hparams.nextn_predict_layers);
+                    LLAMA_LOG_WARN("   -> setting nextn_predict_layers to zero\n");
+                    LLAMA_LOG_WARN("===============================================================================================\n");
+                    hparams.nextn_predict_layers = 0;
+                }
                 // Probe the first appended predictor block, or n_layer - 1 for base GGUFs.
                 const uint32_t dsv4_probe_offset = std::max<uint32_t>(1, hparams.nextn_predict_layers);
                 const uint32_t dsv4_probe_layer = hparams.n_layer > dsv4_probe_offset

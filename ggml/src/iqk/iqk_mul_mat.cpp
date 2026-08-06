@@ -1741,6 +1741,7 @@ bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_ty
 
 namespace {
 constexpr int k_indexer_chunks = 64;
+constexpr int k_n_bucket = 64;
 size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth) {
     auto k = dst->src[0];
     auto q = dst->src[1];
@@ -1754,6 +1755,15 @@ size_t iqk_idx_topk_work_wbs_per_thread(const struct ggml_tensor * dst, int nth)
         size += k_indexer_chunks * q->ne[1] * sizeof(float);
         size += k->ne[1] * sizeof(float);
         size += k->ne[1] * sizeof(int32_t);
+#ifdef __AVX2__
+        if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && k->ne[1] % 32 == 0 && q->ne[1] % 8 == 0) {
+            size += 32*k->ne[0]*sizeof(float); // K repacked into row-interleaved floats
+            size += 32*q->ne[1]*sizeof(float);
+        }
+#endif
+        // We will not use iqk_bucket_sort for batch processing, so
+        // no need to allocate the extra work buffers.
+        //size += (2*k->ne[1] + k_n_bucket)*sizeof(int);
         size = GGML_PAD(size, 128);
         return size;
     }
@@ -1765,6 +1775,185 @@ inline void iqk_f16_to_f32(int n, const ggml_fp16_t * x, float * y) {
         y[i] = GGML_FP16_TO_FP32(x[i]);
     }
 }
+
+#ifdef __AVX2__
+inline float hmin_f32_8(__m256 x) {
+    __m128 min4 = _mm_min_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
+    min4 = _mm_min_ps(min4, _mm_movehl_ps(min4, min4));
+    min4 = _mm_min_ss(min4, _mm_movehdup_ps(min4));
+    return  _mm_cvtss_f32(min4);
+}
+#endif
+
+// Note: result is not actually sorted in decreasing order, we just get the indices of the ntop
+//       values stored in idx.
+// In micro-benchmark testing this code outperforms std::partial_sort by a factor of 4-6
+// (factors, not percentages!).
+// For DS4 running CPU-only this translates into a 3% better TG at a context of 128k tokens.
+void iqk_bucket_topk(int nval, int ntop, float * values, int * idx, int * idx_inf, int nbucket, int * counts,
+        int * idx_aux) {
+#if 0
+    int ngood = nval;
+    while (ngood > 0 && values[ngood-1] == -INFINITY) --ngood;
+    if (ngood <= ntop) {
+        for (int j = 0; j < ntop; ++j) idx[j] = j;
+        return;
+    }
+    float max = values[0], min = values[0];
+#ifdef __AVX2__
+    auto vmax = _mm256_loadu_ps(values);
+    auto vmin = vmax;
+    auto vidx = _mm256_set_epi32(7,6,5,4,3,2,1,0);
+    auto vstep = _mm256_set1_epi32(8);
+    _mm256_storeu_si256((__m256i *)idx, vidx);
+    for (int j = 1; j < ngood/8; ++j) {
+        auto v = _mm256_loadu_ps(values + 8*j);
+        vidx = _mm256_add_epi32(vidx, vstep);
+        _mm256_storeu_si256((__m256i *)idx + j, vidx);
+        vmax = _mm256_max_ps(vmax, v);
+        vmin = _mm256_min_ps(vmin, v);
+    }
+    max = hmax_f32_8(vmax);
+    min = hmin_f32_8(vmin);
+    for (int j = 8*(ngood/8); j < ngood; ++j) {
+        float v = values[j];
+        max = std::max(max, v);
+        min = std::min(min, v);
+        idx[j] = j;
+    }
+#else
+    for (int j = 0; j < ngood; ++j) {
+        float v = values[j];
+        max = std::max(max, v);
+        min = std::min(min, v);
+        idx[j] = j;
+    }
+#endif
+#else
+    // If we knew that we don't have -inf values, we could do this more efficiently.
+    // But we don't. At least not for sure.
+    // Oh, I did measure using the above commented out code, which assumes that
+    // -inf values if present are at the end, and I saw no real performance difference.
+    int ngood = 0, ninf = 0;
+    float max = values[0], min = values[0];
+    for (int j = 0; j < nval; ++j) {
+        if (float v = values[j]; v > -INFINITY) {
+            values[ngood] = v;
+            idx[ngood++] = j;
+            max = std::max(max, v);
+            min = std::min(min, v);
+        } else {
+            idx_inf[ninf++] = j;
+        }
+    }
+#endif
+    if (ngood <= ntop) {
+        for (int j = ngood; j < ntop; ++j) idx[j] = idx_inf[j-ngood];
+        return;
+    }
+    if (max - min < 1e-6f) return; // we got basically the same values, so it doesn't matter which we pick
+    float av = (nbucket - 0.75f)/(min - max);
+    float bv = -av*max;
+#ifdef __AVX2__
+    auto v_av = _mm256_set1_ps(av);
+    auto v_bv = _mm256_set1_ps(bv);
+    for (int i = 0; i < nbucket; ++i) counts[i] = 0;
+    for (int j = 0; j < ngood/8; ++j) {
+        auto v = _mm256_loadu_ps(values + 8*j);
+        auto xv = _mm256_fmadd_ps(v_av, v, v_bv);
+        auto iv = _mm256_cvtps_epi32(xv);
+        iv = _mm256_min_epi32(iv, _mm256_set1_epi32(nbucket-1));
+        auto aux = idx_aux + 8*j;
+        _mm256_storeu_si256((__m256i *)aux, iv);
+        for (int k = 0; k < 8; ++k) ++counts[aux[k]];
+    }
+    for (int j = 8*(ngood/8); j < ngood; ++j) {
+        int i = int(av*values[j] + bv);
+        i = std::min(i, nbucket-1);
+        idx_aux[j] = i;
+        ++counts[i];
+    }
+#else
+    for (int j = 0; j < ngood; ++j) {
+        int i = int(av*values[j] + bv);
+        i = std::min(i, nbucket-1);
+        idx_aux[j] = i;
+        ++counts[i];
+    }
+#endif
+    int last_bucket = 0;
+    int sum = 0;
+    for (; last_bucket < nbucket-1; ++last_bucket) {
+        sum += counts[last_bucket];
+        if (sum >= ntop) break;
+    }
+    int nhave = 0, nlast = 0;
+    for (int j = 0; j < ngood; ++j) {
+        if (idx_aux[j] < last_bucket) {
+            idx[nhave++] = idx[j];
+        } else if (idx_aux[j] == last_bucket) {
+            idx_inf[nlast++] = idx[j];
+        }
+    }
+    int n_extra = ntop - nhave;
+    auto compare = [values] (int l, int r) {
+        return values[l] > values[r];
+    };
+    if (2*n_extra < nlast) {
+        std::partial_sort(idx_inf, idx_inf + n_extra, idx_inf + nlast, compare);
+    } else {
+        std::sort(idx_inf, idx_inf + nlast, compare);
+    }
+    for (int j = 0; j < n_extra; ++j) idx[nhave + j] = idx_inf[j];
+}
+#ifdef __AVX2__
+inline void iqk_repack_f16(int nrows, int n_per_row, const char * k_in, size_t nb, float * k_out) {
+    __m256 xv[4];
+    for (int row = 0; row < nrows; row += 4) {
+        for (int i = 0; i < n_per_row/8; ++i) {
+            for (int k = 0; k < 4; ++k) {
+                xv[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(k_in + (row + k)*nb) + i));
+            }
+            auto t0 = _mm256_unpacklo_ps(xv[0], xv[1]);
+            auto t1 = _mm256_unpacklo_ps(xv[2], xv[3]);
+            auto t2 = _mm256_unpackhi_ps(xv[0], xv[1]);
+            auto t3 = _mm256_unpackhi_ps(xv[2], xv[3]);
+            xv[0] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+            xv[1] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+            xv[2] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+            xv[3] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+            _mm256_storeu_ps(k_out, xv[0]); k_out += 8;
+            _mm256_storeu_ps(k_out, xv[1]); k_out += 8;
+            _mm256_storeu_ps(k_out, xv[2]); k_out += 8;
+            _mm256_storeu_ps(k_out, xv[3]); k_out += 8;
+        }
+    }
+}
+template <int nrc_y> inline void iqk_mul_f32_f32_r(int n_per_row, int n_rows, size_t nby, const float * x, const float * y_in,
+        float * result) {
+    __m256 vx[4];
+    const float * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = y_in + nby*iy;
+    for (int row = 0; row < n_rows; row += 4) {
+        __m256 acc[nrc_y] = {};
+        for (int ib = 0; ib < n_per_row/8; ++ib) {
+            for (int k = 0; k < 4; ++k) vx[k] = _mm256_loadu_ps(x + 8*k);
+            x += 32;
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto vy = _mm256_loadu_ps(y[iy] + 8*ib);
+                acc[iy] = _mm256_fmadd_ps(vx[0], _mm256_shuffle_ps(vy, vy, 0x00), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(vx[1], _mm256_shuffle_ps(vy, vy, 0x55), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(vx[2], _mm256_shuffle_ps(vy, vy, 0xaa), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(vx[3], _mm256_shuffle_ps(vy, vy, 0xff), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sum = _mm_add_ps(_mm256_castps256_ps128(acc[iy]), _mm256_extractf128_ps(acc[iy], 1));
+            _mm_storeu_ps(result + n_rows*iy + row, sum);
+        }
+    }
+}
+#endif
 }
 
 size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread) {
@@ -1782,6 +1971,7 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
     size += k->ne[1] * q->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(float);
     size += k->ne[1] * sizeof(int32_t);
+    size += (2*k->ne[1] + k_n_bucket)*sizeof(int);
     return size;
 }
 
@@ -1834,10 +2024,47 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         auto kq = (float *)(work + quantize_size);
         auto score = kq + k_indexer_chunks*q->ne[1];
         auto sorted = (int32_t *)(score + k->ne[1]);
+        //auto idx_inf = sorted + k->ne[1];
+        //auto idx_aux = idx_inf + k->ne[1];
+        //auto counts  = idx_aux + k->ne[1];
         for (int iq = ith; iq < q->ne[2]; iq += nth) {
             auto this_q = (const char *)q->data + iq*q->nb[2];
             auto this_m = (const char *)m->data + iq*m->nb[1];
             auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
+            bool done = false;
+#ifdef __AVX2__
+            if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && k->ne[1] % 32 == 0 && q->ne[1] % 8 == 0) {
+                auto k_repacked = (float *)(sorted + k->ne[1]);
+                auto kq_local = k_repacked + 32*k->ne[0];
+                for (int ik = 0; ik < (int)k->ne[1]; ik += 32) {
+                    iqk_repack_f16(32, k->ne[0], (const char *)k->data + k->nb[1]*ik, k->nb[1], k_repacked);
+                    for (int iq = 0; iq < (int)q->ne[1]; iq += 8) {
+                        iqk_mul_f32_f32_r<8>(k->ne[0], 32, q->nb[1]/sizeof(float), k_repacked,
+                                (const float *)(this_q + iq*q->nb[1]), kq_local + 32*iq);
+                    }
+                    __m256 acc[4];
+                    if (m->type == GGML_TYPE_F32) {
+                        auto m32 = (const float *)this_m + ik;
+                        for (int k = 0; k < 4; ++k) acc[k] = _mm256_loadu_ps(m32 + 8*k);
+                    } else {
+                        auto m16 = (const ggml_fp16_t *)this_m + ik;
+                        for (int k = 0; k < 4; ++k) acc[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)m16 + k));
+                    }
+                    auto kq_i = kq_local;
+                    for (int i = 0; i < int(q->ne[1]); ++i) {
+                        auto vw = _mm256_set1_ps(this_w[i]);
+                        for (int k = 0; k < 4; ++k) {
+                            auto relu = _mm256_max_ps(_mm256_setzero_ps(), _mm256_loadu_ps(kq_i + 8*k));
+                            acc[k] = _mm256_fmadd_ps(vw, relu, acc[k]);
+                        }
+                        kq_i += 32;
+                    }
+                    for (int k = 0; k < 4; ++k) _mm256_storeu_ps(score + ik + 8*k, acc[k]);
+                }
+                done = true;
+            }
+#endif
+            if (!done) {
             if (from_float) {
                 from_float((const float *)this_q, work, q->ne[0] * q->ne[1]);
                 this_q = work;
@@ -1864,9 +2091,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                         for (int i = 0; i < int(q->ne[1]); ++i) {
                             auto wi = _mm256_set1_ps(this_w[i]);
                             for (int j = 0; j < k_indexer_chunks/8; ++j) {
-                                auto relu = _mm256_loadu_ps(kq_i + 8*j);
-                                auto mask = _mm256_cmp_ps(relu, _mm256_setzero_ps(), _CMP_GT_OQ);
-                                relu = _mm256_blendv_ps(_mm256_setzero_ps(), relu, mask);
+                                auto relu = _mm256_max_ps(_mm256_setzero_ps(), _mm256_loadu_ps(kq_i + 8*j));
                                 acc[j] = _mm256_fmadd_ps(wi, relu, acc[j]);
                             }
                             kq_i += k_indexer_chunks;
@@ -1885,6 +2110,12 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
                     kq_i += nk;
                 }
             }
+            }
+
+            // Here iqk_bucket_topk is not faster than just using std::partial_sort, so no need to allocate the extra
+            // work buffers.
+            // iqk_bucket_topk(k->ne[1], n_top_k, score, sorted, idx_inf, k_n_bucket, counts, idx_aux);
+
             for (int j = 0; j < int(k->ne[1]); ++j) sorted[j] = j;
             std::partial_sort(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
             std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
@@ -1893,10 +2124,11 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     }
 
     if (k->ne[1] % 32 != 0) return false; // we can assume cache size is a multiple of at least 32
+    int n32 = k->ne[1] / 32;
 
     // We have more than 1 thread per q row
     // To not make it too complicated, let's just have all threads process the same row
-    int n32 = k->ne[1] / 32;
+
     int npt = (n32 + nth - 1)/nth;
     int ith_mid = nth;
     int n_this_thread = npt;
@@ -1929,6 +2161,9 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     auto score = kq + k->ne[1]*q->ne[1];
     auto score_th = score + first;
     auto sorted = (int32_t *)(score + k->ne[1]);
+    auto idx_inf = sorted + k->ne[1];
+    auto idx_aux = idx_inf + k->ne[1];
+    auto counts  = idx_aux + k->ne[1];
     for (int iq = 0; iq < q->ne[2]; ++iq) {
         if (n_this_thread > 0) {
             auto this_q = q_data + iq*qnb2;
@@ -1953,8 +2188,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
         }
         barrier(barrier_data);
         if (ith == 0) {
-            for (int j = 0; j < int(k->ne[1]); ++j) sorted[j] = j;
-            std::partial_sort(sorted, sorted + n_top_k, sorted + k->ne[1], [score] (int32_t l, int32_t r) -> bool { return score[l] > score[r]; });
+            iqk_bucket_topk(k->ne[1], n_top_k, score, sorted, idx_inf, k_n_bucket, counts, idx_aux);
             std::memcpy((char *)dst->data + dst->nb[1]*iq, sorted, n_top_k*sizeof(int32_t));
         }
         if (iq + 1 < q->ne[2]) {
