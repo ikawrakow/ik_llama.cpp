@@ -2913,13 +2913,9 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
 
         layer.ffn_gate_inp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_inp"));
         layer.ffn_norm       = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_norm"));
-        if (i >= hparams.dsv4_hash_layer_count) {
-            use_mmap_buffer &= !create_std_ffn_exps_from_meta(tn, i, 0);
-        } else {
-            layer.ffn_gate_exps  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_exps"));
-            layer.ffn_down_exps  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_exps"));
-            layer.ffn_up_exps    = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_exps"));
-        }
+
+        use_mmap_buffer &= !create_std_ffn_exps_from_meta(tn, i, 0);
+
         layer.ffn_gate_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_shexp"));
         layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_shexp"));
         layer.ffn_up_shexp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_shexp"));
