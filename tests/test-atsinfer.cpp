@@ -231,7 +231,42 @@ void test_static_placement_multi_device() {
     assert(attn_on_gpu >= 1);
     assert(attn_on_gpu <= 2); // one 100 MB budget per device: at most one non-expert each
 
-    // Scenario 3: dense model across two devices.
+    // Scenario 3: when non-experts do not all fit, residual capacity must still accept
+    // complete expert groups. The old all-or-nothing branch left every expert on CPU.
+    {
+        std::vector<atsinfer_tensor_profile> partial;
+        for (int i = 0; i < 4; ++i) {
+            atsinfer_tensor_profile a;
+            a.tensor_name = "blk." + std::to_string(i) + ".attn_q.weight";
+            a.size_bytes = 120 * MB;
+            a.exec_time_cpu_ms = 10.0f;
+            a.exec_time_gpu_ms = 1.0f;
+            a.latency_reduction = 9.0f;
+            a.switching_cost_ms = 0.5f;
+            a.layer_id = i;
+            partial.push_back(a);
+        }
+        atsinfer_tensor_profile e;
+        e.tensor_name = "layers.0.ffn_up_exp.0.weight";
+        e.size_bytes = 60 * MB;
+        e.exec_time_cpu_ms = 10.0f;
+        e.exec_time_gpu_ms = 1.0f;
+        e.latency_reduction = 9.0f;
+        e.switching_cost_ms = 0.5f;
+        e.layer_id = 0;
+        // Exercise name-based classification as a cache/import fallback.
+        e.is_moe_expert = false;
+        partial.push_back(e);
+
+        // 4*120 MB of non-experts > 2*200 MB total, but each device has 80 MB
+        // left after taking one attention tensor, enough for the 60 MB expert.
+        auto partial_dec = atsinfer_compute_static_placement_multi(
+                partial, { 200 * MB, 200 * MB }, true);
+        assert(partial_dec.placement[e.tensor_name] >= 0);
+        assert(partial_dec.total_vram_used_bytes <= 400 * MB);
+    }
+
+    // Scenario 4: dense model across two devices.
     std::vector<atsinfer_tensor_profile> dense;
     for (int i = 0; i < 5; ++i) {
         atsinfer_tensor_profile p;

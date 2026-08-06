@@ -108,6 +108,16 @@ static atsinfer_knapsack_result solve_knapsack_dp(
     return result;
 }
 
+static bool atsinfer_is_expert_tensor(const atsinfer_tensor_profile & p) {
+    // Prefer the profiler's classification: split-expert GGUFs use names such as
+    // ffn_up_exp.0.weight, while merged tensors use ffn_up_exps.weight.
+    return p.is_moe_expert ||
+           p.tensor_name.find("ffn_exp") != std::string::npos ||
+           p.tensor_name.find("exps") != std::string::npos ||
+           p.tensor_name.find("expert") != std::string::npos ||
+           p.tensor_name.find(".exp.") != std::string::npos;
+}
+
 // Group expert tensors (ffn_up_exps, ffn_gate_exps, ffn_down_exps) by layer so the
 // DP cannot split a fused-MoE operator across backends (Defect 1). Each layer's triple
 // becomes a single knapsack item with combined size, combined latency reduction, and
@@ -189,29 +199,21 @@ static std::vector<atsinfer_tensor_profile> atsinfer_group_expert_tensors(
 // Expand a grouped expert decision ("blk.N.ffn_exps_group" -> device) to the individual
 // expert tensors of the layer. Ungrouped tensors are placed directly.
 static void atsinfer_apply_group_decision(
-    const std::string & group_name,
+    const atsinfer_tensor_profile & group,
     int device,
     const std::vector<atsinfer_tensor_profile> & t_exp,
     atsinfer_placement_decision & result) {
 
-    if (group_name.find("ffn_exps_group") != std::string::npos) {
-        // Extract layer prefix, e.g. "blk.0." from "blk.0.ffn_exps_group"
-        const size_t pos = group_name.find(".ffn_exps_group");
-        const std::string prefix = pos != std::string::npos
-            ? group_name.substr(0, pos + 1)
-            : group_name;
-        // Fan out to all expert tensors whose name starts with this prefix.
-        // Also verify the tensor actually contains an expert marker to avoid
-        // accidentally matching a non-expert tensor from the same layer.
+    if (group.tensor_name.find("ffn_exps_group") != std::string::npos) {
+        // Grouping is by layer_id, not by a particular GGUF naming prefix. This also
+        // handles models using "layers.N." instead of "blk.N." tensor names.
         for (const auto & p : t_exp) {
-            if (p.tensor_name.find(prefix) == 0 &&
-                (p.tensor_name.find("exps") != std::string::npos ||
-                 p.tensor_name.find("expert") != std::string::npos)) {
+            if (p.layer_id == group.layer_id) {
                 result.placement[p.tensor_name] = device;
             }
         }
     } else {
-        result.placement[group_name] = device;
+        result.placement[group.tensor_name] = device;
     }
 }
 
@@ -232,6 +234,34 @@ atsinfer_placement_decision atsinfer_compute_static_placement_multi(
         result.placement[p.tensor_name] = ATSINFER_DEVICE_CPU;
     }
 
+    size_t total_budget = 0;
+    for (size_t b : vram_budget_bytes_per_device) {
+        total_budget += b;
+    }
+
+    // When the complete profile fits in the aggregate budget, cap each solver bucket
+    // to its proportional share of the model. Without this, sequential per-device
+    // knapsacks put the whole model on device 0 whenever one GPU can hold it, leaving
+    // the other GPU with only a few leftover tensors despite an equal budget.
+    std::vector<size_t> solver_budgets = vram_budget_bytes_per_device;
+    size_t total_profile_bytes = 0;
+    for (const auto & p : tensor_profiles) {
+        total_profile_bytes += p.size_bytes;
+    }
+    if (total_profile_bytes < total_budget && total_budget > 0) {
+        size_t assigned = 0;
+        for (size_t d = 0; d < solver_budgets.size(); ++d) {
+            solver_budgets[d] = (size_t) ((long double) total_profile_bytes * vram_budget_bytes_per_device[d] / total_budget);
+            assigned += solver_budgets[d];
+        }
+        for (size_t d = 0; assigned < total_profile_bytes && d < solver_budgets.size(); ++d) {
+            if (solver_budgets[d] < vram_budget_bytes_per_device[d]) {
+                ++solver_budgets[d];
+                ++assigned;
+            }
+        }
+    }
+
     if (!is_moe_model) {
         // Dense: one knapsack per device over the tensors the previous devices did not take.
         std::vector<char> taken(tensor_profiles.size(), 0);
@@ -246,7 +276,7 @@ atsinfer_placement_decision atsinfer_compute_static_placement_multi(
                     pool_idx.push_back(i);
                 }
             }
-            auto k = solve_knapsack_dp(pool, vram_budget_bytes_per_device[d]);
+            auto k = solve_knapsack_dp(pool, solver_budgets[d]);
             for (size_t j = 0; j < pool.size(); ++j) {
                 if (k.on_gpu[j]) {
                     taken[pool_idx[j]] = 1;
@@ -266,8 +296,7 @@ atsinfer_placement_decision atsinfer_compute_static_placement_multi(
     size_t nonexp_size = 0;
 
     for (const auto & p : tensor_profiles) {
-        if (p.tensor_name.find("exps") != std::string::npos ||
-            p.tensor_name.find("expert") != std::string::npos) {
+        if (atsinfer_is_expert_tensor(p)) {
             t_exp.push_back(p);
         } else {
             t_nonexp.push_back(p);
@@ -282,17 +311,41 @@ atsinfer_placement_decision atsinfer_compute_static_placement_multi(
     // lands on one device under multi-GPU.
     std::vector<atsinfer_tensor_profile> t_exp_grouped = atsinfer_group_expert_tensors(t_exp);
 
-    size_t total_budget = 0;
-    for (size_t b : vram_budget_bytes_per_device) {
-        total_budget += b;
-    }
+    // Expert groups are placed after non-experts, but any capacity left by a partial
+    // non-expert fit is still useful. The old all-or-nothing branch kept every expert on
+    // the CPU whenever nonexp_size exceeded the total budget, which made a large budget
+    // look like it only placed attention tensors.
+    auto place_experts = [&](const std::vector<size_t> & remaining) {
+        std::vector<char> exp_taken(t_exp_grouped.size(), 0);
+        for (size_t d = 0; d < n_dev; ++d) {
+            std::vector<atsinfer_tensor_profile> pool;
+            std::vector<size_t> pool_idx;
+            for (size_t gi = 0; gi < t_exp_grouped.size(); ++gi) {
+                if (!exp_taken[gi]) {
+                    pool.push_back(t_exp_grouped[gi]);
+                    pool_idx.push_back(gi);
+                }
+            }
+            auto k = solve_knapsack_dp(pool, remaining[d]);
+            for (size_t j = 0; j < pool.size(); ++j) {
+                if (k.on_gpu[j]) {
+                    const size_t gi = pool_idx[j];
+                    exp_taken[gi] = 1;
+                    atsinfer_apply_group_decision(t_exp_grouped[gi], (int)d, t_exp, result);
+                }
+            }
+            result.vram_used_per_device[d]   += k.vram_used_bytes;
+            result.total_vram_used_bytes     += k.vram_used_bytes;
+            result.expected_total_latency_ms += k.expected_latency_ms;
+        }
+    };
 
     if (total_budget >= nonexp_size) {
         // Non-expert tensors fit across the devices: give them GPU priority (the same rule
         // as the single-GPU solver), placing each on the device with the most remaining
         // budget that fits. That spreads them and leaves the largest holes for the expert
         // DP. A tensor bigger than any single device stays on the CPU.
-        std::vector<size_t> remaining = vram_budget_bytes_per_device;
+        std::vector<size_t> remaining = solver_budgets;
         for (const auto & p : t_nonexp) {
             size_t best_d = n_dev, best_rem = 0;
             for (size_t d = 0; d < n_dev; ++d) {
@@ -309,34 +362,12 @@ atsinfer_placement_decision atsinfer_compute_static_placement_multi(
             result.vram_used_per_device[best_d] += p.size_bytes;
             result.total_vram_used_bytes += p.size_bytes;
         }
-
-        // Experts: sequential per-device knapsack over the still-unplaced groups.
-        std::vector<char> exp_taken(t_exp_grouped.size(), 0);
-        for (size_t d = 0; d < n_dev; ++d) {
-            std::vector<atsinfer_tensor_profile> pool;
-            std::vector<size_t> pool_idx;
-            for (size_t gi = 0; gi < t_exp_grouped.size(); ++gi) {
-                if (!exp_taken[gi]) {
-                    pool.push_back(t_exp_grouped[gi]);
-                    pool_idx.push_back(gi);
-                }
-            }
-            auto k = solve_knapsack_dp(pool, remaining[d]);
-            for (size_t j = 0; j < pool.size(); ++j) {
-                if (k.on_gpu[j]) {
-                    const size_t gi = pool_idx[j];
-                    exp_taken[gi] = 1;
-                    atsinfer_apply_group_decision(t_exp_grouped[gi].tensor_name, (int)d, t_exp, result);
-                }
-            }
-            result.vram_used_per_device[d]   += k.vram_used_bytes;
-            result.total_vram_used_bytes     += k.vram_used_bytes;
-            result.expected_total_latency_ms += k.expected_latency_ms;
-        }
+        place_experts(remaining);
     } else {
-        // Budget too small for the non-experts: keep ALL experts on the CPU and spend the
-        // devices on the non-experts (the single-GPU solver's priority rule, generalized).
+        // Non-experts have priority, but do not discard residual capacity: after the
+        // per-device knapsacks, place as many complete expert groups as fit in the holes.
         std::vector<char> taken(t_nonexp.size(), 0);
+        std::vector<size_t> remaining = solver_budgets;
         for (size_t d = 0; d < n_dev; ++d) {
             std::vector<atsinfer_tensor_profile> pool;
             std::vector<size_t> pool_idx;
@@ -346,7 +377,7 @@ atsinfer_placement_decision atsinfer_compute_static_placement_multi(
                     pool_idx.push_back(i);
                 }
             }
-            auto k = solve_knapsack_dp(pool, vram_budget_bytes_per_device[d]);
+            auto k = solve_knapsack_dp(pool, solver_budgets[d]);
             for (size_t j = 0; j < pool.size(); ++j) {
                 if (k.on_gpu[j]) {
                     taken[pool_idx[j]] = 1;
@@ -355,8 +386,10 @@ atsinfer_placement_decision atsinfer_compute_static_placement_multi(
             }
             result.vram_used_per_device[d]   += k.vram_used_bytes;
             result.total_vram_used_bytes     += k.vram_used_bytes;
+            remaining[d] = solver_budgets[d] - k.vram_used_bytes;
             result.expected_total_latency_ms += k.expected_latency_ms;
         }
+        place_experts(remaining);
     }
 
     return result;
