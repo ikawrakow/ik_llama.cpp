@@ -946,7 +946,7 @@ static void ds4_build_comp(ggml_tensor * cur, llm_build_context & llm, ggml_cont
 static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_build_context & llm, ggml_tensor * inpL,
         ggml_tensor ** append_csa_state, ggml_tensor ** append_csa_score,
         ggml_tensor ** append_lid_state, ggml_tensor ** append_lid_score,
-        ggml_tensor * inp_pos, ggml_tensor * KQ_mask, int il) {
+        ggml_tensor * inp_pos, ggml_tensor * KQ_mask, ggml_tensor * KQ_mask_swa_win, int il) {
 
     ggml_tensor * residual = inpL;
     ggml_tensor * post = nullptr;
@@ -1072,8 +1072,19 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         llm.llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, nullptr, kv, n_tokens, llm.kv_head, cb, il);
     }
 
+    const bool raw_compacted = kv_self.is_compacted((int) il);
+
     ggml_tensor * raw_k = nullptr;
-    if (hparams.n_head_kv(il) == 1 && lctx.dsv4.inputs.raw_k_read_idxs != nullptr) {
+    ggml_tensor * raw_mask = nullptr;
+    if (raw_compacted) {
+        // live window rows [win_off, win_off + w_view); KQ_mask_swa_win is that view's column-exact mask
+        GGML_ASSERT(hparams.n_head_kv(il) == 1 && KQ_mask_swa_win != nullptr && lctx.swa_window_view.active);
+        const size_t row_size = ggml_row_size(kv_self.k_l[il]->type, n_embd_head);
+        raw_k = ggml_view_3d(ctx0, kv_self.k_l[il],
+                n_embd_head, 1, lctx.swa_window_view.w_view,
+                row_size, row_size, row_size*(size_t) lctx.swa_window_view.win_off);
+        raw_mask = KQ_mask_swa_win;
+    } else if (hparams.n_head_kv(il) == 1 && lctx.dsv4.inputs.raw_k_read_idxs != nullptr) {
         raw_k = dsv4_raw_get_k(&lctx, ctx0, kv_self.k_l[il], lctx.dsv4.inputs.raw_k_read_idxs, n_embd_head, cb, il);
     }
     if (raw_k == nullptr) {
@@ -1085,22 +1096,26 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
     }
     cb(raw_k, "raw_k", il);
 
-    const int64_t raw_kq_n_kv = raw_k != nullptr && lctx.dsv4.raw.n_kv > 0
+    const int64_t raw_kq_n_kv = raw_compacted ? lctx.swa_window_view.w_view
+        : raw_k != nullptr && lctx.dsv4.raw.n_kv > 0
         ? lctx.dsv4.raw.n_kv
         : (raw_k != nullptr ? raw_k->ne[2] * raw_k->ne[3] : n_kv);
-    const int64_t raw_attn_n_kv = raw_kq_n_kv > 0 ? std::max<int64_t>(256, GGML_PAD(raw_kq_n_kv, 256)) : raw_kq_n_kv;
-    if (raw_k != nullptr && raw_k->ne[3] == 1) {
+    const int64_t raw_attn_n_kv = raw_compacted ? lctx.swa_window_view.w_view
+        : raw_kq_n_kv > 0 ? std::max<int64_t>(256, GGML_PAD(raw_kq_n_kv, 256)) : raw_kq_n_kv;
+    if (!raw_compacted && raw_k->ne[3] == 1) {
         raw_k = dsv4_pad_raw_k_to(ctx0, raw_k, raw_attn_n_kv);
     }
-    ggml_tensor * raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask,
-            lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, raw_k->ne[3], cb, il);
-    cb(raw_mask, "raw_mask_view", il);
-    raw_mask = dsv4_pad_mask_tokens(ctx0, raw_mask, n_tokens);
-    raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
+    if (raw_mask == nullptr) {
+        raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask,
+                lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, raw_k->ne[3], cb, il);
+        cb(raw_mask, "raw_mask_view", il);
+        raw_mask = dsv4_pad_mask_tokens(ctx0, raw_mask, n_tokens);
+        raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
+    }
     cb(raw_mask, "dsv4_raw_mask_padded", il);
     ggml_tensor * attn = nullptr;
 
-    if (hparams.n_swa > 0) {
+    if (hparams.n_swa > 0 && !raw_compacted) {
         constexpr int k_fa_chunk = 256;
         int n_swa = hparams.n_swa;
         int ntokens = std::max(k_fa_chunk, int(q->ne[2]));
@@ -1126,10 +1141,14 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             extra_mask = dsv4_pad_mask_tokens(ctx0, extra_mask, n_tokens);
         }
         raw_k = dsv4_repeat_streams(ctx0, raw_k, extra_k->ne[3]);
-        if (!cparams.flash_attn) {
+        if (!cparams.flash_attn && !raw_compacted) {
             raw_mask = dsv4_build_raw_mask_view(ctx0, KQ_mask,
                     lctx.dsv4.inputs.raw_k_read_idxs, raw_kq_n_kv, n_tokens, extra_k->ne[3], cb, il);
             raw_mask = dsv4_pad_raw_mask_to(ctx0, raw_mask, raw_attn_n_kv, n_tokens);
+        }
+        if (!cparams.flash_attn && raw_compacted && raw_mask->ne[1] != n_tokens) {
+            // non-FA masks are unpadded; drop the win mask's token padding before the concat
+            raw_mask = ggml_view_2d(ctx0, raw_mask, raw_mask->ne[0], n_tokens, raw_mask->nb[1], 0);
         }
         if (cparams.flash_attn && extra_mask->type != GGML_TYPE_F16) {
             extra_mask = ggml_cast(ctx0, extra_mask, GGML_TYPE_F16);
@@ -1257,7 +1276,16 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
     dsv4_build_plan_inputs(ctx0, lctx.dsv4.inputs.lid, lctx.dsv4.lid_plan, "dsv4_lid", n_tokens, false, lctx.cparams.flash_attn);
 
     ggml_tensor * inp_pos = build_inp_pos();
-    ggml_tensor * KQ_mask = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
+    // build only the mask the graph consumes; an input tensor without a consumer is never allocated
+    ggml_tensor * KQ_mask = nullptr;
+    ggml_tensor * KQ_mask_swa_win = nullptr;
+    if (kv_self.any_compacted()) {
+        bool KQ_mask_swa_windowed = false;
+        KQ_mask_swa_win = build_swa_mask_for_graph(hparams.n_swa, /* compacted = */ true, &KQ_mask_swa_windowed);
+        GGML_ASSERT(KQ_mask_swa_windowed && KQ_mask_swa_win != nullptr);
+    } else {
+        KQ_mask = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : build_inp_KQ_mask();
+    }
     ggml_tensor * inpL = nullptr;
 
     ggml_tensor * append_csa_state = nullptr;
@@ -1301,7 +1329,7 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
         auto cur = ds4_attention(gf, ctx0, *this, inpL,
                              &append_csa_state, &append_csa_score,
                              &append_lid_state, &append_lid_score,
-                             inp_pos, KQ_mask, il);
+                             inp_pos, KQ_mask, KQ_mask_swa_win, il);
         inpL = cur;
 
         ggml_tensor *post, *comb;

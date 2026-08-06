@@ -2302,7 +2302,9 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_indexer_head = hparams.indexer_head_size;
 
-        size_t size = ggml_row_size(type_k, n_embd_head) * hparams.n_head_kv(il) * kv_size;
+        const uint32_t raw_pad = llama_kv_cache::get_padding(flash_attn);
+        const uint32_t k_rows = llama_kv_layer_rows(hparams, il, kv_size, swa_compress, n_ubatch, raw_pad);
+        size_t size = ggml_row_size(type_k, n_embd_head) * hparams.n_head_kv(il) * k_rows;
         if (ratio == csa_ratio) {
             size += ggml_row_size(type_k, n_embd_head) * csa_kv * n_stream;
             size += ggml_row_size(idx_type_k, n_indexer_head) * csa_kv * n_stream;
