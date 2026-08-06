@@ -391,12 +391,6 @@ void server_context::init() {
         reuse_forced_off = true;
     }
 
-    if (params_base.cache_ram_mib != 0 && !llama_supports_full_state_io(ctx)) {
-        LLAMA_LOG_WARN("prompt cache is disabled: this context cannot save full sequence state (--swa-compress)\n");
-        params_base.cache_ram_mib = 0;
-        reuse_forced_off = true;
-    }
-
     if (params_base.cache_ram_mib != 0 && llama_model_supports_partial_kv_reuse(model)) {
         if (params_base.cache_ram_mib < 0) {
             LLAMA_LOG_INFO("prompt cache is enabled, size limit: %s\n", "no limit");
