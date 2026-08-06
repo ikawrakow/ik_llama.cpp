@@ -3926,7 +3926,9 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight" ||
-                name.rfind("dflash_aux_hidden_norm.", 0) == 0) {
+                name.rfind("dflash_aux_hidden_norm.", 0) == 0 ||
+                name == "markov_w1.weight" || name == "markov_w2.weight" ||
+                name == "conf_proj.weight" || name == "conf_proj.bias") {
             output_misc_size += size;
             continue;
         }

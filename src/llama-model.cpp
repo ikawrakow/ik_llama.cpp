@@ -868,6 +868,9 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_DFLASH_FC,            "dflash_fc" },
             { LLM_TENSOR_DFLASH_HIDDEN_NORM,   "dflash_hidden_norm" },
             { LLM_TENSOR_DFLASH_AUX_HIDDEN_NORM, "dflash_aux_hidden_norm.%d" },
+            { LLM_TENSOR_DSPARK_MARKOV_W1,     "markov_w1" },
+            { LLM_TENSOR_DSPARK_MARKOV_W2,     "markov_w2" },
+            { LLM_TENSOR_DSPARK_CONF_PROJ,     "conf_proj" },
         },
     },
     {

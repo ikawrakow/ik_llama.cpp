@@ -150,6 +150,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
     COMMON_SPECULATIVE_TYPE_DFLASH,        // DFlash draft model
+    COMMON_SPECULATIVE_TYPE_DSPARK,
     COMMON_SPECULATIVE_TYPE_MTP,           // MTP model
     COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
@@ -164,6 +165,8 @@ enum common_speculative_type {
 std::string common_speculative_type_name_str();
 enum common_speculative_type common_speculative_type_from_name(const std::string & name);
 std::string common_speculative_type_to_str(enum common_speculative_type type);
+bool common_speculative_type_is_dflash_family(enum common_speculative_type type);
+bool common_speculative_type_uses_target_features(enum common_speculative_type type);
 bool common_speculative_type_is_self_spec(enum common_speculative_type type);
 
 struct common_speculative_stage_params {
@@ -268,6 +271,8 @@ struct common_params_speculative {
     common_params_speculative with_stage_overrides(const common_speculative_stage_params & stage) const;
     bool has_stage_chain() const;
     bool has_stage_type(common_speculative_type stage_type) const;
+    bool has_dflash_family_stage() const;
+    bool uses_target_features() const;
     void remove_stage_type(common_speculative_type stage_type);
     bool has_composite_stage_chain() const;
     bool needs_dft_model() const;

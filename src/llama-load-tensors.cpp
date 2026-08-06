@@ -2346,6 +2346,24 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
     model.output_mtp = model.output;
     model.dflash_fc = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "weight"), {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
     model.dflash_hidden_norm = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_HIDDEN_NORM, "weight"), {n_embd}, 0);
+
+    const ggml_tensor * markov_w1_meta = ml.get_tensor_meta("markov_w1.weight");
+    if (markov_w1_meta != nullptr) {
+        const int64_t markov_rank = markov_w1_meta->ne[0];
+        model.dspark_markov_w1 = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), {markov_rank, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_markov_w2 = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), {markov_rank, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_conf_proj = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), {n_embd + markov_rank, 1},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_conf_proj_b = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"), {1},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+    }
+
     model.dflash_aux_hidden_norms.clear();
     if (hparams.dflash_laguna) {
         GGML_ASSERT(hparams.dflash_n_target_layers > 0);

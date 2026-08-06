@@ -474,6 +474,10 @@ struct llama_model {
     struct ggml_tensor * dflash_fc = nullptr;
     struct ggml_tensor * dflash_hidden_norm = nullptr;
     std::vector<struct ggml_tensor *> dflash_aux_hidden_norms;
+    struct ggml_tensor * dspark_markov_w1 = nullptr;
+    struct ggml_tensor * dspark_markov_w2 = nullptr;
+    struct ggml_tensor * dspark_conf_proj = nullptr;
+    struct ggml_tensor * dspark_conf_proj_b = nullptr;
 
     struct ggml_tensor * output_norm;
     struct ggml_tensor * output_norm_b;

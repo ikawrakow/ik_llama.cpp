@@ -850,8 +850,7 @@ int main(int argc, char ** argv) {
                 const bool need_prompt_target_features =
                     embd_is_prompt &&
                     spec != nullptr &&
-                    (params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) ||
-                     params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH));
+                    params.speculative.uses_target_features();
 
                 llama_batch batch = {};
                 if (need_prompt_target_features) {

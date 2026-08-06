@@ -4,6 +4,49 @@
 
 #include <cmath>
 
+// DSpark uses the previous token at row zero, then feeds each greedy argmax
+// into the next Markov lookup.
+static ggml_tensor * build_dspark_logits(
+        llm_build_context & llm,
+        ggml_tensor * base_logits,
+        ggml_tensor * input_tokens) {
+    ggml_context * ctx0 = llm.ctx0;
+    const llama_model & model = llm.model;
+
+    GGML_ASSERT(model.dspark_markov_w1 != nullptr);
+    GGML_ASSERT(model.dspark_markov_w2 != nullptr);
+    GGML_ASSERT(input_tokens != nullptr);
+    GGML_ASSERT(base_logits->ne[1] == input_tokens->ne[0]);
+
+    const int64_t n_vocab  = base_logits->ne[0];
+    const int64_t n_tokens = base_logits->ne[1];
+    GGML_ASSERT(n_tokens > 0);
+
+    ggml_tensor * previous = ggml_view_1d(ctx0, input_tokens, 1, 0);
+    ggml_tensor * chained = nullptr;
+
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        ggml_tensor * markov_w1 = ggml_get_rows(ctx0, model.dspark_markov_w1, previous);
+        ggml_tensor * markov_bias = ggml_mul_mat(ctx0, model.dspark_markov_w2, markov_w1);
+        ggml_tensor * base_row = ggml_view_2d(
+                ctx0,
+                base_logits,
+                n_vocab,
+                1,
+                base_logits->nb[1],
+                (size_t) i * base_logits->nb[1]);
+        ggml_tensor * biased_row = ggml_add(ctx0, base_row, markov_bias);
+
+        chained = chained == nullptr ? biased_row : ggml_concat(ctx0, chained, biased_row, 1);
+        if (i + 1 < n_tokens) {
+            previous = ggml_argmax(ctx0, biased_row);
+        }
+    }
+
+    // Materialize the assembled rows before draft-token argmax consumes them.
+    return ggml_cont(ctx0, chained);
+}
+
 ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
@@ -432,7 +475,13 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
     GGML_ASSERT(model.output_mtp != nullptr);
     ggml_tensor * result = build_output(lctx, ctx0, inpL, model.output_mtp, model.output_norm, cb);
-    cb(result, "result_output", -1);
+    if (lctx.dflash.dspark) {
+        cb(result, "dflash_base_result_output", -1);
+        result = build_dspark_logits(*this, result, lctx.inp_tokens);
+        cb(result, "result_output", -1);
+    } else {
+        cb(result, "result_output", -1);
+    }
     ggml_build_forward_expand(gf, result);
 
     lctx.dflash.draft_tokens_tensor = nullptr;
