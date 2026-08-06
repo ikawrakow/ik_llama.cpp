@@ -651,7 +651,7 @@ struct llama_context {
     int32_t mtp_n_heads = 0;
 
     void reset_scheduler();
-    bool can_reuse_graph(const llama_batch & u_batch);
+    bool can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fingerprint);
 
     struct CacheCopy {
         ggml_tensor * cpy = nullptr;
