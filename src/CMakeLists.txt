@@ -144,6 +144,19 @@ target_compile_features   (llama PUBLIC cxx_std_17)
 
 target_link_libraries(llama PUBLIC ggml)
 
+if (GGML_CUDA)
+    # ATSInfer's CUDA glue (atsinfer/atsinfer-cuda.cpp, atsinfer/atsinfer-profiler.cpp) calls the
+    # CUDA runtime API directly. ggml exposes GGML_USE_CUDA publicly (so these files compile with
+    # it defined) but links the CUDA toolkit privately, so the toolkit headers and libcudart never
+    # reach this target. Add them explicitly, otherwise <cuda_runtime.h> cannot be found in CUDA
+    # builds.
+    find_package(CUDAToolkit)
+    if (CUDAToolkit_FOUND)
+        target_include_directories(llama PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+        target_link_libraries(llama PRIVATE CUDA::cudart)
+    endif()
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_SHARED LLAMA_BUILD)
