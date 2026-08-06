@@ -564,8 +564,34 @@ struct llama_context::Prev {
     int32_t mtp_n_heads;
     int64_t swa_w_view;
     int64_t swa_win_off;
+    uint64_t seq_fingerprint;
     ggml_cgraph * graph;
 };
+
+static inline bool llama_graph_bakes_seq_state(const llm_arch & arch) {
+    return llm_arch_is_hybrid(arch) || llm_arch_is_recurrent(arch);
+}
+
+static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b, const llm_arch & arch) {
+    static const bool legacy_graph_reuse = getenv("IK_LEGACY_GRAPH_REUSE") != nullptr;
+    if (!llama_graph_bakes_seq_state(arch) || legacy_graph_reuse) {
+        return 0ull;
+    }
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+    mix((uint64_t) (uint32_t) b.n_tokens);
+    for (int32_t i = 0; i < b.n_tokens; ++i) {
+        const int32_t ns = b.n_seq_id ? b.n_seq_id[i] : 0;
+        mix((uint64_t) (uint32_t) ns);
+        if (b.seq_id && b.seq_id[i]) {
+            for (int32_t j = 0; j < ns; ++j) {
+                mix((uint64_t) (uint32_t) b.seq_id[i][j]);
+            }
+        }
+        mix(b.pos && b.pos[i] == 0 ? 1ull : 0ull);
+    }
+    return h;
+}
 
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
@@ -597,6 +623,9 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     if (u_batch.embd) return false;
+    if (llama_ubatch_seq_fingerprint(u_batch, model.arch) != the_prev->seq_fingerprint) {
+        return false;
+    }
     auto & kv_self_used = (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
                           mtp_target_ctx != nullptr ? mtp_target_ctx->kv_self : kv_self;
     if (the_prev->save_per_step_ssm != kv_self_used.save_per_step_ssm ||
@@ -6323,7 +6352,8 @@ static int llama_decode_internal(
                         kv_self_used.save_per_step_ssm, kv_self_used.ckpt.per_step_max_allocated,
                         cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads,
                         lctx.swa_window_view.w_view,
-                        lctx.swa_window_view.win_off, gf});
+                        lctx.swa_window_view.win_off,
+                        llama_ubatch_seq_fingerprint(u_batch, model.arch), gf});
             }
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
