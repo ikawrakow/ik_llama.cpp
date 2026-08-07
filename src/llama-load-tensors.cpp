@@ -35,6 +35,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags = 0, int n_ff_exps_input = 0,
             ggml_context * ffn_ctx = nullptr);
+    bool create_std_ffn_exps_from_meta(const LLM_TN & tn, int i, int flags = 0, ggml_context * ffn_ctx = nullptr);
 
     bool create_tensors() override;
 
@@ -2795,7 +2796,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN &) {
+bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     auto create_tensor_from_meta = [&](ggml_context * ctx, const std::string & name, int flags = 0) -> ggml_tensor * {
@@ -2956,9 +2957,9 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN &) {
 
         layer.ffn_gate_inp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_inp"));
         layer.ffn_norm       = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_norm"));
-        layer.ffn_gate_exps  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_exps"));
-        layer.ffn_down_exps  = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_exps"));
-        layer.ffn_up_exps    = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_exps"));
+
+        use_mmap_buffer &= !create_std_ffn_exps_from_meta(tn, i, 0);
+
         layer.ffn_gate_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_gate_shexp"));
         layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_down_shexp"));
         layer.ffn_up_shexp   = create_tensor_from_meta(ctx_split, layer_weight_name(i, "ffn_up_shexp"));
@@ -4240,6 +4241,37 @@ bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & t
         }
     }
     layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, flags);
+
+    return merged;
+}
+
+bool create_tensors_helper::create_std_ffn_exps_from_meta(const LLM_TN & tn, int i, int flags, ggml_context * ffn_ctx) {
+    auto & layer = model.layers[i];
+    if (!ffn_ctx) {
+        ffn_ctx = ctx_for_layer_split(i);
+    }
+
+    bool merged = false;
+    auto ug_name = tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", i);
+    auto ug_meta = ml.get_tensor_meta(ug_name.c_str());
+    if (ug_meta) {
+        layer.ffn_up_gate_exps = create_tensor(ffn_ctx, ug_name, {  ug_meta->ne[0], ug_meta->ne[1], ug_meta->ne[2]}, flags);
+    } else {
+        merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
+        if (!merged) {
+            auto u_name = tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i);
+            auto g_name = tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i);
+            auto u_meta = ml.get_tensor_meta(u_name.c_str());
+            auto g_meta = ml.get_tensor_meta(g_name.c_str());
+            GGML_ASSERT(u_meta && g_meta);
+            layer.ffn_up_exps   = create_tensor(ffn_ctx, u_name, { u_meta->ne[0], u_meta->ne[1], u_meta->ne[2] }, 0);
+            layer.ffn_gate_exps = create_tensor(ffn_ctx, g_name, { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, 0);
+        }
+    }
+    auto d_name = tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i);
+    auto d_meta = ml.get_tensor_meta(d_name.c_str());
+    GGML_ASSERT(d_meta);
+    layer.ffn_down_exps = create_tensor(ffn_ctx, d_name, { d_meta->ne[0], d_meta->ne[1], d_meta->ne[2] }, 0);
 
     return merged;
 }

@@ -113,7 +113,7 @@ static __global__ void fused_mul_silu_f32(const float * x, float * dst, const in
     int row = i / ne0;
     int j   = i % ne0;
     auto x_row = x + 2*row*ne0;
-    //dst[i] = x_row[j] * x_row[j + ne0] / (1.0f + expf(-x_row[j + ne0]));
+    // Note: gate is at the beginning of each row, up is offset by ne0
     dst[i] = x_row[j] * x_row[j + ne0] / (1.0f + expf(-x_row[j]));
 }
 
@@ -126,9 +126,10 @@ static __global__ void fused_mul_silu_f32(const float * x, float * dst, const in
     int row = i / ne0;
     int j   = i % ne0;
     auto x_row = x + 2*row*ne0;
-    float g = x_row[j + ne0] / (1.0f + expf(-x_row[j + ne0]));
+    // Note: gate is at the beginning of each row, up is offset by ne0
+    float g = x_row[j] / (1.0f + expf(-x_row[j]));
     g = min(g, limit);
-    dst[i] = max(-limit, min(limit, x_row[j])) * g;
+    dst[i] = max(-limit, min(limit, x_row[j + ne0])) * g;
 }
 
 static __global__ void fused_mul_relu_f32(const float * x, const float * y, float * dst, const int k) {
