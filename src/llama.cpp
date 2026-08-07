@@ -1106,6 +1106,13 @@ static inline bool llama_kv_qnext_seq_id_in_range(const llama_kv_cache & cache, 
     return n_slots > 0 && seq_id >= 0 && (uint32_t) seq_id < n_slots;
 }
 
+static bool llama_mtp_tail_uses_layer_cache(const llama_model & model) {
+    return model.hparams.nextn_predict_layers > 0 &&
+        (model.arch == LLM_ARCH_GLM_DSA ||
+         model.arch == LLM_ARCH_QWEN35MOE ||
+         model.arch == LLM_ARCH_STEP35);
+}
+
 static bool llama_kv_cache_init(
              struct llama_kv_cache & cache,
                const llama_context * ctx,
@@ -1215,9 +1222,7 @@ static bool llama_kv_cache_init(
     // count used buffer types
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
-        const bool is_mtp = (model.arch == LLM_ARCH_GLM_DSA ||
-                             //model.arch == LLM_ARCH_QWEN35 ||
-                             model.arch == LLM_ARCH_QWEN35MOE) && hparams.nextn_predict_layers > 0;
+        const bool is_mtp = llama_mtp_tail_uses_layer_cache(model);
         const int64_t n_mtp_first = hparams.n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
             const bool is_mtp_tail = is_mtp && i >= n_mtp_first;
@@ -1322,10 +1327,7 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k(i);
 
-        const bool is_mtp_tail_layer = (//model.arch == LLM_ARCH_QWEN35 ||
-                                        model.arch == LLM_ARCH_QWEN35MOE ||
-                                        model.arch == LLM_ARCH_GLM_DSA) &&
-                hparams.nextn_predict_layers > 0 && i >= n_mtp_first_layer;
+        const bool is_mtp_tail_layer = llama_mtp_tail_uses_layer_cache(model) && i >= n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
@@ -4930,6 +4932,14 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             return -2;
         }
 
+        const enum llama_mtp_package mtp_package = llama_model_mtp_package(&model);
+        if (mtp_package == LLAMA_MTP_PACKAGE_INVALID) {
+            throw std::runtime_error("invalid MTP package: missing target trunk and predictor tail tensors");
+        }
+        if (mtp_package == LLAMA_MTP_PACKAGE_COMPANION && !params.mtp) {
+            throw std::runtime_error("MTP companion GGUF cannot be used as the target model, pass it with -md/--draft");
+        }
+
         // ---- populate reload registry ONLY when hot-swap is requested ----
         if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
             model.reload = std::make_unique<reload_info>(ml);
@@ -5839,6 +5849,7 @@ static uint32_t llama_output_embd_width(const llama_context & lctx) {
 static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
     return lctx.cparams.mtp && (
         lctx.model.hparams.nextn_predict_layers > 0 ||
+        llama_model_mtp_package(&lctx.model) == LLAMA_MTP_PACKAGE_TARGET_ONLY ||
         lctx.model.arch == LLM_ARCH_GEMMA4 ||
         lctx.model.arch == LLM_ARCH_GEMMA4_MTP ||
         lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
@@ -6396,13 +6407,8 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
-            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_GEMMA4    ||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_MTP||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
-                                                      lctx.model.arch == LLM_ARCH_DEEPSEEK4);
-            // For DSV4 we want to extract the 16,384-dim embedding first
             if (cparams.embeddings || has_mtp) {
-                if (use_raw_mtp_embd) {
+                if (has_mtp) {
                     for (int i = gf->n_nodes - 1; i >= 0; --i) {
                         if (strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
                             embd = gf->nodes[i];
@@ -8141,6 +8147,7 @@ struct llama_context * llama_init_from_model(
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
         model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
         model->arch != LLM_ARCH_DEEPSEEK4 &&
+        model->arch != LLM_ARCH_STEP35 &&
         model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
         model->arch != LLM_ARCH_OPENPANGU &&
         cparams.mtp != 0) {

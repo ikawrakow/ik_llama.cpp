@@ -1190,6 +1190,12 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
     // output
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+    // If, for any reason, an MTP-only GGUF reports a count of physical blocks in addition to the MTP blk, skip them
+    const bool mtp_only = hparams.nextn_predict_layers > 0 &&
+                          ml.get_tensor_meta("blk.0.attn_norm.weight") == nullptr;
+    const int trunk_flags = mtp_only
+        ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
     // STEP35 supports per-layer partial RoPE dims; rope factors are stored as a single shared tensor
     // ("rope_freqs.weight") and ggml uses only the first (n_rot_l/2) entries per layer.
     uint32_t n_rot_max = 0;
@@ -1202,22 +1208,38 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
         auto & layer = model.layers[i];
+        const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
+                                  static_cast<uint32_t>(i) >= hparams.n_layer - hparams.nextn_predict_layers;
+        const std::string mtp_probe_name = tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i);
+        const bool mtp_layer_present = !is_mtp_layer || ml.get_tensor_meta(mtp_probe_name.c_str()) != nullptr;
+        const int layer_flags = mtp_only && !is_mtp_layer
+            ? trunk_flags
+            : (is_mtp_layer && !mtp_layer_present
+                ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0);
+        const int optional_layer_flags = layer_flags | llama_model_loader::TENSOR_NOT_REQUIRED;
+        const int nextn_required_flags = mtp_layer_present ? 0 : llama_model_loader::TENSOR_NOT_REQUIRED;
         const uint32_t n_head_l      = hparams.n_head(i);
-        layer.attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
-        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, layer_flags);
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, optional_layer_flags);
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, optional_layer_flags);
         // optional rope factors (llama3) / longrope tensors
+        const int rope_flags = mtp_only
+            ? llama_model_loader::TENSOR_NOT_REQUIRED
+            : optional_layer_flags;
         if (hparams.rope_scaling_type_train == LLAMA_ROPE_SCALING_TYPE_LONGROPE) {
-            layer.rope_long  = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), {n_rot_max/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
-            layer.rope_short = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), {n_rot_max/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
+            layer.rope_long  = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), {n_rot_max/2}, rope_flags | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
+            layer.rope_short = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), {n_rot_max/2}, rope_flags | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
         } else {
-            layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot_max/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
+            layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot_max/2}, rope_flags | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
         }
-        use_mmap_buffer &= !merge_qkv(tn, i, 0);
-        //layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head_l}, 0);
-        //layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
-        //layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
-        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head_l, n_embd}, 0);
+        if (layer_flags == 0) {
+            use_mmap_buffer &= !merge_qkv(tn, i, 0);
+        } else {
+            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd_head_k * n_head_l}, layer_flags);
+            layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_k_gqa}, layer_flags);
+            layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd_v_gqa}, layer_flags);
+        }
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head_l, n_embd}, layer_flags);
         const std::string attn_gate_name = tn(LLM_TENSOR_ATTN_GATE, "weight", i);
         int64_t n_attn_gate = n_head_l;
         if (model.arch == LLM_ARCH_LAGUNA) {
@@ -1229,18 +1251,18 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
                 n_attn_gate = n_embd_head_v * n_head_l;
             }
         }
-        layer.wqkv_gate = create_tensor(ctx_split, attn_gate_name, {n_embd, n_attn_gate}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        layer.wqkv_gate = create_tensor(ctx_split, attn_gate_name, {n_embd, n_attn_gate}, optional_layer_flags);
+        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, layer_flags);
         // dense MLP (leading dense blocks)
-        layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, optional_layer_flags);
+        layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, optional_layer_flags);
+        layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, optional_layer_flags);
         // MoE routed experts + selection bias (router_bias)
         const int64_t n_ff_exp = hparams.n_ff_exp;
         if (!layer.ffn_gate) {
             layer.ffn_gate_inp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert},
-                    llama_model_loader::TENSOR_NOT_REQUIRED);
-            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, n_ff_exp);
+                    optional_layer_flags);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, optional_layer_flags);
             //layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp, n_expert},
             //        llama_model_loader::TENSOR_NOT_REQUIRED);
             //layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd, n_expert},
@@ -1248,14 +1270,29 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
             //layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert},
             //        llama_model_loader::TENSOR_NOT_REQUIRED);
             layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
-                    llama_model_loader::TENSOR_NOT_REQUIRED);
+                    optional_layer_flags);
         // shared expert MLP
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp},
-                    llama_model_loader::TENSOR_NOT_REQUIRED);
+                    optional_layer_flags);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp},
-                    llama_model_loader::TENSOR_NOT_REQUIRED);
+                    optional_layer_flags);
             layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd},
-                    llama_model_loader::TENSOR_NOT_REQUIRED);
+                    optional_layer_flags);
+        }
+
+        if (is_mtp_layer) {
+            layer.nextn.eh_proj = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), {2 * n_embd, n_embd}, nextn_required_flags);
+            layer.nextn.embed_tokens = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", i), {n_embd, n_vocab}, optional_layer_flags);
+            layer.nextn.enorm = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), {n_embd}, nextn_required_flags);
+            layer.nextn.hnorm = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_HNORM, "weight", i), {n_embd}, nextn_required_flags);
+            layer.nextn.shared_head_head = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab}, optional_layer_flags);
+            layer.nextn.shared_head_norm = create_tensor(ctx_split,
+                    tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd}, optional_layer_flags);
         }
     }
     return use_mmap_buffer;

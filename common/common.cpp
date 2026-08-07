@@ -4248,7 +4248,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
-    mparams.mtp             = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+    mparams.mtp             = params.has_mtp || params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     mparams.flash_attn      = params.flash_attn;
     mparams.defer_experts   = params.defer_experts;
     mparams.swa_compress    = params.swa_compress;
@@ -4345,7 +4345,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.prefetch_experts  = params.prefetch_experts;
     cparams.prefetch_experts_threads = params.prefetch_experts_threads;
     cparams.max_extra_alloc   = params.max_extra_alloc_MiB;
-    cparams.mtp               = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+    cparams.mtp               = params.has_mtp || params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     cparams.mtp_op_type      = MTP_OP_NONE;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);

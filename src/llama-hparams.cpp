@@ -1564,6 +1564,12 @@ void llm_load_hparams(
         case LLM_ARCH_STEP35:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (hparams.nextn_predict_layers > hparams.n_layer) {
+                    throw std::runtime_error(format("step35.nextn_predict_layers (%u) exceeds block_count (%u)",
+                            hparams.nextn_predict_layers, hparams.n_layer));
+                }
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
                 //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 // MoE + SWA parameters
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);

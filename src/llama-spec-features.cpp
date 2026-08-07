@@ -10,15 +10,26 @@ uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx) {
         return 0;
     }
 
-    const auto & hparams = ctx->model.hparams;
-    if (ctx->cparams.mtp && (ctx->model.arch == LLM_ARCH_GEMMA4_MTP || ctx->model.arch == LLM_ARCH_GEMMA4_ASSISTANT) && hparams.mtp_backbone_n_embd > 0) {
+    if (!ctx->cparams.mtp) {
+        return ctx->model.hparams.n_embd;
+    }
+
+    return llama_model_mtp_feature_width(&ctx->model);
+}
+
+uint32_t llama_model_mtp_feature_width(const struct llama_model * model) {
+    if (model == nullptr) {
+        return 0;
+    }
+
+    const auto & hparams = model->hparams;
+    if ((model->arch == LLM_ARCH_GEMMA4_MTP || model->arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
+        hparams.mtp_backbone_n_embd > 0) {
         return hparams.mtp_backbone_n_embd;
     }
-
-    if (ctx->cparams.mtp && ctx->model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_embd_out > hparams.n_embd) {
+    if (model->arch == LLM_ARCH_DEEPSEEK4 && hparams.n_embd_out > hparams.n_embd) {
         return hparams.n_embd_out;
     }
-
     return hparams.n_embd;
 }
 
