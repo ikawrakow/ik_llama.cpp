@@ -5085,11 +5085,12 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[1]->ne[0] == op->src[0]->ne[1] &&
                    op->src[3]->ne[0] == op->src[0]->ne[2];
         case GGML_OP_DELTA_NET:
-        case GGML_OP_INDEXER_TOPK:
         case GGML_OP_MASK_TOPK:
         case GGML_OP_MASK_TO_IDX:
         case GGML_OP_DS4_COMP:
             return true;
+        case GGML_OP_INDEXER_TOPK:
+            return ggml_is_quantized(op->src[0]->type) || ggml_is_contiguous(op->src[0]);
         case GGML_OP_HC_PRE:
         case GGML_OP_HC_POST:
             return true;
