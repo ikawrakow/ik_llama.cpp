@@ -317,6 +317,9 @@ struct gpt_params {
     float   ban_phrases_bias      = -999.0f; // logit bias applied to ban phrases
     int32_t max_extra_alloc_MiB   =     256; // additional VRAM per GPU the scheduler may allocate for more efficient compute graph evaluation
     int32_t nrep                  =       1; // number of repetitions used in sweep bench
+    int32_t sweep_stride          =       1;
+    bool    sweep_memory          =   false;
+    bool    sweep_bench           =   false;
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
