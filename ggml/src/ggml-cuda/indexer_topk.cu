@@ -72,7 +72,6 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     //if (k->type != GGML_TYPE_F16 && !ggml_is_quantized(k->type)) printf("%s: K is %s?\n", __func__, ggml_type_name(k->type));
     GGML_ASSERT(k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_BF16 ||
                 k->type == GGML_TYPE_F32 || ggml_is_quantized(k->type));
-    GGML_ASSERT(ggml_is_quantized(k->type) || ggml_is_contiguous(k));
     GGML_ASSERT(k->ne[2] == 1 || k->ne[3] == 1);
     GGML_ASSERT(k->ne[1] > n_top_k);
     GGML_ASSERT(k->ne[1] == m->ne[0]);
@@ -162,6 +161,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     ggml_cuda_pool_alloc<float> k_f32(ctx.pool());
     ggml_cuda_pool_alloc<char>  q_converted(ctx.pool());
     const float * k_data = nullptr;
+    int k_ld = k->ne[0];
     auto q_padded = GGML_PAD(q->ne[0], MATRIX_ROW_PADDING);
     if (ggml_is_quantized(k->type)) {
         auto nbytes_q = (size_t)(q_padded/QK8_1) * ((size_t) q->ne[1] * max_rows) * sizeof(block_q8_1);
@@ -169,6 +169,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         q_converted.alloc(nbytes_q);
     } else if (k->type == GGML_TYPE_F32) {
         k_data = (const float *) k->data;
+        k_ld   = k->nb[1]/sizeof(float);
     } else {
         k_f32.alloc(k->ne[0]*k->ne[1]);
         ggml_get_to_fp32_cuda(k->type)(k->data, k_f32.get(), k->ne[1]*k->ne[0], 1, ctx.stream());
@@ -199,7 +200,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
             CUBLAS_CHECK(cublasSgemm(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
-                    &alpha,     k_data,                k->ne[0],
+                    &alpha,     k_data,                k_ld,
                        (const float *)q_data, q->ne[0],
                     &beta,      kq.get(),     k->ne[1]));
         }
