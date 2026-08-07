@@ -83,6 +83,7 @@ enum llm_arch {
     LLM_ARCH_MISTRAL4,
     LLM_ARCH_GEMMA4,
     LLM_ARCH_GEMMA4_MTP,
+    LLM_ARCH_DFLASH,
     LLM_ARCH_DFLASH_DRAFT,
     LLM_ARCH_GEMMA4_ASSISTANT,
     LLM_ARCH_OPENPANGU,
@@ -150,6 +151,7 @@ enum llm_kv {
     LLM_KV_DFLASH_BLOCK_SIZE,
     LLM_KV_DFLASH_MASK_TOKEN_ID,
     LLM_KV_DFLASH_TARGET_LAYER_IDS,
+    LLM_KV_DFLASH_TARGET_LAYERS,
     LLM_KV_DFLASH_N_TARGET_FEATURES,
     LLM_KV_DFLASH_BACKBONE_ROTARY_BASE,
     LLM_KV_DFLASH_LAGUNA,
@@ -454,5 +456,6 @@ const char * llama_model_arch_name(llm_arch arch);
 
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid(const llm_arch & arch);
+bool llm_arch_is_dflash_family(const llm_arch & arch);
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il);

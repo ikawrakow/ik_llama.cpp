@@ -1226,9 +1226,18 @@ static bool dsv4_per_step_copy_base(llama_context & ctx, bool restore) {
     for (size_t i = 0; i < ckpt.dsv4_per_step_state.size(); ++i) {
         ggml_tensor * state = ckpt.dsv4_per_step_state[i];
         ggml_tensor * shadow = ckpt.dsv4_per_step_state_shadow[i];
-        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(ctx.sched, state);
-        if (state == nullptr || shadow == nullptr || backend == nullptr) {
+        ggml_backend_t backend = state != nullptr
+                ? ggml_backend_sched_get_tensor_backend(ctx.sched, state)
+                : nullptr;
+        if (state == nullptr || shadow == nullptr) {
             return false;
+        }
+        if (backend == nullptr) {
+            if (state->buffer == nullptr || shadow->buffer == nullptr) {
+                return false;
+            }
+            ggml_backend_tensor_copy(restore ? shadow : state, restore ? state : shadow);
+            continue;
         }
         if (restore) {
             ggml_backend_tensor_copy_async(backend, backend, shadow, state);
@@ -1502,7 +1511,7 @@ static enum llama_spec_ckpt_restore_result dsv4_per_step_restore_rows(
             return LLAMA_SPEC_CKPT_RESTORE_FAILED;
         }
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(ctx.sched, state);
-        if (backend == nullptr) {
+        if (backend == nullptr && (state->buffer == nullptr || delta->buffer == nullptr)) {
             return LLAMA_SPEC_CKPT_RESTORE_FAILED;
         }
 
@@ -1529,9 +1538,13 @@ static enum llama_spec_ckpt_restore_result dsv4_per_step_restore_rows(
             dst_view.view_src = nullptr;
             src_view.view_offs = 0;
             dst_view.view_offs = 0;
-            ggml_backend_tensor_copy_async(backend, backend, &src_view, &dst_view);
+            if (backend != nullptr) {
+                ggml_backend_tensor_copy_async(backend, backend, &src_view, &dst_view);
+            } else {
+                ggml_backend_tensor_copy(&src_view, &dst_view);
+            }
         }
-        if (std::find(backends.begin(), backends.end(), backend) == backends.end()) {
+        if (backend != nullptr && std::find(backends.begin(), backends.end(), backend) == backends.end()) {
             backends.push_back(backend);
         }
     }

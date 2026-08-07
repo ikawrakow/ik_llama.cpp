@@ -4,9 +4,7 @@
 
 #include <cmath>
 
-// DSpark uses the previous token at row zero, then feeds each greedy argmax
-// into the next Markov lookup.
-static ggml_tensor * build_dspark_logits(
+ggml_tensor * llm_build_context::build_dspark_logits(
         llm_build_context & llm,
         ggml_tensor * base_logits,
         ggml_tensor * input_tokens) {
@@ -43,7 +41,6 @@ static ggml_tensor * build_dspark_logits(
         }
     }
 
-    // Materialize the assembled rows before draft-token argmax consumes them.
     return ggml_cont(ctx0, chained);
 }
 
@@ -108,6 +105,67 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, target_features);
     fused_target = llm_build_norm(ctx0, fused_target, hparams, model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
     cb(fused_target, "dflash_kv_fused_target", -1);
+
+    if (hparams.dflash_dsv4) {
+        const int64_t n_embd_head = hparams.n_embd_head_k(0);
+        const int64_t n_embd_head_rope = hparams.n_rot;
+        const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+
+        GGML_ASSERT(n_embd_head_nope > 0);
+        GGML_ASSERT(hparams.n_head_kv() == 1);
+
+        for (int il = 0; il < n_layer; ++il) {
+            const auto & layer = model.layers[il];
+            GGML_ASSERT(layer.wkv_latent != nullptr);
+            GGML_ASSERT(layer.attn_kv_norm != nullptr);
+
+            ggml_tensor * kv = llm_build_lora_mm(lctx, ctx0, layer.wkv_latent, fused_target);
+            kv = llm_build_norm(ctx0, kv, hparams, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, cb, il);
+            kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, update_rows);
+
+            ggml_tensor * kv_nope = ggml_view_3d(ctx0, kv, n_embd_head_nope, 1, update_rows,
+                    ggml_row_size(kv->type, n_embd_head),
+                    ggml_row_size(kv->type, n_embd_head), 0);
+            ggml_tensor * kv_pe = ggml_view_3d(ctx0, kv, n_embd_head_rope, 1, update_rows,
+                    ggml_row_size(kv->type, n_embd_head),
+                    ggml_row_size(kv->type, n_embd_head),
+                    ggml_row_size(kv->type, n_embd_head_nope));
+            kv_pe = ggml_rope_ext(ctx0, kv_pe, lctx.dflash.kv.cache_input_pos_ctx, nullptr,
+                    n_embd_head_rope, rope_type, 0, freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+            kv = ggml_concat(ctx0, kv_nope, kv_pe, 0);
+            cb(kv, "dflash_dsv4_kv_injected", il);
+            kv = ggml_cont(ctx0, ggml_permute(ctx0, kv, 0, 2, 1, 3));
+
+            ggml_tensor * Kcur = kv;
+            ggml_tensor * Vcur = kv;
+            const int32_t first_rows = std::min<int32_t>((int32_t) update_rows, (int32_t) ctx_len - write_pos);
+            const int32_t second_rows = (int32_t) update_rows - first_rows;
+
+            auto store_rows = [&](ggml_tensor * source, ggml_tensor * destination, int32_t rows, int32_t src_row, int32_t dst_row, const char * name) {
+                if (rows <= 0) {
+                    return;
+                }
+                ggml_tensor * src_view = rows == update_rows && src_row == 0
+                        ? source
+                        : ggml_view_3d(ctx0, source, source->ne[0], rows, source->ne[2],
+                                source->nb[1], source->nb[2], (size_t) src_row * source->nb[1]);
+                ggml_tensor * dst_view = ggml_view_3d(ctx0, destination, destination->ne[0], rows, destination->ne[2],
+                        destination->nb[1], destination->nb[2], (size_t) dst_row * destination->nb[1]);
+                ggml_tensor * copy = ggml_cpy(ctx0, src_view, dst_view);
+                cb(copy, name, il);
+                ggml_build_forward_expand(gf, copy);
+            };
+
+            GGML_ASSERT(lctx.dflash.kv.k_ctx_cache[il] != nullptr);
+            GGML_ASSERT(lctx.dflash.kv.v_ctx_cache[il] != nullptr);
+            store_rows(Kcur, lctx.dflash.kv.k_ctx_cache[il], first_rows, 0, write_pos, "dflash_dsv4_k_store");
+            store_rows(Vcur, lctx.dflash.kv.v_ctx_cache[il], first_rows, 0, write_pos, "dflash_dsv4_v_store");
+            store_rows(Kcur, lctx.dflash.kv.k_ctx_cache[il], second_rows, first_rows, 0, "dflash_dsv4_k_store");
+            store_rows(Vcur, lctx.dflash.kv.v_ctx_cache[il], second_rows, first_rows, 0, "dflash_dsv4_v_store");
+        }
+
+        return gf;
+    }
 
     for (int il = 0; il < n_layer; ++il) {
         GGML_ASSERT(il < (int32_t) lctx.dflash.kv.k_ctx_cache.size());
@@ -244,6 +302,10 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
 }
 
 ggml_cgraph * llm_build_context::build_dflash() {
+    if (hparams.dflash_dsv4) {
+        return build_dflash_dsv4();
+    }
+
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
     const int64_t n_target_features = hparams.dflash_n_target_features;

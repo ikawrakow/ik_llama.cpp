@@ -8,6 +8,12 @@
 static bool common_speculative_are_dflash_compatible(
         const llama_model * model_tgt,
         const llama_model * model_dft) {
+    const char * draft_arch = model_dft != nullptr ? llama_model_arch_string(model_dft) : nullptr;
+    if (model_tgt == nullptr || model_dft == nullptr || draft_arch == nullptr ||
+            (std::strcmp(draft_arch, "dflash") != 0 && std::strcmp(draft_arch, "dflash-draft") != 0)) {
+        return false;
+    }
+
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
