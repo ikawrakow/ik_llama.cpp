@@ -1266,7 +1266,6 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, optional_layer_flags);
         layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, optional_layer_flags);
         // MoE routed experts + selection bias (router_bias)
-        const int64_t n_ff_exp = hparams.n_ff_exp;
         if (!layer.ffn_gate) {
             layer.ffn_gate_inp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert},
                     optional_layer_flags);
