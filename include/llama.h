@@ -724,7 +724,7 @@ extern "C" {
     // Currently true for every model; no architecture is excluded from partial KV reuse.
     LLAMA_API bool llama_model_supports_partial_kv_reuse(const struct llama_model * model);
 
-    // true for every non-null context; none is excluded from full-state seq save/restore
+    // false when the context cannot serialize whole-context or file-session state (--swa-compress); per-sequence buffer state is unaffected
     LLAMA_API bool llama_supports_full_state_io(const struct llama_context * ctx);
 
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);

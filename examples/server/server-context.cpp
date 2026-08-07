@@ -2952,6 +2952,10 @@ void server_context::process_single_task(server_task&& task) {
             send_error(task, "slot save is unsupported for openPangu because per-sequence file state is not implemented", ERROR_TYPE_NOT_SUPPORTED);
             break;
         }
+        if (!llama_supports_full_state_io(ctx)) {
+            send_error(task, "slot save is unsupported with --swa-compress because file-session state is not implemented for compacted contexts", ERROR_TYPE_NOT_SUPPORTED);
+            break;
+        }
 
         const size_t token_count = slot->cache_tokens.size();
         const int64_t t_start = ggml_time_us();
@@ -2993,6 +2997,10 @@ void server_context::process_single_task(server_task&& task) {
             // if requested slot is unavailable, we defer this task for processing later
             LOG_VERBOSE("requested slot is unavailable", { {"id_task", task.id} });
             queue_tasks.defer(std::move(task));
+            break;
+        }
+        if (!llama_supports_full_state_io(ctx)) {
+            send_error(task, "slot restore is unsupported with --swa-compress because file-session state is not implemented for compacted contexts", ERROR_TYPE_NOT_SUPPORTED);
             break;
         }
         const int64_t t_start = ggml_time_us();

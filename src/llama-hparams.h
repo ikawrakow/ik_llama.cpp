@@ -395,18 +395,14 @@ struct llama_hparams {
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
 
-// retained window + one u-batch; compaction then fires every C - W tokens. The slack floor keeps a
-// small u-batch from compacting every few tokens.
-static inline uint32_t llama_swa_compact_window_rows(uint32_t window, uint32_t pad, uint32_t n_ubatch) {
-    const uint32_t min_slack = 256;
-    const uint32_t slack     = n_ubatch > min_slack ? n_ubatch : min_slack;
-    const uint32_t unpadded  = window + slack;
-    return pad > 1 ? ((unpadded + pad - 1)/pad)*pad : unpadded;
-}
-
+// sinks + retained window + one u-batch, padded as one sum so the total is pad-aligned for any
+// sink_rows; compaction then fires every C - W tokens, and the slack floor keeps a small u-batch from compacting every few tokens
 static inline uint32_t llama_swa_compact_rows(uint32_t window, uint32_t pad, uint32_t n_ubatch,
                                               uint32_t sink_rows) {
-    return sink_rows + llama_swa_compact_window_rows(window, pad, n_ubatch);
+    const uint32_t min_slack = 256;
+    const uint32_t slack     = n_ubatch > min_slack ? n_ubatch : min_slack;
+    const uint32_t unpadded  = sink_rows + window + slack;
+    return pad > 1 ? ((unpadded + pad - 1)/pad)*pad : unpadded;
 }
 
 static inline uint32_t llama_kv_layer_rows(const llama_hparams & hparams, int il, uint32_t kv_size,

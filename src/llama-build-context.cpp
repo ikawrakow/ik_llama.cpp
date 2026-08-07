@@ -596,6 +596,39 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, boo
     return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa_win, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa_win;
 }
 
+ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed) {
+    *windowed = false;
+    lctx.swa_window_view = {};
+
+    if (window == 0) {
+        return nullptr;
+    }
+
+    const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
+    const int64_t live = compacted
+        ? (int64_t) swa_head - (int64_t) kv_self.sink_rows + n_tokens : 0;
+    const llama_swa_window_view view = compacted
+        ? llama_swa_calc_window_view_compact(live, kv_self.sink_rows, n_tokens, window, pad)
+        : llama_swa_calc_window_view(n_kv, n_tokens, window, pad);
+
+    if (!view.engaged) {
+        return build_inp_KQ_mask_swa();
+    }
+
+    lctx.swa_window_view = {
+        true,
+        compacted,
+        n_kv,
+        n_tokens,
+        window,
+        pad,
+        view.w_view,
+        view.win_off,
+    };
+    *windowed = true;
+    return build_inp_KQ_mask_swa_win(view.w_view);
+}
+
 //build_mhc_post: x = 4096 x 4096 x 1 x 1, post = 4 x 4096 x 1 x 1, residual = 4096 x 4 x 4096 x 1, comb = 4 x 4 x 4096 x 1
 //build_mhc_post: x = 4096 x 1 x 1 x 1,    post = 4 x 1 x 1 x 1,    residual = 4096 x 4 x 1 x 1,    comb = 4 x 4 x 1 x 1
 // x        = n_embd x n_tokens           <--- y in Pangu

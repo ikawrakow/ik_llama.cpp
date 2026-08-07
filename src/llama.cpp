@@ -1461,7 +1461,7 @@ static bool llama_kv_cache_init(
                 const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, cache.rows(i));
             } else if (is_dsv4_k_only) {
-                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*cache.rows(i));
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
@@ -1707,7 +1707,9 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
     }
 
     const uint32_t W = cache.window_swa;
-    const uint32_t C = cache.size_swa - cache.sink_rows;
+    // the graph views the window at pad granularity, so only the pad-aligned part of the allocation is usable capacity
+    const uint32_t pad = llama_kv_cache::get_padding(lctx.cparams.flash_attn);
+    const uint32_t C = pad > 1 ? ((cache.size_swa - cache.sink_rows)/pad)*pad : cache.size_swa - cache.sink_rows;
     GGML_ASSERT(n_tokens <= C);
 
     if (cache.live_swa() + n_tokens <= C) {
@@ -1728,7 +1730,9 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
             continue;
         }
         ggml_tensor * kl = cache.k_l[il];
-        const size_t stride = kl->nb[1];
+        // kl rows are position-major: kl->ne[1]/rows(il) rows per position (n_head_kv)
+        const size_t rows_per_pos = (size_t) kl->ne[1] / cache.rows((int) il);
+        const size_t stride = kl->nb[1] * rows_per_pos;
         const size_t nbytes = (size_t) W * stride;
         if (scratch.size() < nbytes) {
             scratch.resize(nbytes);
@@ -2517,6 +2521,11 @@ static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
         // defrag moves cells, which would break the cell-index == position mapping the
         // openPangu indexer cache relies on; skipping is safe (defrag is an optimization)
         LLAMA_LOG_WARN("%s: defrag is not supported for this model's position-indexed KV cache - skipping\n", __func__);
+        return;
+    }
+    if (cache.any_compacted()) {
+        // defrag moves rows by cell index; a compacted layer has no per-cell rows
+        LLAMA_LOG_WARN("%s: defrag is not supported for a compacted KV cache (--swa-compress) - skipping\n", __func__);
         return;
     }
     cache.do_defrag = true;
@@ -7893,6 +7902,13 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    if (params.n_seq_max > 1 && params.swa_compress && model->arch == LLM_ARCH_DEEPSEEK4) {
+        // the compacted window is one position stream (head_swa/pos_base_swa are per-cache, not per-sequence)
+        LLAMA_LOG_ERROR("%s: --swa-compress supports a single sequence only (requested n_seq_max = %u); run with -np 1\n",
+                __func__, params.n_seq_max);
+        return nullptr;
+    }
+
     if (model->arch == LLM_ARCH_OPENPANGU) {
         std::string error_msg;
         if (!llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
@@ -8635,7 +8651,7 @@ void llama_free(struct llama_context * ctx) {
 }
 
 bool llama_supports_full_state_io(const struct llama_context * ctx) {
-    return ctx != nullptr;
+    return ctx != nullptr && !ctx->kv_self.any_compacted();
 }
 
 const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model) {
@@ -11079,6 +11095,10 @@ static bool llama_state_io_supported(
             return true;
         }
         LLAMA_LOG_ERROR("%s: only per-sequence state save/restore is supported for openPangu (whole-context and file-session state are not)\n", func);
+        return false;
+    }
+    if (ctx->kv_self.any_compacted() && seq_id < 0) {
+        LLAMA_LOG_ERROR("%s: whole-context state save/restore is not supported with --swa-compress; use per-sequence state\n", func);
         return false;
     }
     return true;
