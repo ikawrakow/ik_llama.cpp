@@ -146,7 +146,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
     }
 
-    constexpr int64_t k_max_work_buffer_elements = 1 << 28;
+    constexpr int64_t k_max_work_buffer_elements = 1 << 26;
 
     int max_rows = k_max_work_buffer_elements / n_kv / n_head;
     if (max_rows < 1) max_rows = 1;
