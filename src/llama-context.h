@@ -5,6 +5,10 @@
 #include "llama-sampling.h"
 
 #include "llama-spec-features.h"
+#include "atsinfer/atsinfer-cuda.h"
+#include "atsinfer/atsinfer-cache.h"
+#include "atsinfer/atsinfer-scheduler.h"
+#include "llama-atsinfer.h"
 
 struct llama_model;
 
@@ -388,6 +392,45 @@ struct llama_context {
 
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
+
+    // ATSInfer hybrid CPU/GPU scheduling runtime
+    std::unique_ptr<ATSInferCudaManager>  atsinfer_cuda;   // async CUDA streams & H2D transfers
+    std::unique_ptr<ATSInferTensorCache>  atsinfer_cache;  // VRAM residency tracker with eviction
+    std::unique_ptr<ATSInferRescheduler>  atsinfer_sched;  // dynamic latency-driven rescheduler
+
+    // Load-Aware Dynamic Transfer state (arXiv 2607.10183v2 section 4.4).
+    //
+    // The units are the MoE layers whose expert weights are host-resident under the static
+    // placement -- whatever produced it, be it --atsinfer, --n-cpu-moe or --fit. Section 4.4.1
+    // treats the static placement b as an input to Algorithm 2, so the dynamic mechanism is
+    // deliberately usable without the ATSInfer placement solver.
+    std::vector<atsinfer_round_unit> atsinfer_units;      // execution order, one entry per MoE layer
+    std::vector<uint8_t>             atsinfer_run_on_gpu; // rb for the current round, indexed like atsinfer_units
+    std::vector<int>                 atsinfer_unit_of_layer; // layer -> index into atsinfer_units, -1 if none
+    bool  atsinfer_dt_active         = false; // dynamic transfer is enabled and units were found
+    bool  atsinfer_pending_reschedule = false; // forces a graph rebuild for the next round
+    bool  atsinfer_want_profile      = false; // next round should be measured (serializes it)
+    bool  atsinfer_prev_round_profiled = false; // previous round's latency is not representative
+    float atsinfer_ref_latency_ms    = 0.0f;  // latency of the plan currently in force
+    float atsinfer_last_latency_ms   = 0.0f;  // latency observed in the previous round
+    float atsinfer_h2d_mbps          = 0.0f;  // B_pcie, measured at load time
+    int64_t atsinfer_round_t0_us     = 0;     // start of the current round, for start-to-start TPOT
+    int   atsinfer_n_reschedules     = 0;
+    int   atsinfer_calib_unit        = -1;    // unit temporarily promoted to sample t_g, -1 when idle
+    bool  atsinfer_calib_failed      = false; // calibration promotion refused (no GPU has room): stop retrying
+    bool  atsinfer_measurements_flushed = false; // cache already updated from this load's measurements
+    // Multi-GPU dynamic-transfer state. atsinfer_promoted_device is per unit (-1 = not
+    // promoted) and remembers which GPU backend a promoted unit runs on so consecutive
+    // rounds do not bounce it between devices -- each move changes the node's backend and
+    // forces a graph rebuild. atsinfer_device_promoted_layers is a per-GPU count of layers
+    // ATSInfer has promoted there, used as a load signal when choosing the next target.
+    std::vector<int>    atsinfer_promoted_device;
+    std::vector<size_t> atsinfer_device_promoted_layers;
+    // round-level totals from the last profiled round; atsinfer_copy_total_ms is the transfer
+    // time currently on the critical path and bounds what async coordination could recover
+    float atsinfer_copy_total_ms     = 0.0f;
+    float atsinfer_exec_cpu_ms       = 0.0f;
+    float atsinfer_exec_gpu_ms       = 0.0f;
 
     const float * draft_input_hidden_state = nullptr;
     size_t draft_input_hidden_state_n_floats = 0;

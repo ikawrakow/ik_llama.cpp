@@ -619,6 +619,10 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fingerprint) {
     if (!cparams.graph_reuse) return false;
+    // ATSInfer re-scheduled: the node -> backend assignment changed, so the cached graph no
+    // longer reflects it and has to be rebuilt. Also force a rebuild for a measured round,
+    // since the timings must come from a graph built with the current assignment.
+    if (atsinfer_pending_reschedule || atsinfer_want_profile) return false;
     if (model.arch == LLM_ARCH_DEEPSEEK4) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
@@ -4885,6 +4889,14 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.mtp = params.mtp;
 
+        // ATSInfer: propagate placement params to loader and model
+        ml.atsinfer_enable      = params.atsinfer_enable;
+        ml.atsinfer_vram_budget = params.atsinfer_vram_budget;
+        ml.atsinfer_dynamic     = params.atsinfer_dynamic;
+        model.atsinfer_enable      = params.atsinfer_enable;
+        model.atsinfer_vram_budget = params.atsinfer_vram_budget;
+        model.atsinfer_dynamic     = params.atsinfer_dynamic;
+
         try {
             llm_load_arch(ml, model);
         } catch(const std::exception & e) {
@@ -6332,6 +6344,23 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
         tim1 = ggml_time_us();
 #endif
+        // ATSInfer Load-Aware Dynamic Transfer (section 4.4): decide this round's assignment
+        // before the graph is built, so the build callback can steer the expert operators.
+        // Must run before can_reuse_graph(), which consults the flags this sets.
+        if (lctx.atsinfer_dt_active) {
+            // TPOT of the round that just finished, measured start-to-start so that no extra
+            // synchronization is needed: by the time we get here the previous round's outputs
+            // have already been consumed, so its work really is done.
+            const int64_t now_us = ggml_time_us();
+            if (lctx.atsinfer_round_t0_us > 0) {
+                lctx.atsinfer_last_latency_ms = (float) (now_us - lctx.atsinfer_round_t0_us) / 1000.0f;
+            }
+            lctx.atsinfer_round_t0_us = now_us;
+
+            atsinfer_dt_plan_round(lctx, lctx.atsinfer_last_latency_ms);
+            ggml_backend_sched_set_profiling(lctx.sched, lctx.atsinfer_want_profile);
+        }
+
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         const uint64_t seq_fingerprint = llama_ubatch_seq_fingerprint(u_batch, lctx.model.arch);
@@ -6474,6 +6503,23 @@ static int llama_decode_internal(
         tim2 = ggml_time_us();
         printf("graph_compute(...): %d us\n", int(tim2-tim1));
 #endif
+
+        // ATSInfer: close out the round.
+        //
+        // Deliberately NO synchronize here. Compute is asynchronous, and forcing a device sync
+        // every round to time it costs more than the scheduler could ever win back: measured,
+        // an unconditional llama_synchronize() per round dropped decode from 38.34 to 22.07
+        // tok/s. Round latency is instead taken between consecutive round starts (see
+        // atsinfer_round_t0 above), which is TPOT by definition and needs no extra sync.
+        // A profiled round is the exception -- it already synchronized per split.
+        if (lctx.atsinfer_dt_active) {
+            if (lctx.atsinfer_want_profile) {
+                atsinfer_dt_collect(lctx);
+                ggml_backend_sched_set_profiling(lctx.sched, false);
+                lctx.atsinfer_want_profile = false;
+            }
+            lctx.atsinfer_pending_reschedule = false;
+        }
 
         bool reset_previous = false;
         // update the kv ring buffer
@@ -7462,6 +7508,9 @@ struct llama_model_params llama_model_default_params() {
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
+        /*.atsinfer_enable             =*/ false,
+        /*.atsinfer_vram_budget        =*/ 0,
+        /*.atsinfer_dynamic            =*/ false,
         /*.swa_compress                =*/ false,
     };
 
@@ -8640,6 +8689,43 @@ struct llama_context * llama_init_from_model(
             if (ctx->buf_output == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to allocate output buffer of size %.2f MiB\n", __func__, new_size / (1024.0 * 1024.0));
             }
+        }
+    }
+
+    // ATSInfer: instantiate runtime objects if enabled.
+    //
+    // Load-Aware Dynamic Transfer takes the static placement b as an input (section 4.4.1), so
+    // --atsinfer-dynamic deliberately does NOT require --atsinfer: it works on top of whatever
+    // placement is in force, including --n-cpu-moe and --fit. Measured here, the ATSInfer
+    // placement solver loses 4.2x on decode (9.15 vs 38.34 tok/s), so tying the dynamic
+    // mechanism to it would only measure the solver's defects.
+    if (model->atsinfer_enable || model->atsinfer_dynamic) {
+        ctx->atsinfer_cuda = std::make_unique<ATSInferCudaManager>();
+        if (!ctx->atsinfer_cuda->init(/*device_id=*/0)) {
+            LLAMA_LOG_WARN("%s: ATSInfer CUDA manager init failed - disabling ATSInfer runtime\n", __func__);
+            ctx->atsinfer_cuda.reset();
+        } else {
+            const uint64_t vram_budget = (uint64_t) model->atsinfer_vram_budget * 1024ULL * 1024ULL;
+            ctx->atsinfer_cache = std::make_unique<ATSInferTensorCache>(vram_budget);
+
+            if (model->atsinfer_dynamic) {
+                // epsilon and the 5x TPOT interval are the paper's settings (section 4.4.3)
+                ctx->atsinfer_sched = std::make_unique<ATSInferRescheduler>(
+                    /*deviation_threshold=*/0.15f,
+                    /*min_tpot_multiplier=*/5
+                );
+
+                // B_pcie for the w_i estimates. The loader only measures this when the placement
+                // solver runs, so measure it here when dynamic transfer is used on its own.
+                const auto hw = atsinfer_profile_hardware(vram_budget);
+                ctx->atsinfer_h2d_mbps = hw.pcie_bandwidth_mbps;
+
+                atsinfer_dt_init(*ctx);
+            }
+
+            LLAMA_LOG_INFO("%s: ATSInfer runtime initialized (static: %d, dynamic: %d, VRAM budget: %d MiB)\n",
+                __func__, (int) model->atsinfer_enable, (int) model->atsinfer_dynamic,
+                model->atsinfer_vram_budget);
         }
     }
 

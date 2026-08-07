@@ -162,3 +162,6 @@ a.out
 a.out.*
 .dev
 .github
+
+# ATSInfer profiling cache (written to CWD at model load)
+atsinfer_profile.cache

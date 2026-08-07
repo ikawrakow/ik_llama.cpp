@@ -2646,6 +2646,9 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             }
         }
 
+        // ATSInfer Load-Aware Dynamic Transfer: steer this round's promoted expert operators
+        atsinfer_dt_apply(lctx, cur, name, il);
+
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
         // FIXME: fix in ggml_backend_sched
         const bool full_offload = lctx.model.n_gpu_layers > (int)lctx.model.hparams.n_layer;

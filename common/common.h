@@ -457,6 +457,11 @@ struct gpt_params {
     int  fused_delta_net   = 0;     // use fused delta-net if number of tokens in the batch is less than this value
     bool has_mtp           = false; // enable MTP if supported by the model
 
+    // ATSInfer hybrid CPU/GPU tensor scheduling
+    bool    atsinfer_enable      = false; // enable ATSInfer placement solver & async scheduling
+    int32_t atsinfer_vram_budget = 0;     // VRAM budget for ATSInfer in MiB (0 = auto-detect from --fit)
+    bool    atsinfer_dynamic     = false; // enable dynamic rescheduling during inference
+
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
     std::string indexer_cache_type_k = "f16"; // indexer K-cache data type

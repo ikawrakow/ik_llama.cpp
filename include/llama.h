@@ -434,6 +434,11 @@ extern "C" {
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
         bool swa_compress;     // must match llama_context_params::swa_compress; the fit also assumes that context's n_ubatch
+
+        // ATSInfer hybrid CPU/GPU tensor scheduling
+        bool    atsinfer_enable;      // enable ATSInfer placement solver
+        int32_t atsinfer_vram_budget; // VRAM budget in MiB (0 = auto)
+        bool    atsinfer_dynamic;     // enable dynamic rescheduling
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

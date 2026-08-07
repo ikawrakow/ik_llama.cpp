@@ -52,6 +52,11 @@ struct llama_model_loader {
     bool merge_up_gate_exps = false;
     bool defer_experts = false;
 
+    // ATSInfer fields
+    bool    atsinfer_enable      = false;
+    int32_t atsinfer_vram_budget = 0;
+    bool    atsinfer_dynamic     = false;
+
     llama_files files;
     llama_ftype ftype;
     llama_fver  fver;
