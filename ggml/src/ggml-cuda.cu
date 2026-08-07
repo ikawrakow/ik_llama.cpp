@@ -8,7 +8,8 @@
 #include "ggml-cuda.h"
 #include "ggml.h"
 #include "ggml-backend-impl.h"
-#include "ggml-impl.h"
+//#include "ggml-impl.h"
+#include "ggml-utils.h"
 
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
