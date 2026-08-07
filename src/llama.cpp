@@ -564,8 +564,34 @@ struct llama_context::Prev {
     int32_t mtp_n_heads;
     int64_t swa_w_view;
     int64_t swa_win_off;
+    uint64_t seq_fingerprint;
     ggml_cgraph * graph;
 };
+
+static inline bool llama_graph_bakes_seq_state(const llm_arch & arch) {
+    return llm_arch_is_hybrid(arch) || llm_arch_is_recurrent(arch);
+}
+
+static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b, const llm_arch & arch) {
+    static const bool legacy_graph_reuse = getenv("IK_LEGACY_GRAPH_REUSE") != nullptr;
+    if (!llama_graph_bakes_seq_state(arch) || legacy_graph_reuse) {
+        return 0ull;
+    }
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+    mix((uint64_t) (uint32_t) b.n_tokens);
+    for (int32_t i = 0; i < b.n_tokens; ++i) {
+        const int32_t ns = b.n_seq_id ? b.n_seq_id[i] : 0;
+        mix((uint64_t) (uint32_t) ns);
+        if (b.seq_id && b.seq_id[i]) {
+            for (int32_t j = 0; j < ns; ++j) {
+                mix((uint64_t) (uint32_t) b.seq_id[i][j]);
+            }
+        }
+        mix(b.pos && b.pos[i] == 0 ? 1ull : 0ull);
+    }
+    return h;
+}
 
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
@@ -591,12 +617,15 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
     printf("    update_cache_copies() must have failed\n");
 }
 
-bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
+bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fingerprint) {
     if (!cparams.graph_reuse) return false;
     if (model.arch == LLM_ARCH_DEEPSEEK4) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     if (u_batch.embd) return false;
+    if (seq_fingerprint != the_prev->seq_fingerprint) {
+        return false;
+    }
     auto & kv_self_used = (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
                           mtp_target_ctx != nullptr ? mtp_target_ctx->kv_self : kv_self;
     if (the_prev->save_per_step_ssm != kv_self_used.save_per_step_ssm ||
@@ -1070,10 +1099,18 @@ static llama_pos llama_kv_openpangu_state_pos(const llama_kv_cache & cache, llam
 
 static constexpr uint32_t LLAMA_OPENPANGU_PARTIAL_LAYOUT_MAGIC = 0x50414732u; // "PAG2"
 static constexpr uint32_t LLAMA_OPENPANGU_PARTIAL_STATE_MAGIC  = 0x50414731u; // "PAG1"
+static constexpr uint32_t LLAMA_SWA_COMPACT_LAYOUT_MAGIC       = 0x53574143u; // "SWAC"
 
 static inline bool llama_kv_qnext_seq_id_in_range(const llama_kv_cache & cache, llama_seq_id seq_id) {
     const uint32_t n_slots = llama_kv_qnext_state_slots(cache);
     return n_slots > 0 && seq_id >= 0 && (uint32_t) seq_id < n_slots;
+}
+
+static bool llama_mtp_tail_uses_layer_cache(const llama_model & model) {
+    return model.hparams.nextn_predict_layers > 0 &&
+        (model.arch == LLM_ARCH_GLM_DSA ||
+         model.arch == LLM_ARCH_QWEN35MOE ||
+         model.arch == LLM_ARCH_STEP35);
 }
 
 static bool llama_kv_cache_init(
@@ -1185,9 +1222,7 @@ static bool llama_kv_cache_init(
     // count used buffer types
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     if (offload) {
-        const bool is_mtp = (model.arch == LLM_ARCH_GLM_DSA ||
-                             //model.arch == LLM_ARCH_QWEN35 ||
-                             model.arch == LLM_ARCH_QWEN35MOE) && hparams.nextn_predict_layers > 0;
+        const bool is_mtp = llama_mtp_tail_uses_layer_cache(model);
         const int64_t n_mtp_first = hparams.n_layer - hparams.nextn_predict_layers;
         for (int64_t i = 0; i < n_layer; ++i) {
             const bool is_mtp_tail = is_mtp && i >= n_mtp_first;
@@ -1292,10 +1327,7 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k(i);
 
-        const bool is_mtp_tail_layer = (//model.arch == LLM_ARCH_QWEN35 ||
-                                        model.arch == LLM_ARCH_QWEN35MOE ||
-                                        model.arch == LLM_ARCH_GLM_DSA) &&
-                hparams.nextn_predict_layers > 0 && i >= n_mtp_first_layer;
+        const bool is_mtp_tail_layer = llama_mtp_tail_uses_layer_cache(model) && i >= n_mtp_first_layer;
         //struct ggml_context * ctx = split_cache && !qnext_recurrent ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         struct ggml_context * ctx = ((split_cache || replicate_mla) && !is_mtp_tail_layer) ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = nullptr;
@@ -1429,7 +1461,7 @@ static bool llama_kv_cache_init(
                 const int64_t n_lat = (int64_t) hparams.n_lora_kv + hparams.n_rot;   // 576
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_lat, cache.rows(i));
             } else if (is_dsv4_k_only) {
-                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
+                k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*cache.rows(i));
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*kv_size);
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
@@ -1512,6 +1544,7 @@ static bool llama_kv_cache_init(
         LLAMA_LOG_ERROR("%s: bailing out\n", __func__);
         GGML_ABORT("fatal error");
     }
+
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto it : ctx_map) {
@@ -1674,7 +1707,9 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
     }
 
     const uint32_t W = cache.window_swa;
-    const uint32_t C = cache.size_swa - cache.sink_rows;
+    // the graph views the window at pad granularity, so only the pad-aligned part of the allocation is usable capacity
+    const uint32_t pad = llama_kv_cache::get_padding(lctx.cparams.flash_attn);
+    const uint32_t C = pad > 1 ? ((cache.size_swa - cache.sink_rows)/pad)*pad : cache.size_swa - cache.sink_rows;
     GGML_ASSERT(n_tokens <= C);
 
     if (cache.live_swa() + n_tokens <= C) {
@@ -1695,7 +1730,9 @@ static void llama_kv_cache_compact_swa(struct llama_context & lctx, uint32_t n_t
             continue;
         }
         ggml_tensor * kl = cache.k_l[il];
-        const size_t stride = kl->nb[1];
+        // kl rows are position-major: kl->ne[1]/rows(il) rows per position (n_head_kv)
+        const size_t rows_per_pos = (size_t) kl->ne[1] / cache.rows((int) il);
+        const size_t stride = kl->nb[1] * rows_per_pos;
         const size_t nbytes = (size_t) W * stride;
         if (scratch.size() < nbytes) {
             scratch.resize(nbytes);
@@ -2484,6 +2521,11 @@ static void llama_kv_cache_defrag(struct llama_kv_cache & cache) {
         // defrag moves cells, which would break the cell-index == position mapping the
         // openPangu indexer cache relies on; skipping is safe (defrag is an optimization)
         LLAMA_LOG_WARN("%s: defrag is not supported for this model's position-indexed KV cache - skipping\n", __func__);
+        return;
+    }
+    if (cache.any_compacted()) {
+        // defrag moves rows by cell index; a compacted layer has no per-cell rows
+        LLAMA_LOG_WARN("%s: defrag is not supported for a compacted KV cache (--swa-compress) - skipping\n", __func__);
         return;
     }
     cache.do_defrag = true;
@@ -4899,6 +4941,14 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             return -2;
         }
 
+        const enum llama_mtp_package mtp_package = llama_model_mtp_package(&model);
+        if (mtp_package == LLAMA_MTP_PACKAGE_INVALID) {
+            throw std::runtime_error("invalid MTP package: missing target trunk and predictor tail tensors");
+        }
+        if (mtp_package == LLAMA_MTP_PACKAGE_COMPANION && !params.mtp) {
+            throw std::runtime_error("MTP companion GGUF cannot be used as the target model, pass it with -md/--draft");
+        }
+
         // ---- populate reload registry ONLY when hot-swap is requested ----
         if (std::getenv("LLAMA_HOTSWAP_ENABLED") != nullptr) {
             model.reload = std::make_unique<reload_info>(ml);
@@ -5808,6 +5858,7 @@ static uint32_t llama_output_embd_width(const llama_context & lctx) {
 static bool llama_context_has_mtp_outputs(const llama_context & lctx) {
     return lctx.cparams.mtp && (
         lctx.model.hparams.nextn_predict_layers > 0 ||
+        llama_model_mtp_package(&lctx.model) == LLAMA_MTP_PACKAGE_TARGET_ONLY ||
         lctx.model.arch == LLM_ARCH_GEMMA4 ||
         lctx.model.arch == LLM_ARCH_GEMMA4_MTP ||
         lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
@@ -6283,7 +6334,8 @@ static int llama_decode_internal(
 #endif
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
-        if (!lctx.can_reuse_graph(u_batch)) {
+        const uint64_t seq_fingerprint = llama_ubatch_seq_fingerprint(u_batch, lctx.model.arch);
+        if (!lctx.can_reuse_graph(u_batch, seq_fingerprint)) {
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
@@ -6321,7 +6373,8 @@ static int llama_decode_internal(
                         kv_self_used.save_per_step_ssm, kv_self_used.ckpt.per_step_max_allocated,
                         cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads,
                         lctx.swa_window_view.w_view,
-                        lctx.swa_window_view.win_off, gf});
+                        lctx.swa_window_view.win_off,
+                        seq_fingerprint, gf});
             }
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);
@@ -6363,13 +6416,8 @@ static int llama_decode_internal(
         }
         else {
             const bool has_mtp = llama_context_has_mtp_outputs(lctx);
-            const bool use_raw_mtp_embd = has_mtp && (lctx.model.arch == LLM_ARCH_GEMMA4    ||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_MTP||
-                                                      lctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT ||
-                                                      lctx.model.arch == LLM_ARCH_DEEPSEEK4);
-            // For DSV4 we want to extract the 16,384-dim embedding first
             if (cparams.embeddings || has_mtp) {
-                if (use_raw_mtp_embd) {
+                if (has_mtp) {
                     for (int i = gf->n_nodes - 1; i >= 0; --i) {
                         if (strcmp(gf->nodes[i]->name, "result_mtp_embd") == 0) {
                             embd = gf->nodes[i];
@@ -7854,6 +7902,13 @@ struct llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    if (params.n_seq_max > 1 && params.swa_compress && model->arch == LLM_ARCH_DEEPSEEK4) {
+        // the compacted window is one position stream (head_swa/pos_base_swa are per-cache, not per-sequence)
+        LLAMA_LOG_ERROR("%s: --swa-compress supports a single sequence only (requested n_seq_max = %u); run with -np 1\n",
+                __func__, params.n_seq_max);
+        return nullptr;
+    }
+
     if (model->arch == LLM_ARCH_OPENPANGU) {
         std::string error_msg;
         if (!llama_openpangu_validate_latent_cache_types(params.type_k, params.type_v, &error_msg)) {
@@ -8108,6 +8163,7 @@ struct llama_context * llama_init_from_model(
         model->arch != LLM_ARCH_QWEN35MOE && model->arch != LLM_ARCH_GEMMA4 &&
         model->arch != LLM_ARCH_GEMMA4_MTP && model->arch != LLM_ARCH_GLM_DSA &&
         model->arch != LLM_ARCH_DEEPSEEK4 &&
+        model->arch != LLM_ARCH_STEP35 &&
         model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
         model->arch != LLM_ARCH_OPENPANGU &&
         cparams.mtp != 0) {
@@ -9716,6 +9772,15 @@ struct llama_data_write {
                 continue;
             }
 
+            // only k_l is compacted; it holds the window at [sink_rows, sink_rows + live_swa())
+            if (kv_self.is_compacted((int) il)) {
+                const size_t live = kv_self.live_swa();
+                if (live) {
+                    write_tensor_data(kv_self.k_l[il], kv_self.sink_rows * k_size_row, live * k_size_row, il);
+                }
+                continue;
+            }
+
             // Read each range of cells of k_size length each into tmp_buf and write out
             for (const auto & range : cell_ranges) {
                 const size_t range_size = range.second - range.first;
@@ -9950,6 +10015,15 @@ struct llama_data_write {
         }
         GGML_ASSERT(cell_count == cell_count_check);
 
+        if (kv_self.any_compacted()) {
+            const uint32_t live_rows = kv_self.live_swa();
+            write(&LLAMA_SWA_COMPACT_LAYOUT_MAGIC, sizeof(LLAMA_SWA_COMPACT_LAYOUT_MAGIC));
+            write(&kv_self.size_swa, sizeof(kv_self.size_swa));
+            write(&live_rows, sizeof(live_rows));
+            write(&kv_self.pos_base_swa, sizeof(kv_self.pos_base_swa));
+            write(&kv_self.head_swa, sizeof(kv_self.head_swa));
+        }
+
         write(&cell_count, sizeof(cell_count));
 
         write_kv_cache_meta(kv_self, cell_ranges, seq_id);
@@ -10060,6 +10134,11 @@ struct llama_data_read {
 
             if (cell_count == 0 && ctx->model.arch == LLM_ARCH_OPENPANGU) {
                 LLAMA_LOG_ERROR("%s: openPangu sequence state carries no kv cells\n", __func__);
+                return false;
+            }
+
+            if (cell_count > kv_self.size) {
+                LLAMA_LOG_ERROR("%s: not enough cells in kv cache\n", __func__);
                 return false;
             }
 
@@ -10353,12 +10432,16 @@ struct llama_data_read {
                 return false;
             }
 
-            if (cell_count) {
+            const bool     k_compact = kv_self.is_compacted((int) il);
+            const uint32_t k_rows    = k_compact ? kv_self.live_swa() : cell_count;
+            const uint32_t k_dst     = k_compact ? kv_self.sink_rows  : kv_self.head;
+
+            if (k_rows) {
                 // Read and set the keys for the whole cell range
                 if (kv_self.k_l[il]->extra) {
-                    read_kv_cache_data_split(ctx, kv_self.k_l[il], read(cell_count * k_size_row), kv_self.head, k_size_row, cell_count, il);
+                    read_kv_cache_data_split(ctx, kv_self.k_l[il], read(k_rows * k_size_row), k_dst, k_size_row, k_rows, il);
                 } else {
-                    ggml_backend_tensor_set(kv_self.k_l[il], read(cell_count * k_size_row), kv_self.head * k_size_row, cell_count * k_size_row);
+                    ggml_backend_tensor_set(kv_self.k_l[il], read(k_rows * k_size_row), k_dst * k_size_row, k_rows * k_size_row);
                 }
             }
         }
@@ -10697,7 +10780,44 @@ struct llama_data_read {
             return;
         }
 
-        bool res = read_kv_cache_meta(ctx, cell_count, seq_id) && read_kv_cache_data(ctx, cell_count, seq_id, flags);
+        struct llama_kv_cache & kv_self = ctx->kv_self;
+
+        const bool compacted    = kv_self.any_compacted();
+        const bool compact_blob = cell_count == LLAMA_SWA_COMPACT_LAYOUT_MAGIC;
+        if (compacted != compact_blob) {
+            throw std::runtime_error("failed to restore kv cache: incompatible compacted sliding-window layout");
+        }
+
+        uint32_t  restore_size_swa = 0;
+        uint32_t  restore_live     = 0;
+        llama_pos restore_pos_base = 0;
+        uint32_t  restore_head_swa = 0;
+        if (compact_blob) {
+            read_to(&restore_size_swa, sizeof(restore_size_swa));
+            read_to(&restore_live,     sizeof(restore_live));
+            read_to(&restore_pos_base, sizeof(restore_pos_base));
+            read_to(&restore_head_swa, sizeof(restore_head_swa));
+            if (restore_size_swa != kv_self.size_swa) {
+                throw std::runtime_error("failed to restore kv cache: compacted row count differs from this context");
+            }
+            if (restore_head_swa < kv_self.sink_rows || restore_head_swa > kv_self.size_swa ||
+                restore_head_swa - kv_self.sink_rows != restore_live) {
+                throw std::runtime_error("failed to restore kv cache: inconsistent compacted window state");
+            }
+            read_to(&cell_count, sizeof(cell_count));
+            if (restore_pos_base < 0 ||
+                (uint64_t) restore_pos_base + restore_live != (uint64_t) cell_count) {
+                throw std::runtime_error("failed to restore kv cache: compacted window base inconsistent with cell count");
+            }
+        }
+
+        // scalars before rows: they set the placement offset, and seq_rm inside meta resets head_swa
+        bool res = read_kv_cache_meta(ctx, cell_count, seq_id);
+        if (res && compact_blob) {
+            kv_self.pos_base_swa = restore_pos_base;
+            kv_self.head_swa     = restore_head_swa;
+        }
+        res = res && read_kv_cache_data(ctx, cell_count, seq_id, flags);
 
         if (!res) {
             if (seq_id == -1) {
@@ -10967,13 +11087,6 @@ static bool llama_state_io_supported(
                         const char * func,
              llama_state_seq_flags flags = 0,
                       llama_seq_id seq_id = -1) {
-    if (ctx->kv_self.any_compacted() && flags == 0) {
-        LLAMA_LOG_ERROR("%s: full state save/restore is not supported with --swa-compress "
-                        "(state I/O addresses cache rows by cell index; compacted layers hold a "
-                        "translated subset)\n", func);
-        return false;
-    }
-
     if (ctx->model.arch == LLM_ARCH_OPENPANGU) {
         if (seq_id >= 0 &&
             llama_kv_qnext_seq_id_in_range(ctx->kv_self, seq_id) &&
@@ -10982,6 +11095,10 @@ static bool llama_state_io_supported(
             return true;
         }
         LLAMA_LOG_ERROR("%s: only per-sequence state save/restore is supported for openPangu (whole-context and file-session state are not)\n", func);
+        return false;
+    }
+    if (ctx->kv_self.any_compacted() && seq_id < 0) {
+        LLAMA_LOG_ERROR("%s: whole-context state save/restore is not supported with --swa-compress; use per-sequence state\n", func);
         return false;
     }
     return true;

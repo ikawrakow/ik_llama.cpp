@@ -584,7 +584,7 @@ struct llama_model {
     // layout, and the compacted mask keys on position alone, so it also requires K-only cache
     // rows and a single sequence
     bool supports_swa_compress() const {
-        return arch == LLM_ARCH_OPENPANGU;
+        return arch == LLM_ARCH_OPENPANGU || arch == LLM_ARCH_DEEPSEEK4;
     }
 
     static inline int hadamard_size(int head_size) {

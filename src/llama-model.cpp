@@ -1760,6 +1760,12 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             {   LLM_TENSOR_FFN_DOWN_SHEXP,    "blk.%d.ffn_down_shexp" },
             {   LLM_TENSOR_FFN_UP_SHEXP,      "blk.%d.ffn_up_shexp" },
 	        {   LLM_TENSOR_FFN_EXP_PROBS_B,   "blk.%d.exp_probs_b" },
+            {   LLM_TENSOR_NEXTN_EH_PROJ,          "blk.%d.nextn.eh_proj" },
+            {   LLM_TENSOR_NEXTN_EMBED_TOKENS,     "blk.%d.nextn.embed_tokens" },
+            {   LLM_TENSOR_NEXTN_ENORM,             "blk.%d.nextn.enorm" },
+            {   LLM_TENSOR_NEXTN_HNORM,             "blk.%d.nextn.hnorm" },
+            {   LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.nextn.shared_head_head" },
+            {   LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.nextn.shared_head_norm" },
         },
     },
     {
@@ -2193,6 +2199,90 @@ bool llama_model_is_gemma4_mtp_assistant(const llama_model * model) {
     return model && (model->arch == LLM_ARCH_GEMMA4_MTP || model->arch == LLM_ARCH_GEMMA4_ASSISTANT);
 }
 
+bool llama_model_is_step35(const llama_model * model) {
+    return model && model->arch == LLM_ARCH_STEP35;
+}
+
+enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
+    if (!model) {
+        return LLAMA_MTP_PACKAGE_INVALID;
+    }
+
+    if (llama_model_is_gemma4_mtp_assistant(model) && model->hparams.nextn_predict_layers == 0) {
+        return LLAMA_MTP_PACKAGE_COMPANION;
+    }
+
+    const size_t n_nextn = model->hparams.nextn_predict_layers;
+    const bool has_common_package_contract =
+        llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
+        llama_model_is_gemma4_mtp_assistant(model);
+    if (!has_common_package_contract) {
+        return n_nextn > 0 ? LLAMA_MTP_PACKAGE_EMBEDDED : LLAMA_MTP_PACKAGE_NONE;
+    }
+
+    if (n_nextn == 0) {
+        if (llama_model_is_step35(model) || llama_model_is_deepseek4(model)) {
+            for (const auto & layer : model->layers) {
+                if (layer.attn_norm != nullptr) {
+                    return LLAMA_MTP_PACKAGE_TARGET_ONLY;
+                }
+            }
+        }
+        return LLAMA_MTP_PACKAGE_NONE;
+    }
+
+    const size_t n_layers = model->layers.size();
+    if (n_nextn > n_layers) {
+        return LLAMA_MTP_PACKAGE_INVALID;
+    }
+
+    const size_t first = n_layers - n_nextn;
+    const bool has_tail = model->layers[first].nextn.eh_proj != nullptr;
+
+    bool has_trunk = false;
+    for (size_t il = 0; il < first; ++il) {
+        if (model->layers[il].attn_norm != nullptr) {
+            has_trunk = true;
+            break;
+        }
+    }
+
+    if (has_trunk && has_tail) {
+        return LLAMA_MTP_PACKAGE_EMBEDDED;
+    }
+    if (has_trunk && !has_tail) {
+        return LLAMA_MTP_PACKAGE_TARGET_ONLY;
+    }
+    if (!has_trunk && has_tail) {
+        return LLAMA_MTP_PACKAGE_COMPANION;
+    }
+    return LLAMA_MTP_PACKAGE_INVALID;
+}
+
+bool llama_model_step35_has_nextn_weights(const llama_model * model) {
+    if (!model || !llama_model_is_step35(model) || model->hparams.nextn_predict_layers == 0) {
+        return false;
+    }
+
+    const size_t n_layers = model->layers.size();
+    const size_t n_nextn = model->hparams.nextn_predict_layers;
+    if (n_nextn > n_layers) {
+        return false;
+    }
+
+    const size_t first = n_layers - n_nextn;
+    for (size_t il = first; il < n_layers; ++il) {
+        const llama_layer & layer = model->layers[il];
+        const llama_layer_nextn & nextn = layer.nextn;
+        if (!nextn.eh_proj || !nextn.enorm || !nextn.hnorm ||
+            !layer.attn_norm || !layer.wq || !layer.wk || !layer.wv || !layer.wo ||
+            !layer.ffn_norm || !layer.ffn_gate || !layer.ffn_up || !layer.ffn_down) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool llama_is_gemma4_mtp_file(const char * path) {
     if (!path || !*path) return false;
     struct gguf_init_params params = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
@@ -2302,7 +2392,9 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_indexer_head = hparams.indexer_head_size;
 
-        size_t size = ggml_row_size(type_k, n_embd_head) * hparams.n_head_kv(il) * kv_size;
+        const uint32_t raw_pad = llama_kv_cache::get_padding(flash_attn);
+        const uint32_t k_rows = llama_kv_layer_rows(hparams, il, kv_size, swa_compress, n_ubatch, raw_pad);
+        size_t size = ggml_row_size(type_k, n_embd_head) * hparams.n_head_kv(il) * k_rows;
         if (ratio == csa_ratio) {
             size += ggml_row_size(type_k, n_embd_head) * csa_kv * n_stream;
             size += ggml_row_size(idx_type_k, n_indexer_head) * csa_kv * n_stream;

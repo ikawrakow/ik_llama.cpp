@@ -118,40 +118,6 @@ static ggml_tensor * openpangu_cast_gathered_latent_for_cache_type(ggml_context 
     return !ggml_is_quantized(kl->type) && src->type != kl->type ? ggml_cast(ctx, src, kl->type) : src;
 }
 
-static ggml_tensor * openpangu_build_swa_mask_for_graph(llm_build_context & llm, uint32_t window,
-                                                        bool compacted, bool * windowed) {
-    *windowed = false;
-    llm.lctx.swa_window_view = {};
-
-    if (window == 0) {
-        return nullptr;
-    }
-
-    const uint32_t pad = llama_kv_cache::get_padding(llm.cparams.flash_attn);
-    const int64_t live = compacted
-        ? (int64_t) llm.swa_head - (int64_t) llm.kv_self.sink_rows + llm.n_tokens : 0;
-    const llama_swa_window_view view = compacted
-        ? llama_swa_calc_window_view_compact(live, llm.kv_self.sink_rows, llm.n_tokens, window, pad)
-        : llama_swa_calc_window_view(llm.n_kv, llm.n_tokens, window, pad);
-
-    if (!view.engaged) {
-        return llm.build_inp_KQ_mask_swa();
-    }
-
-    llm.lctx.swa_window_view = {
-        true,
-        compacted,
-        llm.n_kv,
-        llm.n_tokens,
-        window,
-        pad,
-        view.w_view,
-        view.win_off,
-    };
-    *windowed = true;
-    return llm.build_inp_KQ_mask_swa_win(view.w_view);
-}
-
 // openPangu-2.0-Flash graph.
 //
 // Attention runs absorbed MLA over a latent KV cache: per position the cache stores only
@@ -1034,7 +1000,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
         // uses hparams.n_swa_mtp when the graph is built with an MTP op type
         bool KQ_mask_swa_windowed = false;
         ggml_tensor * KQ_mask = hparams.n_swa_mtp > 0 && hparams.n_swa > 0
-            ? openpangu_build_swa_mask_for_graph(*this, hparams.n_swa_mtp, /* compacted = */ false, &KQ_mask_swa_windowed)
+            ? build_swa_mask_for_graph(hparams.n_swa_mtp, /* compacted = */ false, &KQ_mask_swa_windowed)
             : build_inp_KQ_mask();
         ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
         lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
@@ -1174,7 +1140,7 @@ ggml_cgraph * llm_build_context::build_openpangu() {
     // schedule keys (n_swa == 0) keep every layer dense (pre-DSA GGUF fallback).
     bool KQ_mask_swa_windowed = false;
     ggml_tensor * KQ_mask_swa = hparams.n_swa > 0
-        ? openpangu_build_swa_mask_for_graph(*this, hparams.n_swa, kv_self.any_compacted(), &KQ_mask_swa_windowed)
+        ? build_swa_mask_for_graph(hparams.n_swa, kv_self.any_compacted(), &KQ_mask_swa_windowed)
         : nullptr;
     lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
     cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
