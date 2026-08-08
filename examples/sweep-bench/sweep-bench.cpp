@@ -311,6 +311,7 @@ int main(int argc, char ** argv) {
 
         if (measure) {
             t_tg_start = ggml_time_us();
+            fprintf(stderr, "======================================== tg_start for n_kv = %u\n", n_kv);
 
             for (int irep = 0; irep < nrep; ++irep) {
                 if (use_checkpoint) {
@@ -332,6 +333,7 @@ int main(int argc, char ** argv) {
                 }
             }
 
+            fprintf(stderr, "======================================== tg_end for n_kv = %u\n", n_kv);
             t_tg_end = ggml_time_us();
         } else {
             // keep the token stream aligned with a stride-1 sweep
