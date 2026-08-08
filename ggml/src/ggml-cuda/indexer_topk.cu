@@ -121,6 +121,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
         for (int istep = 0; istep < nstep; ++istep) {
             int first_row = max_rows*istep;
+            if (first_row >= int(q->ne[2])) break;
             int last_row  = std::min(first_row + max_rows, int(q->ne[2]));
             int nrows     = last_row - first_row;
 
