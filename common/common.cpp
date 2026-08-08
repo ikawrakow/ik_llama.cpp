@@ -1811,17 +1811,17 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ctk" || arg == "--cache-type-k") {
         CHECK_ARG
-        params.cache_type_k = argv[++i];
+        params.cache_type_k = argv[i];
         return true;
     }
     if (arg == "-ctv" || arg == "--cache-type-v") {
         CHECK_ARG
-        params.cache_type_v = argv[++i];
+        params.cache_type_v = argv[i];
         return true;
     }
     if (arg == "-ictk" || arg == "--indexer-cache-type-k") {
         CHECK_ARG
-        params.indexer_cache_type_k = argv[++i];
+        params.indexer_cache_type_k = argv[i];
         return true;
     }
     if (arg == "-ctk-first" || arg == "--cache-type-k-first") {
