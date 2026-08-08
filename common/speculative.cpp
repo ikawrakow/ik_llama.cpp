@@ -30,6 +30,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
     COMMON_SPECULATIVE_TYPE_DFLASH,
+    COMMON_SPECULATIVE_TYPE_DSPARK,
     COMMON_SPECULATIVE_TYPE_MTP,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
@@ -44,6 +45,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"dflash",        COMMON_SPECULATIVE_TYPE_DFLASH},
+    {"dspark",        COMMON_SPECULATIVE_TYPE_DSPARK},
     {"mtp",           COMMON_SPECULATIVE_TYPE_MTP},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
@@ -1210,6 +1212,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
         case COMMON_SPECULATIVE_TYPE_DFLASH:        return "dflash";
+        case COMMON_SPECULATIVE_TYPE_DSPARK:        return "dspark";
         case COMMON_SPECULATIVE_TYPE_MTP:           return "mtp";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
@@ -1288,12 +1291,12 @@ common_speculative * common_speculative_init(
     }
 
     const bool has_dflash_stage = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params & stage) {
-        return stage.type == COMMON_SPECULATIVE_TYPE_DFLASH;
+        return common_speculative_type_is_dflash_family(stage.type);
     });
 
     const bool needs_draft_ctx = std::any_of(stages.begin(), stages.end(), [&params](const common_speculative_stage_params & stage) {
         return stage.type == COMMON_SPECULATIVE_TYPE_DRAFT ||
-               stage.type == COMMON_SPECULATIVE_TYPE_DFLASH ||
+               common_speculative_type_is_dflash_family(stage.type) ||
                (stage.type == COMMON_SPECULATIVE_TYPE_MTP && params.model_dft != nullptr);
     });
 
@@ -1314,7 +1317,7 @@ common_speculative * common_speculative_init(
 
             int32_t max_cross_ctx = 0;
             for (const auto & stage : stages) {
-                if (stage.type != COMMON_SPECULATIVE_TYPE_DFLASH) {
+                if (!common_speculative_type_is_dflash_family(stage.type)) {
                     continue;
                 }
 
@@ -1401,14 +1404,16 @@ common_speculative * common_speculative_init(
                 ));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_DFLASH: {
+            case COMMON_SPECULATIVE_TYPE_DFLASH:
+            case COMMON_SPECULATIVE_TYPE_DSPARK: {
                 auto state = std::make_unique<common_speculative_state_dflash>(
                     config.type,
                     ctx_tgt,
                     ctx_dft,
                     config.params.dflash_cross_ctx);
                 if (!state->ready) {
-                    LOG_ERR("%s: failed to initialize DFlash speculative state\n", __func__);
+                    LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
+                            common_speculative_type_to_str(config.type).c_str());
                     return nullptr;
                 }
                 impls.push_back(std::move(state));
@@ -1501,7 +1506,8 @@ common_speculative * common_speculative_init(
     } else if (params.autotune && !result->impls.empty()) {
         auto actual_type = result->impls[0]->type;
         if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
-            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
+            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3 &&
+            actual_type != COMMON_SPECULATIVE_TYPE_DSPARK) {
             result->tuner = std::make_unique<spec_tuner>();
             result->tuner->init(actual_type, result->configs[0].params, llama_get_model(ctx_tgt));
             LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
@@ -1666,6 +1672,16 @@ static bool common_speculative_has_type(const common_speculative * spec, common_
     });
 }
 
+static bool common_speculative_has_dflash_family(const common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    return std::any_of(spec->configs.begin(), spec->configs.end(), [](const common_speculative_config & config) {
+        return common_speculative_type_is_dflash_family(config.type);
+    });
+}
+
 static int common_speculative_ctx_mtp_n_embd(llama_context * ctx) {
     return ctx ? (int) llama_mtp_state_n_embd(ctx) : 0;
 }
@@ -1804,7 +1820,7 @@ static bool common_speculative_collect_target_batch_features(
         const llama_batch & batch,
         common_speculative_feature_view & features) {
     features = {};
-    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH)) {
+    if (common_speculative_has_dflash_family(spec)) {
         return llama_spec_get_dflash_feature_view(ctx, batch, features);
     }
 
@@ -1826,7 +1842,7 @@ static bool common_speculative_collect_target_seq_batch_features(
         llama_seq_id seq_id,
         common_speculative_feature_view & features) {
     features = {};
-    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH)) {
+    if (common_speculative_has_dflash_family(spec)) {
         return llama_spec_get_dflash_feature_view_for_seq(ctx, batch, seq_id, features);
     }
 
@@ -1912,8 +1928,13 @@ int common_speculative_get_configured_n_max(const common_speculative * spec) {
 }
 
 static bool common_speculative_has_target_features(const common_speculative * spec) {
-    return common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) ||
-        common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH);
+    if (spec == nullptr) {
+        return false;
+    }
+
+    return std::any_of(spec->configs.begin(), spec->configs.end(), [](const common_speculative_config & config) {
+        return common_speculative_type_uses_target_features(config.type);
+    });
 }
 
 bool common_speculative_load_draft_model(
@@ -1958,7 +1979,7 @@ bool common_speculative_load_draft_model(
     if (params_dft.n_ctx == 0) {
         params_dft.n_ctx = params.n_ctx;
     }
-    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH) && params_dft.n_gpu_layers < 0) {
+    if (params.has_dflash_family_stage() && params_dft.n_gpu_layers < 0) {
         params_dft.n_gpu_layers = params_base.n_gpu_layers;
     }
     params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
@@ -2280,7 +2301,7 @@ bool common_speculative_copy_output_hidden_rows(
         const std::vector<int32_t> & output_indices,
         std::vector<float> & hidden_rows) {
     hidden_rows.clear();
-    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH)) {
+    if (common_speculative_has_dflash_family(spec)) {
         return llama_spec_copy_dflash_rows_from_output_indices(ctx, output_indices, hidden_rows);
     }
 
@@ -2706,7 +2727,7 @@ static common_speculative_state_dflash * common_speculative_get_dflash_state(com
     }
 
     for (auto & impl : spec->impls) {
-        if (impl->type != COMMON_SPECULATIVE_TYPE_DFLASH) {
+        if (!common_speculative_type_is_dflash_family(impl->type)) {
             continue;
         }
 

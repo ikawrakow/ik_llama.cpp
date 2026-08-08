@@ -2823,6 +2823,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_gemma4_mtp();
             } break;
+        case LLM_ARCH_DFLASH:
         case LLM_ARCH_DFLASH_DRAFT:
             {
                 result = llm.build_dflash();

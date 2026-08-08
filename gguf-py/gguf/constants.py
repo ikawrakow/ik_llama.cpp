@@ -403,6 +403,9 @@ class MODEL_TENSOR(IntEnum):
     DFLASH_FC            = auto()
     DFLASH_HIDDEN_NORM   = auto()
     DFLASH_AUX_HIDDEN_NORM = auto()
+    DSPARK_MARKOV_W1     = auto() # DSpark Markov lookup matrix
+    DSPARK_MARKOV_W2     = auto() # DSpark Markov projection matrix
+    DSPARK_CONF_PROJ     = auto() # DSpark confidence projection
     ATTN_KV              = auto()
     ATTN_KV_NORM         = auto()
     ATTN_OUT_A           = auto()
@@ -632,6 +635,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DFLASH_FC:                 "dflash_fc",
     MODEL_TENSOR.DFLASH_HIDDEN_NORM:        "dflash_hidden_norm",
     MODEL_TENSOR.DFLASH_AUX_HIDDEN_NORM:    "dflash_aux_hidden_norm.{bid}",
+    MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
+    MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
+    MODEL_TENSOR.DSPARK_CONF_PROJ:          "conf_proj",
     # openPangu-2.0
     MODEL_TENSOR.INDEXER_K_NORM:            "blk.{bid}.attn_indexer_k_norm",
     MODEL_TENSOR.INDEXER_PROJ:              "blk.{bid}.attn_indexer_weights_proj",
@@ -1560,6 +1566,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DFLASH_FC,
         MODEL_TENSOR.DFLASH_HIDDEN_NORM,
         MODEL_TENSOR.DFLASH_AUX_HIDDEN_NORM,
+        # optional DSpark heads
+        MODEL_TENSOR.DSPARK_MARKOV_W1,
+        MODEL_TENSOR.DSPARK_MARKOV_W2,
+        MODEL_TENSOR.DSPARK_CONF_PROJ,
     ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,

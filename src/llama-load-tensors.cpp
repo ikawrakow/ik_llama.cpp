@@ -103,6 +103,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_dflash_tensors(const LLM_TN & tn);
 
+    bool create_dflash_dsv4_tensors(const LLM_TN & tn);
+
     bool create_starcoder2_tensors(const LLM_TN & tn);
 
     bool create_mamba_tensors(const LLM_TN & tn);
@@ -2346,6 +2348,24 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
     model.output_mtp = model.output;
     model.dflash_fc = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "weight"), {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
     model.dflash_hidden_norm = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_HIDDEN_NORM, "weight"), {n_embd}, 0);
+
+    const ggml_tensor * markov_w1_meta = ml.get_tensor_meta("markov_w1.weight");
+    if (markov_w1_meta != nullptr) {
+        const int64_t markov_rank = markov_w1_meta->ne[0];
+        model.dspark_markov_w1 = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), {markov_rank, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_markov_w2 = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), {markov_rank, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_conf_proj = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), {n_embd + markov_rank, 1},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_conf_proj_b = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"), {1},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+    }
+
     model.dflash_aux_hidden_norms.clear();
     if (hparams.dflash_laguna) {
         GGML_ASSERT(hparams.dflash_n_target_layers > 0);
@@ -2391,6 +2411,82 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
         layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
         layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
         layer.ffn_up = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP, "weight", i), {n_embd, n_ff}, 0);
+    }
+
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_dflash_dsv4_tensors(const LLM_TN &) {
+    LOADING_PRELUDE
+
+    // DSV4 draft share token embedding and output head.
+    model.tok_embd = nullptr;
+    model.output = nullptr;
+    model.output_mtp = nullptr;
+
+    auto create_tensor_from_meta = [&](ggml_context * ctx, const std::string & name, int flags = 0) -> ggml_tensor * {
+        ggml_tensor * meta = (flags & (llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP))
+            ? ml.get_tensor_meta(name.c_str())
+            : ml.require_tensor_meta(name.c_str());
+        if (meta == nullptr) {
+            return nullptr;
+        }
+
+        std::vector<int64_t> ne;
+        const int n_dims = ggml_n_dims(meta);
+        ne.reserve(n_dims);
+        for (int d = 0; d < n_dims; ++d) {
+            ne.push_back(meta->ne[d]);
+        }
+        return create_tensor(ctx, name, ne, flags);
+    };
+
+    model.output_norm = create_tensor_from_meta(ctx_output, "output_norm.weight");
+    model.dflash_fc = create_tensor_from_meta(ctx_output, "fc.weight");
+    model.dflash_hidden_norm = create_tensor_from_meta(ctx_output, "enc.output_norm.weight");
+    model.hc_head_base = create_tensor_from_meta(ctx_output, "output_hc_base.weight");
+    model.hc_head_fn = create_tensor_from_meta(ctx_output, "output_hc_fn.weight");
+    model.hc_head_scale = create_tensor_from_meta(ctx_output, "output_hc_scale.weight");
+    model.dspark_markov_w1 = create_tensor_from_meta(ctx_output, "markov_w1.weight");
+    model.dspark_markov_w2 = create_tensor_from_meta(ctx_output, "markov_w2.weight");
+    model.dspark_conf_proj = create_tensor_from_meta(ctx_output, "conf_proj.weight");
+    model.dspark_conf_proj_b = create_tensor_from_meta(ctx_output, "conf_proj.bias", llama_model_loader::TENSOR_NOT_REQUIRED);
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+        auto & layer = model.layers[i];
+        const auto block = [i](const char * stem) { return format("blk.%d.%s.weight", i, stem); };
+
+        layer.attn_norm = create_tensor_from_meta(ctx_split, block("attn_norm"));
+        layer.attn_sinks = create_tensor_from_meta(ctx_split, block("attn_sinks"));
+        layer.wq_a = create_tensor_from_meta(ctx_split, block("attn_q_a"));
+        layer.attn_q_a_norm = create_tensor_from_meta(ctx_split, block("attn_q_a_norm"));
+        layer.wq_b = create_tensor_from_meta(ctx_split, block("attn_q_b"));
+        layer.wkv_latent = create_tensor_from_meta(ctx_split, block("attn_kv"));
+        layer.wkv_b = layer.wkv_latent;
+        layer.wkv_a_mqa = layer.wkv_latent;
+        layer.attn_kv_a_norm = create_tensor_from_meta(ctx_split, block("attn_kv_a_norm"));
+        layer.attn_kv_norm = layer.attn_kv_a_norm;
+        layer.wo_a = create_tensor_from_meta(ctx_split, block("attn_output_a"));
+        layer.wo_b = create_tensor_from_meta(ctx_split, block("attn_output_b"));
+        layer.wo = layer.wo_b;
+
+        layer.hc_attn_base = create_tensor_from_meta(ctx_split, block("hc_attn_base"));
+        layer.hc_attn_fn = create_tensor_from_meta(ctx_split, block("hc_attn_fn"));
+        layer.hc_attn_scale = create_tensor_from_meta(ctx_split, block("hc_attn_scale"));
+        layer.hc_ffn_base = create_tensor_from_meta(ctx_split, block("hc_ffn_base"));
+        layer.hc_ffn_fn = create_tensor_from_meta(ctx_split, block("hc_ffn_fn"));
+        layer.hc_ffn_scale = create_tensor_from_meta(ctx_split, block("hc_ffn_scale"));
+
+        layer.ffn_norm = create_tensor_from_meta(ctx_split, block("ffn_norm"));
+        layer.ffn_gate_inp = create_tensor_from_meta(ctx_split, block("ffn_gate_inp"));
+        layer.ffn_gate_exps = create_tensor_from_meta(ctx_split, block("ffn_gate_exps"));
+        layer.ffn_down_exps = create_tensor_from_meta(ctx_split, block("ffn_down_exps"));
+        layer.ffn_up_exps = create_tensor_from_meta(ctx_split, block("ffn_up_exps"));
+        layer.ffn_gate_shexp = create_tensor_from_meta(ctx_split, block("ffn_gate_shexp"));
+        layer.ffn_down_shexp = create_tensor_from_meta(ctx_split, block("ffn_down_shexp"));
+        layer.ffn_up_shexp = create_tensor_from_meta(ctx_split, block("ffn_up_shexp"));
+        layer.ffn_exp_probs_b = create_tensor_from_meta(ctx_split, format("blk.%d.exp_probs_b.bias", i));
     }
 
     return use_mmap_buffer;
@@ -4932,6 +5028,8 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_GEMMA4_MTP:
         case LLM_ARCH_GEMMA4_ASSISTANT:
             use_mmap_buffer = create_gemma4_mtp_tensors(tn); break;
+        case LLM_ARCH_DFLASH:
+            use_mmap_buffer = create_dflash_dsv4_tensors(tn); break;
         case LLM_ARCH_DFLASH_DRAFT:
             use_mmap_buffer = create_dflash_tensors(tn); break;
         case LLM_ARCH_STARCODER2:
