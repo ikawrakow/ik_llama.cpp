@@ -92,15 +92,6 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         size_t per_row = size_t(n_kv)*(q->ne[1]*sizeof(half) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
         int max_rows = (k_max_buf_size + per_row - 1)/per_row;
         max_rows = std::min<int>(max_rows, q->ne[2]);
-        //int max_rows = 1;
-        //while (true) {
-        //    if (max_rows >= int(q->ne[2])) break;
-        //    if (per_row*max_rows*2 > k_max_buf_size) break;
-        //    max_rows *= 2;
-        //}
-        //max_rows = std::min<int>(max_rows, q->ne[2]);
-        ////constexpr int k_max_rows = 16;
-        //int max_rows = std::min<int>(k_max_rows, q->ne[2]);
         int nstep = (q->ne[2] + max_rows - 1)/max_rows;
 
         ggml_cuda_pool_alloc<half>  kq(ctx.pool(), int64_t(n_kv)*q->ne[1]*max_rows);
@@ -113,9 +104,6 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
         const half alpha = 1.0f;
         const half beta = 0.0f;
-
-        //printf("========================================= %s: n_kv = %d, q->ne[2] = %ld, max_rows = %d, nstep = %d -> %g MiB\n", __func__,
-        //        n_kv, q->ne[2], max_rows, nstep, 1.*max_rows*per_row/1024./1024.);
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
 
@@ -151,10 +139,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             }
             CUDA_CHECK(cudaGetLastError());
 
-            //auto tim1 = ggml_time_us();
             argsort_f32_i32_cuda_cub(ctx.pool(), score.get(), sorted.get(), k->ne[1], nrows, GGML_SORT_ORDER_DESC, ctx.stream());
-            //auto tim2 = ggml_time_us();
-            //printf("argsort_f32_i32(%s,%d,%d): %d us\n", dst->name, first_row, last_row, int(tim2-tim1));
             CUDA_CHECK(cudaGetLastError());
 
             k_copy_topk<<<nrows, k_block_size, 0, ctx.stream()>>>(sorted.get(),
