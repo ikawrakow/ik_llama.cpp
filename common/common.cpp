@@ -1338,6 +1338,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.nrep = std::stoi(argv[i]);
         return true;
     }
+    if (params.sweep_bench && arg == "--sweep-stride") {
+        CHECK_ARG
+        params.sweep_stride = std::stoi(argv[i]);
+        return true;
+    }
+    if (params.sweep_bench && arg == "--sweep-memory") {
+        params.sweep_memory = true;
+        return true;
+    }
     if (arg == "--samplers") {
         CHECK_ARG
         const auto sampler_names = string_split(argv[i], ";");
@@ -3394,6 +3403,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "bench",       "-ntg n0,n1,...",                "number of text generation tokens" });
     options.push_back({ "bench",       "-npl n0,n1,...",                "number of parallel prompts" });
     options.push_back({ "bench",       "-nrep,  --n-repetitions N",     "number of repetitions (default: %d)", params.nrep });
+    if (params.sweep_bench) {
+        options.push_back({ "bench",   "        --sweep-stride N",       "measure every Nth sweep row (default: %d)", params.sweep_stride });
+        options.push_back({ "bench",   "        --sweep-memory",         "report RSS high-water and sampled VRAM delta" });
+    }
     options.push_back({ "bench",       "-wb,    --warmup-batch",         "run a warmup batch before measurement" });
     options.push_back({ "bench",       "       --output-format FORMAT",  "output format: table, jsonl, or csv (default: table)" });
 
