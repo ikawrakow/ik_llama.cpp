@@ -565,6 +565,7 @@ struct llama_context::Prev {
     int64_t swa_w_view;
     int64_t swa_win_off;
     uint64_t seq_fingerprint;
+    uint64_t model_state_hash;
     ggml_cgraph * graph;
 };
 
@@ -593,20 +594,60 @@ static uint64_t llama_ubatch_seq_fingerprint(const llama_batch & b, const llm_ar
     return h;
 }
 
+static inline uint64_t model_state_hash(const llama_context & lctx) {
+    if (lctx.model.arch != LLM_ARCH_DEEPSEEK4) {
+        return 0ull;
+    }
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+    auto mix_plan = [&mix] (const llama_context::dsv4_runtime::comp_plan & plan) {
+        mix(plan.state_pos.size());
+        mix(plan.state_persist_src_idxs.size());
+        mix(plan.state_persist_dst_idxs.size());
+        mix(plan.state_read_idxs.size());
+        mix(plan.state_write_idxs.size());
+        mix(plan.state_write_pos.size());
+        mix(plan.n_kv);
+    };
+    mix_plan(lctx.dsv4.csa_plan);
+    mix_plan(lctx.dsv4.hca_plan);
+    mix_plan(lctx.dsv4.lid_plan);
+    mix(lctx.dsv4.raw.write_src_idxs.size());
+    mix(lctx.dsv4.raw.write_dst_idxs.size());
+    mix(lctx.dsv4.raw.read_dst_idxs.size());
+    //mix(lctx.dsv4.lid_plan.n_kv > lctx.model.hparams.indexer_top_k);
+    //for (auto n_vis : lctx.dsv4.hca_plan.n_visible) mix(n_vis > 0);
+    return h;
+}
+
 void llama_context::reset_scheduler() {
     ggml_backend_sched_reset(sched);
     prev.reset();
     prev_mtp.reset();
 }
 
-static void why_not_reuse_previous(const llama_batch & u_batch, const llama_context & ctx, const llama_context::Prev * the_prev) {
+static void why_not_reuse_previous(const llama_batch & u_batch, const llama_context & ctx, const llama_context::Prev * the_prev,
+        uint64_t seq_fingerprint, uint64_t model_state_hash) {
+    if (!ctx.cparams.graph_reuse) { printf("    graph_reuse is false\n"); return; }
     if (!the_prev) { printf("    previous is null\n"); return; }
     if (!the_prev->graph) { printf("    previous graph is null\n"); return; }
-    if (!ctx.cparams.graph_reuse) { printf("    graph_reuse is false\n"); return; }
     if (u_batch.embd) { printf("    ubatch.embd is not null\n"); return; }
+    if (seq_fingerprint != the_prev->seq_fingerprint) { printf("    fingerprint is not the same\n"); return; }
+    if (model_state_hash != the_prev->model_state_hash) { printf("    model state hash is not the same\n"); return; }
     if (u_batch.all_seq_id != the_prev->all_seq_id) { printf("    all_seq_id is not the same\n"); return; }
     auto & kv_self_used = (ctx.model.arch == LLM_ARCH_GEMMA4_MTP || ctx.model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
         ctx.mtp_target_ctx != nullptr ? ctx.mtp_target_ctx->kv_self : ctx.kv_self;
+    if (the_prev->save_per_step_ssm != kv_self_used.save_per_step_ssm ||
+        the_prev->per_step_max_allocated != kv_self_used.ckpt.per_step_max_allocated) { printf("    ssm not the same\n"); return; }
+    if (kv_self_used.any_compacted()) {
+        const auto view = llama_swa_calc_window_view_compact(
+                (int64_t) kv_self_used.live_swa() + u_batch.n_tokens, kv_self_used.sink_rows,
+                u_batch.n_tokens, kv_self_used.window_swa,
+                llama_kv_cache::get_padding(ctx.cparams.flash_attn));
+        if (view.w_view != the_prev->swa_w_view || view.win_off != the_prev->swa_win_off) {
+            printf("    SWA view is not the same\n"); return;
+        }
+    }
     if (kv_self_used.head == 0) { printf("    kv_self.head = 0\n"); return; }
     if (kv_self_used.n != the_prev->n_kv) { printf("    kv_self.n is not the same\n"); return; }
     if (ctx.n_outputs != the_prev->n_outputs) { printf("    n_outputs is not the same\n"); return; }
@@ -617,15 +658,13 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
     printf("    update_cache_copies() must have failed\n");
 }
 
-bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fingerprint) {
+bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fingerprint, uint64_t model_state_hash) {
     if (!cparams.graph_reuse) return false;
-    if (model.arch == LLM_ARCH_DEEPSEEK4) return false;
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     if (u_batch.embd) return false;
-    if (seq_fingerprint != the_prev->seq_fingerprint) {
-        return false;
-    }
+    if (seq_fingerprint != the_prev->seq_fingerprint) return false;
+    if (model_state_hash != the_prev->model_state_hash) return false;
     auto & kv_self_used = (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
                           mtp_target_ctx != nullptr ? mtp_target_ctx->kv_self : kv_self;
     if (the_prev->save_per_step_ssm != kv_self_used.save_per_step_ssm ||
@@ -650,13 +689,14 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fi
            update_cache_copies();
     if (false && !result) {
         printf("%s(%d):", __func__, cparams.mtp_op_type);
-        why_not_reuse_previous(u_batch, *this, the_prev);
+        why_not_reuse_previous(u_batch, *this, the_prev, seq_fingerprint, model_state_hash);
     }
     return result;
 }
 
 bool llama_context::update_cache_copies() {
     if (model.arch == LLM_ARCH_GEMMA4_MTP || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) return true;
+    if (model.arch == LLM_ARCH_DEEPSEEK4) return true;
     auto patch_dsa_cache_copies = [&]() -> bool {
         // DSA indexer-key cache: patch the kr_l write offset for reused graphs. Each
         // registered cpy writes this ubatch's index keys into kr_l at the kv_head slot;
@@ -709,9 +749,11 @@ bool llama_context::update_cache_copies() {
     };
 
     if ((int)kv_self.k_l.size() < n_layer) {
+        printf("%s: kv_self.k_l.size() < n_layer\n", __func__);
         return false;
     }
     if (!kv_self.v_l.empty() && (int)kv_self.v_l.size() < n_layer) {
+        printf("%s: !kv_self.v_l.empty() && (int)kv_self.v_l.size() < n_layer\n", __func__);
         return false;
     }
     for (int il = 0; il < n_layer; ++il) {
@@ -752,6 +794,7 @@ bool llama_context::update_cache_copies() {
         } else {
             auto& c = cache_copies[2*il+0];
             if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) {
+                printf("%s: K has no copy or is not a copy in layer %d\n", __func__, il);
                 return false;
             }
             c.cpy->view_offs = kv_self.head*c.step;
@@ -760,6 +803,7 @@ bool llama_context::update_cache_copies() {
             if (!kv_self.v_l.empty() && kv_self.v_l[il]) {
                 auto& c = cache_copies[2*il+1];
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) {
+                    printf("%s: V has no copy or is not a copy in layer %d\n", __func__, il);
                     return false;
                 }
                 c.cpy->view_offs = kv_self.head*c.step;
@@ -6323,6 +6367,9 @@ static int llama_decode_internal(
 
             // must run before can_reuse_graph()
             llama_kv_cache_compact_swa(lctx, u_batch.n_tokens);
+            if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, false, false)) {
+                return GGML_STATUS_FAILED;
+            }
         }
 
 #if IK_PRINT_TIMING
@@ -6335,7 +6382,8 @@ static int llama_decode_internal(
         auto & prev = cparams.mtp_op_type == MTP_OP_NONE ? lctx.prev : lctx.prev_mtp;
         ggml_cgraph * gf = nullptr;
         const uint64_t seq_fingerprint = llama_ubatch_seq_fingerprint(u_batch, lctx.model.arch);
-        if (!lctx.can_reuse_graph(u_batch, seq_fingerprint)) {
+        const uint64_t state_hash      = model_state_hash(lctx);
+        if (!lctx.can_reuse_graph(u_batch, seq_fingerprint, state_hash)) {
             lctx.reset_scheduler();
             ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 #if IK_PRINT_TIMING
@@ -6346,9 +6394,6 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
-            if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 && !llama_prepare_dsv4_graph_inputs(lctx, u_batch, false, false)) {
-                return GGML_STATUS_FAILED;
-            }
 
             gf = llm_build_context::llama_build_graph(lctx, u_batch, false);
 #if IK_PRINT_TIMING
@@ -6374,7 +6419,7 @@ static int llama_decode_internal(
                         cparams.mtp_op_type, lctx.mtp_step_idx, lctx.mtp_n_heads,
                         lctx.swa_window_view.w_view,
                         lctx.swa_window_view.win_off,
-                        seq_fingerprint, gf});
+                        seq_fingerprint, state_hash, gf});
             }
         } else {
             //printf("Reusing graph with type = %d, n_kv = %d, n_tokens = %d\n", cparams.mtp_op_type, (int)prev->n_kv, (int)prev->n_tokens);

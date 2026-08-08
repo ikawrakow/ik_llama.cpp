@@ -281,10 +281,6 @@ static ggml_tensor * dsv4_require_f32_rows(
     return ggml_cast(ctx, t, GGML_TYPE_F32);
 }
 
-static ggml_tensor * dsv4_cache_read_f32(ggml_context * ctx, ggml_tensor * t) {
-    return t != nullptr && ggml_is_quantized(t->type) ? ggml_cast(ctx, t, GGML_TYPE_F32) : t;
-}
-
 static ggml_tensor * dsv4_cache_stream_view_3d(
         ggml_context * ctx,
         ggml_tensor  * cache,
@@ -450,10 +446,10 @@ static ggml_tensor * dsv4_comp_get_k(
     }
 
     if (comp.sinfo.n_stream() == 0) {
-        return dsv4_cache_read_f32(ctx, ggml_reshape_4d(ctx, dsv4_cache_view_3d(ctx, cache, n_embd_head, n_kv), n_embd_head, 1, n_kv, 1));
+        return ggml_reshape_4d(ctx, dsv4_cache_view_3d(ctx, cache, n_embd_head, n_kv), n_embd_head, 1, n_kv, 1);
     }
 
-    return dsv4_cache_read_f32(ctx, dsv4_cache_stream_view_4d(ctx, cache, n_embd_head, n_kv, kv_size, comp.sinfo.s0, (int64_t) comp.sinfo.n_stream()));
+    return dsv4_cache_stream_view_4d(ctx, cache, n_embd_head, n_kv, kv_size, comp.sinfo.s0, (int64_t) comp.sinfo.n_stream());
 }
 
 static ggml_tensor * dsv4_comp_cpy_k(
@@ -1136,6 +1132,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         auto extra_k = cache;
         if (extra_k->ne[1] > 1) {
             extra_k = dsv4_comp_get_k(ctx0, cache, extra_ctx, n_embd_head, cache->ne[1]/n_stream);
+            cb(extra_k, "extra_k", il);
         }
         if (cparams.flash_attn) {
             extra_mask = dsv4_pad_mask_tokens(ctx0, extra_mask, n_tokens);
@@ -1158,6 +1155,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
         }
         if (raw_k->type != extra_k->type) {
             extra_k = ggml_cast(ctx0, extra_k, raw_k->type);
+            cb(extra_k, (tag + "_k_cast").c_str(), il);
         }
         ggml_tensor * k_all = ggml_concat(ctx0, raw_k, extra_k, 2);
         ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, extra_mask, 0);
@@ -1190,6 +1188,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
                 // raw_kv and csa_kv concetenation much less expensive for long context.
                 csa_kv = ggml_get_rows_ext(ctx0, csa_kv, top_k, true, false);
                 csa_kv = ggml_reshape_3d(ctx0, csa_kv, csa_kv->ne[0], 1, csa_kv->ne[1]);
+                cb(csa_kv, "csa_kv_getrows", il);
                 csa_mask = ggml_get_rows_ext(ctx0, csa_mask, top_k, true, true);
             } else {
                 csa_mask = build_top_k_mask(ctx0, dsv4_build_raw_mask_view(ctx0, lctx.dsv4.inputs.csa.kq_mask, nullptr,

@@ -70,7 +70,8 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     int n_kv    = k->ne[1];
     int n_head  = q->ne[1];
     //if (k->type != GGML_TYPE_F16 && !ggml_is_quantized(k->type)) printf("%s: K is %s?\n", __func__, ggml_type_name(k->type));
-    GGML_ASSERT(k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || ggml_is_quantized(k->type));
+    GGML_ASSERT(k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_BF16 ||
+                k->type == GGML_TYPE_F32 || ggml_is_quantized(k->type));
     GGML_ASSERT(k->ne[2] == 1 || k->ne[3] == 1);
     GGML_ASSERT(k->ne[1] > n_top_k);
     GGML_ASSERT(k->ne[1] == m->ne[0]);
@@ -87,8 +88,10 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     constexpr int k_block_size = 256;
 
     if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32) {
-        constexpr int k_max_rows = 16;
-        int max_rows = std::min<int>(k_max_rows, q->ne[2]);
+        constexpr size_t k_max_buf_size = 1 << 28;
+        size_t per_row = size_t(n_kv)*(q->ne[1]*sizeof(half) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
+        int max_rows = (k_max_buf_size + per_row - 1)/per_row;
+        max_rows = std::min<int>(max_rows, q->ne[2]);
         int nstep = (q->ne[2] + max_rows - 1)/max_rows;
 
         ggml_cuda_pool_alloc<half>  kq(ctx.pool(), int64_t(n_kv)*q->ne[1]*max_rows);
@@ -102,15 +105,17 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         const half alpha = 1.0f;
         const half beta = 0.0f;
 
+        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
+
         for (int istep = 0; istep < nstep; ++istep) {
             int first_row = max_rows*istep;
-            int last_row  = std::min(first_row + k_max_rows, int(q->ne[2]));
+            if (first_row >= int(q->ne[2])) break;
+            int last_row  = std::min(first_row + max_rows, int(q->ne[2]));
             int nrows     = last_row - first_row;
 
             to_fp16_cuda((const float *)q->data + q->ne[0]*q->ne[1]*first_row, q_f16.get(), q->ne[0]*q->ne[1]*nrows, 1, ctx.stream());
             CUDA_CHECK(cudaGetLastError());
 
-            CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
             CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
                     &alpha, (const half *)k->data,       CUDA_R_16F, k->ne[0],
@@ -159,16 +164,21 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     ggml_cuda_pool_alloc<int>   sorted(ctx.pool(), int64_t(n_kv)*max_rows);
     ggml_cuda_pool_alloc<float> k_f32(ctx.pool());
     ggml_cuda_pool_alloc<char>  q_converted(ctx.pool());
+    const float * k_data = nullptr;
+    int k_ld = k->ne[0];
     auto q_padded = GGML_PAD(q->ne[0], MATRIX_ROW_PADDING);
     if (ggml_is_quantized(k->type)) {
         auto nbytes_q = (size_t)(q_padded/QK8_1) * ((size_t) q->ne[1] * max_rows) * sizeof(block_q8_1);
         nbytes_q += get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
         q_converted.alloc(nbytes_q);
+    } else if (k->type == GGML_TYPE_F32) {
+        k_data = (const float *) k->data;
+        k_ld   = k->nb[1]/sizeof(float);
     } else {
         k_f32.alloc(k->ne[0]*k->ne[1]);
-        auto to_fp32_cuda = ggml_get_to_fp32_cuda(k->type);
-        to_fp32_cuda(k->data, k_f32.get(), k->ne[1]*k->ne[0], 1, ctx.stream());
+        ggml_get_to_fp32_cuda(k->type)(k->data, k_f32.get(), k->ne[1]*k->ne[0], 1, ctx.stream());
         CUDA_CHECK(cudaGetLastError());
+        k_data = k_f32.get();
     }
 
     for (int istep = 0; istep < nstep; ++istep) {
@@ -177,6 +187,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         int nrows = last - first;
         auto q_data = (const char *)q->data + istep*max_rows*q->nb[2];
         auto m_data = (const char *)m->data + istep*max_rows*m->nb[1];
+        auto w_data = (const float *)w->data + first*q->ne[1];
         if (ggml_is_quantized(k->type)) {
             quantize_mmq_q8_1_cuda((const float *)q_data, q_converted.get(), q->ne[0], q->ne[1]*nrows, 1, q_padded, k->type, ctx.stream());
             CUDA_CHECK(cudaGetLastError());
@@ -193,15 +204,15 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(ctx.device), ctx.stream()));
             CUBLAS_CHECK(cublasSgemm(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
-                    &alpha,     k_f32.get(),  k->ne[0],
+                    &alpha,     k_data,                k_ld,
                        (const float *)q_data, q->ne[0],
                     &beta,      kq.get(),     k->ne[1]));
         }
         if (m->type == GGML_TYPE_F32) {
-            k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const float *)m_data,
+            k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const float *)m_data,
                     score.get(), k->ne[1], q->ne[1], m->nb[1]);
         } else {
-            k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), (const float *)w->data, (const half  *)m_data,
+            k_fused_relu_mul_sum_rows<<<nrows, k_block_size, 0, ctx.stream()>>>(kq.get(), w_data, (const half  *)m_data,
                     score.get(), k->ne[1], q->ne[1], m->nb[1]);
         }
         CUDA_CHECK(cudaGetLastError());
