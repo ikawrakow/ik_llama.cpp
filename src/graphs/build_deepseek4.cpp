@@ -1521,7 +1521,9 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
     ggml_set_input(lctx.dflash.inputs.kq_mask_swa);
     cb(lctx.dflash.inputs.kq_mask_swa, "dsv4_dflash_kq_mask_swa", -1);
 
-    lctx.dflash.kv.draft_tail_rows_tensor = nullptr;
+    lctx.dflash.kv.draft_tail_rows_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(lctx.dflash.kv.draft_tail_rows_tensor);
+    cb(lctx.dflash.kv.draft_tail_rows_tensor, "dflash_draft_tail_rows", -1);
 
     ggml_tensor * tok_embd = model.tok_embd;
     GGML_ASSERT(tok_embd != nullptr);
@@ -1535,59 +1537,38 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
         ggml_tensor * qr = llm_build_lora_mm(lctx, ctx0, layer.wq_a, input);
         qr = llm_build_norm(ctx0, qr, hparams, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, cb, il);
         ggml_tensor * q = llm_build_lora_mm(lctx, ctx0, layer.wq_b, qr);
-        q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
+        q = ggml_reshape_2d(ctx0, q, n_embd_head, n_head * n_tokens);
         q = ggml_rms_norm(ctx0, q, hparams.f_norm_rms_eps);
-
-        ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_nope, n_head, n_tokens,
-                ggml_row_size(q->type, n_embd_head),
-                ggml_row_size(q->type, n_embd_head) * n_head, 0);
-        ggml_tensor * q_pe = ggml_view_3d(ctx0, q, n_embd_head_rope, n_head, n_tokens,
-                ggml_row_size(q->type, n_embd_head),
-                ggml_row_size(q->type, n_embd_head) * n_head,
-                ggml_row_size(q->type, n_embd_head_nope));
-        q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+        q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
+        q = ggml_rope_ext_inplace(ctx0, q, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        q = ggml_concat(ctx0, q_nope, q_pe, 0);
+        q->op_params[15] = 1;
         cb(q, "dsv4_dflash_q", il);
 
         ggml_tensor * kv = llm_build_lora_mm(lctx, ctx0, layer.wkv_latent, input);
         kv = llm_build_norm(ctx0, kv, hparams, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, cb, il);
         kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
 
-        ggml_tensor * kv_nope = ggml_view_3d(ctx0, kv, n_embd_head_nope, 1, n_tokens,
-                ggml_row_size(kv->type, n_embd_head), ggml_row_size(kv->type, n_embd_head), 0);
-        ggml_tensor * kv_pe = ggml_view_3d(ctx0, kv, n_embd_head_rope, 1, n_tokens,
-                ggml_row_size(kv->type, n_embd_head), ggml_row_size(kv->type, n_embd_head),
-                ggml_row_size(kv->type, n_embd_head_nope));
-        kv_pe = ggml_rope_ext(ctx0, kv_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+        kv = ggml_rope_ext_inplace(ctx0, kv, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        kv = ggml_concat(ctx0, kv_nope, kv_pe, 0);
-        kv = ggml_cont(ctx0, ggml_permute(ctx0, kv, 0, 2, 1, 3));
+        kv->op_params[15] = 1;
+        kv = ggml_permute(ctx0, kv, 0, 2, 1, 3);
         cb(kv, "dsv4_dflash_kv", il);
 
-
-        ggml_tensor * Kdst = ggml_view_3d(ctx0, lctx.dflash.kv.k_ctx_cache[il],
-                lctx.dflash.kv.k_ctx_cache[il]->ne[0], n_tokens,
-                lctx.dflash.kv.k_ctx_cache[il]->ne[2],
-                lctx.dflash.kv.k_ctx_cache[il]->nb[1],
-                lctx.dflash.kv.k_ctx_cache[il]->nb[2],
-                (size_t) ctx_len * lctx.dflash.kv.k_ctx_cache[il]->nb[1]);
-        ggml_tensor * Vdst = ggml_view_3d(ctx0, lctx.dflash.kv.v_ctx_cache[il],
-                lctx.dflash.kv.v_ctx_cache[il]->ne[0], n_tokens,
-                lctx.dflash.kv.v_ctx_cache[il]->ne[2],
-                lctx.dflash.kv.v_ctx_cache[il]->nb[1],
-                lctx.dflash.kv.v_ctx_cache[il]->nb[2],
-                (size_t) ctx_len * lctx.dflash.kv.v_ctx_cache[il]->nb[1]);
-        ggml_tensor * Kcopy = ggml_cpy(ctx0, kv, Kdst);
-        ggml_tensor * Vcopy = ggml_cpy(ctx0, kv, Vdst);
-        ggml_build_forward_expand(gf, Kcopy);
-        ggml_build_forward_expand(gf, Vcopy);
-        ggml_tensor * Kcur = ggml_view_3d(ctx0, lctx.dflash.kv.k_ctx_cache[il],
+        ggml_tensor * Kcur = ggml_set_rows(ctx0, lctx.dflash.kv.k_ctx_cache[il], kv,
+                lctx.dflash.kv.draft_tail_rows_tensor);
+        ggml_tensor * Vcur = ggml_set_rows(ctx0, lctx.dflash.kv.v_ctx_cache[il], kv,
+                lctx.dflash.kv.draft_tail_rows_tensor);
+        cb(Kcur, "dsv4_dflash_k_set_tail", il);
+        cb(Vcur, "dsv4_dflash_v_set_tail", il);
+        ggml_build_forward_expand(gf, Kcur);
+        ggml_build_forward_expand(gf, Vcur);
+        Kcur = ggml_view_3d(ctx0, lctx.dflash.kv.k_ctx_cache[il],
                 lctx.dflash.kv.k_ctx_cache[il]->ne[0], n_kv_total,
                 lctx.dflash.kv.k_ctx_cache[il]->ne[2],
                 lctx.dflash.kv.k_ctx_cache[il]->nb[1],
                 lctx.dflash.kv.k_ctx_cache[il]->nb[2], 0);
-        ggml_tensor * Vcur = ggml_view_3d(ctx0, lctx.dflash.kv.v_ctx_cache[il],
+        Vcur = ggml_view_3d(ctx0, lctx.dflash.kv.v_ctx_cache[il],
                 lctx.dflash.kv.v_ctx_cache[il]->ne[0], n_kv_total,
                 lctx.dflash.kv.v_ctx_cache[il]->ne[2],
                 lctx.dflash.kv.v_ctx_cache[il]->nb[1],
@@ -1607,15 +1588,10 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
         ggml_build_forward_expand(gf, attn);
 
         attn = ggml_reshape_3d(ctx0, attn, n_embd_head, n_head, n_tokens);
-        ggml_tensor * out_nope = ggml_view_3d(ctx0, attn, n_embd_head_nope, n_head, n_tokens,
-                ggml_row_size(attn->type, n_embd_head), ggml_row_size(attn->type, n_embd_head) * n_head, 0);
-        ggml_tensor * out_pe = ggml_view_3d(ctx0, attn, n_embd_head_rope, n_head, n_tokens,
-                ggml_row_size(attn->type, n_embd_head), ggml_row_size(attn->type, n_embd_head) * n_head,
-                ggml_row_size(attn->type, n_embd_head_nope));
-        out_pe = ggml_rope_ext(ctx0, out_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+        attn = ggml_rope_ext_inplace(ctx0, attn, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                 freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        out_pe->op = GGML_OP_ROPE_BACK;
-        attn = ggml_concat(ctx0, out_nope, out_pe, 0);
+        attn->op = GGML_OP_ROPE_BACK;
+        attn->op_params[15] = 1;
 
         const int64_t o_group_dim = layer.wo_a->ne[0];
         const int64_t n_groups = (n_head * n_embd_head) / o_group_dim;
@@ -1668,13 +1644,24 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
             inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
     out = llm_build_norm(ctx0, out, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
     out = build_output(lctx, ctx0, out, model.output, nullptr, cb);
-    cb(out, "result_output", -1);
+    if (lctx.dflash.dspark) {
+        cb(out, "dflash_base_result_output", -1);
+    } else {
+        cb(out, "result_output", -1);
+    }
     ggml_build_forward_expand(gf, out);
 
     lctx.dflash.draft_tokens_tensor = nullptr;
-    ggml_tensor * result = lctx.dflash.dspark ? build_dspark_logits(*this, out, lctx.inp_tokens) : out;
-    ggml_tensor * draft_tokens = ggml_argmax(ctx0, result);
+    ggml_tensor * draft_tokens = nullptr;
+    ggml_tensor * result = out;
+    if (lctx.dflash.dspark) {
+        result = build_dspark_logits(*this, out, lctx.inp_tokens, &draft_tokens);
+        cb(result, "result_output", -1);
+    } else {
+        draft_tokens = ggml_argmax(ctx0, result);
+    }
     ggml_set_name(draft_tokens, "draft_argmax");
+    ggml_build_forward_expand(gf, result);
     ggml_build_forward_expand(gf, draft_tokens);
     lctx.dflash.draft_tokens_tensor = draft_tokens;
     return gf;

@@ -182,6 +182,7 @@ void llama_context::free_dflash_kv_cache_tensors() {
     dflash.kv.cache_graph_write_pos = 0;
     dflash.kv.cache_input_target_features = nullptr;
     dflash.kv.cache_input_pos_ctx = nullptr;
+    dflash.kv.cache_input_rows = nullptr;
     dflash.kv.kq_mask_tensor = nullptr;
     dflash.kv.kq_mask_swa_tensor = nullptr;
     dflash.kv.draft_tail_rows_tensor = nullptr;
@@ -436,8 +437,7 @@ bool llama_prepare_dflash_graph_inputs(
                 __func__, n_kv_total, cross_ctx + (int32_t) n_tokens);
         return false;
     }
-    if (!lctx.model.hparams.dflash_dsv4 &&
-            (draft_tail_rows == nullptr || draft_tail_rows->type != GGML_TYPE_I32 || draft_tail_rows->ne[0] != (int64_t) n_tokens)) {
+    if (draft_tail_rows == nullptr || draft_tail_rows->type != GGML_TYPE_I32 || draft_tail_rows->ne[0] != (int64_t) n_tokens) {
         LLAMA_LOG_ERROR("%s: DFlash draft tail row input is not initialized for n_tokens=%u\n", __func__, n_tokens);
         return false;
     }
@@ -545,12 +545,15 @@ bool llama_prepare_dflash_graph_inputs(
         ggml_cgraph * gf_kv = nullptr;
         const bool can_reuse_kv_graph = lctx.dflash.kv.cache_graph != nullptr &&
                 lctx.dflash.kv.cache_graph_rows == update_rows &&
-                lctx.dflash.kv.cache_graph_write_pos == lctx.dflash.kv.cache_write_pos;
+                (lctx.model.hparams.dflash_dsv4 ||
+                 lctx.dflash.kv.cache_graph_write_pos == lctx.dflash.kv.cache_write_pos);
         if (can_reuse_kv_graph) {
             gf_kv = lctx.dflash.kv.cache_graph;
         } else {
             gf_kv = llm_build_context::llama_build_graph_dflash_kv_cache(lctx);
-            if (gf_kv == nullptr || lctx.dflash.kv.cache_input_target_features == nullptr || lctx.dflash.kv.cache_input_pos_ctx == nullptr) {
+            if (gf_kv == nullptr || lctx.dflash.kv.cache_input_target_features == nullptr ||
+                    lctx.dflash.kv.cache_input_pos_ctx == nullptr ||
+                    (lctx.model.hparams.dflash_dsv4 && lctx.dflash.kv.cache_input_rows == nullptr)) {
                 LLAMA_LOG_ERROR("%s: failed to build DFlash K/V cache graph\n", __func__);
                 return false;
             }
@@ -575,6 +578,20 @@ bool llama_prepare_dflash_graph_inputs(
             ggml_backend_tensor_set_async(kv_pos_backend, lctx.dflash.kv.cache_input_pos_ctx, update_pos, 0, ggml_nbytes(lctx.dflash.kv.cache_input_pos_ctx));
         } else {
             ggml_backend_tensor_set(lctx.dflash.kv.cache_input_pos_ctx, update_pos, 0, ggml_nbytes(lctx.dflash.kv.cache_input_pos_ctx));
+        }
+        if (lctx.model.hparams.dflash_dsv4) {
+            std::vector<int32_t> update_rows_idx((size_t) update_rows);
+            for (int32_t i = 0; i < update_rows; ++i) {
+                update_rows_idx[(size_t) i] = (cache_write_start + i) % cross_ctx;
+            }
+            ggml_backend_t kv_rows_backend = llama_backend_for_tensor(lctx, lctx.dflash.kv.cache_input_rows);
+            if (kv_rows_backend != nullptr) {
+                ggml_backend_tensor_set_async(kv_rows_backend, lctx.dflash.kv.cache_input_rows,
+                        update_rows_idx.data(), 0, ggml_nbytes(lctx.dflash.kv.cache_input_rows));
+            } else {
+                ggml_backend_tensor_set(lctx.dflash.kv.cache_input_rows, update_rows_idx.data(), 0,
+                        ggml_nbytes(lctx.dflash.kv.cache_input_rows));
+            }
         }
         llama_graph_compute_sched(lctx, lctx.dflash.kv.cache_sched, gf_kv, lctx.cparams.n_threads);
         ggml_backend_sched_synchronize(lctx.dflash.kv.cache_sched);
@@ -612,13 +629,11 @@ bool llama_prepare_dflash_graph_inputs(
         }
     }
 
-    if (!lctx.model.hparams.dflash_dsv4) {
-        std::vector<int32_t> draft_tail_rows_data((size_t) n_tokens);
-        for (uint32_t i = 0; i < n_tokens; ++i) {
-            draft_tail_rows_data[(size_t) i] = cross_ctx + (int32_t) i;
-        }
-        ggml_backend_tensor_set(draft_tail_rows, draft_tail_rows_data.data(), 0, ggml_nbytes(draft_tail_rows));
+    std::vector<int32_t> draft_tail_rows_data((size_t) n_tokens);
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        draft_tail_rows_data[(size_t) i] = cross_ctx + (int32_t) i;
     }
+    ggml_backend_tensor_set(draft_tail_rows, draft_tail_rows_data.data(), 0, ggml_nbytes(draft_tail_rows));
 
     const size_t mask_elems = (size_t) n_kv_total * (size_t) n_mask_tokens;
     if (kq_mask == nullptr) {

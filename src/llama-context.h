@@ -439,6 +439,7 @@ struct llama_context {
             int32_t cache_graph_write_pos = 0;
             struct ggml_tensor * cache_input_target_features = nullptr;
             struct ggml_tensor * cache_input_pos_ctx = nullptr;
+            struct ggml_tensor * cache_input_rows = nullptr;
             struct ggml_tensor * kq_mask_tensor = nullptr;
             struct ggml_tensor * kq_mask_swa_tensor = nullptr;
             struct ggml_tensor * draft_tail_rows_tensor = nullptr;
