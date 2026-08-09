@@ -313,9 +313,17 @@ struct mtmd_context {
             //image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
         }
         else if (proj == PROJECTOR_TYPE_KIMIK25) {
-            // template renders: <|media_begin|>image<|media_content|> <pad/embeddings> <|media_end|>
-            img_beg = "<|media_begin|>image<|media_content|>";
-            img_end = "<|media_end|>";
+            // GLM-5.2-V reuses the Kimi-K2.5 vision encoder and projector, but marks
+            // images with its own tokens, so decide based on the text model vocab
+            if (lookup_token("<|begin_of_image|>") != LLAMA_TOKEN_NULL) {
+                // <|begin_of_image|> ... (image embeddings) ... <|end_of_image|>
+                img_beg = "<|begin_of_image|>";
+                img_end = "<|end_of_image|>";
+            } else {
+                // template renders: <|media_begin|>image<|media_content|> <pad/embeddings> <|media_end|>
+                img_beg = "<|media_begin|>image<|media_content|>";
+                img_end = "<|media_end|>";
+            }
         }
     }
 
