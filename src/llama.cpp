@@ -9793,13 +9793,18 @@ struct llama_data_write {
         write(&v_state, sizeof(v_state));
         write(&n_layer, sizeof(n_layer));
 
+        const bool openpangu_partial = llama_kv_has_openpangu_partial_state(kv_self, ctx->model.arch, flags);
+
         // Iterate and write all the keys first, each row is a cell
         // Get whole range at a time
         for (uint32_t il = 0; il < n_layer; ++il) {
             const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
-            const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
+            // a compacted layer holds the only copy of its window, so partial state has to carry it.
+            // the openPangu layout is excluded: it records no live_swa(), and seq_rm can move head_swa
+            // between save and restore, so writer and reader would disagree on the row count.
+            const bool has_k_cache = kv_self.k_l[il] != nullptr && (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
 
             // Write key type
             const int32_t k_type_i = has_k_cache ? (int32_t) kv_self.k_l[il]->type : -1;
@@ -9895,7 +9900,6 @@ struct llama_data_write {
             }
         }
 
-        const bool openpangu_partial = llama_kv_has_openpangu_partial_state(kv_self, ctx->model.arch, flags);
         const uint32_t qnext_state = (llama_kv_has_qnext_state_storage(kv_self) || openpangu_partial) ? 1 : 0;
         write(&qnext_state, sizeof(qnext_state));
 
@@ -10437,12 +10441,14 @@ struct llama_data_read {
             return false;
         }
 
+        const bool openpangu_partial = llama_kv_has_openpangu_partial_state(kv_self, ctx->model.arch, flags);
+
         // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
         for (uint32_t il = 0; il < n_layer; ++il) {
             const uint32_t n_embd_k_gqa = llama_kv_k_row_embd(ctx->model, hparams, il);
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
-            const bool has_k_cache = kv_self.k_l[il] != nullptr && need_kv;
+            const bool has_k_cache = kv_self.k_l[il] != nullptr && (need_kv || (!openpangu_partial && kv_self.is_compacted((int) il)));
 
 
             // Read type of key
@@ -10608,7 +10614,6 @@ struct llama_data_read {
         uint32_t qnext_state_ref = 0;
         read_to(&qnext_state_ref, sizeof(qnext_state_ref));
 
-        const bool openpangu_partial = llama_kv_has_openpangu_partial_state(kv_self, ctx->model.arch, flags);
         const bool has_qnext_state = llama_kv_has_qnext_state_storage(kv_self) || openpangu_partial;
         if ((qnext_state_ref != 0) != has_qnext_state) {
             LLAMA_LOG_ERROR("%s: incompatible qwen3next state cache presence\n", __func__);
