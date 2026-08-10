@@ -216,13 +216,17 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                         work_m[j] = M[idx[j]];
                         if (j % nth == ith) {
                             std::memcpy(work_k + row_size_k*j, ((const char *)k + idx[j]*stride_k), row_size_k);
-                            std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
+                            if (k != v) {
+                                std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
+                            }
                         }
                     } else {
                         work_m[j] = h_inf;
                         if (j % nth == ith) {
                             std::memset(work_k + row_size_k*j, 0, row_size_k);
-                            std::memset(work_v + row_size_v*j, 0, row_size_v);
+                            if (k != v) {
+                                std::memset(work_v + row_size_v*j, 0, row_size_v);
+                            }
                         }
                     }
                 }
@@ -234,7 +238,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 auto this_qkv = qkv + first*nb1/sizeof(float);
                 if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
                          Dk, Dv, neq2_this_thread, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
-                         (const float *)this_q, work_k, work_v, work_m, (const float *)sinks, 1,
+                         (const float *)this_q, work_k, k == v ? work_k : work_v, work_m, (const float *)sinks, 1,
                          scale, softcap,
                          this_qkv, nullptr, nullptr)) return false;
                 return true;
@@ -261,12 +265,16 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 for (int j = 0; j < nkv; ++j) {
                     if (idx[j] >= 0) {
                         std::memcpy(work_k + row_size_k*j, ((const char *)k + idx[j]*stride_k), row_size_k);
-                        std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
+                        if (k != v) {
+                            std::memcpy(work_v + row_size_v*j, ((const char *)v + idx[j]*stride_v), row_size_v);
+                        }
                         work_m[j] = M[idx[j]];
                         last_found = j;
                     } else {
                         std::memset(work_k + row_size_k*j, 0, row_size_k);
-                        std::memset(work_v + row_size_v*j, 0, row_size_v);
+                        if (k != v) {
+                            std::memset(work_v + row_size_v*j, 0, row_size_v);
+                        }
                         work_m[j] = h_inf;
                     }
                 }
@@ -277,7 +285,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 auto this_qkv = qkv + iq*ne1*nb1/sizeof(float);
                 if (!iqk_flash_attn_impl(int_type_k_in, int_type_v,
                          Dk, Dv, neq2, this_nkv, nbq2, row_size_k, row_size_v, 0, Dv,
-                         (const float *)this_q, work_k, work_v, work_m, (const float *)sinks, 1,
+                         (const float *)this_q, work_k, k == v ? work_k : work_v, work_m, (const float *)sinks, 1,
                          scale, softcap,
                          this_qkv, nullptr, nullptr)) return false;
             }
