@@ -87,7 +87,7 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
     constexpr int k_block_size = 256;
 
-    if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32) {
+    if ((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0) && q->type == GGML_TYPE_F32) {
         constexpr size_t k_max_buf_size = 1 << 28;
         size_t per_row = size_t(n_kv)*(q->ne[1]*sizeof(half) + sizeof(int) + sizeof(float)) + q->ne[0]*q->ne[1]*sizeof(half);
         int max_rows = (k_max_buf_size + per_row - 1)/per_row;
@@ -98,6 +98,17 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
         ggml_cuda_pool_alloc<float> score(ctx.pool(), int64_t(n_kv)*max_rows);
         ggml_cuda_pool_alloc<int>   sorted(ctx.pool(), int64_t(n_kv)*max_rows);
         ggml_cuda_pool_alloc<half>  q_f16(ctx.pool(), q->ne[0]*q->ne[1]*max_rows);
+        ggml_cuda_pool_alloc<half>  k_f16(ctx.pool());
+
+        auto k_data = (const half *)k->data;
+        if (k->type == GGML_TYPE_Q8_0) {
+            k_f16.alloc(k->ne[0]*k->ne[1]);
+            auto to_fp16_cuda = ggml_get_to_fp16_cuda(k->type);
+            GGML_ASSERT(to_fp16_cuda);
+            to_fp16_cuda(k->data, k_f16.get(), k->ne[0]*k->ne[1], 1, ctx.stream());
+            CUDA_CHECK(cudaGetLastError());
+            k_data = k_f16.get();
+        }
 
         auto to_fp16_cuda = ggml_get_to_fp16_cuda(q->type);
         GGML_ASSERT(to_fp16_cuda);
@@ -118,9 +129,9 @@ void ggml_cuda_op_indexer_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
             CUBLAS_CHECK(cublasGemmEx(ctx.cublas_handle(ctx.device), CUBLAS_OP_T, CUBLAS_OP_N,
                     k->ne[1], q->ne[1]*nrows, q->ne[0],
-                    &alpha, (const half *)k->data,       CUDA_R_16F, k->ne[0],
-                             q_f16.get(),       CUDA_R_16F, q->ne[0],
-                    &beta,   kq.get(), CUDA_R_16F, k->ne[1],
+                    &alpha, k_data,       CUDA_R_16F, k->ne[0],
+                            q_f16.get(),  CUDA_R_16F, q->ne[0],
+                    &beta,  kq.get(),     CUDA_R_16F, k->ne[1],
                     CUBLAS_COMPUTE_16F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
