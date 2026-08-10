@@ -85,6 +85,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
+    { LLM_ARCH_DFLASH,          "dflash"       },
     { LLM_ARCH_DFLASH_DRAFT,    "dflash-draft" },
     { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4-assistant"   },
     { LLM_ARCH_OPENPANGU,       "openpangu"    },
@@ -167,6 +168,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DFLASH_BLOCK_SIZE,                 "%s.dflash.block_size"                 },
     { LLM_KV_DFLASH_MASK_TOKEN_ID,              "%s.dflash.mask_token_id"              },
     { LLM_KV_DFLASH_TARGET_LAYER_IDS,           "%s.dflash.target_layer_ids"           },
+    { LLM_KV_DFLASH_TARGET_LAYERS,              "%s.target_layers"                      },
     { LLM_KV_DFLASH_N_TARGET_FEATURES,          "%s.dflash.n_target_features"          },
     { LLM_KV_DFLASH_BACKBONE_ROTARY_BASE,       "%s.dflash.backbone_rotary_base"       },
     { LLM_KV_DFLASH_LAGUNA,                     "%s.dflash.laguna"                     },
@@ -317,4 +319,8 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     default:
         return false;
     }
+}
+
+bool llm_arch_is_dflash_family(const llm_arch & arch) {
+    return arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_DFLASH_DRAFT;
 }

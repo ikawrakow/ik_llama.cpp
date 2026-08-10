@@ -96,6 +96,14 @@ common_time_meas::~common_time_meas() {
     }
 }
 
+bool common_speculative_type_is_dflash_family(enum common_speculative_type type) {
+    return type == COMMON_SPECULATIVE_TYPE_DFLASH || type == COMMON_SPECULATIVE_TYPE_DSPARK;
+}
+
+bool common_speculative_type_uses_target_features(enum common_speculative_type type) {
+    return type == COMMON_SPECULATIVE_TYPE_MTP || common_speculative_type_is_dflash_family(type);
+}
+
 bool common_speculative_type_is_self_spec(enum common_speculative_type type) {
     switch (type) {
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -202,6 +210,20 @@ bool common_params_speculative::has_stage_type(common_speculative_type stage_typ
     });
 }
 
+bool common_params_speculative::has_dflash_family_stage() const {
+    const auto resolved = get_resolved_stages();
+    return std::any_of(resolved.begin(), resolved.end(), [](const common_speculative_stage_params & stage) {
+        return common_speculative_type_is_dflash_family(stage.type);
+    });
+}
+
+bool common_params_speculative::uses_target_features() const {
+    const auto resolved = get_resolved_stages();
+    return std::any_of(resolved.begin(), resolved.end(), [](const common_speculative_stage_params & stage) {
+        return common_speculative_type_uses_target_features(stage.type);
+    });
+}
+
 void common_params_speculative::remove_stage_type(common_speculative_type stage_type) {
     stages.erase(std::remove_if(stages.begin(), stages.end(), [stage_type](const common_speculative_stage_params & stage) {
         return stage.type == stage_type;
@@ -219,7 +241,7 @@ bool common_params_speculative::has_composite_stage_chain() const {
 
 bool common_params_speculative::needs_dft_model() const {
     return has_stage_type(COMMON_SPECULATIVE_TYPE_DRAFT) ||
-        has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH) ||
+        has_dflash_family_stage() ||
         (has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && has_dft());
 }
 
@@ -295,12 +317,12 @@ bool common_speculative_validate_chain(const common_params_speculative & params,
             return fail("speculative stage has n_min greater than n_max");
         }
 
-        if ((stage.type == COMMON_SPECULATIVE_TYPE_DRAFT || stage.type == COMMON_SPECULATIVE_TYPE_DFLASH) && !params.has_dft()) {
+        if ((stage.type == COMMON_SPECULATIVE_TYPE_DRAFT || common_speculative_type_is_dflash_family(stage.type)) && !params.has_dft()) {
             return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires a draft model or draft params");
         }
 
-        if (stage.type == COMMON_SPECULATIVE_TYPE_DFLASH && stage_params.dflash_cross_ctx < 1) {
-            return fail("dflash speculative stage requires cross_ctx >= 1");
+        if (common_speculative_type_is_dflash_family(stage.type) && stage_params.dflash_cross_ctx < 1) {
+            return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires cross_ctx >= 1");
         }
     }
 
@@ -3366,7 +3388,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  cpu          serialise architecture state via host storage; re-decode on rejection\n"
                                                               "  --recurrent-ckpt-mode remains as a deprecated alias" });
     options.push_back({ "*", "--spec-type SPEC[:k=v,...]",      "canonical speculative stage entry; repeat for a supported two-stage chain.\n"
-                                                              "types: none, draft, dflash, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
+                                                              "types: none, draft, dflash, dspark, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
                                                               "canonical keys: n_max,n_min,p_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
                                                               "MTP heads: heads=1 is the default; heads>1 and heads=0 (all model heads) are experimental\n"
                                                               "for comma-bearing string values, quote the value inside the stage payload for normal shell use\n"
