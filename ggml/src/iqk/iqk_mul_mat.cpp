@@ -1960,7 +1960,15 @@ size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor * dst, int nthread
     auto k = dst->src[0];
     auto q = dst->src[1];
     if (q->ne[2] >= nthread) {
-        return iqk_idx_topk_work_wbs_per_thread(dst, nthread) * nthread;
+        size_t common_size = 0;
+        auto requant_type = MulMat::is_dequant_better(k->type, q->ne[1]);
+        if (requant_type != k->type) {
+            int nr = MulMat::num_rows(requant_type);
+            if (k->ne[1] % nr == 0 && k->ne[1] % k_indexer_chunks == 0 && k_indexer_chunks % nr == 0) {
+                common_size = ggml_row_size(requant_type, k->ne[0]) * k->ne[1];
+            }
+        }
+        return common_size + iqk_idx_topk_work_wbs_per_thread(dst, nthread) * nthread;
     }
     size_t size = 0;
     auto tt = ggml_internal_get_type_traits(k->type);
@@ -1999,10 +2007,27 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     if (m->type != GGML_TYPE_F32 && m->type != GGML_TYPE_F16) return false;
 
     auto work_size = iqk_idx_topk_work_wbs_per_thread(dst, nth);
-    auto work = (char *)work_buffer + ith*work_size;
+    auto work_all = (char *)work_buffer;
     ggml_from_float_t from_float = nullptr;
 
-    auto tt = ggml_internal_get_type_traits(k->type);
+    auto k_type = k->type;
+    int num_k_rows = 1;
+    if (q->ne[2] >= nth) {
+        auto requant_type = MulMat::is_dequant_better(k_type, q->ne[1]);
+        if (requant_type != k_type) {
+            int nr = MulMat::num_rows(requant_type);
+            if (k->ne[1] % nr == 0 && k->ne[1] % k_indexer_chunks == 0 && k_indexer_chunks % nr == 0) {
+                k_type = requant_type;
+                num_k_rows = nr;
+            }
+            //else if (ith == 0) {
+            //    printf("Not repacking K from %s to %s because %d, %d, %d\n", ggml_type_name(k->type), ggml_type_name(requant_type),
+            //            k->ne[1] % nr == 0, k->ne[1] % k_indexer_chunks == 0, k_indexer_chunks % nr == 0);
+            //}
+        }
+    }
+
+    auto tt = ggml_internal_get_type_traits(k_type);
 
     size_t quantize_size = 0;
     auto q_type = q->type;
@@ -2016,9 +2041,31 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
     }
 
     MulMat mm;
-    if (!MulMat::prepare(int(k->type), int(q_type), k->ne[0], mm, q->ne[1])) {
+    if (!MulMat::prepare(int(k_type), int(q_type), k->ne[0], mm, q->ne[1])) {
         return false;
     }
+
+    auto k_data = k->data;
+    auto k_nb1  = k->nb[1];
+    if (k_type != k->type) {
+        auto row_size = ggml_row_size(k_type, k->ne[0]);
+        k_data = work_all;
+        work_all += row_size * k->ne[1];
+        int nk_tot = k->ne[1] / num_k_rows;
+        int npt = (nk_tot + nth - 1)/nth;
+        int first = npt*ith;
+        int last  = std::min(nk_tot, first + npt);
+        if (last > first) {
+            if (!iqk_convert_repack(int(k->type), k->ne[0], (const char *)k->data + first*num_k_rows*k->nb[1], k->nb[1],
+                        (char *)k_data + first*num_k_rows*row_size, k->ne[0], (last - first)*num_k_rows)) {
+                GGML_ABORT("Fatal error");
+            }
+        }
+        k_nb1 = row_size;
+        barrier(barrier_data);
+    }
+
+    auto work = work_all + ith*work_size;
 
     if (q->ne[2] >= nth) {
         auto kq = (float *)(work + quantize_size);
@@ -2033,7 +2080,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             auto this_w = (const float *)((const char *)w->data + w->nb[1]*iq);
             bool done = false;
 #ifdef __AVX2__
-            if (k->type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && k->ne[1] % 32 == 0 && q->ne[1] % 8 == 0) {
+            if (k_type == GGML_TYPE_F16 && q->type == GGML_TYPE_F32 && k->ne[1] % 32 == 0 && q->ne[1] % 8 == 0) {
                 auto k_repacked = (float *)(sorted + k->ne[1]);
                 auto kq_local = k_repacked + 32*k->ne[0];
                 for (int ik = 0; ik < (int)k->ne[1]; ik += 32) {
@@ -2073,7 +2120,7 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
             for (int i_step = 0; i_step < n_step; ++i_step) {
                 int nk = std::min(k_indexer_chunks, int(k->ne[1]) - i_step*k_indexer_chunks);
                 DataInfo info{kq, this_q, (size_t)nk, (size_t)row_size_q, 0, 1, nullptr, 0};
-                mm.mul_mat_NxM(k->ne[0], (const char *)k->data + i_step*k_indexer_chunks*k->nb[1], k->nb[1], info, nk, q->ne[1]);
+                mm.mul_mat_NxM(k->ne[0], (const char *)k_data + i_step*k_indexer_chunks*k_nb1, k_nb1, info, nk, q->ne[1]);
 
                 auto kq_i = kq;
                 auto this_score = score + i_step*k_indexer_chunks;
