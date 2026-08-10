@@ -103,6 +103,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_dflash_tensors(const LLM_TN & tn);
 
+    bool create_dflash_dsv4_tensors(const LLM_TN & tn);
+
     bool create_starcoder2_tensors(const LLM_TN & tn);
 
     bool create_mamba_tensors(const LLM_TN & tn);
@@ -2346,6 +2348,24 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
     model.output_mtp = model.output;
     model.dflash_fc = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "weight"), {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
     model.dflash_hidden_norm = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_HIDDEN_NORM, "weight"), {n_embd}, 0);
+
+    const ggml_tensor * markov_w1_meta = ml.get_tensor_meta("markov_w1.weight");
+    if (markov_w1_meta != nullptr) {
+        const int64_t markov_rank = markov_w1_meta->ne[0];
+        model.dspark_markov_w1 = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), {markov_rank, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_markov_w2 = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), {markov_rank, n_vocab},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_conf_proj = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), {n_embd + markov_rank, 1},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.dspark_conf_proj_b = create_tensor(
+                ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"), {1},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+    }
+
     model.dflash_aux_hidden_norms.clear();
     if (hparams.dflash_laguna) {
         GGML_ASSERT(hparams.dflash_n_target_layers > 0);
@@ -2391,6 +2411,102 @@ bool create_tensors_helper::create_dflash_tensors(const LLM_TN & tn) {
         layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
         layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
         layer.ffn_up = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP, "weight", i), {n_embd, n_ff}, 0);
+    }
+
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_dflash_dsv4_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    // DSV4 draft share token embedding and output head.
+    model.tok_embd = nullptr;
+    model.output = nullptr;
+    model.output_mtp = nullptr;
+
+    const std::string markov_w1_name = tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight");
+    const std::string markov_w2_name = tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight");
+    const ggml_tensor * markov_w1_meta = ml.require_tensor_meta(markov_w1_name.c_str());
+    const ggml_tensor * markov_w2_meta = ml.require_tensor_meta(markov_w2_name.c_str());
+    if (ggml_n_dims(markov_w1_meta) != 2 || ggml_n_dims(markov_w2_meta) != 2 ||
+            markov_w1_meta->ne[0] <= 0 || markov_w1_meta->ne[1] != (int64_t) n_vocab ||
+            markov_w2_meta->ne[0] != markov_w1_meta->ne[0] || markov_w2_meta->ne[1] != markov_w1_meta->ne[1]) {
+        throw std::runtime_error(format("%s: invalid DSV4 Markov tensor shapes: %s=%s, %s=%s",
+                __func__, markov_w1_name.c_str(), llama_format_tensor_shape(markov_w1_meta).c_str(),
+                markov_w2_name.c_str(), llama_format_tensor_shape(markov_w2_meta).c_str()));
+    }
+    const int64_t markov_rank = markov_w1_meta->ne[0];
+
+    model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    model.dflash_fc = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_FC, "weight"),
+            {(int64_t) hparams.dflash_n_target_features, n_embd}, 0);
+    model.dflash_hidden_norm = create_tensor(ctx_output, tn(LLM_TENSOR_DFLASH_HIDDEN_NORM, "weight"), {n_embd}, 0);
+    model.hc_head_base = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_BASE, "weight"), {(int64_t) hparams.dsv4_hc_mult}, 0);
+    model.hc_head_fn = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_FN, "weight"),
+            {(int64_t) n_embd * hparams.dsv4_hc_mult, (int64_t) hparams.dsv4_hc_mult}, 0);
+    model.hc_head_scale = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
+    model.dspark_markov_w1 = create_tensor(ctx_output, markov_w1_name, {markov_rank, n_vocab}, 0);
+    model.dspark_markov_w2 = create_tensor(ctx_output, markov_w2_name, {markov_rank, n_vocab}, 0);
+    model.dspark_conf_proj = create_tensor(ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"),
+            {n_embd + markov_rank, 1}, 0);
+    model.dspark_conf_proj_b = create_tensor(ctx_output, tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"),
+            {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+        auto & layer = model.layers[i];
+        const int64_t n_head = hparams.n_head(i);
+        const int64_t n_embd_head = hparams.n_embd_head_k(i);
+        const int64_t q_lora_rank = hparams.n_lora_q;
+        const int64_t kv_lora_rank = hparams.n_lora_kv;
+        const int64_t o_group_dim = hparams.dsv4_o_group_count > 0
+                ? (n_head * n_embd_head) / hparams.dsv4_o_group_count : 0;
+        const int64_t o_lora_width = (int64_t) hparams.dsv4_o_lora_rank * hparams.dsv4_o_group_count;
+        const int64_t hc_width = (int64_t) hparams.dsv4_hc_mult * hparams.dsv4_hc_mult
+                + 2 * hparams.dsv4_hc_mult;
+        const std::string ffn_gate_exps_name = tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i);
+        const ggml_tensor * ffn_gate_exps_meta = ml.require_tensor_meta(ffn_gate_exps_name.c_str());
+        if (ggml_n_dims(ffn_gate_exps_meta) != 3 || ffn_gate_exps_meta->ne[0] != n_embd ||
+                ffn_gate_exps_meta->ne[1] <= 0 || ffn_gate_exps_meta->ne[2] != n_expert) {
+            throw std::runtime_error(format("%s: invalid DSV4 expert tensor shape at layer %d: %s=%s",
+                    __func__, i, ffn_gate_exps_name.c_str(), llama_format_tensor_shape(ffn_gate_exps_meta).c_str()));
+        }
+        const int64_t n_ff = ffn_gate_exps_meta->ne[1];
+        if (q_lora_rank <= 0 || kv_lora_rank <= 0 || o_group_dim <= 0 || o_lora_width <= 0 || hc_width <= 0) {
+            throw std::runtime_error(format("%s: invalid DSV4 derived tensor dimensions at layer %d", __func__, i));
+        }
+
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+        layer.attn_sinks = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
+        layer.wq_a = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_A, "weight", i), {n_embd, q_lora_rank}, 0);
+        layer.attn_q_a_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", i), {q_lora_rank}, 0);
+        layer.wq_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_B, "weight", i), {q_lora_rank, n_head * n_embd_head}, 0);
+        layer.wkv_latent = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_LATENT, "weight", i), {n_embd, kv_lora_rank}, 0);
+        layer.wkv_b = layer.wkv_latent;
+        layer.wkv_a_mqa = layer.wkv_latent;
+        layer.attn_kv_a_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", i), {kv_lora_rank}, 0);
+        layer.attn_kv_norm = layer.attn_kv_a_norm;
+        layer.wo_a = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT_A, "weight", i), {o_group_dim, o_lora_width}, 0);
+        layer.wo_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT_B, "weight", i), {o_lora_width, n_embd}, 0);
+        layer.wo = layer.wo_b;
+
+        layer.hc_attn_base = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_BASE, "weight", i), {hc_width}, 0);
+        layer.hc_attn_fn = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_FN, "weight", i), {n_embd * hparams.dsv4_hc_mult, hc_width}, 0);
+        layer.hc_attn_scale = create_tensor(ctx_split, tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, 0);
+        layer.hc_ffn_base = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_BASE, "weight", i), {hc_width}, 0);
+        layer.hc_ffn_fn = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_FN, "weight", i), {n_embd * hparams.dsv4_hc_mult, hc_width}, 0);
+        layer.hc_ffn_scale = create_tensor(ctx_split, tn(LLM_TENSOR_HC_FFN_SCALE, "weight", i), {3}, 0);
+
+        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        layer.ffn_gate_inp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+        layer.ffn_gate_exps = create_tensor(ctx_split, ffn_gate_exps_name, {n_embd, n_ff, n_expert}, 0);
+        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff, n_embd, n_expert}, 0);
+        layer.ffn_up_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), {n_embd, n_ff, n_expert}, 0);
+        const int64_t n_ff_shexp = n_ff * hparams.n_expert_shared;
+        layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, 0);
+        layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, 0);
+        layer.ffn_up_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), {n_embd, n_ff_shexp}, 0);
+        layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
     }
 
     return use_mmap_buffer;
@@ -4932,6 +5048,8 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_GEMMA4_MTP:
         case LLM_ARCH_GEMMA4_ASSISTANT:
             use_mmap_buffer = create_gemma4_mtp_tensors(tn); break;
+        case LLM_ARCH_DFLASH:
+            use_mmap_buffer = create_dflash_dsv4_tensors(tn); break;
         case LLM_ARCH_DFLASH_DRAFT:
             use_mmap_buffer = create_dflash_tensors(tn); break;
         case LLM_ARCH_STARCODER2:

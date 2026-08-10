@@ -439,6 +439,7 @@ struct llama_context {
             int32_t cache_graph_write_pos = 0;
             struct ggml_tensor * cache_input_target_features = nullptr;
             struct ggml_tensor * cache_input_pos_ctx = nullptr;
+            struct ggml_tensor * cache_input_rows = nullptr;
             struct ggml_tensor * kq_mask_tensor = nullptr;
             struct ggml_tensor * kq_mask_swa_tensor = nullptr;
             struct ggml_tensor * draft_tail_rows_tensor = nullptr;
@@ -472,9 +473,8 @@ struct llama_context {
         std::vector<float> feature_view_buffer;
         input_state inputs;
         int32_t visible_cross_ctx = 0;
+        bool dspark = false;
 
-        // Argmax token IDs from the DFlash draft graph, computed via GPU argmax.
-        // Populated in llama_decode_internal after graph compute.
         std::vector<llama_token> draft_tokens;
         struct ggml_tensor * draft_tokens_tensor = nullptr;
     };
