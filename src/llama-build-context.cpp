@@ -1111,7 +1111,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             llm_ffn_op_type   type_op,
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
-         bool is_norm, ggml_tensor * add_extra, ggml_tensor * post_norm) {
+         bool is_norm, ggml_tensor * add_extra,
+         ggml_tensor * post_norm, float post_norm_eps) {
 
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
@@ -1220,7 +1221,11 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             cb(cur, "ffn_down_s", il);
         }
         if (post_norm) {
-            cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+            if (post_norm_eps > 0.0f) {
+                cur = ggml_fused_rms_norm(ctx, cur, post_norm, post_norm_eps);
+            } else {
+                cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+            }
             cb(cur, "ffn_post_normed", il);
         }
         if (add_input) {
@@ -1364,7 +1369,11 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     }
 
     if (post_norm) {
-        cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+        if (post_norm_eps > 0.0f) {
+            cur = ggml_fused_rms_norm(ctx, cur, post_norm, post_norm_eps);
+        } else {
+            cur = llm_build_norm(ctx, cur, lctx.model.hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+        }
         cb(cur, "ffn_post_normed", il);
     }
 
@@ -3009,7 +3018,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         ggml_tensor * input, ggml_tensor * inp_pos, ggml_tensor * inp_out_ids, ggml_tensor * rope_factors_in,
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
         int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm, bool is_multi,
-        ggml_tensor * post_norm, int kv_il) {
+        ggml_tensor * post_norm, int kv_il, float post_norm_eps) {
 
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
@@ -3449,7 +3458,11 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     }
 
     if (post_norm) {
-        cur = llm_build_norm(ctx0, cur, hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+        if (post_norm_eps > 0) {
+            cur = ggml_fused_rms_norm(ctx0, cur, post_norm, post_norm_eps);
+        } else {
+            cur = llm_build_norm(ctx0, cur, hparams, post_norm, NULL, LLM_NORM_RMS, cb, il);
+        }
         cb(cur, "sa_normed", il);
     }
 
