@@ -37,6 +37,12 @@ enum llm_norm_type {
     LLM_NORM_RMS,
 };
 
+struct post_norm_data {
+    ggml_tensor * norm;
+    ggml_tensor * add;
+    float         f_rms_eps;
+};
+
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;
@@ -508,7 +514,8 @@ struct llm_build_context {
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false,
          bool is_norm = false, ggml_tensor * add_extra = nullptr,
-         ggml_tensor * post_norm = nullptr, float post_norm_eps = 0.0f);
+         ggml_tensor * post_norm = nullptr, float post_norm_eps = 0.0f,
+         post_norm_data * pnd = nullptr);
 
     static ggml_tensor * build_dspark_logits(llm_build_context & llm,
             ggml_tensor * base_logits, ggml_tensor * input_tokens,
@@ -599,7 +606,8 @@ llm_expert_gating_func_type   gating_op,
             ggml_tensor * inp_pos, ggml_tensor * inp_out_ids, ggml_tensor * rope_factors,
             ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
-            bool is_multi = false, ggml_tensor * post_norm = nullptr, int kv_il = -1, float post_norm_eps = 0.0f);
+            bool is_multi = false, ggml_tensor * post_norm = nullptr, int kv_il = -1, float post_norm_eps = 0.0f,
+            post_norm_data * pnd = nullptr);
 
     static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, const llm_build_cb & cb);
 

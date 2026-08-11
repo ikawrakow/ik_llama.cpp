@@ -5376,9 +5376,7 @@ bool create_tensors_helper::create_tensors() {
                 }
                 if (layer.wqkv_gate) {
                     auto wqkv_gate_split = split_kq;
-                    if (model.arch == LLM_ARCH_LAGUNA && layer.wqkv_gate->ne[1] == layer.wo->ne[0]) {
-                        // Full-width Laguna M.1 gates follow the value/output partition.
-                        // Head-wise gates still follow the K/Q partition collapsed by head size.
+                    if (layer.wqkv_gate->ne[1] == layer.wo->ne[0]) {
                         wqkv_gate_split = split_vo;
                     } else {
                         for (auto & s : wqkv_gate_split) s /= hparams.n_embd_head_k(il);
