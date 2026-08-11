@@ -3296,7 +3296,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         if (gate->ne[0] == n_embd_head_v * nh) {
                             gate = ggml_sigmoid(ctx0, gate);
                             cb(gate, "gate", il_cb);
-                            gate = ggml_reshape_3d(ctx0, gate, cur->ne[0], cur->ne[1], cur->ne[2]);
+                            cur = ggml_reshape_2d(ctx0, cur, gate->ne[0], gate->ne[1]);
+                            //gate = ggml_reshape_3d(ctx0, gate, cur->ne[0], cur->ne[1], cur->ne[2]);
                             cur = ggml_mul(ctx0, cur, gate);
                         } else {
                             auto gate_3d = ggml_reshape_3d(ctx0, gate, 1, nh, n_tokens);
