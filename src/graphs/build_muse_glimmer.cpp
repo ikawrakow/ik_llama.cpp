@@ -33,8 +33,6 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
 
     ggml_tensor * ffn_inp = nullptr;
 
-    //post_norm_data pnd;
-    //pnd.f_rms_eps = post_norm_eps;
     post_norm_data * pnd_ptr = nullptr;
 
     bool add_input = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? false : true;
@@ -43,61 +41,50 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
 
     std::vector<ggml_tensor *> pn_tensors;
 
+    auto do_post_norm = [&] (ggml_tensor * cur, ggml_tensor * post_norm, ggml_tensor * inp, const std::string & tag, int il, bool get_rows) {
+        GGML_ASSERT(cur->op == GGML_OP_REDUCE);
+        int n = cur->op_params[1];
+        if ((int)pn_tensors.size() != n) pn_tensors.resize(n);
+        for (int id = 0; id < n; ++id) {
+            if (!cur->src[id]) {
+                pn_tensors[id] = nullptr;
+                continue;
+            }
+            auto pn_extra = (ggml_split_tensor_t *)post_norm->extra;
+            GGML_ASSERT(pn_extra && pn_extra->splits[id]);
+            auto normed = ggml_fused_rms_norm(ctx0, cur->src[id], pn_extra->splits[id], post_norm_eps);
+            cb(normed, (tag + "_pn").c_str(), 1000*(il+1) + id);
+            auto add = get_input_tensor_sm_graph(ctx0, inp, id);
+            if (get_rows && il == n_active_layer - 1 && inp_out_ids) {
+                add = ggml_get_rows(ctx0, add, inp_out_ids);
+            }
+            auto added = ggml_add(ctx0, normed, add);
+            cb(added, (tag + "_pn_add").c_str(), 1000*(il+1) + id);
+            pn_tensors[id] = added;
+        }
+        cur = ggml_reduce(ctx0, pn_tensors.data(), n, GGML_OP_ADD);
+        cb(cur, (tag + "_final").c_str(), il);
+        cur->op_params[3] = 1;
+        ggml_build_forward_expand(gf, cur);
+        return cur;
+    };
+
     for (int il = 0; il < n_active_layer; ++il) {
 
         bool use_rope = hparams.swa_layers[il];
-        auto this_KQ_mask = use_rope ?  KQ_mask_swa : KQ_mask;
-        int this_n_swa = this_KQ_mask == KQ_mask_swa ? hparams.n_swa : 0;
+        auto this_KQ_mask = use_rope ? KQ_mask_swa : KQ_mask;
+        int this_n_swa = use_rope ? hparams.n_swa : 0;
 
-        //if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && il > 0) {
-        //    pnd.norm = model.layers[il-1].ffn_post_norm;
-        //    pnd.add  = ffn_inp;
-        //    pnd_ptr = &pnd;
-        //}
-
-        // self-attention
         cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
                 inp_pos, il == n_active_layer - 1 ? inp_out_ids : nullptr, nullptr,
                 this_KQ_mask, nullptr, nullptr, kq_scale, 0.0f, this_n_swa, il, use_rope, false, add_input, false, false,
                 model.layers[il].attn_post_norm, -1, post_norm_eps, pnd_ptr);
 
         if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-            GGML_ASSERT(cur->op == GGML_OP_REDUCE);
-            int n = cur->op_params[1];
-            if ((int)pn_tensors.size() != n) pn_tensors.resize(n);
-            for (int id = 0; id < n; ++id) {
-                if (!cur->src[id]) {
-                    pn_tensors[id] = nullptr;
-                    continue;
-                }
-                auto pn_extra = (ggml_split_tensor_t *)model.layers[il].attn_post_norm->extra;
-                GGML_ASSERT(pn_extra && pn_extra->splits[id]);
-                auto normed = ggml_fused_rms_norm(ctx0, cur->src[id], pn_extra->splits[id], post_norm_eps);
-                cb(normed, "attn_pn", 1000*(il+1) + id);
-                auto add = get_input_tensor_sm_graph(ctx0, inpL, id);
-                if (il == n_active_layer - 1 && inp_out_ids) {
-                    add = ggml_get_rows(ctx0, add, inp_out_ids);
-                }
-                auto added = ggml_add(ctx0, normed, add);
-                cb(added, "attn_pn_add", 1000*(il+1) + id);
-                pn_tensors[id] = added;
-            }
-            cur = ggml_reduce(ctx0, pn_tensors.data(), n, GGML_OP_ADD);
-            cb(cur, "attn_final", il);
-            cur->op_params[3] = 1;
-            ggml_build_forward_expand(gf, cur);
+            cur = do_post_norm(cur, model.layers[il].attn_post_norm, inpL, "attn", il, true);
         }
 
         ffn_inp = cur;
-
-        //if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        //    pnd.norm = model.layers[il].attn_post_norm;
-        //    if (il == n_active_layer - 1 && inp_out_ids) {
-        //        inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
-        //    }
-        //    pnd.add  = inpL;
-        //    pnd_ptr  = &pnd;
-        //}
 
         cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
                     model.layers[il].ffn_up,   nullptr, nullptr,
@@ -109,27 +96,7 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
         cb(cur, "ffn_out", il);
 
         if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-            GGML_ASSERT(cur->op == GGML_OP_REDUCE);
-            int n = cur->op_params[1];
-            if ((int)pn_tensors.size() != n) pn_tensors.resize(n);
-            for (int id = 0; id < n; ++id) {
-                if (!cur->src[id]) {
-                    pn_tensors[id] = nullptr;
-                    continue;
-                }
-                auto pn_extra = (ggml_split_tensor_t *)model.layers[il].ffn_post_norm->extra;
-                GGML_ASSERT(pn_extra && pn_extra->splits[id]);
-                auto normed = ggml_fused_rms_norm(ctx0, cur->src[id], pn_extra->splits[id], post_norm_eps);
-                cb(normed, "ffn_pn", 1000*(il+1) + id);
-                auto add = get_input_tensor_sm_graph(ctx0, ffn_inp, id);
-                auto added = ggml_add(ctx0, normed, add);
-                cb(added, "ffn_pn_add", 1000*(il+1) + id);
-                pn_tensors[id] = added;
-            }
-            cur = ggml_reduce(ctx0, pn_tensors.data(), n, GGML_OP_ADD);
-            cb(cur, "ffn_final", il);
-            cur->op_params[3] = 1;
-            ggml_build_forward_expand(gf, cur);
+            cur = do_post_norm(cur, model.layers[il].ffn_post_norm, ffn_inp, "ffn", il, false);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
@@ -139,18 +106,6 @@ ggml_cgraph * llm_build_context::build_muse_glimmer() {
         inpL = cur;
     }
     cur = inpL;
-
-    //if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-    //    if (inp_out_ids) {
-    //        ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
-    //    }
-    //    auto pn_extra = (ggml_split_tensor_t *)model.layers[n_active_layer-1].ffn_post_norm->extra;
-    //    GGML_ASSERT(pn_extra && pn_extra->splits[pn_extra->n_device-1]);
-    //    cur = ggml_fused_rms_norm(ctx0, cur, pn_extra->splits[pn_extra->n_device-1], post_norm_eps);
-    //    cb(cur, "ffn_post_norm", n_active_layer-1);
-    //    cur = ggml_add(ctx0, cur, ffn_inp);
-    //    cb(cur, "ffn_with_inp", n_active_layer-1);
-    //}
 
     // lm_head
     cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
