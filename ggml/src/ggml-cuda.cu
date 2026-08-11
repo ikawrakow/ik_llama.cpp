@@ -2042,7 +2042,7 @@ static void ggml_cuda_op_mul_mat(
 
         // If src0 is on a temporary compute buffer (partial offloading) there may be some padding that needs to be cleared:
         if (ne00 % MATRIX_ROW_PADDING != 0 && ggml_is_quantized(src0->type) && ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE && src0->view_src == nullptr) {
-            const int64_t nbytes_data    = ggml_row_size(src0->type, (dev[id].row_high - dev[id].row_low)*ne00);
+            const int64_t nbytes_data    = ggml_nbytes(src0);
             const int64_t nbytes_padding = ggml_row_size(src0->type, MATRIX_ROW_PADDING - ne00 % MATRIX_ROW_PADDING);
             CUDA_CHECK(cudaMemsetAsync(dev[id].src0_dd + nbytes_data , 0, nbytes_padding, stream));
         }
@@ -2647,8 +2647,11 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
     // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.
     // Therefore, in such cases use cuBLAS.
-    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
-        && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
+    const size_t src0_nbytes = ggml_nbytes(src0);
+    const size_t src0_alloc  = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
+    const bool   src0_padded = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
+        && src0_nbytes != src0_alloc;
+    const bool bad_padding_clear = src0_padded && src0->view_src;
 
     bool use_dequantize_mul_mat_vec = ggml_cuda_dmmv_type_supported(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
@@ -2672,6 +2675,10 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16 || !fast_fp16_available(cc);
 
     if ((use_mul_mat_vec_q || use_mul_mat_q) && src1->ne[2]*src1->ne[3] == 1) {
+        // This return does not go through ggml_cuda_op_mul_mat, which is where the padding is otherwise cleared.
+        if (src0_padded) {
+            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + src0_nbytes, 0, src0_alloc - src0_nbytes, ctx.stream()));
+        }
         return ggml_cuda_mul_mat_q(ctx, src0, src1, dst, cgraph, node_n, use_mul_mat_vec_q);
     }
 
