@@ -316,8 +316,15 @@ void server_context::init() {
             {"n_ctx_slot", slot.n_ctx}
             });
 
-        const int ga_n = params_base.grp_attn_n;
-        const int ga_w = params_base.grp_attn_w;
+        int ga_n = params_base.grp_attn_n;
+        int ga_w = params_base.grp_attn_w;
+
+        if (ga_n != 1 && !llama_supports_ctx_shift(slot.ctx)) {
+            // self-extend re-positions cached rows, which a compacted layer cannot represent
+            LOG_WARNING("%s\n", "self-extend is not supported with --swa-compress, it will be disabled");
+            ga_n = 1;
+            ga_w = 512;
+        }
 
         if (ga_n != 1) {
             GGML_ASSERT(ga_n > 0 && "ga_n must be positive");                       // NOLINT
@@ -1824,6 +1831,12 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             LOG_WARNING("%s\n", "ctx_shift is not supported by this model's KV cache, it will be disabled");
         }
     }
+    if (!llama_supports_ctx_shift(slot.ctx)) {
+        if (params_base.ctx_shift) {
+            params_base.ctx_shift = false;
+            LOG_WARNING("%s\n", "ctx_shift is not supported with --swa-compress, it will be disabled");
+        }
+    }
     {
         const auto& stop = data.find("stop");
         if (stop != data.end() && stop->is_array()) {
@@ -2951,10 +2964,6 @@ void server_context::process_single_task(server_task&& task) {
             send_error(task, "slot save is unsupported for openPangu because per-sequence file state is not implemented", ERROR_TYPE_NOT_SUPPORTED);
             break;
         }
-        if (!llama_supports_full_state_io(ctx)) {
-            send_error(task, "slot save is unsupported with --swa-compress because file-session state is not implemented for compacted contexts", ERROR_TYPE_NOT_SUPPORTED);
-            break;
-        }
 
         const size_t token_count = slot->cache_tokens.size();
         const int64_t t_start = ggml_time_us();
@@ -2996,10 +3005,6 @@ void server_context::process_single_task(server_task&& task) {
             // if requested slot is unavailable, we defer this task for processing later
             LOG_VERBOSE("requested slot is unavailable", { {"id_task", task.id} });
             queue_tasks.defer(std::move(task));
-            break;
-        }
-        if (!llama_supports_full_state_io(ctx)) {
-            send_error(task, "slot restore is unsupported with --swa-compress because file-session state is not implemented for compacted contexts", ERROR_TYPE_NOT_SUPPORTED);
             break;
         }
         const int64_t t_start = ggml_time_us();

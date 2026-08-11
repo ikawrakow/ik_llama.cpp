@@ -724,8 +724,9 @@ extern "C" {
     // Currently true for every model; no architecture is excluded from partial KV reuse.
     LLAMA_API bool llama_model_supports_partial_kv_reuse(const struct llama_model * model);
 
-    // false when the context cannot serialize whole-context or file-session state (--swa-compress); per-sequence buffer state is unaffected
-    LLAMA_API bool llama_supports_full_state_io(const struct llama_context * ctx);
+    // false when the context's KV cache cannot be re-positioned after the fact (--swa-compress).
+    // The model-level query above cannot answer this, because compaction is a context option.
+    LLAMA_API bool llama_supports_ctx_shift(const struct llama_context * ctx);
 
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 

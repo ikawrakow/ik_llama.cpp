@@ -12,7 +12,11 @@ ggml_cgraph * llm_build_context::build_laguna() {
     ggml_tensor * KQ_mask     = build_inp_KQ_mask();
     // Laguna M.1 has only global-attention layers and leaves n_swa at zero; building
     // the SWA mask in that case trips the generic SWA precondition.
-    ggml_tensor * KQ_mask_swa = hparams.n_swa > 0 ? build_inp_KQ_mask_swa() : nullptr;
+    ggml_tensor * KQ_mask_swa = hparams.n_swa > 0
+        ? kv_self.any_compacted()
+            ? build_swa_mask_for_graph(hparams.n_swa, true)
+            : build_inp_KQ_mask_swa()
+        : nullptr;
 
     for (int il = 0; il < n_layer; ++il) {
         const bool is_swa = hparams.swa_layers[il];
