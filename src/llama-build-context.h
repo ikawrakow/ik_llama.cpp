@@ -194,6 +194,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_llama();
 
+    ggml_cgraph * build_muse_glimmer();
+
     ggml_cgraph * build_mistral3();
 
     ggml_cgraph * build_deci();

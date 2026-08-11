@@ -1928,6 +1928,30 @@ void llm_load_hparams(
                     validate_dflash_hparams(hparams, model.arch);
                 }
             } break;
+        case LLM_ARCH_MUSE_GLIMMER:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+                ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
+                ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
+
+                hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+
+                if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false)) {
+                    uint32_t swa_period = 4;
+                    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period);
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        hparams.swa_layers[il] = (swa_period == 0 || (il % swa_period < swa_period - 1));
+                    }
+                }
+
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
+                    case 52: model.type = e_model::MODEL_30B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+
+            } break;
         default: (void)0;
     }
 

@@ -2680,6 +2680,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_llama();
             } break;
+        case LLM_ARCH_MUSE_GLIMMER:
+            {
+                result = llm.build_muse_glimmer();
+            } break;
         case LLM_ARCH_DECI:
             {
                 result = llm.build_deci();
@@ -3393,8 +3397,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cur = ggml_mul(ctx0, cur, gate);
             }
         } else {
-            auto gate_3d = ggml_reshape_3d(ctx0, gate, 1, n_head_l, n_tokens);
-            cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
+            if (gate->ne[0] == n_head_l) {
+                auto gate_3d = ggml_reshape_3d(ctx0, gate, 1, n_head_l, n_tokens);
+                cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SIGMOID);
+            } else {
+                GGML_ASSERT(gate->ne[0] == n_embd_head_v * n_head_l);
+                gate = ggml_sigmoid(ctx0, gate);
+                cur  = ggml_mul(ctx0, cur, gate);
+                //cur = ggml_fused_mul_unary(ctx0, gate, cur, GGML_UNARY_OP_SIGMOID);
+            }
         }
         cb(cur, "attn_gated_3d", il);
         cur = ggml_reshape_2d(ctx0, cur, n_embd_head_v * n_head_l, n_tokens);

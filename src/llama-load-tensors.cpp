@@ -41,6 +41,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_llama_tensors(const LLM_TN & tn);
 
+    bool create_muse_glimmer_tensors(const LLM_TN & tn);
+
     bool create_deci_tensors(const LLM_TN & tn);
 
     bool create_llama4_tensors(const LLM_TN & tn);
@@ -609,6 +611,40 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
                 }
             }
         }
+    }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_muse_glimmer_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+    create_embd_output(tn, n_embd, n_vocab, true);
+
+    for (int i = 0; i < n_layer; ++i) {
+        //ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+        auto & layer = model.layers[i];
+
+        layer.attn_norm      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd});
+        layer.attn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd});
+
+        use_mmap_buffer &= !merge_qkv(tn, i, 1);
+
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd});
+
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+
+        layer.wqkv_gate = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+
+        layer.ffn_norm      = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM,      "weight", i), {n_embd});
+        layer.ffn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd});
+
+        // Do we need this? Don't see rope freqa in the official Meta GGUF
+        //layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {n_embd/n_head/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
+
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+
     }
     return use_mmap_buffer;
 }
@@ -4977,6 +5013,8 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_MISTRAL3:
             use_mmap_buffer = create_llama_tensors(tn); break;
+        case LLM_ARCH_MUSE_GLIMMER:
+            use_mmap_buffer = create_muse_glimmer_tensors(tn); break;
         case LLM_ARCH_DECI:
             use_mmap_buffer = create_deci_tensors(tn); break;
         case LLM_ARCH_LLAMA4:
