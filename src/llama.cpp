@@ -6560,6 +6560,8 @@ static int llama_decode_internal(
                     lctx.dflash.draft_tokens_tensor,
                     lctx.dflash.draft_tokens.data(), 0,
                     (size_t) n_tokens_argmax * sizeof(int32_t));
+                // Synchronize argmax results before consuming them.
+                ggml_backend_synchronize(backend_argmax);
             }
         }
 
