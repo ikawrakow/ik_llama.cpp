@@ -3938,8 +3938,48 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 dst->ne[2] == 1 && cgraph->nodes[i+2]->ne[2] == 1) {
                 ggml_cuda_op_fused_rms_rms_norm(ctx, dst, cgraph->nodes[i+2]);
                 i += 2;
-            } else {
-                ggml_cuda_op_fused_rms_norm(ctx, dst);
+            }
+            else {
+                int inow = i;
+                // First try rms -> add -> rms
+                // This doesn't always work because the second rms result may get allocated on top of the
+                // first rms source
+                if (fusion && i + 2 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_ADD &&
+                    cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
+                    dst->src[0]->ne[1] == 1 &&
+                    dst->src[0]->type != GGML_TYPE_Q8_0 && // In case someone has decided to use Q8_0 as the graph reduce type
+                    cgraph->nodes[i+1]->src[0] == dst &&
+                    cgraph->nodes[i+2]->src[0] == cgraph->nodes[i+1] &&
+                    ggml_are_same_shape(dst, cgraph->nodes[i+1]->src[1])) {
+                    auto src0 = (const char *)dst->src[0]->data;
+                    auto src0_end = src0 + ggml_nbytes(dst->src[0]);
+                    auto add1 = (const char *)cgraph->nodes[i+1]->data;
+                    auto rms2 = (const char *)cgraph->nodes[i+2]->data;
+                    auto nbytes = ggml_nbytes(dst);
+                    bool overlap1 = add1 > src0 && add1 < src0_end;
+                    bool overlap2 = add1 + nbytes > src0 && add1 + nbytes < src0_end;
+                    bool overlap3 = add1 <= src0 && add1 + nbytes >= src0_end && !(add1 == src0 && add1 + nbytes == src0_end);
+                    bool overlap4 = rms2 > src0 && rms2 < src0_end;
+                    bool overlap5 = rms2 + nbytes > src0 && rms2 + nbytes < src0_end;
+                    bool overlap6 = rms2 <= src0 && rms2 + nbytes >= src0_end && !(rms2 == src0 && rms2 + nbytes == src0_end);
+                    if (!overlap1 && !overlap2 && !overlap3 && !overlap4 && !overlap5 && !overlap6) {
+                        ggml_cuda_op_fused_rms_add_rms(ctx, cgraph->nodes[i+2]);
+                        i += 2;
+                    }
+                }
+                // If that did not work, try rms -> add
+                if (fusion && inow == i && i + 1 < cgraph->n_nodes &&
+                    dst->src[0]->type != GGML_TYPE_Q8_0 && // In case someone has decided to use Q8_0 as the graph reduce type
+                    cgraph->nodes[i+1]->op == GGML_OP_ADD &&
+                    cgraph->nodes[i+1]->src[0] == dst &&
+                    ggml_are_same_shape(dst, cgraph->nodes[i+1]->src[1])) {
+                    ggml_cuda_op_fused_rms_add(ctx, cgraph->nodes[i+1]);
+                    i += 1;
+                }
+                if (inow == i) {
+                    ggml_cuda_op_fused_rms_norm(ctx, dst);
+                }
             }
             break;
         case GGML_OP_FUSED_RMS_RMS_ADD:
