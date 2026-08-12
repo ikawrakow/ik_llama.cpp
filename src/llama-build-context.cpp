@@ -3150,6 +3150,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         cb(Vcur, "Vcur_scales", il_cb);
                     }
                 }
+                ggml_build_forward_expand(gf, Qcur);
+                ggml_build_forward_expand(gf, Kcur);
                 auto rope_factors = rope_factors_in;
                 if (rope_factors) {
                     GGML_ASSERT(rope_factors->extra);
@@ -3175,6 +3177,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                                 ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
                         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                                 ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
+                        ggml_build_forward_expand(gf, Qcur);
+                        ggml_build_forward_expand(gf, Kcur);
                     }
                 }
                 cb(Qcur, "Qcur", il_cb);
