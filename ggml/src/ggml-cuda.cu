@@ -5341,6 +5341,7 @@ struct cuda_params {
     int  offload_batch_size_per_byte = -1;
     int  mmq_id_thresh = 32;
     float fa_offset = 0.6931f;
+    bool  fabsum = false;
 #ifdef USE_CUDA_GRAPH
     bool use_cuda_graph = true;
 #else
@@ -5399,6 +5400,9 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             }
             else if (parsed[0] == "mmq-id-size") {
                 is_good = read_value(parsed[1], params.mmq_id_thresh);
+            }
+            else if (parsed[0] == "fa-fabsum") {
+                is_good = read_value(parsed[1], params.fabsum);
             }
             else if (parsed[0] == "enable-p2p") {
                 is_good = read_value(parsed[1], params.enable_p2p);
@@ -5467,6 +5471,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         if (params.fa_offset != ctx->fa_offset) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting fa_offset to %g\n", __func__, params.fa_offset);
             ctx->fa_offset = params.fa_offset;
+        }
+        if (params.fabsum != ctx->fabsum) {
+            GGML_CUDA_LOG_INFO(" =========================== %s: setting fabsum to %d\n", __func__, params.fabsum);
+            ctx->fabsum = params.fabsum;
         }
         enable_p2p = params.enable_p2p;
 #ifdef USE_CUDA_GRAPH
