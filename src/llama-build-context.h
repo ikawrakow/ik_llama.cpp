@@ -38,8 +38,8 @@ enum llm_norm_type {
 };
 
 struct post_norm_data {
+    std::vector<ggml_tensor *> next_input;
     ggml_tensor * norm;
-    ggml_tensor * add;
     float         f_rms_eps;
 };
 

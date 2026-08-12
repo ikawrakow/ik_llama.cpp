@@ -1093,6 +1093,28 @@ ggml_tensor * llm_build_context::do_split_norm(ggml_context * ctx, ggml_tensor *
     return cur;
 }
 
+static ggml_tensor * llm_do_split_post_norm(ggml_context * ctx, ggml_tensor * cur, post_norm_data * pnd, int id, int n_device, const char * tag, int il_cb, const llm_build_cb & cb) {
+    auto pn_extra = (ggml_split_tensor_t *)pnd->norm->extra;
+    GGML_ASSERT(pn_extra && pn_extra->splits[id]);
+    GGML_ASSERT((int)pnd->next_input.size() == n_device);
+    cur = ggml_fused_rms_norm(ctx, cur, pn_extra->splits[id], pnd->f_rms_eps);
+    cb(cur, tag, il_cb);
+    auto add = pnd->next_input[id];
+    if (!add) {
+        for (int j = 0; j < n_device; ++j) {
+            if (pnd->next_input[j]) {
+                add = pnd->next_input[j];
+                break;
+            }
+        }
+        GGML_ASSERT(add);
+    }
+    cur = ggml_add(ctx, cur, add);
+    cb(cur, "inp_added", il_cb);
+    pnd->next_input[id] = cur;
+    return cur;
+}
+
 ggml_tensor * llm_build_context::llm_build_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -1136,15 +1158,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             if (!split_u) continue;
             auto cur = get_input_tensor_sm_graph(ctx, input, id);
             if (pnd) {
-                auto pn_extra = (ggml_split_tensor_t *)pnd->norm->extra;
-                GGML_ASSERT(pn_extra && pn_extra->splits[id]);
-                cur = ggml_fused_rms_norm(ctx, cur, pn_extra->splits[id], pnd->f_rms_eps);
-                cb(cur, "ffn_post_norm", il_cb);
-                if (pnd->add) {
-                    auto add_id = get_input_tensor_sm_graph(ctx, pnd->add, id);
-                    cur = ggml_add(ctx, cur, add_id);
-                    cb(cur, "inp_added", il_cb);
-                }
+                cur = llm_do_split_post_norm(ctx, cur, pnd, id, u->n_device, "attn_post_norm", il_cb, cb);
             }
             cur = do_split_norm(ctx, cur, ffn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
             if (input->op != GGML_OP_REDUCE) {
@@ -3111,15 +3125,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 if (!split_wq) continue;
                 auto cur = get_input_tensor_sm_graph(ctx0, input, id);
                 if (pnd) {
-                    auto pn_extra = (ggml_split_tensor_t *)pnd->norm->extra;
-                    GGML_ASSERT(pn_extra && pn_extra->splits[id]);
-                    cur = ggml_fused_rms_norm(ctx0, cur, pn_extra->splits[id], pnd->f_rms_eps);
-                    cb(cur, "att_post_norm", il_cb);
-                    if (pnd->add) {
-                        auto add_id = get_input_tensor_sm_graph(ctx0, pnd->add, id);
-                        cur = ggml_add(ctx0, cur, add_id);
-                        cb(cur, "inp_added", il_cb);
-                    }
+                    cur = llm_do_split_post_norm(ctx0, cur, pnd, id, wq->n_device, "ffn_post_norm", il_cb, cb);
                 }
                 cur = do_split_norm(ctx0, cur, the_attn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
                 auto input_normed = cur;
@@ -3323,6 +3329,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 if (inp_out_ids) {
                     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
                     cb(cur, "fa_get_rows", il_cb);
+                    if (pnd) {
+                        pnd->next_input[id] = ggml_get_rows(ctx0, pnd->next_input[id], inp_out_ids);
+                    }
                 }
 
                 cur = llm_build_lora_mm(lctx, ctx0, split_wo, cur);
