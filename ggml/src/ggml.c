@@ -10190,7 +10190,7 @@ struct ggml_tensor * ggml_delta_net(
 
     GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == n_tokens && k->ne[2] == H_k && k->ne[3] == n_seqs);
     GGML_ASSERT(v->ne[1] == n_tokens && v->ne[3] == n_seqs);
-    GGML_ASSERT(g->ne[0] == n_tokens && g->ne[1] == 1 && g->ne[2] == H_v && g->ne[3] == n_seqs);
+    GGML_ASSERT(g->ne[0] == n_tokens && (g->ne[1] == 1 || g->ne[1] == S_v) && g->ne[2] == H_v && g->ne[3] == n_seqs);
     GGML_ASSERT(beta->ne[0] == 1 && beta->ne[1] == n_tokens && beta->ne[2] == H_v && beta->ne[3] == n_seqs);
     GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v * H_v && state->ne[2] == 1 && state->ne[3] == n_seqs);
     //GGML_ASSERT(H_k == H_v);
@@ -23863,6 +23863,148 @@ static void ggml_compute_forward_solve_tri(const struct ggml_compute_params * pa
 
 // ggml_compute_forward_delta_net
 
+static void ggml_compute_forward_kda_f32(int32_t ith, int32_t nth, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const struct ggml_tensor * src2 = dst->src[2];
+    const struct ggml_tensor * src3 = dst->src[3];
+    const struct ggml_tensor * src4 = dst->src[4];
+    const struct ggml_tensor * src5 = dst->src[5];
+    const struct ggml_tensor * src6 = dst->src[6];
+    const struct ggml_tensor * src7 = dst->src[7];
+
+    const int32_t head_dim = (int32_t) src0->ne[0];
+    const int32_t n_tokens = (int32_t) src0->ne[1];
+    const int32_t n_heads = (int32_t) src2->ne[2];
+    const int32_t n_seqs = (int32_t) src0->ne[3];
+    const int32_t gqa_ratio = n_heads/(int32_t) src0->ne[2];
+
+    const size_t output_size = (size_t) head_dim * n_tokens * n_heads * n_seqs;
+
+    const float * q_data = (const float *) src0->data;
+    const float * k_data = (const float *) src1->data;
+    const float * v_data = (const float *) src2->data;
+    const float * g_data = (const float *) src3->data;
+    const float * beta_data = (const float *) src4->data;
+    const float * state_in = (const float *) src5->data;
+    float * out_data = (float *) dst->data;
+    float * saved_steps = src6 ? (float *) src6->data : NULL;
+
+    const size_t vnb1 = src2->nb[1]/sizeof(float);
+    const size_t vnb2 = src2->nb[2]/sizeof(float);
+    const size_t vnb3 = src2->nb[3]/sizeof(float);
+    const size_t gnb0 = src3->nb[0]/sizeof(float);
+    const size_t gnb1 = src3->nb[1]/sizeof(float);
+    const size_t gnb2 = src3->nb[2]/sizeof(float);
+    const size_t gnb3 = src3->nb[3]/sizeof(float);
+    const size_t bnb1 = src4->nb[1]/sizeof(float);
+    const size_t bnb2 = src4->nb[2]/sizeof(float);
+    const size_t bnb3 = src4->nb[3]/sizeof(float);
+
+    const int32_t repeat_type = dst->op_params[0];
+    const int32_t state_step_stride = head_dim * head_dim * n_heads * n_seqs;
+    float * state_working = src7 ? (float *) src7->data : out_data + output_size;
+
+#if GGML_USE_IQK_MULMAT
+    if (iqk_kda(head_dim, n_heads, gqa_ratio, repeat_type, n_tokens, n_seqs,
+                src2->nb[1], src2->nb[2], src2->nb[3], src3->nb, src4->nb,
+                q_data, k_data, v_data, g_data, beta_data, state_in,
+                out_data, state_working, saved_steps, state_step_stride, ith, nth)) {
+        return;
+    }
+#endif
+
+    const int32_t total_heads = n_heads * n_seqs;
+    const int32_t heads_per_thread = (total_heads + nth - 1) / nth;
+    const int32_t h_start = ith * heads_per_thread;
+    const int32_t h_end = (h_start + heads_per_thread < total_heads) ? h_start + heads_per_thread : total_heads;
+
+    const float scale = 1.0f / sqrtf((float) head_dim);
+
+    float * v_new_buf = (float *) malloc(4 * head_dim * sizeof(float));
+    GGML_ASSERT(v_new_buf);
+    float * kd = v_new_buf + head_dim;
+    float * decay = kd + head_dim;
+    float * qd = decay + head_dim;
+
+    for (int32_t h_idx = h_start; h_idx < h_end; ++h_idx) {
+        const int32_t batch_idx = h_idx / n_heads;
+        const int32_t head_idx = h_idx % n_heads;
+        const int32_t head_idx_kq = repeat_type == 0 ? head_idx / gqa_ratio : head_idx % (n_heads/gqa_ratio);
+
+        const int32_t qkv_head_offset_kq = batch_idx * (head_dim * n_tokens * n_heads/gqa_ratio) + head_idx_kq * (head_dim * n_tokens);
+        const int32_t qkv_token_stride = head_dim;
+        const int32_t state_head_offset = batch_idx * (head_dim * head_dim * n_heads) + head_idx * (head_dim * head_dim);
+        const int32_t out_head_offset = batch_idx * (head_dim * n_heads * n_tokens) + head_idx * head_dim;
+        const int32_t out_token_stride = head_dim * n_heads;
+
+        const float * v_head = v_data + batch_idx * vnb3 + head_idx * vnb2;
+        const float * g_head = g_data + batch_idx * gnb3 + head_idx * gnb2;
+        const float * beta_head = beta_data + batch_idx * bnb3 + head_idx * bnb2;
+
+        float * state = state_working + state_head_offset;
+        for (int32_t i = 0; i < head_dim * head_dim; ++i) {
+            state[i] = state_in[state_head_offset + i];
+        }
+
+        const int32_t state_head_size = head_dim * head_dim;
+
+        for (int32_t t = 0; t < n_tokens; ++t) {
+            const float * q_t = q_data + qkv_head_offset_kq + t * qkv_token_stride;
+            const float * k_t = k_data + qkv_head_offset_kq + t * qkv_token_stride;
+            const float * v_t = v_head + t * vnb1;
+            const float * g_t = g_head + t * gnb0;
+
+            const float beta_raw = beta_head[t * bnb1];
+            const float beta_val = 1.0f / (1.0f + expf(-beta_raw));
+
+            float attn_score = 0.0f;
+            for (int32_t i = 0; i < head_dim; ++i) {
+                attn_score += k_t[i] * (q_t[i] * scale);
+            }
+
+            float * out_t = out_data + out_head_offset + t * out_token_stride;
+
+            for (int32_t col = 0; col < head_dim; ++col) {
+                decay[col] = expf(fminf(g_t[col * gnb1], 50.0f));
+                kd[col] = k_t[col] * decay[col];
+                qd[col] = q_t[col] * decay[col];
+            }
+
+            for (int32_t row = 0; row < head_dim; ++row) {
+                float v_prime = 0.0f;
+                float out_val = 0.0f;
+
+                for (int32_t col = 0; col < head_dim; ++col) {
+                    const float s = state[row + col * head_dim];
+                    v_prime += s * kd[col];
+                    out_val += s * qd[col];
+                }
+
+                const float v_new = v_t[row] * beta_val - v_prime * beta_val;
+                v_new_buf[row] = v_new;
+                out_t[row] = out_val * scale + v_new * attn_score;
+            }
+
+            for (int32_t col = 0; col < head_dim; ++col) {
+                const float k_col = k_t[col];
+                for (int32_t row = 0; row < head_dim; ++row) {
+                    float s = state[row + col * head_dim];
+                    s = decay[col] * s + v_new_buf[row] * k_col;
+                    state[row + col * head_dim] = fminf(fmaxf(s, -1e6f), 1e6f);
+                }
+            }
+
+            if (saved_steps && t + 1 < n_tokens) {
+                float * next_state = saved_steps + state_head_offset + (size_t) t * state_step_stride;
+                memcpy(next_state, state, state_head_size * sizeof(float));
+            }
+        }
+    }
+
+    free(v_new_buf);
+}
+
 static void ggml_compute_forward_delta_net_f32(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -23874,6 +24016,11 @@ static void ggml_compute_forward_delta_net_f32(
     const struct ggml_tensor * src5 = dst->src[5];
     const struct ggml_tensor * src6 = dst->src[6];
     const struct ggml_tensor * src7 = dst->src[7];
+
+    if (src3->ne[1] != 1) {
+        ggml_compute_forward_kda_f32(params->ith, params->nth, dst);
+        return;
+    }
 
     const int64_t head_dim = src0->ne[0];
     const int64_t n_tokens = src0->ne[1];

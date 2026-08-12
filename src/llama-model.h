@@ -243,11 +243,16 @@ struct llama_layer {
     llama_split_tensor split_ssm_wqkv_gate;
     llama_split_tensor split_ssm_in;
     llama_split_tensor split_ssm_conv1d;
+    llama_split_tensor split_ssm_conv1d_q;
+    llama_split_tensor split_ssm_conv1d_k;
+    llama_split_tensor split_ssm_conv1d_v;
     llama_split_tensor split_ssm_dt;
     llama_split_tensor split_ssm_a;
     llama_split_tensor split_ssm_beta_alpha;
     llama_split_tensor split_ssm_beta;
     llama_split_tensor split_ssm_alpha;
+    llama_split_tensor split_ssm_f_a;
+    llama_split_tensor split_ssm_g_a;
     llama_split_tensor split_ssm_norm;
     llama_split_tensor split_ssm_out;
 
@@ -354,9 +359,14 @@ struct llama_layer {
     struct ggml_tensor * ssm_beta_alpha = nullptr;
     struct ggml_tensor * ssm_alpha = nullptr;
     struct ggml_tensor * ssm_beta = nullptr;
+    struct ggml_tensor * ssm_f_a = nullptr;
+    struct ggml_tensor * ssm_g_a = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;
+    struct ggml_tensor * ssm_conv1d_q = nullptr;
+    struct ggml_tensor * ssm_conv1d_k = nullptr;
+    struct ggml_tensor * ssm_conv1d_v = nullptr;
     struct ggml_tensor * ssm_a = nullptr;
     struct ggml_tensor * ssm_d = nullptr;
 
@@ -581,7 +591,14 @@ struct llama_model {
     }
 
     bool is_mla_model() const {
-        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
+        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3;
+    }
+
+    float swiglu_limit(uint32_t il, bool shared) const {
+        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4) {
+            return 0.0f;
+        }
+        return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];
     }
 
     // a compacted sliding-window cache needs the graph to build its KQ mask over the compacted

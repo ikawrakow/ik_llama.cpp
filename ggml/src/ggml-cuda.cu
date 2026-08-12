@@ -58,6 +58,7 @@
 #include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/delta-net.cuh"
+#include "ggml-cuda/kda.cuh"
 #include "ggml-cuda/sinkhorn.cuh"
 #include "ggml-cuda/latent_attn.cuh"
 #include "ggml-cuda/blend.cuh"
@@ -4140,11 +4141,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
         case GGML_OP_DELTA_NET: {
+            const auto op_delta_net = dst->src[3]->ne[1] == 1 ? ggml_cuda_op_delta_net : ggml_cuda_op_kda;
             const int j = fusion ? ggml_delta_net_find_state_cpy(cgraph, i) : -1;
             if (j >= 0) {
                 ggml_tensor fused = *dst;
                 fused.src[7] = cgraph->nodes[j]->src[1];
-                ggml_cuda_op_delta_net(ctx, &fused);
+                op_delta_net(ctx, &fused);
 #ifdef USE_CUDA_GRAPH
                 // claim the entry of the copy that is not going to be launched
                 if (ctx.cur_graph && ctx.cur_graph->use_cpy_indirection) {
@@ -4153,7 +4155,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
 #endif
                 i = j;
             } else {
-                ggml_cuda_op_delta_net(ctx, dst);
+                op_delta_net(ctx, dst);
             }
         } break;
         case GGML_OP_SINKHORN:
