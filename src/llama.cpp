@@ -11729,6 +11729,8 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
 }
 
 llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i) {
+    llama_synchronize(ctx);
+
     if ((size_t) i >= ctx->dflash.draft_tokens.size()) {
         return LLAMA_TOKEN_NULL;
     }
