@@ -28972,8 +28972,15 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                 } break;
             case GGML_OP_INDEXER_TOPK:
                 {
-                    size_t size = iqk_idx_topk_work_buffer_size(node, n_tasks);
-                    cur = MAX(cur, size);
+                    cur = iqk_idx_topk_work_buffer_size(node, n_tasks);
+                } break;
+            case GGML_OP_DS4_COMP:
+                {
+                    if (node->op_params[0] == 0) {
+                        struct ggml_tensor * idx = node->src[2];
+                        int ratio = idx->ne[0] / (2*node->ne[1]);
+                        cur = 32*(4*ratio + 3)*sizeof(float)*n_tasks;
+                    }
                 } break;
             case GGML_OP_CROSS_ENTROPY_LOSS:
                 {
