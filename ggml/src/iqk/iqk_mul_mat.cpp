@@ -2249,8 +2249,16 @@ bool iqk_indexer_topk(struct ggml_tensor * dst, void * work_buffer, barrier_t ba
 #else  // IQK_IMPLEMENT
 
 #include "ggml-impl.h"
+#include "iqk_mul_mat.h"
 
-extern "C" IQK_API bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
+// These stubs abort unconditionally, but they implement interfaces that do
+// return on supported CPUs, so the noreturn suggestion does not apply.
+#if defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsuggest-attribute=noreturn"
+#endif
+
+extern "C" IQK_API bool iqk_mul_mat(long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }
@@ -2274,7 +2282,8 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long, long, long, int, int, const void *
 extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*ne00*/, int /*ne11*/, int /*unary_op*/,
         int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
-        float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, float, int /*ith*/, int /*nth*/) {
+        const char * /*up_b*/, const char * /*gate_b*/,
+        float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, float /*limit*/, int /*ith*/, int /*nth*/) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }
@@ -2293,5 +2302,17 @@ bool iqk_indexer_topk(struct ggml_tensor *, void *, barrier_t, void *, int, int)
 size_t iqk_idx_topk_work_buffer_size(const struct ggml_tensor *, int) {
     return 0;
 }
+
+extern "C" IQK_API size_t iqk_fa_work_buffer_size(const struct ggml_tensor *, int) {
+    return 0;
+}
+
+extern "C" IQK_API void iqk_topk_moe(int, int, int, const float *, float *, int32_t *, int, int) {
+    GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
+}
+
+#if defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 #endif

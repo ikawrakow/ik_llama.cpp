@@ -642,6 +642,7 @@ bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int ty
                             [[maybe_unused]] const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
                             [[maybe_unused]] const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             [[maybe_unused]] const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
+                            [[maybe_unused]] const void  * sinks,    // mask. If not null, assumed to be fp16. nq x nk elements
                             [[maybe_unused]] float         scale,    // scale applied before softmax
                             [[maybe_unused]] float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             [[maybe_unused]] float       * qkv,      // v*softmax(scale*(k*q))
