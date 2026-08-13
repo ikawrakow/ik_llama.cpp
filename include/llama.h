@@ -433,6 +433,7 @@ extern "C" {
         bool dry_run;       // skip loading tensors
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
+        bool swa_compress;     // must match llama_context_params::swa_compress; the fit also assumes that context's n_ubatch
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -494,6 +495,7 @@ extern "C" {
         bool graph_reuse;       // whether to reuse graphs when possible [EXPERIMENTAL]
         bool dsa;               // enable GLM DSA sparse attention (off by default) [EXPERIMENTAL]
         bool fused_idx_topk;    // enable the fused indexer topk op (off by default) [EXPERIMENTAL]
+        bool swa_compress;      // allocate sliding-window layers at window size instead of n_ctx (off by default) [EXPERIMENTAL]
         int  dsa_top_k;         // DSA top-k override (<0 => model's configured indexer_top_k) [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
@@ -709,6 +711,8 @@ extern "C" {
     // Returns true if the model is a Gemma 4 MTP assistant (external frozen-KV speculative drafter)
     LLAMA_API bool llama_model_is_gemma4_mtp_assistant(const struct llama_model * model);
 
+    LLAMA_API bool llama_model_is_step35(const struct llama_model * model);
+
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
     LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);
@@ -719,6 +723,9 @@ extern "C" {
 
     // Currently true for every model; no architecture is excluded from partial KV reuse.
     LLAMA_API bool llama_model_supports_partial_kv_reuse(const struct llama_model * model);
+
+    // false when the context cannot serialize whole-context or file-session state (--swa-compress); per-sequence buffer state is unaffected
+    LLAMA_API bool llama_supports_full_state_io(const struct llama_context * ctx);
 
     LLAMA_API const char * llama_model_arch_string(const struct llama_model * model);
 
@@ -1565,7 +1572,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
 
-    /// @details Randonly selects a token from the candidates following adaptive p sampler.
+    /// @details Randomly selects a token from the candidates following adaptive p sampler.
     llama_token llama_sample_token_adaptive_p(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
@@ -1604,7 +1611,21 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     // MTP
     //
 
+    enum llama_mtp_package {
+        LLAMA_MTP_PACKAGE_NONE = 0,
+        LLAMA_MTP_PACKAGE_EMBEDDED,
+        LLAMA_MTP_PACKAGE_TARGET_ONLY,
+        LLAMA_MTP_PACKAGE_COMPANION,
+        LLAMA_MTP_PACKAGE_INVALID,
+    };
+
     LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
+
+    LLAMA_API enum llama_mtp_package llama_model_mtp_package(const struct llama_model * model);
+
+    LLAMA_API uint32_t llama_model_mtp_feature_width(const struct llama_model * model);
+
+    LLAMA_API bool llama_model_step35_has_nextn_weights(const struct llama_model * model);
 
     // Set which, if any, MTP operation the context will use
     LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);

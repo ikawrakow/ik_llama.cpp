@@ -251,7 +251,7 @@ The sampler is turned off for `threshold > 0.5`, and `--xtc-probability <=0`.
 
 Sets all logits $L_i$ to $-\infty$ where $L_i < L_{\rm max} - n \sigma$. Here $L_{\rm max}$ is the maximum logit, $\sigma$ is the logit standard deviation, and $n$ (a floating point number) is the top-n-sigma parameter. Increasing $n$ increases the fraction of tokens considered for sampling. In the limit of $n$ close to zero, one effectively gets greedy sampling (only top probability token considered).
 
--   --top-n-sigma t          top-n-sigma parmeter (default: 0.0 => disabled)
+-   --top-n-sigma t          top-n-sigma parameter (default: 0.0 => disabled)
 
 ### Logit Bias
 
@@ -290,7 +290,7 @@ These options help improve the performance and memory usage of the LLaMA models.
 
 ### NUMA support
 
--   `--numa distribute`: Pin an equal proportion of the threads to the cores on each NUMA node. This will spread the load amongst all cores on the system, utilitizing all memory channels at the expense of potentially requiring memory to travel over the slow links between nodes.
+-   `--numa distribute`: Pin an equal proportion of the threads to the cores on each NUMA node. This will spread the load amongst all cores on the system, utilizing all memory channels at the expense of potentially requiring memory to travel over the slow links between nodes.
 -   `--numa isolate`: Pin all threads to the NUMA node that the program starts on. This limits the number of cores and amount of memory that can be used, but guarantees all memory access remains local to the NUMA node.
 -   `--numa numactl`: Pin threads to the CPUMAP that is passed to the program by starting it with the numactl utility. This is the most flexible mode, and allow arbitrary core usage patterns, for example a map that uses all the cores on one NUMA nodes, and just enough cores on a second node to saturate the inter-node memory bus.
 

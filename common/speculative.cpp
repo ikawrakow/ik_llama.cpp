@@ -30,6 +30,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
     COMMON_SPECULATIVE_TYPE_DFLASH,
+    COMMON_SPECULATIVE_TYPE_DSPARK,
     COMMON_SPECULATIVE_TYPE_MTP,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
@@ -44,6 +45,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"dflash",        COMMON_SPECULATIVE_TYPE_DFLASH},
+    {"dspark",        COMMON_SPECULATIVE_TYPE_DSPARK},
     {"mtp",           COMMON_SPECULATIVE_TYPE_MTP},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
@@ -141,6 +143,24 @@ static bool common_speculative_are_compatible(
     }
 
     return true;
+}
+
+static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
+    return llama_model_is_step35(model) || llama_model_is_deepseek4(model);
+}
+
+static bool common_speculative_has_recognized_mtp_companion(
+        const llama_model * target,
+        const llama_model * companion) {
+    if (target == nullptr || companion == nullptr) {
+        return false;
+    }
+    if (llama_model_is_gemma4_mtp_assistant(companion)) {
+        return llama_model_arch_string(target) != nullptr &&
+               std::strcmp(llama_model_arch_string(target), "gemma4") == 0;
+    }
+    return common_speculative_target_has_appended_mtp_contract(target) &&
+           llama_model_mtp_package(companion) == LLAMA_MTP_PACKAGE_COMPANION;
 }
 
 // state of an implementation of speculative decoding
@@ -1192,6 +1212,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
         case COMMON_SPECULATIVE_TYPE_DFLASH:        return "dflash";
+        case COMMON_SPECULATIVE_TYPE_DSPARK:        return "dspark";
         case COMMON_SPECULATIVE_TYPE_MTP:           return "mtp";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
@@ -1270,12 +1291,12 @@ common_speculative * common_speculative_init(
     }
 
     const bool has_dflash_stage = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params & stage) {
-        return stage.type == COMMON_SPECULATIVE_TYPE_DFLASH;
+        return common_speculative_type_is_dflash_family(stage.type);
     });
 
     const bool needs_draft_ctx = std::any_of(stages.begin(), stages.end(), [&params](const common_speculative_stage_params & stage) {
         return stage.type == COMMON_SPECULATIVE_TYPE_DRAFT ||
-               stage.type == COMMON_SPECULATIVE_TYPE_DFLASH ||
+               common_speculative_type_is_dflash_family(stage.type) ||
                (stage.type == COMMON_SPECULATIVE_TYPE_MTP && params.model_dft != nullptr);
     });
 
@@ -1296,7 +1317,7 @@ common_speculative * common_speculative_init(
 
             int32_t max_cross_ctx = 0;
             for (const auto & stage : stages) {
-                if (stage.type != COMMON_SPECULATIVE_TYPE_DFLASH) {
+                if (!common_speculative_type_is_dflash_family(stage.type)) {
                     continue;
                 }
 
@@ -1383,14 +1404,16 @@ common_speculative * common_speculative_init(
                 ));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_DFLASH: {
+            case COMMON_SPECULATIVE_TYPE_DFLASH:
+            case COMMON_SPECULATIVE_TYPE_DSPARK: {
                 auto state = std::make_unique<common_speculative_state_dflash>(
                     config.type,
                     ctx_tgt,
                     ctx_dft,
                     config.params.dflash_cross_ctx);
                 if (!state->ready) {
-                    LOG_ERR("%s: failed to initialize DFlash speculative state\n", __func__);
+                    LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
+                            common_speculative_type_to_str(config.type).c_str());
                     return nullptr;
                 }
                 impls.push_back(std::move(state));
@@ -1483,7 +1506,8 @@ common_speculative * common_speculative_init(
     } else if (params.autotune && !result->impls.empty()) {
         auto actual_type = result->impls[0]->type;
         if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
-            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
+            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3 &&
+            actual_type != COMMON_SPECULATIVE_TYPE_DSPARK) {
             result->tuner = std::make_unique<spec_tuner>();
             result->tuner->init(actual_type, result->configs[0].params, llama_get_model(ctx_tgt));
             LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",
@@ -1648,6 +1672,16 @@ static bool common_speculative_has_type(const common_speculative * spec, common_
     });
 }
 
+static bool common_speculative_has_dflash_family(const common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    return std::any_of(spec->configs.begin(), spec->configs.end(), [](const common_speculative_config & config) {
+        return common_speculative_type_is_dflash_family(config.type);
+    });
+}
+
 static int common_speculative_ctx_mtp_n_embd(llama_context * ctx) {
     return ctx ? (int) llama_mtp_state_n_embd(ctx) : 0;
 }
@@ -1786,7 +1820,7 @@ static bool common_speculative_collect_target_batch_features(
         const llama_batch & batch,
         common_speculative_feature_view & features) {
     features = {};
-    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH)) {
+    if (common_speculative_has_dflash_family(spec)) {
         return llama_spec_get_dflash_feature_view(ctx, batch, features);
     }
 
@@ -1808,7 +1842,7 @@ static bool common_speculative_collect_target_seq_batch_features(
         llama_seq_id seq_id,
         common_speculative_feature_view & features) {
     features = {};
-    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH)) {
+    if (common_speculative_has_dflash_family(spec)) {
         return llama_spec_get_dflash_feature_view_for_seq(ctx, batch, seq_id, features);
     }
 
@@ -1894,8 +1928,13 @@ int common_speculative_get_configured_n_max(const common_speculative * spec) {
 }
 
 static bool common_speculative_has_target_features(const common_speculative * spec) {
-    return common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP) ||
-        common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH);
+    if (spec == nullptr) {
+        return false;
+    }
+
+    return std::any_of(spec->configs.begin(), spec->configs.end(), [](const common_speculative_config & config) {
+        return common_speculative_type_uses_target_features(config.type);
+    });
 }
 
 bool common_speculative_load_draft_model(
@@ -1906,6 +1945,9 @@ bool common_speculative_load_draft_model(
     }
 
     gpt_params params_dft = params_base;
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP)) {
+        params_dft.has_mtp = true;
+    }
     params_dft.devices          = params.devices.empty() ? params_base.devices : params.devices;
     params_dft.model            = params.model;
     params_dft.n_gpu_layers     = params.n_gpu_layers;
@@ -1937,7 +1979,7 @@ bool common_speculative_load_draft_model(
     if (params_dft.n_ctx == 0) {
         params_dft.n_ctx = params.n_ctx;
     }
-    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH) && params_dft.n_gpu_layers < 0) {
+    if (params.has_dflash_family_stage() && params_dft.n_gpu_layers < 0) {
         params_dft.n_gpu_layers = params_base.n_gpu_layers;
     }
     params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
@@ -1966,13 +2008,28 @@ bool common_speculative_prepare_mtp_runtime(
         return false;
     }
 
-    if (llama_model_n_nextn_layer(model) == 0 && !has_external_mtp) {
-        LOG_WRN("%s: MTP speculative stage requested, but model has 0 NextN layers. Removing MTP from the configured stage chain.\n",
+    const enum llama_mtp_package target_package = llama_model_mtp_package(model);
+    const bool has_embedded_mtp = target_package == LLAMA_MTP_PACKAGE_EMBEDDED;
+    if (target_package == LLAMA_MTP_PACKAGE_COMPANION ||
+        target_package == LLAMA_MTP_PACKAGE_INVALID) {
+        LOG_ERR("%s: the target GGUF is an MTP companion or invalid package, load a complete target model instead\n",
                 __func__);
-        params.remove_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
-        if (!params.needs_dft_model()) {
-            params.clear_dft();
-        }
+        return false;
+    }
+    if (target_package == LLAMA_MTP_PACKAGE_TARGET_ONLY && !has_external_mtp) {
+        LOG_ERR("%s: target GGUF contains no MTP tail, provide a matching predictor-only companion with -md\n",
+                __func__);
+        return false;
+    }
+
+    if (llama_model_is_step35(model) && has_embedded_mtp &&
+        !llama_model_step35_has_nextn_weights(model)) {
+        LOG_ERR("%s: Step target is missing one or more complete MTP heads\n", __func__);
+        return false;
+    }
+    if (!has_external_mtp && !has_embedded_mtp) {
+        LOG_ERR("%s: MTP speculative stage requested, but the target package is not a complete embedded MTP model\n",
+                __func__);
         return false;
     }
 
@@ -2066,27 +2123,78 @@ bool common_speculative_finalize_startup(
             return false;
         }
 
-        if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) &&
-            params.model_dft != nullptr &&
-            llama_model_is_deepseek4(params.model_dft) &&
-            llama_model_n_nextn_layer(params.model_dft) != 1) {
-            LOG_ERR("%s: DeepSeek-V4 MTP draft requires exactly one NextN predictor layer, got %d.\n",
-                    __func__, llama_model_n_nextn_layer(params.model_dft));
-            return false;
+        const bool mtp_requested = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+        if (mtp_requested && model != nullptr && params.model_dft != nullptr) {
+            const llama_model * companion = params.model_dft;
+            const bool appended_contract = common_speculative_target_has_appended_mtp_contract(model);
+
+            if (appended_contract &&
+                llama_model_mtp_package(companion) != LLAMA_MTP_PACKAGE_COMPANION) {
+                LOG_ERR("%s: -md for an MTP stage must be a predictor-only companion GGUF\n", __func__);
+                return false;
+            }
+
+            if (llama_model_is_step35(model)) {
+                if (!llama_model_is_step35(companion)) {
+                    LOG_ERR("%s: Step MTP requires a Step companion\n", __func__);
+                    return false;
+                }
+
+                const int32_t n_heads = llama_model_n_nextn_layer(companion);
+                if (n_heads != 3) {
+                    LOG_ERR("%s: Step MTP companion requires exactly three predictor heads, got %d\n",
+                            __func__, n_heads);
+                    return false;
+                }
+
+                if (!llama_model_step35_has_nextn_weights(companion)) {
+                    LOG_ERR("%s: Step MTP companion is missing required predictor tensors\n", __func__);
+                    return false;
+                }
+            } else if (llama_model_is_deepseek4(model)) {
+                if (!llama_model_is_deepseek4(companion)) {
+                    LOG_ERR("%s: DeepSeek-V4 MTP requires a DeepSeek-V4 companion\n", __func__);
+                    return false;
+                }
+
+                const int32_t n_heads = llama_model_n_nextn_layer(companion);
+                if (n_heads != 1) {
+                    LOG_ERR("%s: DeepSeek-V4 MTP companion requires exactly one predictor layer, got %d\n",
+                            __func__, n_heads);
+                    return false;
+                }
+            }
+
+            if (common_speculative_has_recognized_mtp_companion(model, companion)) {
+                if (!common_speculative_are_compatible(model, companion)) {
+                    LOG_ERR("%s: MTP target and companion vocabularies are incompatible\n", __func__);
+                    return false;
+                }
+
+                const uint32_t target_width = llama_model_mtp_feature_width(model);
+                const uint32_t companion_width = llama_model_mtp_feature_width(companion);
+
+                if (target_width != companion_width) {
+                    LOG_ERR("%s: MTP feature-width mismatch: target=%u companion=%u\n",
+                            __func__, target_width, companion_width);
+                    return false;
+                }
+            }
         }
     }
 
     params_base.has_mtp = params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     const bool has_external_mtp = params_base.has_mtp && params.model_dft &&
-        (llama_model_is_gemma4_mtp_assistant(params.model_dft) ||
-         (llama_model_is_deepseek4(params.model_dft) &&
-          llama_model_n_nextn_layer(params.model_dft) == 1));
+        common_speculative_has_recognized_mtp_companion(model, params.model_dft);
 
     params_base.has_mtp = common_speculative_prepare_mtp_runtime(
         params,
         params_base,
         model,
         has_external_mtp);
+    if (params.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && !params_base.has_mtp) {
+        return false;
+    }
     if (params_base.has_mtp) {
         params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
     }
@@ -2193,7 +2301,7 @@ bool common_speculative_copy_output_hidden_rows(
         const std::vector<int32_t> & output_indices,
         std::vector<float> & hidden_rows) {
     hidden_rows.clear();
-    if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_DFLASH)) {
+    if (common_speculative_has_dflash_family(spec)) {
         return llama_spec_copy_dflash_rows_from_output_indices(ctx, output_indices, hidden_rows);
     }
 
@@ -2619,7 +2727,7 @@ static common_speculative_state_dflash * common_speculative_get_dflash_state(com
     }
 
     for (auto & impl : spec->impls) {
-        if (impl->type != COMMON_SPECULATIVE_TYPE_DFLASH) {
+        if (!common_speculative_type_is_dflash_family(impl->type)) {
             continue;
         }
 

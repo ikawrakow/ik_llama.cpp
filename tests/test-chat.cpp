@@ -355,7 +355,7 @@ static std::string renormalize_json(const std::string & json_str) {
         auto json_obj = json::parse(json_str);
         return json_obj.dump();
     } catch (const std::exception & e) {
-        return "";  // ignore parial JSON contents for comparison purposes
+        return "";  // ignore partial JSON contents for comparison purposes
     }
 }
 

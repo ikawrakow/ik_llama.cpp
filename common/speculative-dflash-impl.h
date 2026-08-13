@@ -8,6 +8,12 @@
 static bool common_speculative_are_dflash_compatible(
         const llama_model * model_tgt,
         const llama_model * model_dft) {
+    const char * draft_arch = model_dft != nullptr ? llama_model_arch_string(model_dft) : nullptr;
+    if (model_tgt == nullptr || model_dft == nullptr || draft_arch == nullptr ||
+            (std::strcmp(draft_arch, "dflash") != 0 && std::strcmp(draft_arch, "dflash-draft") != 0)) {
+        return false;
+    }
+
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
@@ -82,6 +88,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
     int32_t mask_token_id = -1;
     int32_t n_target_features = 0;
     int32_t cross_ctx = 0;
+    bool is_dspark = false;
     bool ready = false;
 
     std::vector<int32_t> target_layer_ids;
@@ -113,6 +120,15 @@ struct common_speculative_state_dflash : public common_speculative_state {
     {
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
         const llama_model * model_dft = llama_get_model(ctx_dft);
+
+        is_dspark = type == COMMON_SPECULATIVE_TYPE_DSPARK;
+        const bool has_dspark_head = llama_model_dflash_has_dspark_head(model_dft);
+        if (is_dspark != has_dspark_head) {
+            LOG_ERR("%s: %s stage requires %s DSpark Markov tensors\n", __func__,
+                    is_dspark ? "dspark" : "dflash",
+                    is_dspark ? "complete" : "no");
+            return;
+        }
 
         if (!common_speculative_are_dflash_compatible(model_tgt, model_dft)) {
             LOG_ERR("%s: DFlash draft model vocab/tokenizer is incompatible with the target model\n", __func__);
@@ -214,6 +230,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
         ready = true;
 
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
+        llama_set_dflash_dspark(ctx_dft, is_dspark);
         LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, cross_ctx=%d, n_target_features=%d, n_target_layers=%d)\n",
                 __func__, llama_n_ctx(ctx_dft), block_size, this->cross_ctx, n_target_features, n_target_layers);
     }
@@ -246,7 +263,8 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return;
         }
 
-        const int32_t n_keep = std::min<int32_t>(params.n_max, block_size - 1);
+        const int32_t max_draft_tokens = is_dspark ? block_size : block_size - 1;
+        const int32_t n_keep = std::min<int32_t>(params.n_max, max_draft_tokens);
         if (n_keep <= 0) {
             return;
         }
@@ -280,12 +298,14 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_kv_cache_clear(ctx_dft);
         batch.n_tokens = 0;
-        const int32_t batch_len = n_keep + 1;
+        const int32_t batch_len = is_dspark ? n_keep : n_keep + 1;
+        // id_last's true position is one past the newest committed feature row
+        // (last_target_pos): seed there, masks follow. Mirrors mainline's
+        // [id_last @ n_past, mask @ n_past+1, ...] block geometry.
         const llama_pos draft_pos_base = last_target_pos >= 0 ? last_target_pos + 1 : (llama_pos) target_window_rows;
-        const llama_pos seed_pos = last_target_pos >= 0 ? last_target_pos : draft_pos_base - 1;
-        common_batch_add(batch, id_last, seed_pos, { 0 }, false);
+        common_batch_add(batch, id_last, draft_pos_base, { 0 }, is_dspark);
         for (int32_t i = 1; i < batch_len; ++i) {
-            common_batch_add(batch, mask_token_id, draft_pos_base + (i - 1), { 0 }, i <= n_keep);
+            common_batch_add(batch, mask_token_id, draft_pos_base + i, { 0 }, true);
         }
 
         if (llama_decode(ctx_dft, batch) != 0) {
@@ -298,7 +318,8 @@ struct common_speculative_state_dflash : public common_speculative_state {
         for (int32_t i = 0; i < n_keep; ++i) {
             llama_token id = llama_get_dflash_draft_token_ith(ctx_dft, i);
             if (id == LLAMA_TOKEN_NULL) {
-                id = common_sampler_sample_speculative(nullptr, ctx_dft, i + 1, nullptr);
+                const int32_t logits_idx = is_dspark ? i : i + 1;
+                id = common_sampler_sample_speculative(nullptr, ctx_dft, logits_idx, nullptr);
             }
             result.push_back(id);
         }

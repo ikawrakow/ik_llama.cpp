@@ -8,6 +8,8 @@
 #include "ggml-cuda.h"
 #include "ggml.h"
 #include "ggml-backend-impl.h"
+//#include "ggml-impl.h"
+#include "ggml-utils.h"
 
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -2040,7 +2042,7 @@ static void ggml_cuda_op_mul_mat(
 
         // If src0 is on a temporary compute buffer (partial offloading) there may be some padding that needs to be cleared:
         if (ne00 % MATRIX_ROW_PADDING != 0 && ggml_is_quantized(src0->type) && ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE && src0->view_src == nullptr) {
-            const int64_t nbytes_data    = ggml_row_size(src0->type, (dev[id].row_high - dev[id].row_low)*ne00);
+            const int64_t nbytes_data    = ggml_nbytes(src0);
             const int64_t nbytes_padding = ggml_row_size(src0->type, MATRIX_ROW_PADDING - ne00 % MATRIX_ROW_PADDING);
             CUDA_CHECK(cudaMemsetAsync(dev[id].src0_dd + nbytes_data , 0, nbytes_padding, stream));
         }
@@ -2516,7 +2518,7 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                 src0->type, stream);
         CUDA_CHECK(cudaGetLastError());
 
-        // The code below handles the case when Q, K, V have a bias applied after the resepctive matrix multiplication.
+        // The code below handles the case when Q, K, V have a bias applied after the respective matrix multiplication.
         // In that case the graph contains mul_mat(Q) -> mul_mat(K) -> mul_mat(V) -> add(Q) -> add(K) -> add(V)
         if (fusion && cgraph && node_n + 5 < cgraph->n_nodes &&
             cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
@@ -2645,8 +2647,11 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
     // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.
     // Therefore, in such cases use cuBLAS.
-    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
-        && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
+    const size_t src0_nbytes = ggml_nbytes(src0);
+    const size_t src0_alloc  = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
+    const bool   src0_padded = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
+        && src0_nbytes != src0_alloc;
+    const bool bad_padding_clear = src0_padded && src0->view_src;
 
     bool use_dequantize_mul_mat_vec = ggml_cuda_dmmv_type_supported(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
@@ -2670,6 +2675,10 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16 || !fast_fp16_available(cc);
 
     if ((use_mul_mat_vec_q || use_mul_mat_q) && src1->ne[2]*src1->ne[3] == 1) {
+        // This return does not go through ggml_cuda_op_mul_mat, which is where the padding is otherwise cleared.
+        if (src0_padded) {
+            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + src0_nbytes, 0, src0_alloc - src0_nbytes, ctx.stream()));
+        }
         return ggml_cuda_mul_mat_q(ctx, src0, src1, dst, cgraph, node_n, use_mul_mat_vec_q);
     }
 
@@ -4130,9 +4139,23 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SOLVE_TRI:
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
-        case GGML_OP_DELTA_NET:
-            ggml_cuda_op_delta_net(ctx, dst);
-            break;
+        case GGML_OP_DELTA_NET: {
+            const int j = fusion ? ggml_delta_net_find_state_cpy(cgraph, i) : -1;
+            if (j >= 0) {
+                ggml_tensor fused = *dst;
+                fused.src[7] = cgraph->nodes[j]->src[1];
+                ggml_cuda_op_delta_net(ctx, &fused);
+#ifdef USE_CUDA_GRAPH
+                // claim the entry of the copy that is not going to be launched
+                if (ctx.cur_graph && ctx.cur_graph->use_cpy_indirection) {
+                    ctx.cur_graph->graph_cpynode_index++;
+                }
+#endif
+                i = j;
+            } else {
+                ggml_cuda_op_delta_net(ctx, dst);
+            }
+        } break;
         case GGML_OP_SINKHORN:
             ggml_cuda_op_sinkhorn(ctx, dst);
             break;
@@ -5124,7 +5147,7 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
     //
     //           batch_size * active_experts >= min_batch_size * total_experts
     //
-    // as the condition for offloading model weights resinding in RAM to the GPU.
+    // as the condition for offloading model weights residing in RAM to the GPU.
     // In this case, the number of tokens is not as usual in op->ne[1] but rather in op->ne[2].
     if (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE) {
         if (ctx->offload_batch_size_per_byte >= 0) {

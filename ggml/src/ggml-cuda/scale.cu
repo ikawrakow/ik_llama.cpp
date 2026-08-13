@@ -13,7 +13,7 @@ static __global__ void scale_f32(const float * x, float * dst, const float scale
 
 static void scale_f32_cuda(const float * x, float * dst, const float scale, const float bias, const int64_t nelements, cudaStream_t stream) {
     const int64_t num_blocks = (nelements + CUDA_SCALE_BLOCK_SIZE - 1) / CUDA_SCALE_BLOCK_SIZE;
-    // Whehn will we be scaling tensors with more than 2^39 elements?
+    // When will we be scaling tensors with more than 2^39 elements?
     //scale_f32<<<MIN(MAX_GRIDDIM_X, num_blocks), CUDA_SCALE_BLOCK_SIZE, 0, stream>>>(x, dst, scale, bias, nelements);
     scale_f32<<<num_blocks, CUDA_SCALE_BLOCK_SIZE, 0, stream>>>(x, dst, scale, bias, nelements); }
 

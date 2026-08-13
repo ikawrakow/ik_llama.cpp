@@ -1198,7 +1198,7 @@ static std::vector<winogrande_entry> load_winogrande_from_csv(const std::string 
 
 /*
  * Evaluates the Winogrande score.
- * Uses a CSV containing task index, dentence, choice 1, choice 2, answer (1 or 2)
+ * Uses a CSV containing task index, sentence, choice 1, choice 2, answer (1 or 2)
  * You can get one such dataset from e.g. https://huggingface.co/datasets/ikawrakow/winogrande-eval-for-llama.cpp
  * As an example, the 1st row in the above dataset is
  *

@@ -105,7 +105,7 @@ sampling:
          --mirostat-ent N         Mirostat target entropy, parameter tau (default: 5.0)
          --xtc-probability p      xtc probability (default: 0.0 => disabled)
          --xtc-threshold t        xtc threshold (default: 1.0 => disabled)
-         --top-n-sigma t          top-n-sigma parmeter (default: 0.0 => disabled)
+         --top-n-sigma t          top-n-sigma parameter (default: 0.0 => disabled)
          -l TOKEN_ID(+/-)BIAS     modifies the likelihood of token appearing in the completion,
                                   i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',
                                   or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'

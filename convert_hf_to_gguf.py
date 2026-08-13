@@ -2623,6 +2623,66 @@ class DFlashDraftModel(Qwen3Model):
         return tensors
 
 
+@Model.register("Qwen3DSparkModel")
+class DSparkModel(DFlashDraftModel):
+    """Qwen3 DSpark sidecar: DFlash backbone plus a Markov head."""
+
+    model_arch = gguf.MODEL_ARCH.DFLASH_DRAFT
+
+    _saw_markov_w1 = False
+    _saw_markov_w2 = False
+    _markov_shape: tuple[int, ...] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        top_level_name = name[6:] if name.startswith("model.") else name
+
+        # DSpark shares vocabulary tensors with the exact target model supplied
+        # through --target-model-dir, matching the DFlash IO contract.
+        if top_level_name in ("embed_tokens.weight", "lm_head.weight"):
+            return []
+
+        if top_level_name in ("markov_head.markov_w1.weight", "markov_head.markov_w2.weight"):
+            if data_torch.ndim != 2:
+                raise ValueError(f"Qwen3DSparkModel: {top_level_name} must be rank-2, got {tuple(data_torch.shape)}")
+            shape = tuple(int(dim) for dim in data_torch.shape)
+            if self._markov_shape is None:
+                self._markov_shape = shape
+            elif shape != self._markov_shape:
+                raise ValueError(
+                    "Qwen3DSparkModel: markov_w1 and markov_w2 shapes must match "
+                    f"(got {self._markov_shape} and {shape})"
+                )
+            tensor_id = (
+                gguf.MODEL_TENSOR.DSPARK_MARKOV_W1
+                if top_level_name.endswith("markov_w1.weight")
+                else gguf.MODEL_TENSOR.DSPARK_MARKOV_W2
+            )
+            if tensor_id == gguf.MODEL_TENSOR.DSPARK_MARKOV_W1:
+                self._saw_markov_w1 = True
+            else:
+                self._saw_markov_w2 = True
+            return [(f"{gguf.TENSOR_NAMES[tensor_id]}.weight", data_torch)]
+
+        if top_level_name in ("confidence_head.proj.weight", "confidence_head.proj.bias"):
+            suffix = "bias" if top_level_name.endswith(".bias") else "weight"
+            return [(f"{gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.DSPARK_CONF_PROJ]}.{suffix}", data_torch)]
+
+        return super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if not self._saw_markov_w1 or not self._saw_markov_w2:
+            raise ValueError(
+                "Qwen3DSparkModel conversion requires both "
+                "markov_head.markov_w1.weight and markov_head.markov_w2.weight"
+            )
+        if self._markov_shape is None or self._markov_shape[0] != int(self.hparams.get("vocab_size", 0)):
+            raise ValueError(
+                "Qwen3DSparkModel: Markov tensors must have first dimension equal to "
+                f"vocab_size={self.hparams.get('vocab_size')} (shape={self._markov_shape})"
+            )
+
+
 @Model.register("DFlashLagunaForCausalLM")
 class DFlashLagunaModel(DFlashDraftModel):
     model_arch = gguf.MODEL_ARCH.DFLASH_DRAFT

@@ -75,6 +75,12 @@ int32_t llama_get_dflash_visible_cross_ctx(
     return ctx != nullptr ? ctx->dflash.visible_cross_ctx : 0;
 }
 
+void llama_set_dflash_dspark(struct llama_context * ctx, bool enabled) {
+    if (ctx != nullptr) {
+        ctx->dflash.dspark = enabled;
+    }
+}
+
 int32_t llama_model_dflash_block_size(const struct llama_model * model) {
     return model ? (int32_t) model->hparams.dflash_block_size : 0;
 }
@@ -115,6 +121,12 @@ int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model
     return (int32_t) model->vocab.token_mask();
 }
 
+bool llama_model_dflash_has_dspark_head(const struct llama_model * model) {
+    return model != nullptr &&
+        model->dspark_markov_w1 != nullptr &&
+        model->dspark_markov_w2 != nullptr;
+}
+
 static const ggml_tensor * llama_dflash_output_tensor(
         const struct llama_model * model) {
     if (model == nullptr) {
@@ -135,7 +147,7 @@ static const ggml_tensor * llama_dflash_output_tensor(
 int32_t llama_model_dflash_io_mode(
         const struct llama_model * draft_model,
         const struct llama_model * target_model) {
-    if (draft_model == nullptr || target_model == nullptr || draft_model->arch != LLM_ARCH_DFLASH_DRAFT) {
+    if (draft_model == nullptr || target_model == nullptr || !llm_arch_is_dflash_family(draft_model->arch)) {
         return LLAMA_DFLASH_IO_MODE_INVALID;
     }
 
@@ -219,7 +231,7 @@ bool llama_model_share_dflash_io_tensors(
         return false;
     }
 
-    if (draft_model->arch != LLM_ARCH_DFLASH_DRAFT) {
+    if (!llm_arch_is_dflash_family(draft_model->arch)) {
         return true;
     }
 

@@ -96,6 +96,14 @@ common_time_meas::~common_time_meas() {
     }
 }
 
+bool common_speculative_type_is_dflash_family(enum common_speculative_type type) {
+    return type == COMMON_SPECULATIVE_TYPE_DFLASH || type == COMMON_SPECULATIVE_TYPE_DSPARK;
+}
+
+bool common_speculative_type_uses_target_features(enum common_speculative_type type) {
+    return type == COMMON_SPECULATIVE_TYPE_MTP || common_speculative_type_is_dflash_family(type);
+}
+
 bool common_speculative_type_is_self_spec(enum common_speculative_type type) {
     switch (type) {
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -202,6 +210,20 @@ bool common_params_speculative::has_stage_type(common_speculative_type stage_typ
     });
 }
 
+bool common_params_speculative::has_dflash_family_stage() const {
+    const auto resolved = get_resolved_stages();
+    return std::any_of(resolved.begin(), resolved.end(), [](const common_speculative_stage_params & stage) {
+        return common_speculative_type_is_dflash_family(stage.type);
+    });
+}
+
+bool common_params_speculative::uses_target_features() const {
+    const auto resolved = get_resolved_stages();
+    return std::any_of(resolved.begin(), resolved.end(), [](const common_speculative_stage_params & stage) {
+        return common_speculative_type_uses_target_features(stage.type);
+    });
+}
+
 void common_params_speculative::remove_stage_type(common_speculative_type stage_type) {
     stages.erase(std::remove_if(stages.begin(), stages.end(), [stage_type](const common_speculative_stage_params & stage) {
         return stage.type == stage_type;
@@ -219,7 +241,7 @@ bool common_params_speculative::has_composite_stage_chain() const {
 
 bool common_params_speculative::needs_dft_model() const {
     return has_stage_type(COMMON_SPECULATIVE_TYPE_DRAFT) ||
-        has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH) ||
+        has_dflash_family_stage() ||
         (has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) && has_dft());
 }
 
@@ -295,12 +317,12 @@ bool common_speculative_validate_chain(const common_params_speculative & params,
             return fail("speculative stage has n_min greater than n_max");
         }
 
-        if ((stage.type == COMMON_SPECULATIVE_TYPE_DRAFT || stage.type == COMMON_SPECULATIVE_TYPE_DFLASH) && !params.has_dft()) {
+        if ((stage.type == COMMON_SPECULATIVE_TYPE_DRAFT || common_speculative_type_is_dflash_family(stage.type)) && !params.has_dft()) {
             return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires a draft model or draft params");
         }
 
-        if (stage.type == COMMON_SPECULATIVE_TYPE_DFLASH && stage_params.dflash_cross_ctx < 1) {
-            return fail("dflash speculative stage requires cross_ctx >= 1");
+        if (common_speculative_type_is_dflash_family(stage.type) && stage_params.dflash_cross_ctx < 1) {
+            return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires cross_ctx >= 1");
         }
     }
 
@@ -1338,6 +1360,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.nrep = std::stoi(argv[i]);
         return true;
     }
+    if (params.sweep_bench && arg == "--sweep-stride") {
+        CHECK_ARG
+        params.sweep_stride = std::stoi(argv[i]);
+        return true;
+    }
+    if (params.sweep_bench && arg == "--sweep-memory") {
+        params.sweep_memory = true;
+        return true;
+    }
     if (arg == "--samplers") {
         CHECK_ARG
         const auto sampler_names = string_split(argv[i], ";");
@@ -1801,17 +1832,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-ctk" || arg == "--cache-type-k") {
-        params.cache_type_k = argv[++i];
+        CHECK_ARG
+        params.cache_type_k = argv[i];
         return true;
     }
     if (arg == "-ctv" || arg == "--cache-type-v") {
-        params.cache_type_v = argv[++i];
+        CHECK_ARG
+        params.cache_type_v = argv[i];
         return true;
     }
     if (arg == "-ictk" || arg == "--indexer-cache-type-k") {
-        LLAMA_LOG_WARN("================== Quantized indexer cache has been disabled for now => argument '%s' ignored\n", arg.c_str());
-        ++i;
-        //params.indexer_cache_type_k = argv[++i];
+        CHECK_ARG
+        params.indexer_cache_type_k = argv[i];
         return true;
     }
     if (arg == "-ctk-first" || arg == "--cache-type-k-first") {
@@ -1918,6 +1950,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-fidx" || arg == "--fused-indexer-topk") {
         params.fused_idx_topk = true;
+        return true;
+    }
+    if (arg == "--swa-compress") {
+        params.swa_compress = true;
         return true;
     }
     if (arg == "-dsatk" || arg == "--dsa-top-k") {
@@ -3054,6 +3090,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-dsa,  --dsa",                  "enable GLM DSA sparse attention (GLM-DSA arch only; default: %s)", params.dsa ? "enabled" : "disabled" });
     options.push_back({ "*",           "-fidx,  --fused-indexer-topk",  "enable the fused indexer topk op (DSA only; default: %s)", params.fused_idx_topk ? "enabled" : "disabled" });
+    options.push_back({ "*",           "        --swa-compress",         "allocate sliding-window layers at window size instead of n_ctx (default: %s)", params.swa_compress ? "enabled" : "disabled" });
     options.push_back({ "*",           "-dsatk, --dsa-top-k",           "DSA top-k override; <0 uses the model's configured indexer_top_k (default: %d)", params.dsa_top_k });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
@@ -3351,7 +3388,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  cpu          serialise architecture state via host storage; re-decode on rejection\n"
                                                               "  --recurrent-ckpt-mode remains as a deprecated alias" });
     options.push_back({ "*", "--spec-type SPEC[:k=v,...]",      "canonical speculative stage entry; repeat for a supported two-stage chain.\n"
-                                                              "types: none, draft, dflash, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
+                                                              "types: none, draft, dflash, dspark, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
                                                               "canonical keys: n_max,n_min,p_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
                                                               "MTP heads: heads=1 is the default; heads>1 and heads=0 (all model heads) are experimental\n"
                                                               "for comma-bearing string values, quote the value inside the stage payload for normal shell use\n"
@@ -3389,6 +3426,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "bench",       "-ntg n0,n1,...",                "number of text generation tokens" });
     options.push_back({ "bench",       "-npl n0,n1,...",                "number of parallel prompts" });
     options.push_back({ "bench",       "-nrep,  --n-repetitions N",     "number of repetitions (default: %d)", params.nrep });
+    if (params.sweep_bench) {
+        options.push_back({ "bench",   "        --sweep-stride N",       "measure every Nth sweep row (default: %d)", params.sweep_stride });
+        options.push_back({ "bench",   "        --sweep-memory",         "report RSS high-water and sampled VRAM delta" });
+    }
     options.push_back({ "bench",       "-wb,    --warmup-batch",         "run a warmup batch before measurement" });
     options.push_back({ "bench",       "       --output-format FORMAT",  "output format: table, jsonl, or csv (default: table)" });
 
@@ -4252,9 +4293,10 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
     mparams.merge_up_gate_exps = params.merge_up_gate_exps;
-    mparams.mtp             = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+    mparams.mtp             = params.has_mtp || params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     mparams.flash_attn      = params.flash_attn;
     mparams.defer_experts   = params.defer_experts;
+    mparams.swa_compress    = params.swa_compress;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -4335,6 +4377,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.graph_reuse       = params.graph_reuse;
     cparams.dsa               = params.dsa;
     cparams.fused_idx_topk    = params.fused_idx_topk;
+    cparams.swa_compress      = params.swa_compress;
     cparams.dsa_top_k         = params.dsa_top_k;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
     cparams.v_cache_hadamard  = params.v_cache_hadamard;
@@ -4347,7 +4390,7 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     cparams.prefetch_experts  = params.prefetch_experts;
     cparams.prefetch_experts_threads = params.prefetch_experts_threads;
     cparams.max_extra_alloc   = params.max_extra_alloc_MiB;
-    cparams.mtp               = params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
+    cparams.mtp               = params.has_mtp || params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     cparams.mtp_op_type      = MTP_OP_NONE;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);

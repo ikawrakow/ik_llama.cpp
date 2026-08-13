@@ -12,7 +12,7 @@ class DupByRows {
     __aicore__ inline DupByRows() {}
     __aicore__ inline void init(GM_ADDR src, GM_ADDR dst, int64_t *input_ne_ub,
                                 size_t *input_nb_ub) {
-        /* Dup by rows when src is contigous on first dimension and dst is
+        /* Dup by rows when src is contiguous on first dimension and dst is
         contiguous, each kernel process one row.
         */
 

@@ -1194,7 +1194,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     }
 
     // If attention sinks are used, potentially re-scale if KQ_max is small.
-    // Also add the sink as a value to KQ_rowsum, this is done after synchonization of KQ_rowsum
+    // Also add the sink as a value to KQ_rowsum, this is done after synchronization of KQ_rowsum
     //     so it's being done unconditionally for every thread.
     if (!is_fixup && (np == 1 || threadIdx.y % np == 0) && sinks_f) {
         float KQ_max_scale[cols_per_thread];
@@ -1953,7 +1953,7 @@ static void launch_fattn_new_mma(
     const int ntiles_total = ntiles_x * ntiles_z * K->ne[2] * Q->ne[3];
 
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
-    // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
+    // Only worth the overhead if there is at least one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
     if (mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
         const int s31 = mask->nb[1] / sizeof(half2);

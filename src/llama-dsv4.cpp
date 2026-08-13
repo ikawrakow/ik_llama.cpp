@@ -356,6 +356,22 @@ static bool dsv4_build_raw_context(
         return false;
     }
 
+    // compacted layers address raw K rows through [sinks | window] geometry rather than by cell
+    const bool compacted = kv.any_compacted();
+    if (compacted) {
+        if (kv.head_swa + (uint32_t) batch.n_tokens > kv.size_swa) {
+            LLAMA_LOG_ERROR("%s: DSV4 compacted raw write rows [%u, %u) are outside size_swa %u\n",
+                    __func__, kv.head_swa, kv.head_swa + (uint32_t) batch.n_tokens, kv.size_swa);
+            return false;
+        }
+        if (batch.pos != nullptr && batch.n_tokens > 0 &&
+            kv.pos_base_swa + (llama_pos) (kv.head_swa - kv.sink_rows) != batch.pos[0]) {
+            LLAMA_LOG_ERROR("%s: DSV4 compacted write row %u disagrees with batch position %d (base %d)\n",
+                    __func__, kv.head_swa, batch.pos[0], kv.pos_base_swa);
+            return false;
+        }
+    }
+
     raw.write_counts.push_back(batch.n_tokens);
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
         const int32_t slot = kv.head + i;
@@ -368,7 +384,7 @@ static bool dsv4_build_raw_context(
         }
 
         raw.write_src_idxs.push_back(i);
-        raw.write_dst_idxs.push_back(slot);
+        raw.write_dst_idxs.push_back(compacted ? (int32_t) kv.head_swa + i : slot);
     }
 
     raw.n_kv = 0;
@@ -385,8 +401,14 @@ static bool dsv4_build_raw_context(
             if (!cell.has_seq_id(seq_id)) {
                 continue;
             }
-            raw.sinfo_read.idxs[s].push_back(slot);
-            raw.read_dst_idxs.push_back((int32_t) slot);
+            if (compacted && cell.pos < kv.pos_base_swa) {
+                // rows before the window base were overwritten by compaction
+                continue;
+            }
+            const uint32_t row = compacted
+                ? kv.sink_rows + (uint32_t) (cell.pos - kv.pos_base_swa) : slot;
+            raw.sinfo_read.idxs[s].push_back(row);
+            raw.read_dst_idxs.push_back((int32_t) row);
             ++count;
         }
         raw.read_counts.push_back(count);
@@ -1204,9 +1226,18 @@ static bool dsv4_per_step_copy_base(llama_context & ctx, bool restore) {
     for (size_t i = 0; i < ckpt.dsv4_per_step_state.size(); ++i) {
         ggml_tensor * state = ckpt.dsv4_per_step_state[i];
         ggml_tensor * shadow = ckpt.dsv4_per_step_state_shadow[i];
-        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(ctx.sched, state);
-        if (state == nullptr || shadow == nullptr || backend == nullptr) {
+        ggml_backend_t backend = state != nullptr
+                ? ggml_backend_sched_get_tensor_backend(ctx.sched, state)
+                : nullptr;
+        if (state == nullptr || shadow == nullptr) {
             return false;
+        }
+        if (backend == nullptr) {
+            if (state->buffer == nullptr || shadow->buffer == nullptr) {
+                return false;
+            }
+            ggml_backend_tensor_copy(restore ? shadow : state, restore ? state : shadow);
+            continue;
         }
         if (restore) {
             ggml_backend_tensor_copy_async(backend, backend, shadow, state);
@@ -1480,7 +1511,7 @@ static enum llama_spec_ckpt_restore_result dsv4_per_step_restore_rows(
             return LLAMA_SPEC_CKPT_RESTORE_FAILED;
         }
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(ctx.sched, state);
-        if (backend == nullptr) {
+        if (backend == nullptr && (state->buffer == nullptr || delta->buffer == nullptr)) {
             return LLAMA_SPEC_CKPT_RESTORE_FAILED;
         }
 
@@ -1507,9 +1538,13 @@ static enum llama_spec_ckpt_restore_result dsv4_per_step_restore_rows(
             dst_view.view_src = nullptr;
             src_view.view_offs = 0;
             dst_view.view_offs = 0;
-            ggml_backend_tensor_copy_async(backend, backend, &src_view, &dst_view);
+            if (backend != nullptr) {
+                ggml_backend_tensor_copy_async(backend, backend, &src_view, &dst_view);
+            } else {
+                ggml_backend_tensor_copy(&src_view, &dst_view);
+            }
         }
-        if (std::find(backends.begin(), backends.end(), backend) == backends.end()) {
+        if (backend != nullptr && std::find(backends.begin(), backends.end(), backend) == backends.end()) {
             backends.push_back(backend);
         }
     }

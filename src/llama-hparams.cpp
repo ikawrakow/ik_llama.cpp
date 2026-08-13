@@ -1178,8 +1178,8 @@ void llm_load_hparams(
                 // DSA/SWA schedule: openpangu.swa_layers lists the sliding-window layer ids and
                 // openpangu.sliding_window_list the per-entry window; the remaining base layers
                 // are DSA (indexer + top-k, no window). The NextN/MTP layers appear in the SWA
-                // list with their own (larger) window, used by the MTP graphs. Absent keys keep
-                // every window at 0 = dense fallback (pre-DSA GGUFs keep working).
+                // list with their own (larger) window, used by the MTP graphs. Absent keys leave
+                // swa_layers cleared = dense fallback (pre-DSA GGUFs keep working).
                 {
                     std::vector<uint32_t> swa_ids, swa_windows;
                     const bool have_ids = ml.get_arr("openpangu.swa_layers",          swa_ids,     false);
@@ -1192,7 +1192,7 @@ void llm_load_hparams(
                             if (il >= hparams.n_layer) {
                                 throw std::runtime_error(format("openpangu.swa_layers contains out-of-range layer %u", il));
                             }
-                            hparams.openpangu_window[il] = swa_windows[i];
+                            hparams.swa_layers[il] = swa_windows[i] > 0 ? 1 : 0;
                             if (il < n_base) {
                                 if (hparams.n_swa != 0 && hparams.n_swa != swa_windows[i]) {
                                     throw std::runtime_error("openpangu: non-uniform base sliding windows are not supported");
@@ -1207,6 +1207,13 @@ void llm_load_hparams(
                         }
                     } else if (have_ids || have_win) {
                         LLAMA_LOG_WARN("%s: openpangu SWA schedule keys are inconsistent - keeping dense fallback\n", __func__);
+                    }
+                    // the graph derives head dims and the MoME conv slot width from layer 0
+                    if (hparams.n_swa > 0 &&
+                        (hparams.n_embd_head_k_swa != hparams.n_embd_head_k_full ||
+                         hparams.n_embd_head_v_swa != hparams.n_embd_head_v_full ||
+                         hparams.n_rot_swa         != hparams.n_rot)) {
+                        throw std::runtime_error("openpangu: per-layer SWA head dimensions are not supported");
                     }
                 }
 
@@ -1557,6 +1564,12 @@ void llm_load_hparams(
         case LLM_ARCH_STEP35:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (hparams.nextn_predict_layers > hparams.n_layer) {
+                    throw std::runtime_error(format("step35.nextn_predict_layers (%u) exceeds block_count (%u)",
+                            hparams.nextn_predict_layers, hparams.n_layer));
+                }
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
                 //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 // MoE + SWA parameters
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
@@ -1660,10 +1673,20 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_DFLASH:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_GLM_DSA:
             {
+                const bool is_dsv4 = model.arch == LLM_ARCH_DFLASH || model.arch == LLM_ARCH_DEEPSEEK4;
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_layer == 43 && hparams.nextn_predict_layers > 0) {
+                    LLAMA_LOG_WARN("===============================================================================================\n");
+                    LLAMA_LOG_WARN("Unexpected number of layers (%d) and nextn_predict_layers (%d) for DeepSeek4-Flash\n",
+                            hparams.n_layer, hparams.nextn_predict_layers);
+                    LLAMA_LOG_WARN("   -> setting nextn_predict_layers to zero\n");
+                    LLAMA_LOG_WARN("===============================================================================================\n");
+                    hparams.nextn_predict_layers = 0;
+                }
                 // Probe the first appended predictor block, or n_layer - 1 for base GGUFs.
                 const uint32_t dsv4_probe_offset = std::max<uint32_t>(1, hparams.nextn_predict_layers);
                 const uint32_t dsv4_probe_layer = hparams.n_layer > dsv4_probe_offset
@@ -1689,7 +1712,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
 
-                if (model.arch == LLM_ARCH_DEEPSEEK4) {
+                if (is_dsv4) {
                     ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,     hparams.swiglu_limits,   hparams.n_layer);
                     if (!ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_limits_shared, hparams.n_layer, 0)) {
                         hparams.swiglu_limits_shared = hparams.swiglu_limits;
@@ -1701,7 +1724,7 @@ void llm_load_hparams(
                 // this does not select the DeepSeek V3 MLA path.
                 ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,      hparams.n_lora_q);
                 ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv, false);
-                if (model.arch == LLM_ARCH_DEEPSEEK4 && hparams.n_lora_kv == 0) {
+                if (is_dsv4 && hparams.n_lora_kv == 0) {
                     const uint32_t probe_layer = dsv4_probe_layer;
                     if (auto * kv_norm = ml.get_tensor_meta(format("blk.%u.attn_kv_a_norm.weight", probe_layer).c_str())) {
                         hparams.n_lora_kv = (uint32_t) kv_norm->ne[0];
@@ -1742,7 +1765,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
                 ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
 
-                if (model.arch == LLM_ARCH_DEEPSEEK4) {
+                if (is_dsv4) {
                     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
                     hparams.rope_freq_scale_train_swa = 1.0f;
@@ -1837,12 +1860,12 @@ void llm_load_hparams(
                     hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
                 }
 
-                if (model.arch == LLM_ARCH_DEEPSEEK4 &&
+                if (is_dsv4 &&
                     hparams.expert_gating_func != LLM_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
                     throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
                 }
 
-                if (model.arch == LLM_ARCH_DEEPSEEK4) {
+                if (is_dsv4) {
                     hparams.n_layer_kv_from_start = hparams.n_layer;
                 } else {
                     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
@@ -1856,7 +1879,7 @@ void llm_load_hparams(
                     case 79: model.type = MODEL_744B_A40B; break;
                     default: model.type = MODEL_UNKNOWN;
                 }
-                if (model.arch != LLM_ARCH_DEEPSEEK4 && hparams.n_head_kv() == 1) {
+                if (!is_dsv4 && hparams.n_head_kv() == 1) {
                     int n_nead_kv = hparams.n_gqa();
                     if (n_nead_kv%4 != 0 || hparams.n_embd_head_k_full != 576 || hparams.n_embd_head_v_full != 512 ||
                         hparams.n_rot != 64) {
@@ -1873,6 +1896,61 @@ void llm_load_hparams(
                     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_full);
                     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_full);
                 }
+
+                if (model.arch == LLM_ARCH_DFLASH) {
+                    hparams.dflash_dsv4 = hparams.dsv4_hc_mult > 0;
+                    if (!hparams.dflash_dsv4) {
+                        throw std::runtime_error("dflash: hyper_connection.count is required for the official DSV4 schema");
+                    }
+
+                    ml.get_key("dflash.block_size", hparams.dflash_block_size, true);
+                    ml.get_key(LLM_KV_TOKENIZER_MASK_ID, hparams.dflash_mask_token_id, true);
+                    load_dflash_target_layer_ids(
+                            ml,
+                            LLM_KV(model.arch)(LLM_KV_DFLASH_TARGET_LAYERS),
+                            hparams,
+                            true);
+
+                    for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+                        if (hparams.dflash_target_layer_ids[i] == 0) {
+                            throw std::runtime_error("dflash: target_layers must use one-based IDs");
+                        }
+                        --hparams.dflash_target_layer_ids[i];
+                    }
+
+                    hparams.dflash_n_target_features = hparams.n_embd * hparams.dflash_n_target_layers;
+                    hparams.dflash_laguna = false;
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        if (hparams.dsv4_compress_ratios[i] != 0) {
+                            throw std::runtime_error("dflash: DSV4 draft requires uncompressed stages");
+                        }
+                    }
+                    validate_dflash_hparams(hparams, model.arch);
+                }
+            } break;
+        case LLM_ARCH_MUSE_GLIMMER:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+                ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
+                ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
+
+                hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+
+                if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false)) {
+                    uint32_t swa_period = 4;
+                    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period);
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        hparams.swa_layers[il] = (swa_period == 0 || (il % swa_period < swa_period - 1));
+                    }
+                }
+
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
+                    case 52: model.type = e_model::MODEL_30B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+
             } break;
         default: (void)0;
     }

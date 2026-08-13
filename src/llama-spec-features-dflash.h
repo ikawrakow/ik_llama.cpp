@@ -78,6 +78,7 @@ llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
 void llama_reset_dflash_kv_cache_state(struct llama_context * ctx);
 void llama_set_dflash_visible_cross_ctx(struct llama_context * ctx, int32_t cross_ctx);
 int32_t llama_get_dflash_visible_cross_ctx(const struct llama_context * ctx);
+void llama_set_dflash_dspark(struct llama_context * ctx, bool enabled);
 
 int32_t llama_model_dflash_block_size(const struct llama_model * model);
 int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
@@ -85,6 +86,7 @@ int32_t llama_model_dflash_n_target_layers(const struct llama_model * model);
 int32_t llama_model_dflash_n_target_features(const struct llama_model * model);
 int32_t llama_model_dflash_target_layer_ids(const struct llama_model * model, int32_t * layer_ids, int32_t capacity);
 int32_t llama_model_dflash_target_mask_token_id(const struct llama_model * model);
+bool llama_model_dflash_has_dspark_head(const struct llama_model * model);
 
 enum llama_dflash_io_mode {
     LLAMA_DFLASH_IO_MODE_INVALID = 0,

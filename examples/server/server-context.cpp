@@ -73,8 +73,7 @@ static bool server_response_needs_chat_parse(oaicompat_type oaicompat) {
 }
 
 static bool server_speculative_uses_target_features(const common_params_speculative & spec) {
-    return spec.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP) ||
-           spec.has_stage_type(COMMON_SPECULATIVE_TYPE_DFLASH);
+    return spec.uses_target_features();
 }
 
 static bool server_speculative_requires_single_slot(const common_params_speculative & spec) {
@@ -2952,6 +2951,10 @@ void server_context::process_single_task(server_task&& task) {
             send_error(task, "slot save is unsupported for openPangu because per-sequence file state is not implemented", ERROR_TYPE_NOT_SUPPORTED);
             break;
         }
+        if (!llama_supports_full_state_io(ctx)) {
+            send_error(task, "slot save is unsupported with --swa-compress because file-session state is not implemented for compacted contexts", ERROR_TYPE_NOT_SUPPORTED);
+            break;
+        }
 
         const size_t token_count = slot->cache_tokens.size();
         const int64_t t_start = ggml_time_us();
@@ -2993,6 +2996,10 @@ void server_context::process_single_task(server_task&& task) {
             // if requested slot is unavailable, we defer this task for processing later
             LOG_VERBOSE("requested slot is unavailable", { {"id_task", task.id} });
             queue_tasks.defer(std::move(task));
+            break;
+        }
+        if (!llama_supports_full_state_io(ctx)) {
+            send_error(task, "slot restore is unsupported with --swa-compress because file-session state is not implemented for compacted contexts", ERROR_TYPE_NOT_SUPPORTED);
             break;
         }
         const int64_t t_start = ggml_time_us();
@@ -3661,12 +3668,16 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 // restore the context checkpoint
                 const int64_t t_start = ggml_time_us();
                 const size_t checkpoint_size = it->data.size();
-                if (is_openpangu) {
+                const bool rewound = !is_openpangu ||
                     llama_kv_cache_seq_rm(slot.ctx, slot.id, it->pos_max + 1, -1);
-                }
-                const size_t n = llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                const size_t n = rewound
+                    ? llama_state_seq_set_data(ctx, it->data.data(), checkpoint_size, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)
+                    : 0;
 
-                if (n != checkpoint_size) {
+                if (!rewound) {
+                    SLT_ERR(slot, "checkpoint rewind to %d was refused; reprocessing from scratch\n", it->pos_max + 1);
+                    do_reset = true;
+                } else if (n != checkpoint_size) {
                     SLT_ERR(slot, "failed to restore context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, (float)checkpoint_size / 1024 / 1024);
                     do_reset = true;
                     //printf("[DEBUG] `do_reset` was set to `true` after failing to restore a checkpoint");
