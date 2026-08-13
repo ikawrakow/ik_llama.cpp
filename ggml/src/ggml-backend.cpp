@@ -1435,6 +1435,11 @@ static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, stru
     }
 }
 
+static inline uint64_t get_next_graph_uid() {
+    static std::atomic<uint64_t> counter = 1;
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
+
 // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
 static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     // reset splits
@@ -1442,6 +1447,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     sched->n_graph_inputs = 0;
     sched->is_reset = false;
     sched->has_reduce = false;
+
+    graph->uid = get_next_graph_uid();
 
     struct ggml_init_params params = {
         /* .mem_size =   */ sched->context_buffer_size,
@@ -1966,6 +1973,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         sched->leaf_backend_ids[graph_copy->n_leafs] = tensor_backend_id(leaf);
         graph_copy->leafs[graph_copy->n_leafs++] = leaf;
     }
+
+    for (int i = 0; i < sched->n_splits; ++i) sched->splits[i].graph.uid = get_next_graph_uid();
 }
 
 static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {

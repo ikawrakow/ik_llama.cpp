@@ -21,6 +21,7 @@ struct ggml_cuda_graph {
             CUDA_CHECK(cudaGraphDestroy(graph));
         }
     }
+    uint64_t uid = 0;
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
     size_t num_nodes = 0;

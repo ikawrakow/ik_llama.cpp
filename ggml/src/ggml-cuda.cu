@@ -4564,6 +4564,13 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
 
 static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph * cgraph) {
 
+    //printf("%s: %zu, %d\n", __func__, cgraph->uid, cgraph->n_nodes);
+    if (cgraph->uid != 0 && graph->uid == cgraph->uid) {
+        GGML_ASSERT(graph->ggml_graph_properties.size() == (size_t)cgraph->n_nodes);
+        //printf("Reusing graph with uid %zu\n", cgraph->uid);
+        return false;
+    }
+
     bool cuda_graph_update_required = false;
 
     if (graph->instance == nullptr) {
@@ -4588,6 +4595,8 @@ static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph *
         }
         set_ggml_graph_node_properties(cgraph->nodes[i], &graph->ggml_graph_properties[i]);
     }
+
+    graph->uid = cgraph->uid;
 
     return cuda_graph_update_required;
 }
