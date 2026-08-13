@@ -159,7 +159,7 @@ struct llm_build_context {
 
     ggml_tensor * build_inp_KQ_mask_swa_win(int64_t n_kv_win, bool causal = true);
 
-    ggml_tensor * build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed);
+    ggml_tensor * build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed = nullptr);
 
     ggml_tensor * build_inp_mean();
 
@@ -501,7 +501,8 @@ struct llm_build_context {
                     int32_t   n_kv,
                     float     kq_scale,
          const llm_build_cb & cb, int il, ggml_tensor * sinks = nullptr, int n_swa = 0, int kv_il = -1,
-         ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr);
+         ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr,
+                    int32_t   swa_head = -1);
 
     static ggml_tensor * llm_build_ffn(ggml_context * ctx, llama_context & lctx, ggml_tensor * ffn_norm,
          ggml_tensor * cur,

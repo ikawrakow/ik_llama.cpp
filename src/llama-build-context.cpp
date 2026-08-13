@@ -597,7 +597,7 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask_swa_win(int64_t n_kv_win, boo
 }
 
 ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool compacted, bool * windowed) {
-    *windowed = false;
+    if (windowed) *windowed = false;
     lctx.swa_window_view = {};
 
     if (window == 0) {
@@ -625,7 +625,7 @@ ggml_tensor * llm_build_context::build_swa_mask_for_graph(uint32_t window, bool 
         view.w_view,
         view.win_off,
     };
-    *windowed = true;
+    if (windowed) *windowed = true;
     return build_inp_KQ_mask_swa_win(view.w_view);
 }
 
@@ -917,6 +917,7 @@ void llm_build_context::llm_build_kv_store(
          const llm_build_cb & cb,
                     int64_t   il) {
     const int64_t n_ctx = cparams.n_ctx;
+    const int32_t n_cache_rows = kv.rows(il);
 
     //const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
     const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
@@ -952,7 +953,7 @@ void llm_build_context::llm_build_kv_store(
         } else {
             // note: the V cache is transposed for legacy non-FA layouts
             v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
-                    (  n_ctx)*ggml_element_size(kv.v_l[il]),
+                    (n_cache_rows)*ggml_element_size(kv.v_l[il]),
                     (kv_head)*ggml_element_size(kv.v_l[il]));
             lctx.cache_copies[2*il+1].step = ggml_element_size(kv.v_l[il]);
 
@@ -1992,19 +1993,21 @@ static ggml_tensor * llm_build_kqv(
          const llm_build_cb & cb,
                     int       il,
                 ggml_tensor * sinks = nullptr, int n_swa = 0, int kv_il = -1,
-                ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr) {
+                ggml_tensor ** k_cache_view = nullptr, ggml_tensor ** v_cache_view = nullptr,
+                    int32_t kv_view_offset = 0) {
     const llama_model   & model   = lctx.model;
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
 
+    const int     kv_layer      = kv_il >= 0 ? kv_il : il;
     const int64_t n_ctx         = kv.size;
+    const int32_t n_cache_rows  = kv.rows(kv_layer);
     const int64_t n_head        = hparams.n_head(il);
     const int64_t n_head_kv     = hparams.n_head_kv(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
     //const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(il);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(il);
     const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa(il);
-    const int     kv_layer      = kv_il >= 0 ? kv_il : il;
 
     struct ggml_tensor * q = ggml_permute(ctx, q_cur, 0, 2, 1, 3);
     cb(q, "q", il);
@@ -2025,7 +2028,7 @@ static ggml_tensor * llm_build_kqv(
                     n_embd_head_k, n_kv, n_head_kv,
                     ggml_row_size(k_cache->type, n_embd_head_k)*n_head_kv, //n_embd_k_gqa),
                     ggml_row_size(k_cache->type, n_embd_head_k),
-                    0);
+                    (size_t) kv_view_offset*ggml_row_size(k_cache->type, n_embd_head_k)*n_head_kv);
         if (k_cache_view) {
             *k_cache_view = k;
         }
@@ -2065,7 +2068,7 @@ static ggml_tensor * llm_build_kqv(
                         n_embd_head_v, n_kv, n_head_kv,
                         ggml_row_size(v_cache->type, n_embd_v_gqa),
                         ggml_row_size(v_cache->type, n_embd_head_v),
-                        0);
+                        (size_t) kv_view_offset*ggml_row_size(v_cache->type, n_embd_v_gqa));
             if (v_cache_view) {
                 *v_cache_view = v;
             }
@@ -2103,15 +2106,15 @@ static ggml_tensor * llm_build_kqv(
             if (kv.v_trans) {
                 v = ggml_view_3d(ctx, v_cache,
                         n_kv, n_embd_head_v, n_head_kv,
-                        ggml_element_size(v_cache)*n_ctx,
-                        ggml_element_size(v_cache)*n_ctx*n_embd_head_v,
-                        0);
+                        ggml_element_size(v_cache)*n_cache_rows,
+                        ggml_element_size(v_cache)*n_cache_rows*n_embd_head_v,
+                        (size_t) kv_view_offset*ggml_element_size(v_cache));
             } else {
                 v = ggml_view_3d(ctx, v_cache,
                         n_embd_head_v, n_kv, n_head_kv,
                         ggml_row_size(v_cache->type, n_embd_v_gqa),
                         ggml_row_size(v_cache->type, n_embd_head_v),
-                        0);
+                        (size_t) kv_view_offset*ggml_row_size(v_cache->type, n_embd_v_gqa));
                 v = ggml_cont(ctx, ggml_transpose(ctx, v));
             }
             if (v_cache_view) {
@@ -2253,7 +2256,8 @@ ggml_tensor * llm_build_context::llm_build_kv(
                     int32_t   n_kv,
                     float     kq_scale,
          const llm_build_cb & cb, int il, ggml_tensor * sinks, int n_swa, int kv_il,
-         ggml_tensor ** k_cache_view, ggml_tensor ** v_cache_view) {
+         ggml_tensor ** k_cache_view, ggml_tensor ** v_cache_view,
+                    int32_t   swa_head) {
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
 
@@ -2283,12 +2287,18 @@ ggml_tensor * llm_build_context::llm_build_kv(
         ggml_build_forward_expand(graph, v_cur);
     }
 
+    const bool compacted = kv.is_compacted(il);
+    const bool use_swa_window = compacted && lctx.swa_window_view.active;
+    const int32_t store_head = compacted ? swa_head : kv_head;
+    const int32_t n_kv_view = use_swa_window ? (int32_t) lctx.swa_window_view.w_view : n_kv;
+    const int32_t kv_view_offset = use_swa_window ? (int32_t) lctx.swa_window_view.win_off : 0;
+
     if (k_cur || v_cur) {
-        llm_build_kv_store(lctx, ctx, hparams, cparams, kv, graph, k_cur, v_cur, n_tokens, kv_head, cb, il);
+        llm_build_kv_store(lctx, ctx, hparams, cparams, kv, graph, k_cur, v_cur, n_tokens, store_head, cb, il);
     }
 
-    auto cur = llm_build_kqv(ctx, lctx, kv, graph, wo, wo_b, q_cur, kq_mask, n_tokens, n_kv, kq_scale, cb, il, sinks, n_swa, kv_il,
-            k_cache_view, v_cache_view);
+    auto cur = llm_build_kqv(ctx, lctx, kv, graph, wo, wo_b, q_cur, kq_mask, n_tokens, n_kv_view, kq_scale, cb, il, sinks, n_swa, kv_il,
+            k_cache_view, v_cache_view, kv_view_offset);
     cb(cur, "kqv_out", il);
 
     return cur;
@@ -3442,7 +3452,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     if (auto wqkv_gate = model.layers[il].wqkv_gate; wqkv_gate != nullptr) {
         cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                 nullptr, nullptr,
-                Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il);
+                Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
+                nullptr, nullptr, swa_head);
         cb(cur, "wqkv", il);
         auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed);
         if (model.arch == LLM_ARCH_LAGUNA) {
@@ -3483,7 +3494,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     } else {
         if (gate) {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, nullptr, nullptr,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il);
+                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
+                    nullptr, nullptr, swa_head);
             if (false && cur->ne[1] == 1) { // we need to add GGML_UNARY_OP_SIGMOID to the ops supported by ggml_fused_mul_unary
                 cur = ggml_fused_mul_unary(ctx0, cur, gate, GGML_UNARY_OP_SIGMOID);
             } else {
@@ -3500,7 +3512,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         } else {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                     model.layers[il].wo, model.layers[il].bo,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il);
+                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
+                    nullptr, nullptr, swa_head);
         }
     }
 
