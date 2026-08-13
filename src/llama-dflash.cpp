@@ -671,7 +671,9 @@ bool llama_prepare_dflash_graph_inputs(
 
     if (kq_mask_swa != nullptr) {
         const int32_t swa_window = (int32_t) lctx.model.hparams.n_swa;
-        const int32_t draft_pos_base = (int32_t) last_target_pos;
+        // keep in sync with the draft batch geometry: block starts one past
+        // the newest committed feature row
+        const int32_t draft_pos_base = (int32_t) last_target_pos + 1;
 
         if (kq_mask_swa->type == GGML_TYPE_F16) {
             const ggml_fp16_t h_inf = ggml_fp32_to_fp16(-INFINITY);

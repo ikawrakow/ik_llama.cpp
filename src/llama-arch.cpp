@@ -89,6 +89,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_DFLASH_DRAFT,    "dflash-draft" },
     { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4-assistant"   },
     { LLM_ARCH_OPENPANGU,       "openpangu"    },
+    { LLM_ARCH_MUSE_GLIMMER,    "muse-glimmer" },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
