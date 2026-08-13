@@ -26,7 +26,8 @@ ggml_tensor * llm_build_context::build_dspark_logits(
     ggml_tensor * draft_tokens = nullptr;
 
     for (int64_t i = 0; i < n_tokens; ++i) {
-        ggml_tensor * markov_w1 = ggml_get_rows(ctx0, model.dspark_markov_w1, previous);
+        ggml_tensor * markov_w1 = ggml_get_rows_ext(
+                ctx0, model.dspark_markov_w1, previous, true, false);
         ggml_tensor * markov_bias = ggml_mul_mat(ctx0, model.dspark_markov_w2, markov_w1);
         ggml_tensor * base_row = ggml_view_2d(
                 ctx0,
