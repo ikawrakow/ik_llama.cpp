@@ -1254,6 +1254,9 @@ static bool llama_kv_cache_init(
     }
     if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && is_mla_attn && offload) {
         cache.replicated_k_l.reserve(n_layer);
+        if (llama_model_has_recurrent(&model)) {
+            cache.split_s_l.reserve(n_layer);
+        }
         replicate_mla = true;
     }
 
@@ -1377,6 +1380,42 @@ static bool llama_kv_cache_init(
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
+        if (qnext_recurrent) {
+            s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
+            auto s_name = std::string{"cache_s_l"} + std::to_string(i);
+            ggml_set_name(s, s_name.c_str());
+            cache.s_l[i] = s;
+            cache.k_l.push_back(nullptr);
+            if (needs_v_cache && !is_dsv4_k_only && model.arch != LLM_ARCH_OPENPANGU) {
+                cache.v_l.push_back(nullptr);
+            }
+            LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
+            if ((split_cache || replicate_mla) && model.layers[i].ssm_out->extra) {
+                auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
+                GGML_ASSERT(split_ssm_out);
+                int num_v_heads = hparams.ssm_dt_rank;
+                int head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+                int n_device = split_ssm_out->n_device;
+                auto & split_s_l = cache.split_s_l.emplace_back();
+                split_s_l.tensor_splits.resize(n_device, nullptr);
+                for (int is = 0; is < n_device; ++is) {
+                    auto split = split_ssm_out->splits[is];
+                    if (!split) continue;
+                    GGML_ASSERT(split->ne[0] % head_v_dim == 0);
+                    int nv = split->ne[0] / head_v_dim;
+                    auto size = hparams.n_embd_v_s_id(nv);
+                    split_s_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, size, qnext_state_slots);
+                    auto split_name = s_name + '.' + std::to_string(is);
+                    ggml_set_name(split_s_l.tensor_splits[is], split_name.c_str());
+                    mem_split[is] += ggml_nbytes(split_s_l.tensor_splits[is]);
+                }
+                split_s_l.ggml.n_device  = n_device;
+                split_s_l.ggml.split_dim = 0;
+                split_s_l.ggml.splits    = split_s_l.tensor_splits.data();
+                cache.s_l[i]->extra = (void *)&split_s_l.ggml;
+            }
+            continue;
+        }
         if (is_mla_attn && cparams.mla_attn) {
             // DeepSeek MLA
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
@@ -1429,40 +1468,6 @@ static bool llama_kv_cache_init(
                 cache.k_l.push_back(nullptr);
                 if (!is_dsv4_k_only) {
                     cache.v_l.push_back(nullptr);
-                }
-                continue;
-            }
-            if (qnext_recurrent) {
-                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
-                auto s_name = std::string{"cache_s_l"} + std::to_string(i);
-                ggml_set_name(s, s_name.c_str());
-                cache.s_l[i] = s;
-                cache.k_l.push_back(nullptr);
-                cache.v_l.push_back(nullptr);
-                LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
-                if (split_cache && model.layers[i].ssm_out->extra) {
-                    auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
-                    GGML_ASSERT(split_ssm_out);
-                    int num_v_heads = hparams.ssm_dt_rank;
-                    int head_v_dim  = hparams.ssm_d_inner / num_v_heads;
-                    int n_device = split_ssm_out->n_device;
-                    auto & split_s_l = cache.split_s_l.emplace_back();
-                    split_s_l.tensor_splits.resize(n_device, nullptr);
-                    for (int is = 0; is < n_device; ++is) {
-                        auto split = split_ssm_out->splits[is];
-                        if (!split) continue;
-                        GGML_ASSERT(split->ne[0] % head_v_dim == 0);
-                        int nv = split->ne[0] / head_v_dim;
-                        auto size = hparams.n_embd_v_s_id(nv);
-                        split_s_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, size, qnext_state_slots);
-                        auto split_name = s_name + '.' + std::to_string(is);
-                        ggml_set_name(split_s_l.tensor_splits[is], split_name.c_str());
-                        mem_split[is] += ggml_nbytes(split_s_l.tensor_splits[is]);
-                    }
-                    split_s_l.ggml.n_device  = n_device;
-                    split_s_l.ggml.split_dim = 0;
-                    split_s_l.ggml.splits    = split_s_l.tensor_splits.data();
-                    cache.s_l[i]->extra = (void *)&split_s_l.ggml;
                 }
                 continue;
             }
@@ -1583,7 +1588,7 @@ static bool llama_kv_cache_init(
             }
         }
     }
-    if (is_mla_attn && cparams.mla_attn && n_mla < n_kv_active_layers && n_mla > 0) {
+    if (is_mla_attn && cparams.mla_attn && !llm_arch_is_hybrid(model.arch) && n_mla < n_kv_active_layers && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d active KV layers having MLA enabled\n", __func__, n_mla, n_kv_active_layers);
         LLAMA_LOG_ERROR("%s: bailing out\n", __func__);
         GGML_ABORT("fatal error");
@@ -2739,7 +2744,7 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: f_attention_scale = %f\n", __func__, hparams.f_attention_scale);
     }
 
-    if (model.arch == LLM_ARCH_BAILINGMOE2) {
+    if (model.arch == LLM_ARCH_BAILINGMOE2 || model.arch == LLM_ARCH_BAILINGMOE3) {
         LLAMA_LOG_INFO("%s: n_layer_dense_lead   = %d\n",     __func__, hparams.n_layer_dense_lead);
         LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: n_ff_shexp           = %d\n",     __func__, hparams.n_ff_shexp);
@@ -8783,6 +8788,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_BAILINGMOE3:
         case LLM_ARCH_DFLASH:
         case LLM_ARCH_MUSE_GLIMMER:
             return LLAMA_ROPE_TYPE_NORM;

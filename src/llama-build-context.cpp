@@ -989,6 +989,27 @@ ggml_tensor * llm_build_context::llm_build_lora_mm(
     return res;
 }
 
+ggml_tensor * llm_build_context::build_mla_output_gate(
+        llama_context & lctx,
+        ggml_context * ctx0,
+        ggml_tensor * output,
+        ggml_tensor * input,
+        ggml_tensor * gate_w,
+        int64_t head_dim,
+        int64_t n_head,
+        int il,
+        const llm_build_cb & cb) {
+    auto gate = llm_build_lora_mm(lctx, ctx0, gate_w, input);
+    gate = ggml_reshape_3d(ctx0, gate, 1, n_head, output->ne[1]);
+    cb(gate, "attn_gate", il);
+
+    output = ggml_reshape_3d(ctx0, output, head_dim, n_head, output->ne[1]);
+    output = ggml_fused_mul_unary(ctx0, gate, output, GGML_UNARY_OP_SIGMOID);
+    output = ggml_reshape_2d(ctx0, output, head_dim * n_head, output->ne[2]);
+    cb(output, "attn_gated", il);
+    return output;
+}
+
 ggml_tensor * llm_build_context::llm_build_lora_mm_id(
         struct llama_context & lctx,
          struct ggml_context * ctx0,
@@ -1166,9 +1187,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             }
             cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
             cb(cur, "ffn_up_gate", il_cb);
-            if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
-                *(float *)(cur->op_params + 1) = lctx.model.hparams.swiglu_limits[il];
-            }
+            *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, lctx.model.arch == LLM_ARCH_BAILINGMOE3);
             cur = llm_build_lora_mm(lctx, ctx, split_d, cur);
             cb(cur, "ffn_down", il_cb);
             if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
@@ -1227,9 +1246,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                         type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI;
         cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
         cb(cur, "ffn_up_gate", il);
-        if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
-            *(float *)(cur->op_params + 1) = lctx.model.hparams.swiglu_limits_shared[il];
-        }
+        *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, true);
         if (down) {
             cur = llm_build_lora_mm(lctx, ctx, down, cur);
             cb(cur, "ffn_down", il);
@@ -1310,18 +1327,16 @@ ggml_tensor * llm_build_context::llm_build_ffn(
        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         cur = ggml_fused_mul_unary(ctx, cur, tmp, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                                                   type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU);
-        if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
-            *((float *)(cur->op_params + 1)) = lctx.model.hparams.swiglu_limits_shared[il];
-        }
+        *((float *)(cur->op_params + 1)) = lctx.model.swiglu_limit(il, true);
     }
     else {
 
     switch (type_op) {
         case LLM_FFN_SILU:
             {
-                if (lctx.model.arch == LLM_ARCH_STEP35) {
+                if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_BAILINGMOE3) {
                     cur = ggml_fused_mul_unary(ctx, cur, up, GGML_UNARY_OP_SILU);
-                    *(float *)(cur->op_params + 1) = lctx.model.hparams.swiglu_limits_shared[il];
+                    *(float *)(cur->op_params + 1) = lctx.model.swiglu_limit(il, true);
                     type_gate = LLM_FFN_SEQ;
                     break;
                 }
@@ -1497,7 +1512,9 @@ llm_expert_gating_func_type   gating_op,
 
     // select experts
     if (selected_experts == nullptr) {
-        if (lctx.cparams.grouped_expert_routing && lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
+        const bool grouped_routing = lctx.cparams.grouped_expert_routing &&
+                (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_BAILINGMOE3);
+        if (grouped_routing && n_tokens > 0) {
             auto& hparams = lctx.model.hparams;
             selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
         } else {
@@ -1527,7 +1544,7 @@ llm_expert_gating_func_type   gating_op,
         if (lctx.model.arch == LLM_ARCH_LAGUNA) {
             weights_sum = ggml_clamp(ctx, weights_sum, 6.103515625e-5f, INFINITY);
             cb(weights_sum, "ffn_moe_weights_sum_clamped", il);
-        } else if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_STEP35) {
+        } else if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_BAILINGMOE3 || lctx.model.arch == LLM_ARCH_STEP35) {
             weights_sum = ggml_scale_bias(ctx, weights_sum, 1.0, 1e-20);
             cb(weights_sum, "ffn_moe_weights_sum_biased", il);
         }
@@ -1573,9 +1590,7 @@ llm_expert_gating_func_type   gating_op,
             par = ggml_moe_up_gate(ctx, up_gate_exps, nullptr, cur, selected_experts,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
         }
-        if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
-            *((float *)(par->op_params + 1)) = lctx.model.hparams.swiglu_limits[il];
-        }
+        *((float *)(par->op_params + 1)) = lctx.model.swiglu_limit(il, false);
     } else {
     GGML_ASSERT(!up_gate_exps && !up_gate_exps_b);
 
@@ -1589,9 +1604,7 @@ llm_expert_gating_func_type   gating_op,
             par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts,
                     type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
         }
-        if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
-            *(float *)(par->op_params + 1) = lctx.model.hparams.swiglu_limits[il];
-        }
+        *(float *)(par->op_params + 1) = lctx.model.swiglu_limit(il, false);
     } else {
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
@@ -1617,9 +1630,7 @@ llm_expert_gating_func_type   gating_op,
 
         if (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU) {
             par = ggml_fused_mul_unary(ctx, gate, up, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
-            if (lctx.model.arch == LLM_ARCH_STEP35 || lctx.model.arch == LLM_ARCH_DEEPSEEK4) {
-                *((float *)(par->op_params + 1)) = lctx.model.hparams.swiglu_limits[il];
-            }
+            *((float *)(par->op_params + 1)) = lctx.model.swiglu_limit(il, false);
         } else if (type_op == LLM_FFN_SWIGLU_OAI) {
             constexpr float alpha = 1.702f;
             constexpr float limit = 7.0f;
@@ -2985,6 +2996,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_BAILINGMOE2:
             {
                 result = llm.build_bailingmoe2();
+            } break;
+        case LLM_ARCH_BAILINGMOE3:
+            {
+                result = llm.build_bailingmoe3();
             } break;
         case LLM_ARCH_MINIMAX_M2:
             {

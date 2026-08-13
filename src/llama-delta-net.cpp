@@ -95,7 +95,9 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     GGML_ASSERT(q->ne[0] == S_k && q->ne[2] == H_k && q->ne[1] == n_tokens && q->ne[3] == n_seqs);
     GGML_ASSERT(k->ne[0] == S_k && k->ne[2] == H_k && k->ne[1] == n_tokens && k->ne[3] == n_seqs);
     GGML_ASSERT(v->ne[2] == n_tokens);
-    GGML_ASSERT(g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
+    const bool scalar_gate = g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs;
+    const bool channel_gate = g->ne[0] == S_v && g->ne[1] == H_v && g->ne[2] == n_tokens && g->ne[3] == n_seqs;
+    GGML_ASSERT(scalar_gate || channel_gate);
     GGML_ASSERT(beta->ne[0] == H_v && beta->ne[2] == n_tokens && beta->ne[3] == n_seqs);
     GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H_v && state->ne[3] == n_seqs);
     //GGML_ASSERT(H_k == H_v);
@@ -109,7 +111,7 @@ std::pair<ggml_tensor *, ggml_tensor *> delta_net::build_fused_delta_net(ggml_co
     cb(state,"state_in", il);
 
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
-    g = ggml_permute(ctx0, g, 2, 0, 3, 1);
+    g = channel_gate ? ggml_permute(ctx0, g, 1, 2, 0, 3) : ggml_permute(ctx0, g, 2, 0, 3, 1);
     beta = ggml_permute(ctx0, beta, 2, 0, 1, 3);
 
     ggml_tensor * state_flat = ggml_reshape_4d(ctx0, state, S_v, S_v * H_v, 1, n_seqs);

@@ -429,6 +429,7 @@ struct llm_build_context {
     ggml_cgraph * build_openai_moe();
 
     ggml_cgraph * build_bailingmoe2();
+    ggml_cgraph * build_bailingmoe3();
 
     ggml_cgraph * build_minimaxm2();
     ggml_cgraph * build_minimaxm3();
@@ -455,6 +456,10 @@ struct llm_build_context {
     //
     static ggml_tensor * llm_build_lora_mm(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * w, ggml_tensor * cur);
+
+    static ggml_tensor * build_mla_output_gate(llama_context & lctx, ggml_context * ctx0,
+            ggml_tensor * output, ggml_tensor * input, ggml_tensor * gate_w,
+            int64_t head_dim, int64_t n_head, int il, const llm_build_cb & cb);
 
     static ggml_tensor * llm_build_lora_mm_id(llama_context & lctx, ggml_context * ctx0,
           ggml_tensor * w, ggml_tensor * cur, ggml_tensor * ids);
