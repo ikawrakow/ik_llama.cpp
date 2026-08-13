@@ -1423,8 +1423,11 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm);
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
-                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers);
+                // Ling-3.0-tiny ships no NextN block, and its converters omit the key
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers, false);
                 ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,            hparams.n_lora_kv);
+                // Ling-3.0-flash sets q_lora_rank null and projects Q directly; Ling-3.0-tiny factorizes it
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,             hparams.n_lora_q, false);
                 ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,           hparams.n_embd_head_k_full);
                 ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,         hparams.n_embd_head_v_full);
                 ml.get_key(LLM_KV_SSM_CONV_KERNEL,                    hparams.ssm_d_conv);
@@ -1436,8 +1439,23 @@ void llm_load_hparams(
                     throw std::runtime_error("bailingmoe3: kda.safe_gate = false is not supported");
                 }
                 ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,               hparams.kda_gate_lower_bound);
-                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,            hparams.swiglu_limits,        hparams.n_layer);
-                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,          hparams.swiglu_limits_shared, hparams.n_layer);
+                // Ling-3.0-tiny sets both limit lists null. 0 is the unclamped value where it is read.
+                hparams.swiglu_limits.fill(0.0f);
+                hparams.swiglu_limits_shared.fill(0.0f);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,            hparams.swiglu_limits,        hparams.n_layer, false);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,          hparams.swiglu_limits_shared, hparams.n_layer, false);
+
+                // one converter writes the tensors but not the key, so the tensors decide.
+                // the norm is 1-D and so cannot be transposed, unlike attn_q_a itself
+                if (hparams.n_lora_q == 0) {
+                    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                        const std::string probe = LLM_TN(LLM_ARCH_BAILINGMOE3)(LLM_TENSOR_ATTN_Q_A_NORM, "weight", il);
+                        if (const auto * meta = ml.get_tensor_meta(probe.c_str())) {
+                            hparams.n_lora_q = meta->ne[0];
+                            break;
+                        }
+                    }
+                }
 
                 hparams.ssm_n_group = hparams.n_head();
                 hparams.ssm_dt_rank = hparams.n_head();

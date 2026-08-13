@@ -4102,8 +4102,17 @@ bool create_tensors_helper::create_bailingmoe3_tensors(const LLM_TN & tn) {
             layer.ssm_norm = create_tensor(ctx_split, tn(LLM_TENSOR_SSM_NORM, "weight", il), {hparams.ssm_d_state}, flags);
             layer.ssm_out  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", il), {n_embd_kda, n_embd}, flags);
         } else {
-            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", il),
-                    {n_embd, n_head_kda * hparams.n_embd_head_k_full}, flags);
+            if (hparams.n_lora_q > 0) {
+                layer.wq_a = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_A, "weight", il),
+                        {n_embd, hparams.n_lora_q}, flags);
+                layer.attn_q_a_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", il),
+                        {hparams.n_lora_q}, flags);
+                layer.wq_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_B, "weight", il),
+                        {hparams.n_lora_q, n_head_kda * hparams.n_embd_head_k_full}, flags);
+            } else {
+                layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", il),
+                        {n_embd, n_head_kda * hparams.n_embd_head_k_full}, flags);
+            }
             layer.wkv_a_mqa = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", il),
                     {n_embd, hparams.n_lora_kv + hparams.n_rot}, flags);
             layer.attn_kv_a_norm = create_tensor(norm_ctx, tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", il),

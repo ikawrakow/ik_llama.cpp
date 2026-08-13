@@ -42,12 +42,13 @@ ggml_cgraph * llm_build_context::build_bailingmoe3() {
         } else {
             auto inpSA = inpL;
             const bool is_tp_layer = tp_mode && model.layers[il].wo->extra;
+            const bool direct_q = hparams.n_lora_q == 0;
             if (is_tp_layer) {
                 cur = build_deepseek2_tp_attention(gf, il, inpL, KQ_mask, inp_pos, rope_cache,
-                        kq_scale, attn_factor_scaled, use_f32_attn_precision, true, pp_opt);
+                        kq_scale, attn_factor_scaled, use_f32_attn_precision, direct_q, pp_opt);
             } else {
                 cur = build_deepseek2_layer_attention(gf, il, inpL, KQ_mask, inp_pos, rope_cache,
-                        kq_scale, attn_factor_scaled, use_f32_attn_precision, true, pp_opt);
+                        kq_scale, attn_factor_scaled, use_f32_attn_precision, direct_q, pp_opt);
             }
             if (last_layer) {
                 cur = ggml_get_rows(ctx0, cur, inp_out_ids);
