@@ -321,7 +321,7 @@ void server_context::init() {
 
         if (ga_n != 1 && !llama_supports_ctx_shift(slot.ctx)) {
             // self-extend re-positions cached rows, which a compacted layer cannot represent
-            LOG_WARNING("%s\n", "self-extend is not supported with --swa-compress, it will be disabled");
+            LOG_WARNING("%s\n", "self-extend is not supported by this context's KV cache, it will be disabled");
             ga_n = 1;
             ga_w = 512;
         }
@@ -1825,16 +1825,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             LOG_WARNING("%s\n", "ctx_shift is not implemented for split mode graph, it will be disabled");
         }
     }
-    if (!llama_model_supports_ctx_shift(llama_get_model(slot.ctx))) {
-        if (params_base.ctx_shift) {
-            params_base.ctx_shift = false;
-            LOG_WARNING("%s\n", "ctx_shift is not supported by this model's KV cache, it will be disabled");
-        }
-    }
     if (!llama_supports_ctx_shift(slot.ctx)) {
         if (params_base.ctx_shift) {
             params_base.ctx_shift = false;
-            LOG_WARNING("%s\n", "ctx_shift is not supported with --swa-compress, it will be disabled");
+            LOG_WARNING("%s\n", "ctx_shift is not supported by this context's KV cache, it will be disabled");
         }
     }
     {

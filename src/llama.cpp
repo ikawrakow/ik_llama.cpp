@@ -2490,7 +2490,7 @@ static void llama_kv_cache_seq_add(
     // by absolute position. Fail loudly instead of corrupting.
     GGML_ASSERT(!cache.s_l_position_strict && "K-shift/context shift is not supported for this model's position-indexed KV cache");
     // a compacted layer holds window rows rather than one row per context cell, so the cells this
-    // would re-position do not describe it and build_k_shift would read past the layer
+    // would re-position do not describe it
     GGML_ASSERT(!cache.any_compacted() && "K-shift/context shift is not supported for a compacted KV cache (--swa-compress)");
 
     uint32_t new_head = cache.size;
@@ -7184,9 +7184,9 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     //LLAMA_LOG_INFO("(tmp log) KV defrag time: %.3f ms\n", (t_end - t_start)/1000.0);
 }
 
-static bool get_can_shift(struct llama_context & lctx) {
-    bool no_shift = lctx.model.is_mla_model();
-    no_shift = no_shift || lctx.model.arch == LLM_ARCH_DEEPSEEK4;
+static bool get_can_shift(const struct llama_context & lctx) {
+    bool no_shift = !llama_model_supports_ctx_shift(&lctx.model);
+    no_shift = no_shift || lctx.model.is_mla_model();
     no_shift = no_shift || lctx.model.hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE;
     // build_k_shift views n_ctx rows per layer, but a compacted layer holds only its window rows
     no_shift = no_shift || lctx.kv_self.any_compacted();
@@ -8742,7 +8742,7 @@ void llama_free(struct llama_context * ctx) {
 }
 
 bool llama_supports_ctx_shift(const struct llama_context * ctx) {
-    return ctx != nullptr && !ctx->kv_self.any_compacted();
+    return ctx != nullptr && get_can_shift(*ctx);
 }
 
 const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model) {
