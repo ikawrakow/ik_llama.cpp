@@ -59,12 +59,12 @@ static __global__ void k_prepare_one_batch_q(int ne0, int ne1, size_t nb1, size_
     q_out[i0 + (i2 + i1*ne1)*ne0] = __float2half(q_in[i0 + i1*nb1 + i2*nb2]);
 }
 
-static __global__ void k_copy_dst(int nelem, int ncols, const half * kqv16, const float * inv_sum, float * dst) {
+static __global__ void k_copy_dst(int nelem, int ncols, const float * kqv32, const float * inv_sum, float * dst) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    dst[i] = __half2float(kqv16[i]) * inv_sum[i / ncols];
+    dst[i] = kqv32[i] * inv_sum[i / ncols];
 }
 
 template <int ncols_template, int block_size_template>
@@ -289,7 +289,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     auto kqv_size = V->ne[0]*Q->ne[2]*max_rows;
     ggml_cuda_pool_alloc<half> q16(ctx.pool(), q_size);
     ggml_cuda_pool_alloc<half> kq16(ctx.pool(), kq_size);
-    ggml_cuda_pool_alloc<half> kqv16(ctx.pool(), kqv_size);
+    ggml_cuda_pool_alloc<float> kqv32(ctx.pool(), kqv_size);
     ggml_cuda_pool_alloc<half> mask16(ctx.pool(), mask_size);
     ggml_cuda_pool_alloc<half> k16(ctx.pool(), k_cache_size);
     ggml_cuda_pool_alloc<float> inv_sum(ctx.pool(), max_rows);
@@ -361,21 +361,21 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                         V->ne[0], Q->ne[2], indexer->ne[0],
                         &alpha_32, k16.get() + v_offset, CUDA_R_16F, K->ne[0], K->ne[0]*indexer->ne[0],
                         kq16.get(),                      CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
-                        &beta_32, kqv16.get(),           CUDA_R_16F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
+                        &beta_32, kqv32.get(),           CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
                         CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         } else {
             CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
                         V->ne[0], Q->ne[2], indexer->ne[0],
                         &alpha_32, v16.get(),  CUDA_R_16F, V->ne[0], V->ne[0]*indexer->ne[0],
                         kq16.get(),            CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
-                        &beta_32, kqv16.get(), CUDA_R_16F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
+                        &beta_32, kqv32.get(), CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
                         CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         }
 
         {
             int nelem = V->ne[0]*Q->ne[2]*nrows;
             int nblock = (nelem + 255)/256;
-            k_copy_dst<<<nblock, 256, 0, ctx.stream()>>>(nelem, dst->ne[0], kqv16.get(), inv_sum.get(),
+            k_copy_dst<<<nblock, 256, 0, ctx.stream()>>>(nelem, dst->ne[0], kqv32.get(), inv_sum.get(),
                     (float *)((char *)dst->data + dst->nb[2]*first));
 
         }
