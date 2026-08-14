@@ -1428,7 +1428,8 @@ common_speculative * common_speculative_init(
                     config.params.dflash_cross_ctx,
                     query_capacity,
                     config.params.n_max,
-                    config.params.conf_min >= 0.0f);
+                    config.params.autotune || config.params.conf_min >= 0.0f,
+                    config.params.autotune);
                 if (!state->ready) {
                     LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
                             common_speculative_type_to_str(config.type).c_str());
@@ -1524,7 +1525,7 @@ common_speculative * common_speculative_init(
     } else if (params.autotune && !result->impls.empty()) {
         auto actual_type = result->impls[0]->type;
         if (actual_type == COMMON_SPECULATIVE_TYPE_DSPARK) {
-            LOG_WRN("Autotune disabled for DSpark; use conf_min for fixed confidence control\n");
+            LOG_DBG("DSpark confidence autotune uses its post-draft policy\n");
         } else if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
             actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
             result->tuner = std::make_unique<spec_tuner>();
