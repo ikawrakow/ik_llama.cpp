@@ -165,6 +165,9 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     if (stage.has_p_min_override()) {
         result.p_min = stage.p_min;
     }
+    if (stage.has_conf_min_override()) {
+        result.conf_min = stage.conf_min;
+    }
     if (stage.has_mtp_heads_override()) {
         result.mtp_heads = stage.mtp_heads;
     }
@@ -323,6 +326,9 @@ bool common_speculative_validate_chain(const common_params_speculative & params,
 
         if (common_speculative_type_is_dflash_family(stage.type) && stage_params.dflash_cross_ctx < 1) {
             return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires cross_ctx >= 1");
+        }
+        if (stage_params.conf_min >= 0.0f && stage.type != COMMON_SPECULATIVE_TYPE_DSPARK) {
+            return fail("conf_min is only valid for dspark speculative stages");
         }
     }
 
@@ -949,6 +955,13 @@ static void common_speculative_stage_apply_kv(
         stage.p_min = std::stof(value_raw);
         if (stage.p_min < 0.0f) {
             throw std::invalid_argument("speculative stage p_min must be >= 0");
+        }
+        return;
+    }
+    if (key == "conf_min") {
+        stage.conf_min = std::stof(value_raw);
+        if (stage.conf_min < 0.0f || stage.conf_min > 1.0f) {
+            throw std::invalid_argument("speculative stage conf_min must be between 0 and 1");
         }
         return;
     }
@@ -3389,7 +3402,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  --recurrent-ckpt-mode remains as a deprecated alias" });
     options.push_back({ "*", "--spec-type SPEC[:k=v,...]",      "canonical speculative stage entry; repeat for a supported two-stage chain.\n"
                                                               "types: none, draft, dflash, dspark, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
-                                                              "canonical keys: n_max,n_min,p_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
+                                                              "canonical keys: n_max,n_min,p_min,conf_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
                                                               "MTP heads: heads=1 is the default; heads>1 and heads=0 (all model heads) are experimental\n"
                                                               "for comma-bearing string values, quote the value inside the stage payload for normal shell use\n"
                                                               "if argv is passed directly without shell unescaping, the parser also accepts escaped commas as \\,\n"

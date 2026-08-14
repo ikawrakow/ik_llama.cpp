@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -89,6 +90,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
     int32_t n_target_features = 0;
     int32_t cross_ctx = 0;
     bool is_dspark = false;
+    bool confidence_enabled = false;
     bool ready = false;
 
     std::vector<int32_t> target_layer_ids;
@@ -108,11 +110,15 @@ struct common_speculative_state_dflash : public common_speculative_state {
     bool target_window_materialized = false;
     llama_pos last_target_pos = -1;
 
+    bool confidence_invalid_reported = false;
+    bool confidence_readback_reported = false;
+
     common_speculative_state_dflash(
             enum common_speculative_type type,
             llama_context * ctx_tgt,
             llama_context * ctx_dft,
-            int32_t cross_ctx)
+            int32_t cross_ctx,
+            bool confidence_enabled)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_dft(ctx_dft)
@@ -122,11 +128,17 @@ struct common_speculative_state_dflash : public common_speculative_state {
         const llama_model * model_dft = llama_get_model(ctx_dft);
 
         is_dspark = type == COMMON_SPECULATIVE_TYPE_DSPARK;
+        this->confidence_enabled = is_dspark && confidence_enabled;
         const bool has_dspark_head = llama_model_dflash_has_dspark_head(model_dft);
         if (is_dspark != has_dspark_head) {
             LOG_ERR("%s: %s stage requires %s DSpark Markov tensors\n", __func__,
                     is_dspark ? "dspark" : "dflash",
                     is_dspark ? "complete" : "no");
+            return;
+        }
+
+        if (this->confidence_enabled && !llama_model_dflash_has_dspark_confidence_head(model_dft)) {
+            LOG_ERR("%s: DSpark confidence mode requires a confidence projection tensor\n", __func__);
             return;
         }
 
@@ -231,6 +243,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
         llama_set_dflash_dspark(ctx_dft, is_dspark);
+        llama_set_dflash_confidence_enabled(ctx_dft, this->confidence_enabled);
         LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, cross_ctx=%d, n_target_features=%d, n_target_layers=%d)\n",
                 __func__, llama_n_ctx(ctx_dft), block_size, this->cross_ctx, n_target_features, n_target_layers);
     }
@@ -249,6 +262,48 @@ struct common_speculative_state_dflash : public common_speculative_state {
         GGML_UNUSED(prompt);
         llama_kv_cache_clear(ctx_dft);
         llama_reset_dflash_kv_cache_state(ctx_dft);
+    }
+
+    bool confidence_values_valid(const float * values, int32_t n_values) {
+        if (values == nullptr || n_values <= 0) {
+            if (!confidence_readback_reported) {
+                LOG_WRN("%s: DSpark confidence readback unavailable; using the full draft prefix\n", __func__);
+                confidence_readback_reported = true;
+            }
+            return false;
+        }
+
+        for (int32_t i = 0; i < n_values; ++i) {
+            if (!std::isfinite(values[i]) || values[i] < 0.0f || values[i] > 1.0f) {
+                if (!confidence_invalid_reported) {
+                    LOG_WRN("%s: invalid DSpark confidence value; using the full draft prefix\n", __func__);
+                    confidence_invalid_reported = true;
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int32_t select_confidence_prefix(
+            const float * confidences,
+            int32_t n_confidences,
+            int32_t n_keep,
+            float conf_min) {
+        if (!confidence_values_valid(confidences, n_confidences) || n_confidences != n_keep) {
+            return n_keep;
+        }
+
+        if (conf_min >= 0.0f) {
+            int32_t selected = 0;
+            while (selected < n_keep && confidences[selected] >= conf_min) {
+                ++selected;
+            }
+            selected = std::max<int32_t>(1, selected);
+            return selected;
+        }
+
+        return n_keep;
     }
 
     void draft(
@@ -314,8 +369,15 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return;
         }
 
-        result.reserve((size_t) n_keep);
-        for (int32_t i = 0; i < n_keep; ++i) {
+        int32_t selected_n = n_keep;
+        if (confidence_enabled) {
+            int32_t n_confidences = 0;
+            const float * confidences = llama_get_dflash_confidences(ctx_dft, &n_confidences);
+            selected_n = select_confidence_prefix(confidences, n_confidences, n_keep, params.conf_min);
+        }
+
+        result.reserve((size_t) selected_n);
+        for (int32_t i = 0; i < selected_n; ++i) {
             llama_token id = llama_get_dflash_draft_token_ith(ctx_dft, i);
             if (id == LLAMA_TOKEN_NULL) {
                 const int32_t logits_idx = is_dspark ? i : i + 1;

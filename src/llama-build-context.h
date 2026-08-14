@@ -525,7 +525,9 @@ struct llm_build_context {
 
     static ggml_tensor * build_dspark_logits(llm_build_context & llm,
             ggml_tensor * base_logits, ggml_tensor * input_tokens,
-            ggml_tensor ** draft_tokens = nullptr);
+            ggml_tensor * confidence_hidden = nullptr,
+            ggml_tensor ** draft_tokens = nullptr,
+            ggml_tensor ** confidences = nullptr);
 
     static ggml_tensor * llm_build_moe_ffn(ggml_context * ctx, llama_context & lctx,
          ggml_tensor * cur,
@@ -618,7 +620,8 @@ llm_expert_gating_func_type   gating_op,
     static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, const llm_build_cb & cb);
 
     static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
-            ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name = true);
+            ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name = true,
+            ggml_tensor ** normed_output = nullptr);
 
     static ggml_tensor * do_split_norm(ggml_context * ctx, ggml_tensor * cur, ggml_tensor * the_norm, const llama_hparams & hparams,
         const llm_build_cb & cb, int id, int il_cb, bool is_norm);

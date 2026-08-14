@@ -2518,7 +2518,8 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
 }
 
 ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur,
-        ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name) {
+        ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb, bool add_normed_name,
+        ggml_tensor ** normed_output) {
     // lm_head
     if (output->extra) {
         auto split_output = (ggml_split_tensor_t *)output->extra;
@@ -2544,6 +2545,9 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
             }
         }
         GGML_ASSERT(!o.empty());
+        if (normed_output != nullptr) {
+            *normed_output = last_norm;
+        }
         if (o.size() == 1) {
             cur = o.front();
         }
@@ -2566,6 +2570,9 @@ ggml_tensor * llm_build_context::build_output(llama_context & lctx, ggml_context
         }
         if (output_norm) {
             cur = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            if (normed_output != nullptr) {
+                *normed_output = cur;
+            }
             if (add_normed_name) {
                 cb(cur, "result_norm", -1);
             }
