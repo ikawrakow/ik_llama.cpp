@@ -2002,11 +2002,14 @@ void llm_load_hparams(
                 hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
                 ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
-                if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false)) {
-                    uint32_t swa_period = 4;
-                    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period);
+                if (uint32_t swa_period; ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false) && swa_period > 0) {
                     for (int il = 0; il < hparams.n_layer; ++il) {
-                        hparams.swa_layers[il] = (swa_period == 0 || (il % swa_period < swa_period - 1));
+                        hparams.swa_layers[il] = (il % swa_period < swa_period - 1);
+                    }
+                } else if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer)) {
+                    LLAMA_LOG_WARN("================================ No attention.sliding_window_pattern key found! Assuming a period of 4\n");
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        hparams.swa_layers[il] = (il % 4 < 3);
                     }
                 }
 
