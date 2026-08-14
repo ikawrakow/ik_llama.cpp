@@ -63,6 +63,8 @@ add_library(llama
             llama-hparams.cpp
             llama-delta-net.h
             llama-delta-net.cpp
+            llama-kda.h
+            llama-kda.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp
@@ -128,6 +130,7 @@ add_library(llama
             graphs/build_mimo2.cpp
             graphs/build_openai.cpp
             graphs/build_bailingmoe2.cpp
+            graphs/build_bailingmoe3.cpp
             graphs/build_minimaxm2.cpp
             graphs/build_minimaxm3.cpp
             graphs/build_smollm3.cpp

@@ -24,6 +24,9 @@ struct delta_net {
     ggml_tensor * build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb) const;
 
+    ggml_tensor * build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb) const;
+
 private:
 
     llama_context     & lctx;
@@ -59,4 +62,8 @@ private:
 
     static ggml_tensor * build_gated_output(llama_context & lctx, ggml_context * ctx0, ggml_tensor * ssm_norm, ggml_tensor * ssm_out,
             ggml_tensor * output, ggml_tensor * z, int64_t head_v_dim, int64_t num_v_heads, int64_t n_tok, int il, const llm_build_cb & cb);
+
+    ggml_tensor * build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
+            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const;
 };

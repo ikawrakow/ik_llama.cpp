@@ -728,7 +728,6 @@ void llm_load_hparams(
             } break;
         case LLM_ARCH_PHI3:
             {
-                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
@@ -1401,7 +1400,7 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers, false);
 
                 // TODO: when MTP is implemented, this should probably be updated if needed
-                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                hparams.n_layer_kv_from_start = static_cast<int32_t>(hparams.n_layer - hparams.nextn_predict_layers);
 
                 switch (hparams.n_layer) {
                     case 20: model.type = MODEL_16B_A1B; break;
@@ -1410,6 +1409,71 @@ void llm_load_hparams(
                     case 33: model.type = MODEL_100B_A6B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
+            } break;
+        case LLM_ARCH_BAILINGMOE3:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
+                ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,                hparams.n_expert_groups);
+                ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT,           hparams.n_group_used);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
+                // Ling-3.0-tiny ships no NextN block, and its converters omit the key
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers, false);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,            hparams.n_lora_kv);
+                // Ling-3.0-flash sets q_lora_rank null and projects Q directly; Ling-3.0-tiny factorizes it
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,             hparams.n_lora_q, false);
+                ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,           hparams.n_embd_head_k_full);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,         hparams.n_embd_head_v_full);
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,                    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_KDA_HEAD_DIM,                       hparams.ssm_d_state);
+                // absent key means true: only the safe-gate formula is implemented
+                hparams.kda_safe_gate = true;
+                ml.get_key(LLM_KV_KDA_SAFE_GATE,                      hparams.kda_safe_gate, false);
+                if (!hparams.kda_safe_gate) {
+                    throw std::runtime_error("bailingmoe3: kda.safe_gate = false is not supported");
+                }
+                ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,               hparams.kda_gate_lower_bound);
+                // Ling-3.0-tiny sets both limit lists null. 0 is the unclamped value where it is read.
+                hparams.swiglu_limits.fill(0.0f);
+                hparams.swiglu_limits_shared.fill(0.0f);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,            hparams.swiglu_limits,        hparams.n_layer, false);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,          hparams.swiglu_limits_shared, hparams.n_layer, false);
+
+                // one converter writes the tensors but not the key, so the tensors decide.
+                // the norm is 1-D and so cannot be transposed, unlike attn_q_a itself
+                if (hparams.n_lora_q == 0) {
+                    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                        const std::string probe = LLM_TN(LLM_ARCH_BAILINGMOE3)(LLM_TENSOR_ATTN_Q_A_NORM, "weight", il);
+                        if (const auto * meta = ml.get_tensor_meta(probe.c_str())) {
+                            hparams.n_lora_q = meta->ne[0];
+                            break;
+                        }
+                    }
+                }
+
+                hparams.ssm_n_group = hparams.n_head();
+                hparams.ssm_dt_rank = hparams.n_head();
+                hparams.ssm_d_inner = hparams.ssm_d_state * hparams.ssm_dt_rank;
+                // believe the tensors: a stale count hides the last real layer
+                if (hparams.nextn_predict_layers > 0) {
+                    const std::string probe = LLM_TN(LLM_ARCH_BAILINGMOE3)(LLM_TENSOR_NEXTN_EH_PROJ, "weight",
+                            hparams.n_layer - hparams.nextn_predict_layers);
+                    if (ml.get_tensor_meta(probe.c_str()) == nullptr) {
+                        hparams.nextn_predict_layers = 0;
+                    }
+                }
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv_arr[il] == 0;
+                }
+
+                model.type = e_model::MODEL_UNKNOWN;
             } break;
 	    case LLM_ARCH_DOTS1:
             {
