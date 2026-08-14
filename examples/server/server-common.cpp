@@ -33,6 +33,7 @@ void server_log(const char* level, const char* function, int line, const char* m
         {"timestamp", time(nullptr)},
     };
 
+    std::string out;
     if (server_log_json) {
         log.merge_patch({
             {"level",    level},
@@ -45,7 +46,7 @@ void server_log(const char* level, const char* function, int line, const char* m
             log.merge_patch(extra);
         }
 
-        printf("%s\n", log.dump(-1, ' ', false, json::error_handler_t::replace).c_str());
+        out = log.dump(-1, ' ', false, json::error_handler_t::replace);
     }
     else {
         char buf[1024];
@@ -62,10 +63,15 @@ void server_log(const char* level, const char* function, int line, const char* m
             ss << " " << el.key() << "=" << value;
         }
 
-        const std::string str = ss.str();
-        printf("%.*s\n", (int)str.size(), str.data());
+        out = ss.str();
     }
+    printf("%s\n", out.c_str());
     fflush(stdout);
+
+    if (LOG_TARGET != nullptr) {
+        fprintf(LOG_TARGET, "%s\n", out.c_str());
+        fflush(LOG_TARGET);
+    }
 }
 
 //
