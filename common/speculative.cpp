@@ -1126,7 +1126,6 @@ static common_params_speculative common_speculative_get_runtime_params(
     result.n_max = stage.has_n_max_override() ? stage.n_max : params.n_max;
     result.n_min = stage.has_n_min_override() ? stage.n_min : params.n_min;
     result.p_min = stage.has_p_min_override() ? stage.p_min : params.p_min;
-    result.conf_min = stage.has_conf_min_override() ? stage.conf_min : params.conf_min;
     result.mtp_heads = stage.has_mtp_heads_override() ? stage.mtp_heads : params.mtp_heads;
 
     if (config.type == COMMON_SPECULATIVE_TYPE_SUFFIX) {
@@ -1428,7 +1427,7 @@ common_speculative * common_speculative_init(
                     config.params.dflash_cross_ctx,
                     query_capacity,
                     config.params.n_max,
-                    config.params.autotune || config.params.conf_min >= 0.0f,
+                    config.params.autotune,
                     config.params.autotune);
                 if (!state->ready) {
                     LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
