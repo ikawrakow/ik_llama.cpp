@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 static bool common_speculative_are_dflash_compatible(
@@ -91,6 +93,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
     int32_t cross_ctx = 0;
     bool is_dspark = false;
     bool confidence_enabled = false;
+    bool confidence_autotune = false;
     bool ready = false;
 
     std::vector<int32_t> target_layer_ids;
@@ -110,6 +113,22 @@ struct common_speculative_state_dflash : public common_speculative_state {
     bool target_window_materialized = false;
     llama_pos last_target_pos = -1;
 
+    std::vector<uint32_t> confidence_cost_samples;
+    std::vector<double> confidence_cost_us;
+    std::vector<uint32_t> confidence_calibration_observations;
+    std::vector<uint32_t> confidence_calibration_accepted;
+    std::vector<double> confidence_calibration_raw_survival;
+    std::vector<double> confidence_current_survival;
+    int32_t confidence_selected_n = 0;
+    int32_t confidence_current_n_keep = 0;
+    int64_t confidence_step_start_us = 0;
+    int64_t confidence_draft_us = 0;
+    uint32_t confidence_full_samples = 0;
+    bool confidence_cost_profile_frozen = false;
+    uint32_t confidence_summary_calls = 0;
+    std::vector<uint32_t> confidence_summary_selected;
+    std::vector<uint32_t> confidence_summary_accepted;
+    std::vector<double> confidence_summary_survival;
     bool confidence_invalid_reported = false;
     bool confidence_readback_reported = false;
 
@@ -118,7 +137,8 @@ struct common_speculative_state_dflash : public common_speculative_state {
             llama_context * ctx_tgt,
             llama_context * ctx_dft,
             int32_t cross_ctx,
-            bool confidence_enabled)
+            bool confidence_enabled,
+            bool confidence_autotune)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_dft(ctx_dft)
@@ -129,6 +149,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         is_dspark = type == COMMON_SPECULATIVE_TYPE_DSPARK;
         this->confidence_enabled = is_dspark && confidence_enabled;
+        this->confidence_autotune = this->confidence_enabled && confidence_autotune;
         const bool has_dspark_head = llama_model_dflash_has_dspark_head(model_dft);
         if (is_dspark != has_dspark_head) {
             LOG_ERR("%s: %s stage requires %s DSpark Markov tensors\n", __func__,
@@ -241,6 +262,16 @@ struct common_speculative_state_dflash : public common_speculative_state {
         target_window_pos_stage.reserve((size_t) this->cross_ctx);
         ready = true;
 
+        confidence_cost_samples.assign((size_t) block_size, 0);
+        confidence_cost_us.assign((size_t) block_size, 0.0);
+        confidence_calibration_observations.assign((size_t) block_size, 0);
+        confidence_calibration_accepted.assign((size_t) block_size, 0);
+        confidence_calibration_raw_survival.assign((size_t) block_size, 0.0);
+        confidence_current_survival.reserve((size_t) block_size);
+        confidence_summary_selected.assign((size_t) block_size + 1, 0);
+        confidence_summary_accepted.assign((size_t) block_size + 1, 0);
+        confidence_summary_survival.assign((size_t) block_size, 0.0);
+
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
         llama_set_dflash_dspark(ctx_dft, is_dspark);
         llama_set_dflash_confidence_enabled(ctx_dft, this->confidence_enabled);
@@ -249,6 +280,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
     }
 
     ~common_speculative_state_dflash() override {
+        confidence_emit_summary();
         llama_clear_dflash_capture(ctx_tgt);
         if (ctx_dft) {
             llama_free(ctx_dft);
@@ -260,8 +292,49 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
+        confidence_emit_summary();
         llama_kv_cache_clear(ctx_dft);
         llama_reset_dflash_kv_cache_state(ctx_dft);
+        confidence_selected_n = 0;
+        confidence_current_n_keep = 0;
+        confidence_step_start_us = 0;
+        confidence_draft_us = 0;
+        confidence_current_survival.clear();
+    }
+
+    static bool confidence_summary_enabled() {
+        const char * value = std::getenv("IK_DSPARK_CONF_SUMMARY");
+        return value != nullptr && std::strcmp(value, "0") != 0;
+    }
+
+    void confidence_emit_summary() {
+        if (!confidence_summary_enabled() || confidence_summary_calls == 0) {
+            return;
+        }
+
+        std::string selected;
+        std::string accepted;
+        std::string survival;
+        for (size_t i = 0; i < confidence_summary_selected.size(); ++i) {
+            selected += (i == 0 ? "" : ",") + std::to_string(confidence_summary_selected[i]);
+            accepted += (i == 0 ? "" : ",") + std::to_string(confidence_summary_accepted[i]);
+            if (i < confidence_summary_survival.size()) {
+                survival += (i == 0 ? "" : ",") +
+                        std::to_string(confidence_summary_survival[i] / confidence_summary_calls);
+            }
+        }
+
+        std::string costs;
+        for (size_t i = 0; i < confidence_cost_us.size(); ++i) {
+            costs += (i == 0 ? "" : ",") + std::to_string(confidence_cost_us[i]);
+        }
+        LOG_INF("DSpark confidence summary calls=%u selected=%s accepted=%s mean_survival=%s cost_us=%s\n",
+                confidence_summary_calls, selected.c_str(), accepted.c_str(), survival.c_str(), costs.c_str());
+
+        confidence_summary_calls = 0;
+        std::fill(confidence_summary_selected.begin(), confidence_summary_selected.end(), 0);
+        std::fill(confidence_summary_accepted.begin(), confidence_summary_accepted.end(), 0);
+        std::fill(confidence_summary_survival.begin(), confidence_summary_survival.end(), 0.0);
     }
 
     bool confidence_values_valid(const float * values, int32_t n_values) {
@@ -285,6 +358,25 @@ struct common_speculative_state_dflash : public common_speculative_state {
         return true;
     }
 
+    double confidence_prefix_survival(const float * confidences, int32_t index) const {
+        double survival = 1.0;
+        for (int32_t i = 0; i <= index; ++i) {
+            survival *= confidences[i];
+        }
+
+        if ((size_t) index < confidence_calibration_observations.size() &&
+                confidence_calibration_observations[(size_t) index] >= 8) {
+            const double observations = (double) confidence_calibration_observations[(size_t) index];
+            const double mean_raw = confidence_calibration_raw_survival[(size_t) index] / observations;
+            const double observed = (double) confidence_calibration_accepted[(size_t) index] / observations;
+            if (mean_raw > 1e-6) {
+                survival *= std::clamp(observed / mean_raw, 0.25, 4.0);
+            }
+        }
+
+        return std::clamp(survival, 0.0, 1.0);
+    }
+
     int32_t select_confidence_prefix(
             const float * confidences,
             int32_t n_confidences,
@@ -303,7 +395,47 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return selected;
         }
 
-        return n_keep;
+        if (!confidence_autotune) {
+            return n_keep;
+        }
+
+        if (confidence_cost_samples.size() < (size_t) n_keep) {
+            confidence_cost_samples.resize((size_t) n_keep, 0);
+            confidence_cost_us.resize((size_t) n_keep, 0.0);
+        }
+
+        constexpr uint32_t min_full_samples = 32;
+        if (confidence_full_samples < min_full_samples ||
+                std::any_of(confidence_cost_samples.begin(),
+                            confidence_cost_samples.begin() + n_keep,
+                            [](uint32_t samples) { return samples == 0; })) {
+            return n_keep;
+        }
+
+        double best_score = -1.0;
+        int32_t best_n = n_keep;
+        double useful = 1.0;
+        for (int32_t i = 0; i < n_keep; ++i) {
+            useful += confidence_prefix_survival(confidences, i);
+            const double cost = confidence_cost_us[(size_t) i];
+            if (cost <= 0.0) {
+                continue;
+            }
+
+            const double score = useful / cost;
+            if (score > best_score) {
+                best_score = score;
+                best_n = i + 1;
+            }
+        }
+
+        const double full_cost = confidence_cost_us[(size_t) n_keep - 1];
+        const double full_score = useful / full_cost;
+        if (best_n < n_keep && best_score < full_score * 1.10) {
+            return n_keep;
+        }
+        return best_n;
+
     }
 
     void draft(
@@ -363,17 +495,42 @@ struct common_speculative_state_dflash : public common_speculative_state {
             common_batch_add(batch, mask_token_id, draft_pos_base + i, { 0 }, true);
         }
 
+        const int64_t draft_start_us = confidence_autotune ? ggml_time_us() : 0;
         if (llama_decode(ctx_dft, batch) != 0) {
             LOG_ERR("%s: llama_decode() failed for DFlash draft batch\n", __func__);
             batch.n_tokens = 0;
+            confidence_step_start_us = 0;
+            confidence_draft_us = 0;
             return;
         }
+        confidence_draft_us = draft_start_us > 0 ? ggml_time_us() - draft_start_us : 0;
+
+        confidence_step_start_us = confidence_autotune ? ggml_time_us() : 0;
 
         int32_t selected_n = n_keep;
+        confidence_current_n_keep = n_keep;
+        confidence_current_survival.clear();
         if (confidence_enabled) {
             int32_t n_confidences = 0;
             const float * confidences = llama_get_dflash_confidences(ctx_dft, &n_confidences);
+            if (confidence_values_valid(confidences, n_confidences) && n_confidences == n_keep) {
+                confidence_current_survival.resize((size_t) n_keep);
+                double survival = 1.0;
+                for (int32_t i = 0; i < n_keep; ++i) {
+                    survival *= confidences[i];
+                    confidence_current_survival[(size_t) i] = survival;
+                }
+            }
             selected_n = select_confidence_prefix(confidences, n_confidences, n_keep, params.conf_min);
+        }
+        confidence_selected_n = selected_n;
+
+        if (confidence_summary_enabled()) {
+            ++confidence_summary_calls;
+            ++confidence_summary_selected[(size_t) selected_n];
+            for (int32_t i = 0; i < n_keep && (size_t) i < confidence_current_survival.size(); ++i) {
+                confidence_summary_survival[(size_t) i] += confidence_current_survival[(size_t) i];
+            }
         }
 
         result.reserve((size_t) selected_n);
@@ -391,6 +548,58 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
     void accept(uint16_t n_accepted) override {
         GGML_UNUSED(n_accepted);
+        if (!confidence_autotune || confidence_selected_n <= 0 || confidence_step_start_us <= 0) {
+            return;
+        }
+
+        const int64_t elapsed_us = ggml_time_us() - confidence_step_start_us;
+        confidence_step_start_us = 0;
+        if (confidence_summary_enabled() && confidence_selected_n >= 0 &&
+                (size_t) n_accepted < confidence_summary_accepted.size()) {
+            ++confidence_summary_accepted[(size_t) n_accepted];
+        }
+        if (confidence_selected_n != confidence_current_n_keep || elapsed_us <= 0) {
+            return;
+        }
+
+        if (confidence_current_survival.size() >= (size_t) confidence_current_n_keep) {
+            for (int32_t i = 0; i < confidence_current_n_keep; ++i) {
+                ++confidence_calibration_observations[(size_t) i];
+                confidence_calibration_raw_survival[(size_t) i] += confidence_current_survival[(size_t) i];
+                if (n_accepted > (uint16_t) i) {
+                    ++confidence_calibration_accepted[(size_t) i];
+                }
+            }
+        }
+
+        if (!confidence_cost_profile_frozen) {
+            const double measured_cost = (double) elapsed_us + (double) confidence_draft_us;
+            const size_t full_index = (size_t) confidence_current_n_keep - 1;
+            const uint32_t samples = ++confidence_cost_samples[full_index];
+            confidence_cost_us[full_index] += (measured_cost - confidence_cost_us[full_index]) / (double) samples;
+            ++confidence_full_samples;
+
+            const double fixed_us = std::max<double>(0.0, (double) confidence_draft_us);
+            const double verify_us = std::max<double>(0.0, (double) elapsed_us);
+            for (int32_t i = 0; i < confidence_current_n_keep - 1; ++i) {
+                const double prefix_fraction = (double) (i + 1) /
+                        (double) confidence_current_n_keep;
+                const double verify_fraction = 0.8 + 0.2 * prefix_fraction;
+                const double estimate = fixed_us + verify_us * verify_fraction;
+                confidence_cost_us[(size_t) i] = estimate;
+                confidence_cost_samples[(size_t) i] = std::max(
+                        confidence_cost_samples[(size_t) i], confidence_full_samples);
+            }
+
+            for (int32_t i = 1; i < confidence_current_n_keep; ++i) {
+                confidence_cost_us[(size_t) i] = std::max(
+                        confidence_cost_us[(size_t) i], confidence_cost_us[(size_t) i - 1]);
+            }
+
+            if (confidence_full_samples >= 32) {
+                confidence_cost_profile_frozen = true;
+            }
+        }
     }
 };
 
