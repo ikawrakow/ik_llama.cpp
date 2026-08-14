@@ -7,6 +7,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "iqk_config.h"
 #ifdef __cplusplus
 extern "C" {
@@ -45,8 +46,14 @@ void iqk_blend(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_mask_topk(struct ggml_tensor * dst, int ith, int nth);
 
+IQK_API bool iqk_kda(int32_t head_dim, int32_t n_heads, int32_t gqa_ratio, int32_t repeat_type,
+        int32_t n_tokens, int32_t n_seqs, size_t vnb1, size_t vnb2, size_t vnb3,
+        const size_t gnb[4], const size_t bnb[4],
+        const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
+        const float * state_in, float * out_data, float * state_out, float * saved_steps,
+        int32_t state_step_stride, int32_t ith, int32_t nth);
+
 #ifdef __cplusplus
 }
 #endif
-
 

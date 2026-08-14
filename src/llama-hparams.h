@@ -94,6 +94,8 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
+    bool     kda_safe_gate = false;
+    float    kda_gate_lower_bound = 0.0f;
 
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
@@ -226,6 +228,7 @@ struct llama_hparams {
         if (this->ssm_d_state != other.ssm_d_state) return true;
         if (this->ssm_dt_rank != other.ssm_dt_rank) return true;
         if (this->ssm_n_group != other.ssm_n_group) return true;
+        if (this->kda_safe_gate != other.kda_safe_gate) return true;
         if (this->recurrent_layer_arr != other.recurrent_layer_arr) return true;
         for (int i = 0; i < 8; ++i) {
             if (this->dflash_target_layer_ids[i] != other.dflash_target_layer_ids[i]) return true;
@@ -237,6 +240,7 @@ struct llama_hparams {
 
         if (!is_float_close(this->f_norm_eps,            other.f_norm_eps,            EPSILON)) return true;
         if (!is_float_close(this->f_norm_rms_eps,        other.f_norm_rms_eps,        EPSILON)) return true;
+        if (!is_float_close(this->kda_gate_lower_bound,  other.kda_gate_lower_bound,  EPSILON)) return true;
         if (!is_float_close(this->rope_attn_factor,      other.rope_attn_factor,      EPSILON)) return true;
         if (!is_float_close(this->rope_freq_base_train,  other.rope_freq_base_train,  EPSILON)) return true;
         if (!is_float_close(this->rope_freq_scale_train, other.rope_freq_scale_train, EPSILON)) return true;

@@ -302,6 +302,13 @@ ggml_tensor * llm_build_context::build_deepseek2_tp_attention(
             kqv_2d = ggml_reshape_2d(ctx0, kqv, n_embd_head_v * n_head_local, n_tokens);
         }
 
+        if (model.layers[il].wqkv_gate) {
+            auto gate_split = (const ggml_split_tensor_t *) model.layers[il].wqkv_gate->extra;
+            GGML_ASSERT(gate_split && gate_split->splits[id]);
+            kqv_2d = build_mla_output_gate(lctx, ctx0, kqv_2d, cur, gate_split->splits[id],
+                    n_embd_head_v, n_head_local, il_id, cb);
+        }
+
         ggml_tensor * partial = llm_build_lora_mm(lctx, ctx0, wo_split->splits[id], kqv_2d);
 
         // Fold residual into the first non-skipped rank so the reduce result includes it.
@@ -728,6 +735,7 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
     // norm
     cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
     cb(cur, "attn_norm", il);
+    auto input_normed = cur;
 
     // DSA lightning indexer (GLM-5.2 / DeepSeek-V3.2). Built below from the q_lora latent
     // and used to construct a sparse causal mask. Defaults to the dense KQ_mask.
@@ -1160,6 +1168,10 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
 
             }
 
+            if (model.layers[il].wqkv_gate) {
+                cur = build_mla_output_gate(lctx, ctx0, cur, input_normed, model.layers[il].wqkv_gate,
+                        n_embd_head_v, n_head, il, cb);
+            }
             ggml_build_forward_expand(gf, cur);
 
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
@@ -1200,9 +1212,19 @@ ggml_tensor * llm_build_context::build_deepseek2_layer_attention(
             struct ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_rope, q_rope), 0);
             cb(k_states, "k_states", il);
 
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                    model.layers[il].wo, NULL,
-                    k_states, v_states, q_states, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+            if (model.layers[il].wqkv_gate) {
+                cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                        nullptr, nullptr,
+                        k_states, v_states, q_states, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+                cur = build_mla_output_gate(lctx, ctx0, cur, input_normed, model.layers[il].wqkv_gate,
+                        n_embd_head_v, n_head, il, cb);
+                cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+                cb(cur, "kqv_out", il);
+            } else {
+                cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                        model.layers[il].wo, nullptr,
+                        k_states, v_states, q_states, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+            }
 
         }
     }

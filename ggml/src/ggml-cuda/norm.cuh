@@ -17,3 +17,7 @@ void ggml_cuda_op_fused_add_add_rms_norm(ggml_backend_cuda_context & ctx, ggml_t
 void ggml_cuda_op_fused_rms_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * rms1, ggml_tensor * rms2);
 
 void ggml_cuda_op_fused_rms_rms_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+void ggml_cuda_op_fused_rms_add_rms(ggml_backend_cuda_context & ctx, ggml_tensor * rms2);
+
+void ggml_cuda_op_fused_rms_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
