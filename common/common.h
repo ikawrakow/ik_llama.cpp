@@ -175,7 +175,6 @@ struct common_speculative_stage_params {
     int32_t n_max = -1;
     int32_t n_min = -1;
     float   p_min = -1.0f;
-    float   conf_min = -1.0f;
     int32_t mtp_heads = -1;
     int32_t dflash_cross_ctx = -1;
 
@@ -190,7 +189,6 @@ struct common_speculative_stage_params {
     bool has_n_max_override() const { return n_max >= 0; }
     bool has_n_min_override() const { return n_min >= 0; }
     bool has_p_min_override() const { return p_min >= 0.0f; }
-    bool has_conf_min_override() const { return conf_min >= 0.0f; }
     bool has_mtp_heads_override() const { return mtp_heads >= 0; }
     bool has_dflash_cross_ctx_override() const { return dflash_cross_ctx >= 0; }
     bool has_ngram_size_n_override() const { return ngram_size_n > 0; }
@@ -230,7 +228,6 @@ struct common_params_speculative {
 
     float   p_split = 0.1f; // speculative decoding split probability
     float   p_min = 0.75f; // minimum speculative decoding probability (greedy)
-    float   conf_min = -1.0f; // DSpark confidence threshold; distinct from p_min
 
     // ngram-based speculative decoding
 

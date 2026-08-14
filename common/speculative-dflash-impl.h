@@ -4,8 +4,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
-#include <cstdlib>
-#include <string>
 #include <vector>
 
 static bool common_speculative_are_dflash_compatible(
@@ -125,10 +123,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
     int64_t confidence_draft_us = 0;
     uint32_t confidence_full_samples = 0;
     bool confidence_cost_profile_frozen = false;
-    uint32_t confidence_summary_calls = 0;
-    std::vector<uint32_t> confidence_summary_selected;
-    std::vector<uint32_t> confidence_summary_accepted;
-    std::vector<double> confidence_summary_survival;
     bool confidence_invalid_reported = false;
     bool confidence_readback_reported = false;
 
@@ -268,9 +262,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
         confidence_calibration_accepted.assign((size_t) block_size, 0);
         confidence_calibration_raw_survival.assign((size_t) block_size, 0.0);
         confidence_current_survival.reserve((size_t) block_size);
-        confidence_summary_selected.assign((size_t) block_size + 1, 0);
-        confidence_summary_accepted.assign((size_t) block_size + 1, 0);
-        confidence_summary_survival.assign((size_t) block_size, 0.0);
 
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
         llama_set_dflash_dspark(ctx_dft, is_dspark);
@@ -280,7 +271,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
     }
 
     ~common_speculative_state_dflash() override {
-        confidence_emit_summary();
         llama_clear_dflash_capture(ctx_tgt);
         if (ctx_dft) {
             llama_free(ctx_dft);
@@ -292,7 +282,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
-        confidence_emit_summary();
         llama_kv_cache_clear(ctx_dft);
         llama_reset_dflash_kv_cache_state(ctx_dft);
         confidence_selected_n = 0;
@@ -300,41 +289,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
         confidence_step_start_us = 0;
         confidence_draft_us = 0;
         confidence_current_survival.clear();
-    }
-
-    static bool confidence_summary_enabled() {
-        const char * value = std::getenv("IK_DSPARK_CONF_SUMMARY");
-        return value != nullptr && std::strcmp(value, "0") != 0;
-    }
-
-    void confidence_emit_summary() {
-        if (!confidence_summary_enabled() || confidence_summary_calls == 0) {
-            return;
-        }
-
-        std::string selected;
-        std::string accepted;
-        std::string survival;
-        for (size_t i = 0; i < confidence_summary_selected.size(); ++i) {
-            selected += (i == 0 ? "" : ",") + std::to_string(confidence_summary_selected[i]);
-            accepted += (i == 0 ? "" : ",") + std::to_string(confidence_summary_accepted[i]);
-            if (i < confidence_summary_survival.size()) {
-                survival += (i == 0 ? "" : ",") +
-                        std::to_string(confidence_summary_survival[i] / confidence_summary_calls);
-            }
-        }
-
-        std::string costs;
-        for (size_t i = 0; i < confidence_cost_us.size(); ++i) {
-            costs += (i == 0 ? "" : ",") + std::to_string(confidence_cost_us[i]);
-        }
-        LOG_INF("DSpark confidence summary calls=%u selected=%s accepted=%s mean_survival=%s cost_us=%s\n",
-                confidence_summary_calls, selected.c_str(), accepted.c_str(), survival.c_str(), costs.c_str());
-
-        confidence_summary_calls = 0;
-        std::fill(confidence_summary_selected.begin(), confidence_summary_selected.end(), 0);
-        std::fill(confidence_summary_accepted.begin(), confidence_summary_accepted.end(), 0);
-        std::fill(confidence_summary_survival.begin(), confidence_summary_survival.end(), 0.0);
     }
 
     bool confidence_values_valid(const float * values, int32_t n_values) {
@@ -359,40 +313,35 @@ struct common_speculative_state_dflash : public common_speculative_state {
     }
 
     double confidence_prefix_survival(const float * confidences, int32_t index) const {
-        double survival = 1.0;
+        double raw_survival = 1.0;
+        double previous = 1.0;
         for (int32_t i = 0; i <= index; ++i) {
-            survival *= confidences[i];
-        }
+            raw_survival *= confidences[i];
+            double calibrated = raw_survival;
 
-        if ((size_t) index < confidence_calibration_observations.size() &&
-                confidence_calibration_observations[(size_t) index] >= 8) {
-            const double observations = (double) confidence_calibration_observations[(size_t) index];
-            const double mean_raw = confidence_calibration_raw_survival[(size_t) index] / observations;
-            const double observed = (double) confidence_calibration_accepted[(size_t) index] / observations;
-            if (mean_raw > 1e-6) {
-                survival *= std::clamp(observed / mean_raw, 0.25, 4.0);
+            if ((size_t) i < confidence_calibration_observations.size() &&
+                    confidence_calibration_observations[(size_t) i] >= 8) {
+                const double observations = (double) confidence_calibration_observations[(size_t) i];
+                const double mean_raw = confidence_calibration_raw_survival[(size_t) i] / observations;
+                const double observed = (double) confidence_calibration_accepted[(size_t) i] / observations;
+                if (mean_raw > 1e-6) {
+                    calibrated *= std::clamp(observed / mean_raw, 0.25, 4.0);
+                }
             }
+
+            calibrated = std::min(std::clamp(calibrated, 0.0, 1.0), previous);
+            previous = calibrated;
         }
 
-        return std::clamp(survival, 0.0, 1.0);
+        return previous;
     }
 
     int32_t select_confidence_prefix(
             const float * confidences,
             int32_t n_confidences,
-            int32_t n_keep,
-            float conf_min) {
+            int32_t n_keep) {
         if (!confidence_values_valid(confidences, n_confidences) || n_confidences != n_keep) {
             return n_keep;
-        }
-
-        if (conf_min >= 0.0f) {
-            int32_t selected = 0;
-            while (selected < n_keep && confidences[selected] >= conf_min) {
-                ++selected;
-            }
-            selected = std::max<int32_t>(1, selected);
-            return selected;
         }
 
         if (!confidence_autotune) {
@@ -521,17 +470,9 @@ struct common_speculative_state_dflash : public common_speculative_state {
                     confidence_current_survival[(size_t) i] = survival;
                 }
             }
-            selected_n = select_confidence_prefix(confidences, n_confidences, n_keep, params.conf_min);
+            selected_n = select_confidence_prefix(confidences, n_confidences, n_keep);
         }
         confidence_selected_n = selected_n;
-
-        if (confidence_summary_enabled()) {
-            ++confidence_summary_calls;
-            ++confidence_summary_selected[(size_t) selected_n];
-            for (int32_t i = 0; i < n_keep && (size_t) i < confidence_current_survival.size(); ++i) {
-                confidence_summary_survival[(size_t) i] += confidence_current_survival[(size_t) i];
-            }
-        }
 
         result.reserve((size_t) selected_n);
         for (int32_t i = 0; i < selected_n; ++i) {
@@ -554,10 +495,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         const int64_t elapsed_us = ggml_time_us() - confidence_step_start_us;
         confidence_step_start_us = 0;
-        if (confidence_summary_enabled() && confidence_selected_n >= 0 &&
-                (size_t) n_accepted < confidence_summary_accepted.size()) {
-            ++confidence_summary_accepted[(size_t) n_accepted];
-        }
         if (confidence_selected_n != confidence_current_n_keep || elapsed_us <= 0) {
             return;
         }
