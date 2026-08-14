@@ -1144,6 +1144,9 @@ extern "C" {
     // Returns LLAMA_TOKEN_NULL if argmax is not available (falls back to logits path).
     LLAMA_API llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i);
 
+    // Get DSpark confidence values from the last draft decode.
+    LLAMA_API const float * llama_get_dflash_confidences(struct llama_context * ctx, int32_t * n_confidences);
+
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,
     // the embeddings for which llama_batch.logits[i] != 0 are stored contiguously

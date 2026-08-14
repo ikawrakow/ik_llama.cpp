@@ -1126,6 +1126,7 @@ static common_params_speculative common_speculative_get_runtime_params(
     result.n_max = stage.has_n_max_override() ? stage.n_max : params.n_max;
     result.n_min = stage.has_n_min_override() ? stage.n_min : params.n_min;
     result.p_min = stage.has_p_min_override() ? stage.p_min : params.p_min;
+    result.conf_min = stage.has_conf_min_override() ? stage.conf_min : params.conf_min;
     result.mtp_heads = stage.has_mtp_heads_override() ? stage.mtp_heads : params.mtp_heads;
 
     if (config.type == COMMON_SPECULATIVE_TYPE_SUFFIX) {
@@ -1426,7 +1427,8 @@ common_speculative * common_speculative_init(
                     ctx_dft,
                     config.params.dflash_cross_ctx,
                     query_capacity,
-                    config.params.n_max);
+                    config.params.n_max,
+                    config.params.conf_min >= 0.0f);
                 if (!state->ready) {
                     LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
                             common_speculative_type_to_str(config.type).c_str());
@@ -1521,9 +1523,10 @@ common_speculative * common_speculative_init(
         LOG_WRN("Autotune disabled — explicit speculative stage chains are not supported yet\n");
     } else if (params.autotune && !result->impls.empty()) {
         auto actual_type = result->impls[0]->type;
-        if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
-            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3 &&
-            actual_type != COMMON_SPECULATIVE_TYPE_DSPARK) {
+        if (actual_type == COMMON_SPECULATIVE_TYPE_DSPARK) {
+            LOG_WRN("Autotune disabled for DSpark; use conf_min for fixed confidence control\n");
+        } else if (actual_type != COMMON_SPECULATIVE_TYPE_NONE &&
+            actual_type != COMMON_SPECULATIVE_TYPE_EAGLE3) {
             result->tuner = std::make_unique<spec_tuner>();
             result->tuner->init(actual_type, result->configs[0].params, llama_get_model(ctx_tgt));
             LOG_DBG("Autotune initialized for %s, tuning %zu parameters\n",

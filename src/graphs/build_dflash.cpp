@@ -8,7 +8,9 @@ ggml_tensor * llm_build_context::build_dspark_logits(
         llm_build_context & llm,
         ggml_tensor * base_logits,
         ggml_tensor * input_tokens,
-        ggml_tensor ** draft_tokens_out) {
+        ggml_tensor * confidence_hidden,
+        ggml_tensor ** draft_tokens_out,
+        ggml_tensor ** confidences_out) {
     ggml_context * ctx0 = llm.ctx0;
     const llama_model & model = llm.model;
 
@@ -16,6 +18,14 @@ ggml_tensor * llm_build_context::build_dspark_logits(
     GGML_ASSERT(model.dspark_markov_w2 != nullptr);
     GGML_ASSERT(input_tokens != nullptr);
     GGML_ASSERT(base_logits->ne[1] == input_tokens->ne[0]);
+    const bool build_confidence = llm.lctx.dflash.dspark_confidence_enabled;
+    if (build_confidence) {
+        GGML_ASSERT(confidence_hidden != nullptr);
+        GGML_ASSERT(confidence_hidden->ne[1] == base_logits->ne[1]);
+        GGML_ASSERT(model.dspark_conf_proj != nullptr);
+        GGML_ASSERT(model.dspark_conf_proj->ne[1] == 1);
+        GGML_ASSERT(model.dspark_conf_proj->ne[0] == confidence_hidden->ne[0] + model.dspark_markov_w1->ne[0]);
+    }
 
     const int64_t n_vocab  = base_logits->ne[0];
     const int64_t n_tokens = base_logits->ne[1];
@@ -24,6 +34,7 @@ ggml_tensor * llm_build_context::build_dspark_logits(
     ggml_tensor * previous = ggml_view_1d(ctx0, input_tokens, 1, 0);
     ggml_tensor * chained = nullptr;
     ggml_tensor * draft_tokens = nullptr;
+    ggml_tensor * confidence_markov_rows = nullptr;
 
     for (int64_t i = 0; i < n_tokens; ++i) {
         ggml_tensor * markov_w1 = ggml_get_rows_ext(
@@ -39,6 +50,12 @@ ggml_tensor * llm_build_context::build_dspark_logits(
         ggml_tensor * biased_row = ggml_add(ctx0, base_row, markov_bias);
         ggml_tensor * token = ggml_argmax(ctx0, biased_row);
 
+        if (build_confidence) {
+            confidence_markov_rows = confidence_markov_rows == nullptr
+                    ? markov_w1
+                    : ggml_concat(ctx0, confidence_markov_rows, markov_w1, 1);
+        }
+
         chained = chained == nullptr ? biased_row : ggml_concat(ctx0, chained, biased_row, 1);
         draft_tokens = draft_tokens == nullptr ? token : ggml_concat(ctx0, draft_tokens, token, 0);
         if (i + 1 < n_tokens) {
@@ -48,6 +65,26 @@ ggml_tensor * llm_build_context::build_dspark_logits(
 
     if (draft_tokens_out != nullptr) {
         *draft_tokens_out = draft_tokens;
+    }
+    if (confidences_out != nullptr) {
+        *confidences_out = nullptr;
+        if (build_confidence) {
+            ggml_tensor * hidden_rows = confidence_hidden;
+            if (hidden_rows->type != GGML_TYPE_F32) {
+                hidden_rows = ggml_cast(ctx0, ggml_cont(ctx0, hidden_rows), GGML_TYPE_F32);
+            }
+
+            if (confidence_markov_rows->type != GGML_TYPE_F32) {
+                confidence_markov_rows = ggml_cast(ctx0, ggml_cont(ctx0, confidence_markov_rows), GGML_TYPE_F32);
+            }
+
+            ggml_tensor * conf_input = ggml_concat(ctx0, hidden_rows, confidence_markov_rows, 0);
+            ggml_tensor * confidences = ggml_mul_mat(ctx0, model.dspark_conf_proj, conf_input);
+            if (model.dspark_conf_proj_b != nullptr) {
+                confidences = ggml_add(ctx0, confidences, model.dspark_conf_proj_b);
+            }
+            *confidences_out = ggml_reshape_1d(ctx0, ggml_sigmoid(ctx0, confidences), n_tokens);
+        }
     }
     return chained;
 }
@@ -529,7 +566,8 @@ ggml_cgraph * llm_build_context::build_dflash() {
     }
 
     GGML_ASSERT(model.output_mtp != nullptr);
-    ggml_tensor * result = build_output(lctx, ctx0, inpL, model.output_mtp, model.output_norm, cb);
+    ggml_tensor * confidence_hidden = nullptr;
+    ggml_tensor * result = build_output(lctx, ctx0, inpL, model.output_mtp, model.output_norm, cb, true, &confidence_hidden);
     if (lctx.dflash.dspark) {
         cb(result, "dflash_base_result_output", -1);
     } else {
@@ -538,9 +576,11 @@ ggml_cgraph * llm_build_context::build_dflash() {
     ggml_build_forward_expand(gf, result);
 
     lctx.dflash.draft_tokens_tensor = nullptr;
+    lctx.dflash.draft_confidence_tensor = nullptr;
     ggml_tensor * draft_tokens = nullptr;
+    ggml_tensor * draft_confidences = nullptr;
     if (lctx.dflash.dspark) {
-        result = build_dspark_logits(*this, result, lctx.inp_tokens, &draft_tokens);
+        result = build_dspark_logits(*this, result, lctx.inp_tokens, confidence_hidden, &draft_tokens, &draft_confidences);
         cb(result, "result_output", -1);
     } else {
         draft_tokens = ggml_argmax(ctx0, result);
@@ -549,6 +589,11 @@ ggml_cgraph * llm_build_context::build_dflash() {
     ggml_build_forward_expand(gf, result);
     ggml_build_forward_expand(gf, draft_tokens);
     lctx.dflash.draft_tokens_tensor = draft_tokens;
+    if (draft_confidences != nullptr) {
+        ggml_set_name(draft_confidences, "draft_confidence");
+        ggml_build_forward_expand(gf, draft_confidences);
+        lctx.dflash.draft_confidence_tensor = draft_confidences;
+    }
 
     return gf;
 }

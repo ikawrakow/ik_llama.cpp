@@ -6589,6 +6589,8 @@ static int llama_decode_internal(
         //}
 
         lctx.dflash.draft_tokens.clear();
+        lctx.dflash.draft_confidences.clear();
+        lctx.dflash.draft_outputs_synchronized = false;
         if (lctx.dflash.draft_tokens_tensor != nullptr) {
             ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(
                 lctx.sched, lctx.dflash.draft_tokens_tensor);
@@ -6599,6 +6601,18 @@ static int llama_decode_internal(
                     lctx.dflash.draft_tokens_tensor,
                     lctx.dflash.draft_tokens.data(), 0,
                     (size_t) n_tokens_argmax * sizeof(int32_t));
+            }
+        }
+        if (lctx.dflash.draft_confidence_tensor != nullptr) {
+            ggml_backend_t backend_confidence = ggml_backend_sched_get_tensor_backend(
+                lctx.sched, lctx.dflash.draft_confidence_tensor);
+            if (backend_confidence != nullptr) {
+                const int64_t n_confidences = lctx.dflash.draft_confidence_tensor->ne[0];
+                lctx.dflash.draft_confidences.resize((size_t) n_confidences);
+                ggml_backend_tensor_get_async(backend_confidence,
+                    lctx.dflash.draft_confidence_tensor,
+                    lctx.dflash.draft_confidences.data(), 0,
+                    (size_t) n_confidences * sizeof(float));
             }
         }
 
@@ -11729,12 +11743,36 @@ float * llama_get_logits_ith(struct llama_context * ctx, int32_t i) {
 }
 
 llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i) {
-    llama_synchronize(ctx);
+    if (ctx != nullptr && !ctx->dflash.draft_outputs_synchronized) {
+        llama_synchronize(ctx);
+        ctx->dflash.draft_outputs_synchronized = true;
+    }
 
-    if ((size_t) i >= ctx->dflash.draft_tokens.size()) {
+    if (ctx == nullptr || (size_t) i >= ctx->dflash.draft_tokens.size()) {
         return LLAMA_TOKEN_NULL;
     }
     return ctx->dflash.draft_tokens[(size_t) i];
+}
+
+const float * llama_get_dflash_confidences(struct llama_context * ctx, int32_t * n_confidences) {
+    if (n_confidences != nullptr) {
+        *n_confidences = 0;
+    }
+    if (ctx == nullptr) {
+        return nullptr;
+    }
+
+    if (!ctx->dflash.draft_outputs_synchronized) {
+        llama_synchronize(ctx);
+        ctx->dflash.draft_outputs_synchronized = true;
+    }
+    if (ctx->dflash.draft_confidences.empty()) {
+        return nullptr;
+    }
+    if (n_confidences != nullptr) {
+        *n_confidences = (int32_t) ctx->dflash.draft_confidences.size();
+    }
+    return ctx->dflash.draft_confidences.data();
 }
 
 float * llama_get_embeddings(struct llama_context * ctx) {
