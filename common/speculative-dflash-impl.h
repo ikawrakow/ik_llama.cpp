@@ -90,7 +90,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
     int32_t n_target_features = 0;
     int32_t cross_ctx = 0;
     bool is_dspark = false;
-    bool confidence_enabled = false;
     bool confidence_autotune = false;
     bool ready = false;
 
@@ -131,7 +130,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
             llama_context * ctx_tgt,
             llama_context * ctx_dft,
             int32_t cross_ctx,
-            bool confidence_enabled,
             bool confidence_autotune)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
@@ -142,8 +140,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
         const llama_model * model_dft = llama_get_model(ctx_dft);
 
         is_dspark = type == COMMON_SPECULATIVE_TYPE_DSPARK;
-        this->confidence_enabled = is_dspark && confidence_enabled;
-        this->confidence_autotune = this->confidence_enabled && confidence_autotune;
+        this->confidence_autotune = is_dspark && confidence_autotune;
         const bool has_dspark_head = llama_model_dflash_has_dspark_head(model_dft);
         if (is_dspark != has_dspark_head) {
             LOG_ERR("%s: %s stage requires %s DSpark Markov tensors\n", __func__,
@@ -152,7 +149,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
             return;
         }
 
-        if (this->confidence_enabled && !llama_model_dflash_has_dspark_confidence_head(model_dft)) {
+        if (this->confidence_autotune && !llama_model_dflash_has_dspark_confidence_head(model_dft)) {
             LOG_ERR("%s: DSpark confidence mode requires a confidence projection tensor\n", __func__);
             return;
         }
@@ -265,7 +262,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
         llama_set_dflash_dspark(ctx_dft, is_dspark);
-        llama_set_dflash_confidence_enabled(ctx_dft, this->confidence_enabled);
+        llama_set_dflash_confidence_enabled(ctx_dft, this->confidence_autotune);
         LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, cross_ctx=%d, n_target_features=%d, n_target_layers=%d)\n",
                 __func__, llama_n_ctx(ctx_dft), block_size, this->cross_ctx, n_target_features, n_target_layers);
     }
@@ -383,7 +380,10 @@ struct common_speculative_state_dflash : public common_speculative_state {
         if (best_n < n_keep && best_score < full_score * 1.10) {
             return n_keep;
         }
-        if (best_n < n_keep) ++best_n;
+        // Keep one confidence-boundary token to avoid over-truncating verification.
+        if (best_n < n_keep) {
+            ++best_n;
+        }
         return best_n;
 
     }
@@ -460,7 +460,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
         int32_t selected_n = n_keep;
         confidence_current_n_keep = n_keep;
         confidence_current_survival.clear();
-        if (confidence_enabled) {
+        if (confidence_autotune) {
             int32_t n_confidences = 0;
             const float * confidences = llama_get_dflash_confidences(ctx_dft, &n_confidences);
             if (confidence_values_valid(confidences, n_confidences) && n_confidences == n_keep) {
@@ -489,7 +489,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
     }
 
     void accept(uint16_t n_accepted) override {
-        GGML_UNUSED(n_accepted);
         if (!confidence_autotune || confidence_selected_n <= 0 || confidence_step_start_us <= 0) {
             return;
         }

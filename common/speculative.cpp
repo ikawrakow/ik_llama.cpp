@@ -1410,7 +1410,6 @@ common_speculative * common_speculative_init(
                     ctx_tgt,
                     ctx_dft,
                     config.params.dflash_cross_ctx,
-                    config.params.autotune,
                     config.params.autotune);
                 if (!state->ready) {
                     LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
