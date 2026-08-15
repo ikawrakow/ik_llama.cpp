@@ -17,6 +17,19 @@
 // mime type for sending response
 #define MIMETYPE_JSON "application/json; charset=utf-8"
 
+// Tee llama/ggml log output to both the --log-file target and stderr.
+static void llama_log_tee_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
+    if (text == nullptr) {
+        return;
+    }
+    if (LOG_TARGET != nullptr) {
+        fprintf(LOG_TARGET, "%s", text);
+        fflush(LOG_TARGET);
+    }
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
 
 #ifndef NDEBUG
 // crash the server in debug mode, otherwise send an http 500 error
@@ -465,6 +478,8 @@ int main(int argc, char ** argv) {
 
     // parse arguments from environment variables
     gpt_params_parse_from_env(params);
+
+    llama_log_set(llama_log_tee_callback, nullptr);
 
     // TODO: not great to use extern vars
     server_log_json = params.log_json;
