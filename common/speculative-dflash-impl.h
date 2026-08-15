@@ -383,6 +383,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
         if (best_n < n_keep && best_score < full_score * 1.10) {
             return n_keep;
         }
+        if (best_n < n_keep) ++best_n;
         return best_n;
 
     }
