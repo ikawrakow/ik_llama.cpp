@@ -548,10 +548,6 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                 ggml_row_size(hidden_state->type, n_backbone), 0);
         cb(cur, "mtp_init_hidden_view", -1);
 
-        ggml_tensor * mtp_embd = ggml_dup(ctx0, hidden_state);
-        cb(mtp_embd, "result_mtp_embd", -1);
-        ggml_build_forward_expand(gf, mtp_embd);
-
         ggml_tensor * logits = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
         cb(logits, "result_output", -1);
         ggml_build_forward_expand(gf, logits);
@@ -1122,12 +1118,6 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     }
 
     cur = inpL;
-
-    if (cparams.mtp) {
-        ggml_tensor * mtp_embd = ggml_dup(ctx0, cur);
-        cb(mtp_embd, "result_mtp_embd", -1);
-        ggml_build_forward_expand(gf, mtp_embd);
-    }
 
     cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
