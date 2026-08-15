@@ -1279,6 +1279,17 @@ common_speculative * common_speculative_init(
     }
 
     const auto stages = params.get_resolved_stages();
+    const llama_model * target_model = llama_get_model(ctx_tgt);
+    const bool is_dsv4_target = llama_model_is_deepseek4(target_model);
+    int32_t dsv4_dspark_query_capacity = 0;
+    for (const auto & stage : stages) {
+        if (stage.type != COMMON_SPECULATIVE_TYPE_DSPARK || !is_dsv4_target) {
+            continue;
+        }
+
+        const int32_t stage_n_max = params.with_stage_overrides(stage).n_max;
+        dsv4_dspark_query_capacity = std::max(dsv4_dspark_query_capacity, std::max(1, stage_n_max));
+    }
     if (params.model_dft && llama_model_is_gemma4_mtp_assistant(params.model_dft)) {
         const bool has_draft_stage = std::any_of(stages.begin(), stages.end(), [](const common_speculative_stage_params & stage) {
             return stage.type == COMMON_SPECULATIVE_TYPE_DRAFT;
@@ -1330,10 +1341,11 @@ common_speculative * common_speculative_init(
                 return nullptr;
             }
 
-            const int64_t required_n_ctx = (int64_t) max_cross_ctx + (int64_t) block_size;
+            const int32_t query_capacity = std::max(block_size, dsv4_dspark_query_capacity);
+            const int64_t required_n_ctx = (int64_t) max_cross_ctx + (int64_t) query_capacity;
             if (required_n_ctx > std::numeric_limits<int32_t>::max()) {
-                LOG_ERR("%s: invalid DFlash draft context size cross_ctx=%d block_size=%d required_n_ctx=%lld\n",
-                        __func__, max_cross_ctx, block_size, (long long) required_n_ctx);
+                LOG_ERR("%s: invalid DFlash draft context size cross_ctx=%d query_capacity=%d required_n_ctx=%lld\n",
+                        __func__, max_cross_ctx, query_capacity, (long long) required_n_ctx);
                 return nullptr;
             }
 
@@ -1369,7 +1381,6 @@ common_speculative * common_speculative_init(
         configs.push_back(common_speculative_config(stage, stage_params));
     }
 
-    const llama_model * target_model = llama_get_model(ctx_tgt);
     if (!configs.empty() && common_speculative_needs_checkpoint(target_model)) {
         const int ckpt_tokens = std::max(1, params.get_max_stage_n_max() + 1);
         const int actual_mode = llama_spec_ckpt_init(ctx_tgt, params.spec_ckpt_mode, ckpt_tokens);
@@ -1406,11 +1417,16 @@ common_speculative * common_speculative_init(
             }
             case COMMON_SPECULATIVE_TYPE_DFLASH:
             case COMMON_SPECULATIVE_TYPE_DSPARK: {
+                const int32_t query_capacity = config.type == COMMON_SPECULATIVE_TYPE_DSPARK && is_dsv4_target
+                    ? std::max(1, dsv4_dspark_query_capacity)
+                    : 0;
                 auto state = std::make_unique<common_speculative_state_dflash>(
                     config.type,
                     ctx_tgt,
                     ctx_dft,
-                    config.params.dflash_cross_ctx);
+                    config.params.dflash_cross_ctx,
+                    query_capacity,
+                    config.params.n_max);
                 if (!state->ready) {
                     LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
                             common_speculative_type_to_str(config.type).c_str());
