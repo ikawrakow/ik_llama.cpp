@@ -672,7 +672,7 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
                 GGML_ASSERT(model.layers[il].attn_q_norm && model.layers[il].attn_q_norm->extra);
                 Qcur = do_split_norm(ctx0, Qcur, model.layers[il].attn_q_norm, hparams, cb, id, il_cb, false);
                 cb(Qcur, "Qcur_normed", il_cb);
-                auto freq_factors = is_sliding ? nullptr : ((const ggml_split_tensor_t *)model.layers[il].rope_freqs->extra)->splits[id];
+                auto freq_factors = is_sliding || !model.layers[il].rope_freqs ? nullptr : ((const ggml_split_tensor_t *)model.layers[il].rope_freqs->extra)->splits[id];
                 Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(Qcur, "Qcur_rope", il_cb);
