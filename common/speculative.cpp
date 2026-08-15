@@ -1427,7 +1427,6 @@ common_speculative * common_speculative_init(
                     config.params.dflash_cross_ctx,
                     query_capacity,
                     config.params.n_max,
-                    config.params.autotune,
                     config.params.autotune);
                 if (!state->ready) {
                     LOG_ERR("%s: failed to initialize %s speculative state\n", __func__,
