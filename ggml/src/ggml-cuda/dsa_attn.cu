@@ -59,17 +59,17 @@ static __global__ void k_prepare_one_batch_q(int ne0, int ne1, size_t nb1, size_
     q_out[i0 + (i2 + i1*ne1)*ne0] = __float2half(q_in[i0 + i1*nb1 + i2*nb2]);
 }
 
-static __global__ void k_copy_dst(int nelem, const half * kqv16, float * dst) {
+static __global__ void k_copy_dst(int nelem, int ncols, const float * kqv32, const float * inv_sum, float * dst) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= nelem) {
         return;
     }
-    dst[i] = __half2float(kqv16[i]);
+    dst[i] = kqv32[i] * inv_sum[i / ncols];
 }
 
 template <int ncols_template, int block_size_template>
 static __global__ void soft_max_f16_simple(half * x, const half * mask, const float * sinks, const int ncols_par, const int nrows_y,
-        const float scale) {
+        const float scale, float * store_inv_sum) {
     const int ncols = ncols_template == 0 ? ncols_par : ncols_template;
 
     const int tid  = threadIdx.x;
@@ -124,17 +124,33 @@ static __global__ void soft_max_f16_simple(half * x, const half * mask, const fl
 
     float tmp = 0.0f; // partial sum
 
+    if (store_inv_sum) {
 #pragma unroll
-    for (int col0 = 0; col0 < ncols; col0 += block_size) {
-        const int col = col0 + tid;
+        for (int col0 = 0; col0 < ncols; col0 += block_size) {
+            const int col = col0 + tid;
 
-        if (ncols_template == 0 && col >= ncols) {
-            break;
+            if (ncols_template == 0 && col >= ncols) {
+                break;
+            }
+
+            const float val = expf(vals[col] - max_val);
+            tmp += val;
+            const int64_t ix = (int64_t)rowx*ncols + col;
+            x[ix] = __float2half(val);
         }
+    } else {
+#pragma unroll
+        for (int col0 = 0; col0 < ncols; col0 += block_size) {
+            const int col = col0 + tid;
 
-        const float val = expf(vals[col] - max_val);
-        tmp += val;
-        vals[col] = val;
+            if (ncols_template == 0 && col >= ncols) {
+                break;
+            }
+
+            const float val = expf(vals[col] - max_val);
+            tmp += val;
+            vals[col] = val;
+        }
     }
 
     // find the sum of exps in the block
@@ -161,6 +177,13 @@ static __global__ void soft_max_f16_simple(half * x, const half * mask, const fl
 
     const float inv_sum = 1.0f / tmp;
 
+    if (store_inv_sum) {
+        if (tid == 0) {
+            store_inv_sum[rowx] = inv_sum;
+        }
+        return;
+    }
+
 #pragma unroll
     for (int col0 = 0; col0 < ncols; col0 += block_size) {
         const int col = col0 + tid;
@@ -179,7 +202,7 @@ static __global__ void soft_max_f16_simple(half * x, const half * mask, const fl
 // nrows_y is Q->ne[2]
 // nrows_x is Q->ne[2] * nrows
 static void soft_max_f16_cuda_simple(half * x, const half * mask, const float * sinks, const int ncols_x, const int nrows_x,
-        const int nrows_y, const float scale, cudaStream_t stream) {
+        const int nrows_y, const float scale, float * store_inv_sum, cudaStream_t stream) {
     int nth = WARP_SIZE;
     while (nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE) nth *= 2;
     const dim3 block_dims(nth,     1, 1);
@@ -191,31 +214,31 @@ static void soft_max_f16_cuda_simple(half * x, const half * mask, const float * 
 
     switch (ncols_x) {
         case 32:
-            soft_max_f16_simple<32, 32><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<32, 32><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         case 64:
-            soft_max_f16_simple<64, 64><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<64, 64><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         case 128:
-            soft_max_f16_simple<128, 128><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<128, 128><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         case 256:
-            soft_max_f16_simple<256, 256><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<256, 256><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         case 512:
-            soft_max_f16_simple<512, 512><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<512, 512><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         case 1024:
-            soft_max_f16_simple<1024, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<1024, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         case 2048:
-            soft_max_f16_simple<2048, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<2048, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         case 4096:
-            soft_max_f16_simple<4096, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<4096, 1024><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
         default:
-            soft_max_f16_simple<0, 0><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale);
+            soft_max_f16_simple<0, 0><<<block_nums, block_dims, shmem, stream>>>(x, mask, sinks, ncols_x, nrows_y, scale, store_inv_sum);
             break;
     }
 }
@@ -266,9 +289,10 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     auto kqv_size = V->ne[0]*Q->ne[2]*max_rows;
     ggml_cuda_pool_alloc<half> q16(ctx.pool(), q_size);
     ggml_cuda_pool_alloc<half> kq16(ctx.pool(), kq_size);
-    ggml_cuda_pool_alloc<half> kqv16(ctx.pool(), kqv_size);
+    ggml_cuda_pool_alloc<float> kqv32(ctx.pool(), kqv_size);
     ggml_cuda_pool_alloc<half> mask16(ctx.pool(), mask_size);
     ggml_cuda_pool_alloc<half> k16(ctx.pool(), k_cache_size);
+    ggml_cuda_pool_alloc<float> inv_sum(ctx.pool(), max_rows);
     ggml_cuda_pool_alloc<half> v16(ctx.pool());
     size_t v_offset = 0;
     if (is_k_view) {
@@ -329,7 +353,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         soft_max_f16_cuda_simple(kq16.get(), mask16.get() + first*indexer->ne[0],
                 sink ? (const float *)sink->data : nullptr,
                 indexer->ne[0], Q->ne[2]*nrows,
-                Q->ne[2], scale, ctx.stream());
+                Q->ne[2], scale, inv_sum.get(), ctx.stream());
         CUDA_CHECK(cudaGetLastError());
 
         if (is_k_view) {
@@ -337,21 +361,21 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                         V->ne[0], Q->ne[2], indexer->ne[0],
                         &alpha_32, k16.get() + v_offset, CUDA_R_16F, K->ne[0], K->ne[0]*indexer->ne[0],
                         kq16.get(),                      CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
-                        &beta_32, kqv16.get(),           CUDA_R_16F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
+                        &beta_32, kqv32.get(),           CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
                         CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         } else {
             CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
                         V->ne[0], Q->ne[2], indexer->ne[0],
                         &alpha_32, v16.get(),  CUDA_R_16F, V->ne[0], V->ne[0]*indexer->ne[0],
                         kq16.get(),            CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
-                        &beta_32, kqv16.get(), CUDA_R_16F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
+                        &beta_32, kqv32.get(), CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
                         CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         }
 
         {
             int nelem = V->ne[0]*Q->ne[2]*nrows;
             int nblock = (nelem + 255)/256;
-            k_copy_dst<<<nblock, 256, 0, ctx.stream()>>>(nelem, kqv16.get(),
+            k_copy_dst<<<nblock, 256, 0, ctx.stream()>>>(nelem, dst->ne[0], kqv32.get(), inv_sum.get(),
                     (float *)((char *)dst->data + dst->nb[2]*first));
 
         }

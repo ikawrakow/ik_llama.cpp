@@ -65,8 +65,9 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
         }
 
         if (lctx.cparams.mtp) {
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
+            ggml_tensor * mtp_embd = inpL->type == GGML_TYPE_F32 ? inpL : ggml_cast(ctx0, inpL, GGML_TYPE_F32);
+            cb(mtp_embd, "result_mtp_embd", -1);
+            ggml_set_output(mtp_embd);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
@@ -136,11 +137,9 @@ ggml_cgraph * llm_build_context::build_qwen35() {
         }
 
         if (lctx.cparams.mtp) {
-            //struct ggml_tensor * embd_copy = ggml_dup(ctx0, inpL);
-            //cb(embd_copy, "result_mtp_embd", -1);
-            //ggml_set_output(embd_copy);
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
+            ggml_tensor * mtp_embd = inpL->type == GGML_TYPE_F32 ? inpL : ggml_cast(ctx0, inpL, GGML_TYPE_F32);
+            cb(mtp_embd, "result_mtp_embd", -1);
+            ggml_set_output(mtp_embd);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
