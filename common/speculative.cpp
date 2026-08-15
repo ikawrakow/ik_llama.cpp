@@ -104,15 +104,15 @@ static bool common_speculative_are_compatible(
         return false;
     }
 
-    //if (
-    //    llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
-    //    llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
-    //    llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
-    //    llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
-    //) {
-    //    LOG_WRN("%s: draft model special tokens must match target model to use speculation\n", __func__);
-    //    return false;
-    //}
+    if (
+        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
+        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
+    ) {
+        LOG_WRN("%s: draft model special tokens must match target model to use speculation\n", __func__);
+        return false;
+    }
 
     {
         const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
