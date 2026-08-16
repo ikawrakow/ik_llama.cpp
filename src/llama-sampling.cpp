@@ -1096,7 +1096,13 @@ void llama_review_adaptive_p_impl(llama_sampler_adaptive_p * adapt_p_ctx, const 
 llama_token llama_sample_token_adaptive_p_impl(
                   struct llama_sampling * smpl,
                  llama_token_data_array * candidates,
-        struct llama_sampler_adaptive_p * adapt_p_ctx) {
+        struct llama_sampler_adaptive_p * adapt_p_ctx,
+                           std::mt19937 & rng) {
+    if (adapt_p_ctx->cum_orig_prob == 0.f) {
+        LLAMA_LOG_ERROR("%s[%d]: falling back to temperature sampling\n", __func__, __LINE__);
+        return llama_sample_token_with_rng_impl(smpl, candidates, rng);
+    }
+
     GGML_ASSERT(candidates->size > 0);
     const int64_t t_start_sample_us = ggml_time_us();
 
@@ -1162,6 +1168,11 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
 
     if (adapt_p_ctx->updt_w_cur) {
         adapt_p_ctx->cum_orig_prob = cum_sum;
+    }
+
+    if (adapt_p_ctx->cum_orig_prob == 0.f) {
+        LLAMA_LOG_ERROR("%s[%d]: cum_orig_prob=%f is invalid\n", __func__, __LINE__, adapt_p_ctx->cum_orig_prob);
+        return;
     }
 
     // compute adapted target probability

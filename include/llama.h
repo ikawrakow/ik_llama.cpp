@@ -1573,12 +1573,6 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
 
-    /// @details Randomly selects a token from the candidates following adaptive p sampler.
-    llama_token llama_sample_token_adaptive_p(
-            struct llama_context * ctx,
-          llama_token_data_array * candidates,
- struct llama_sampler_adaptive_p * adapt_p_ctx);
-
     //
     // Model split
     //
@@ -1656,6 +1650,9 @@ const std::vector<std::pair<std::string, struct ggml_tensor *>> & llama_internal
 // Randomly selects a token from the candidates based on their probabilities using given std::mt19937.
 // This is a temporary workaround in order to fix race conditions when sampling with multiple sequences.
 llama_token llama_sample_token_with_rng(struct llama_context * ctx, llama_token_data_array * candidates, std::mt19937 & rng);
+
+// Randomly selects a token from the candidates following adaptive p sampler.
+llama_token llama_sample_token_adaptive_p(struct llama_context * ctx, llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx, std::mt19937 & rng);
 
 #endif // LLAMA_API_INTERNAL
 
