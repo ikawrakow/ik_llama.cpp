@@ -83,11 +83,10 @@ struct llama_sampler_adaptive_p {
     std::vector<float> cum_probs;   // cumulative probability distribution
 };
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
-       const float target,
-       const float decay,
-        const bool updt_w_cur,
-    const uint32_t seed);
+struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(const float    target,
+                                                             const float    decay,
+                                                             const bool     updt_w_cur,
+                                                             const uint32_t seed);
 
 struct llama_sampler_adaptive_p * llama_clone_adaptive_p(const struct llama_sampler_adaptive_p * adapt_p_ctx);
 

@@ -1211,17 +1211,19 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
     ctx->t_sample_us += ggml_time_us() - t_start;
 }
 
-void llama_prep_adaptive_p_impl(
-              struct llama_sampling * smpl,
-             llama_token_data_array * candidates,
-    struct llama_sampler_adaptive_p * adapt_p_ctx) {
+void llama_prep_adaptive_p_impl(struct llama_sampling           * smpl,
+                                llama_token_data_array          * candidates,
+                                struct llama_sampler_adaptive_p * adapt_p_ctx) {
+    auto & orig_prob = adapt_p_ctx->orig_prob;
+    orig_prob.resize(candidates->size);
+
     if (adapt_p_ctx->updt_w_cur     // update with current probability, original not needed
         || (adapt_p_ctx->target < 0.0f)) {  // or disabled
         return;
     }
+
     constexpr float kDelta = 30.0f; //16.6f;
     auto t_start = ggml_time_us();
-    auto & orig_prob = adapt_p_ctx->orig_prob;
     if (candidates->size != orig_prob.size() || candidates->sorted) {
         LLAMA_LOG_ERROR("%s: this function must be called before any other sampler has been applied\n", __func__);
         LLAMA_LOG_ERROR("%s: the sampler has been initialized with a vocabulary of %zu, but is being called with %zu candidates\n",
@@ -1239,12 +1241,10 @@ void llama_prep_adaptive_p_impl(
     if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
 }
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
-       const float target,
-       const float decay,
-        const bool updt_w_cur,
-    const uint32_t seed) {
-    GGML_ASSERT(n_vocab > 0);
+struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(const float    target,
+                                                             const float    decay,
+                                                             const bool     updt_w_cur,
+                                                             const uint32_t seed) {
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
     auto result = new llama_sampler_adaptive_p {
         /* .target            = */ target,
@@ -1260,7 +1260,6 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
     result->history.push_back({
         target / (1.0f - clamped_decay),    // weighted_sum
         1.0f / (1.0f - clamped_decay) });   // total_weight
-    result->orig_prob.resize(n_vocab);
     return result;
 }
 

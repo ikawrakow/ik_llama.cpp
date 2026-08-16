@@ -164,9 +164,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             case llama_sampler_type::ADAPTIVE_P:
             {
                 if (params.adaptive_target >= 0.0f) {
-                    GGML_ASSERT(vocab);
-                    auto n_vocab = llama_vocab_n_tokens(vocab);
-                    result->adapt_p_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
+                    result->adapt_p_ctx = llama_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
                 }
                 break;
             }
@@ -219,6 +217,9 @@ void common_sampler_reset(common_sampler * ctx) {
     // llama_grammar_reset(ctx);
     ctx->prev.clear();
     llama_sampler_dry_reset(ctx->smpl);
+
+    llama_free_adaptive_p(ctx->adapt_p_ctx);
+    ctx->adapt_p_ctx = llama_init_adaptive_p(ctx->params.adaptive_target, ctx->params.adaptive_decay, ctx->params.adaptive_updt_w_cur, ctx->rng());
 }
 
 void common_sampler_review(common_sampler * ctx, const size_t n_unsent, const bool rewind_status) {
