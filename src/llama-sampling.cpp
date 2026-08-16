@@ -1121,9 +1121,9 @@ llama_token llama_sample_token_adaptive_p_impl(
     GGML_ASSERT(id < int(ctx->orig_prob.size()));
 
     // update history
-    const float update_prob = ctx->updt_w_cur
-        ? candidates->data[idx].p / ctx->cum_cur_p
-        : ctx->orig_prob[id] / ctx->cum_orig_prob;
+    const float update_prob = (ctx->updt_w_cur ? candidates->data[idx].p
+                                               : ctx->orig_prob[id])
+                              / ctx->cum_orig_prob;
     if (update_prob > 0) {
         ctx->history.push_back({
             ctx->decay * ctx->history.back().first + update_prob,   // weighted_sum
@@ -1159,7 +1159,10 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
         candidates->data[i].p = prob;
         cum_sum += prob;
     }
-    adapt_p_ctx->cum_cur_p = cum_sum;
+
+    if (adapt_p_ctx->updt_w_cur) {
+        adapt_p_ctx->cum_orig_prob = cum_sum;
+    }
 
     // compute adapted target probability
     const float weighted_sum = adapt_p_ctx->history.back().first;
@@ -1240,7 +1243,6 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
         /* .history           = */ {},
         /* .orig_prob         = */ {},
         /* .cum_orig_prob     = */ 1.0f,
-        /* .cum_cur_p         = */ 1.0f,
         /* .max_xform_logit   = */ -INFINITY,
         /* .cum_probs         = */ {},
     };

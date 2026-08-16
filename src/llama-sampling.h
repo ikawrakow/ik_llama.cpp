@@ -77,7 +77,6 @@ struct llama_sampler_adaptive_p {
     float cum_orig_prob;    // for normalizing orig_prob in sample_token
 
     // first referenced in sample
-    float cum_cur_p;        // cumulative sum of current probabilities
     float max_xform_logit;  // maximum logit found during transform
 
     // first referenced in sample_token
