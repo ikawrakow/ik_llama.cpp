@@ -36,6 +36,10 @@
 #define cublasHandle_t hipblasHandle_t
 #define cublasOperation_t hipblasOperation_t
 #define cublasStrsmBatched hipblasStrsmBatched
+// hipBLAS has no equivalent of the cuBLAS math mode, TF32 is not a thing here
+#define cublasMath_t int
+#define CUBLAS_DEFAULT_MATH 0
+#define cublasGetMathMode(handle, mode) (*(mode) = CUBLAS_DEFAULT_MATH, CUBLAS_STATUS_SUCCESS)
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
 #define cublasSgemm hipblasSgemm
@@ -57,6 +61,9 @@
 #define cudaEventDestroy hipEventDestroy
 #define cudaFree hipFree
 #define cudaFreeHost hipHostFree
+// cudaFuncSetAttribute() is a template over the kernel type, hipFuncSetAttribute() takes a const void *
+#define cudaFuncSetAttribute(func, attr, value) hipFuncSetAttribute((const void *)(func), attr, value)
+#define cudaFuncAttributeMaxDynamicSharedMemorySize hipFuncAttributeMaxDynamicSharedMemorySize
 #define cudaGetDevice hipGetDevice
 #define cudaGetDeviceCount hipGetDeviceCount
 #define cudaGetDeviceProperties hipGetDeviceProperties

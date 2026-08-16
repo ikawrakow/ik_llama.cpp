@@ -16,10 +16,10 @@ __device__ __forceinline__ void vec_dot_iq2_bn_q8_1(
     for (int j = 0; j < 2; ++j) {
         int vl = qs[j];
         int vh = qs[j] >> 4;
-        sumi1 = __dp4a(vl & 0x03030303, q8l[j+0], sumi1);
-        sumi2 = __dp4a(vl & 0x0c0c0c0c, q8l[j+4], sumi2);
-        sumi3 = __dp4a(vh & 0x03030303, q8h[j+0], sumi3);
-        sumi4 = __dp4a(vh & 0x0c0c0c0c, q8h[j+4], sumi4);
+        sumi1 = ggml_cuda_dp4a(vl & 0x03030303, q8l[j+0], sumi1);
+        sumi2 = ggml_cuda_dp4a(vl & 0x0c0c0c0c, q8l[j+4], sumi2);
+        sumi3 = ggml_cuda_dp4a(vh & 0x03030303, q8h[j+0], sumi3);
+        sumi4 = ggml_cuda_dp4a(vh & 0x0c0c0c0c, q8h[j+4], sumi4);
     }
     auto d8l = __half22float2(bq8_1[0].ds);
     auto d8h = __half22float2(bq8_1[1].ds);
