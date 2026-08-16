@@ -1182,6 +1182,10 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
     // unbounded negative logits suppress far-from-target tokens after softmax
     float max_logit = -INFINITY;
     for (size_t i = 0; i < candidates->size; ++i) {
+        if (candidates->data[i].logit <= -999.f) {
+            // probably masked tokens
+            continue;
+        }
         const float dist = std::abs(candidates->data[i].p * fused_width - fused_target);
         const float logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
         candidates->data[i].logit = logit;
