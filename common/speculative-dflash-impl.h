@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -79,6 +80,8 @@ static void dflash_materialize_target_window_features(common_speculative_state_d
 
 // DFlash runtime state and draft path.
 struct common_speculative_state_dflash : public common_speculative_state {
+    static constexpr uint32_t confidence_profile_samples_required = 32;
+
     llama_context * ctx_tgt;
     llama_context * ctx_dft;
 
@@ -89,6 +92,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
     int32_t n_target_features = 0;
     int32_t cross_ctx = 0;
     bool is_dspark = false;
+    bool confidence_autotune = false;
     bool ready = false;
 
     std::vector<int32_t> target_layer_ids;
@@ -108,11 +112,20 @@ struct common_speculative_state_dflash : public common_speculative_state {
     bool target_window_materialized = false;
     llama_pos last_target_pos = -1;
 
+    double confidence_mean_draft_us = 0.0;
+    double confidence_mean_post_draft_us = 0.0;
+    uint32_t confidence_profile_samples = 0;
+    int64_t confidence_step_start_us = 0;
+    int64_t confidence_draft_us = 0;
+    bool confidence_invalid_reported = false;
+    bool confidence_readback_reported = false;
+
     common_speculative_state_dflash(
             enum common_speculative_type type,
             llama_context * ctx_tgt,
             llama_context * ctx_dft,
-            int32_t cross_ctx)
+            int32_t cross_ctx,
+            bool confidence_autotune)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_dft(ctx_dft)
@@ -122,11 +135,17 @@ struct common_speculative_state_dflash : public common_speculative_state {
         const llama_model * model_dft = llama_get_model(ctx_dft);
 
         is_dspark = type == COMMON_SPECULATIVE_TYPE_DSPARK;
+        this->confidence_autotune = is_dspark && confidence_autotune;
         const bool has_dspark_head = llama_model_dflash_has_dspark_head(model_dft);
         if (is_dspark != has_dspark_head) {
             LOG_ERR("%s: %s stage requires %s DSpark Markov tensors\n", __func__,
                     is_dspark ? "dspark" : "dflash",
                     is_dspark ? "complete" : "no");
+            return;
+        }
+
+        if (this->confidence_autotune && !llama_model_dflash_has_dspark_confidence_head(model_dft)) {
+            LOG_ERR("%s: DSpark confidence mode requires a confidence projection tensor\n", __func__);
             return;
         }
 
@@ -231,6 +250,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
         llama_set_dflash_dspark(ctx_dft, is_dspark);
+        llama_set_dflash_confidence_enabled(ctx_dft, this->confidence_autotune);
         LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, cross_ctx=%d, n_target_features=%d, n_target_layers=%d)\n",
                 __func__, llama_n_ctx(ctx_dft), block_size, this->cross_ctx, n_target_features, n_target_layers);
     }
@@ -249,6 +269,81 @@ struct common_speculative_state_dflash : public common_speculative_state {
         GGML_UNUSED(prompt);
         llama_kv_cache_clear(ctx_dft);
         llama_reset_dflash_kv_cache_state(ctx_dft);
+        confidence_step_start_us = 0;
+        confidence_draft_us = 0;
+    }
+
+    bool confidence_values_valid(const float * values, int32_t n_values) {
+        if (values == nullptr || n_values <= 0) {
+            if (!confidence_readback_reported) {
+                LOG_WRN("%s: DSpark confidence readback unavailable; using the full draft prefix\n", __func__);
+                confidence_readback_reported = true;
+            }
+            return false;
+        }
+
+        for (int32_t i = 0; i < n_values; ++i) {
+            if (!std::isfinite(values[i]) || values[i] < 0.0f || values[i] > 1.0f) {
+                if (!confidence_invalid_reported) {
+                    LOG_WRN("%s: invalid DSpark confidence value; using the full draft prefix\n", __func__);
+                    confidence_invalid_reported = true;
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int32_t select_confidence_prefix(
+            const float * confidences,
+            int32_t n_confidences,
+            int32_t n_keep) {
+        if (!confidence_values_valid(confidences, n_confidences) || n_confidences != n_keep) {
+            return n_keep;
+        }
+
+        if (!confidence_autotune) {
+            return n_keep;
+        }
+
+        if (confidence_profile_samples < confidence_profile_samples_required ||
+                confidence_mean_draft_us <= 0.0 || confidence_mean_post_draft_us <= 0.0) {
+            return n_keep;
+        }
+
+        double best_score = -1.0;
+        int32_t best_n = n_keep;
+        double survival = 1.0;
+        double useful = 1.0;
+        for (int32_t i = 0; i < n_keep; ++i) {
+            survival *= confidences[i];
+            useful += survival;
+
+            const double prefix_fraction = static_cast<double>(i + 1) / n_keep;
+            const double verify_fraction = i + 1 == n_keep
+                    ? 1.0
+                    : 0.8 + 0.2 * prefix_fraction;
+            const double cost = confidence_mean_draft_us +
+                    confidence_mean_post_draft_us * verify_fraction;
+
+            const double score = useful / cost;
+            if (score > best_score) {
+                best_score = score;
+                best_n = i + 1;
+            }
+        }
+
+        const double full_cost = confidence_mean_draft_us + confidence_mean_post_draft_us;
+        const double full_score = useful / full_cost;
+        if (best_n < n_keep && best_score < full_score * 1.10) {
+            return n_keep;
+        }
+        // Keep one confidence-boundary token to avoid over-truncating verification.
+        if (best_n < n_keep) {
+            ++best_n;
+        }
+        return best_n;
+
     }
 
     void draft(
@@ -308,14 +403,29 @@ struct common_speculative_state_dflash : public common_speculative_state {
             common_batch_add(batch, mask_token_id, draft_pos_base + i, { 0 }, true);
         }
 
+        const bool profile_active = confidence_autotune &&
+                confidence_profile_samples < confidence_profile_samples_required;
+        const int64_t draft_start_us = profile_active ? ggml_time_us() : 0;
         if (llama_decode(ctx_dft, batch) != 0) {
             LOG_ERR("%s: llama_decode() failed for DFlash draft batch\n", __func__);
             batch.n_tokens = 0;
+            confidence_step_start_us = 0;
+            confidence_draft_us = 0;
             return;
         }
+        confidence_draft_us = draft_start_us > 0 ? ggml_time_us() - draft_start_us : 0;
 
-        result.reserve((size_t) n_keep);
-        for (int32_t i = 0; i < n_keep; ++i) {
+        confidence_step_start_us = profile_active ? ggml_time_us() : 0;
+
+        int32_t selected_n = n_keep;
+        if (confidence_autotune) {
+            int32_t n_confidences = 0;
+            const float * confidences = llama_get_dflash_confidences(ctx_dft, &n_confidences);
+            selected_n = select_confidence_prefix(confidences, n_confidences, n_keep);
+        }
+
+        result.reserve((size_t) selected_n);
+        for (int32_t i = 0; i < selected_n; ++i) {
             llama_token id = llama_get_dflash_draft_token_ith(ctx_dft, i);
             if (id == LLAMA_TOKEN_NULL) {
                 const int32_t logits_idx = is_dspark ? i : i + 1;
@@ -327,8 +437,24 @@ struct common_speculative_state_dflash : public common_speculative_state {
         batch.n_tokens = 0;
     }
 
-    void accept(uint16_t n_accepted) override {
-        GGML_UNUSED(n_accepted);
+    void accept(uint16_t) override {
+        if (!confidence_autotune ||
+                confidence_profile_samples >= confidence_profile_samples_required ||
+                confidence_step_start_us <= 0) {
+            return;
+        }
+
+        const int64_t elapsed_us = ggml_time_us() - confidence_step_start_us;
+        confidence_step_start_us = 0;
+        if (elapsed_us <= 0 || confidence_draft_us <= 0) {
+            return;
+        }
+
+        const uint32_t samples = ++confidence_profile_samples;
+        confidence_mean_draft_us +=
+                ((double) confidence_draft_us - confidence_mean_draft_us) / samples;
+        confidence_mean_post_draft_us +=
+                ((double) elapsed_us - confidence_mean_post_draft_us) / samples;
     }
 };
 

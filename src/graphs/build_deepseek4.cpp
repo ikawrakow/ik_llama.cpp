@@ -1657,6 +1657,7 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
 
     ggml_tensor * out = build_hc_head(ctx0, *this, hparams, n_embd, hparams.f_norm_rms_eps,
             inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+    ggml_tensor * confidence_hidden = out;
     out = llm_build_norm(ctx0, out, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
     out = build_output(lctx, ctx0, out, model.output, nullptr, cb);
     if (lctx.dflash.dspark) {
@@ -1667,10 +1668,12 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
     ggml_build_forward_expand(gf, out);
 
     lctx.dflash.draft_tokens_tensor = nullptr;
+    lctx.dflash.draft_confidence_tensor = nullptr;
     ggml_tensor * draft_tokens = nullptr;
+    ggml_tensor * draft_confidences = nullptr;
     ggml_tensor * result = out;
     if (lctx.dflash.dspark) {
-        result = build_dspark_logits(*this, out, lctx.inp_tokens, &draft_tokens);
+        result = build_dspark_logits(*this, out, lctx.inp_tokens, confidence_hidden, &draft_tokens, &draft_confidences);
         cb(result, "result_output", -1);
     } else {
         draft_tokens = ggml_argmax(ctx0, result);
@@ -1679,5 +1682,10 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
     ggml_build_forward_expand(gf, result);
     ggml_build_forward_expand(gf, draft_tokens);
     lctx.dflash.draft_tokens_tensor = draft_tokens;
+    if (draft_confidences != nullptr) {
+        ggml_set_name(draft_confidences, "draft_confidence");
+        ggml_build_forward_expand(gf, draft_confidences);
+        lctx.dflash.draft_confidence_tensor = draft_confidences;
+    }
     return gf;
 }
