@@ -1,5 +1,8 @@
 #pragma once
 
+// ROCm 6 and later provide __shfl_sync() and friends as templates that static_assert on the
+// width of the mask, so the shims below have to replace them rather than shadow them
+#define HIP_DISABLE_WARP_SYNC_BUILTINS 1
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
@@ -19,7 +22,11 @@
 #define CUBLAS_TF32_TENSOR_OP_MATH 0
 #define CUDA_R_16F  HIPBLAS_R_16F
 #define CUDA_R_32F  HIPBLAS_R_32F
+#define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
+#define __shfl_up_sync(mask, var, laneMask, width) __shfl_up(var, laneMask, width)
 #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
+#define __all_sync(mask, var) __all(var)
+#define __any_sync(mask, var) __any(var)
 #define cublasComputeType_t hipblasDatatype_t //deprecated, new hipblasComputeType_t not in 5.6
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
