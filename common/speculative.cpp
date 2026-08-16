@@ -145,7 +145,8 @@ static bool common_speculative_are_compatible(
 }
 
 static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
-    return llama_model_is_step35(model) || llama_model_is_deepseek4(model);
+    return llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
+           llama_model_is_qwen35_family(model);
 }
 
 static bool common_speculative_has_recognized_mtp_companion(
@@ -2159,6 +2160,20 @@ bool common_speculative_finalize_startup(
                 const int32_t n_heads = llama_model_n_nextn_layer(companion);
                 if (n_heads != 1) {
                     LOG_ERR("%s: DeepSeek-V4 MTP companion requires exactly one predictor layer, got %d\n",
+                            __func__, n_heads);
+                    return false;
+                }
+            } else if (llama_model_is_qwen35_family(model)) {
+                // dense and MoE are separate architectures, so compare the arch itself
+                if (std::strcmp(llama_model_arch_string(model), llama_model_arch_string(companion)) != 0) {
+                    LOG_ERR("%s: Qwen3.5 MTP requires a companion of the same architecture, target is %s and companion is %s\n",
+                            __func__, llama_model_arch_string(model), llama_model_arch_string(companion));
+                    return false;
+                }
+
+                const int32_t n_heads = llama_model_n_nextn_layer(companion);
+                if (n_heads != 1) {
+                    LOG_ERR("%s: Qwen3.5 MTP companion requires exactly one predictor layer, got %d\n",
                             __func__, n_heads);
                     return false;
                 }
