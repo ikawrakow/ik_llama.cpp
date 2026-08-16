@@ -1,0 +1,48 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+#include "types.comp"
+#include "generic_binary_head.comp"
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+// src0 is assumed contiguous. p.nb01/02/03 are byte strides divided by the type size,
+// which is not a whole number for a type carrying a per-row scale, so the source row is
+// derived from the shape instead. Token embedding tensors are contiguous in practice.
+float dequant_elem(const uint row_word, const uint i00) {
+    const uint blk  = a_block_word(row_word, i00 / QUANT_K);
+    const uint pos  = i00 % QUANT_K;
+    const uint ib32 = pos / 32;
+    const uint j    = pos % 32;
+
+    uint vo;
+    const float dl = iq4_ks_scale(row_word, blk, ib32, vo);
+
+    // qs[] starts at byte 8; the low nibbles hold the first 16 weights of the subblock,
+    // the high nibbles the rest
+    const uint q = a_byte(blk + 2, 16 * ib32 + (j & 15));
+
+    return dl * float(kvalues_iq4k[vo + (j < 16 ? (q & 0xF) : (q >> 4))]);
+}
+
+void main() {
+    const uint i00 = (gl_GlobalInvocationID.x)*2;
+    const uint i10 = gl_GlobalInvocationID.y;
+    const uint i11 = (gl_GlobalInvocationID.z)/p.ne12;
+    const uint i12 = (gl_GlobalInvocationID.z)%p.ne12;
+
+    init_iq_shmem(gl_WorkGroupSize);
+
+    if (i00 >= p.ne00) {
+        return;
+    }
+
+    const uint i01 = data_b[i10*p.nb10 + i11*p.nb11 + i12*p.nb12];
+
+    const uint row_word = (i01 + (i11 + i12*p.ne02)*p.ne01) * a_row_words(p.ne00);
+    const uint d_offset = i10*p.nb21 + i11*p.nb22 + i12*p.nb23;
+
+    data_d[d_offset + i00    ] = D_TYPE(dequant_elem(row_word, i00    ));
+    data_d[d_offset + i00 + 1] = D_TYPE(dequant_elem(row_word, i00 + 1));
+}

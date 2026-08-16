@@ -747,6 +747,50 @@ void main() {
             buf_a[buf_idx + 1 ] = FLOAT_TYPE(kvalues_iq4nl[bitfieldExtract(vui, 8, 4)]) * d;
             buf_a[buf_idx + 16] = FLOAT_TYPE(kvalues_iq4nl[bitfieldExtract(vui, 4, 4)]) * d;
             buf_a[buf_idx + 17] = FLOAT_TYPE(kvalues_iq4nl[vui >> 12]) * d;
+#elif defined(DATA_A_IQ4_KS)
+            const uint idx = pos_a + (loadc_a + l) * p.stride_a / LOAD_VEC_A + loadr_a;
+            const uint buf_idx = (loadc_a + l) * SHMEM_STRIDE + loadr_a * LOAD_VEC_A;
+
+            // recover the position from the load index; exact because batch_stride_a is ne00*ne01
+            const uint elem = idx * LOAD_VEC_A;
+            const uint row_word = (elem / p.stride_a) * a_row_words(p.stride_a);
+            const uint acol = elem % p.stride_a;
+
+            const uint blk = a_block_word(row_word, acol / QUANT_K);
+            const uint ib32 = (acol % QUANT_K) / 32;
+            const uint j = acol % 32;
+
+            uint vo;
+            const float dl = iq4_ks_scale(row_word, blk, ib32, vo);
+
+            const uint qb = 16 * ib32 + (j & 15);
+            const uint qw = data_a_u32[blk + 2 + qb / 4] >> (8 * (qb % 4));
+            const uint qshift = j < 16 ? 0 : 4;
+
+            buf_a[buf_idx    ] = FLOAT_TYPE(dl * kvalues_iq4k[vo + ((qw >> qshift) & 0xF)]);
+            buf_a[buf_idx + 1] = FLOAT_TYPE(dl * kvalues_iq4k[vo + ((qw >> (8 + qshift)) & 0xF)]);
+#elif defined(DATA_A_IQ4_KT)
+            const uint idx = pos_a + (loadc_a + l) * p.stride_a / LOAD_VEC_A + loadr_a;
+            const uint buf_idx = (loadc_a + l) * SHMEM_STRIDE + loadr_a * LOAD_VEC_A;
+
+            // LOAD_VEC_A is 4 here, so one load index is one trellis group of 4
+            const uint elem = idx * LOAD_VEC_A;
+            const uint row_word = (elem / p.stride_a) * a_row_words(p.stride_a);
+            const uint acol = elem % p.stride_a;
+
+            const uint blk = a_block_word(row_word, acol / QUANT_K);
+            const uint ib32 = (acol % QUANT_K) / 32;
+
+            const uint shb = data_a_u32[blk + ib32];
+            uint offset;
+            const float sl = iq4_kt_scale(row_word, shb, offset);
+
+            uint x = iq4_kt_index(blk, shb, ib32, (acol % 32) / 4, offset);
+
+            buf_a[buf_idx    ] = FLOAT_TYPE(sl * iq4_kt_next(x));
+            buf_a[buf_idx + 1] = FLOAT_TYPE(sl * iq4_kt_next(x));
+            buf_a[buf_idx + 2] = FLOAT_TYPE(sl * iq4_kt_next(x));
+            buf_a[buf_idx + 3] = FLOAT_TYPE(sl * iq4_kt_next(x));
 #endif
         }
         [[unroll]] for (uint l = 0; l < BN; l += loadstride_b) {
