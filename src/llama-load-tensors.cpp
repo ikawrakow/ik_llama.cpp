@@ -1704,6 +1704,12 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
     const int64_t value_dim  = head_v_dim * n_v_heads;
     const int64_t conv_dim   = key_dim * 2 + value_dim;
 
+    // A predictor-only MTP GGUF reports the full block count but only ships the NextN block, skip the rest
+    const bool mtp_only = hparams.nextn_predict_layers > 0 &&
+                          ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_NORM, "weight", 0).c_str()) == nullptr;
+    const int trunk_flags = mtp_only
+        ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+
     for (int i = 0; i < n_layer; ++i) {
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
@@ -1712,7 +1718,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
 
         auto & layer = model.layers[i];
 
-        int flags = 0;
+        int flags = is_mtp_layer ? 0 : trunk_flags;
         if (!model.mtp && is_mtp_layer) {
             flags |= llama_model_loader::TENSOR_SKIP;
         }
@@ -1813,6 +1819,12 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
     const int64_t value_dim  = head_v_dim * n_v_heads;
     const int64_t conv_dim   = key_dim * 2 + value_dim;
 
+    // A predictor-only MTP GGUF reports the full block count but only ships the NextN block, skip the rest
+    const bool mtp_only = hparams.nextn_predict_layers > 0 &&
+                          ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_NORM, "weight", 0).c_str()) == nullptr;
+    const int trunk_flags = mtp_only
+        ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = model.layers[i];
 
@@ -1821,7 +1833,7 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
 
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
-        int flags = 0;
+        int flags = is_mtp_layer ? 0 : trunk_flags;
         // Skip loading MTP layers if the feature is disabled
         if (!model.mtp) {
             if (is_mtp_layer) {
@@ -5395,6 +5407,10 @@ bool create_tensors_helper::create_tensors() {
             for ([[maybe_unused]] auto mem : mem_used) LLAMA_LOG_DEBUG(" %g", mem/1024./1024.);
             LLAMA_LOG_DEBUG("\n");
             auto & layer = model.layers[il];
+            // a predictor-only MTP GGUF has no tensors at all in its main blocks
+            if (!layer.attn_norm && !layer.wq && !layer.wqkv && !layer.ssm_in && !layer.wo) {
+                continue;
+            }
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
                 prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, mirror, mem_used);

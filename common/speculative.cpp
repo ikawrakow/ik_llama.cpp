@@ -145,7 +145,8 @@ static bool common_speculative_are_compatible(
 }
 
 static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
-    return llama_model_is_step35(model) || llama_model_is_deepseek4(model);
+    return llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
+           llama_model_is_qwen35_family(model);
 }
 
 static bool common_speculative_has_recognized_mtp_companion(

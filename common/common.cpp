@@ -4072,6 +4072,14 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
+    // a predictor-only MTP GGUF has no main blocks, so it cannot be the target model
+    if (llama_model_mtp_package(model) == LLAMA_MTP_PACKAGE_COMPANION) {
+        fprintf(stderr, "%s: error: '%s' is an MTP companion, pass it with -md instead\n",
+                __func__, params.model.c_str());
+        llama_free_model(model);
+        return iparams;
+    }
+
     auto cparams = common_context_params_to_llama(params);
 
     llama_context * lctx = llama_init_from_model(model, cparams);
