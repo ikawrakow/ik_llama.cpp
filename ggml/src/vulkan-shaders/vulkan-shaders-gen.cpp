@@ -64,8 +64,17 @@ const std::vector<std::string> type_names = {
     "iq3_s",
     "iq4_xs",
     "iq4_nl",
+    "iq4_ks",
+    "iq4_kt",
     "bf16",
 };
+
+// IQ4_KS and IQ4_KT keep a per-row f32 scale ahead of the row's blocks, so they are read
+// through a uint32_t alias of the A buffer and need dedicated shaders. The coopmat2 path
+// cannot express their addressing and skips them.
+static bool is_row_meta_quant(const std::string & tname) {
+    return tname == "iq4_ks" || tname == "iq4_kt";
+}
 
 namespace {
 void execute_command(const std::string& command, std::string& stdout_str, std::string& stderr_str) {
@@ -362,10 +371,16 @@ void matmul_shaders(bool fp16, bool matmul_id, bool coopmat, bool coopmat2, bool
         std::string load_vec_quant = "2";
         if ((tname == "q4_0") || (tname == "q4_1") || (tname == "iq1_s") || (tname == "iq1_m") || (tname == "iq2_xxs") || (tname == "iq2_xs") || (tname == "iq2_s"))
             load_vec_quant = "8";
-        else if ((tname == "q5_0") || (tname == "q5_1") || (tname == "q8_0") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_nl"))
+        // iq4_kt: 4 so that one load index is exactly one trellis group of 4 weights
+        else if ((tname == "q5_0") || (tname == "q5_1") || (tname == "q8_0") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_nl") || (tname == "iq4_kt"))
             load_vec_quant = "4";
 
         if (tname == "bf16") {
+            continue;
+        }
+
+        // the coopmat2 tensor layout cannot describe a per-row scale ahead of the blocks
+        if (coopmat2 && is_row_meta_quant(tname)) {
             continue;
         }
 
@@ -431,6 +446,7 @@ void process_shaders() {
                 continue;
             }
             if (tname == "bf16") continue;
+            if (is_row_meta_quant(tname)) continue;
 
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
             if (tname == "f16") {
@@ -466,7 +482,7 @@ void process_shaders() {
     for (const auto& tname : type_names) {
         // mul mat vec
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
-        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_")) ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
+        std::string shader = (string_ends_with(tname, "_k") || string_starts_with(tname, "iq1_") || string_starts_with(tname, "iq2_") || string_starts_with(tname, "iq3_") || is_row_meta_quant(tname)) ? "mul_mat_vec_" + tname + ".comp" : "mul_mat_vec.comp";
 
         string_to_spv("mul_mat_vec_" + tname + "_f32_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float"}, {"B_TYPE_VEC2", "vec2"}, {"B_TYPE_VEC4", "vec4"}, {"D_TYPE", "float"}}));
         string_to_spv("mul_mat_vec_" + tname + "_f16_f32", shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "float16_t"}, {"B_TYPE_VEC2", "f16vec2"}, {"B_TYPE_VEC4", "f16vec4"}, {"D_TYPE", "float"}}));
@@ -479,7 +495,8 @@ void process_shaders() {
         }
 
         if (!string_ends_with(tname, "_k")) {
-            shader = (tname == "f32" || tname == "f16" || tname == "bf16") ? "get_rows.comp" : "get_rows_quant.comp";
+            shader = (tname == "f32" || tname == "f16" || tname == "bf16") ? "get_rows.comp" :
+                     is_row_meta_quant(tname) ? "get_rows_" + tname + ".comp" : "get_rows_quant.comp";
 
             if (tname == "f16") {
                 string_to_spv("get_rows_" + tname, shader, merge_maps(base_dict, {{data_a_key, "1"}, {"B_TYPE", "int"}, {"D_TYPE", "float16_t"}, {"OPTIMIZATION_ERROR_WORKAROUND", "1"}}));
