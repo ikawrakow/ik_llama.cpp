@@ -644,12 +644,17 @@ void llm_load_hparams(
                     }
                 }
 
+                // the +1 variants carry the MTP block (either embedded or as a standalone companion)
                 switch (hparams.n_layer) {
                     case 40:
                     case 41:
                         model.type = e_model::MODEL_35B_A3B; break;
-                    case 48: model.type = e_model::MODEL_122B_A10B; break;
-                    case 60: model.type = e_model::MODEL_397B_A17B; break;
+                    case 48:
+                    case 49:
+                        model.type = e_model::MODEL_122B_A10B; break;
+                    case 60:
+                    case 61:
+                        model.type = e_model::MODEL_397B_A17B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
