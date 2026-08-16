@@ -57,7 +57,9 @@
 #define CC_RDNA1      (CC_OFFSET_AMD + 1010)
 #define CC_RDNA2      (CC_OFFSET_AMD + 1030)
 #define CC_RDNA3      (CC_OFFSET_AMD + 1100)
-#define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < CC_OFFSET_MTHREADS)
+// CC_OFFSET_AMD is below CC_OFFSET_MTHREADS, so the AMD range has to be excluded explicitly.
+// An NVIDIA cc is 100*major + 10*minor and never comes anywhere near either offset
+#define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < CC_OFFSET_AMD)
 #define GGML_CUDA_CC_IS_AMD(cc)   (cc >= CC_OFFSET_AMD)
 
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
