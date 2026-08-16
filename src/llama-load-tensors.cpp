@@ -1841,6 +1841,8 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
             }
         }
         const int mtp_opt = is_mtp_layer ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+        // q_proj may be shared with the last main block, which a predictor-only GGUF does not have
+        const int mtp_opt_q = mtp_only ? 0 : mtp_opt;
 
         layer.attn_norm      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), { n_embd }, flags);
         layer.attn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, flags);
@@ -1848,7 +1850,7 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
 
         if (!hparams.is_recurrent(i)) {
             // Attention layers (MTP layer is always standard attention)
-            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head * 2 }, flags | mtp_opt);
+            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head * 2 }, flags | mtp_opt_q);
             layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, flags);
             layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, flags);
             layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, flags);

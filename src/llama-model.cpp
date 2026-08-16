@@ -2359,7 +2359,8 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     }
 
     const size_t first = n_layers - n_nextn;
-    // Qwen3.5 9B/4B NextN blocks have no eh_proj, but every one of them has enorm
+    // A Qwen3.5 NextN block loads eh_proj, attn_q and the MLP as optional, so none of them
+    // marks a predictor tail on its own; enorm is required and is present in all of them.
     const bool has_tail = model->layers[first].nextn.eh_proj != nullptr ||
         (llama_model_is_qwen35_family(model) && model->layers[first].nextn.enorm != nullptr);
 
