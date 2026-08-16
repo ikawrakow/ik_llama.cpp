@@ -4072,6 +4072,17 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
+    // A predictor-only MTP companion has no main blocks, so it cannot serve as the target model.
+    // Reject it here: llama_model_load() cannot tell a -m load from a -md load, and building a
+    // target context over the absent blocks aborts deep inside the graph builder.
+    if (llama_model_mtp_package(model) == LLAMA_MTP_PACKAGE_COMPANION) {
+        fprintf(stderr, "%s: error: '%s' is an MTP predictor-only companion GGUF; "
+                        "pass it with -md/--model-draft and load a complete model with -m\n",
+                __func__, params.model.c_str());
+        llama_free_model(model);
+        return iparams;
+    }
+
     auto cparams = common_context_params_to_llama(params);
 
     llama_context * lctx = llama_init_from_model(model, cparams);

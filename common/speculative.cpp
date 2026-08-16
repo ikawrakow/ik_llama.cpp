@@ -145,7 +145,8 @@ static bool common_speculative_are_compatible(
 }
 
 static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
-    return llama_model_is_step35(model) || llama_model_is_deepseek4(model);
+    return llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
+           llama_model_is_qwen35_family(model);
 }
 
 static bool common_speculative_has_recognized_mtp_companion(
@@ -2041,6 +2042,9 @@ bool common_speculative_prepare_mtp_runtime(
     params.cparams_dft.mtp         = true;
     params.cparams_dft.mtp_op_type = MTP_OP_WARMUP;
     params.cparams_dft.embeddings  = true;
+    // An MTP graph never appends a pooling layer, so a pooled cparams would leave inp_mean/inp_cls
+    // null and abort in llama_set_inputs on the first companion decode.
+    params.cparams_dft.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
     return true;
 }
@@ -2127,7 +2131,12 @@ bool common_speculative_finalize_startup(
             const llama_model * companion = params.model_dft;
             const bool appended_contract = common_speculative_target_has_appended_mtp_contract(model);
 
-            if (appended_contract &&
+            // A Qwen3.5 target may already carry its own NextN tail. In that case -md is an ordinary
+            // draft model for a chained draft stage and need not be a predictor-only companion.
+            const bool target_self_mtp = llama_model_is_qwen35_family(model) &&
+                llama_model_mtp_package(model) == LLAMA_MTP_PACKAGE_EMBEDDED;
+
+            if (appended_contract && !target_self_mtp &&
                 llama_model_mtp_package(companion) != LLAMA_MTP_PACKAGE_COMPANION) {
                 LOG_ERR("%s: -md for an MTP stage must be a predictor-only companion GGUF\n", __func__);
                 return false;
@@ -2159,6 +2168,22 @@ bool common_speculative_finalize_startup(
                 const int32_t n_heads = llama_model_n_nextn_layer(companion);
                 if (n_heads != 1) {
                     LOG_ERR("%s: DeepSeek-V4 MTP companion requires exactly one predictor layer, got %d\n",
+                            __func__, n_heads);
+                    return false;
+                }
+            } else if (llama_model_is_qwen35_family(model) &&
+                       llama_model_mtp_package(companion) == LLAMA_MTP_PACKAGE_COMPANION) {
+                const char * arch_tgt = llama_model_arch_string(model);
+                const char * arch_dft = llama_model_arch_string(companion);
+                if (arch_tgt == nullptr || arch_dft == nullptr || std::strcmp(arch_tgt, arch_dft) != 0) {
+                    LOG_ERR("%s: Qwen3.5 MTP companion must use the same architecture as the target (target=%s, companion=%s)\n",
+                            __func__, arch_tgt ? arch_tgt : "?", arch_dft ? arch_dft : "?");
+                    return false;
+                }
+
+                const int32_t n_heads = llama_model_n_nextn_layer(companion);
+                if (n_heads != 1) {
+                    LOG_ERR("%s: Qwen3.5 MTP companion requires exactly one predictor layer, got %d\n",
                             __func__, n_heads);
                     return false;
                 }

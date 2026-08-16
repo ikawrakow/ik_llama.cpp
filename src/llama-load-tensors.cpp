@@ -1704,6 +1704,16 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
     const int64_t value_dim  = head_v_dim * n_v_heads;
     const int64_t conv_dim   = key_dim * 2 + value_dim;
 
+    // See create_qwen35_tensors: a predictor-only companion ships only the NextN block.
+    const bool mtp_only = hparams.nextn_predict_layers > 0 &&
+                          ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_NORM, "weight", 0).c_str()) == nullptr;
+    const int trunk_flags = mtp_only
+        ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+    if (mtp_only) {
+        LLAMA_LOG_INFO("%s: standalone MTP companion - skipping %d absent main blocks\n",
+                __func__, (int)(n_layer - hparams.nextn_predict_layers));
+    }
+
     for (int i = 0; i < n_layer; ++i) {
         const bool is_mtp_layer = hparams.nextn_predict_layers > 0 &&
                                   static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
@@ -1712,7 +1722,7 @@ bool create_tensors_helper::create_qwen35moe_tensors(const LLM_TN & tn) {
 
         auto & layer = model.layers[i];
 
-        int flags = 0;
+        int flags = is_mtp_layer ? 0 : trunk_flags;
         if (!model.mtp && is_mtp_layer) {
             flags |= llama_model_loader::TENSOR_SKIP;
         }
@@ -1813,6 +1823,17 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
     const int64_t value_dim  = head_v_dim * n_v_heads;
     const int64_t conv_dim   = key_dim * 2 + value_dim;
 
+    // A predictor-only companion GGUF advertises the full block count (n_main + nextn) but ships only the
+    // NextN block, so blk.0 .. blk.n_main-1 are absent - they live in the target GGUF passed with -m.
+    const bool mtp_only = hparams.nextn_predict_layers > 0 &&
+                          ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_NORM, "weight", 0).c_str()) == nullptr;
+    const int trunk_flags = mtp_only
+        ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+    if (mtp_only) {
+        LLAMA_LOG_INFO("%s: standalone MTP companion - skipping %d absent main blocks\n",
+                __func__, (int)(n_layer - hparams.nextn_predict_layers));
+    }
+
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = model.layers[i];
 
@@ -1821,7 +1842,7 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
 
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
-        int flags = 0;
+        int flags = is_mtp_layer ? 0 : trunk_flags;
         // Skip loading MTP layers if the feature is disabled
         if (!model.mtp) {
             if (is_mtp_layer) {
@@ -1887,13 +1908,15 @@ bool create_tensors_helper::create_qwen35_tensors(const LLM_TN & tn) {
         }
     }
 
-    // 9B shares q_proj
-    if (model.mtp && hparams.nextn_predict_layers > 0) {
+    // 9B shares q_proj. This is only possible when the trunk is part of this GGUF: a predictor-only
+    // companion has no layer n_main-1 to borrow wq from, and n_main could be 0.
+    if (model.mtp && !mtp_only && hparams.nextn_predict_layers > 0 &&
+        hparams.nextn_predict_layers < (uint32_t) n_layer) {
         const uint32_t n_main = n_layer - hparams.nextn_predict_layers;
+        auto & last_main = model.layers[n_main - 1];
         for (uint32_t i = n_main; i < (uint32_t)n_layer; ++i) {
             auto & mtp_layer = model.layers[i];
-            auto & last_main = model.layers[n_main - 1];
-            if (mtp_layer.wq == nullptr) {
+            if (mtp_layer.wq == nullptr && last_main.wq != nullptr) {
                 mtp_layer.wq = last_main.wq;
             }
         }
@@ -5395,6 +5418,14 @@ bool create_tensors_helper::create_tensors() {
             for ([[maybe_unused]] auto mem : mem_used) LLAMA_LOG_DEBUG(" %g", mem/1024./1024.);
             LLAMA_LOG_DEBUG("\n");
             auto & layer = model.layers[il];
+            // A predictor-only MTP companion GGUF advertises the full block count but ships only the
+            // NextN block, so its main blocks hold no tensors at all - there is nothing to split, and
+            // split_recurrent_tensors() would assert on the missing ssm_in/wqkv.
+            if (!layer.attn_norm && !layer.wq && !layer.wqkv && !layer.ssm_in &&
+                !layer.wo && !layer.ffn_down && !layer.ffn_down_exps && !layer.ffn_up_gate_exps) {
+                LLAMA_LOG_DEBUG("%s: layer %d holds no tensors - nothing to split\n", __func__, il);
+                continue;
+            }
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
                 prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, mirror, mem_used);
