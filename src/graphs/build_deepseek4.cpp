@@ -1510,8 +1510,8 @@ ggml_cgraph * llm_build_context::build_dflash_dsv4() {
     const int64_t n_embd_head = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_rope = hparams.n_rot;
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
-    const int64_t ctx_len = lctx.dflash.visible_cross_ctx > 0
-            ? (int64_t) lctx.dflash.visible_cross_ctx
+    const int64_t ctx_len = lctx.dflash.visible_history_capacity > 0
+            ? (int64_t) lctx.dflash.visible_history_capacity
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
     const int64_t n_kv_total = GGML_PAD(ctx_len + n_tokens, flash_attn ? 256 : 32);
     const ggml_type mask_type = flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;

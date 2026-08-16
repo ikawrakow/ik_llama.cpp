@@ -56,8 +56,8 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
     const int64_t n_target_features = hparams.dflash_n_target_features;
-    const int64_t ctx_len = lctx.dflash.visible_cross_ctx > 0
-            ? (int64_t) lctx.dflash.visible_cross_ctx
+    const int64_t ctx_len = lctx.dflash.visible_history_capacity > 0
+            ? (int64_t) lctx.dflash.visible_history_capacity
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
     const int64_t update_rows = std::max<int64_t>(1, lctx.dflash.kv.cache_update_rows > 0 ? lctx.dflash.kv.cache_update_rows : ctx_len);
     const int32_t write_pos = lctx.dflash.kv.cache_write_pos;
@@ -302,8 +302,8 @@ ggml_cgraph * llm_build_context::build_dflash() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
     const int64_t n_target_features = hparams.dflash_n_target_features;
-    const int64_t ctx_len = lctx.dflash.visible_cross_ctx > 0
-            ? (int64_t) lctx.dflash.visible_cross_ctx
+    const int64_t ctx_len = lctx.dflash.visible_history_capacity > 0
+            ? (int64_t) lctx.dflash.visible_history_capacity
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
     const int64_t n_kv_total = GGML_PAD(ctx_len + n_tokens, (int64_t) llama_kv_cache::get_padding(flash_attn));
 

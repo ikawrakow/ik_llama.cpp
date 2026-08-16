@@ -43,12 +43,12 @@ llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
         return plan;
     }
 
-    const int32_t cross_ctx = ctx->dflash.visible_cross_ctx > 0
-            ? ctx->dflash.visible_cross_ctx
+    const int32_t history_capacity = ctx->dflash.visible_history_capacity > 0
+            ? ctx->dflash.visible_history_capacity
             : std::max<int32_t>(1, (int32_t) ctx->cparams.n_ctx - (int32_t) ctx->model.hparams.dflash_block_size);
 
     return llama_plan_dflash_kv_cache_transition(
-            cross_ctx,
+            history_capacity,
             ctx->dflash.kv.cache_n_filled,
             ctx->dflash.kv.cache_write_pos,
             ctx->dflash.kv.cache_valid,
@@ -60,19 +60,19 @@ llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
             n_rows);
 }
 
-void llama_set_dflash_visible_cross_ctx(
+void llama_set_dflash_visible_history_capacity(
         struct llama_context * ctx,
-        int32_t cross_ctx) {
+        int32_t history_capacity) {
     if (ctx == nullptr) {
         return;
     }
 
-    ctx->dflash.visible_cross_ctx = std::max<int32_t>(0, cross_ctx);
+    ctx->dflash.visible_history_capacity = std::max<int32_t>(0, history_capacity);
 }
 
-int32_t llama_get_dflash_visible_cross_ctx(
+int32_t llama_get_dflash_visible_history_capacity(
         const struct llama_context * ctx) {
-    return ctx != nullptr ? ctx->dflash.visible_cross_ctx : 0;
+    return ctx != nullptr ? ctx->dflash.visible_history_capacity : 0;
 }
 
 void llama_set_dflash_dspark(struct llama_context * ctx, bool enabled) {
@@ -370,8 +370,8 @@ static bool llama_set_dflash_target_features_impl(
         ctx->dflash.target.keep_rows = std::max<int32_t>(0, n_rows - ctx->dflash.target.append_rows);
         }
 
-            const int32_t cross_ctx = ctx->dflash.visible_cross_ctx > 0
-                ? ctx->dflash.visible_cross_ctx
+            const int32_t history_capacity = ctx->dflash.visible_history_capacity > 0
+                ? ctx->dflash.visible_history_capacity
                 : std::max<int32_t>(1, (int32_t) ctx->cparams.n_ctx - (int32_t) ctx->model.hparams.dflash_block_size);
             const llama_dflash_window_update cache_window_update = {
                 ctx->dflash.target.version,
@@ -387,7 +387,7 @@ static bool llama_set_dflash_target_features_impl(
             ctx->dflash.kv.cache_view_n_filled = ctx->dflash.kv.cache_n_filled;
             ctx->dflash.kv.cache_view_write_pos = ctx->dflash.kv.cache_write_pos;
             ctx->dflash.kv.cache_view_valid = ctx->dflash.kv.cache_valid;
-        } else if (cross_ctx > 0) {
+        } else if (history_capacity > 0) {
             ctx->dflash.kv.cache_view_n_filled = cache_plan.next_n_filled;
             ctx->dflash.kv.cache_view_write_pos = cache_plan.next_write_pos;
             ctx->dflash.kv.cache_view_valid = cache_plan.next_n_filled > 0;

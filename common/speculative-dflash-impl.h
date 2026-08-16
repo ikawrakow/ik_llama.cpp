@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <exception>
+#include <limits>
 #include <vector>
+
+#include "ggml.h"
 
 static bool common_speculative_are_dflash_compatible(
         const llama_model * model_tgt,
@@ -76,6 +80,8 @@ static bool common_speculative_are_dflash_compatible(
 
 struct common_speculative_state_dflash;
 static void dflash_materialize_target_window_features(common_speculative_state_dflash & state);
+static void dflash_record_window_update(common_speculative_state_dflash & state,
+        int32_t keep_rows, int32_t append_rows, bool replace);
 
 // DFlash runtime state and draft path.
 struct common_speculative_state_dflash : public common_speculative_state {
@@ -87,14 +93,13 @@ struct common_speculative_state_dflash : public common_speculative_state {
     int32_t block_size = 0;
     int32_t mask_token_id = -1;
     int32_t n_target_features = 0;
-    int32_t cross_ctx = 0;
+    int32_t history_capacity = 0;
     bool is_dspark = false;
     bool ready = false;
 
     std::vector<int32_t> target_layer_ids;
     std::vector<float> target_window;
     std::vector<llama_pos> target_window_pos;
-    std::vector<float> target_window_stage;
     std::vector<llama_pos> target_window_pos_stage;
     std::vector<float> target_window_ring;
     std::vector<float> target_window_append_features;
@@ -107,16 +112,20 @@ struct common_speculative_state_dflash : public common_speculative_state {
     bool target_window_replace = false;
     bool target_window_materialized = false;
     llama_pos last_target_pos = -1;
+    uint64_t rebuild_count = 0;
+    uint64_t rebuild_rows = 0;
+    uint64_t rebuild_time_us = 0;
+    uint64_t generated_tokens = 0;
 
     common_speculative_state_dflash(
             enum common_speculative_type type,
             llama_context * ctx_tgt,
             llama_context * ctx_dft,
-            int32_t cross_ctx)
+            int32_t history_capacity)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
         , ctx_dft(ctx_dft)
-        , cross_ctx(std::max(1, cross_ctx))
+        , history_capacity(std::max(1, history_capacity))
     {
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
         const llama_model * model_dft = llama_get_model(ctx_dft);
@@ -221,21 +230,44 @@ struct common_speculative_state_dflash : public common_speculative_state {
         }
 
         batch = llama_batch_init(std::max(1, block_size), 0, 1);
-        target_window.reserve((size_t) this->cross_ctx * (size_t) n_target_features);
-        target_window_stage.reserve((size_t) this->cross_ctx * (size_t) n_target_features);
-        target_window_ring.resize((size_t) this->cross_ctx * (size_t) n_target_features);
-        target_window_append_features.reserve((size_t) this->cross_ctx * (size_t) n_target_features);
-        target_window_pos.reserve((size_t) this->cross_ctx);
-        target_window_pos_stage.reserve((size_t) this->cross_ctx);
+        const size_t ring_rows = (size_t) this->history_capacity;
+        const size_t ring_width = (size_t) n_target_features;
+        const size_t max_size = std::numeric_limits<size_t>::max();
+        if (ring_width == 0 || ring_rows > max_size / ring_width || ring_rows * ring_width > max_size / sizeof(float)) {
+            LOG_ERR("%s: DFlash feature ring size overflows: history=%d width=%d\n",
+                    __func__, history_capacity, n_target_features);
+            return;
+        }
+
+        const size_t ring_elements = ring_rows * ring_width;
+        const size_t ring_bytes = ring_elements * sizeof(float);
+        try {
+            target_window_ring.resize(ring_elements);
+        } catch (const std::exception & err) {
+            LOG_ERR("%s: failed to allocate DFlash feature ring: history=%d width=%d bytes=%zu (%.2f GiB): %s\n",
+                    __func__, history_capacity, n_target_features, ring_bytes,
+                    (double) ring_bytes / (1024.0 * 1024.0 * 1024.0), err.what());
+            return;
+        }
+        target_window_pos.reserve((size_t) this->history_capacity);
+        target_window_pos_stage.reserve((size_t) this->history_capacity);
         ready = true;
 
-        llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
+        llama_set_dflash_visible_history_capacity(ctx_dft, this->history_capacity);
         llama_set_dflash_dspark(ctx_dft, is_dspark);
-        LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, cross_ctx=%d, n_target_features=%d, n_target_layers=%d)\n",
-                __func__, llama_n_ctx(ctx_dft), block_size, this->cross_ctx, n_target_features, n_target_layers);
+        LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, history_capacity=%d, n_target_features=%d, n_target_layers=%d)\n",
+                __func__, llama_n_ctx(ctx_dft), block_size, this->history_capacity, n_target_features, n_target_layers);
     }
 
     ~common_speculative_state_dflash() override {
+        if (rebuild_count > 0) {
+            LOG_INF("%s: DFlash cache rebuilds=%llu rows=%llu time=%.3f ms rows/token=%.3f\n",
+                    __func__,
+                    (unsigned long long) rebuild_count,
+                    (unsigned long long) rebuild_rows,
+                    (double) rebuild_time_us / 1000.0,
+                    generated_tokens > 0 ? (double) rebuild_rows / (double) generated_tokens : 0.0);
+        }
         llama_clear_dflash_capture(ctx_tgt);
         if (ctx_dft) {
             llama_free(ctx_dft);
@@ -249,6 +281,10 @@ struct common_speculative_state_dflash : public common_speculative_state {
         GGML_UNUSED(prompt);
         llama_kv_cache_clear(ctx_dft);
         llama_reset_dflash_kv_cache_state(ctx_dft);
+        rebuild_count = 0;
+        rebuild_rows = 0;
+        rebuild_time_us = 0;
+        generated_tokens = 0;
     }
 
     void draft(
@@ -271,6 +307,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         const float * target_features = nullptr;
         size_t target_feature_floats = 0;
+        const int32_t batch_len = is_dspark ? n_keep : n_keep + 1;
         llama_dflash_window_update window_update = {
             target_window_version,
             target_window_keep_rows,
@@ -282,6 +319,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
         const llama_dflash_kv_cache_transition cache_plan =
                 llama_plan_dflash_kv_cache_transition_for_ctx(ctx_dft, window_update, target_window_rows);
 
+        const int64_t rebuild_start_us = cache_plan.rebuild_cache ? ggml_time_us() : 0;
         if (cache_plan.rebuild_cache) {
             dflash_materialize_target_window_features(*this);
             target_features = target_window.data();
@@ -298,18 +336,29 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_kv_cache_clear(ctx_dft);
         batch.n_tokens = 0;
-        const int32_t batch_len = is_dspark ? n_keep : n_keep + 1;
         // id_last's true position is one past the newest committed feature row
         // (last_target_pos): seed there, masks follow. Mirrors mainline's
         // [id_last @ n_past, mask @ n_past+1, ...] block geometry.
-        const llama_pos draft_pos_base = last_target_pos >= 0 ? last_target_pos + 1 : (llama_pos) target_window_rows;
+        const llama_pos draft_pos_base = last_target_pos >= 0
+                ? last_target_pos + 1
+                : (llama_pos) target_window_rows;
         common_batch_add(batch, id_last, draft_pos_base, { 0 }, is_dspark);
         for (int32_t i = 1; i < batch_len; ++i) {
             common_batch_add(batch, mask_token_id, draft_pos_base + i, { 0 }, true);
         }
 
-        if (llama_decode(ctx_dft, batch) != 0) {
-            LOG_ERR("%s: llama_decode() failed for DFlash draft batch\n", __func__);
+        const int decode_status = llama_decode(ctx_dft, batch);
+        if (cache_plan.rebuild_cache) {
+            rebuild_count++;
+            rebuild_rows += (uint64_t) target_window_rows;
+            rebuild_time_us += (uint64_t) std::max<int64_t>(0, ggml_time_us() - rebuild_start_us);
+            std::vector<float>().swap(target_window);
+            target_window_materialized = false;
+        }
+        if (decode_status != 0) {
+            LOG_ERR("%s: DFlash draft decode failed (status=%d local_pos=%d history_rows=%d capacity=%d)\n",
+                    __func__, decode_status, (int) draft_pos_base,
+                    target_window_rows, history_capacity + block_size);
             batch.n_tokens = 0;
             return;
         }
@@ -323,6 +372,8 @@ struct common_speculative_state_dflash : public common_speculative_state {
             }
             result.push_back(id);
         }
+
+        generated_tokens += (uint64_t) result.size();
 
         batch.n_tokens = 0;
     }
@@ -354,12 +405,12 @@ static void dflash_ring_reset_rows(
         return;
     }
 
-    if (state.target_window_ring.size() != (size_t) state.cross_ctx * row_width) {
-        state.target_window_ring.resize((size_t) state.cross_ctx * row_width);
+    if (state.target_window_ring.size() != (size_t) state.history_capacity * row_width) {
+        state.target_window_ring.resize((size_t) state.history_capacity * row_width);
     }
 
     std::memcpy(state.target_window_ring.data(), rows, (size_t) n_rows * row_width * sizeof(float));
-    state.target_window_ring_write_pos = n_rows % state.cross_ctx;
+    state.target_window_ring_write_pos = n_rows % state.history_capacity;
     state.target_window_ring_filled = n_rows;
     state.target_window_materialized = false;
 }
@@ -373,26 +424,26 @@ static void dflash_ring_append_rows(
         return;
     }
 
-    if (state.target_window_ring.size() != (size_t) state.cross_ctx * row_width) {
-        state.target_window_ring.resize((size_t) state.cross_ctx * row_width);
+    if (state.target_window_ring.size() != (size_t) state.history_capacity * row_width) {
+        state.target_window_ring.resize((size_t) state.history_capacity * row_width);
     }
 
     int32_t write_pos = state.target_window_ring_write_pos;
     int32_t remaining = n_rows;
     const float * src = rows;
     while (remaining > 0) {
-        const int32_t chunk_rows = std::min<int32_t>(remaining, state.cross_ctx - write_pos);
+        const int32_t chunk_rows = std::min<int32_t>(remaining, state.history_capacity - write_pos);
         std::memcpy(
                 state.target_window_ring.data() + (size_t) write_pos * row_width,
                 src,
                 (size_t) chunk_rows * row_width * sizeof(float));
         src += (size_t) chunk_rows * row_width;
         remaining -= chunk_rows;
-        write_pos = (write_pos + chunk_rows) % state.cross_ctx;
+        write_pos = (write_pos + chunk_rows) % state.history_capacity;
     }
 
     state.target_window_ring_write_pos = write_pos;
-    state.target_window_ring_filled = std::min(state.cross_ctx, state.target_window_ring_filled + n_rows);
+    state.target_window_ring_filled = std::min(state.history_capacity, state.target_window_ring_filled + n_rows);
     state.target_window_materialized = false;
 }
 
@@ -404,8 +455,8 @@ static void dflash_materialize_target_window_features(common_speculative_state_d
     const size_t row_width = (size_t) state.n_target_features;
     state.target_window.resize((size_t) state.target_window_rows * row_width);
 
-    const int32_t read_start = (state.target_window_ring_write_pos - state.target_window_rows + state.cross_ctx) % state.cross_ctx;
-    const int32_t first_rows = std::min<int32_t>(state.target_window_rows, state.cross_ctx - read_start);
+    const int32_t read_start = (state.target_window_ring_write_pos - state.target_window_rows + state.history_capacity) % state.history_capacity;
+    const int32_t first_rows = std::min<int32_t>(state.target_window_rows, state.history_capacity - read_start);
     std::memcpy(
             state.target_window.data(),
             state.target_window_ring.data() + (size_t) read_start * row_width,
@@ -429,7 +480,7 @@ static bool dflash_append_target_features(
     if (features.kind != COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE ||
             features.width != state.n_target_features ||
             features.rows.empty() ||
-            state.cross_ctx <= 0) {
+            state.history_capacity <= 0) {
         return false;
     }
 
@@ -453,22 +504,22 @@ static bool dflash_append_target_features(
     }
 
     const int32_t n_rows = (int32_t) new_positions.size();
-    if (n_rows >= state.cross_ctx) {
-        const int32_t keep_from = n_rows - state.cross_ctx;
+    if (n_rows >= state.history_capacity) {
+        const int32_t keep_from = n_rows - state.history_capacity;
         state.target_window_pos.assign(new_positions.begin() + keep_from, new_positions.end());
         state.target_window_append_features.assign(
                 new_rows.begin() + (ptrdiff_t) keep_from * (ptrdiff_t) row_width,
                 new_rows.end());
-        dflash_ring_reset_rows(state, state.target_window_append_features.data(), state.cross_ctx);
+        dflash_ring_reset_rows(state, state.target_window_append_features.data(), state.history_capacity);
 
-        state.target_window_rows = state.cross_ctx;
+        state.target_window_rows = state.history_capacity;
         state.target_window_ring_filled = state.target_window_rows;
         state.last_target_pos = state.target_window_pos.empty() ? -1 : state.target_window_pos.back();
         dflash_record_window_update(state, 0, state.target_window_rows, true);
         return true;
     }
 
-    const int32_t keep_old_rows = std::min<int32_t>(state.target_window_rows, state.cross_ctx - n_rows);
+    const int32_t keep_old_rows = std::min<int32_t>(state.target_window_rows, state.history_capacity - n_rows);
     std::vector<llama_pos> & next_window_pos = state.target_window_pos_stage;
     next_window_pos.resize((size_t) (keep_old_rows + n_rows));
 
@@ -492,7 +543,6 @@ static bool dflash_append_target_features(
 static void dflash_clear_target_features(common_speculative_state_dflash & state) {
     state.target_window.clear();
     state.target_window_pos.clear();
-    state.target_window_stage.clear();
     state.target_window_pos_stage.clear();
     state.target_window_append_features.clear();
     state.target_window_rows = 0;
@@ -503,6 +553,10 @@ static void dflash_clear_target_features(common_speculative_state_dflash & state
     state.target_window_replace = false;
     state.target_window_materialized = false;
     state.last_target_pos = -1;
+    state.rebuild_count = 0;
+    state.rebuild_rows = 0;
+    state.rebuild_time_us = 0;
+    state.generated_tokens = 0;
     llama_reset_dflash_kv_cache_state(state.ctx_dft);
 }
 
