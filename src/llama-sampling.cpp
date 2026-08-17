@@ -1131,13 +1131,15 @@ llama_token llama_sample_token_adaptive_p_impl(
                                                : ctx->orig_prob[id])
                               / ctx->cum_orig_prob;
     if (update_prob > 0) {
-        ctx->history.push_back({
-            ctx->decay * ctx->history.back().first + update_prob,   // weighted_sum
-            ctx->decay * ctx->history.back().second + 1.0f });      // total_weight
+        const auto [weighted_sum, total_weight] = ctx->history.back();
+        ctx->history.push_back({ ctx->decay * weighted_sum + update_prob,
+                                 ctx->decay * total_weight + 1.0f });
     }
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
+
+    // printf("%s[%d]: idx = %zu, id = %d\n", __func__, __LINE__, idx, id);
 
     return id;
 }
