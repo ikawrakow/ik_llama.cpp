@@ -449,7 +449,9 @@ static __device__ __forceinline__ void get_int_from_table_16_shift(const uint32_
 }
 
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, const int8_t * values) {
-#if defined(__CUDA_ARCH__)
+#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+    return ggml_cuda_perm_table_16(q4, values);
+#elif defined(__CUDA_ARCH__)
     uint32_t v1, v2, v3, v4, mask;
     const uint32_t * values32 = (const uint32_t *)values;
 
