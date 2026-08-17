@@ -11,6 +11,8 @@
 
 #define A_DOT_B(a, b) a.b
 
+#define SSIZE(container) static_cast<int32_t>(container.size())
+
 // sampler types
 enum class llama_sampler_type : char {
     DRY         = 'd',
@@ -174,25 +176,26 @@ typedef struct common_params_sampling {
     std::vector<llama_token> penalty_prompt_tokens;
     bool                     use_penalty_prompt_tokens = false;
 
-    // expiring logit bias
+    // expiring logit bias (elb) + expiring sparam bias (epb)
     struct elb_param {
         struct elb_entry {
-            std::vector<size_t>         posi;           // positions of phrases in generated text
-            std::vector<float>          addsubs;        // add/modify then subtract/restore sampling parameters
-            std::vector<bool>           addflags;       // true if added
-            size_t                      max_phrase_len;
-            std::vector<std::string>    phrases;
-            std::vector<float>          biases;     // for each phrase, nth bias for nth token, extrapolate
-            int32_t                     duration;   // bias duration, unless exitword matches
-            bool                        is_range;   // has lower and upper biases
+            int32_t                     max_keyword_len;
+            std::vector<int32_t>        search_posi;        // epb: starting search positions for phrases
+            std::vector<float>          addsubs;            // epb: bias for sparams
+            std::vector<bool>           addflags;           // epb: true if added
+            std::vector<std::string>    phrases;            // exitwords for elb (below) OR keywords for epb (above)
+            std::vector<float>          biases;             // elb: for each phrase, nth bias for nth token, extrapolate
+            int32_t                     duration;           // elb: bias duration, unless exitword matches
+            bool                        is_range;           // elb: has lower and upper biases
             bool operator == (const struct elb_entry& other) const {
                 return (is_range == other.is_range)
                     && (duration == other.duration)
-                    && (biases == other.biases)
-                    && (phrases == other.phrases)
+                    && (max_keyword_len == other.max_keyword_len)
                     && (addflags == other.addflags)
+                    && (biases == other.biases)
                     && (addsubs == other.addsubs)
-                    && (posi == other.posi);
+                    && (search_posi == other.search_posi)
+                    && (phrases == other.phrases);
             }
         };
         std::vector<struct elb_entry> entries;
@@ -214,6 +217,10 @@ struct common_sampler {
     // parameters that will be used for sampling
     common_params_sampling params;
 
+    bool is_decoding;   // set true near the end of pp
+
+    std::string scratch;
+
     // mirostat sampler state
     float mirostat_mu;
 
@@ -233,14 +240,17 @@ struct common_sampler {
 
     size_t n_valid; // Number of correct top tokens with correct probabilities.
 
+    int32_t     n_rewind;
+    std::string rewinded_text;
+
+    std::string_view generated_text;
+    std::string      playing_text;      // token_buffer + draft
+
     llama_token_data_array cur_p; // current candidates
 
     std::mt19937 rng;
 
     std::vector<float>* server_biases;
-
-    std::string  drafted_text;
-    std::string* to_generated_text = nullptr;
 
     // expiring logit bias
     struct elb_state {
@@ -248,7 +258,7 @@ struct common_sampler {
             int32_t     id;
             float       bias;
             size_t      duration;
-            std::string cond;       // bias activation condition
+            std::string cond;   // bias activation condition
         };
         std::vector<struct elb_token> first_tokens;     // first token of each phrase
         std::vector<struct elb_token> other_tokens;
@@ -257,12 +267,13 @@ struct common_sampler {
         size_t                        delay;            // to avoid early termination of positively biased phrases
         int32_t                       max_cond_len;
         std::string                   jumpword;
-        size_t                        jump_idx;
-        size_t                        search_word_len;
+        int32_t                       jump_idx;
+        int32_t                       search_word_len;
+        int32_t                       init_pos;
     };
     std::vector<struct elb_state> elb_states;
-    size_t                        elb_idx;          // for elb_states
-    size_t                        elb_search_pos;
+    int32_t                       elb_idx;          // for elb_states and elb_params
+    int32_t                       elb_search_pos;   // for exitwords
 };
 
 
@@ -363,6 +374,8 @@ llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, str
 void common_expiring_logit_bias_apply(struct common_sampler* ctx_sampling, float* logits);
 
 void common_expiring_logit_bias_accept(struct common_sampler* ctx_sampling, struct llama_context * ctx_main);
+
+void common_expiring_logit_bias_rewind(struct common_sampler* ctx_sampling);
 
 llama_grammar* llama_sampler_init_llg(const llama_vocab* vocab,
     const char* grammar_kind, const char* grammar_data);
