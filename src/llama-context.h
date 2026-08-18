@@ -461,10 +461,10 @@ struct llama_context {
         };
 
         struct input_state {
-            struct ggml_tensor * target_features = nullptr; // F32 [n_target_features, cross_ctx]
-            struct ggml_tensor * pos_ctx = nullptr;         // I32 [cross_ctx]
-            struct ggml_tensor * kq_mask = nullptr;         // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
-            struct ggml_tensor * kq_mask_swa = nullptr;     // F32 [cross_ctx + n_batch, GGML_PAD(n_batch)]
+            struct ggml_tensor * target_features = nullptr; // F32 [n_target_features, history_capacity]
+            struct ggml_tensor * pos_ctx = nullptr;         // I32 [history_capacity]
+            struct ggml_tensor * kq_mask = nullptr;         // F32 [history_capacity + n_batch, GGML_PAD(n_batch)]
+            struct ggml_tensor * kq_mask_swa = nullptr;     // F32 [history_capacity + n_batch, GGML_PAD(n_batch)]
         };
 
         target_window_state target;
@@ -472,7 +472,7 @@ struct llama_context {
         std::unique_ptr<capture_state> capture;
         std::vector<float> feature_view_buffer;
         input_state inputs;
-        int32_t visible_cross_ctx = 0;
+        int32_t visible_history_capacity = 0;
         bool dspark = false;
 
         std::vector<llama_token> draft_tokens;
@@ -671,7 +671,7 @@ struct llama_context {
 
     bool update_cache_copies();
 
-    bool ensure_dflash_kv_cache_tensors(int32_t cross_ctx);
+    bool ensure_dflash_kv_cache_tensors(int32_t history_capacity);
     void free_dflash_kv_cache_tensors();
     bool ensure_dsv4_cache_tensors();
     void free_dsv4_cache_tensors();

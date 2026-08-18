@@ -29,7 +29,7 @@ struct llama_dflash_kv_cache_transition {
 };
 
 static inline llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition(
-                int32_t cross_ctx,
+                int32_t history_capacity,
                 int32_t current_n_filled,
                 int32_t current_write_pos,
                 bool cache_valid,
@@ -41,11 +41,11 @@ static inline llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transi
                 int32_t n_rows) {
         llama_dflash_kv_cache_transition plan;
 
-        const int32_t safe_cross_ctx = std::max<int32_t>(1, cross_ctx);
-        const int32_t bounded_n_filled = std::clamp(current_n_filled, 0, safe_cross_ctx);
+        const int32_t safe_history_capacity = std::max<int32_t>(1, history_capacity);
+        const int32_t bounded_n_filled = std::clamp(current_n_filled, 0, safe_history_capacity);
         const int32_t bounded_append_rows = std::clamp(append_rows, 0, n_rows);
         const int32_t bounded_keep_rows = std::clamp(keep_rows, 0, n_rows);
-        const int32_t expected_keep_rows = std::min(bounded_n_filled, std::max<int32_t>(0, safe_cross_ctx - bounded_append_rows));
+        const int32_t expected_keep_rows = std::min(bounded_n_filled, std::max<int32_t>(0, safe_history_capacity - bounded_append_rows));
 
         plan.cache_up_to_date = cache_valid && applied_window_version == target_window_version;
         plan.rebuild_cache = !cache_valid || replace || bounded_append_rows <= 0 || bounded_append_rows > n_rows;
@@ -56,15 +56,15 @@ static inline llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transi
         plan.append_rows = bounded_append_rows;
         if (plan.cache_up_to_date) {
                 plan.next_n_filled = bounded_n_filled;
-                plan.next_write_pos = safe_cross_ctx > 0
-                                ? ((current_write_pos % safe_cross_ctx) + safe_cross_ctx) % safe_cross_ctx
+                plan.next_write_pos = safe_history_capacity > 0
+                                ? ((current_write_pos % safe_history_capacity) + safe_history_capacity) % safe_history_capacity
                                 : 0;
         } else if (plan.rebuild_cache) {
-                plan.next_n_filled = std::min(safe_cross_ctx, n_rows);
-                plan.next_write_pos = plan.next_n_filled % safe_cross_ctx;
+                plan.next_n_filled = std::min(safe_history_capacity, n_rows);
+                plan.next_write_pos = plan.next_n_filled % safe_history_capacity;
         } else {
-                plan.next_n_filled = std::min(safe_cross_ctx, bounded_n_filled + bounded_append_rows);
-                plan.next_write_pos = (current_write_pos + bounded_append_rows) % safe_cross_ctx;
+                plan.next_n_filled = std::min(safe_history_capacity, bounded_n_filled + bounded_append_rows);
+                plan.next_write_pos = (current_write_pos + bounded_append_rows) % safe_history_capacity;
         }
 
         return plan;
@@ -76,8 +76,8 @@ llama_dflash_kv_cache_transition llama_plan_dflash_kv_cache_transition_for_ctx(
                 int32_t n_rows);
 
 void llama_reset_dflash_kv_cache_state(struct llama_context * ctx);
-void llama_set_dflash_visible_cross_ctx(struct llama_context * ctx, int32_t cross_ctx);
-int32_t llama_get_dflash_visible_cross_ctx(const struct llama_context * ctx);
+void llama_set_dflash_visible_history_capacity(struct llama_context * ctx, int32_t history_capacity);
+int32_t llama_get_dflash_visible_history_capacity(const struct llama_context * ctx);
 void llama_set_dflash_dspark(struct llama_context * ctx, bool enabled);
 
 int32_t llama_model_dflash_block_size(const struct llama_model * model);
