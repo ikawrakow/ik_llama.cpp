@@ -86,6 +86,7 @@ static void test_normalize_quotes_with_embedded_quotes(testing & t);
 
 // TAG_WITH_TAGGED argument parsing tests
 static void test_tagged_args_with_embedded_quotes(testing & t);
+static void test_tagged_args_closer_newline_optional(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -111,6 +112,7 @@ int main(int argc, char * argv[]) {
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
+    t.test("tagged_args_closer_newline_optional", test_tagged_args_closer_newline_optional);
 
     return t.summary();
 }
@@ -2313,4 +2315,61 @@ static void test_cohere2moe_parser(testing & t) {
         t.assert_equal("parallel : tool 1 name", std::string("python"),           parallel_msg.tool_calls[1].name);
         t.assert_equal("parallel : tool 1 id",   std::string("1"),                parallel_msg.tool_calls[1].id);
     }
+}
+
+// the input drops the newline the inferred closer carries
+static void test_tagged_args_closer_newline_optional(testing & t) {
+    struct autoparser a;
+    a.analysis_complete              = true;
+    a.jinja_caps.supports_tool_calls = true;
+    a.tools.format.mode              = tool_format::TAG_WITH_TAGGED;
+    a.tools.format.per_call_start    = "<tool_call>";
+    a.tools.format.per_call_end      = "</tool_call>";
+    a.tools.function.name_suffix     = "\n";
+    a.tools.arguments.name_prefix    = "<arg_key>";
+    a.tools.arguments.name_suffix    = "</arg_key>\n";
+    a.tools.arguments.value_prefix   = "<arg_value>";
+    a.tools.arguments.value_suffix   = "</arg_value>\n";
+    a.content.mode                   = content_mode::PLAIN;
+    a.reasoning.mode                 = reasoning_mode::NONE;
+
+    generation_params inputs;
+    inputs.tools = json::parse(R"([{"type":"function","function":{"name":"search","parameters":{
+        "type":"object","properties":{"file":{"type":"string"},"pattern":{"type":"string"}},
+        "required":["file","pattern"]}}}])");
+    inputs.tool_choice          = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    inputs.reasoning_format     = COMMON_REASONING_FORMAT_NONE;
+    inputs.enable_thinking      = false;
+    inputs.parallel_tool_calls  = false;
+
+    auto arena = a.build_parser(inputs);
+    common_chat_parser_params pp;
+    pp.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    pp.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    pp.parse_tool_calls = true;
+
+    auto check = [&](const char * label, const std::string & gen) {
+        common_chat_msg msg;
+        try {
+            msg = common_chat_peg_parse(arena, gen, /* is_partial = */ false, pp);
+        } catch (const std::exception & ex) {
+            t.assert_true(std::string(label) + " : parsed (" + ex.what() + ")", false);
+            return;
+        }
+        if (!t.assert_equal(std::string(label) + " : tool calls", 1u, msg.tool_calls.size())) {
+            return;
+        }
+        const std::string & args = msg.tool_calls[0].arguments;
+        t.assert_true(std::string(label) + " : no delimiter absorbed", args.find("</arg_value>") == std::string::npos);
+        t.assert_true(std::string(label) + " : file value", args.find("\"file\":\"app.log\"") != std::string::npos);
+        t.assert_true(std::string(label) + " : pattern value", args.find("\"pattern\":\"error\"") != std::string::npos);
+    };
+
+    check("closer with newline",
+        "<tool_call>search\n<arg_key>file</arg_key>\n<arg_value>app.log</arg_value>\n"
+        "<arg_key>pattern</arg_key>\n<arg_value>error</arg_value>\n</tool_call>");
+
+    check("closer without newline",
+        "<tool_call>search\n<arg_key>file</arg_key>\n<arg_value>app.log</arg_value>"
+        "<arg_key>pattern</arg_key>\n<arg_value>error</arg_value>\n</tool_call>");
 }
