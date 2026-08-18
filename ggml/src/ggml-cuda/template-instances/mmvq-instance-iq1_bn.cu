@@ -32,7 +32,7 @@ __device__ __forceinline__ void vec_dot_iq1_bn_q8_1(
         uint16_t v = (mult[l]*bq1->extra) & 0xff;
         v += v << 1;
         *a = v >> 8;
-        sumi = __dp4a(val[0], q8[4*l+0], __dp4a(val[1], q8[4*l+1], __dp4a(val[2], q8[4*l+2], __dp4a(val[3], q8[4*l+3], sumi))));
+        sumi = ggml_cuda_dp4a(val[0], q8[4*l+0], ggml_cuda_dp4a(val[1], q8[4*l+1], ggml_cuda_dp4a(val[2], q8[4*l+2], ggml_cuda_dp4a(val[3], q8[4*l+3], sumi))));
     }
     float2 d8 = __half22float2(bq8_1[iqs].ds);
     *result += scale * (d8.x * sumi - d8.y);

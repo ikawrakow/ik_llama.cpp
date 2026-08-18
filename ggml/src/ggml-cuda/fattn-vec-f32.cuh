@@ -442,7 +442,14 @@ void ggml_cuda_flash_attn_ext_vec_f32_case(ggml_backend_cuda_context & ctx, ggml
         return;
     }
 
+#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+    // both logit_softcap variants of the 8 column kernel in one module overflow the 16 bit branch
+    // offset of the AMDGPU backend, but only for this instance. Any block width covers any
+    // Q->ne[1], see the single column NVIDIA case above
+    constexpr int cols_per_block = (Dk == 128 && type_K == GGML_TYPE_F16 && type_V == GGML_TYPE_F16) ? 4 : 8;
+#else
     constexpr int cols_per_block = 8;
+#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
         ggml_cuda_flash_attn_ext_vec_f32_case_impl<Dk, Dv, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
