@@ -477,6 +477,11 @@ struct llama_context {
 
         std::vector<llama_token> draft_tokens;
         struct ggml_tensor * draft_tokens_tensor = nullptr;
+        struct ggml_tensor * draft_lattice_tensor = nullptr;
+        struct ggml_tensor * draft_lattice_ids_tensor = nullptr;
+        std::vector<float> draft_lattice;
+        std::vector<int32_t> draft_lattice_ids;
+        int32_t draft_lattice_top_k = 0;
     };
     dflash_runtime dflash;
     using dflash_capture_state = dflash_runtime::capture_state;

@@ -2623,6 +2623,65 @@ class DFlashDraftModel(Qwen3Model):
         return tensors
 
 
+@Model.register("DFlash2DraftModel")
+class DFlash2DraftModel(DFlashDraftModel):
+    """DFlash 2 sidecar with dynamic convolution and candidate selector tensors."""
+
+    model_arch = gguf.MODEL_ARCH.DFLASH2
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        dflash_cfg = self.hparams.get("dflash_config")
+        dflash_cfg = dflash_cfg if isinstance(dflash_cfg, dict) else {}
+
+        def required(name: str) -> int:
+            value = dflash_cfg.get(name, self.hparams.get(name))
+            if value is None:
+                raise ValueError(f"DFlash2DraftModel conversion requires explicit {name} metadata")
+            return int(value)
+
+        self.gguf_writer.add_conv_kernel_size(required("conv_kernel_size"))
+        self.gguf_writer.add_conv_group_size(required("conv_group_size"))
+        self.gguf_writer.add_selector_rank(required("selector_rank"))
+        self.gguf_writer.add_selector_top_k(required("selector_top_k"))
+
+        for name, method in (
+            ("output_multiplier", self.gguf_writer.add_logit_scale),
+            ("final_logit_softcapping", self.gguf_writer.add_final_logit_softcapping),
+            ("input_embedding_scale", self.gguf_writer.add_embedding_scale),
+        ):
+            value = dflash_cfg.get(name, self.hparams.get(name))
+            if value is not None and (name != "final_logit_softcapping" or float(value) > 0):
+                method(float(value))
+
+        # The source config uses zero-based target_layer_ids, while GGUF's
+        # dflash.target_layers metadata is the one-based schema consumed by
+        # the runtime. Keep an explicit target_layers override for already
+        # converted configurations.
+        target_layers = dflash_cfg.get("target_layers")
+        if target_layers is None:
+            target_layer_ids = dflash_cfg.get("target_layer_ids")
+            if not target_layer_ids:
+                raise ValueError("DFlash2DraftModel conversion requires target_layers metadata")
+            target_layers = [int(value) + 1 for value in target_layer_ids]
+        else:
+            target_layers = [int(value) for value in target_layers]
+        if not target_layers or any(value <= 0 for value in target_layers):
+            raise ValueError("DFlash2DraftModel conversion requires target_layers metadata")
+        if len(set(target_layers)) != len(target_layers):
+            raise ValueError("DFlash2DraftModel conversion requires unique target_layers metadata")
+        self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name in (
+            "model.candidate_selector.predecessor_codebook",
+            "model.candidate_selector.successor_codebook",
+        ):
+            name += ".weight"
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @Model.register("Qwen3DSparkModel")
 class DSparkModel(DFlashDraftModel):
     """Qwen3 DSpark sidecar: DFlash backbone plus a Markov head."""

@@ -251,7 +251,10 @@ bool llama_model_share_dflash_io_tensors(
             draft_model->output == target_model->tok_embd;
 
     if (draft_model->output_mtp == nullptr) {
-        if (target_model->output_mtp != nullptr && uses_shared_tok && uses_shared_output) {
+        // DFlash2 follows upstream and scores with the target's primary output
+        // head; an MTP companion head belongs to the target's native MTP path.
+        if (draft_model->arch != LLM_ARCH_DFLASH2 &&
+                target_model->output_mtp != nullptr && uses_shared_tok && uses_shared_output) {
             draft_model->output_mtp = target_model->output_mtp;
         } else if (draft_model->output != nullptr) {
             draft_model->output_mtp = draft_model->output;
