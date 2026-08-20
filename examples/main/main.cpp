@@ -973,9 +973,11 @@ int main(int argc, char ** argv) {
                     draft_history,
                     sampled_before,
                     n_past,
-                    0);
+                    0,
+                    &sparams);
 
                 auto & draft = draft_result.tokens;
+                auto & proposal_dists = draft_result.proposal_dists;
                 int max_usable_draft = (int) draft.size();
                 if (n_predict_budget >= 0 && n_predict_budget != std::numeric_limits<int>::max()) {
                     max_usable_draft = std::min(max_usable_draft, std::max(0, n_predict_budget - 2));
@@ -984,6 +986,9 @@ int main(int argc, char ** argv) {
                 max_usable_draft = std::min(max_usable_draft, std::max(0, (int) llama_n_batch(ctx) - 1));
                 if ((int) draft.size() > max_usable_draft) {
                     draft.resize(max_usable_draft);
+                    if (!proposal_dists.empty()) {
+                        proposal_dists.resize(max_usable_draft);
+                    }
                 }
 
                 const int min_usable_draft = params.speculative.get_min_usable_stage_n_min();
@@ -1022,16 +1027,16 @@ int main(int argc, char ** argv) {
                             LOG_TEE("%s : failed to eval speculative batch\n", __func__);
                             return 1;
                         }
-
                         std::vector<llama_token> ids;
                         try {
-                            ids = common_sampler_sample_and_accept_n(ctx_sampling, ctx, verify_indices, draft);
+                            ids = proposal_dists.empty()
+                                ? common_sampler_sample_and_accept_n(ctx_sampling, ctx, verify_indices, draft)
+                                : common_sampler_sample_and_accept_n(ctx_sampling, ctx, verify_indices, draft, proposal_dists);
                         } catch (const std::exception & e) {
                             llama_batch_free(verify_batch);
                             LOG_TEE("%s: speculative sampling failed: %s\n", __func__, e.what());
                             return 1;
                         }
-
                         std::vector<int32_t> accepted_output_indices;
                         if (!ids.empty()) {
                             accepted_output_indices.assign(verify_indices.begin(), verify_indices.begin() + ids.size());
@@ -1051,7 +1056,6 @@ int main(int argc, char ** argv) {
                             LOG_TEE("%s: speculative checkpoint restore/commit failed\n", __func__);
                             return 1;
                         }
-
                         llama_batch_free(verify_batch);
 
                         if (!ids.empty()) {

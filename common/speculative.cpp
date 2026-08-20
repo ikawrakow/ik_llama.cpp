@@ -17,6 +17,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <unordered_map>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
@@ -1097,6 +1098,8 @@ struct common_speculative {
     int last_n_drafted = 0;
     int64_t t_step_start_us = 0;
     bool last_step_target_only = false;
+    float draft_temperature = 0.0f;
+    uint32_t draft_seed = LLAMA_DEFAULT_SEED;
 };
 
 static bool common_speculative_stage_chain_matches(
@@ -1126,6 +1129,8 @@ static common_params_speculative common_speculative_get_runtime_params(
     result.n_min = stage.has_n_min_override() ? stage.n_min : params.n_min;
     result.p_min = stage.has_p_min_override() ? stage.p_min : params.p_min;
     result.mtp_heads = stage.has_mtp_heads_override() ? stage.mtp_heads : params.mtp_heads;
+    result.draft_temperature = params.draft_temperature;
+    result.draft_seed = params.draft_seed;
 
     if (config.type == COMMON_SPECULATIVE_TYPE_SUFFIX) {
         result.suffix_min_match_len = stage.has_suffix_min_match_len_override()
@@ -1168,6 +1173,8 @@ void common_speculative_prepare_request(common_speculative * spec, common_params
 
         const auto & runtime_stage = use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
         common_params_speculative impl_params = common_speculative_get_runtime_params(spec->configs[i], params, runtime_stage);
+        impl_params.draft_temperature = spec->draft_temperature;
+        impl_params.draft_seed = spec->draft_seed;
         mtp_state->mtp_heads_active = std::max<int32_t>(0, impl_params.mtp_heads);
     }
 }
@@ -1568,6 +1575,8 @@ llama_tokens common_speculative_draft(
         auto & impl = spec->impls[i];
         const auto & runtime_stage = use_runtime_stage_overrides ? runtime_stages[i] : spec->configs[i].stage;
         common_params_speculative impl_params = common_speculative_get_runtime_params(spec->configs[i], params, runtime_stage);
+        impl_params.draft_temperature = spec->draft_temperature;
+        impl_params.draft_seed = spec->draft_seed;
         if (spec->tuner && spec->tuner->enabled && impl->type == COMMON_SPECULATIVE_TYPE_DFLASH) {
             impl_params.n_max = params.n_max;
         }
@@ -1893,8 +1902,14 @@ common_speculative_draft_result common_speculative_draft_ex(
         const llama_tokens & prompt_tgt,
         llama_token id_last,
         llama_pos draft_base_pos,
-        llama_seq_id draft_seq_id) {
+        llama_seq_id draft_seq_id,
+        const common_params_sampling * sampling) {
     common_speculative_draft_result result = {};
+
+    if (spec != nullptr) {
+        spec->draft_temperature = sampling != nullptr ? sampling->temp : 0.0f;
+        spec->draft_seed = sampling != nullptr ? sampling->seed : LLAMA_DEFAULT_SEED;
+    }
 
     if (common_speculative_has_type(spec, COMMON_SPECULATIVE_TYPE_MTP)) {
         if (!common_speculative_ensure_sequence_hidden(spec, ctx, draft_seq_id, draft_base_pos - 1)) {
@@ -1915,6 +1930,13 @@ common_speculative_draft_result common_speculative_draft_ex(
         ? spec->curr_impl->type
         : COMMON_SPECULATIVE_TYPE_NONE;
     result.target_only = spec != nullptr && spec->last_step_target_only;
+
+    if (spec != nullptr && spec->curr_impl != nullptr &&
+            spec->curr_impl->type == COMMON_SPECULATIVE_TYPE_DFLASH) {
+        if (auto * dflash_state = common_speculative_get_dflash_state(spec); dflash_state != nullptr) {
+            result.proposal_dists = dflash_state->proposal_dists;
+        }
+    }
 
     return result;
 }
@@ -3299,6 +3321,7 @@ int32_t mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch
     llama_set_mtp_op_type(ctx, MTP_OP_NONE);
     return ret;
 }
+
 common_speculative_round_result common_speculative_run_round(
         common_speculative * spec,
         llama_model * model,
@@ -3370,11 +3393,18 @@ common_speculative_round_result common_speculative_run_round(
         draft_history,
         result.sampled_before,
         n_past,
-        seq_id);
+        seq_id,
+        &sparams);
     auto & draft = draft_result.tokens;
-
+    auto & proposal_dists = draft_result.proposal_dists;
     const int min_usable_draft = params.get_min_usable_stage_n_min();
     if ((int) draft.size() < min_usable_draft || (draft.empty() && !draft_result.target_only)) {
+        return result;
+    }
+
+    if (!proposal_dists.empty() && proposal_dists.size() != draft.size()) {
+        result.failed = true;
+        result.error = "DFlash2 proposal distribution count does not match draft";
         return result;
     }
 
@@ -3415,10 +3445,11 @@ common_speculative_round_result common_speculative_run_round(
         result.error = "speculative verify decode failed";
         return result;
     }
-
     std::vector<llama_token> ids;
     try {
-        ids = common_sampler_sample_and_accept_n(sampler, ctx, verify_indices, draft);
+        ids = proposal_dists.empty()
+            ? common_sampler_sample_and_accept_n(sampler, ctx, verify_indices, draft)
+            : common_sampler_sample_and_accept_n(sampler, ctx, verify_indices, draft, proposal_dists);
     } catch (const std::exception & e) {
         llama_batch_free(verify_batch);
         result.failed = true;
