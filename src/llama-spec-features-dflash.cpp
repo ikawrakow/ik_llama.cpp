@@ -128,9 +128,21 @@ bool llama_model_dflash_has_dspark_head(const struct llama_model * model) {
 }
 
 static const ggml_tensor * llama_dflash_output_tensor(
-        const struct llama_model * model) {
+        const struct llama_model * model,
+        bool dflash2) {
     if (model == nullptr) {
         return nullptr;
+    }
+
+    // Native MTP keeps a companion head in output_mtp, while -mtprot stores a
+    // requantized copy of the primary head there and owns it through
+    // output_mtp_ptr. DFlash2 must ignore the former and use the latter.
+    if (dflash2) {
+        if (model->output_mtp_ptr != nullptr &&
+                model->output_mtp == model->output_mtp_ptr.get()) {
+            return model->output_mtp;
+        }
+        return model->output != nullptr ? model->output : model->tok_embd;
     }
 
     if (model->output_mtp != nullptr) {
@@ -151,8 +163,9 @@ int32_t llama_model_dflash_io_mode(
         return LLAMA_DFLASH_IO_MODE_INVALID;
     }
 
-    const ggml_tensor * draft_output = llama_dflash_output_tensor(draft_model);
-    const ggml_tensor * target_output = llama_dflash_output_tensor(target_model);
+    const bool dflash2 = draft_model->arch == LLM_ARCH_DFLASH2;
+    const ggml_tensor * draft_output = llama_dflash_output_tensor(draft_model, dflash2);
+    const ggml_tensor * target_output = llama_dflash_output_tensor(target_model, dflash2);
     if (draft_model->tok_embd == nullptr || draft_output == nullptr || target_model->tok_embd == nullptr || target_output == nullptr) {
         return LLAMA_DFLASH_IO_MODE_INVALID;
     }
@@ -213,7 +226,8 @@ bool llama_model_dflash_io_tensors_match(
         const struct llama_model * draft_model,
         int32_t n_embd,
         int32_t n_vocab) {
-    const ggml_tensor * output = llama_dflash_output_tensor(draft_model);
+    const ggml_tensor * output = llama_dflash_output_tensor(
+            draft_model, draft_model != nullptr && draft_model->arch == LLM_ARCH_DFLASH2);
     if (draft_model == nullptr || draft_model->tok_embd == nullptr || output == nullptr || n_embd <= 0 || n_vocab <= 0) {
         return false;
     }
@@ -235,19 +249,34 @@ bool llama_model_share_dflash_io_tensors(
         return true;
     }
 
+    const bool dflash2 = draft_model->arch == LLM_ARCH_DFLASH2;
+    const ggml_tensor * target_output_const = llama_dflash_output_tensor(target_model, dflash2);
+    ggml_tensor * target_output = const_cast<ggml_tensor *>(target_output_const);
+
+    if (dflash2 && target_output != nullptr) {
+        const bool uses_requantized_primary =
+                target_model->output_mtp_ptr != nullptr &&
+                target_model->output_mtp == target_model->output_mtp_ptr.get() &&
+                target_output == target_model->output_mtp;
+        LLAMA_LOG_INFO("%s: DFlash2 target output = %s (%s)\n",
+                __func__,
+                uses_requantized_primary ? "requantized primary" : "primary",
+                ggml_type_name(target_output->type));
+    }
+
     if (draft_model->tok_embd == nullptr) {
         draft_model->tok_embd = target_model->tok_embd;
     }
 
     if (draft_model->output == nullptr) {
-        draft_model->output = target_model->output ? target_model->output : target_model->tok_embd;
+        draft_model->output = target_output ? target_output : target_model->tok_embd;
         if (draft_model->output == nullptr) {
             draft_model->output = draft_model->tok_embd;
         }
     }
 
     const bool uses_shared_tok = draft_model->tok_embd == target_model->tok_embd;
-    const bool uses_shared_output = draft_model->output == target_model->output ||
+    const bool uses_shared_output = draft_model->output == target_output ||
             draft_model->output == target_model->tok_embd;
 
     if (draft_model->output_mtp == nullptr) {
@@ -265,9 +294,10 @@ bool llama_model_share_dflash_io_tensors(
 
     const bool output_mtp_aliases_output = draft_model->output_mtp == draft_model->output;
     const bool tok_embd_is_shared = draft_model->tok_embd == target_model->tok_embd;
-    const bool output_is_shared = draft_model->output == target_model->output ||
+    const bool output_is_shared = draft_model->output == target_output ||
             draft_model->output == target_model->tok_embd;
-    const bool output_mtp_is_shared = draft_model->output_mtp == target_model->output_mtp ||
+    const bool output_mtp_is_shared = draft_model->output_mtp == target_output ||
+            (!dflash2 && draft_model->output_mtp == target_model->output_mtp) ||
             draft_model->output_mtp == target_model->output ||
             draft_model->output_mtp == target_model->tok_embd;
     const bool isolate_shared_io =
@@ -309,7 +339,7 @@ bool llama_model_share_dflash_io_tensors(
         }
     }
 
-    const struct ggml_tensor * output = llama_dflash_output_tensor(draft_model);
+    const struct ggml_tensor * output = llama_dflash_output_tensor(draft_model, dflash2);
     return draft_model->tok_embd != nullptr && output != nullptr;
 }
 
