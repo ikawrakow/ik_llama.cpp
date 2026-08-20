@@ -342,13 +342,15 @@ struct common_speculative_state_dflash : public common_speculative_state {
         llama_kv_cache_clear(ctx_dft);
         batch.n_tokens = 0;
         const int32_t batch_len = is_dspark ? n_keep : n_keep + 1;
+        const bool output_seed_row = is_dspark;
+        const bool output_mask_rows = !is_dflash2;
         // id_last's true position is one past the newest committed feature row
         // (last_target_pos): seed there, masks follow. Mirrors mainline's
         // [id_last @ n_past, mask @ n_past+1, ...] block geometry.
         const llama_pos draft_pos_base = last_target_pos >= 0 ? last_target_pos + 1 : (llama_pos) target_window_rows;
-        common_batch_add(batch, id_last, draft_pos_base, { 0 }, !is_dflash2);
+        common_batch_add(batch, id_last, draft_pos_base, { 0 }, output_seed_row);
         for (int32_t i = 1; i < batch_len; ++i) {
-            common_batch_add(batch, mask_token_id, draft_pos_base + i, { 0 }, !is_dflash2);
+            common_batch_add(batch, mask_token_id, draft_pos_base + i, { 0 }, output_mask_rows);
         }
 
         if (llama_decode(ctx_dft, batch) != 0) {
