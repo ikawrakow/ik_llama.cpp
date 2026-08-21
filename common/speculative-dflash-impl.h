@@ -83,8 +83,7 @@ static void dflash_materialize_target_window_features(common_speculative_state_d
 
 // DFlash runtime state and draft path.
 struct common_speculative_state_dflash : public common_speculative_state {
-    // Domain-separated selector stream; do not merge it with target sampling
-    // or verifier RNG state.
+    // Separated seed for dflash 2 againts target samplers
     static constexpr uint32_t SELECTOR_SEED_XOR = 0x85ebca6bU;
     llama_context * ctx_tgt;
     llama_context * ctx_dft;
@@ -99,7 +98,6 @@ struct common_speculative_state_dflash : public common_speculative_state {
     bool is_dflash2 = false;
     bool ready = false;
 
-    // Populated only for stochastic DFlash2 and consumed by the target verifier.
     std::vector<common_speculative_token_dist> proposal_dists;
     std::mt19937 selector_rng;
     uint32_t selector_seed = LLAMA_DEFAULT_SEED;

@@ -2655,10 +2655,6 @@ class DFlash2DraftModel(DFlashDraftModel):
             if value is not None and (name != "final_logit_softcapping" or float(value) > 0):
                 method(float(value))
 
-        # The source config uses zero-based target_layer_ids, while GGUF's
-        # dflash.target_layers metadata is the one-based schema consumed by
-        # the runtime. Keep an explicit target_layers override for already
-        # converted configurations.
         target_layers = dflash_cfg.get("target_layers")
         if target_layers is None:
             target_layer_ids = dflash_cfg.get("target_layer_ids")

@@ -9,8 +9,7 @@
 #include <random>
 #include <unordered_map>
 
-// Keep the verifier stream independent from the target sampler and selector
-// stream while making seeded speculative runs reproducible.
+// Keep dflash randomness independent from target
 static constexpr uint32_t COMMON_SPECULATIVE_VERIFIER_SEED_XOR = 0x9e3779b9U;
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
 #include <immintrin.h>
@@ -842,8 +841,6 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
     };
     size_t i = 0;
     for (; i < draft.size(); ++i) {
-        // Sampling first applies penalties, grammar, and the configured truncation
-        // so the target distribution is the one used for verification.
         const llama_token fallback = common_sampler_sample(gsmpl, ctx, idxs[i], true);
         const auto & q = dists[i];
         GGML_ASSERT(q.ids.size() == q.probs.size());

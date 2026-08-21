@@ -337,7 +337,5 @@ bool llm_arch_is_dflash_family(const llm_arch & arch) {
 }
 
 bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch) {
-    // DFlash2 consumes every anchor/mask row to construct its selector lattice;
-    // these rows are internal graph inputs, not public target outputs.
     return arch == LLM_ARCH_DFLASH2;
 }

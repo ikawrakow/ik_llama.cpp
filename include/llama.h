@@ -1142,8 +1142,8 @@ extern "C" {
     // Returns LLAMA_TOKEN_NULL if argmax is not available (falls back to logits path).
     LLAMA_API llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i);
 
-    // Copy the compact DFlash2 selector lattice after a draft decode.
-    // The lattice has top_k*top_k scores and top_k candidate IDs per position.
+    // Copy DFlash2 selector lattice after a draft decode with top_k*top_k scores
+    // and top_k candidate IDs per position.
     LLAMA_API int32_t llama_get_dflash_draft_lattice_top_k(struct llama_context * ctx);
     LLAMA_API int32_t llama_get_dflash_draft_lattice_n_positions(struct llama_context * ctx);
     LLAMA_API bool llama_copy_dflash_draft_lattice(

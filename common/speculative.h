@@ -41,8 +41,7 @@ struct common_speculative_checkpoint {
 
 struct common_speculative_draft_result {
     llama_tokens tokens;
-    // Sparse proposal distributions are populated only by stochastic DFlash2.
-    std::vector<common_speculative_token_dist> proposal_dists;
+    std::vector<common_speculative_token_dist> proposal_dists; // Sparse proposal distributions populated by stochastic DFlash2
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
     bool target_only = false;
 };
