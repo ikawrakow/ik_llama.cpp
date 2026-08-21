@@ -226,7 +226,7 @@ struct common_params_speculative {
     int32_t mtp_heads = 1; // MTP heads to use; 1 is the default, while >1 and 0 (all model heads) are experimental
     int32_t dflash_cross_ctx = 512; // target-feature context window for DFlash
 
-    // Per-request selector inputs; consumed only by the DFlash2 draft implementation.
+    // Samplers for DFlash2
     float    draft_temperature = 0.0f;
     uint32_t draft_seed = LLAMA_DEFAULT_SEED;
 

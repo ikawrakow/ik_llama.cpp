@@ -134,9 +134,6 @@ static const ggml_tensor * llama_dflash_output_tensor(
         return nullptr;
     }
 
-    // Native MTP keeps a companion head in output_mtp, while -mtprot stores a
-    // requantized copy of the primary head there and owns it through
-    // output_mtp_ptr. DFlash2 must ignore the former and use the latter.
     if (dflash2) {
         if (model->output_mtp_ptr != nullptr &&
                 model->output_mtp == model->output_mtp_ptr.get()) {
@@ -280,8 +277,6 @@ bool llama_model_share_dflash_io_tensors(
             draft_model->output == target_model->tok_embd;
 
     if (draft_model->output_mtp == nullptr) {
-        // DFlash2 follows upstream and scores with the target's primary output
-        // head; an MTP companion head belongs to the target's native MTP path.
         if (draft_model->arch != LLM_ARCH_DFLASH2 &&
                 target_model->output_mtp != nullptr && uses_shared_tok && uses_shared_output) {
             draft_model->output_mtp = target_model->output_mtp;

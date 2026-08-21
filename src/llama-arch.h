@@ -85,7 +85,6 @@ enum llm_arch {
     LLM_ARCH_GEMMA4,
     LLM_ARCH_GEMMA4_MTP,
     LLM_ARCH_DFLASH,
-    // DFlash 2 shares the external GGUF namespace with DSV4.
     LLM_ARCH_DFLASH2,
     LLM_ARCH_DFLASH_DRAFT,
     LLM_ARCH_GEMMA4_ASSISTANT,
@@ -482,6 +481,7 @@ const char * llama_model_arch_name(llm_arch arch);
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid(const llm_arch & arch);
 bool llm_arch_is_dflash_family(const llm_arch & arch);
+// DFlash2 consumes every anchor/mask row to construct its selector lattice
 bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch);
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il);

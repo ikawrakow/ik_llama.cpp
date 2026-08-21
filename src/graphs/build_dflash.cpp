@@ -15,9 +15,6 @@ static ggml_tensor * build_dflash2_conv(
     const int64_t kernel_size = g.hparams.dflash_conv_kernel_size;
     const int64_t group_size = g.hparams.dflash_conv_group_size;
     const int64_t n_groups = hidden_size / group_size;
-    // DFlash2 is currently wired through the single-slot speculative path.
-    // Keep this explicit: the convolution must not cross sequence/block
-    // boundaries if a batched path is added later.
     const int64_t n_blocks = 1;
     const int64_t block_size = n_tokens / n_blocks;
 
@@ -118,7 +115,6 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     const int64_t n_embd_head_k = hparams.n_embd_head_k(0);
     const int64_t n_embd_head_v = hparams.n_embd_head_v(0);
     const int64_t n_target_features = hparams.dflash_n_target_features;
-    const bool is_dflash2 = model.arch == LLM_ARCH_DFLASH2;
     const int64_t ctx_len = lctx.dflash.visible_cross_ctx > 0
             ? (int64_t) lctx.dflash.visible_cross_ctx
             : std::max<int64_t>(1, (int64_t) cparams.n_ctx - (int64_t) hparams.dflash_block_size);
@@ -182,14 +178,8 @@ ggml_cgraph * llm_build_context::build_dflash_kv_cache() {
     }
 
     ggml_tensor * fused_target = llm_build_lora_mm(lctx, ctx0, model.dflash_fc, target_features);
-    if (is_dflash2) {
-        // DFlash2's quantized encoder requires the explicit two-operation form.
-        fused_target = ggml_rms_norm(ctx0, fused_target, hparams.f_norm_rms_eps);
-        fused_target = ggml_mul(ctx0, fused_target, model.dflash_hidden_norm);
-    } else {
-        fused_target = llm_build_norm(ctx0, fused_target, hparams,
-                model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
-    }
+    fused_target = llm_build_norm(ctx0, fused_target, hparams,
+            model.dflash_hidden_norm, nullptr, LLM_NORM_RMS, cb, -1);
     cb(fused_target, "dflash_kv_fused_target", -1);
 
     if (hparams.dflash_dsv4) {
@@ -615,7 +605,6 @@ ggml_cgraph * llm_build_context::build_dflash() {
         cb(cur, "ffn_out", il);
 
         if (is_dflash2) {
-            // The same dynamic coefficients modulate the post-FFN convolution.
             cur = build_dflash2_conv(*this, cur, ffn_dynamic, model.layers[il].dflash_ffn_conv_base, 1);
             cb(cur, "dflash2_ffn_conv_out", il);
         }
@@ -702,9 +691,6 @@ ggml_cgraph * llm_build_context::build_dflash() {
 
         cb(packed, "dflash2_lattice", -1);
         ggml_build_forward_expand(gf, packed);
-        // Keep the I32 candidate indices live for the post-decode readback.  They
-        // are not otherwise consumed after `packed`, so the scheduler may reuse
-        // their storage for the F32 lattice before the CPU copies them.
         cb(candidates, "dflash2_lattice_ids", -1);
         ggml_set_output(candidates);
         ggml_build_forward_expand(gf, candidates);

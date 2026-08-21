@@ -2483,7 +2483,6 @@ bool create_tensors_helper::create_dflash2_tensors(const LLM_TN & tn) {
         throw std::runtime_error("invalid DFlash2 convolution or selector dimensions");
     }
 
-    // DFlash2 drafts use the target model's embedding and output tensors.
     model.tok_embd = nullptr;
     model.output = nullptr;
     model.output_mtp = nullptr;

@@ -6632,8 +6632,6 @@ static int llama_decode_internal(
                         lctx.dflash.draft_lattice_ids_tensor,
                         lctx.dflash.draft_lattice_ids.data(), 0,
                         n_ids * sizeof(int32_t));
-                // Both small host transfers are queued before one wait so the
-                // CPU selector traversal never observes partial lattice data.
                 llama_synchronize(&lctx);
                 std::vector<llama_token> selected;
                 selected.reserve(std::max(0, n_positions - 1));
@@ -6816,8 +6814,8 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    // Keep scheduler tensor/backend assignments alive until speculative checkpoint
-    // restoration has completed; per-step recurrent restore uses those mappings.
+    // Keep scheduler alive in case someone dont run graph reuse so
+    // speculative checkpoint restoration can be completed
     const bool speculative_checkpoint_active =
         lctx.kv_self.ckpt.selected_spec_mode != LLAMA_SPEC_CKPT_NONE;
     if (lctx.cparams.mtp_op_type == MTP_OP_NONE && !lctx.prev && !speculative_checkpoint_active) {
