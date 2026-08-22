@@ -101,6 +101,15 @@ class TensorNameMap:
         MODEL_TENSOR.MHC_MERGE_GAMMA: (
             "model.merge_mhc_module.norm_gamma",
         ),
+        MODEL_TENSOR.DFLASH_SELECTOR_PREV: (
+            "model.candidate_selector.predecessor_codebook",
+        ),
+        MODEL_TENSOR.DFLASH_SELECTOR_NEXT: (
+            "model.candidate_selector.successor_codebook",
+        ),
+        MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN: (
+            "model.candidate_selector.hidden_projection",
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -439,6 +448,19 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_SINKS: (
             "model.layers.{bid}.self_attn.attention_sink_bias",                # MiMo DFlash
+        ),
+
+        MODEL_TENSOR.DFLASH_ATTN_CONV_BASE: (
+            "model.layers.{bid}.attention_conv.base_kernel",
+        ),
+        MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ: (
+            "model.layers.{bid}.attention_conv.kernel_projection",
+        ),
+        MODEL_TENSOR.DFLASH_FFN_CONV_BASE: (
+            "model.layers.{bid}.mlp_conv.base_kernel",
+        ),
+        MODEL_TENSOR.DFLASH_FFN_CONV_PROJ: (
+            "model.layers.{bid}.mlp_conv.kernel_projection",
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (

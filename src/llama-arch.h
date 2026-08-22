@@ -85,6 +85,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA4,
     LLM_ARCH_GEMMA4_MTP,
     LLM_ARCH_DFLASH,
+    LLM_ARCH_DFLASH2,
     LLM_ARCH_DFLASH_DRAFT,
     LLM_ARCH_GEMMA4_ASSISTANT,
     LLM_ARCH_OPENPANGU,
@@ -157,6 +158,10 @@ enum llm_kv {
     LLM_KV_DFLASH_N_TARGET_FEATURES,
     LLM_KV_DFLASH_BACKBONE_ROTARY_BASE,
     LLM_KV_DFLASH_LAGUNA,
+    LLM_KV_DFLASH_CONV_KERNEL_SIZE,
+    LLM_KV_DFLASH_CONV_GROUP_SIZE,
+    LLM_KV_DFLASH_SELECTOR_RANK,
+    LLM_KV_DFLASH_SELECTOR_TOP_K,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -438,6 +443,13 @@ enum llm_tensor {
     LLM_TENSOR_DSPARK_MARKOV_W1,
     LLM_TENSOR_DSPARK_MARKOV_W2,
     LLM_TENSOR_DSPARK_CONF_PROJ,
+    LLM_TENSOR_DFLASH_ATTN_CONV_BASE,
+    LLM_TENSOR_DFLASH_ATTN_CONV_PROJ,
+    LLM_TENSOR_DFLASH_FFN_CONV_BASE,
+    LLM_TENSOR_DFLASH_FFN_CONV_PROJ,
+    LLM_TENSOR_DFLASH_SELECTOR_PREV,
+    LLM_TENSOR_DFLASH_SELECTOR_NEXT,
+    LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
 
     // openPangu-2.0
     LLM_TENSOR_ATTN_QA_CONV,        // MoME causal conv on q-lora latent
@@ -469,5 +481,7 @@ const char * llama_model_arch_name(llm_arch arch);
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid(const llm_arch & arch);
 bool llm_arch_is_dflash_family(const llm_arch & arch);
+// DFlash2 consumes every anchor/mask row to construct its selector lattice
+bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch);
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il);

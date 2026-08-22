@@ -1737,6 +1737,42 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_DFLASH2:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale, false);
+                hparams.f_final_logit_softcapping = 0.0f;
+                ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
+                ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
+                ml.get_key("dflash.block_size",       hparams.dflash_block_size);
+                ml.get_key("dflash.conv_kernel_size", hparams.dflash_conv_kernel_size);
+                ml.get_key("dflash.conv_group_size",  hparams.dflash_conv_group_size);
+                ml.get_key("dflash.selector_rank",    hparams.dflash_selector_rank);
+                ml.get_key("dflash.selector_top_k",   hparams.dflash_selector_top_k);
+                ml.get_key(LLM_KV_TOKENIZER_MASK_ID,       hparams.dflash_mask_token_id);
+                ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn, false);
+                load_dflash_target_layer_ids(
+                        ml,
+                        LLM_KV(model.arch)(LLM_KV_DFLASH_TARGET_LAYERS),
+                        hparams,
+                        true);
+                for (uint32_t i = 0; i < hparams.dflash_n_target_layers; ++i) {
+                    if (hparams.dflash_target_layer_ids[i] == 0) {
+                        throw std::runtime_error("dflash2: target_layers must use one-based IDs");
+                    }
+                    --hparams.dflash_target_layer_ids[i];
+                }
+                hparams.dflash_n_target_features = hparams.n_embd * hparams.dflash_n_target_layers;
+                if (hparams.dflash_selector_top_k == 0 ||
+                        hparams.n_embd < hparams.dflash_selector_top_k * (hparams.dflash_selector_top_k + 1)) {
+                    throw std::runtime_error("dflash2: hidden size is too small for selector top-k lattice");
+                }
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false);
+                hparams.n_layer_kv_from_start = hparams.n_layer;
+                hparams.dflash_dsv4 = false;
+                model.type = e_model::MODEL_UNKNOWN;
+            } break;
         case LLM_ARCH_DFLASH:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_GLM_DSA:

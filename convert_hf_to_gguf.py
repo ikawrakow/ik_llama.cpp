@@ -313,7 +313,9 @@ class Model:
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
                         )
                     )
-                    or not name.endswith(".weight")
+                    or (not name.endswith(".weight") and not (
+                        self.model_arch == gguf.MODEL_ARCH.DFLASH2 and new_name.endswith(".weight")
+                    ))
                 ):
                     data_qtype = gguf.GGMLQuantizationType.F32
 
@@ -644,6 +646,9 @@ class Model:
         if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
             # ref: https://huggingface.co/Qwen/Qwen3.5-9B-Instruct
             res = "qwen35"
+        if chkhsh == "d353350c764d8c3b39c763113960e4fb4919bea5fbf208a0e3b22e8469dc7406":
+            # ref: https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct
+            res = "llama4"
         if chkhsh == "99cc61242f7106804ce24fdf3a6451e4a55251078dffd5453c806e11b2310db3":
             # ref: https://huggingface.co/Qwen/Qwen3.5-27B
             res = "qwen35"
@@ -2621,6 +2626,157 @@ class DFlashDraftModel(Qwen3Model):
                 self._saw_output = True
 
         return tensors
+
+
+@Model.register("DFlash2DraftModel")
+class DFlash2DraftModel(DFlashDraftModel):
+    """DFlash 2 sidecar with dynamic convolution and candidate selector tensors."""
+
+    model_arch = gguf.MODEL_ARCH.DFLASH2
+
+    def _set_vocab_tokenizer_json(self, dir_model: Path, vocab_size: int) -> None:
+        tokenizer_path = dir_model / "tokenizer.json"
+        with open(tokenizer_path, "r", encoding="utf-8") as f:
+            tokenizer_json = json.load(f)
+
+        from tokenizers import Tokenizer
+        tokenizer = Tokenizer.from_file(str(tokenizer_path))
+
+        class TokenizerShim:
+            def encode(self, text: str) -> list[int]:
+                return tokenizer.encode(text).ids
+
+        vocab: dict[str, int] = tokenizer_json["model"]["vocab"]
+        reverse_vocab = {id_: token for token, id_ in vocab.items()}
+        added_vocab = {
+            item["id"]: item
+            for item in tokenizer_json.get("added_tokens", [])
+            if isinstance(item.get("id"), int) and isinstance(item.get("content"), str)
+        }
+        reverse_vocab.update({id_: item["content"] for id_, item in added_vocab.items()})
+        assert max(reverse_vocab) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(TokenizerShim())
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        for i in range(vocab_size):
+            token = reverse_vocab.get(i)
+            if token is None:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+                continue
+
+            added_token = added_vocab.get(i)
+            if added_token is not None:
+                if not added_token.get("normalized", True):
+                    token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False).ids)
+                if added_token.get("special", False) or self.does_token_look_special(token):
+                    toktypes.append(gguf.TokenType.CONTROL)
+                else:
+                    token = token.replace("\u2581", " ")
+                    toktypes.append(gguf.TokenType.USER_DEFINED)
+            else:
+                toktypes.append(gguf.TokenType.NORMAL)
+            tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+        eot_id = next(
+            (id_ for id_, item in added_vocab.items() if item["content"] == "<|eot|>"),
+            None,
+        )
+        if eot_id is not None:
+            self.gguf_writer.add_eot_token_id(eot_id)
+
+    def set_vocab(self):
+        target_dir = self._require_target_model_dir()
+        target_hparams = self._get_target_hparams()
+        target_raw_hparams = self._get_target_raw_hparams()
+        target_architectures = target_raw_hparams.get("architectures", [])
+        if "MuseGlimmerForConditionalGeneration" in target_architectures:
+            self._set_vocab_tokenizer_json(target_dir, int(target_hparams["vocab_size"]))
+        else:
+            super().set_vocab()
+            if (bos_token_id := target_hparams.get("bos_token_id")) is not None:
+                self.gguf_writer.add_bos_token_id(int(bos_token_id))
+
+    def set_gguf_parameters(self):
+        dflash_cfg = self.hparams.get("dflash_config")
+        dflash_cfg = dflash_cfg if isinstance(dflash_cfg, dict) else {}
+
+        Qwen3Model.set_gguf_parameters(self)
+        self.gguf_writer.add_causal_attention(self._causal_attention())
+
+        rope_parameters = self.hparams.get("rope_parameters")
+        if isinstance(rope_parameters, dict) and (rope_theta := rope_parameters.get("rope_theta")) is not None:
+            self.gguf_writer.add_rope_freq_base(float(rope_theta))
+
+        def required(name: str) -> int:
+            value = dflash_cfg.get(name, self.hparams.get(name))
+            if value is None:
+                raise ValueError(f"DFlash2DraftModel conversion requires explicit {name} metadata")
+            return int(value)
+
+        block_size = required("block_size")
+        mask_token_id = required("mask_token_id")
+        target_layer_ids = dflash_cfg.get("target_layer_ids")
+        if target_layer_ids is None:
+            raise ValueError("DFlash2DraftModel conversion requires target_layer_ids metadata")
+        target_layers = [int(value) + 1 for value in target_layer_ids]
+        if not target_layers or any(value <= 0 for value in target_layers):
+            raise ValueError("DFlash2DraftModel conversion requires target_layer_ids metadata")
+        if len(set(target_layers)) != len(target_layers):
+            raise ValueError("DFlash2DraftModel conversion requires unique target_layer_ids metadata")
+
+        self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.block_size", block_size)
+        self.gguf_writer.add_mask_token_id(mask_token_id)
+        self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
+        self.gguf_writer.add_conv_kernel_size(required("conv_kernel_size"))
+        self.gguf_writer.add_conv_group_size(required("conv_group_size"))
+        self.gguf_writer.add_selector_rank(required("selector_rank"))
+        self.gguf_writer.add_selector_top_k(required("selector_top_k"))
+
+        for name, method in (
+            ("output_multiplier", self.gguf_writer.add_logit_scale),
+            ("final_logit_softcapping", self.gguf_writer.add_final_logit_softcapping),
+            ("input_embedding_scale", self.gguf_writer.add_embedding_scale),
+        ):
+            value = dflash_cfg.get(name, self.hparams.get(name))
+            if value is not None and (name != "final_logit_softcapping" or float(value) > 0):
+                method(float(value))
+
+        use_sliding_window = self.hparams.get("use_sliding_window")
+        sliding_window = self.hparams.get("sliding_window")
+        if use_sliding_window and sliding_window:
+            layer_types = self.hparams.get("layer_types")
+            swa_pattern = ([str(value) == "sliding_attention" for value in layer_types]
+                           if layer_types else [True] * self.block_count)
+            self.gguf_writer.add_sliding_window(int(sliding_window))
+            self.gguf_writer.add_sliding_window_pattern(swa_pattern)
+
+    @staticmethod
+    def normalize_tensor_name(name: str) -> str:
+        if name.startswith("candidate_selector."):
+            name = f"model.{name}"
+        if name in (
+            "model.candidate_selector.predecessor_codebook",
+            "model.candidate_selector.successor_codebook",
+        ):
+            name += ".weight"
+        return name
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        top_level_name = name[6:] if name.startswith("model.") else name
+        if top_level_name == "fc.weight":
+            return [("fc.weight", data_torch)]
+        if top_level_name == "hidden_norm.weight":
+            return [("enc.output_norm.weight", data_torch)]
+        return super().modify_tensors(data_torch, self.normalize_tensor_name(name), bid)
 
 
 @Model.register("Qwen3DSparkModel")
