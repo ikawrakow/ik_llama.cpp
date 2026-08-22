@@ -1094,7 +1094,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
         tokens_new_ex = tokens_new.get_tokens_exclude_think(ctx, think_tokens);
     }
     else {
-        prompt_tokens = std::move(prompt.tokens); 
+        prompt_tokens = prompt.tokens.clone();
         tokens_new_ex = tokens_new.clone();
     }
     const auto lcp_best = prompt_tokens.get_common_prefix(ctx, tokens_new_ex);
@@ -1111,7 +1111,7 @@ bool server_prompt_cache::load(server_prompt& prompt, const server_tokens& token
             tokens = it->tokens.get_tokens_exclude_think(ctx, think_tokens);
         }
         else {
-            tokens = std::move(it->tokens);
+            tokens = it->tokens.clone();
         }
         const auto lcp_cur = tokens.get_common_prefix(ctx, tokens_new_ex);
         const float f_keep_cur = float(lcp_cur.first) / tokens.size();
