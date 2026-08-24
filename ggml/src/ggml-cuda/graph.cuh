@@ -4,7 +4,10 @@
 
 struct ggml_graph_node_properties {
     void * node_address;
-    ggml_op node_op;
+    ggml_op   node_op;
+    ggml_type type;
+    void * view_src;
+    size_t view_offs;
     int64_t ne[GGML_MAX_DIMS];
     size_t nb[GGML_MAX_DIMS];
     void * src_address[GGML_MAX_SRC];
@@ -21,6 +24,7 @@ struct ggml_cuda_graph {
             CUDA_CHECK(cudaGraphDestroy(graph));
         }
     }
+    uint64_t uid = 0;
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
     size_t num_nodes = 0;

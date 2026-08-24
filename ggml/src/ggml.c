@@ -28271,6 +28271,7 @@ struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t siz
     assert(obj_size == (size_t)((char *)p - (char *)cgraph));
 
     *cgraph = (struct ggml_cgraph) {
+        /*.uid          =*/ 0ull,
         /*.size         =*/ size,
         /*.n_nodes      =*/ 0,
         /*.n_leafs      =*/ 0,
@@ -28293,6 +28294,7 @@ struct ggml_cgraph * ggml_new_graph(struct ggml_context * ctx) {
 
 struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1) {
     struct ggml_cgraph cgraph = {
+        /*.uid          =*/ 0ull,
         /*.size         =*/ 0,
         /*.n_nodes      =*/ i1 - i0,
         /*.n_leafs      =*/ 0,

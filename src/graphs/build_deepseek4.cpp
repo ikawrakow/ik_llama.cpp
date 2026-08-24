@@ -1138,6 +1138,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
                     raw_k->nb[1], raw_k->nb[2], raw_k->nb[3], raw_k->nb[2]*first);
             raw_mask = ggml_view_4d(ctx0, raw_mask, nton, raw_mask->ne[1], raw_mask->ne[2], raw_mask->ne[3],
                     raw_mask->nb[1], raw_mask->nb[2], raw_mask->nb[3], raw_mask->nb[0]*first);
+            raw_mask = ggml_cont(ctx0, raw_mask);
         }
     }
 

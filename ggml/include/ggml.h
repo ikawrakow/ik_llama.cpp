@@ -862,6 +862,7 @@ extern "C" {
 
     // computation graph
     struct ggml_cgraph {
+        uint64_t uid;
         int size;
         int n_nodes;
         int n_leafs;
