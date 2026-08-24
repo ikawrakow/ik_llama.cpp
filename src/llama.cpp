@@ -7968,10 +7968,10 @@ static bool llama_mirror_model_weights(const llama_model & model, int n_threads)
                         node_data[node] = (char *) mirror->node_base[node] + offset;
                     }
                 }
+                pending_tensors.push_back(tensor);
                 if (!ggml_numa_tensor_set_mirror(tensor, node_data)) {
                     throw std::runtime_error("NUMA mirror: tensor metadata setup failed");
                 }
-                pending_tensors.push_back(tensor);
                 ++mirrored_tensors;
             }
         }
