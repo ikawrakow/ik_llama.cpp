@@ -344,6 +344,7 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                     (const float *)((const char *)Q->data + first*Q->nb[1]), q16.get());
         }
 
+        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(), ctx.stream()));
         CUBLAS_CHECK(cublasHgemmStridedBatched(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
                     indexer->ne[0], Q->ne[2], Q->ne[0],
                     &alpha, k16.get(), K->ne[0], K->ne[0]*indexer->ne[0],
