@@ -77,18 +77,16 @@ struct llama_sampler_adaptive_p {
     float cum_orig_prob;    // for normalizing orig_prob in sample_token
 
     // first referenced in sample
-    float cum_cur_p;        // cumulative sum of current probabilities
     float max_xform_logit;  // maximum logit found during transform
 
     // first referenced in sample_token
     std::vector<float> cum_probs;   // cumulative probability distribution
 };
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
-       const float target,
-       const float decay,
-        const bool updt_w_cur,
-    const uint32_t seed);
+struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(const float    target,
+                                                             const float    decay,
+                                                             const bool     updt_w_cur,
+                                                             const uint32_t seed);
 
 struct llama_sampler_adaptive_p * llama_clone_adaptive_p(const struct llama_sampler_adaptive_p * adapt_p_ctx);
 
@@ -127,6 +125,6 @@ llama_token llama_sample_token_mirostat_v2_impl(struct llama_sampling * smpl, ll
 llama_token llama_sample_token_greedy_impl     (struct llama_sampling * smpl, llama_token_data_array * candidates);
 llama_token llama_sample_token_with_rng_impl   (struct llama_sampling * smpl, llama_token_data_array * candidates, std::mt19937 & rng);
 llama_token llama_sample_token_impl            (struct llama_sampling * smpl, llama_token_data_array * candidates);
-llama_token llama_sample_token_adaptive_p_impl (struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx);
+llama_token llama_sample_token_adaptive_p_impl (struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx, std::mt19937 & rng);
 
 
