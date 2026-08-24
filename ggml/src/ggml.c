@@ -41,6 +41,7 @@
 #include <signal.h>
 #if defined(__gnu_linux__)
 #include <syscall.h>
+#include <sys/mman.h>
 #endif
 
 #define IK_PRINT_TIMING 0
@@ -4539,6 +4540,9 @@ static_assert(sizeof(struct ggml_tensor)%GGML_MEM_ALIGN == 0, "ggml_tensor size 
 struct ggml_numa_node {
     uint32_t cpus[GGML_NUMA_MAX_CPUS]; // hardware threads on this node
     uint32_t n_cpus;
+    size_t allocated_bytes;
+    size_t bound_bytes;
+    size_t freed_bytes;
 };
 
 struct ggml_numa_nodes {
@@ -4773,6 +4777,92 @@ bool ggml_numa_mirror_active(void) {
 
 uint32_t ggml_numa_get_mirror(void) {
     return g_state.numa.mirror_flags;
+}
+
+#if defined(__gnu_linux__)
+#ifndef MPOL_BIND
+#define MPOL_BIND 2
+#endif
+
+static long ggml_sys_mbind(void * addr, unsigned long len, int mode,
+        const unsigned long * nodemask, unsigned long maxnode, unsigned flags) {
+#if defined(SYS_mbind)
+    return syscall(SYS_mbind, addr, len, mode, nodemask, maxnode, flags);
+#else
+    UNUSED(addr); UNUSED(len); UNUSED(mode); UNUSED(nodemask); UNUSED(maxnode); UNUSED(flags);
+    return -1;
+#endif
+}
+
+static size_t ggml_numa_aligned_size(size_t size) {
+    const size_t page_size = (size_t) sysconf(_SC_PAGESIZE);
+    return (size + page_size - 1) & ~(page_size - 1);
+}
+
+static bool ggml_numa_node_has_capacity(size_t size, int node) {
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/devices/system/node/node%d/meminfo", node);
+    FILE * f = fopen(path, "r");
+    if (!f) return false;
+
+    unsigned long long mem_free_kib = 0;
+    unsigned long long file_pages_kib = 0;
+    unsigned long long reclaimable_kib = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long long kib = 0;
+        if (sscanf(line, "Node %*u MemFree: %llu kB", &kib) == 1) mem_free_kib = kib;
+        if (sscanf(line, "Node %*u FilePages: %llu kB", &kib) == 1) file_pages_kib = kib;
+        if (sscanf(line, "Node %*u SReclaimable: %llu kB", &kib) == 1) reclaimable_kib = kib;
+    }
+    fclose(f);
+    const unsigned long long available_kib = mem_free_kib + file_pages_kib + reclaimable_kib;
+    return available_kib >= (unsigned long long) ((size + 1023) / 1024);
+}
+#endif
+
+bool ggml_numa_alloc(void ** ptr, size_t size, int node) {
+    if (!ptr || size == 0 || !ggml_numa_mirror_active() || node < 0 || node >= (int) g_state.numa.n_nodes) return false;
+#if defined(__gnu_linux__)
+    const size_t aligned = ggml_numa_aligned_size(size);
+    if (!ggml_numa_node_has_capacity(aligned, node)) {
+        GGML_PRINT("NUMA mirror: node %d lacks capacity for %zu bytes\n", node, aligned);
+        return false;
+    }
+    void * p = mmap(NULL, aligned, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) return false;
+
+    const size_t bits = 8 * sizeof(unsigned long);
+    unsigned long nodemask[(GGML_NUMA_MAX_NODES + bits - 1) / bits];
+    memset(nodemask, 0, sizeof(nodemask));
+    nodemask[node / bits] |= 1UL << (node % bits);
+    if (ggml_sys_mbind(p, aligned, MPOL_BIND, nodemask, GGML_NUMA_MAX_NODES, 0) != 0) {
+        GGML_PRINT("NUMA mirror: mbind node %d failed: %s\n", node, strerror(errno));
+        munmap(p, aligned);
+        return false;
+    }
+    if (madvise(p, aligned, MADV_HUGEPAGE) != 0) {
+        GGML_PRINT_DEBUG("NUMA mirror: MADV_HUGEPAGE failed: %s\n", strerror(errno));
+    }
+    g_state.numa.nodes[node].allocated_bytes += aligned;
+    g_state.numa.nodes[node].bound_bytes += aligned;
+    *ptr = p;
+    return true;
+#else
+    UNUSED(node);
+    return false;
+#endif
+}
+
+void ggml_numa_free(void * ptr, size_t size, int node) {
+    if (!ptr || size == 0 || node < 0 || node >= (int) g_state.numa.n_nodes) return;
+#if defined(__gnu_linux__)
+    const size_t aligned = ggml_numa_aligned_size(size);
+    munmap(ptr, aligned);
+    g_state.numa.nodes[node].freed_bytes += aligned;
+#else
+    UNUSED(size);
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -935,6 +935,8 @@ extern "C" {
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
     GGML_API bool    ggml_numa_mirror_active(void); // true for an effective multi-node weights-only mirror policy
     GGML_API uint32_t ggml_numa_get_mirror(void);   // immutable effective ggml_numa_mirror_flags
+    GGML_API bool    ggml_numa_alloc(void ** ptr, size_t size, int node); // checked node-local allocation
+    GGML_API void    ggml_numa_free(void * ptr, size_t size, int node);  // release one successful allocation
 
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
