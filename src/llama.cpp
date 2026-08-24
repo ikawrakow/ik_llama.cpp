@@ -6978,7 +6978,7 @@ static int llama_encode_internal(
 }
 
 // find holes from the beginning of the KV cache and fill them by moving data from the end of the cache
-static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
+static enum ggml_status llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     auto & kv_self = lctx.kv_self;
 
     const auto & hparams = lctx.model.hparams;
@@ -7111,7 +7111,7 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     }
 
     if (n_moves == 0) {
-        return;
+        return GGML_STATUS_SUCCESS;
     }
 
     //LLAMA_LOG_INFO("(tmp log) KV defrag cell moves: %u\n", n_moves);
@@ -7195,7 +7195,7 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
 
     ggml_cgraph * gf = llm_build_context::llama_build_graph_defrag(lctx, ids);
 
-    llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+    return llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
 #endif
 
     //const int64_t t_end = ggml_time_us();
@@ -7234,7 +7234,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_k_shift(lctx);
 
-            llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            if (llama_graph_compute(lctx, gf, lctx.cparams.n_threads) != GGML_STATUS_SUCCESS) {
+                return GGML_STATUS_FAILED;
+            }
 
             need_reserve = true;
         }
@@ -7260,7 +7262,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_s_copy(lctx);
 
-            llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            if (llama_graph_compute(lctx, gf, lctx.cparams.n_threads) != GGML_STATUS_SUCCESS) {
+                return GGML_STATUS_FAILED;
+            }
 
             need_reserve = true;
         }
@@ -7278,7 +7282,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
     // defragment the KV cache if needed
     if (lctx.kv_self.do_defrag) {
-        llama_kv_cache_defrag_internal(lctx);
+        if (llama_kv_cache_defrag_internal(lctx) != GGML_STATUS_SUCCESS) {
+            return GGML_STATUS_FAILED;
+        }
 
         need_reserve = true;
 
