@@ -2290,7 +2290,26 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         /**/ if (value == "distribute" || value == "") { params.numa = GGML_NUMA_STRATEGY_DISTRIBUTE; }
         else if (value == "isolate") { params.numa = GGML_NUMA_STRATEGY_ISOLATE; }
         else if (value == "numactl") { params.numa = GGML_NUMA_STRATEGY_NUMACTL; }
+        else if (value == "mirror") {
+            params.numa = GGML_NUMA_STRATEGY_MIRROR;
+            params.numa_mirror = GGML_NUMA_MIRROR_WEIGHTS;
+        }
         else { invalid_param = true; }
+        return true;
+    }
+    if (arg == "--numa-mirror") {
+        CHECK_ARG
+        std::string value(argv[i]);
+        if (value == "weights") {
+            params.numa = GGML_NUMA_STRATEGY_MIRROR;
+            params.numa_mirror = GGML_NUMA_MIRROR_WEIGHTS;
+        } else if (value == "none") {
+            params.numa = GGML_NUMA_STRATEGY_DISABLED;
+            params.numa_mirror = GGML_NUMA_MIRROR_NONE;
+        } else {
+            fprintf(stderr, "error: --numa-mirror supports only weights or none in this candidate\n");
+            invalid_param = true;
+        }
         return true;
     }
     if (arg == "-dev" || arg == "--device") {
@@ -3330,8 +3349,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
                                                                         "  - numactl: use the CPU map provided by numactl\n"
+                                                                        "  - mirror: pin workers by NUMA node for the weights-only mirror candidate\n"
                                                                         "if run without this previously, it is recommended to drop the system page cache before using this\n"
                                                                         "see https://github.com/ggerganov/llama.cpp/issues/1437" });
+    options.push_back({ "*",           "       --numa-mirror TYPE",     "mirror component: weights or none (weights-only candidate)" });
 
     if (llama_supports_gpu_offload()) {
         options.push_back({ "*",           "-ngl,  --gpu-layers N",

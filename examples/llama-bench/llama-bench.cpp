@@ -357,7 +357,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ser, --smart-expert-reduction <i,f>(default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -gr, --graph-reuse <0|1>            (default: %s)\n", join(cmd_params_defaults.reuse, ",").c_str());
     printf("  -mmp, --mmap <0|1>                  (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
-    printf("  --numa <distribute|isolate|numactl> (default: disabled)\n");
+    printf("  --numa <distribute|isolate|numactl|mirror> (default: disabled)\n");
+    printf("  --numa-mirror <weights|none>            (weights-only candidate)\n");
     printf("  -embd, --embeddings <0|1>           (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>    (default: 0)\n");
     printf("  -r, --repetitions <n>               (default: %d)\n", cmd_params_defaults.reps);
@@ -693,7 +694,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 /**/ if (value == "distribute" || value == "" ) { params.numa = GGML_NUMA_STRATEGY_DISTRIBUTE; }
                 else if (value == "isolate")                    { params.numa = GGML_NUMA_STRATEGY_ISOLATE; }
                 else if (value == "numactl")                    { params.numa = GGML_NUMA_STRATEGY_NUMACTL; }
+                else if (value == "mirror")                     { params.numa = GGML_NUMA_STRATEGY_MIRROR; }
                 else { invalid_param = true; break; }
+            }
+        } else if (arg == "--numa-mirror") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            const std::string value(argv[i]);
+            if (value == "weights") {
+                params.numa = GGML_NUMA_STRATEGY_MIRROR;
+            } else if (value == "none") {
+                params.numa = GGML_NUMA_STRATEGY_DISABLED;
+            } else {
+                fprintf(stderr, "error: --numa-mirror supports only weights or none in this candidate\n");
+                invalid_param = true;
+                break;
             }
         } else if (arg == "-fa" || arg == "--flash-attn") {
             if (++i >= argc) {

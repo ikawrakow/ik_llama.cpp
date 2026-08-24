@@ -4539,6 +4539,7 @@ struct ggml_numa_node {
 
 struct ggml_numa_nodes {
     enum ggml_numa_strategy numa_strategy;
+    uint32_t mirror_flags;
     struct ggml_numa_node nodes[GGML_NUMA_MAX_NODES];
     uint32_t n_nodes;
     uint32_t total_cpus; // hardware threads on system
@@ -4657,6 +4658,9 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 
     // set numa scheme
     g_state.numa.numa_strategy = numa_flag;
+    g_state.numa.mirror_flags = numa_flag == GGML_NUMA_STRATEGY_MIRROR
+            ? GGML_NUMA_MIRROR_WEIGHTS
+            : GGML_NUMA_MIRROR_NONE;
 
     GGML_PRINT_DEBUG("numa strategy %u\n",g_state.numa.numa_strategy);
 
@@ -4725,6 +4729,10 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             fclose(fptr);
         }
     }
+
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
+        GGML_PRINT("NUMA mirror: requested=weights effective=weights nodes=%u\n", g_state.numa.n_nodes);
+    }
 #else
     UNUSED(numa_flag);
     // TODO
@@ -4733,6 +4741,16 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 
 bool ggml_is_numa(void) {
     return g_state.numa.n_nodes > 1;
+}
+
+bool ggml_numa_mirror_active(void) {
+    return g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR &&
+           g_state.numa.n_nodes > 1 &&
+           g_state.numa.mirror_flags == GGML_NUMA_MIRROR_WEIGHTS;
+}
+
+uint32_t ggml_numa_get_mirror(void) {
+    return g_state.numa.mirror_flags;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

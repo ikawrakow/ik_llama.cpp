@@ -901,6 +901,15 @@ extern "C" {
         GGML_NUMA_STRATEGY_COUNT
     };
 
+    // The first NUMA-mirror candidate supports weights only.  Keep this
+    // policy immutable after ggml_numa_init(): every executable must select
+    // it before direct NUMA initialization, rather than changing a global
+    // component mask after model/context construction has started.
+    enum ggml_numa_mirror_flags {
+        GGML_NUMA_MIRROR_NONE    = 0,
+        GGML_NUMA_MIRROR_WEIGHTS = 1 << 0,
+    };
+
     //
     // GUID
     //
@@ -924,6 +933,8 @@ extern "C" {
 
     GGML_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
+    GGML_API bool    ggml_numa_mirror_active(void); // true for an effective multi-node weights-only mirror policy
+    GGML_API uint32_t ggml_numa_get_mirror(void);   // immutable effective ggml_numa_mirror_flags
 
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
