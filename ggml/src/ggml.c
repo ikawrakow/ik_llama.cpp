@@ -2843,6 +2843,10 @@ struct ggml_compute_params {
     // ith = thread index, nth = number of threads
     int ith, nth;
 
+    // Effective NUMA node after this worker's affinity has been applied.  A
+    // negative value means that no node-local replica may be selected.
+    int numa_node;
+
     // work buffer for all threads
     size_t wsize;
     void * wdata;
@@ -4731,7 +4735,25 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     }
 
     if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
-        GGML_PRINT("NUMA mirror: requested=weights effective=weights nodes=%u\n", g_state.numa.n_nodes);
+        bool has_allowed_cpu_on_every_node = g_state.numa.n_nodes > 1;
+        for (uint32_t n = 0; n < g_state.numa.n_nodes; ++n) {
+            bool has_allowed_cpu = false;
+            const struct ggml_numa_node * node = &g_state.numa.nodes[n];
+            for (uint32_t i = 0; i < node->n_cpus; ++i) {
+                if (CPU_ISSET(node->cpus[i], &g_state.numa.cpuset)) {
+                    has_allowed_cpu = true;
+                    break;
+                }
+            }
+            has_allowed_cpu_on_every_node &= has_allowed_cpu;
+        }
+
+        if (!has_allowed_cpu_on_every_node) {
+            g_state.numa.mirror_flags = GGML_NUMA_MIRROR_NONE;
+            GGML_PRINT("NUMA mirror: requested=weights effective=none reason=insufficient-node-cpu-affinity nodes=%u\n", g_state.numa.n_nodes);
+        } else {
+            GGML_PRINT("NUMA mirror: requested=weights effective=weights nodes=%u\n", g_state.numa.n_nodes);
+        }
     }
 #else
     UNUSED(numa_flag);
@@ -28466,14 +28488,22 @@ typedef int ggml_lock_t;
 
 // Android's libc implementation "bionic" does not support setting affinity
 #if defined(__gnu_linux__)
-static void set_numa_thread_affinity(int thread_n) {
+static int ggml_numa_node_for_thread(int ith, int nth) {
+    const int n_nodes = (int) g_state.numa.n_nodes;
+    if (n_nodes <= 1 || nth <= 0) {
+        return 0;
+    }
+
+    const int node = (ith * n_nodes) / nth;
+    return MIN(node, n_nodes - 1);
+}
+
+static int set_numa_thread_affinity(int thread_n, int n_threads) {
     if (!ggml_is_numa()) {
-        return;
+        return -1;
     }
 
     int node_num;
-    int rv;
-    size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
 
     switch(g_state.numa.numa_strategy) {
         case GGML_NUMA_STRATEGY_DISTRIBUTE:
@@ -28484,31 +28514,49 @@ static void set_numa_thread_affinity(int thread_n) {
             // run thread on current_node
             node_num = g_state.numa.current_node;
             break;
-        case GGML_NUMA_STRATEGY_NUMACTL:
-            // use the cpuset that numactl gave us
-            rv = pthread_setaffinity_np(pthread_self(), setsize, &g_state.numa.cpuset);
-            if (rv) {
-                fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n",strerror(rv));
+        case GGML_NUMA_STRATEGY_MIRROR:
+            if (!ggml_numa_mirror_active()) {
+                return -1;
             }
-            return;
+            node_num = ggml_numa_node_for_thread(thread_n, n_threads);
+            break;
+        case GGML_NUMA_STRATEGY_NUMACTL:
+            // The inherited caller mask is the effective policy.
+            return -1;
         default:
-            return;
+            return -1;
     }
 
     struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
-
+    const size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
     cpu_set_t * cpus = CPU_ALLOC(g_state.numa.total_cpus);
+    if (cpus == NULL) {
+        return -1;
+    }
+
     CPU_ZERO_S(setsize, cpus);
+    bool has_allowed_cpu = false;
     for (size_t i = 0; i < node->n_cpus; ++i) {
-        CPU_SET_S(node->cpus[i], setsize, cpus);
+        const uint32_t cpu = node->cpus[i];
+        if (CPU_ISSET(cpu, &g_state.numa.cpuset)) {
+            CPU_SET_S(cpu, setsize, cpus);
+            has_allowed_cpu = true;
+        }
     }
 
-    rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
-    if (rv) {
-            fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
+    if (!has_allowed_cpu) {
+        CPU_FREE(cpus);
+        return -1;
     }
 
+    const int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
     CPU_FREE(cpus);
+    if (rv) {
+        fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
+        return -1;
+    }
+
+    return node_num;
 }
 
 static void clear_numa_thread_affinity(void) {
@@ -28516,25 +28564,15 @@ static void clear_numa_thread_affinity(void) {
         return;
     }
 
-    size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
-
-    cpu_set_t * cpus = CPU_ALLOC(g_state.numa.total_cpus);
-    CPU_ZERO_S(setsize, cpus);
-    for (unsigned i = 0; i < g_state.numa.total_cpus; ++i) {
-        CPU_SET_S(i, setsize, cpus);
-    }
-
-    int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
+    const int rv = pthread_setaffinity_np(pthread_self(), sizeof(g_state.numa.cpuset), &g_state.numa.cpuset);
     if (rv) {
         fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
     }
-
-    CPU_FREE(cpus);
 }
 #else
 // TODO: Windows etc.
 // (the linux implementation may also work on BSD, someone should test)
-static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
+static int set_numa_thread_affinity(int thread_n, int n_threads) { UNUSED(thread_n); UNUSED(n_threads); return -1; }
 static void clear_numa_thread_affinity(void) {}
 #endif
 
@@ -29035,11 +29073,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cgraph * cgraph = state->shared->cgraph;
     const struct ggml_cplan  * cplan  = state->shared->cplan;
 
-    set_numa_thread_affinity(state->ith);
+    const int numa_node = set_numa_thread_affinity(state->ith, state->shared->n_threads);
 
     struct ggml_compute_params params = {
         /*.ith   =*/ state->ith,
         /*.nth   =*/ state->shared->n_threads,
+        /*.numa_node =*/ numa_node,
         /*.wsize =*/ cplan->work_size,
         /*.wdata =*/ cplan->work_data,
         /*.shared=*/ state->shared,
