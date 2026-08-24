@@ -938,11 +938,15 @@ extern "C" {
     GGML_API int     ggml_numa_node_count(void);
     GGML_API bool    ggml_numa_mirror_active(void); // true for an effective multi-node weights-only mirror policy
     GGML_API uint32_t ggml_numa_get_mirror(void);   // immutable effective ggml_numa_mirror_flags
+    GGML_API bool    ggml_numa_mirror_node_active(int node, int n_threads);
     GGML_API bool    ggml_numa_alloc(void ** ptr, size_t size, int node); // checked node-local allocation
     GGML_API void    ggml_numa_free(void * ptr, size_t size, int node);  // release one successful allocation
     GGML_API bool    ggml_numa_bind(void * ptr, size_t size, int node);  // checked placement of owned existing memory
+    GGML_API void    ggml_numa_record_populated(size_t size, int node);  // checked owner populated node-local pages
     GGML_API bool    ggml_numa_tensor_set_mirror(struct ggml_tensor * tensor, void * const * node_data);
     GGML_API void    ggml_numa_tensor_clear_mirror(struct ggml_tensor * tensor);
+    GGML_API bool    ggml_numa_mirror_diagnostics_enabled(void);
+    GGML_API void    ggml_numa_print_mirror_diagnostics(const char * phase);
 
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);
