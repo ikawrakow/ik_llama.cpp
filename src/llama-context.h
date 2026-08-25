@@ -448,6 +448,14 @@ struct llama_context {
         struct capture_state {
             std::vector<int32_t> layer_ids;
             std::vector<std::vector<float>> layer_rows;
+            std::vector<std::vector<uint8_t>> layer_rows_raw;
+            struct capture_chunk {
+                int32_t row_offset = 0;
+                int32_t row_count = 0;
+                size_t byte_offset = 0;
+                ggml_type type = GGML_TYPE_COUNT;
+            };
+            std::vector<std::vector<capture_chunk>> layer_chunks;
             std::vector<int32_t> layer_rows_written;
             int32_t row_count = 0;
             int32_t row_width = 0;

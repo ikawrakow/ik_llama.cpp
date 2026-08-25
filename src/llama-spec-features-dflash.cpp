@@ -521,6 +521,14 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
         return 0;
     }
 
+    const ggml_type capture_type = tensor->type;
+    const ggml_type_traits_t capture_traits = ggml_internal_get_type_traits(capture_type);
+    if (capture_type != GGML_TYPE_F32 && capture_traits.to_float == nullptr) {
+        ctx->dflash.capture->invalid = true;
+        LLAMA_LOG_WARN("%s: unsupported DFlash capture type %s\n", __func__, ggml_type_name(capture_type));
+        return 2;
+    }
+
     auto & capture = *ctx->dflash.capture;
     if (capture.capture_batch_id == 0) {
         capture.capture_batch_id = 1;
@@ -542,6 +550,8 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
     }
 
     auto & rows = capture.layer_rows[(size_t) layer_idx];
+    auto & raw_rows = capture.layer_rows_raw[(size_t) layer_idx];
+    auto & chunks = capture.layer_chunks[(size_t) layer_idx];
     auto & rows_written = capture.layer_rows_written[(size_t) layer_idx];
     if (rows_written + row_count > capture.expected_rows) {
         capture.invalid = true;
@@ -555,9 +565,28 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
     }
     auto backend = ggml_backend_sched_get_tensor_backend(ctx->sched, tensor);
     GGML_ASSERT(backend);
-    ggml_backend_tensor_get_async(backend, tensor,
-            rows.data() + (size_t) rows_written * (size_t) row_width,
-            0, (size_t) row_count * (size_t) row_width * sizeof(float));
+
+    const size_t raw_row_stride = (size_t) row_width * sizeof(float);
+    const size_t byte_offset = (size_t) rows_written * raw_row_stride;
+
+    void * readback_dst = nullptr;
+    size_t readback_bytes = 0;
+    if (capture_type == GGML_TYPE_F32) {
+        readback_dst = rows.data() + (size_t) rows_written * (size_t) row_width;
+        readback_bytes = (size_t) row_count * (size_t) row_width * sizeof(float);
+    } else {
+        const size_t row_bytes = ggml_row_size(capture_type, row_width);
+        const size_t expected_bytes = (size_t) capture.expected_rows * raw_row_stride;
+        if (raw_rows.size() != expected_bytes) {
+            raw_rows.resize(expected_bytes);
+        }
+        readback_dst = raw_rows.data() + byte_offset;
+        readback_bytes = (size_t) row_count * row_bytes;
+    }
+
+    ggml_backend_tensor_get_async(backend, tensor, readback_dst, 0, readback_bytes);
+
+    chunks.push_back({ rows_written, row_count, byte_offset, capture_type });
     rows_written += row_count;
     capture.row_width = row_width;
     capture.row_count = std::max(capture.row_count, rows_written);
@@ -581,6 +610,8 @@ bool llama_set_dflash_capture_layers(
     auto capture = std::make_unique<llama_context::dflash_runtime::capture_state>();
     capture->layer_ids.assign(layer_ids, layer_ids + n_layers);
     capture->layer_rows.resize((size_t) n_layers);
+    capture->layer_rows_raw.resize((size_t) n_layers);
+    capture->layer_chunks.resize((size_t) n_layers);
     capture->layer_rows_written.assign((size_t) n_layers, 0);
     capture->layer_seen_batch_id.assign((size_t) n_layers, 0);
     capture->prev_cb_eval = ctx->cparams.cb_eval;
@@ -641,6 +672,9 @@ void llama_begin_dflash_capture_batch(struct llama_context * ctx, int32_t expect
     capture.invalid = expected_rows <= 0;
     std::fill(capture.layer_rows_written.begin(), capture.layer_rows_written.end(), 0);
     std::fill(capture.layer_seen_batch_id.begin(), capture.layer_seen_batch_id.end(), 0);
+    for (auto & chunks : capture.layer_chunks) {
+        chunks.clear();
+    }
 }
 
 void llama_finish_dflash_capture_batch(
@@ -676,6 +710,8 @@ static bool llama_spec_prepare_dflash_capture(
     n_layers = (int32_t) capture.layer_ids.size();
     if (capture.invalid || row_count <= 0 || row_width <= 0 || n_layers <= 0 ||
             capture.expected_rows <= 0 || capture.layer_rows.size() != (size_t) n_layers ||
+            capture.layer_rows_raw.size() != (size_t) n_layers ||
+            capture.layer_chunks.size() != (size_t) n_layers ||
             capture.layer_rows_written.size() != (size_t) n_layers) {
         return false;
     }
@@ -695,6 +731,41 @@ static bool llama_spec_prepare_dflash_capture(
     }
 
     for (int32_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
+        auto & rows = capture.layer_rows[(size_t) layer_idx];
+        if (rows.size() != (size_t) row_count * (size_t) row_width) {
+            return false;
+        }
+
+        const auto & raw_rows = capture.layer_rows_raw[(size_t) layer_idx];
+        const auto & chunks = capture.layer_chunks[(size_t) layer_idx];
+        for (const auto & chunk : chunks) {
+            if (chunk.row_offset < 0 || chunk.row_count <= 0 ||
+                    chunk.row_offset + chunk.row_count > row_count) {
+                return false;
+            }
+
+            if (chunk.type == GGML_TYPE_F32) {
+                continue;
+            }
+
+            const ggml_type_traits_t traits = ggml_internal_get_type_traits(chunk.type);
+            if (traits.to_float == nullptr) {
+                return false;
+            }
+
+            const size_t row_bytes = ggml_row_size(chunk.type, row_width);
+            const size_t chunk_bytes = (size_t) chunk.row_count * row_bytes;
+            if (chunk.byte_offset > raw_rows.size() ||
+                    chunk_bytes > raw_rows.size() - chunk.byte_offset) {
+                return false;
+            }
+
+            traits.to_float(
+                    raw_rows.data() + chunk.byte_offset,
+                    rows.data() + (size_t) chunk.row_offset * (size_t) row_width,
+                    (int64_t) chunk.row_count * row_width);
+        }
+
         if (capture.layer_seen_batch_id[(size_t) layer_idx] != capture.capture_batch_id) {
             LLAMA_LOG_WARN("%s: DFlash capture is stale for layer %d (seen_batch=%llu current_batch=%llu rows=%d width=%d)\n",
                     __func__,
@@ -706,7 +777,6 @@ static bool llama_spec_prepare_dflash_capture(
             return false;
         }
 
-        const auto & rows = capture.layer_rows[(size_t) layer_idx];
         if (capture.layer_rows_written[(size_t) layer_idx] != row_count ||
                 rows.size() != (size_t) row_count * (size_t) row_width) {
             LLAMA_LOG_WARN("%s: DFlash capture rows mismatch for layer %d: got=%d/%zu expected=%d/%zu (rows=%d width=%d)\n",
