@@ -363,14 +363,14 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                         &alpha_32, k16.get() + v_offset, CUDA_R_16F, K->ne[0], K->ne[0]*indexer->ne[0],
                         kq16.get(),                      CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
                         &beta_32, kqv32.get(),           CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
-                        CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+                        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         } else {
             CUBLAS_CHECK(cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N,
                         V->ne[0], Q->ne[2], indexer->ne[0],
                         &alpha_32, v16.get(),  CUDA_R_16F, V->ne[0], V->ne[0]*indexer->ne[0],
                         kq16.get(),            CUDA_R_16F, indexer->ne[0], indexer->ne[0]*Q->ne[2],
                         &beta_32, kqv32.get(), CUDA_R_32F, V->ne[0], V->ne[0]*Q->ne[2], nrows,
-                        CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+                        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         }
 
         {
