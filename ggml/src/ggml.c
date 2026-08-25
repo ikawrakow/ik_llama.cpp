@@ -4808,17 +4808,6 @@ bool ggml_numa_mirror_active(void) {
            g_state.numa.mirror_flags == GGML_NUMA_MIRROR_WEIGHTS;
 }
 
-bool ggml_numa_mirror_node_active(int node, int n_threads) {
-    if (!ggml_numa_mirror_active() || node < 0 || node >= (int) g_state.numa.n_nodes || n_threads <= 0) {
-        return false;
-    }
-    for (int ith = 0; ith < n_threads; ++ith) {
-        const int selected = MIN((ith * (int) g_state.numa.n_nodes) / n_threads, (int) g_state.numa.n_nodes - 1);
-        if (selected == node) return true;
-    }
-    return false;
-}
-
 bool ggml_numa_mirror_node_available(int node) {
     if (!ggml_numa_mirror_active() || node < 0 || node >= (int) g_state.numa.n_nodes) {
         return false;
