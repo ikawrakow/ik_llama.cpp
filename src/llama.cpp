@@ -7896,7 +7896,7 @@ void llama_free_model(struct llama_model * model) {
     delete model;
 }
 
-static bool llama_mirror_model_weights(const llama_model & model, int n_threads) {
+static bool llama_mirror_model_weights(const llama_model & model) {
     if (!ggml_numa_mirror_active()) return true;
     if (model.numa_mirror_state == llama_model::numa_mirror_state::ready) return true;
     if (model.reload) {
@@ -7916,8 +7916,11 @@ static bool llama_mirror_model_weights(const llama_model & model, int n_threads)
     size_t replica_nodes = 0;
     const bool verify_copies = std::getenv("GGML_NUMA_MIRROR_VERIFY") != nullptr;
 
+    // Replica coverage is model-owned and must not depend on the first
+    // context's worker count.  Allocate every node in the immutable inherited
+    // process mask so a later wider context cannot silently fall back.
     for (int node = 1; node < n_nodes; ++node) {
-        replica_nodes += ggml_numa_mirror_node_active(node, n_threads) ? 1 : 0;
+        replica_nodes += ggml_numa_mirror_node_available(node) ? 1 : 0;
     }
 
     auto cleanup = [&]() {
@@ -7939,13 +7942,13 @@ static bool llama_mirror_model_weights(const llama_model & model, int n_threads)
             mirror.size = ggml_backend_buffer_get_size(buf);
             mirror.node_base[0] = ggml_backend_buffer_get_base(buf);
             if (!mirror.node_base[0]) throw std::runtime_error("NUMA mirror: host buffer has no base");
-            if (ggml_numa_mirror_node_active(0, n_threads) &&
+            if (ggml_numa_mirror_node_available(0) &&
                     !ggml_numa_bind(mirror.node_base[0], mirror.size, 0)) {
                 throw std::runtime_error("NUMA mirror: node-0 weight placement failed");
             }
 
             for (int node = 1; node < n_nodes; ++node) {
-                if (!ggml_numa_mirror_node_active(node, n_threads)) continue;
+                if (!ggml_numa_mirror_node_available(node)) continue;
                 if (!ggml_numa_alloc(&mirror.node_base[node], mirror.size, node)) {
                     throw std::runtime_error("NUMA mirror: replica allocation failed");
                 }
@@ -7970,7 +7973,7 @@ static bool llama_mirror_model_weights(const llama_model & model, int n_threads)
                 void * node_data[8] = {};
                 const size_t offset = (const char *) tensor->data - (const char *) mirror->node_base[0];
                 for (int node = 0; node < n_nodes; ++node) {
-                    if (ggml_numa_mirror_node_active(node, n_threads)) {
+                    if (ggml_numa_mirror_node_available(node)) {
                         node_data[node] = (char *) mirror->node_base[node] + offset;
                     }
                 }
@@ -8109,7 +8112,7 @@ static bool llama_prepare_model_for_context(llama_context & lctx) {
 
     try {
         if (!llama_repack_up_gate_exps(lctx)) return false;
-        return llama_mirror_model_weights(model, lctx.cparams.n_threads);
+        return llama_mirror_model_weights(model);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: model finalization failed: %s\n", __func__, err.what());
         return false;

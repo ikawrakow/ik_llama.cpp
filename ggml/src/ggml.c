@@ -2831,7 +2831,7 @@ struct ggml_compute_state_shared {
 
     atomic_int current_chunk; // currently processing chunk during mul_mat, shared between all the threads
 
-    enum ggml_status ec;
+    atomic_int ec;
 };
 
 struct ggml_compute_state {
@@ -4562,6 +4562,7 @@ struct ggml_numa_nodes {
     bool mirror_diagnostics;
     atomic_int affinity_failures;
     atomic_int worker_diagnostic_seen[GGML_NUMA_MAX_CPUS];
+    atomic_int path_diagnostic_seen[GGML_NUMA_MAX_NODES][4];
 #if defined(__gnu_linux__)
     cpu_set_t cpuset; // cpuset from numactl
 #else
@@ -4818,6 +4819,18 @@ bool ggml_numa_mirror_node_active(int node, int n_threads) {
     return false;
 }
 
+bool ggml_numa_mirror_node_available(int node) {
+    if (!ggml_numa_mirror_active() || node < 0 || node >= (int) g_state.numa.n_nodes) {
+        return false;
+    }
+#if defined(__gnu_linux__)
+    return g_state.numa.nodes[node].allowed_cpu_count > 0;
+#else
+    UNUSED(node);
+    return false;
+#endif
+}
+
 uint32_t ggml_numa_get_mirror(void) {
     return g_state.numa.mirror_flags;
 }
@@ -4840,6 +4853,19 @@ void ggml_numa_print_mirror_diagnostics(const char * phase) {
 }
 
 struct ggml_numa_mirror { void * data[GGML_NUMA_MAX_NODES]; };
+
+static void ggml_numa_mirror_note_path(int path_id, const char * path,
+        const struct ggml_tensor * tensor, int node, const void * selected) {
+    if (!ggml_numa_mirror_diagnostics_enabled() || !tensor || node < 0 ||
+            node >= GGML_NUMA_MAX_NODES || path_id < 0 || path_id >= 4) {
+        return;
+    }
+    if (atomic_fetch_add(&g_state.numa.path_diagnostic_seen[node][path_id], 1) == 0) {
+        GGML_PRINT("NUMA mirror: path=%s tensor=%s node=%d selected=%p base=%p\n",
+                path ? path : "unknown", tensor->name[0] ? tensor->name : "(unnamed)",
+                node, selected, tensor->data);
+    }
+}
 
 static inline void * ggml_numa_tensor_data(const struct ggml_tensor * tensor, int node) {
     if (node < 0 || node >= (int) g_state.numa.n_nodes) return tensor->data;
@@ -18518,7 +18544,8 @@ static void ggml_compute_forward_mul_mat_id(
                 acc += chunks_per_expert;
             }
 
-            const char * src0_cur = (const char *) src0->data + cur_a*nb02;
+            const char * src0_cur = src0_data + cur_a*nb02;
+            ggml_numa_mirror_note_path(0, "mul_mat_id_chunked", src0, params->numa_node, src0_cur);
 
             if (!iqk_mul_mat_moe(ne01, matrix_row_counts[cur_a], ne00, ne11,
                         src0->type, src0_cur, nb01,
@@ -18875,6 +18902,8 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
             }
         }
 
+        ggml_numa_mirror_note_path(1, "mul_mat_id_up_gate_chunked", src0_1, params->numa_node, src0_1_cur);
+
         if (!iqk_moe_fused_up_gate(nr0_base, matrix_row_counts[cur_a], ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
                             vec_dot_type, (const char *)wdata_ug, row_size_ug,
@@ -18903,16 +18932,16 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
-            src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
-            src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
-            up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
-            gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
+            src0_1_cur = src0_1_data + cur_a*nb02;
+            src0_2_cur = src0_2_data + cur_a*nb02;
+            up_b_cur   = up_b_data   ? up_b_data + cur_a*nb41 : NULL;
+            gate_b_cur = gate_b_data ? gate_b_data + cur_a*nb51 : NULL;
         } else {
-            src0_2_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_2_cur = src0_1_data + cur_a*nb02;
             src0_1_cur = src0_2_cur + nb02/2;
             if (up_b) {
                 GGML_ASSERT(!gate_b);
-                gate_b_cur = (const char *)up_b->data + cur_a*nb41;
+                gate_b_cur = up_b_data + cur_a*nb41;
                 up_b_cur   = gate_b_cur + nb41/2;
             }
         }
@@ -22846,7 +22875,7 @@ static void ggml_compute_forward_pad_f32(
         for (int ib = ith; ib < nblocks; ib += nth) {
             int first = ib*k_block_size;
             int last  = MIN(first + k_block_size, nelem);
-            // 
+            //
             //int ii = first;
             //int i3 = ii/(ne0*ne1*ne2); ii -= i3*ne0*ne1*ne2;
             //int i2 = ii/(ne0*ne1    ); ii -= i2*ne0*ne1;
@@ -29319,10 +29348,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const int numa_node = set_numa_thread_affinity(state->ith, state->shared->n_threads);
 
     if (ggml_numa_mirror_active() && numa_node < 0) {
-        state->shared->ec = GGML_STATUS_FAILED;
+        atomic_store(&state->shared->ec, GGML_STATUS_FAILED);
     }
     ggml_barrier(state->shared);
-    if (state->shared->ec != GGML_STATUS_SUCCESS) {
+    if (atomic_load(&state->shared->ec) != GGML_STATUS_SUCCESS) {
         return 0;
     }
 
@@ -29355,12 +29384,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #endif
 
         if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {
-            state->shared->ec = GGML_STATUS_ABORTED;
+            atomic_store(&state->shared->ec, GGML_STATUS_ABORTED);
         }
 
         ggml_barrier(state->shared);
 
-        if (state->shared->ec != GGML_STATUS_SUCCESS) {
+        if (atomic_load(&state->shared->ec) != GGML_STATUS_SUCCESS) {
             break;
         }
     }
@@ -29459,7 +29488,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     // don't leave affinity set on the main thread
     clear_numa_thread_affinity();
 
-    return state_shared.ec;
+    return (enum ggml_status) atomic_load(&state_shared.ec);
 }
 
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
