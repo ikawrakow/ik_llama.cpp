@@ -4509,6 +4509,8 @@ ggml_backend_t ggml_backend_metal_init(void) {
         /* .context   = */ ctx,
     };
 
+    ggml_backend_metal_set_n_cb(metal_backend, 1);
+
     return metal_backend;
 }
 
