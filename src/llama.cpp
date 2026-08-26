@@ -7913,6 +7913,9 @@ static bool llama_mirror_model_weights(const llama_model & model) {
     size_t mirrored_buffers = 0;
     size_t mirrored_weight_bytes = 0;
     size_t mirrored_tensors = 0;
+    size_t relocated_tensors = 0;
+    size_t out_of_buffer_tensors = 0;
+    size_t empty_host_buffers = 0;
     size_t replica_nodes = 0;
     const bool verify_copies = std::getenv("GGML_NUMA_MIRROR_VERIFY") != nullptr;
 
@@ -7932,15 +7935,63 @@ static bool llama_mirror_model_weights(const llama_model & model) {
         pending_buffers.clear();
     };
 
+    struct eligible_tensor {
+        struct ggml_tensor * tensor;
+        size_t offset;
+    };
+
     try {
         for (ggml_backend_buffer_t buf : model.bufs) {
             if (!buf || !ggml_backend_buffer_is_host(buf)) continue;
 
+            const uintptr_t buffer_base = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(buf));
+            const size_t buffer_size = ggml_backend_buffer_get_size(buf);
+            if (buffer_base == 0 || buffer_size > UINTPTR_MAX - buffer_base) {
+                if (ggml_numa_mirror_diagnostics_enabled()) {
+                    LLAMA_LOG_ERROR("%s: reject host buffer=%p size=%zu reason=invalid-address-range\n",
+                            __func__, (void *) buffer_base, buffer_size);
+                }
+                throw std::runtime_error("NUMA mirror: invalid host buffer address range");
+            }
+            const uintptr_t buffer_end = buffer_base + buffer_size;
+            std::vector<eligible_tensor> eligible_tensors;
+            for (struct ggml_context * ctx : model.ctxs) {
+                for (struct ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+                    if (!tensor->data || tensor->view_src || tensor->buffer != buf) continue;
+
+                    const uintptr_t tensor_base = reinterpret_cast<uintptr_t>(tensor->data);
+                    const size_t tensor_size = ggml_nbytes(tensor);
+                    const bool start_in_buffer = tensor_base >= buffer_base && tensor_base <= buffer_end;
+                    const bool range_in_buffer = start_in_buffer && tensor_size <= buffer_end - tensor_base;
+                    if (!range_in_buffer) {
+                        ++out_of_buffer_tensors;
+                        if (!start_in_buffer) ++relocated_tensors;
+                        if (ggml_numa_mirror_diagnostics_enabled()) {
+                            LLAMA_LOG_INFO("%s: skip tensor=%s reason=%s buffer=%p data=%p nbytes=%zu\n",
+                                    __func__, tensor->name[0] ? tensor->name : "(unnamed)",
+                                    start_in_buffer ? "live-range-out-of-buffer" : "relocated-live-range",
+                                    (void *) buffer_base, tensor->data, tensor_size);
+                        }
+                        continue;
+                    }
+                    eligible_tensors.push_back({ tensor, (size_t) (tensor_base - buffer_base) });
+                }
+            }
+
+            if (eligible_tensors.empty()) {
+                ++empty_host_buffers;
+                if (ggml_numa_mirror_diagnostics_enabled()) {
+                    LLAMA_LOG_INFO("%s: skip host buffer=%p size=%zu reason=no-eligible-tensors\n",
+                            __func__, (void *) buffer_base, buffer_size);
+                }
+                continue;
+            }
+
             pending_buffers.emplace_back();
             auto & mirror = pending_buffers.back();
             mirror.buf = buf;
-            mirror.size = ggml_backend_buffer_get_size(buf);
-            mirror.node_base[0] = ggml_backend_buffer_get_base(buf);
+            mirror.size = buffer_size;
+            mirror.node_base[0] = reinterpret_cast<void *>(buffer_base);
             if (!mirror.node_base[0]) throw std::runtime_error("NUMA mirror: host buffer has no base");
             if (ggml_numa_mirror_node_available(0) &&
                     !ggml_numa_bind(mirror.node_base[0], mirror.size, 0)) {
@@ -7960,21 +8011,12 @@ static bool llama_mirror_model_weights(const llama_model & model) {
             }
             ++mirrored_buffers;
             mirrored_weight_bytes += mirror.size;
-        }
-
-        for (struct ggml_context * ctx : model.ctxs) {
-            for (struct ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
-                if (!tensor->data || tensor->view_src || !tensor->buffer || !ggml_backend_buffer_is_host(tensor->buffer)) continue;
-                const llama_model::numa_mirror_buffer * mirror = nullptr;
-                for (const auto & candidate : pending_buffers) {
-                    if (candidate.buf == tensor->buffer) { mirror = &candidate; break; }
-                }
-                if (!mirror) continue;
+            for (const eligible_tensor & eligible : eligible_tensors) {
+                struct ggml_tensor * tensor = eligible.tensor;
                 void * node_data[8] = {};
-                const size_t offset = (const char *) tensor->data - (const char *) mirror->node_base[0];
                 for (int node = 0; node < n_nodes; ++node) {
                     if (ggml_numa_mirror_node_available(node)) {
-                        node_data[node] = (char *) mirror->node_base[node] + offset;
+                        node_data[node] = (char *) mirror.node_base[node] + eligible.offset;
                     }
                 }
                 pending_tensors.push_back(tensor);
@@ -7987,9 +8029,10 @@ static bool llama_mirror_model_weights(const llama_model & model) {
 
         model.numa_mirror_bufs = std::move(pending_buffers);
         model.numa_mirror_state = llama_model::numa_mirror_state::ready;
-        LLAMA_LOG_INFO("%s: NUMA mirror host_weight_buffers=%zu host_weight_bytes=%zu expected_additional_bytes=%zu mirrored_tensors=%zu verify=%s\n",
+        LLAMA_LOG_INFO("%s: NUMA mirror host_weight_buffers=%zu host_weight_bytes=%zu expected_additional_bytes=%zu mirrored_tensors=%zu relocated_tensors=%zu out_of_buffer_tensors=%zu empty_host_buffers=%zu verify=%s\n",
                 __func__, mirrored_buffers, mirrored_weight_bytes,
                 mirrored_weight_bytes * replica_nodes, mirrored_tensors,
+                relocated_tensors, out_of_buffer_tensors, empty_host_buffers,
                 verify_copies ? "enabled" : "disabled");
         ggml_numa_print_mirror_diagnostics("model-ready");
         return true;
