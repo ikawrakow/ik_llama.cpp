@@ -8846,8 +8846,9 @@ struct ggml_tensor * ggml_permute(
     //ggml_format_name(result, "%s (permuted)", a->name);
     ggml_format_name_fast(a->name, " (permuted)", 11, result->name);
 
-    int ne[GGML_MAX_DIMS];
-    int nb[GGML_MAX_DIMS];
+    // 64-bit: nb is size_t in ggml_tensor; a 32-bit int truncated any stride > 2 GiB.
+    int64_t ne[GGML_MAX_DIMS];
+    size_t  nb[GGML_MAX_DIMS];
 
     ne[axis0] = a->ne[0];
     ne[axis1] = a->ne[1];
