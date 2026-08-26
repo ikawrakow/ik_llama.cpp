@@ -1,6 +1,7 @@
 #include "server-common.h"
 
 #include <algorithm>
+#include <cstdio>
 
 using raw_buffer = std::vector<uint8_t>;
 
@@ -33,6 +34,7 @@ void server_log(const char* level, const char* function, int line, const char* m
         {"timestamp", time(nullptr)},
     };
 
+    std::string out;
     if (server_log_json) {
         log.merge_patch({
             {"level",    level},
@@ -45,7 +47,7 @@ void server_log(const char* level, const char* function, int line, const char* m
             log.merge_patch(extra);
         }
 
-        printf("%s\n", log.dump(-1, ' ', false, json::error_handler_t::replace).c_str());
+        out = log.dump(-1, ' ', false, json::error_handler_t::replace);
     }
     else {
         char buf[1024];
@@ -62,10 +64,19 @@ void server_log(const char* level, const char* function, int line, const char* m
             ss << " " << el.key() << "=" << value;
         }
 
-        const std::string str = ss.str();
-        printf("%.*s\n", (int)str.size(), str.data());
+        out = ss.str();
     }
+    printf("%s\n", out.c_str());
     fflush(stdout);
+
+    // Mirror to --log-file when explicitly set (see log_target_changed()).
+    if (log_target_changed()) {
+        FILE * tgt = LOG_TARGET;
+        if (tgt != nullptr && tgt != stdout && tgt != stderr) {
+            fprintf(tgt, "%s\n", out.c_str());
+            fflush(tgt);
+        }
+    }
 }
 
 //
