@@ -7329,6 +7329,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         // TODO: extract to a function
         // build worst-case graph
         int n_tokens = (int)std::min(lctx.cparams.n_ctx, lctx.cparams.n_ubatch);
+        if (llm_arch_is_dflash_family(lctx.model.arch)) {
+            n_tokens = std::min(n_tokens, (int) lctx.model.hparams.dflash_block_size);
+        }
         // MTP draft generation consumes one token and one hidden-state vector per decode step.
         if (lctx.cparams.mtp_op_type == MTP_OP_DRAFT_GEN) {
             n_tokens = 1;
@@ -8366,6 +8369,13 @@ struct llama_context * llama_init_from_model(
     ggml_type type_k = params.type_k;
     ggml_type type_v = params.type_v;
 
+    if (llm_arch_is_dflash_family(model->arch)) {
+        const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
+        kv_size = GGML_PAD(std::max<uint32_t>(1u, hparams.dflash_block_size), pad);
+        LLAMA_LOG_INFO("%s: DFlash ordinary KV bookkeeping capacity = %u (history owned by custom cache)\n",
+                __func__, kv_size);
+    }
+
     // Mamba only needs a constant number of KV cache cells per sequence
     if (model->arch == LLM_ARCH_MAMBA) {
         // Mamba needs at least as many KV cells as there are sequences kept at any time
@@ -8659,6 +8669,9 @@ struct llama_context * llama_init_from_model(
             }
 
             int n_tokens = (int)std::min(cparams.n_ctx, cparams.n_ubatch);
+            if (llm_arch_is_dflash_family(model->arch)) {
+                n_tokens = std::min(n_tokens, (int) model->hparams.dflash_block_size);
+            }
             const size_t max_nodes = ctx->max_nodes(n_tokens, cparams.n_ctx);
 
             // buffer used to store the computation graph and the tensor meta data
