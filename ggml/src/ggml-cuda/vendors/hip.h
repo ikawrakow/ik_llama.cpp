@@ -1,5 +1,8 @@
 #pragma once
 
+// ROCm 6 and later provide __shfl_sync() and friends as templates that static_assert on the
+// width of the mask, so the shims below have to replace them rather than shadow them
+#define HIP_DISABLE_WARP_SYNC_BUILTINS 1
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
@@ -8,9 +11,6 @@
 // for rocblas_initialize()
 #include "rocblas/rocblas.h"
 #endif // __HIP_PLATFORM_AMD__
-#define CUBLAS_COMPUTE_16F HIPBLAS_R_16F
-#define CUBLAS_COMPUTE_32F HIPBLAS_R_32F
-#define CUBLAS_COMPUTE_32F_FAST_16F HIPBLAS_R_32F
 #define CUBLAS_GEMM_DEFAULT HIPBLAS_GEMM_DEFAULT
 #define CUBLAS_GEMM_DEFAULT_TENSOR_OP HIPBLAS_GEMM_DEFAULT
 #define CUBLAS_OP_N HIPBLAS_OP_N
@@ -18,21 +18,33 @@
 #define CUBLAS_STATUS_SUCCESS HIPBLAS_STATUS_SUCCESS
 #define CUBLAS_TF32_TENSOR_OP_MATH 0
 #define CUDA_R_16F  HIPBLAS_R_16F
+#define CUDA_R_16BF HIPBLAS_R_16B
 #define CUDA_R_32F  HIPBLAS_R_32F
+#define CUBLAS_SIDE_RIGHT HIPBLAS_SIDE_RIGHT
+#define CUBLAS_FILL_MODE_UPPER HIPBLAS_FILL_MODE_UPPER
+#define CUBLAS_DIAG_NON_UNIT HIPBLAS_DIAG_NON_UNIT
+#define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
+#define __shfl_up_sync(mask, var, laneMask, width) __shfl_up(var, laneMask, width)
 #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
-#define cublasComputeType_t hipblasDatatype_t //deprecated, new hipblasComputeType_t not in 5.6
+#define __all_sync(mask, var) __all(var)
+#define __any_sync(mask, var) __any(var)
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
 #define cublasGemmEx hipblasGemmEx
 #define cublasGemmBatchedEx hipblasGemmBatchedEx
 #define cublasGemmStridedBatchedEx hipblasGemmStridedBatchedEx
 #define cublasHandle_t hipblasHandle_t
+#define cublasOperation_t hipblasOperation_t
+#define cublasStrsmBatched hipblasStrsmBatched
+// hipBLAS has no equivalent of the cuBLAS math mode, TF32 is not a thing here
+#define cublasMath_t int
+#define CUBLAS_DEFAULT_MATH 0
+#define cublasGetMathMode(handle, mode) (*(mode) = CUBLAS_DEFAULT_MATH, CUBLAS_STATUS_SUCCESS)
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
 #define cublasSgemm hipblasSgemm
 #define cublasSgemmStridedBatched hipblasSgemmStridedBatched
 #define cublasStatus_t hipblasStatus_t
-#define cudaDataType_t hipblasDatatype_t //deprecated, new hipblasDatatype not in 5.6
 #define cudaDeviceCanAccessPeer hipDeviceCanAccessPeer
 #define cudaDeviceDisablePeerAccess hipDeviceDisablePeerAccess
 #define cudaDeviceEnablePeerAccess hipDeviceEnablePeerAccess
@@ -49,6 +61,9 @@
 #define cudaEventDestroy hipEventDestroy
 #define cudaFree hipFree
 #define cudaFreeHost hipHostFree
+// cudaFuncSetAttribute() is a template over the kernel type, hipFuncSetAttribute() takes a const void *
+#define cudaFuncSetAttribute(func, attr, value) hipFuncSetAttribute((const void *)(func), attr, value)
+#define cudaFuncAttributeMaxDynamicSharedMemorySize hipFuncAttributeMaxDynamicSharedMemorySize
 #define cudaGetDevice hipGetDevice
 #define cudaGetDeviceCount hipGetDeviceCount
 #define cudaGetDeviceProperties hipGetDeviceProperties
@@ -72,6 +87,7 @@
 #define cudaMemset hipMemset
 #define cudaMemsetAsync hipMemsetAsync
 #define cudaMemGetInfo hipMemGetInfo
+#define cudaOccupancyMaxActiveBlocksPerMultiprocessor hipOccupancyMaxActiveBlocksPerMultiprocessor
 #define cudaOccupancyMaxPotentialBlockSize hipOccupancyMaxPotentialBlockSize
 #define cudaSetDevice hipSetDevice
 #define cudaStreamCreateWithFlags hipStreamCreateWithFlags
@@ -80,7 +96,7 @@
 #define cudaStreamNonBlocking hipStreamNonBlocking
 #define cudaStreamPerThread hipStreamPerThread
 #define cudaStreamSynchronize hipStreamSynchronize
-#define cudaStreamWaitEvent(stream, event, flags) hipStreamWaitEvent(stream, event, flags)
+#define cudaStreamWaitEvent hipStreamWaitEvent
 #define cudaStream_t hipStream_t
 #define cudaSuccess hipSuccess
 #define __trap() do { abort(); __builtin_unreachable(); } while(0)
@@ -93,6 +109,22 @@
 #define CUBLAS_STATUS_EXECUTION_FAILED HIPBLAS_STATUS_EXECUTION_FAILED
 #define CUBLAS_STATUS_INTERNAL_ERROR HIPBLAS_STATUS_INTERNAL_ERROR
 #define CUBLAS_STATUS_NOT_SUPPORTED HIPBLAS_STATUS_NOT_SUPPORTED
+
+// hipblasDatatype_t was deprecated in ROCm 6.5 and the GEMM entry points now take the
+// dedicated compute and data types instead
+#if HIP_VERSION >= 60500000
+#define CUBLAS_COMPUTE_16F HIPBLAS_COMPUTE_16F
+#define CUBLAS_COMPUTE_32F HIPBLAS_COMPUTE_32F
+#define CUBLAS_COMPUTE_32F_FAST_16F HIPBLAS_COMPUTE_32F_FAST_16F
+#define cublasComputeType_t hipblasComputeType_t
+#define cudaDataType_t hipDataType
+#else
+#define CUBLAS_COMPUTE_16F HIPBLAS_R_16F
+#define CUBLAS_COMPUTE_32F HIPBLAS_R_32F
+#define CUBLAS_COMPUTE_32F_FAST_16F HIPBLAS_R_32F
+#define cublasComputeType_t hipblasDatatype_t
+#define cudaDataType_t hipblasDatatype_t
+#endif // HIP_VERSION >= 60500000
 
 #define __CUDA_ARCH__ 1300
 
@@ -113,6 +145,22 @@
 #ifndef __has_builtin
     #define __has_builtin(x) 0
 #endif
+
+typedef __hip_bfloat16  nv_bfloat16;
+typedef __hip_bfloat162 nv_bfloat162;
+
+// hipBLAS spells a half as an unsigned short, so the pointers need a cast the cuBLAS call does not
+static inline hipblasStatus_t ggml_cuda_hgemm_strided_batched(
+        hipblasHandle_t handle, hipblasOperation_t transA, hipblasOperation_t transB, int m, int n, int k,
+        const half * alpha, const half * AP, int lda, long long strideA,
+        const half * BP, int ldb, long long strideB,
+        const half * beta, half * CP, int ldc, long long strideC, int batchCount) {
+    return hipblasHgemmStridedBatched(handle, transA, transB, m, n, k,
+            (const hipblasHalf *)alpha, (const hipblasHalf *)AP, lda, strideA,
+            (const hipblasHalf *)BP, ldb, strideB,
+            (const hipblasHalf *)beta, (hipblasHalf *)CP, ldc, strideC, batchCount);
+}
+#define cublasHgemmStridedBatched ggml_cuda_hgemm_strided_batched
 
 typedef int8_t int8x4_t __attribute__((ext_vector_type(4)));
 typedef uint8_t uint8x4_t __attribute__((ext_vector_type(4)));

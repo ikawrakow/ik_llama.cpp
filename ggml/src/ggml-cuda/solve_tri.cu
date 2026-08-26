@@ -2,7 +2,6 @@
 #include "ggml.h"
 #include "solve_tri.cuh"
 #include "ggml-cuda.h"
-#include <cublas_v2.h>
 #include <cstdio>
 
 #define MAX_N_FAST 64

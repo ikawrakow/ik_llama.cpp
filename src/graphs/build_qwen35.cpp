@@ -64,11 +64,6 @@ ggml_cgraph * llm_build_context::build_qwen35moe() {
             inpL = cur;
         }
 
-        if (lctx.cparams.mtp) {
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
-        }
-
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
         cb(cur, "result_output", -1);
     }
@@ -133,14 +128,6 @@ ggml_cgraph * llm_build_context::build_qwen35() {
             cb(cur, "l_out", il);
 
             inpL = cur;
-        }
-
-        if (lctx.cparams.mtp) {
-            //struct ggml_tensor * embd_copy = ggml_dup(ctx0, inpL);
-            //cb(embd_copy, "result_mtp_embd", -1);
-            //ggml_set_output(embd_copy);
-            cb(inpL, "result_mtp_embd", -1);
-            ggml_set_output(inpL);
         }
 
         cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);

@@ -1,0 +1,36 @@
+#version 450
+
+#include "dequant_head.comp"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    // Each thread handles 1 subblock (1 scale and 32 quantized values)
+    const uint ib = gl_WorkGroupID.x * 32 + gl_LocalInvocationID.x / 8;
+
+    if (ib >= p.nel / 256) {
+        return;
+    }
+
+    const uint ib32 = gl_LocalInvocationID.x % 8;
+
+    const uint blocks_per_row = p.K / QUANT_K;
+    const uint row_word = (ib / blocks_per_row) * a_row_words(p.K);
+    const uint blk = a_block_word(row_word, ib % blocks_per_row);
+
+    // shb[] occupies the first 8 words of the block, ql[] the next 16, qh[] the last 8
+    const uint shb = data_a_u32[blk + ib32];
+    uint offset;
+    const float sl = iq4_kt_scale(row_word, shb, offset);
+
+    const uint b_idx = 256 * ib + 32 * ib32;
+    [[unroll]] for (uint ig = 0; ig < 8; ++ig) {
+        uint x = iq4_kt_index(blk, shb, ib32, ig, offset);
+
+        [[unroll]] for (uint k = 0; k < 4; ++k) {
+            data_b[b_idx + 4 * ig + k] = D_TYPE(sl * iq4_kt_next(x));
+        }
+    }
+}

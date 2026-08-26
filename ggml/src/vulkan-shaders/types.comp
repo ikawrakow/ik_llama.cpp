@@ -1356,6 +1356,121 @@ void init_iq_shmem(uvec3 wgsize)
 }
 #endif
 
+// IQ4_KS and IQ4_KT rows are one f32 scale followed by the row's blocks, so rows are not a
+// whole number of blocks apart. These two are addressed by word through a uint32_t alias of
+// binding 0; both block sizes and the prefix are multiples of 4 bytes, so strides are exact.
+// The prefix is one word for these two types; a type with a different row_meta_size needs
+// its own stride.
+#define A_ROW_META_WORDS 1
+
+#define QUANT_K_IQ4_KS 256
+#define QUANT_R_IQ4_KS 1
+
+struct block_iq4_ks
+{
+    uint8_t scales[QUANT_K_IQ4_KS/32];
+    uint8_t qs[QUANT_K_IQ4_KS/2];
+};
+
+#if defined(DATA_A_IQ4_KS)
+#define QUANT_K QUANT_K_IQ4_KS
+#define QUANT_R QUANT_R_IQ4_KS
+#define A_TYPE block_iq4_ks
+#define A_TYPE_ROW_META
+#define BLOCK_WORDS 34
+#endif
+
+#define QUANT_K_IQ4_KT 256
+#define QUANT_R_IQ4_KT 1
+
+struct block_iq4_kt
+{
+    uint32_t qs[QUANT_K_IQ4_KT/8];
+};
+
+#if defined(DATA_A_IQ4_KT)
+#define QUANT_K QUANT_K_IQ4_KT
+#define QUANT_R QUANT_R_IQ4_KT
+#define A_TYPE block_iq4_kt
+#define A_TYPE_ROW_META
+#define BLOCK_WORDS 32
+#endif
+
+#if defined(A_TYPE_ROW_META)
+layout (binding = 0) readonly buffer A_U32 {uint data_a_u32[];};
+
+uint a_row_words(uint ncols) {
+    return A_ROW_META_WORDS + (ncols / QUANT_K) * BLOCK_WORDS;
+}
+
+uint a_block_word(uint row_word, uint ib) {
+    return row_word + A_ROW_META_WORDS + ib * BLOCK_WORDS;
+}
+
+uint a_byte(uint base_word, uint idx) {
+    return (data_a_u32[base_word + idx / 4] >> (8 * (idx % 4))) & 0xFF;
+}
+
+float a_row_scale(uint row_word) {
+    return uintBitsToFloat(data_a_u32[row_word]);
+}
+#endif
+
+#if defined(DATA_A_IQ4_KS)
+const int8_t kvalues_iq4k_const[32] = {
+    int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),
+    int8_t(1), int8_t(13), int8_t(25), int8_t(38), int8_t(53), int8_t(69), int8_t(89), int8_t(113),
+    int8_t(-123), int8_t(-100), int8_t(-79), int8_t(-61), int8_t(-45), int8_t(-31), int8_t(-18), int8_t(-6),
+    int8_t(5), int8_t(17), int8_t(29), int8_t(42), int8_t(57), int8_t(73), int8_t(93), int8_t(117)
+};
+
+shared FLOAT_TYPE kvalues_iq4k[32];
+
+#define NEEDS_INIT_IQ_SHMEM
+void init_iq_shmem(uvec3 wgsize)
+{
+    // copy the table into shared memory and sync
+    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4k.length(); i += wgsize.x) {
+        kvalues_iq4k[i] = FLOAT_TYPE(kvalues_iq4k_const[i]);
+    }
+    barrier();
+}
+
+// scales[ib32]: bits 1..7 signed magnitude, bit 0 selects the codebook half (-> vo)
+float iq4_ks_scale(uint row_word, uint blk, uint ib32, out uint vo)
+{
+    const uint sc = a_byte(blk, ib32);
+    vo = (sc & 1) << 4;
+    return a_row_scale(row_word) * float(int(sc & 254) - 127);
+}
+#endif
+
+#if defined(DATA_A_IQ4_KT)
+// one trellis step; 4 weights per index. See QuantizerIQKT::set_values
+float iq4_kt_next(inout uint x)
+{
+    x *= 0xCBAC1FED;
+    const uint s = x & 0x3F3F3F3F;
+    return float(int((s & 0xFF) + ((s >> 8) & 0xFF) + ((s >> 16) & 0xFF) + (s >> 24)) - 126);
+}
+
+// shb low byte: bits 1..7 signed scale, bit 0 selects the index-range half (-> offset)
+float iq4_kt_scale(uint row_word, uint shb, out uint offset)
+{
+    offset = (shb & 1) != 0 ? 4096 + 32768 : 4096;
+    return a_row_scale(row_word) * float(int((shb & 0xFF) >> 1) - 64);
+}
+
+// 15-bit index: 8b ql[jj], one qh[] nibble (low for jj < 32, high above), 3b from shb
+uint iq4_kt_index(uint blk, uint shb, uint ib32, uint ig, uint offset)
+{
+    const uint jj = 8 * ib32 + ig;
+    const uint ql = a_byte(blk + 8, jj);
+    const uint qh = a_byte(blk + 24, jj % 32);
+    return offset + (ql | ((qh << (8 - 4 * (jj / 32))) & 0xF00) | (((shb >> (8 + 3 * ig)) & 7) << 12));
+}
+#endif
+
 // returns the bfloat value in the low 16b.
 // See ggml_compute_fp32_to_bf16
 uint32_t fp32_to_bf16(float f)

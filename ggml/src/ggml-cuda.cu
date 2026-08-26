@@ -307,6 +307,7 @@ const ggml_cuda_device_info & ggml_cuda_info() {
 
 /* ---------- hot-swap: invalidate all cached CUDA graphs ---------- */
 extern "C" void ggml_backend_cuda_invalidate_graphs(const void * model) {
+#ifdef USE_CUDA_GRAPH
     auto & info = const_cast<ggml_cuda_device_info &>(ggml_cuda_info());
     if (auto it = info.all_ctx.find(model); it != info.all_ctx.end()) {
         for (auto ctx : it->second) {
@@ -317,6 +318,9 @@ extern "C" void ggml_backend_cuda_invalidate_graphs(const void * model) {
     } else {
         fprintf(stderr, "================================= %s: did not find entry for model at %p\n", __func__, model);
     }
+#else
+    GGML_UNUSED(model);
+#endif // USE_CUDA_GRAPH
     //for (int i = 0; i < info.device_count; ++i) {
     //    if (info.all_ctx[i]) {
     //        info.all_ctx[i]->cuda_graphs.clear();
@@ -2573,7 +2577,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                                || dst->op == GGML_OP_PERMUTE || dst->op == GGML_OP_NONE) {
             ++node_n; continue;
         }
-        if (dst->op != GGML_OP_MUL_MAT || dst->src[1] != src1 || !ggml_is_quantized(dst->src[0]->type)) break;
+        if (dst->op != GGML_OP_MUL_MAT || dst->src[1] != src1 || !ggml_is_quantized(dst->src[0]->type) ||
+                !ggml_cuda_should_use_mmq(dst->src[0]->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[1])) break;
         if (!is_gemv && mmq_get_q8_1_ds_layout(src0->type) != mmq_get_q8_1_ds_layout(dst->src[0]->type)) break;
         if (is_gemv) {
             if (fusion && node_n + 2 < cgraph->n_nodes &&
@@ -4506,6 +4511,8 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
         graph->use_cpy_indirection = true;
         // copy pointers to GPU so they can be accessed via indirection within CUDA graph
         ggml_cuda_cpy_dest_ptrs_copy(graph, graph->cpy_dest_ptrs.data(), graph->cpy_dest_ptrs.size(), stream);
+    } else {
+        graph->use_cpy_indirection = false;
     }
 
     return use_cuda_graph;
@@ -4514,6 +4521,9 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
     graph_node_properties->node_address = node->data;
     graph_node_properties->node_op = node->op;
+    graph_node_properties->type = node->type;
+    graph_node_properties->view_src = node->view_src;
+    graph_node_properties->view_offs = node->view_offs;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         graph_node_properties->ne[i] = node->ne[i];
         graph_node_properties->nb[i] = node->nb[i];
@@ -4524,45 +4534,12 @@ static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_p
     memcpy(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
 
-static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
-    if (node->data != graph_node_properties->node_address &&
-          node->op != GGML_OP_CPY &&
-          node->op != GGML_OP_VIEW) {
-        return false;
-    }
-
-    if (node->op != graph_node_properties->node_op) {
-        return false;
-    }
-
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        if (node->ne[i] != graph_node_properties->ne[i]) {
-            return false;
-        }
-        if (node->nb[i] != graph_node_properties->nb[i]) {
-            return false;
-        }
-    }
-
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (node->src[i] &&
-            node->src[i]->data != graph_node_properties->src_address[i] &&
-            node->op != GGML_OP_VIEW &&
-            !(node->op == GGML_OP_CPY && i == 1)
-        ) {
-            return false;
-        }
-    }
-
-    if ((node->op == GGML_OP_SCALE || node->op == GGML_OP_LATENT_ATTN) &&
-        memcmp(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
-        return false;
-    }
-
-    return true;
-}
-
 static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph * cgraph) {
+
+    if (cgraph->uid != 0 && graph->uid == cgraph->uid) {
+        GGML_ASSERT(graph->ggml_graph_properties.size() == (size_t)cgraph->n_nodes);
+        return false;
+    }
 
     bool cuda_graph_update_required = false;
 
@@ -4579,15 +4556,15 @@ static bool is_cuda_graph_update_required(ggml_cuda_graph * graph, ggml_cgraph *
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
     // and store properties to allow this comparison for the next token
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        bool has_matching_properties = true;
-        if (!cuda_graph_update_required) {
-            has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &graph->ggml_graph_properties[i]);
-        }
-        if (!has_matching_properties) {
+        ggml_graph_node_properties new_props;
+        set_ggml_graph_node_properties(cgraph->nodes[i], &new_props);
+        if (memcmp(&graph->ggml_graph_properties[i], &new_props, sizeof(new_props)) != 0) {
             cuda_graph_update_required = true;
+            memcpy(&graph->ggml_graph_properties[i], &new_props, sizeof(new_props));
         }
-        set_ggml_graph_node_properties(cgraph->nodes[i], &graph->ggml_graph_properties[i]);
     }
+
+    graph->uid = cgraph->uid;
 
     return cuda_graph_update_required;
 }
@@ -5150,11 +5127,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_LATENT_ATTN:
             return ggml_cuda_latent_attn_is_supported(op);
         case GGML_OP_FLASH_ATTN_EXT:
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
-            return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;
-#else
             return ggml_cuda_fattn_is_supported(*cuda_ctx, op);
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         default:
             return false;
     }

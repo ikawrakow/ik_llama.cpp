@@ -361,7 +361,13 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
 
-    auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
+    // stop at the trimmed closer only before an arg tag, so one inside a value does not match
+    std::vector<std::string> value_end = { arguments.value_suffix };
+    auto trimmed_suffix = trim_whitespace(arguments.value_suffix);
+    if (trimmed_suffix != arguments.value_suffix && !arguments.name_prefix.empty()) {
+        value_end.push_back(trimmed_suffix + arguments.name_prefix);
+    }
+    auto until_suffix = p.rule("until-suffix", p.until_one_of(value_end));
 
     common_peg_parser tool_choice = p.choice();
 
@@ -394,7 +400,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                 p.tool_arg_json_value(p.schema(
                                     p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
                                     p.space()) +
-                           p.tool_arg_close(p.literal(arguments.value_suffix)));
+                           p.tool_arg_close(p.optspace(arguments.value_suffix)));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
             if (is_required) {

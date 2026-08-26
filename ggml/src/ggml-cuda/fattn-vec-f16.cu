@@ -106,7 +106,7 @@ bool ggml_cuda_fattn_vec_f16_is_supported([[maybe_unused]] ggml_backend_cuda_con
     auto K = dst->src[1];
     auto V = dst->src[2];
     if (K->ne[0] != V->ne[0]) {
-        if (K->ne[0] != 192 || V->ne[2] != 128) return false;
+        if (K->ne[0] != 192 || V->ne[0] != 128) return false;
         if (K->type != V->type) return false;
         return K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0;
     }

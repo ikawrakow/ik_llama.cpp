@@ -2319,6 +2319,10 @@ bool llama_model_is_step35(const llama_model * model) {
     return model && model->arch == LLM_ARCH_STEP35;
 }
 
+bool llama_model_is_qwen35_family(const llama_model * model) {
+    return model && (model->arch == LLM_ARCH_QWEN35 || model->arch == LLM_ARCH_QWEN35MOE);
+}
+
 enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     if (!model) {
         return LLAMA_MTP_PACKAGE_INVALID;
@@ -2331,13 +2335,15 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     const size_t n_nextn = model->hparams.nextn_predict_layers;
     const bool has_common_package_contract =
         llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
+        llama_model_is_qwen35_family(model) ||
         llama_model_is_gemma4_mtp_assistant(model);
     if (!has_common_package_contract) {
         return n_nextn > 0 ? LLAMA_MTP_PACKAGE_EMBEDDED : LLAMA_MTP_PACKAGE_NONE;
     }
 
     if (n_nextn == 0) {
-        if (llama_model_is_step35(model) || llama_model_is_deepseek4(model)) {
+        if (llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
+            llama_model_is_qwen35_family(model)) {
             for (const auto & layer : model->layers) {
                 if (layer.attn_norm != nullptr) {
                     return LLAMA_MTP_PACKAGE_TARGET_ONLY;
@@ -2353,7 +2359,10 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     }
 
     const size_t first = n_layers - n_nextn;
-    const bool has_tail = model->layers[first].nextn.eh_proj != nullptr;
+    // A Qwen3.5 NextN block loads eh_proj, attn_q and the MLP as optional, so none of them
+    // marks a predictor tail on its own; enorm is required and is present in all of them.
+    const bool has_tail = model->layers[first].nextn.eh_proj != nullptr ||
+        (llama_model_is_qwen35_family(model) && model->layers[first].nextn.enorm != nullptr);
 
     bool has_trunk = false;
     for (size_t il = 0; il < first; ++il) {

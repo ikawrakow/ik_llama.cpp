@@ -577,6 +577,22 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
         }
     }
 }
+#else
+
+// indexer_topk.cu calls this unconditionally, so it needs a definition when there is no CUB.
+// The bitonic sort it falls back to is bounded by the shared memory size, which is the limit
+// CUB is here to lift, so it asserts rather than sorts once ncols gets large
+void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
+                              const float *    x,
+                              int *            dst,
+                              const int        ncols,
+                              const int        nrows,
+                              ggml_sort_order  order,
+                              cudaStream_t     stream) {
+    GGML_UNUSED(pool);
+    argsort_f32_T_cuda(x, dst, ncols, nrows, ncols, order, -1, 0.f, stream);
+}
+
 #endif  // GGML_CUDA_USE_CUB
 
 void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -592,12 +608,12 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
+    enum ggml_sort_order order = (enum ggml_sort_order) dst->op_params[0];
+
 #ifdef GGML_CUDA_USE_CUB
     const int    ncols_pad      = next_power_of_2(ncols);
     const size_t shared_mem     = ncols_pad * sizeof(int);
     const size_t max_shared_mem = ggml_cuda_info().devices[ggml_cuda_get_device()].smpb;
-
-    enum ggml_sort_order order = (enum ggml_sort_order) dst->op_params[0];
 
     if (shared_mem > max_shared_mem || ncols > 1024) {
         ggml_cuda_pool & pool = ctx.pool();
