@@ -550,7 +550,6 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
     }
 
     auto & rows = capture.layer_rows[(size_t) layer_idx];
-    auto & raw_rows = capture.layer_rows_raw[(size_t) layer_idx];
     auto & chunks = capture.layer_chunks[(size_t) layer_idx];
     auto & rows_written = capture.layer_rows_written[(size_t) layer_idx];
     if (rows_written + row_count > capture.expected_rows) {
@@ -572,17 +571,23 @@ static int llama_dflash_capture_eval_callback(struct ggml_tensor * tensor, bool 
     void * readback_dst = nullptr;
     size_t readback_bytes = 0;
     if (capture_type == GGML_TYPE_F32) {
-        readback_dst = rows.data() + (size_t) rows_written * (size_t) row_width;
         readback_bytes = (size_t) row_count * (size_t) row_width * sizeof(float);
     } else {
         const size_t row_bytes = ggml_row_size(capture_type, row_width);
-        const size_t expected_bytes = (size_t) capture.expected_rows * raw_row_stride;
-        if (raw_rows.size() != expected_bytes) {
-            raw_rows.resize(expected_bytes);
-        }
-        readback_dst = raw_rows.data() + byte_offset;
         readback_bytes = (size_t) row_count * row_bytes;
     }
+
+    const size_t rows_bytes = rows.size() * sizeof(float);
+    if (byte_offset > rows_bytes || readback_bytes > rows_bytes - byte_offset) {
+        capture.invalid = true;
+        LLAMA_LOG_WARN("%s: DFlash capture readback exceeds row storage for layer %d: offset=%zu size=%zu capacity=%zu\n",
+                __func__, layer_id, byte_offset, readback_bytes, rows_bytes);
+        return 2;
+    }
+
+    readback_dst = capture_type == GGML_TYPE_F32
+        ? static_cast<void *>(rows.data() + (size_t) rows_written * (size_t) row_width)
+        : static_cast<void *>(reinterpret_cast<uint8_t *>(rows.data()) + byte_offset);
 
     ggml_backend_tensor_get_async(backend, tensor, readback_dst, 0, readback_bytes);
 
@@ -610,7 +615,6 @@ bool llama_set_dflash_capture_layers(
     auto capture = std::make_unique<llama_context::dflash_runtime::capture_state>();
     capture->layer_ids.assign(layer_ids, layer_ids + n_layers);
     capture->layer_rows.resize((size_t) n_layers);
-    capture->layer_rows_raw.resize((size_t) n_layers);
     capture->layer_chunks.resize((size_t) n_layers);
     capture->layer_rows_written.assign((size_t) n_layers, 0);
     capture->layer_seen_batch_id.assign((size_t) n_layers, 0);
@@ -710,7 +714,6 @@ static bool llama_spec_prepare_dflash_capture(
     n_layers = (int32_t) capture.layer_ids.size();
     if (capture.invalid || row_count <= 0 || row_width <= 0 || n_layers <= 0 ||
             capture.expected_rows <= 0 || capture.layer_rows.size() != (size_t) n_layers ||
-            capture.layer_rows_raw.size() != (size_t) n_layers ||
             capture.layer_chunks.size() != (size_t) n_layers ||
             capture.layer_rows_written.size() != (size_t) n_layers) {
         return false;
@@ -736,8 +739,9 @@ static bool llama_spec_prepare_dflash_capture(
             return false;
         }
 
-        const auto & raw_rows = capture.layer_rows_raw[(size_t) layer_idx];
         const auto & chunks = capture.layer_chunks[(size_t) layer_idx];
+        const size_t rows_bytes = rows.size() * sizeof(float);
+        std::vector<uint8_t> chunk_buffer;
         for (const auto & chunk : chunks) {
             if (chunk.row_offset < 0 || chunk.row_count <= 0 ||
                     chunk.row_offset + chunk.row_count > row_count) {
@@ -755,13 +759,17 @@ static bool llama_spec_prepare_dflash_capture(
 
             const size_t row_bytes = ggml_row_size(chunk.type, row_width);
             const size_t chunk_bytes = (size_t) chunk.row_count * row_bytes;
-            if (chunk.byte_offset > raw_rows.size() ||
-                    chunk_bytes > raw_rows.size() - chunk.byte_offset) {
+            if (chunk.byte_offset > rows_bytes ||
+                    chunk_bytes > rows_bytes - chunk.byte_offset) {
                 return false;
             }
 
+            chunk_buffer.resize(chunk_bytes);
+            std::memcpy(chunk_buffer.data(),
+                    reinterpret_cast<const uint8_t *>(rows.data()) + chunk.byte_offset,
+                    chunk_bytes);
             traits.to_float(
-                    raw_rows.data() + chunk.byte_offset,
+                    chunk_buffer.data(),
                     rows.data() + (size_t) chunk.row_offset * (size_t) row_width,
                     (int64_t) chunk.row_count * row_width);
         }

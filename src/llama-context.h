@@ -448,7 +448,6 @@ struct llama_context {
         struct capture_state {
             std::vector<int32_t> layer_ids;
             std::vector<std::vector<float>> layer_rows;
-            std::vector<std::vector<uint8_t>> layer_rows_raw;
             struct capture_chunk {
                 int32_t row_offset = 0;
                 int32_t row_count = 0;
