@@ -73,8 +73,12 @@ struct rpc_tensor {
     uint64_t id;
     uint32_t type;
     uint64_t buffer;
-    uint32_t ne[GGML_MAX_DIMS];
-    uint32_t nb[GGML_MAX_DIMS];
+    // 64-bit to match ggml_tensor (int64_t ne, size_t nb). A 32-bit nb silently
+    // truncated any stride >= 4 GiB on the wire; the GLM-5.2 DSA indexer query's
+    // per-token stride crosses that at ~26k tokens, corrupting the stride on the
+    // remote server.
+    uint64_t ne[GGML_MAX_DIMS];
+    uint64_t nb[GGML_MAX_DIMS];
     uint32_t op;
     int32_t  op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
     int32_t  flags;
