@@ -237,15 +237,15 @@ struct ggml_backend_rpc_buffer_type_context {
 struct graph_cache {
 
     bool is_cached(const ggml_cgraph * cgraph) {
-        if ((int)last_graph.size() != cgraph->n_nodes) {
-            return false;
-        }
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            if (memcmp(&last_graph[i], cgraph->nodes[i], sizeof(ggml_tensor)) != 0) {
-                return false;
-            }
-        }
-        return true;
+        // Disabled: comparing graphs by memcmp of the tensor structs treats successive
+        // same-shape prefill micro-batches as identical, so they take the
+        // GRAPH_RECOMPUTE path and re-run a stored graph against a grown KV context.
+        // Stale KV/mask views then make context-dependent ops (e.g. the GLM-5.2 DSA
+        // indexer) read past their buffers -> server crash. Always send the full graph
+        // instead (metadata only; tensor data stays in RPC buffers). Upstream
+        // llama.cpp retired this cache design in ggml-org/llama.cpp#22701.
+        (void)cgraph;
+        return false;
     }
 
     void add(const ggml_cgraph * cgraph) {
