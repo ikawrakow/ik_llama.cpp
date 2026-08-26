@@ -1144,6 +1144,15 @@ extern "C" {
     // Returns LLAMA_TOKEN_NULL if argmax is not available (falls back to logits path).
     LLAMA_API llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t i);
 
+    // Copy DFlash2 selector lattice after a draft decode with top_k*top_k scores
+    // and top_k candidate IDs per position.
+    LLAMA_API int32_t llama_get_dflash_draft_lattice_top_k(struct llama_context * ctx);
+    LLAMA_API int32_t llama_get_dflash_draft_lattice_n_positions(struct llama_context * ctx);
+    LLAMA_API bool llama_copy_dflash_draft_lattice(
+            struct llama_context * ctx,
+            float * scores, size_t score_count,
+            int32_t * ids, size_t id_count);
+
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,
     // the embeddings for which llama_batch.logits[i] != 0 are stored contiguously

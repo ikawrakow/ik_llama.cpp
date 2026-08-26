@@ -101,6 +101,10 @@ class Keys:
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
         ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
+        CONV_KERNEL_SIZE                  = "{arch}.conv_kernel_size"
+        CONV_GROUP_SIZE                   = "{arch}.conv_group_size"
+        SELECTOR_RANK                     = "{arch}.selector_rank"
+        SELECTOR_TOP_K                    = "{arch}.selector_top_k"
 
     class Attention:
         HEAD_COUNT        = "{arch}.attention.head_count"
@@ -255,6 +259,7 @@ class MODEL_ARCH(IntEnum):
     GEMMA4       = auto()
     GEMMA4_MTP   = auto()
     DFLASH       = auto()
+    DFLASH2      = auto()
     DFLASH_DRAFT = auto()
     STARCODER2   = auto()
     MAMBA        = auto()
@@ -406,6 +411,13 @@ class MODEL_TENSOR(IntEnum):
     DSPARK_MARKOV_W1     = auto() # DSpark Markov lookup matrix
     DSPARK_MARKOV_W2     = auto() # DSpark Markov projection matrix
     DSPARK_CONF_PROJ     = auto() # DSpark confidence projection
+    DFLASH_ATTN_CONV_BASE = auto()
+    DFLASH_ATTN_CONV_PROJ = auto()
+    DFLASH_FFN_CONV_BASE  = auto()
+    DFLASH_FFN_CONV_PROJ  = auto()
+    DFLASH_SELECTOR_PREV  = auto()
+    DFLASH_SELECTOR_NEXT  = auto()
+    DFLASH_SELECTOR_HIDDEN = auto()
     ATTN_KV              = auto()
     ATTN_KV_NORM         = auto()
     ATTN_OUT_A           = auto()
@@ -476,6 +488,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GEMMA4:         "gemma4",
     MODEL_ARCH.GEMMA4_MTP:     "gemma4_mtp",
     MODEL_ARCH.DFLASH:         "dflash",
+    MODEL_ARCH.DFLASH2:        "dflash",
     MODEL_ARCH.DFLASH_DRAFT:   "dflash-draft",
     MODEL_ARCH.STARCODER2:     "starcoder2",
     MODEL_ARCH.MAMBA:          "mamba",
@@ -638,6 +651,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
     MODEL_TENSOR.DSPARK_CONF_PROJ:          "conf_proj",
+    MODEL_TENSOR.DFLASH_ATTN_CONV_BASE:     "blk.{bid}.attn_conv_base",
+    MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ:     "blk.{bid}.attn_conv_proj",
+    MODEL_TENSOR.DFLASH_FFN_CONV_BASE:      "blk.{bid}.ffn_conv_base",
+    MODEL_TENSOR.DFLASH_FFN_CONV_PROJ:      "blk.{bid}.ffn_conv_proj",
+    MODEL_TENSOR.DFLASH_SELECTOR_PREV:      "selector_predecessor",
+    MODEL_TENSOR.DFLASH_SELECTOR_NEXT:      "selector_successor",
+    MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN:    "selector_hidden",
     # openPangu-2.0
     MODEL_TENSOR.INDEXER_K_NORM:            "blk.{bid}.attn_indexer_k_norm",
     MODEL_TENSOR.INDEXER_PROJ:              "blk.{bid}.attn_indexer_weights_proj",
@@ -1570,6 +1590,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DSPARK_MARKOV_W1,
         MODEL_TENSOR.DSPARK_MARKOV_W2,
         MODEL_TENSOR.DSPARK_CONF_PROJ,
+    ],
+    MODEL_ARCH.DFLASH2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.DFLASH_FC,
+        MODEL_TENSOR.DFLASH_HIDDEN_NORM,
+        MODEL_TENSOR.DFLASH_ATTN_CONV_BASE,
+        MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ,
+        MODEL_TENSOR.DFLASH_FFN_CONV_BASE,
+        MODEL_TENSOR.DFLASH_FFN_CONV_PROJ,
+        MODEL_TENSOR.DFLASH_SELECTOR_PREV,
+        MODEL_TENSOR.DFLASH_SELECTOR_NEXT,
+        MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN,
     ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,

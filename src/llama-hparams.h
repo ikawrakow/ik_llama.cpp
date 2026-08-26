@@ -170,6 +170,10 @@ struct llama_hparams {
     uint32_t dflash_n_target_features = 0;
     uint32_t dflash_n_target_layers = 0;
     uint32_t dflash_target_layer_ids[8] = {};
+    uint32_t dflash_conv_kernel_size = 0;
+    uint32_t dflash_conv_group_size = 0;
+    uint32_t dflash_selector_rank = 0;
+    uint32_t dflash_selector_top_k = 0;
     float    dflash_backbone_rotary_base = 0.0f;
     bool     dflash_laguna = false;
     bool     dflash_dsv4 = false;
@@ -197,6 +201,10 @@ struct llama_hparams {
         if (this->dflash_mask_token_id != other.dflash_mask_token_id) return true;
         if (this->dflash_n_target_features != other.dflash_n_target_features) return true;
         if (this->dflash_n_target_layers != other.dflash_n_target_layers) return true;
+        if (this->dflash_conv_kernel_size != other.dflash_conv_kernel_size) return true;
+        if (this->dflash_conv_group_size != other.dflash_conv_group_size) return true;
+        if (this->dflash_selector_rank != other.dflash_selector_rank) return true;
+        if (this->dflash_selector_top_k != other.dflash_selector_top_k) return true;
         if (this->dflash_laguna != other.dflash_laguna) return true;
         if (this->dflash_dsv4   != other.dflash_dsv4)   return true;
         if (this->n_layer       != other.n_layer)       return true;

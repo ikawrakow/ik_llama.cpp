@@ -24,6 +24,11 @@ using common_speculative_feature_view = llama_spec_feature_view;
 static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_NONE = LLAMA_SPEC_FEATURE_NONE;
 static constexpr common_speculative_feature_kind COMMON_SPECULATIVE_FEATURE_HIDDEN_STATE = LLAMA_SPEC_FEATURE_HIDDEN_STATE;
 
+struct common_speculative_token_dist {
+    llama_tokens ids;
+    std::vector<float> probs;
+};
+
 struct common_speculative_checkpoint {
     bool valid = false;
     int mode = LLAMA_SPEC_CKPT_NONE;
@@ -36,6 +41,7 @@ struct common_speculative_checkpoint {
 
 struct common_speculative_draft_result {
     llama_tokens tokens;
+    std::vector<common_speculative_token_dist> proposal_dists; // Sparse proposal distributions populated by stochastic DFlash2
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
     bool target_only = false;
 };
@@ -134,7 +140,8 @@ common_speculative_draft_result common_speculative_draft_ex(
                      const llama_tokens & prompt,
                             llama_token   id_last,
                             llama_pos     draft_base_pos = -1,
-                            llama_seq_id  draft_seq_id = 0);
+                            llama_seq_id  draft_seq_id = 0,
+                            const common_params_sampling * sampling = nullptr);
 
 int common_speculative_get_configured_n_max(const common_speculative * spec);
 

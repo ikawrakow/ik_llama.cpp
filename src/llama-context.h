@@ -448,6 +448,13 @@ struct llama_context {
         struct capture_state {
             std::vector<int32_t> layer_ids;
             std::vector<std::vector<float>> layer_rows;
+            struct capture_chunk {
+                int32_t row_offset = 0;
+                int32_t row_count = 0;
+                size_t byte_offset = 0;
+                ggml_type type = GGML_TYPE_COUNT;
+            };
+            std::vector<std::vector<capture_chunk>> layer_chunks;
             std::vector<int32_t> layer_rows_written;
             int32_t row_count = 0;
             int32_t row_width = 0;
@@ -477,6 +484,11 @@ struct llama_context {
 
         std::vector<llama_token> draft_tokens;
         struct ggml_tensor * draft_tokens_tensor = nullptr;
+        struct ggml_tensor * draft_lattice_tensor = nullptr;
+        struct ggml_tensor * draft_lattice_ids_tensor = nullptr;
+        std::vector<float> draft_lattice;
+        std::vector<int32_t> draft_lattice_ids;
+        int32_t draft_lattice_top_k = 0;
     };
     dflash_runtime dflash;
     using dflash_capture_state = dflash_runtime::capture_state;

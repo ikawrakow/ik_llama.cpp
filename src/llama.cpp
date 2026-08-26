@@ -4010,6 +4010,10 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight" ||
+                (model.arch == LLM_ARCH_DFLASH2 &&
+                (name == "fc.weight" || name == "output_norm.weight" ||
+                 name == "selector_predecessor.weight" || name == "selector_successor.weight" ||
+                 name == "selector_hidden.weight" || name == "enc.output_norm.weight")) ||
                 (model.arch == LLM_ARCH_DFLASH &&
                 (name == "fc.weight" || name == "enc.output_norm.weight")) ||
                 name.rfind("dflash_aux_hidden_norm.", 0) == 0 ||
@@ -5242,7 +5246,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         auto tim1 = ggml_time_us();
 #endif
         const int64_t n_tokens = batch.n_tokens;
-        if (n_tokens > 1 && !cparams.mtp && lctx.n_outputs < n_tokens) {
+        if (n_tokens > 1 && !cparams.mtp && lctx.n_outputs < n_tokens &&
+                !llm_arch_requires_all_graph_output_rows(lctx.model.arch)) {
             GGML_ASSERT(lctx.inp_out_ids && "every model that can must skip unused outputs");
         }
 
@@ -6589,6 +6594,8 @@ static int llama_decode_internal(
         //}
 
         lctx.dflash.draft_tokens.clear();
+        lctx.dflash.draft_lattice.clear();
+        lctx.dflash.draft_lattice_ids.clear();
         if (lctx.dflash.draft_tokens_tensor != nullptr) {
             ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(
                 lctx.sched, lctx.dflash.draft_tokens_tensor);
@@ -6599,6 +6606,53 @@ static int llama_decode_internal(
                     lctx.dflash.draft_tokens_tensor,
                     lctx.dflash.draft_tokens.data(), 0,
                     (size_t) n_tokens_argmax * sizeof(int32_t));
+            }
+        }
+
+        if (lctx.model.arch == LLM_ARCH_DFLASH2 && lctx.dflash.draft_lattice_tensor != nullptr &&
+                lctx.dflash.draft_lattice_ids_tensor != nullptr) {
+            ggml_backend_t backend_lattice = ggml_backend_sched_get_tensor_backend(
+                    lctx.sched, lctx.dflash.draft_lattice_tensor);
+            ggml_backend_t backend_lattice_ids = ggml_backend_sched_get_tensor_backend(
+                    lctx.sched, lctx.dflash.draft_lattice_ids_tensor);
+            if (backend_lattice != nullptr && backend_lattice_ids != nullptr) {
+                const size_t n_values = (size_t) lctx.dflash.draft_lattice_tensor->ne[0] *
+                        (size_t) lctx.dflash.draft_lattice_tensor->ne[1];
+                lctx.dflash.draft_lattice.resize(n_values);
+                const int32_t top_k = lctx.dflash.draft_lattice_top_k;
+                const int32_t width = top_k * top_k;
+                const int32_t n_positions = (int32_t) lctx.dflash.draft_lattice_tensor->ne[1];
+                const size_t n_ids = (size_t) top_k * (size_t) n_positions;
+                lctx.dflash.draft_lattice_ids.resize(n_ids);
+                ggml_backend_tensor_get_async(backend_lattice,
+                        lctx.dflash.draft_lattice_tensor,
+                        lctx.dflash.draft_lattice.data(), 0,
+                        n_values * sizeof(float));
+                ggml_backend_tensor_get_async(backend_lattice_ids,
+                        lctx.dflash.draft_lattice_ids_tensor,
+                        lctx.dflash.draft_lattice_ids.data(), 0,
+                        n_ids * sizeof(int32_t));
+                llama_synchronize(&lctx);
+                std::vector<llama_token> selected;
+                selected.reserve(std::max(0, n_positions - 1));
+                int32_t previous = 0;
+                for (int32_t pos = 1; pos < n_positions; ++pos) {
+                    const float * row = lctx.dflash.draft_lattice.data() + (size_t) pos * width;
+                    int32_t best = 0;
+                    float best_score = -INFINITY;
+                    for (int32_t current = 0; current < top_k; ++current) {
+                        const float score = row[current + top_k * previous];
+                        if (score > best_score) {
+                            best_score = score;
+                            best = current;
+                        }
+                    }
+                    selected.push_back((llama_token) lctx.dflash.draft_lattice_ids[(size_t) pos * top_k + best]);
+                    previous = best;
+                }
+                if (!selected.empty()) {
+                    lctx.dflash.draft_tokens = std::move(selected);
+                }
             }
         }
 
@@ -6760,10 +6814,14 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && !lctx.prev) {
+    // Keep scheduler alive in case someone dont run graph reuse so
+    // speculative checkpoint restoration can be completed
+    const bool speculative_checkpoint_active =
+        lctx.kv_self.ckpt.selected_spec_mode != LLAMA_SPEC_CKPT_NONE;
+    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && !lctx.prev && !speculative_checkpoint_active) {
         ggml_backend_sched_reset(lctx.sched);
     }
-    else if (lctx.cparams.mtp_op_type != MTP_OP_NONE && !lctx.prev_mtp) {
+    else if (lctx.cparams.mtp_op_type != MTP_OP_NONE && !lctx.prev_mtp && !speculative_checkpoint_active) {
         ggml_backend_sched_reset(lctx.sched);
     }
 #if IK_PRINT_TIMING
@@ -8870,6 +8928,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
         case LLM_ARCH_DFLASH_DRAFT:
+        case LLM_ARCH_DFLASH2:
         case LLM_ARCH_GEMMA4_ASSISTANT:
             return LLAMA_ROPE_TYPE_NEOX;
 
@@ -11735,6 +11794,49 @@ llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t
         return LLAMA_TOKEN_NULL;
     }
     return ctx->dflash.draft_tokens[(size_t) i];
+}
+
+int32_t llama_get_dflash_draft_lattice_top_k(struct llama_context * ctx) {
+    if (ctx == nullptr) {
+        return 0;
+    }
+    llama_synchronize(ctx);
+    return ctx->dflash.draft_lattice_top_k;
+}
+
+int32_t llama_get_dflash_draft_lattice_n_positions(struct llama_context * ctx) {
+    if (ctx == nullptr || ctx->dflash.draft_lattice_top_k <= 0) {
+        return 0;
+    }
+    llama_synchronize(ctx);
+    const size_t top_k = (size_t) ctx->dflash.draft_lattice_top_k;
+    return (int32_t) (ctx->dflash.draft_lattice_ids.size() / top_k);
+}
+
+bool llama_copy_dflash_draft_lattice(
+        struct llama_context * ctx,
+        float * scores, size_t score_count,
+        int32_t * ids, size_t id_count) {
+    if (ctx == nullptr || scores == nullptr || ids == nullptr || ctx->dflash.draft_lattice_top_k <= 0) {
+        return false;
+    }
+    llama_synchronize(ctx);
+    const size_t top_k = (size_t) ctx->dflash.draft_lattice_top_k;
+    const size_t n_positions = ctx->dflash.draft_lattice_ids.size() / top_k;
+    const size_t n_scores = top_k * top_k * n_positions;
+    const size_t n_ids = top_k * n_positions;
+    if (ctx->dflash.draft_lattice.size() != n_scores || score_count < n_scores || id_count < n_ids) {
+        return false;
+    }
+    const int32_t n_vocab = (int32_t) ctx->model.vocab.n_tokens();
+    if (std::any_of(ctx->dflash.draft_lattice_ids.begin(),
+                    ctx->dflash.draft_lattice_ids.begin() + n_ids,
+                    [n_vocab](int32_t token) { return token < 0 || token >= n_vocab; })) {
+        return false;
+    }
+    std::memcpy(scores, ctx->dflash.draft_lattice.data(), n_scores * sizeof(float));
+    std::memcpy(ids, ctx->dflash.draft_lattice_ids.data(), n_ids * sizeof(int32_t));
+    return true;
 }
 
 float * llama_get_embeddings(struct llama_context * ctx) {
