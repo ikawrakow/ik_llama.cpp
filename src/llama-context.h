@@ -474,9 +474,13 @@ struct llama_context {
         input_state inputs;
         int32_t visible_cross_ctx = 0;
         bool dspark = false;
+        bool dspark_confidence_enabled = false;
 
         std::vector<llama_token> draft_tokens;
         struct ggml_tensor * draft_tokens_tensor = nullptr;
+        std::vector<float> draft_confidences;
+        struct ggml_tensor * draft_confidence_tensor = nullptr;
+        bool draft_outputs_synchronized = false;
     };
     dflash_runtime dflash;
     using dflash_capture_state = dflash_runtime::capture_state;

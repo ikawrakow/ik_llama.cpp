@@ -81,6 +81,12 @@ void llama_set_dflash_dspark(struct llama_context * ctx, bool enabled) {
     }
 }
 
+void llama_set_dflash_confidence_enabled(struct llama_context * ctx, bool enabled) {
+    if (ctx != nullptr) {
+        ctx->dflash.dspark_confidence_enabled = enabled;
+    }
+}
+
 int32_t llama_model_dflash_block_size(const struct llama_model * model) {
     return model ? (int32_t) model->hparams.dflash_block_size : 0;
 }
@@ -125,6 +131,12 @@ bool llama_model_dflash_has_dspark_head(const struct llama_model * model) {
     return model != nullptr &&
         model->dspark_markov_w1 != nullptr &&
         model->dspark_markov_w2 != nullptr;
+}
+
+bool llama_model_dflash_has_dspark_confidence_head(const struct llama_model * model) {
+    return model != nullptr &&
+        model->dspark_conf_proj != nullptr &&
+        model->dspark_conf_proj->ne[1] == 1;
 }
 
 static const ggml_tensor * llama_dflash_output_tensor(
