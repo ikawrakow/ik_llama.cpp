@@ -1319,6 +1319,8 @@ common_speculative * common_speculative_init(
     });
 
     llama_context * ctx_dft = nullptr;
+    int32_t dflash_cross_ctx = 0;
+
     if (needs_draft_ctx) {
         if (!params.model_dft) {
             LOG_ERR("%s: draft speculative stage requires a loaded draft model\n", __func__);
@@ -1333,15 +1335,6 @@ common_speculative * common_speculative_init(
                 return nullptr;
             }
 
-            int32_t max_cross_ctx = 0;
-            for (const auto & stage : stages) {
-                if (!common_speculative_type_is_dflash_family(stage.type)) {
-                    continue;
-                }
-
-                max_cross_ctx = std::max(max_cross_ctx, params.with_stage_overrides(stage).dflash_cross_ctx);
-            }
-
             const int32_t block_size = llama_model_dflash_block_size(params.model_dft);
             if (block_size <= 0) {
                 LOG_ERR("%s: invalid DFlash draft block size\n", __func__);
@@ -1349,14 +1342,25 @@ common_speculative * common_speculative_init(
             }
 
             const int32_t query_capacity = std::max(block_size, dsv4_dspark_query_capacity);
-            const int64_t required_n_ctx = (int64_t) max_cross_ctx + (int64_t) query_capacity;
-            if (required_n_ctx > std::numeric_limits<int32_t>::max()) {
-                LOG_ERR("%s: invalid DFlash draft context size cross_ctx=%d query_capacity=%d required_n_ctx=%lld\n",
-                        __func__, max_cross_ctx, query_capacity, (long long) required_n_ctx);
+            const int32_t target_ctx = std::max<int32_t>(1, llama_n_ctx(ctx_tgt));
+            const int32_t requested_draft_ctx = cparams_dft.n_ctx > 0
+                    ? (int32_t) cparams_dft.n_ctx : target_ctx;
+            const int32_t effective_draft_ctx = std::min(target_ctx, requested_draft_ctx);
+            if (requested_draft_ctx > target_ctx) {
+                LOG_INF("%s: DFlash draft context %d exceeds target context %d, clamping to target capacity\n",
+                        __func__, requested_draft_ctx, target_ctx);
+            }
+            const int32_t cross_ctx = effective_draft_ctx - query_capacity;
+            if (cross_ctx <= 0) {
+                LOG_ERR("%s: invalid DFlash draft context size draft=%d target=%d query_capacity=%d, draft context must exceed the query block\n",
+                        __func__, requested_draft_ctx, target_ctx, query_capacity);
                 return nullptr;
             }
 
-            cparams_dft.n_ctx = (uint32_t) required_n_ctx;
+            cparams_dft.n_ctx = (uint32_t) effective_draft_ctx;
+            dflash_cross_ctx = cross_ctx;
+            LOG_INF("%s: DFlash context target/slot=%d logical=%d cross_ctx=%d query_block=%d\n",
+                    __func__, target_ctx, effective_draft_ctx, cross_ctx, query_capacity);
         }
 
         ctx_dft = llama_init_from_model(params.model_dft, cparams_dft);
@@ -1431,7 +1435,7 @@ common_speculative * common_speculative_init(
                     config.type,
                     ctx_tgt,
                     ctx_dft,
-                    config.params.dflash_cross_ctx,
+                    dflash_cross_ctx,
                     query_capacity,
                     config.params.n_max);
                 if (!state->ready) {
@@ -2014,13 +2018,15 @@ bool common_speculative_load_draft_model(
 
     LOG_INF("%s: loading draft model '%s'\n", __func__, params_dft.model.c_str());
 
-    if (params_dft.n_ctx == 0) {
+    if (params.has_dflash_family_stage() && params.n_ctx > 0) {
         params_dft.n_ctx = params.n_ctx;
     }
     if (params.has_dflash_family_stage() && params_dft.n_gpu_layers < 0) {
         params_dft.n_gpu_layers = params_base.n_gpu_layers;
     }
-    params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
+    if (params_dft.n_ctx == 0) {
+        params_dft.n_ctx = params.n_ctx > 0 ? params.n_ctx : params_base.n_ctx / params_base.n_parallel;
+    }
     params_dft.n_parallel = 1;
 
     params.mparams_dft.path = params_dft.model;
@@ -3178,12 +3184,17 @@ void common_speculative_context_shift(
         spec->last_step_target_only = false;
         spec->t_step_start_us = 0;
     }
-    if (auto * ctx_mtp = common_speculative_get_companion_ctx(spec); ctx_mtp != nullptr) {
+    auto * dflash_state = common_speculative_get_dflash_state(spec);
+    if (dflash_state == nullptr) {
+        auto * ctx_mtp = common_speculative_get_companion_ctx(spec);
+        if (ctx_mtp == nullptr) {
+            return;
+        }
         llama_kv_cache_seq_rm (ctx_mtp, seq_id, kv_keep, kv_keep + kv_discard);
         llama_kv_cache_seq_add(ctx_mtp, seq_id, kv_keep + kv_discard, kv_past, -kv_discard);
     }
 
-    if (auto * dflash_state = common_speculative_get_dflash_state(spec); dflash_state != nullptr) {
+    if (dflash_state != nullptr) {
         dflash_context_shift(*dflash_state, kv_keep, kv_discard, kv_past);
     }
 }
