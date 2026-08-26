@@ -91,6 +91,9 @@ void common_log_add(struct common_log* log, enum ggml_log_level level, const cha
 //
 
 void common_log_set_file(struct common_log* log, const char* file); // not thread-safe
+// Share an externally-opened FILE* (e.g. LOG_TARGET) so common_log tees to it
+// without a second fopen() on the same path; common_log will not close it.
+void common_log_set_file_ptr(struct common_log* log, FILE* file); // not thread-safe
 void common_log_set_colors(struct common_log* log, log_colors colors); // not thread-safe
 void common_log_set_prefix(struct common_log* log, bool prefix);       // whether to output prefix to each log
 void common_log_set_timestamps(struct common_log* log, bool timestamps);   // whether to output timestamps in the prefix
@@ -441,6 +444,18 @@ inline std::string log_filename_generator_impl(LogTriState multilog, const std::
     #define LOG_TEELN(str, ...) LOG_TEE_IMPL("%s" str, "", ##__VA_ARGS__, "\n")
 #endif
 
+// True only when the log target was explicitly set via log_set_target() (e.g.
+// by --log-file). LOG_TARGET is non-null by default (log_handler() lazily opens
+// "llama.log"), so a null check cannot tell a user-requested file from the
+// default. Tee callers should gate on this instead of `LOG_TARGET != nullptr`.
+inline bool log_target_changed(bool mark_changed = false) {
+    static bool changed = false;
+    if (mark_changed) {
+        changed = true;
+    }
+    return changed;
+}
+
 // INTERNAL, DO NOT USE
 inline FILE *log_handler1_impl(bool change = false, LogTriState append = LogTriStateSame, LogTriState disable = LogTriStateSame, const std::string & filename = LOG_DEFAULT_FILE_NAME, FILE *target = nullptr)
 {
@@ -561,8 +576,12 @@ inline FILE *log_enable_impl()
 #define log_set_target(target) log_set_target_impl(target)
 
 // INTERNAL, DO NOT USE
-inline FILE *log_set_target_impl(const std::string & filename) { return log_handler1_impl(true, LogTriStateSame, LogTriStateSame, filename); }
-inline FILE *log_set_target_impl(FILE *target) { return log_handler2_impl(true, LogTriStateSame, LogTriStateSame, target); }
+// Mark log_target_changed() here (not inside log_handler1_impl): when --log-file
+// is parsed before any LOG() call, this is the first invocation, so
+// log_handler1_impl's static filename initializes to the requested name and its
+// `!= filename` check never fires.
+inline FILE *log_set_target_impl(const std::string & filename) { log_target_changed(true); return log_handler1_impl(true, LogTriStateSame, LogTriStateSame, filename); }
+inline FILE *log_set_target_impl(FILE *target) { log_target_changed(true); return log_handler2_impl(true, LogTriStateSame, LogTriStateSame, target); }
 
 // INTERNAL, DO NOT USE
 inline FILE *log_handler() { return log_handler1_impl(); }
