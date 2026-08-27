@@ -34,7 +34,7 @@ struct delta_net {
     // which recurrent state slot a token owns. Other per-sequence state in the same row shares
     // the slot, so callers read it here rather than resolving the batch again
     bool     batch_shares_one_seq()  const { return all_same_seq; }
-    uint32_t state_slot(int64_t i)   const { return (uint32_t) token_seq_ids[i]; }
+    uint32_t state_slot(int32_t i)   const { return (uint32_t) token_seq_ids[i]; }
 
 private:
 

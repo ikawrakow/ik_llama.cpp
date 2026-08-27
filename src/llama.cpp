@@ -5205,11 +5205,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // position, and one spanning a sequence boundary is dropped from the cut below
         GGML_ASSERT(ggml_backend_buffer_is_host(qsa.bias->buffer));
 
-        const int64_t n_kv     = qsa.cell_blk->ne[0];
-        const int64_t r        = qsa.ratio;
-        const int64_t n_tokens = qsa.bias->ne[1];
-        const int64_t n_win    = qsa.win_blocks->ne[0];
-        const int64_t n_blocks = kv_self.kp_l.empty() ? 0 : (n_kv + r - 1)/r;
+        const int32_t n_kv     = qsa.cell_blk->ne[0];
+        const int32_t r        = qsa.ratio;
+        const int32_t n_tokens = qsa.bias->ne[1];
+        const int32_t n_win    = qsa.win_blocks->ne[0];
+        const int32_t n_blocks = kv_self.kp_l.empty() ? 0 : (n_kv + r - 1)/r;
 
         int32_t * dst_cell_blk  = (int32_t *) qsa.cell_blk->data;
         int32_t * dst_win_blk   = (int32_t *) qsa.win_blocks->data;
@@ -5230,17 +5230,17 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         std::vector<int32_t> filled(n_blocks, 0);
         std::vector<llama_seq_id> blk_seq(n_blocks, -1);
         std::vector<bool> blk_mixed(n_blocks, false);
-        std::vector<int32_t> blk_cells((size_t) r*n_blocks, 0);
+        std::vector<int32_t> blk_cells(r*n_blocks, 0);
         std::vector<llama_pos> blk_pos(n_blocks, -1);
 
-        for (int64_t j = 0; j < n_kv; ++j) {
+        for (int32_t j = 0; j < n_kv; ++j) {
             const auto & cell = kv_self.cells[j];
             if (cell.is_empty()) {
                 continue;
             }
 
             const llama_pos p = cell.pos;
-            const int64_t   b = j/r;
+            const int32_t   b = j/r;
 
             const llama_seq_id sid = *cell.seq_id.begin();
             if (blk_seq[b] < 0) {
@@ -5251,7 +5251,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
             blk_of[j]   = (int32_t) b;
             cell_pos[j] = p;
-            blk_cells[(size_t) b*r + j%r] = (int32_t) j;
+            blk_cells[b*r + j%r] = j;
             if (blk_pos[b] < 0 || p < blk_pos[b]) {
                 blk_pos[b] = p;
             }
@@ -5261,17 +5261,17 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // only these blocks can have changed. A short window repeats its last entry, so the
         // scatter writes the same correct value twice rather than an unrelated block
         std::vector<int32_t> touched;
-        touched.reserve((size_t) n_win);
+        touched.reserve(n_win);
         if (lctx.qsa_pooled_stale) {
-            for (int64_t b = 0; b < n_blocks; ++b) {
+            for (int32_t b = 0; b < n_blocks; ++b) {
                 touched.push_back((int32_t) b);
             }
         } else
-        for (int64_t i = 0; i < n_tokens && i < (int64_t) batch.n_tokens; ++i) {
+        for (int32_t i = 0; i < n_tokens && i < batch.n_tokens; ++i) {
             const int32_t b = (int32_t) ((kv_self.head + i)/r);
             if (b < n_blocks && std::find(touched.begin(), touched.end(), b) == touched.end()) {
                 touched.push_back(b);
-                if ((int64_t) touched.size() == n_win) {
+                if ((int32_t) touched.size() == n_win) {
                     break;
                 }
             }
@@ -5280,19 +5280,19 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             touched.push_back(0);
         }
 
-        for (int64_t w = 0; w < n_win; ++w) {
-            const int32_t b = touched[std::min<size_t>((size_t) w, touched.size() - 1)];
+        for (int32_t w = 0; w < n_win; ++w) {
+            const int32_t b = touched[std::min<size_t>(w, touched.size() - 1)];
             dst_win_blk[w] = b;
-            std::copy_n(blk_cells.begin() + (size_t) b*r, r, dst_win_cells + w*r);
+            std::copy_n(blk_cells.begin() + b*r, r, dst_win_cells + w*r);
             // the block's own first position, which equals b*r only while a single sequence
             // fills the cache from zero
             const int32_t bp = blk_pos[b] < 0 ? 0 : (int32_t) blk_pos[b];
-            for (int64_t sec = 0; sec < GGML_MROPE_SECTIONS; ++sec) {
+            for (int32_t sec = 0; sec < GGML_MROPE_SECTIONS; ++sec) {
                 dst_win_pos[sec*n_win + w] = bp;
             }
         }
 
-        for (int64_t j = 0; j < n_kv; ++j) {
+        for (int32_t j = 0; j < n_kv; ++j) {
             const int32_t b = blk_of[j];
             if (b >= 0 && (filled[b] < r || blk_mixed[b])) {
                 blk_of[j] = -1;
@@ -5302,11 +5302,12 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
         // KQ_mask already carries causality, so this holds only the per-block part: -inf for an
         // unpoolable block, a boost for the incomplete block the query sits in
-        auto fill_bias = [&](int64_t i0, int64_t i1) {
-            for (int64_t i = i0; i < i1; ++i) {
-                float * cur_bias = dst_bias + i*n_kv;
+        auto fill_bias = [&](int32_t i0, int32_t i1) {
+            for (int32_t i = i0; i < i1; ++i) {
+                // n_kv times n_tokens reaches 2^31 at the model's full context, so index wide
+                float * cur_bias = dst_bias + (size_t) i*n_kv;
 
-                if (i >= (int64_t) batch.n_tokens) {
+                if (i >= batch.n_tokens) {
                     std::fill(cur_bias, cur_bias + n_kv, 0.0f);
                     continue;
                 }
@@ -5314,7 +5315,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 const llama_pos q          = batch.pos[i];
                 const llama_pos tail_start = (q + 1)/r*r;
 
-                for (int64_t j = 0; j < n_kv; ++j) {
+                for (int32_t j = 0; j < n_kv; ++j) {
                     const llama_pos p = cell_pos[j];
 
                     // finite, so it can never meet a -inf and produce a nan
@@ -5326,9 +5327,9 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         if (n_kv >= 1024 && n_tokens >= 32) {
             // the same threshold the KQ_mask fill below uses for the same iteration space
             const int n_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
-            const int64_t npt = (n_tokens + n_thread - 1)/n_thread;
+            const int32_t npt = (n_tokens + n_thread - 1)/n_thread;
             std::vector<std::thread> workers;
-            for (int64_t i0 = npt; i0 < n_tokens; i0 += npt) {
+            for (int32_t i0 = npt; i0 < n_tokens; i0 += npt) {
                 workers.emplace_back(fill_bias, i0, std::min(n_tokens, i0 + npt));
             }
             fill_bias(0, std::min(n_tokens, npt));
@@ -5339,7 +5340,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
         // a reused graph was built with the narrow window, so clearing on `touched` alone would
         // leave the blocks it could not reach at zero
-        lctx.qsa_pooled_stale = (int64_t) touched.size() > n_win;
+        lctx.qsa_pooled_stale = (int32_t) touched.size() > n_win;
     }
 
     if (batch.token && lctx.inp_tokens) {
@@ -6056,11 +6057,11 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     if (lctx.inp_ple_rows) {
         const auto & hp = lctx.model.hparams;
 
-        const int64_t n_tokens = batch.n_tokens;
-        const int64_t n_gram   = hp.ple_ngram_size;
-        const int64_t n_heads  = hp.ple_n_heads;
-        const int64_t per_gram = hp.ple_heads_per_ngram;
-        const int64_t eos      = hp.ple_eos_token_id;
+        const int32_t     n_tokens = batch.n_tokens;
+        const int32_t     n_gram   = hp.ple_ngram_size;
+        const int32_t     n_heads  = hp.ple_n_heads;
+        const int32_t     per_gram = hp.ple_heads_per_ngram;
+        const llama_token eos      = hp.ple_eos_token_id;
 
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_ple_rows->buffer));
         int32_t * data = (int32_t *) lctx.inp_ple_rows->data;
@@ -6070,28 +6071,28 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         // here; without that key EOS just makes the span a segment boundary
         const llama_token img_tok = hp.ple_image_token_id != 0
             ? (llama_token) hp.ple_image_token_id
-            : (llama_token) eos;
-        auto tok_of = [&](int64_t k) -> llama_token {
+            : eos;
+        auto tok_of = [&](int32_t k) -> llama_token {
             return batch.token ? batch.token[k] : img_tok;
         };
 
         // snapshot before any update: one pass would let a token read an earlier token of this
         // same ubatch as prior context
         std::map<llama_seq_id, std::vector<llama_token>> snap;
-        for (int64_t i = 0; i < n_tokens; ++i) {
+        for (int32_t i = 0; i < n_tokens; ++i) {
             const llama_seq_id seq = batch.seq_id[i][0];
             if (snap.count(seq)) {
                 continue;
             }
             auto & h = lctx.ple_hist[seq];
             if (h.next_pos != batch.pos[i]) {
-                h.toks.assign(n_gram - 1, (llama_token) eos);
+                h.toks.assign(n_gram - 1, eos);
             }
-            h.toks.resize(n_gram - 1, (llama_token) eos);
+            h.toks.resize(n_gram - 1, eos);
             snap[seq] = h.toks;
         }
 
-        for (int64_t i = 0; i < n_tokens; ++i) {
+        for (int32_t i = 0; i < n_tokens; ++i) {
             const llama_pos    pos = batch.pos[i];
             const llama_seq_id seq = batch.seq_id[i][0];
 
@@ -6099,38 +6100,38 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
             // predecessor s (1-based) of this token: from the ubatch when it is there, from the
             // sequence's own history when it is not, EOS past a segment boundary
-            auto prev = [&](int64_t s) -> int64_t {
-                const int64_t j = i - s;
+            auto prev = [&](int32_t s) -> llama_token {
+                const int32_t j = i - s;
                 if (j >= 0 && batch.seq_id[j][0] == seq && batch.pos[j] == pos - s) {
                     return tok_of(j);
                 }
                 // s - i positions before this ubatch started, most recent last
-                const int64_t back = s - i;
-                const int64_t k    = (int64_t) hist.size() - back;
+                const int32_t back = s - i;
+                const int32_t k    = (int32_t) hist.size() - back;
                 if (back > 0 && k >= 0 && pos - s >= 0) {
                     return hist[k];
                 }
                 return eos;
             };
 
-            std::vector<int64_t> ctx_toks(n_gram);
+            std::vector<llama_token> ctx_toks(n_gram);
             ctx_toks[0] = tok_of(i);
             bool cut = false;
-            for (int64_t s = 1; s < n_gram; ++s) {
+            for (int32_t s = 1; s < n_gram; ++s) {
                 ctx_toks[s] = cut ? eos : prev(s);
                 if (ctx_toks[s] == eos) {
                     cut = true;
                 }
             }
 
-            for (int64_t n = 2; n <= n_gram; ++n) {
+            for (int32_t n = 2; n <= n_gram; ++n) {
                 uint64_t mixed = (uint64_t) ctx_toks[0] * hp.ple_layer_multipliers[0];
-                for (int64_t j = 1; j < n; ++j) {
+                for (int32_t j = 1; j < n; ++j) {
                     mixed ^= (uint64_t) ctx_toks[j] * hp.ple_layer_multipliers[j];
                 }
-                const int64_t base = (n - 2) * per_gram;
-                for (int64_t g = 0; g < per_gram; ++g) {
-                    const int64_t h_i = base + g;
+                const int32_t base = (n - 2) * per_gram;
+                for (int32_t g = 0; g < per_gram; ++g) {
+                    const int32_t h_i = base + g;
                     data[i * n_heads + h_i] =
                         (int32_t) (mixed % hp.ple_head_vocab_sizes[h_i] + hp.ple_head_offsets[h_i]);
                 }
@@ -6138,7 +6139,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
             auto & h = lctx.ple_hist[seq];
             h.toks.push_back(tok_of(i));
-            if ((int64_t) h.toks.size() > n_gram - 1) {
+            if ((int32_t) h.toks.size() > n_gram - 1) {
                 h.toks.erase(h.toks.begin(), h.toks.end() - (n_gram - 1));
             }
             h.next_pos = pos + 1;

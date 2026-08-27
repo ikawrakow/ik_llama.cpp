@@ -10,8 +10,8 @@ static ggml_tensor * qwen4exp_grouped_rms(
         const llama_hparams & hparams,
         ggml_tensor         * x,
         ggml_tensor         * w,
-        int64_t               hc_dim,
-        int64_t               nt) {
+        int32_t               hc_dim,
+        int32_t               nt) {
     ggml_tensor * t = ggml_rms_norm(ctx0, x, hparams.f_norm_rms_eps);
     t = ggml_reshape_2d(ctx0, t, hc_dim, nt);
     return ggml_mul(ctx0, t, w);
@@ -29,11 +29,11 @@ static ggml_tensor * qwen4exp_hc_mix(
         ggml_tensor       * w_up,
         ggml_tensor       * w_inject,
         ggml_tensor      ** inject,
-        int64_t             n_embd,
+        int32_t             n_embd,
         int                 il,
         const llm_build_cb & cb) {
-    const int64_t hc     = hparams.dsv4_hc_mult;
-    const int64_t hc_dim = hc * n_embd;
+    const int32_t hc     = hparams.dsv4_hc_mult;
+    const int32_t hc_dim = hc * n_embd;
     const int64_t nt     = x->ne[2];
 
     ggml_tensor * xn = qwen4exp_grouped_rms(ctx0, hparams, x, w_norm, hc_dim, nt);
@@ -69,10 +69,10 @@ static ggml_tensor * qwen4exp_hc_combine(
         ggml_tensor         * residual,
         ggml_tensor         * block_out,
         ggml_tensor         * inject,
-        int64_t               n_embd,
+        int32_t               n_embd,
         int                   il,
         const llm_build_cb  & cb) {
-    const int64_t hc = hparams.dsv4_hc_mult;
+    const int32_t hc = hparams.dsv4_hc_mult;
     const int64_t nt = residual->ne[2];
 
     ggml_tensor * w = ggml_sigmoid(ctx0, ggml_scale(ctx0, inject, 1.0f / (float) hc));
@@ -99,19 +99,19 @@ static ggml_tensor * qwen4exp_ple_conv(
         const llama_model   & model,
         ggml_tensor         * state_all,
         ggml_tensor         * xt,          // [n_tokens, hc_dim]
-        int64_t               hc_dim,
-        int64_t               n_tokens,
+        int32_t               hc_dim,
+        int32_t               n_tokens,
         uint32_t              slot,
         bool                  reset,
         int                   il,
         const llm_build_cb  & cb) {
-    const int64_t kern = hparams.ple_conv_kernel;
-    const int64_t dil  = hparams.ple_ngram_size;
-    const int64_t hist = hparams.ple_conv_state();
+    const int32_t kern = hparams.ple_conv_kernel;
+    const int32_t dil  = hparams.ple_ngram_size;
+    const int32_t hist = hparams.ple_conv_state();
 
     // the delta-net state occupies the front of the row; this history follows it
     const size_t esz     = ggml_element_size(state_all);
-    const size_t row_off = (size_t) (state_all->ne[0] - hist*hc_dim) * esz;
+    const size_t row_off = esz * (state_all->ne[0] - hist*hc_dim);
 
     ggml_tensor * state = ggml_cont(ctx0,
             ggml_view_2d(ctx0, state_all, hist, hc_dim, hist*esz, slot*state_all->nb[1] + row_off));
@@ -123,8 +123,8 @@ static ggml_tensor * qwen4exp_ple_conv(
     ggml_tensor * conv_in = ggml_concat(ctx0, state, xt, 0); // [hist + n_tokens, hc_dim]
 
     ggml_tensor * conv_out = nullptr;
-    for (int64_t k = 0; k < kern; ++k) {
-        const int64_t start = hist - (kern - 1 - k)*dil;
+    for (int32_t k = 0; k < kern; ++k) {
+        const int32_t start = hist - (kern - 1 - k)*dil;
 
         ggml_tensor * shifted = ggml_cont(ctx0,
                 ggml_view_2d(ctx0, conv_in, n_tokens, hc_dim, conv_in->nb[1], start*conv_in->nb[0]));
@@ -169,18 +169,18 @@ static ggml_tensor * qwen4exp_ple(
         ggml_tensor       * state_all,
         bool                reset_state,
         const std::vector<bool> & reset_pos,
-        int64_t             n_embd,
-        int64_t             n_tokens,
+        int32_t             n_embd,
+        int32_t             n_tokens,
         int                 il,
         const llm_build_cb & cb) {
-    const int64_t hc      = hparams.dsv4_hc_mult;
-    const int64_t hc_dim  = hc * n_embd;
-    const int64_t n_heads = hparams.ple_n_heads;
+    const int32_t hc      = hparams.dsv4_hc_mult;
+    const int32_t hc_dim  = hc * n_embd;
+    const int32_t n_heads = hparams.ple_n_heads;
 
     // get_rows lays the head dimension out slowest, which is the flatten order the
     // projections expect
     ggml_tensor * emb = ggml_get_rows(ctx0, model.tok_embd_per_layer, rows);
-    emb = ggml_reshape_2d(ctx0, emb, (int64_t) hparams.ple_head_dim * n_heads, n_tokens);
+    emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
     cb(emb, "ple_embd", il);
 
     ggml_tensor * key   = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_key,   emb);
@@ -222,7 +222,7 @@ static ggml_tensor * qwen4exp_ple(
     } else {
         // A mixed-sequence ubatch reads a different history per token, exactly as the
         // delta-net path splits it.
-        for (int64_t i = 0; i < n_tokens; ++i) {
+        for (int32_t i = 0; i < n_tokens; ++i) {
             ggml_tensor * x_i = ggml_cont(ctx0,
                     ggml_view_2d(ctx0, xt, 1, hc_dim, xt->nb[1], i*xt->nb[0]));
             ggml_tensor * out_i = qwen4exp_ple_conv(ctx0, gf, hparams, model, state_all, x_i, hc_dim, 1,
@@ -256,17 +256,17 @@ static ggml_tensor * qwen4exp_qsa_mask(
     const llama_model    & model   = bctx.model;
     const llama_kv_cache & kv_self = bctx.kv_self;
 
-    ggml_tensor * kr_cache = (size_t) il < kv_self.kr_l.size() ? kv_self.kr_l[il] : nullptr;
-    ggml_tensor * kp_cache = (size_t) il < kv_self.kp_l.size() ? kv_self.kp_l[il] : nullptr;
+    ggml_tensor * kr_cache = il < (int) kv_self.kr_l.size() ? kv_self.kr_l[il] : nullptr;
+    ggml_tensor * kp_cache = il < (int) kv_self.kp_l.size() ? kv_self.kp_l[il] : nullptr;
     if (!kr_cache || !kp_cache || !model.layers[il].indexer_k_proj) {
         return KQ_mask;
     }
 
-    const int64_t idx_dim  = hparams.indexer_head_size;
-    const int64_t n_idx_h  = hparams.indexer_n_head;
-    const int64_t r        = hparams.dsv4_compress_ratios[(size_t) il];
-    const int64_t n_kv     = bctx.n_kv;
-    const int64_t n_tokens = bctx.n_tokens;
+    const int32_t idx_dim  = hparams.indexer_head_size;
+    const int32_t n_idx_h  = hparams.indexer_n_head;
+    const int32_t r        = hparams.dsv4_compress_ratios[il];
+    const int32_t n_kv     = bctx.n_kv;
+    const int32_t n_tokens = bctx.n_tokens;
 
     // the cached indexer keys are raw: pooling precedes both the norm and the rotation
     ggml_tensor * k_raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].indexer_k_proj, cur);
@@ -279,18 +279,18 @@ static ggml_tensor * qwen4exp_qsa_mask(
         ggml_tensor * kr_cpy = ggml_cpy(ctx0, k_raw, kr_view);
         // the view above bakes kv_head, so register the copy for the offset fixup that
         // update_cache_copies() already applies to the K and V writes of a reused graph
-        if ((size_t) il < lctx.dsa_cache_copies.size()) {
+        if (il < (int) lctx.dsa_cache_copies.size()) {
             lctx.dsa_cache_copies[il].cpy  = kr_cpy;
             lctx.dsa_cache_copies[il].step = kr_cache->nb[1];
         }
         ggml_build_forward_expand(gf, kr_cpy);
     }
 
-    const int64_t n_blocks = (n_kv + r - 1)/r;
+    const int32_t n_blocks = (n_kv + r - 1)/r;
 
     // a raw key never changes once written, so only the blocks this ubatch wrote need pooling
     // again: n_tokens consecutive cells span n_tokens/r, plus one when the run straddles
-    const int64_t n_win = lctx.qsa_pooled_stale ? n_blocks : std::min<int64_t>(n_blocks, (n_tokens + r - 1)/r + 1);
+    const int32_t n_win = lctx.qsa_pooled_stale ? n_blocks : std::min(n_blocks, (n_tokens + r - 1)/r + 1);
 
     llama_context::qsa_input * inp = nullptr;
     for (auto & q : lctx.inp_qsa) {
@@ -357,8 +357,8 @@ static ggml_tensor * qwen4exp_qsa_mask(
 
     // at n_kv the cut keeps every cell and scoring cannot change the mask. The pooling above
     // still had to run: it is the only chance these blocks get to enter the cache
-    const int64_t top_k_cells = lctx.cparams.dsa_top_k > 0 ? lctx.cparams.dsa_top_k : hparams.indexer_top_k;
-    const int64_t width = top_k_cells + r - 1;
+    const int32_t top_k_cells = lctx.cparams.dsa_top_k > 0 ? lctx.cparams.dsa_top_k : (int32_t) hparams.indexer_top_k;
+    const int32_t width = top_k_cells + r - 1;
     if (width >= n_kv) {
         ggml_build_forward_expand(gf, kp_all);
         return KQ_mask;
@@ -382,21 +382,19 @@ static ggml_tensor * qwen4exp_qsa_mask(
     ggml_tensor * cut_mask = ggml_add(ctx0, inp->bias, causal);
     cb(cut_mask, "qsa_cut_mask", il);
 
-    // one pooled key per CELL keeps the cut in cell space, where the causal mask can drop
-    // individual members of a kept block. Same scoring as below, but the op holds its score and
-    // sort storage in the backend pool, so the n_kv by n_tokens intermediates never exist
+    // top-k selects cells, not blocks: every cell carries its own block's pooled key, so the
+    // causal mask can still drop cells inside a selected block. The op scores and sorts
+    // internally, so the n_kv by n_tokens score matrix is never materialized.
     if (lctx.cparams.fused_idx_topk) {
         ggml_tensor * k_cells = ggml_get_rows_ext(ctx0, pooled, inp->cell_blk, true, false);
         k_cells = ggml_reshape_3d(ctx0, k_cells, idx_dim, n_kv, 1);
         ggml_tensor * fused = ggml_indexer_topk(ctx0, k_cells, q, inp->head_w, cut_mask,
                 GGML_UNARY_OP_RELU, width);
-        if (bctx.supports_op(fused)) {
-            cb(fused, "qsa_top_k", il);
-            ggml_build_forward_expand(gf, fused);
-            ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, fused);
-            cb(mask, "qsa_mask", il);
-            return mask;
-        }
+        cb(fused, "qsa_top_k", il);
+        ggml_build_forward_expand(gf, fused);
+        ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, fused);
+        cb(mask, "qsa_mask", il);
+        return mask;
     }
 
     ggml_tensor * score = ggml_mul_mat(ctx0, pooled,
@@ -432,10 +430,10 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
     delta_net delta(lctx, batch);
 
-    const int64_t n_embd_head = hparams.n_embd_head_v(0);
+    const int32_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
 
-    const int64_t hc = hparams.dsv4_hc_mult;
+    const int32_t hc = hparams.dsv4_hc_mult;
 
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
     ggml_tensor * inp_pos = build_inp_pos();
@@ -455,7 +453,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     cb(res_hc, "hc_residual", -1);
 
     if (hparams.ple_n_heads > 0) {
-        lctx.inp_ple_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t) hparams.ple_n_heads * n_tokens);
+        lctx.inp_ple_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, hparams.ple_n_heads * n_tokens);
         cb(lctx.inp_ple_rows, "inp_ple_rows", -1);
         ggml_set_input(lctx.inp_ple_rows);
     } else {
@@ -464,9 +462,9 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
     // the same test the delta-net path uses for its own state
     const bool ple_reset_state = batch.pos != nullptr && batch.pos[0] == 0;
-    std::vector<bool> ple_reset_pos((size_t) n_tokens, false);
-    for (int64_t i = 0; i < n_tokens && batch.pos != nullptr; ++i) {
-        ple_reset_pos[(size_t) i] = batch.pos[i] == 0;
+    std::vector<bool> ple_reset_pos(n_tokens, false);
+    for (int32_t i = 0; i < n_tokens && batch.pos != nullptr; ++i) {
+        ple_reset_pos[i] = batch.pos[i] == 0;
     }
 
     for (int il = 0; il < n_layer; ++il) {

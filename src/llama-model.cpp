@@ -2622,7 +2622,7 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
     // a qwen4exp sparse-attention layer also caches one raw indexer key per cell and one
     // pooled key per block of `ratio` cells
     if (arch == LLM_ARCH_QWEN4EXP && hparams.indexer_head_size > 0 && hparams.is_qsa(il)) {
-        const uint32_t ratio = hparams.dsv4_compress_ratios[(size_t) il];
+        const uint32_t ratio = hparams.dsv4_compress_ratios[il];
         k_size += ggml_row_size(idx_type_k, hparams.indexer_head_size) * (rows + (rows + ratio - 1)/ratio);
     }
     // a PLE layer that is not recurrent still gets a state row for its convolution history

@@ -1677,9 +1677,9 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    const int64_t hc      = hparams.dsv4_hc_mult;
-    const int64_t hc_dim  = hc * n_embd;
-    const int64_t hc_rank = hparams.hc_low_rank;
+    const int32_t hc      = hparams.dsv4_hc_mult;
+    const int32_t hc_dim  = hc * n_embd;
+    const int32_t hc_rank = hparams.hc_low_rank;
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -1710,23 +1710,23 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
             }
         }
         model.tok_embd_per_layer = create_tensor(ctx_input, tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
-                {(int64_t) hparams.ple_head_dim, ple_rows});
+                {hparams.ple_head_dim, ple_rows});
     }
 
     const bool has_moe_hparams = n_expert > 0 && n_expert_used > 0;
-    const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : (has_moe_hparams ? n_ff / n_expert_used : n_ff);
-    const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff_exp;
+    const int32_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : (has_moe_hparams ? n_ff / n_expert_used : n_ff);
+    const int32_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff_exp;
 
-    const int64_t head_k_dim  = hparams.ssm_d_state;
-    const int64_t num_k_heads = hparams.ssm_n_group;
-    const int64_t num_v_heads = hparams.ssm_dt_rank;
-    const int64_t head_v_dim  = hparams.ssm_d_inner / num_v_heads;
-    const int64_t key_dim     = head_k_dim * num_k_heads;
-    const int64_t value_dim   = head_v_dim * num_v_heads;
-    const int64_t conv_dim    = key_dim * 2 + value_dim;
+    const int32_t head_k_dim  = hparams.ssm_d_state;
+    const int32_t num_k_heads = hparams.ssm_n_group;
+    const int32_t num_v_heads = hparams.ssm_dt_rank;
+    const int32_t head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+    const int32_t key_dim     = head_k_dim * num_k_heads;
+    const int32_t value_dim   = head_v_dim * num_v_heads;
+    const int32_t conv_dim    = key_dim * 2 + value_dim;
 
-    const int64_t idx_head   = hparams.indexer_head_size;
-    const int64_t idx_n_head = hparams.indexer_n_head;
+    const int32_t idx_head   = hparams.indexer_head_size;
+    const int32_t idx_n_head = hparams.indexer_n_head;
 
     if (n_expert_used == 0) {
         throw std::runtime_error("n_expert_used must be > 0 when QWEN4EXP MoE tensors are present");
@@ -1753,7 +1753,7 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
             layer.ple_norm_key   = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_NORM_KEY,   "weight", i), {hc_dim});
             layer.ple_norm_query = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_NORM_QUERY, "weight", i), {hc_dim});
             layer.ple_norm_conv  = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_NORM_CONV,  "weight", i), {hc_dim});
-            layer.ple_conv1d     = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_CONV1D,     "weight", i), {(int64_t) hparams.ple_conv_kernel, hc_dim});
+            layer.ple_conv1d     = create_tensor(ctx_split, tn(LLM_TENSOR_PLE_CONV1D,     "weight", i), {hparams.ple_conv_kernel, hc_dim});
         }
 
         if (!hparams.is_recurrent(i)) {
