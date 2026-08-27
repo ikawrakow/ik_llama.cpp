@@ -721,8 +721,10 @@ bool llama_model_loader::get_arr(const std::string & key, std::vector<T> & resul
         case GGUF_TYPE_UINT32:
         case GGUF_TYPE_BOOL:
         case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same_v<T,  int32_t>) || (std::is_same_v<T, uint32_t>));  break;
+        case GGUF_TYPE_UINT64:
+        case GGUF_TYPE_INT64:   GGML_ASSERT((std::is_same_v<T,  int64_t>) || (std::is_same_v<T, uint64_t>));  break;
         default:
-            throw std::runtime_error(format("%s is not a float32, int32, uint32 or bool array", key.c_str()));
+            throw std::runtime_error(format("%s is not a float32, int32, uint32, int64, uint64 or bool array", key.c_str()));
     }
 
     result.resize(arr_info.length);
@@ -1416,5 +1418,6 @@ template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum ll
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(const std::string &, unsigned int &, bool);
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
 template bool llama_model_loader::get_arr<uint32_t>(const std::string &, std::vector<uint32_t> &, bool);
+template bool llama_model_loader::get_arr<uint64_t>(const std::string &, std::vector<uint64_t> &, bool);
 template bool llama_model_loader::get_arr<int32_t, 8>(const std::string &, std::array<int32_t, 8> &, bool);
 template bool llama_model_loader::get_arr<uint32_t, 8>(const std::string &, std::array<uint32_t, 8> &, bool);
