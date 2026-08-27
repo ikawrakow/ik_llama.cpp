@@ -677,6 +677,8 @@ void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, in
 
     const int nb = k / qk;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
+
     for (int i = 0; i < nb; i++) {
         float amax = 0.0f; // absolute max
         float max  = 0.0f;
@@ -692,7 +694,7 @@ void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, in
         const float d  = max / -8;
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(d);
+        y[i].d = GGML_FP32_TO_FP16(fudge*d);
 
         for (int j = 0; j < qk/2; ++j) {
             const float x0 = x[i*qk + 0    + j]*id;
@@ -761,6 +763,8 @@ void quantize_row_q5_0_ref(const float * restrict x, block_q5_0 * restrict y, in
 
     const int nb = k / qk;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0);
+
     for (int i = 0; i < nb; i++) {
         float amax = 0.0f; // absolute max
         float max  = 0.0f;
@@ -776,7 +780,7 @@ void quantize_row_q5_0_ref(const float * restrict x, block_q5_0 * restrict y, in
         const float d  = max / -16;
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(d);
+        y[i].d = GGML_FP32_TO_FP16(fudge * d);
 
         uint32_t qh = 0;
 
@@ -908,6 +912,8 @@ void quantize_row_q8_0_ref(const float * restrict x, block_q8_0 * restrict y, in
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0);
+
     for (int i = 0; i < nb; i++) {
         float amax = 0.0f; // absolute max
 
@@ -919,7 +925,7 @@ void quantize_row_q8_0_ref(const float * restrict x, block_q8_0 * restrict y, in
         const float d = amax / ((1 << 7) - 1);
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(d);
+        y[i].d = GGML_FP32_TO_FP16(fudge * d);
 
         for (int j = 0; j < QK8_0; ++j) {
             const float x0 = x[i*QK8_0 + j]*id;
@@ -2491,6 +2497,8 @@ void quantize_row_q3_K_ref(const float * restrict x, block_q3_K * restrict y, in
     int8_t L[QK_K];
     float scales[QK_K / 16];
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q3_K);
+
     for (int i = 0; i < nb; i++) {
 
         float max_scale = 0;
@@ -2517,7 +2525,7 @@ void quantize_row_q3_K_ref(const float * restrict x, block_q3_K * restrict y, in
                 l >>= 4;
                 y[i].scales[j%4 + 8] |= (l << (2*(j/4)));
             }
-            y[i].d = GGML_FP32_TO_FP16(1/iscale);
+            y[i].d = GGML_FP32_TO_FP16(fudge/iscale);
         } else {
             y[i].d = GGML_FP32_TO_FP16(0.f);
         }
@@ -2624,6 +2632,8 @@ static void quantize_row_q3_K_impl(const float * restrict x, block_q3_K * restri
     float sw[QK_K / 16];
     int8_t Ls[QK_K / 16];
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q3_K);
+
     for (int i = 0; i < nb; i++) {
 
         float sumx2 = 0;
@@ -2658,7 +2668,7 @@ static void quantize_row_q3_K_impl(const float * restrict x, block_q3_K * restri
             l >>= 4;
             y[i].scales[j%4 + 8] |= (l << (2*(j/4)));
         }
-        y[i].d = GGML_FP32_TO_FP16(d_block);
+        y[i].d = GGML_FP32_TO_FP16(d_block * fudge);
 
         int8_t sc;
         for (int j = 0; j < QK_K/16; ++j) {
@@ -3165,6 +3175,8 @@ void quantize_row_q6_K_ref(const float * restrict x, block_q6_K * restrict y, in
     int8_t L[QK_K];
     float   scales[QK_K/16];
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_K);
+
     for (int i = 0; i < nb; i++) {
 
         float max_scale = 0;
@@ -3191,7 +3203,7 @@ void quantize_row_q6_K_ref(const float * restrict x, block_q6_K * restrict y, in
         }
 
         float iscale = -128.f/max_scale;
-        y[i].d = GGML_FP32_TO_FP16(1/iscale);
+        y[i].d = GGML_FP32_TO_FP16(fudge/iscale);
         for (int ib = 0; ib < QK_K/16; ++ib) {
             y[i].scales[ib] = MIN(127, nearest_int(iscale*scales[ib]));
         }
@@ -3272,6 +3284,7 @@ static void quantize_row_q6_K_impl(const float * restrict x, block_q6_K * restri
     int8_t L[QK_K];
     float   scales[QK_K/16];
     //float   weights[16];
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_K);
 
     for (int i = 0; i < nb; i++) {
 
@@ -3311,7 +3324,7 @@ static void quantize_row_q6_K_impl(const float * restrict x, block_q6_K * restri
         }
 
         float iscale = -128.f/max_scale;
-        y[i].d = GGML_FP32_TO_FP16(1/iscale);
+        y[i].d = GGML_FP32_TO_FP16(fudge/iscale);
         for (int ib = 0; ib < QK_K/16; ++ib) {
             y[i].scales[ib] = MIN(127, nearest_int(iscale*scales[ib]));
         }
@@ -3382,6 +3395,8 @@ static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restri
     for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
     float sigma2 = sum_x2/n_per_row;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q4_0);
+
     const int64_t nb = n_per_row/QK4_0;
     for (int ib = 0; ib < nb; ++ib) {
         const float * xb = x + QK4_0 * ib;
@@ -3392,7 +3407,7 @@ static void quantize_row_q4_0_impl(const float * restrict x, block_q4_0 * restri
             for (int j = 0; j < QK4_0; ++j) weight[j] = xb[j]*xb[j];
         }
         float d = make_qx_quants(QK4_0, 8, xb, L, 1, weight);
-        y[ib].d = GGML_FP32_TO_FP16(d);
+        y[ib].d = GGML_FP32_TO_FP16(d * fudge);
         for (int j = 0; j < 16; ++j) {
             y[ib].qs[j] = L[j] | (L[j+16] << 4);
         }
@@ -3513,6 +3528,7 @@ static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restri
     float sum_x2 = 0;
     for (int j = 0; j < n_per_row; ++j) sum_x2 += x[j]*x[j];
     float sigma2 = sum_x2/n_per_row;
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q5_0);
 
     const int64_t nb = n_per_row/QK5_0;
     for (int ib = 0; ib < nb; ++ib) {
@@ -3520,7 +3536,7 @@ static void quantize_row_q5_0_impl(const float * restrict x, block_q5_0 * restri
         const float * qw = quant_weights + QK5_0 * ib;
         for (int j = 0; j < QK5_0; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
         float d = make_qx_quants(QK5_0, 16, xb, L, 1, weight);
-        y[ib].d = GGML_FP32_TO_FP16(d);
+        y[ib].d = GGML_FP32_TO_FP16(d * fudge);
 
         uint32_t qh = 0;
 
@@ -3623,6 +3639,8 @@ static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restri
         sigma2 = sum_x2/n_per_row;
     }
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_Q6_0);
+
     const int64_t nb = n_per_row/QK6_0;
     for (int ib = 0; ib < nb; ++ib) {
         const float * xb = x + QK6_0 * ib;
@@ -3633,7 +3651,7 @@ static void quantize_row_q6_0_impl(const float * restrict x, block_q6_0 * restri
             for (int j = 0; j < QK6_0; ++j) weight[j] = xb[j]*xb[j];
         }
         float d = make_qx_quants(QK6_0, 32, xb, L, 1, weight);
-        y[ib].d = GGML_FP32_TO_FP16(d);
+        y[ib].d = GGML_FP32_TO_FP16(d * fudge);
 
         memset(y[ib].qh, 0, QK6_0/4);
 
@@ -13004,6 +13022,8 @@ static void quantize_row_iq2_xxs_impl(const float * restrict x, void * restrict 
     uint8_t block_signs[4];
     uint32_t q2[2*(QK_K/32)];
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ2_XXS);
+
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
         y[ibl].d = GGML_FP32_TO_FP16(0.f);
@@ -13141,7 +13161,7 @@ static void quantize_row_iq2_xxs_impl(const float * restrict x, void * restrict 
         }
 
         float d = max_scale/31;
-        y[ibl].d = GGML_FP32_TO_FP16(d);
+        y[ibl].d = GGML_FP32_TO_FP16(d * fudge);
         float id = 1/d;
         for (int ib = 0; ib < QK_K/32; ++ib) {
             int l = nearest_int(0.5f*(id*scales[ib]-1));
@@ -13190,6 +13210,8 @@ static void quantize_row_iq2_xs_impl(const float * restrict x, void * restrict v
     uint16_t index[2], aux_index[2];
     float sumx[17], sumw[17], pairs[32];
     int * int_pairs = (int *)(pairs + 1);
+
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ2_XS);
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
@@ -13366,7 +13388,7 @@ static void quantize_row_iq2_xs_impl(const float * restrict x, void * restrict v
         }
 
         float d = max_scale/31;
-        y[ibl].d = GGML_FP32_TO_FP16(d);
+        y[ibl].d = GGML_FP32_TO_FP16(d * fudge);
         float id = 1/d;
         float sumqx = 0, sumq2 = 0;
         for (int ib = 0; ib < QK_K/16; ++ib) {
@@ -13395,7 +13417,7 @@ static void quantize_row_iq2_xs_impl(const float * restrict x, void * restrict v
             }
         }
         memcpy(y[ibl].qs, q2, QK_K/4);
-        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(1.05f*sumqx/sumq2);
+        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(fudge*sumqx/sumq2);
 
     }
 }
@@ -13715,6 +13737,8 @@ static void quantize_row_iq3_xxs_impl(int grid_size, const float * restrict x, v
     uint32_t * scales_and_signs = (uint32_t *)(q3 + QK_K/4);
     uint8_t  * qh = q3 + 3*(QK_K/8);
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ3_XXS);
+
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
         dh[0] = GGML_FP32_TO_FP16(0.f);
@@ -13865,7 +13889,7 @@ static void quantize_row_iq3_xxs_impl(int grid_size, const float * restrict x, v
         }
 
         float d = max_scale/31;
-        dh[0] = GGML_FP32_TO_FP16(d * 1.0125f);  // small improvement via this fudge factor
+        dh[0] = GGML_FP32_TO_FP16(d * fudge);
         float id = 1/d;
         for (int ib = 0; ib < QK_K/32; ++ib) {
             int l = nearest_int(0.5f*(id*scales[ib]-1));
@@ -13937,6 +13961,8 @@ static void quantize_row_iq3_s_impl(int block_size, const float * restrict x, vo
 
     const int bs4 = block_size/4;
     const int bs8 = block_size/8;
+
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ3_S);
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
@@ -14074,7 +14100,7 @@ static void quantize_row_iq3_s_impl(int block_size, const float * restrict x, vo
         }
 
         float d = max_scale/31;
-        y[ibl].d = GGML_FP32_TO_FP16(d * 1.033f);
+        y[ibl].d = GGML_FP32_TO_FP16(d * fudge);
         float id = 1/d;
         for (int ib = 0; ib < QK_K/block_size; ib += 2) {
             int l1 = nearest_int(0.5f*(id*scales[ib+0]-1));
@@ -14376,6 +14402,7 @@ static void quantize_row_iq1_s_impl(const float * restrict x, void * restrict vy
     //const float x_m[3] = {-1 - IQ1S_DELTA, -IQ1S_DELTA, 1 - IQ1S_DELTA};
 
     //int * idx = (int *)(pairs + 1);
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ1_S);
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
@@ -14413,7 +14440,7 @@ static void quantize_row_iq1_s_impl(const float * restrict x, void * restrict vy
         }
 
         float d = max_scale/15;
-        y[ibl].d = GGML_FP32_TO_FP16(d*1.125f); // 1.125f is another fudge factor. Don't ask me why it is needed.
+        y[ibl].d = GGML_FP32_TO_FP16(d*fudge);
         float id = 1/d;
         for (int ib = 0; ib < QK_K/block_size; ++ib) {
             int l = nearest_int(0.5f*(id*scales[ib]-1));
@@ -14632,6 +14659,8 @@ static void quantize_row_iq1_m_impl(const float * restrict x, void * restrict vy
     iq1m_scale_t s;
     const float * xx;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ1_M);
+
     for (int ibl = 0; ibl < nbl; ++ibl) {
         memset(y[ibl].qs, 0, QK_K/8);
         memset(y[ibl].qh, 0, QK_K/16);
@@ -14720,7 +14749,7 @@ static void quantize_row_iq1_m_impl(const float * restrict x, void * restrict vy
             }
         }
         if (sumq2_f > 0) d = sumqx_f/sumq2_f;
-        s.f16 = GGML_FP32_TO_FP16(d*1.085f); // 1.085f is another fudge factor. Don't ask me why it is needed.
+        s.f16 = GGML_FP32_TO_FP16(d*fudge);
         sc[0] |= ((s.u16 & 0x000f) << 12);
         sc[1] |= ((s.u16 & 0x00f0) <<  8);
         sc[2] |= ((s.u16 & 0x0f00) <<  4);
@@ -14793,6 +14822,8 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
 
     memset(q4, 0, super_block_size/2);
     dh[0] = GGML_FP32_TO_FP16(0.f);
+
+    const float fudge = ggml_get_quantize_fudge_factor(super_block_size/block_size > 1 ? GGML_TYPE_IQ4_XS : GGML_TYPE_IQ4_NL);
 
     float max_scale = 0, amax_scale = 0;
     for (int ib = 0; ib < super_block_size/block_size; ++ib) {
@@ -14915,7 +14946,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         int nb = super_block_size/block_size;
         memset(scales_h, 0, ((nb+7)/8)*sizeof(uint16_t));
         float d = -max_scale/32;
-        dh[0] = GGML_FP32_TO_FP16(d);
+        dh[0] = GGML_FP32_TO_FP16(d*fudge);
         float id = d ? 1/d : 0.f;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
             int l = nearest_int(id*scales[ib]);
@@ -14935,7 +14966,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
             scales_h[ib/8] |= (l_h << 2*(ib%8));
         }
     } else {
-        dh[0] = GGML_FP32_TO_FP16(scales[0]);
+        dh[0] = GGML_FP32_TO_FP16(scales[0] * fudge);
         if (ntry > 0) {
             float id = scales[0] ? 1/scales[0] : 0;
             for (int j = 0; j < super_block_size; ++j) {
@@ -15058,6 +15089,8 @@ static void quantize_row_iq2_s_impl(const float * restrict x, void * restrict vy
     bool   is_on_grid[2];
     bool   is_on_grid_aux[2];
     uint8_t block_signs[2];
+
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ2_S);
 
     for (int ibl = 0; ibl < nbl; ++ibl) {
 
@@ -15187,7 +15220,7 @@ static void quantize_row_iq2_s_impl(const float * restrict x, void * restrict vy
         }
 
         float d = max_scale/31;
-        y[ibl].d = GGML_FP32_TO_FP16(d * 0.9875f);
+        y[ibl].d = GGML_FP32_TO_FP16(d * fudge);
         float id = 1/d;
         for (int ib = 0; ib < QK_K/16; ++ib) {
             int l = nearest_int(0.5f*(id*scales[ib]-1));

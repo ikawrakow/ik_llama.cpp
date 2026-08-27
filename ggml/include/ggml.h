@@ -3353,6 +3353,9 @@ extern "C" {
             struct ggml_tensor          * dst,
             struct ggml_tensor          * src);
 
+    GGML_API void  ggml_set_quantize_fudge_factor(enum ggml_type type, float fudge);
+    GGML_API float ggml_get_quantize_fudge_factor(enum ggml_type type);
+
 #ifdef  __cplusplus
 }
 #endif

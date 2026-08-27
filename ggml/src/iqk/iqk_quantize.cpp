@@ -1204,6 +1204,8 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
 
     const int8_t * shifted_values = iq2nl_values + 4;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ2_K);
+
     for (int ibl = 0; ibl < n_per_row/QK_K; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq2_k));
@@ -1327,7 +1329,7 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
                 }
             }
         }
-        y[ibl].d = GGML_FP32_TO_FP16(1.030f*(sumq2 > 0 ? sumqx/sumq2 : d));
+        y[ibl].d = GGML_FP32_TO_FP16(fudge*(sumq2 > 0 ? sumqx/sumq2 : d));
 
     }
 }
@@ -2058,6 +2060,8 @@ void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const f
 
     float max_scale = 0, max_abs_scale = 0;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ2_KL);
+
     for (int ibl = 0; ibl < n_per_row/QK_K; ++ibl) {
         std::memset(&y[ibl], 0, sizeof(block_iq2_kl));
         auto scales = all_scales + ibl*(QK_K/kBlockSize);
@@ -2208,7 +2212,7 @@ void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const f
     }
     if (sumq2 > 0) d = sumqx/sumq2;
 
-    dptr[0] = GGML_FP32_TO_FP16(1.025f * d);
+    dptr[0] = GGML_FP32_TO_FP16(fudge * d);
 
 }
 }
@@ -2304,6 +2308,8 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
     uint8_t L[16];
 
     const int8_t * shifted_values = iq3nl_values + 8;
+
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ3_K);
 
     for (int ibl = 0; ibl < n_per_row/QK_K; ++ibl) {
 
@@ -2504,7 +2510,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
                 }
             }
         }
-        y[ibl].d = GGML_FP32_TO_FP16(1.01f*(sumq2 > 0 ? sumqx/sumq2 : d));
+        y[ibl].d = GGML_FP32_TO_FP16(fudge*(sumq2 > 0 ? sumqx/sumq2 : d));
 
     }
 }
@@ -2599,6 +2605,8 @@ static void quantize_row_iq3_ks_impl(const int super_block_size, const int block
 
     float amax_scale = 0;
     float max_scale = 0;
+
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ3_KS);
 
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
         memset(&y[ibl], 0, sizeof(block_iq3_ks));
@@ -2743,7 +2751,7 @@ static void quantize_row_iq3_ks_impl(const int super_block_size, const int block
             }
         }
     }
-    if (sumq2 > 0) *dptr = GGML_FP32_TO_FP16(sumqx/sumq2);
+    if (sumq2 > 0) *dptr = GGML_FP32_TO_FP16(fudge*sumqx/sumq2);
 }
 }
 
@@ -2935,6 +2943,8 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
 
     const int8_t * shifted_values = values + 16;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_K);
+
     float max_scale = 0, amax_scale = 0;
     uint16_t extra = 0;
     for (int ib = 0; ib < super_block_size/block_size; ++ib) {
@@ -3030,7 +3040,7 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
         }
     }
     float d = -max_scale/32;
-    y->d = GGML_FP32_TO_FP16(d);
+    y->d = GGML_FP32_TO_FP16(fudge*d);
     y->extra = extra;
     float id = d ? 1/d : 0.f;
     float sumqx = 0, sumq2 = 0;
@@ -3062,7 +3072,7 @@ static void quantize_row_iq4_k_impl_bs16(const int super_block_size, const int b
         else y->scales_l[ib/2] |= (l_l << 4);
         scales_h[ib/8] |= (l_h << 2*(ib%8));
     }
-    if (sumq2 > 0) y->d = GGML_FP32_TO_FP16(sumqx/sumq2);
+    if (sumq2 > 0) y->d = GGML_FP32_TO_FP16(fudge*sumqx/sumq2);
 
     for (int i = 0; i < super_block_size/32; ++i) {
         for (int j = 0; j < 16; ++j) {
@@ -3245,6 +3255,8 @@ void quantize_row_iq5_k_impl(const float * x, void * vy, int n_per_row, const fl
 
     const int8_t * shifted_values = iq5nl_values + 32;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ5_K);
+
     for (int ibl = 0; ibl < n_per_row/QK_K; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq5_k));
@@ -3369,7 +3381,7 @@ void quantize_row_iq5_k_impl(const float * x, void * vy, int n_per_row, const fl
 
         if (!max_abs_scale) continue;
         float d = -max_scale/32;
-        y[ibl].d = GGML_FP32_TO_FP16(d);
+        y[ibl].d = GGML_FP32_TO_FP16(fudge*d);
         y[ibl].extra = extra;
 
         float id = 1/d;
@@ -3408,7 +3420,7 @@ void quantize_row_iq5_k_impl(const float * x, void * vy, int n_per_row, const fl
                 }
             }
         }
-        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(sumqx/sumq2);
+        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(fudge*sumqx/sumq2);
 
     }
 
@@ -3600,6 +3612,8 @@ void quantize_row_iq6_k_impl(const float * x, void * vy, int n_per_row, const fl
     float scales[QK_K/16];
     float weight[16];
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ6_K);
+
     for (int ibl = 0; ibl < n_per_row/QK_K; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq6_k));
@@ -3731,7 +3745,7 @@ void quantize_row_iq6_k_impl(const float * x, void * vy, int n_per_row, const fl
 
         if (!max_abs_scale) continue;
         float d = -max_scale/127;
-        y[ibl].d = GGML_FP32_TO_FP16(d);
+        y[ibl].d = GGML_FP32_TO_FP16(fudge*d);
         y[ibl].extra = extra;
 
         float id = 1/d;
@@ -3769,7 +3783,7 @@ void quantize_row_iq6_k_impl(const float * x, void * vy, int n_per_row, const fl
                 }
             }
         }
-        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(sumqx/sumq2);
+        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(fudge*sumqx/sumq2);
 
     }
 }
@@ -4382,6 +4396,8 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
 
     float amax_scale = 0;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_KS);
+
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
         memset(&y[ibl], 0, sizeof(block_iq4_ks));
         const float * xbl = x + ibl*super_block_size;
@@ -4480,7 +4496,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
         }
     }
     float d = amax_scale/127;
-    *dptr = d;
+    *dptr = fudge*d;
     if (!d) return;
     float id = d ? 1/d : 0.f;
     float sumqx = 0, sumq2 = 0;
@@ -4524,7 +4540,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
         }
     }
     //printf("rmse = %g\n", sqrt(mse/n_per_row));
-    if (sumq2 > 0) *dptr = sumqx/sumq2;
+    if (sumq2 > 0) *dptr = fudge*sumqx/sumq2;
 }
 }
 
@@ -4633,6 +4649,8 @@ static void quantize_row_iq5_ks_impl(const int super_block_size, const int block
 
     float amax_scale = 0;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ5_KS);
+
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
         memset(&y[ibl], 0, sizeof(block_iq5_ks));
         const float * xbl = x + ibl*super_block_size;
@@ -4731,7 +4749,7 @@ static void quantize_row_iq5_ks_impl(const int super_block_size, const int block
         }
     }
     float d = amax_scale/127;
-    *dptr = d;
+    *dptr = fudge*d;
     if (!d) return;
     float id = d ? 1/d : 0.f;
     float sumqx = 0, sumq2 = 0;
@@ -4767,7 +4785,7 @@ static void quantize_row_iq5_ks_impl(const int super_block_size, const int block
             }
         }
     }
-    if (sumq2 > 0) *dptr = sumqx/sumq2;
+    if (sumq2 > 0) *dptr = fudge*sumqx/sumq2;
 }
 }
 
@@ -4938,6 +4956,8 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
 
     float amax_scale = 0;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_KSS);
+
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
         memset(&y[ibl], 0, sizeof(block_iq4_kss));
         const float * xbl = x + ibl*super_block_size;
@@ -5053,7 +5073,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
         }
     }
     float d = amax_scale/127;
-    *dptr = d;
+    *dptr = fudge*d;
     if (!d) return;
     float id = 1/d;
     float sumqx = 0, sumq2 = 0;
@@ -5129,7 +5149,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
             }
         }
     }
-    if (sumq2 > 0) *dptr = sumqx/sumq2 * 1.01f;
+    if (sumq2 > 0) *dptr = fudge*sumqx/sumq2;
 }
 }
 
@@ -9366,6 +9386,8 @@ void quantize_row_iq1_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
     }
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ1_KT);
+
     float id = d ? 1/d : 0.f;
     for (int ibl = 0; ibl < nblock; ++ibl) {
         auto scales = all_scales + ibl*Q::kNblock;
@@ -9375,7 +9397,7 @@ void quantize_row_iq1_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
     }
 
-    *dptr = d;
+    *dptr = fudge*d;
     if (!d) return;
 
     for (int iloop = 0; iloop < 1; ++iloop) {
@@ -9429,7 +9451,7 @@ void quantize_row_iq1_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
         if (sumq2 > 0) {
             d = sumqx/sumq2;
-            *dptr = d * 1.07f;
+            *dptr = d * fudge;
             if (!d) return;
         } else {
             break;
@@ -9545,6 +9567,8 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     float amax_scale = 0, max_scale = 0;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ2_KT);
+
     for (int ibl = 0; ibl < nblock; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq2_kt));
@@ -9632,7 +9656,7 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
     }
 
-    *dptr = d;
+    *dptr = d * fudge;
     if (!d) return;
 
     for (int iloop = 0; iloop < 1; ++iloop) {
@@ -9686,7 +9710,7 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
         if (sumq2 > 0) {
             d = sumqx/sumq2;
-            *dptr = d;
+            *dptr = d * fudge;
             if (!d) return;
         } else {
             break;
@@ -9841,6 +9865,8 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     float xaux[Q::kBlockSize];
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ3_KT);
+
     for (int ibl = 0; ibl < nblock; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq3_kt));
@@ -9945,7 +9971,7 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
     }
 
-    *dptr = d;
+    *dptr = d * fudge;
 
     for (int iloop = 0; iloop < 1; ++iloop) {
 
@@ -9983,7 +10009,7 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
         if (sumq2 > 0) {
             d = sumqx/sumq2;
-            *dptr = d;
+            *dptr = d * fudge;
             if (!d) break;
         } else {
             break;
@@ -10133,6 +10159,8 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     float amax_scale = 0, max_scale = 0;
 
+    const float fudge = ggml_get_quantize_fudge_factor(GGML_TYPE_IQ4_KT);
+
     for (int ibl = 0; ibl < nblock; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq4_kt));
@@ -10199,7 +10227,7 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     float d = -max_scale/64;
 
-    dptr[0] = d;
+    dptr[0] = d * fudge;
     if (!d) return;
 
     constexpr int kNumGroups = Q::kSuperBlockSize/Q::kGroupSize;
@@ -10248,7 +10276,7 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
         if (sumq2 > 0) {
             d = sumqx/sumq2;
-            dptr[0] = d;
+            dptr[0] = d * fudge;
             if (!d) break;
         } else {
             break;

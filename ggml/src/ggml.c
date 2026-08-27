@@ -1967,6 +1967,113 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
     },
 };
 
+static float fudge_factors[GGML_TYPE_COUNT] = {
+    [GGML_TYPE_I8]         = 1.0f,
+    [GGML_TYPE_I16]        = 1.0f,
+    [GGML_TYPE_I32]        = 1.0f,
+    [GGML_TYPE_I64]        = 1.0f,
+    [GGML_TYPE_F64]        = 1.0f,
+    [GGML_TYPE_F32]        = 1.0f,
+    [GGML_TYPE_F16]        = 1.0f,
+    [GGML_TYPE_Q4_0]       = 1.0f,
+    [GGML_TYPE_Q4_1]       = 1.0f,
+    [4]                    = 1.0f,
+    [5]                    = 1.0f,
+    [GGML_TYPE_Q5_0]       = 1.0f,
+    [GGML_TYPE_Q5_1]       = 1.0f,
+    [GGML_TYPE_Q6_0]       = 1.0f,
+    [GGML_TYPE_Q8_0]       = 1.0f,
+    [GGML_TYPE_Q8_1]       = 1.0f,
+    [GGML_TYPE_Q8_0_X4]    = 1.0f,
+    [GGML_TYPE_Q8_1_X4]    = 1.0f,
+    [GGML_TYPE_Q8_2_X4]    = 1.0f,
+    [GGML_TYPE_Q2_K]       = 1.0f,
+    [GGML_TYPE_Q2_K_R4]    = 1.0f,
+    [GGML_TYPE_Q3_K]       = 1.0f,
+    [GGML_TYPE_Q3_K_R4]    = 1.0f,
+    [GGML_TYPE_Q4_K]       = 1.0f,
+    [GGML_TYPE_Q4_K_R4]    = 1.0f,
+    [GGML_TYPE_Q5_K]       = 1.0f,
+    [GGML_TYPE_Q5_K_R4]    = 1.0f,
+    [GGML_TYPE_Q6_K]       = 1.0f,
+    [GGML_TYPE_Q6_K_R4]    = 1.0f,
+    [GGML_TYPE_Q8_K_R8]    = 1.0f,
+    [GGML_TYPE_Q8_K_R16]   = 1.0f,
+    [GGML_TYPE_IQ2_XXS]    = 1.0f, // Note: via the grid we effectively scale with 43/40
+    [GGML_TYPE_IQ2_XXS_R4] = 1.0f,
+    [GGML_TYPE_IQ2_XS]     = 1.05f, // Note: via the grid we effective further scale with 43/40
+    [GGML_TYPE_IQ2_XS_R4]  = 1.0f,
+    [GGML_TYPE_IQ3_XXS]    = 1.0125f, // Note: via the grid we effective further scale with 63/60
+    [GGML_TYPE_IQ3_XXS_R4] = 1.0f,
+    [GGML_TYPE_IQ3_S]      = 1.033f,
+    [GGML_TYPE_IQ3_S_R4]   = 1.0f,
+    [GGML_TYPE_IQ2_S]      = 0.9875f, // Note: via the grid we effective further scale with 43/40
+    [GGML_TYPE_IQ2_S_R4]   = 1.0f,
+    [GGML_TYPE_IQ1_S]      = 1.125f,
+    [GGML_TYPE_IQ1_S_R4]   = 1.0f,
+    [GGML_TYPE_IQ1_M]      = 1.085f,
+    [GGML_TYPE_IQ1_M_R4]   = 1.0f,
+    [GGML_TYPE_IQ1_BN]     = 1.0f,
+    [GGML_TYPE_IQ2_BN]     = 1.0f,
+    [GGML_TYPE_IQ2_BN_R4]  = 1.0f,
+    [GGML_TYPE_IQ4_NL]     = 1.0f,
+    [GGML_TYPE_IQ4_XS]     = 1.0f,
+    [GGML_TYPE_MXFP4]      = 1.0f,
+    [GGML_TYPE_MXFP4_R8]   = 1.0f,
+    [GGML_TYPE_IQ4_KS]     = 1.0f,
+    [GGML_TYPE_IQ4_KS_R4]  = 1.0f,
+    [GGML_TYPE_IQ5_KS_R4]  = 1.0f,
+    [GGML_TYPE_IQ4_KSS]    = 1.01f,
+    [GGML_TYPE_IQ5_KS]     = 1.0f,
+    [GGML_TYPE_Q8_K]       = 1.0f,
+    [GGML_TYPE_Q8_K64]     = 1.0f,
+    [GGML_TYPE_Q8_K128]    = 1.0f,
+    [GGML_TYPE_Q8_KV]      = 1.0f,
+    [GGML_TYPE_Q8_KV_R8]   = 1.0f,
+    [GGML_TYPE_Q8_K16]     = 1.0f,
+    [GGML_TYPE_Q8_K32]     = 1.0f,
+    [GGML_TYPE_Q8_KR8]     = 1.0f,
+    [GGML_TYPE_BF16]       = 1.0f,
+    [GGML_TYPE_BF16_R16]   = 1.0f,
+    [GGML_TYPE_Q4_0_4_4]   = 1.0f,
+    [GGML_TYPE_Q4_0_4_8]   = 1.0f,
+    [GGML_TYPE_Q4_0_8_8]   = 1.0f,
+    [GGML_TYPE_IQ2_K]      = 1.03f,
+    [GGML_TYPE_IQ2_K_R4]   = 1.0f,
+    // What do I do here? We use 1.03f for the slow path, 1.0f for the default
+    [GGML_TYPE_IQ2_KS]     = 1.0f,
+    [GGML_TYPE_IQ1_KT]     = 1.07f,
+    [GGML_TYPE_IQ2_KT]     = 1.0f, // Note: we apply 1.05f at run time!
+    [GGML_TYPE_IQ3_KT]     = 1.0f, // Note: we apply 1.01f at run time!
+    [GGML_TYPE_IQ4_KT]     = 1.0f,
+    [GGML_TYPE_Q1_0_G128]  = 1.0f,
+    [GGML_TYPE_IQ3_K]      = 1.01f,
+    [GGML_TYPE_IQ3_KS]     = 1.0f,
+    [GGML_TYPE_IQ2_KL]     = 1.025f,
+    [GGML_TYPE_IQ4_K]      = 1.0f,
+    [GGML_TYPE_IQ4_K_R4]   = 1.0f,
+    [GGML_TYPE_IQ3_K_R4]   = 1.0f,
+    [GGML_TYPE_IQ5_K]      = 1.0f,
+    [GGML_TYPE_IQ5_K_R4]   = 1.0f,
+    [GGML_TYPE_IQ6_K]      = 1.0f,
+    [GGML_TYPE_IQ4_NL_R4]  = 1.0f,
+    [GGML_TYPE_IQ4_XS_R8]  = 1.0f,
+    [GGML_TYPE_Q4_0_R8]    = 1.0f,
+    [GGML_TYPE_Q8_0_R8]    = 1.0f,
+    [GGML_TYPE_Q5_0_R4]    = 1.0f,
+    [GGML_TYPE_Q6_0_R4]    = 1.0f,
+    [GGML_TYPE_I2_S]       = 1.0f,
+};
+
+void ggml_set_quantize_fudge_factor(enum ggml_type type, float fudge) {
+    fudge_factors[type] = fudge;
+}
+
+float ggml_get_quantize_fudge_factor(enum ggml_type type) {
+    return fudge_factors[type];
+}
+
+
 // For internal test use
 ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type) {
     GGML_ASSERT(type < GGML_TYPE_COUNT);
