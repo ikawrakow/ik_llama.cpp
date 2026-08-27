@@ -608,6 +608,95 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_QWEN4EXP:
+            {
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
+
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
+
+                ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,    hparams.dsv4_hc_mult);
+                ml.get_key(LLM_KV_HYPER_CONNECTION_LOW_RANK, hparams.hc_low_rank);
+
+                {
+                    uint32_t full_attn_interval = 4;
+                    ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+                    }
+                }
+
+                {
+                    uint32_t n_ratios = 0;
+                    if (ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_ratios, false) && n_ratios >= hparams.n_layer) {
+                        std::vector<uint32_t> ratios;
+                        ml.get_arr(ml.llm_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS), ratios);
+                        std::copy_n(ratios.begin(), hparams.n_layer, hparams.dsv4_compress_ratios.begin());
+                    }
+                }
+
+                // ple.layers is absent when the model carries no n-gram table, which leaves
+                // the module inert
+                {
+                    uint32_t n_ple_layers = 0;
+                    if (ml.get_arr_n(LLM_KV_PLE_LAYERS, n_ple_layers, false) && n_ple_layers > 0) {
+                        std::vector<uint32_t> ple_layers;
+                        ml.get_arr(ml.llm_kv(LLM_KV_PLE_LAYERS), ple_layers);
+                        for (uint32_t il : ple_layers) {
+                            if (il < hparams.n_layer) {
+                                hparams.ple_layer_arr[il] = true;
+                            }
+                        }
+                        ml.get_key(LLM_KV_PLE_NGRAM_SIZE,      hparams.ple_ngram_size);
+                        ml.get_key(LLM_KV_PLE_HEADS_PER_NGRAM, hparams.ple_heads_per_ngram);
+                        ml.get_key(LLM_KV_PLE_CONV_KERNEL,     hparams.ple_conv_kernel);
+                        ml.get_key(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, hparams.ple_head_dim);
+                        ml.get_key(LLM_KV_PLE_EOS_TOKEN_ID,    hparams.ple_eos_token_id, false);
+                        ml.get_key(LLM_KV_PLE_IMAGE_TOKEN_ID,  hparams.ple_image_token_id, false);
+
+                        hparams.ple_n_heads = (hparams.ple_ngram_size - 1) * hparams.ple_heads_per_ngram;
+                        if (hparams.ple_n_heads > LLAMA_MAX_PLE_HEADS || hparams.ple_ngram_size > LLAMA_MAX_PLE_NGRAM) {
+                            throw std::runtime_error("qwen4exp: PLE geometry exceeds the supported bounds");
+                        }
+
+                        std::vector<uint64_t> mults, offs, vocabs;
+                        ml.get_arr(ml.llm_kv(LLM_KV_PLE_LAYER_MULTIPLIERS), mults);
+                        ml.get_arr(ml.llm_kv(LLM_KV_PLE_HEAD_OFFSETS),      offs);
+                        ml.get_arr(ml.llm_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES),  vocabs);
+                        // the derived geometry indexes these arrays, and a short one would leave
+                        // zeros that reach a modulo in the host fill
+                        if (mults.size()  < hparams.ple_ngram_size ||
+                            offs.size()   < hparams.ple_n_heads ||
+                            vocabs.size() < hparams.ple_n_heads) {
+                            throw std::runtime_error("qwen4exp: the PLE arrays are shorter than the declared geometry");
+                        }
+                        for (size_t i = 0; i < mults.size()  && i < LLAMA_MAX_PLE_NGRAM; ++i) hparams.ple_layer_multipliers[i] = mults[i];
+                        for (size_t i = 0; i < offs.size()   && i < LLAMA_MAX_PLE_HEADS; ++i) hparams.ple_head_offsets[i]      = offs[i];
+                        for (size_t i = 0; i < vocabs.size() && i < LLAMA_MAX_PLE_HEADS; ++i) hparams.ple_head_vocab_sizes[i]  = vocabs[i];
+                        for (uint32_t h = 0; h < hparams.ple_n_heads; ++h) {
+                            if (hparams.ple_head_vocab_sizes[h] == 0) {
+                                throw std::runtime_error("qwen4exp: a PLE head declares a zero vocabulary size");
+                            }
+                        }
+                    }
+                }
+
+                switch (hparams.n_layer) {
+                    case 48: model.type = e_model::MODEL_125B_A6B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_QWEN35MOE:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
