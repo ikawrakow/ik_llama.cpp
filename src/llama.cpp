@@ -8812,8 +8812,10 @@ struct llama_context * llama_init_from_model(
             {
                 if (pipeline_parallel) {
                     LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
+                    ggml_backend_sched_free(ctx->sched);
+                    ctx->sched = nullptr;
                     ctx->sched = ggml_backend_sched_new(ctx->backends.data(), backend_buft.data(), ctx->backends.size(), max_nodes, false);
-                    gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
+                    gf_success = ctx->sched != nullptr && ggml_backend_sched_reserve(ctx->sched, gf);
                 }
                 if (!gf_success) {
                     LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
