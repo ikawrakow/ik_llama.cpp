@@ -8100,10 +8100,6 @@ static bool llama_prepare_model_for_context(llama_context & lctx) {
     std::lock_guard<std::mutex> lock(model.numa_mirror_mutex);
 
     if (ggml_numa_mirror_active()) {
-        if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
-            LLAMA_LOG_ERROR("%s: NUMA mirror is incompatible with MTP contexts\n", __func__);
-            return false;
-        }
         if (model.reload) {
             LLAMA_LOG_ERROR("%s: NUMA mirror is incompatible with hot reload\n", __func__);
             return false;
