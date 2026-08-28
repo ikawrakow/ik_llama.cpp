@@ -778,7 +778,7 @@ static ggml_tensor * dsv4_build_lid_top_k_shared(
                 indexer_mask->ne[0], n_tokens, indexer_mask->nb[1],
                 s*n_tokens*indexer_mask->nb[1]);
 
-        ggml_tensor * cur = ggml_indexer_topk(ctx0, k, q, w, mask,
+        ggml_tensor * cur = ggml_indexer_topk(ctx0, k, q, w, mask, nullptr,
                 GGML_UNARY_OP_RELU, n_top_k);
         if (selected) {
             selected = ggml_concat(ctx0, selected, cur, 1);
