@@ -21,8 +21,8 @@ __device__ __forceinline__ void vec_dot_iq3_k_q8_1(
 
     const uint8_t extra = bq3->extra >> (8*ib128 + il8/2);
     uint32_t extra32 = uint32_t(extra) * 0x01010101;
-    uint32_t extra32_1 = ((extra32 << 3) & 0x08080808) | ((extra32 << 5) & 0x80808080);
-    uint32_t extra32_2 = ((extra32 << 2) & 0x08080808) | ((extra32 << 4) & 0x80808080);
+    uint32_t extra32_1 = (extra32 << 3) & 0x88888888;
+    uint32_t extra32_2 = (extra32 << 1) & 0x88888888;
 
     const int * q8;
     int sumi[4] = {0, 0, 0, 0};

@@ -370,7 +370,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_final() {
         msg.role = "assistant";
         msg.content = content;
     }
-    if (stop) {
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
 
@@ -412,8 +412,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_final() {
 json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     std::time_t t = std::time(0);
     std::string finish_reason = "length";
-    if (stop) {
-        //if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = oaicompat_msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
 

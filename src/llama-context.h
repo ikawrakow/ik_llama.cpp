@@ -131,6 +131,10 @@ struct llama_kv_cache {
     // Empty unless the model has the DSA indexer.
     std::vector<struct ggml_tensor *> kr_l;
 
+    // Pooled block keys for Qwen sparse attention: [indexer_head_size, kv_size/compress_ratio],
+    // already normalised and rotated. Empty unless the model scores blocks.
+    std::vector<struct ggml_tensor *> kp_l;
+
     // When true, the delta_net graph builder will enable per-step SSM state saves
     bool save_per_step_ssm = false;
 
@@ -448,6 +452,13 @@ struct llama_context {
         struct capture_state {
             std::vector<int32_t> layer_ids;
             std::vector<std::vector<float>> layer_rows;
+            struct capture_chunk {
+                int32_t row_offset = 0;
+                int32_t row_count = 0;
+                size_t byte_offset = 0;
+                ggml_type type = GGML_TYPE_COUNT;
+            };
+            std::vector<std::vector<capture_chunk>> layer_chunks;
             std::vector<int32_t> layer_rows_written;
             int32_t row_count = 0;
             int32_t row_width = 0;
@@ -477,6 +488,11 @@ struct llama_context {
 
         std::vector<llama_token> draft_tokens;
         struct ggml_tensor * draft_tokens_tensor = nullptr;
+        struct ggml_tensor * draft_lattice_tensor = nullptr;
+        struct ggml_tensor * draft_lattice_ids_tensor = nullptr;
+        std::vector<float> draft_lattice;
+        std::vector<int32_t> draft_lattice_ids;
+        int32_t draft_lattice_top_k = 0;
     };
     dflash_runtime dflash;
     using dflash_capture_state = dflash_runtime::capture_state;
@@ -613,6 +629,7 @@ struct llama_context {
     struct ggml_tensor * inp_s_mask;      // F32 [1, n_kv]
     struct ggml_tensor * inp_s_seq;       // I32 [n_kv, n_batch]
     struct ggml_tensor * inp_s_seq_qnext; // I32 [1, n_batch]
+    struct ggml_tensor * inp_ple_rows = nullptr; // I32 [ple_n_heads * n_batch], qwen4exp n-gram rows
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
@@ -620,6 +637,32 @@ struct llama_context {
     struct ggml_tensor * inp_mtp_states = nullptr;
     struct ggml_tensor * inp_mtp_carry = nullptr; // F32 [n_embd, nextn-1] per-head hidden at the last committed position
     struct ggml_tensor * inp_dsa_sink = nullptr; // F32 [n_kv, n_tokens] per-sequence attention-sink boost for DSA indexer top-k
+
+    // Qwen sparse attention: everything that depends on cache layout is computed on the host,
+    // so the graph only gathers, pools and scores. One entry per distinct compress ratio.
+    struct qsa_input {
+        int32_t ratio    = 0;
+        struct ggml_tensor * cell_blk  = nullptr; // I32 [n_kv]           block each cell belongs to
+        struct ggml_tensor * bias      = nullptr; // F32 [n_kv, n_tokens] causal mask plus the tail boost
+        // only the blocks this ubatch writes into are pooled again; the rest are read from kp_l
+        struct ggml_tensor * win_blocks = nullptr; // I32 [n_win]         which block each entry rebuilds
+        struct ggml_tensor * win_cells  = nullptr; // I32 [ratio*n_win]   member cells of those blocks
+        struct ggml_tensor * win_pos    = nullptr; // I32 [4*n_win]       mrope position of those blocks
+        struct ggml_tensor * head_w     = nullptr; // F32 [n_idx_h, n_tokens] all ones; the head sum is unweighted
+    };
+    std::vector<qsa_input> inp_qsa;
+
+    // the pooled block keys no longer match the raw indexer keys and the next built graph must
+    // pool every block; set on state restore and defrag, cleared by that graph's host fill
+    bool qsa_pooled_stale = false;
+
+    // each sequence's recent tokens, read by the n-gram hash when a ubatch does not carry its
+    // first tokens' predecessors; trusted only while contiguous with the incoming position
+    struct ple_history {
+        llama_pos next_pos = -1;
+        std::vector<llama_token> toks;
+    };
+    std::map<llama_seq_id, ple_history> ple_hist;
 
     struct swa_window_view_state {
         bool active       = false;

@@ -14,6 +14,7 @@
 #include <string>
 #include <unordered_map>
 #include <fstream>
+#include <sstream>
 #include <cmath>
 
 struct quant_option {
@@ -152,7 +153,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--ignore-imatrix-rules] [--dry-run] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--per-layer-token-embedding-type] [--extra-output-tensor] [--fudge-factors] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--repack] [--repack-pattern] [--keep-split] [--partial-requant] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -172,6 +173,7 @@ static void usage(const char * executable) {
     printf("  --repack-pattern Comma separated list of regexs to use for matching tensor names to be repacked.\n\n");
     printf("  --symmetric-q40  Use [-7:7] range for Q4_0 quantization (turns off imatrix)\n\n");
     printf("  --slow-iq2ks Use the original very slow IQ2_KS quantization method.\n\n");
+    printf("  --fudge-factors type1=ff1,type2=ff2... Apply scale fudge factors during quantization as specified by type=fudge-factor.\n\n");
     printf("Additional specific tensor quantization types used in the custom quant scheme 'CQS (default is Q2_K):\n");
     printf("      --attn-q-type ggml_type: use this ggml_type for the attn_q.weight tensor.\n");
     printf("      --attn-k-type ggml_type: use this ggml_type for the attn_k.weight tensor.\n");
@@ -341,6 +343,32 @@ static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& cu
     return true;
 }
 
+static bool parse_fudge_factors(const std::string & arg, std::unordered_map<ggml_type, float> & factors) {
+    for (const auto & item : string_split<std::string>(arg, ',')) {
+        auto pos = item.find('=');
+        if (pos == std::string::npos) {
+            fprintf(stderr, "Invalid fudge factor input %s\n", arg.c_str());
+            return false;
+        }
+        auto type_as_string = item.substr(0, pos);
+        auto value_as_string = item.substr(pos + 1);
+        auto type = parse_ggml_type(type_as_string.c_str());
+        if (type == GGML_TYPE_COUNT) {
+            fprintf(stderr, "Invalid quantization type '%s' in fudge factor input %s\n", type_as_string.c_str(), item.c_str());
+            return false;
+        }
+        std::istringstream stream(value_as_string);
+        float val; stream >> val;
+        if (stream.fail()) {
+            fprintf(stderr, "Invalid fudge factor '%s' in fudge factor input %s\n", value_as_string.c_str(), item.c_str());
+            return false;
+        }
+        factors[type] = val;
+        printf("Adding scale fudge factor = %g for type %s\n", val, ggml_type_name(type));
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -357,6 +385,8 @@ int main(int argc, char ** argv) {
     params.user_data = &user_data;
 
     std::vector<std::string> repack_patterns;
+
+    std::unordered_map<ggml_type, float> fudge_factors;
 
     bool hide_imatrix = false;
 
@@ -466,6 +496,10 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_custom_quants(argv[++arg_idx], custom_quants)) {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--fudge-factors") == 0) {
+            if (arg_idx == argc-1 || !parse_fudge_factors(argv[++arg_idx], fudge_factors)) {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--allow-requantize") == 0) {
             params.allow_requantize = true;
         } else if (strcmp(argv[arg_idx], "--pure") == 0) {
@@ -496,6 +530,12 @@ int main(int argc, char ** argv) {
             params.partial_requant = true;
         } else {
             usage(argv[0]);
+        }
+    }
+
+    if (!fudge_factors.empty()) {
+        for (auto [type, factor] : fudge_factors) {
+            ggml_set_quantize_fudge_factor(type, factor);
         }
     }
 

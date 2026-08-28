@@ -17,6 +17,25 @@
 // mime type for sending response
 #define MIMETYPE_JSON "application/json; charset=utf-8"
 
+// Tee llama/ggml log output to --log-file (when set) and stderr. Gated on
+// log_target_changed() so it's a no-op unless --log-file was passed (LOG_TARGET
+// is non-null by default). The stdout/stderr guard mirrors LOG_TEE_IMPL and
+// avoids doubled output when fopen() falls back to stderr.
+static void llama_log_tee_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
+    if (text == nullptr) {
+        return;
+    }
+    if (log_target_changed()) {
+        FILE * tgt = LOG_TARGET;
+        if (tgt != nullptr && tgt != stdout && tgt != stderr) {
+            fprintf(tgt, "%s", text);
+            fflush(tgt);
+        }
+    }
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
 
 #ifndef NDEBUG
 // crash the server in debug mode, otherwise send an http 500 error
@@ -465,6 +484,23 @@ int main(int argc, char ** argv) {
 
     // parse arguments from environment variables
     gpt_params_parse_from_env(params);
+
+    // Tee llama/ggml logs to --log-file; installed before model load so that
+    // load-time logs are captured too.
+    llama_log_set(llama_log_tee_callback, nullptr);
+
+    // Route common_log (SLT_*/SRV_*/QUE_*/RES_*/bare LOG_* slot+queue output) to
+    // --log-file via its native file sink. The worker tees to stderr and file
+    // (common/log.cpp), so this captures every common_log line in one call
+    // instead of mirroring each macro. Share LOG_TARGET's already-opened FILE*
+    // so there's a single handle on the file (a second fopen would truncate and
+    // the two handles' writes would corrupt each other).
+    if (log_target_changed()) {
+        FILE * tgt = LOG_TARGET;
+        if (tgt != nullptr && tgt != stdout && tgt != stderr) {
+            common_log_set_file_ptr(common_log_main(), tgt);
+        }
+    }
 
     // TODO: not great to use extern vars
     server_log_json = params.log_json;

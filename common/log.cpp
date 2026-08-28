@@ -146,6 +146,7 @@ struct common_log {
 
     common_log(size_t capacity) {
         file = nullptr;
+        file_owned = false;
         prefix = false;
         timestamps = false;
         running = false;
@@ -165,7 +166,7 @@ struct common_log {
 
     ~common_log() {
         pause();
-        if (file) {
+        if (file && file_owned) {
             fclose(file);
         }
     }
@@ -176,6 +177,7 @@ private:
     std::condition_variable cv;
 
     FILE * file;
+    bool file_owned;
 
     bool prefix;
     bool timestamps;
@@ -330,15 +332,31 @@ public:
     void set_file(const char * path) {
         pause();
 
-        if (file) {
+        if (file && file_owned) {
             fclose(file);
         }
 
         if (path) {
             file = fopen(path, "w");
+            file_owned = true;
         } else {
             file = nullptr;
+            file_owned = false;
         }
+
+        resume();
+    }
+
+    // Use an externally-owned FILE* (no fopen, no fclose on destruction).
+    void set_file_ptr(FILE * f) {
+        pause();
+
+        if (file && file_owned) {
+            fclose(file);
+        }
+
+        file = f;
+        file_owned = false;
 
         resume();
     }
@@ -418,6 +436,13 @@ void common_log_add(struct common_log * log, enum ggml_log_level level, const ch
 
 void common_log_set_file(struct common_log * log, const char * file) {
     log->set_file(file);
+}
+
+// Share an externally-opened FILE* (e.g. log_handler's LOG_TARGET) so common_log
+// tees to it without a second fopen() on the same path. common_log will not
+// close it on destruction (the caller owns the handle).
+void common_log_set_file_ptr(struct common_log * log, FILE * file) {
+    log->set_file_ptr(file);
 }
 
 void common_log_set_colors(struct common_log * log, log_colors colors) {

@@ -168,9 +168,6 @@ common_params_speculative common_params_speculative::with_stage_overrides(const 
     if (stage.has_mtp_heads_override()) {
         result.mtp_heads = stage.mtp_heads;
     }
-    if (stage.has_dflash_cross_ctx_override()) {
-        result.dflash_cross_ctx = stage.dflash_cross_ctx;
-    }
     if (stage.has_ngram_size_n_override()) {
         result.ngram_size_n = stage.ngram_size_n;
         result.ngram_mod.reset();
@@ -321,9 +318,6 @@ bool common_speculative_validate_chain(const common_params_speculative & params,
             return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires a draft model or draft params");
         }
 
-        if (common_speculative_type_is_dflash_family(stage.type) && stage_params.dflash_cross_ctx < 1) {
-            return fail(common_speculative_type_to_str(stage.type) + " speculative stage requires cross_ctx >= 1");
-        }
     }
 
     if (resolved.size() == 2) {
@@ -956,13 +950,6 @@ static void common_speculative_stage_apply_kv(
         stage.mtp_heads = std::stoi(value_raw);
         if (stage.mtp_heads < 0) {
             throw std::invalid_argument("speculative stage mtp_heads must be >= 0");
-        }
-        return;
-    }
-    if (key == "cross_ctx" || key == "dflash_cross_ctx") {
-        stage.dflash_cross_ctx = std::stoi(value_raw);
-        if (stage.dflash_cross_ctx < 1) {
-            throw std::invalid_argument("speculative stage dflash cross_ctx must be at least 1");
         }
         return;
     }
@@ -3071,7 +3058,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "path to dynamic lookup cache to use for lookup decoding (updated by generation)" });
 
     options.push_back({ "*",           "-c,    --ctx-size N",           "size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx });
-    options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.speculative.n_ctx });
+    options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = inherits target context for DFlash/DSpark, otherwise loaded from model)", params.speculative.n_ctx });
 
     options.push_back({ "*",           "-ctx-ckpt N, --ctx-checkpoints N",           "max number of context checkpoints to create per slot (default: %d)",params.ctx_checkpoints_n});
     options.push_back({ "*",           "-ctx-ckpt-i N, --ctx-checkpoints-interval N",  "minimum number of tokens between each context checkpoint.  (default: %d, <=0 disable)",params.ctx_checkpoints_interval});
@@ -3389,12 +3376,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                               "  --recurrent-ckpt-mode remains as a deprecated alias" });
     options.push_back({ "*", "--spec-type SPEC[:k=v,...]",      "canonical speculative stage entry; repeat for a supported two-stage chain.\n"
                                                               "types: none, draft, dflash, dspark, mtp, ngram-cache, ngram-simple, ngram-map-k, ngram-map-k4v, ngram-mod, suffix\n"
-                                                              "canonical keys: n_max,n_min,p_min,heads,cross_ctx,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
+                                                              "canonical keys: n_max,n_min,p_min,heads,ngram_size_n,ngram_size_m,ngram_min_hits,suffix_min_match_len,suffix_max_depth,suffix_corpus\n"
                                                               "MTP heads: heads=1 is the default; heads>1 and heads=0 (all model heads) are experimental\n"
                                                               "for comma-bearing string values, quote the value inside the stage payload for normal shell use\n"
                                                               "if argv is passed directly without shell unescaping, the parser also accepts escaped commas as \\,\n"
                                                               "examples: --spec-type mtp:n_max=1,p_min=0.0\n"
-                                                              "          --model-draft draft.gguf --spec-type dflash:n_max=4,cross_ctx=512\n"
+                                                              "          --model-draft draft.gguf --spec-type dflash:n_max=4\n"
                                                               "          --spec-type ngram-mod:n_max=64,n_min=2,ngram_size_n=8 --spec-type mtp:n_max=1,p_min=0.0\n"
                                                               "          --spec-type \"suffix:n_max=16,n_min=2,suffix_min_match_len=5,suffix_max_depth=64,suffix_corpus='/tmp/spec,type-corpus.json'\"\n"
                                                               "legacy --spec-stage, --draft-*, --spec-ngram-*, --suffix-* and -mtp flags are rejected" });

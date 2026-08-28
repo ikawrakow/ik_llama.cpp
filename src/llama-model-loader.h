@@ -88,6 +88,8 @@ struct llama_model_loader {
 
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
+    mutable bool arch_resolved = false;
+    mutable llm_arch resolved_arch = LLM_ARCH_UNKNOWN;
     llama_expert_tensor_index expert_tensor_index;
 
     llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
@@ -131,7 +133,16 @@ struct llama_model_loader {
 
     const std::string& get_arch_name() const { return arch_name; }
 
-    enum llm_arch get_arch() const { return llm_kv.arch; }
+    enum llm_arch get_arch() const {
+        if (!arch_resolved) {
+            resolved_arch = llm_kv.arch;
+            if (resolved_arch == LLM_ARCH_DFLASH && get_tensor_meta("selector_hidden.weight") != nullptr) {
+                resolved_arch = LLM_ARCH_DFLASH2;
+            }
+            arch_resolved = true;
+        }
+        return resolved_arch;
+    }
 
     const char * get_tensor_name(int i) const;
 

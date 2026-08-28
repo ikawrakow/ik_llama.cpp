@@ -7,6 +7,8 @@
 #include <cmath>
 
 #define LLAMA_MAX_LAYERS  512
+#define LLAMA_MAX_PLE_NGRAM 8
+#define LLAMA_MAX_PLE_HEADS 64
 
 enum llm_expert_gating_func_type {
     LLM_EXPERT_GATING_FUNC_TYPE_NONE             = 0,
@@ -152,6 +154,21 @@ struct llama_hparams {
     float    dsv4_hc_eps             = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios = {};
 
+    // qwen4exp. hc_low_rank 0 means the full-rank hyper-connection form; the
+    // ple_* group is inert unless the model carries an n-gram embedding layer.
+    uint32_t hc_low_rank         = 0;
+    uint32_t ple_ngram_size      = 0;
+    uint32_t ple_heads_per_ngram = 0;
+    uint32_t ple_conv_kernel     = 0;
+    uint32_t ple_n_heads         = 0;   // (ngram_size - 1) * heads_per_ngram
+    uint32_t ple_head_dim        = 0;
+    uint32_t ple_eos_token_id    = 0;
+    uint32_t ple_image_token_id  = 0;
+    std::array<bool,     LLAMA_MAX_LAYERS> ple_layer_arr = {};
+    std::array<uint64_t, LLAMA_MAX_PLE_NGRAM> ple_layer_multipliers = {};
+    std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_offsets      = {};
+    std::array<uint64_t, LLAMA_MAX_PLE_HEADS> ple_head_vocab_sizes  = {};
+
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
@@ -170,6 +187,10 @@ struct llama_hparams {
     uint32_t dflash_n_target_features = 0;
     uint32_t dflash_n_target_layers = 0;
     uint32_t dflash_target_layer_ids[8] = {};
+    uint32_t dflash_conv_kernel_size = 0;
+    uint32_t dflash_conv_group_size = 0;
+    uint32_t dflash_selector_rank = 0;
+    uint32_t dflash_selector_top_k = 0;
     float    dflash_backbone_rotary_base = 0.0f;
     bool     dflash_laguna = false;
     bool     dflash_dsv4 = false;
@@ -197,6 +218,10 @@ struct llama_hparams {
         if (this->dflash_mask_token_id != other.dflash_mask_token_id) return true;
         if (this->dflash_n_target_features != other.dflash_n_target_features) return true;
         if (this->dflash_n_target_layers != other.dflash_n_target_layers) return true;
+        if (this->dflash_conv_kernel_size != other.dflash_conv_kernel_size) return true;
+        if (this->dflash_conv_group_size != other.dflash_conv_group_size) return true;
+        if (this->dflash_selector_rank != other.dflash_selector_rank) return true;
+        if (this->dflash_selector_top_k != other.dflash_selector_top_k) return true;
         if (this->dflash_laguna != other.dflash_laguna) return true;
         if (this->dflash_dsv4   != other.dflash_dsv4)   return true;
         if (this->n_layer       != other.n_layer)       return true;
@@ -368,6 +393,26 @@ struct llama_hparams {
 
     bool is_recurrent(uint32_t il) const {
         return il < n_layer ? recurrent_layer_arr[il] : false;
+    }
+
+    bool is_ple(uint32_t il) const {
+        return il < n_layer ? ple_layer_arr[il] : false;
+    }
+
+    // the layer runs Qwen sparse attention over pooled blocks; deepseek4 fills the same
+    // ratio array for its CSA/HCA layers and reads the ratio value directly instead
+    bool is_qsa(uint32_t il) const {
+        return il < n_layer ? dsv4_compress_ratios[il] > 0 : false;
+    }
+
+    // rows the PLE convolution history adds to a layer's recurrent state row: the taps reach
+    // (kernel - 1) * ngram_size positions back, over every channel of the wide residual
+    uint32_t n_embd_ple_conv(uint32_t il) const {
+        return is_ple(il) ? ple_conv_state() * dsv4_hc_mult * n_embd : 0;
+    }
+
+    uint32_t ple_conv_state() const {
+        return ple_conv_kernel > 0 ? (ple_conv_kernel - 1) * ple_ngram_size : 0;
     }
 
     static bool is_float_close(float a, float b, float abs_tol) {

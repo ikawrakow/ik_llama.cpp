@@ -31,6 +31,7 @@ enum llm_arch {
     LLM_ARCH_QWEN3VLMOE,
     LLM_ARCH_QWEN35MOE,
     LLM_ARCH_QWEN35,
+    LLM_ARCH_QWEN4EXP,
     LLM_ARCH_MELLUM,
     LLM_ARCH_PHI2,
     LLM_ARCH_PHI3,
@@ -85,6 +86,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA4,
     LLM_ARCH_GEMMA4_MTP,
     LLM_ARCH_DFLASH,
+    LLM_ARCH_DFLASH2,
     LLM_ARCH_DFLASH_DRAFT,
     LLM_ARCH_GEMMA4_ASSISTANT,
     LLM_ARCH_OPENPANGU,
@@ -157,6 +159,10 @@ enum llm_kv {
     LLM_KV_DFLASH_N_TARGET_FEATURES,
     LLM_KV_DFLASH_BACKBONE_ROTARY_BASE,
     LLM_KV_DFLASH_LAGUNA,
+    LLM_KV_DFLASH_CONV_KERNEL_SIZE,
+    LLM_KV_DFLASH_CONV_GROUP_SIZE,
+    LLM_KV_DFLASH_SELECTOR_RANK,
+    LLM_KV_DFLASH_SELECTOR_TOP_K,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -194,6 +200,17 @@ enum llm_kv {
     LLM_KV_HYPER_CONNECTION_COUNT,
     LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS,
     LLM_KV_HYPER_CONNECTION_EPSILON,
+    LLM_KV_HYPER_CONNECTION_LOW_RANK,
+
+    LLM_KV_PLE_LAYERS,
+    LLM_KV_PLE_NGRAM_SIZE,
+    LLM_KV_PLE_HEADS_PER_NGRAM,
+    LLM_KV_PLE_CONV_KERNEL,
+    LLM_KV_PLE_LAYER_MULTIPLIERS,
+    LLM_KV_PLE_HEAD_OFFSETS,
+    LLM_KV_PLE_HEAD_VOCAB_SIZES,
+    LLM_KV_PLE_EOS_TOKEN_ID,
+    LLM_KV_PLE_IMAGE_TOKEN_ID,
 
     LLM_KV_HASH_LAYER_COUNT,
 
@@ -418,6 +435,31 @@ enum llm_tensor {
     LLM_TENSOR_HC_FFN_FN,
     LLM_TENSOR_HC_FFN_SCALE,
 
+    // qwen4exp low-rank hyper-connections: a gated mix over the wide residual,
+    // unrelated to the HC_*_BASE/FN/SCALE set above
+    LLM_TENSOR_HC_HEAD_NORM,
+    LLM_TENSOR_HC_HEAD_DOWN,
+    LLM_TENSOR_HC_HEAD_UP,
+    LLM_TENSOR_HC_ATTN_NORM,
+    LLM_TENSOR_HC_ATTN_DOWN,
+    LLM_TENSOR_HC_ATTN_UP,
+    LLM_TENSOR_HC_ATTN_INJECT,
+    LLM_TENSOR_HC_FFN_NORM,
+    LLM_TENSOR_HC_FFN_DOWN,
+    LLM_TENSOR_HC_FFN_UP,
+    LLM_TENSOR_HC_FFN_INJECT,
+
+    LLM_TENSOR_PLE_KEY,
+    LLM_TENSOR_PLE_VALUE,
+    LLM_TENSOR_PLE_NORM_KEY,
+    LLM_TENSOR_PLE_NORM_QUERY,
+    LLM_TENSOR_PLE_NORM_CONV,
+    LLM_TENSOR_PLE_CONV1D,
+
+    LLM_TENSOR_INDEXER_Q_PROJ,
+    LLM_TENSOR_INDEXER_K_PROJ,
+    LLM_TENSOR_INDEXER_Q_NORM,
+
     LLM_TENSOR_PER_LAYER_TOKEN_EMBD,
     LLM_TENSOR_PER_LAYER_MODEL_PROJ,
     LLM_TENSOR_PER_LAYER_INP_GATE,         // 100
@@ -438,6 +480,13 @@ enum llm_tensor {
     LLM_TENSOR_DSPARK_MARKOV_W1,
     LLM_TENSOR_DSPARK_MARKOV_W2,
     LLM_TENSOR_DSPARK_CONF_PROJ,
+    LLM_TENSOR_DFLASH_ATTN_CONV_BASE,
+    LLM_TENSOR_DFLASH_ATTN_CONV_PROJ,
+    LLM_TENSOR_DFLASH_FFN_CONV_BASE,
+    LLM_TENSOR_DFLASH_FFN_CONV_PROJ,
+    LLM_TENSOR_DFLASH_SELECTOR_PREV,
+    LLM_TENSOR_DFLASH_SELECTOR_NEXT,
+    LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
 
     // openPangu-2.0
     LLM_TENSOR_ATTN_QA_CONV,        // MoME causal conv on q-lora latent
@@ -469,5 +518,7 @@ const char * llama_model_arch_name(llm_arch arch);
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid(const llm_arch & arch);
 bool llm_arch_is_dflash_family(const llm_arch & arch);
+// DFlash2 consumes every anchor/mask row to construct its selector lattice
+bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch);
 
 llm_tensor llm_tensor_type(llm_arch arch, const std::string & tensor_name, int il);
