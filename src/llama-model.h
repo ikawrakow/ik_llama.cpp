@@ -537,6 +537,16 @@ struct llama_model {
     struct ggml_tensor * hc_head_down = nullptr;
     struct ggml_tensor * hc_head_up   = nullptr;
 
+    // qwen4exp MTP head: entry fusion (fc_embedding + shared fc_hidden over the wide
+    // residual) and the exit mixer, which is hc_head-shaped (norm/down/up, no inject)
+    struct ggml_tensor * mtp_fc_embd         = nullptr;
+    struct ggml_tensor * mtp_fc_hidden       = nullptr;
+    struct ggml_tensor * mtp_pre_norm_embd   = nullptr;
+    struct ggml_tensor * mtp_pre_norm_hidden = nullptr;
+    struct ggml_tensor * mtp_mixer_norm      = nullptr;
+    struct ggml_tensor * mtp_mixer_down      = nullptr;
+    struct ggml_tensor * mtp_mixer_up        = nullptr;
+
     // openPangu-2.0: global mHC stream-merge module (non-block)
     struct ggml_tensor * mhc_merge_phi   = nullptr;
     struct ggml_tensor * mhc_merge_alpha = nullptr;
