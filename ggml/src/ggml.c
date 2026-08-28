@@ -10332,12 +10332,19 @@ struct ggml_tensor * ggml_indexer_topk(
             struct ggml_tensor  * q,
             struct ggml_tensor  * w,
             struct ggml_tensor  * mask,
+            struct ggml_tensor  * blk_idx,
             enum ggml_unary_op    op,
             int                   n_top_k) {
     GGML_ASSERT(k->ne[2] == 1 && k->ne[3] == 1);
-    GGML_ASSERT(k->ne[1] > n_top_k);
-    GGML_ASSERT(k->ne[1] == mask->ne[0]);
     GGML_ASSERT(k->ne[0] == q->ne[0]);
+    if (blk_idx) {
+        GGML_ASSERT(ggml_nrows(blk_idx) == 1);
+        GGML_ASSERT(blk_idx->ne[0] > n_top_k);
+        GGML_ASSERT(blk_idx->type == GGML_TYPE_I32);
+    } else {
+        GGML_ASSERT(k->ne[1] == mask->ne[0]);
+        GGML_ASSERT(k->ne[1] > n_top_k);
+    }
     GGML_ASSERT(q->ne[2] == mask->ne[1]);
     GGML_ASSERT(q->ne[1] == w->ne[0]);
     GGML_ASSERT(q->ne[2] == w->ne[1]);
@@ -10349,6 +10356,7 @@ struct ggml_tensor * ggml_indexer_topk(
     result->src[1] = q;
     result->src[2] = w;
     result->src[3] = mask;
+    result->src[4] = blk_idx;
 
     return result;
 }
