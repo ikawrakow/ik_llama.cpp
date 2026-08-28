@@ -455,8 +455,6 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
     ggml_tensor * res_hc = nullptr;
     if (is_mtp) {
-        GGML_ASSERT(model.mtp && hparams.nextn_predict_layers == 1);
-
         // the fill sites assert on these buffers; the MTP graph consumes neither
         lctx.inp_s_seq_qnext = nullptr;
         lctx.inp_ple_rows    = nullptr;
@@ -464,26 +462,27 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         const int32_t hc_dim = hc * n_embd;
         ggml_tensor * hidden = build_inp_mtp_states(hc_dim);       // target's pre-mixer wide stream
         ggml_tensor * tok    = build_inp_embd_mtp(model.tok_embd); // [n_embd, n_tokens]
+        const auto & nextn = model.layers[n_layer_begin].nextn;
 
-        // embedding branch: plain RMS + fc_embedding
+        // Normalize the two inputs exactly as before: the embedding over n_embd,
+        // and the hidden state over the full flattened hc*n_embd wide vector.
         ggml_tensor * e = ggml_rms_norm(ctx0, tok, hparams.f_norm_rms_eps);
-        e = ggml_mul(ctx0, e, model.mtp_pre_norm_embd);
-        e = llm_build_lora_mm(lctx, ctx0, model.mtp_fc_embd, e);
-        cb(e, "mtp_fc_embd", -1);
+        e = ggml_mul(ctx0, e, nextn.enorm);
 
-        // hidden branch: RMS statistics over the FULL flattened wide vector (not
-        // per-stream like the HC mixers), then the shared fc_hidden per stream
         ggml_tensor * h = ggml_rms_norm(ctx0, hidden, hparams.f_norm_rms_eps);
-        h = ggml_mul(ctx0, h, model.mtp_pre_norm_hidden);
-        h = ggml_reshape_2d(ctx0, h, n_embd, hc * n_tokens);
-        h = llm_build_lora_mm(lctx, ctx0, model.mtp_fc_hidden, h);
-        cb(h, "mtp_fc_hidden", -1);
+        h = ggml_mul(ctx0, h, nextn.hnorm);
 
-        // the embedding is added as a residual to every stream
-        ggml_tensor * e3 = ggml_repeat_4d(ctx0,
+        // eh_proj is [fc_embedding | fc_hidden] along its input dimension.
+        // Concatenating e_norm and h_norm per stream therefore preserves the old
+        // fc_embedding@e_norm + fc_hidden@h_norm entry result in one matmul.
+        e = ggml_repeat_4d(ctx0,
                 ggml_reshape_3d(ctx0, e, n_embd, 1, n_tokens), n_embd, hc, n_tokens, 1);
-        res_hc = ggml_add(ctx0, ggml_reshape_3d(ctx0, h, n_embd, hc, n_tokens), e3);
-        cb(res_hc, "mtp_entry", n_layer_begin);
+        h = ggml_reshape_3d(ctx0, h, n_embd, hc, n_tokens);
+        ggml_tensor * eh = ggml_concat(ctx0, e, h, 0);
+        cb(eh, "mtp_eh_concat", n_layer_begin);
+
+        res_hc = llm_build_lora_mm(lctx, ctx0, nextn.eh_proj, eh);
+        cb(res_hc, "mtp_eh_proj", n_layer_begin);
     } else {
         ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
 
@@ -577,9 +576,10 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         ggml_build_forward_expand(gf, h_next);
 
         // exit mixer is hc_head-shaped: per-stream norm + low-rank gate, no inject
+        const auto & nextn = model.layers[n_layer_begin].nextn;
         ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams,
                 ggml_reshape_3d(ctx0, h_next, n_embd, hc, h_next->ne[1]),
-                model.mtp_mixer_norm, model.mtp_mixer_down, model.mtp_mixer_up,
+                nextn.hc_head_norm, nextn.hc_head_down, nextn.hc_head_up,
                 nullptr, nullptr, n_embd, -1, cb);
 
         cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);

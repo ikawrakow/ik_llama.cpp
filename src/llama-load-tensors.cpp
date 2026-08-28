@@ -1681,6 +1681,12 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     const int32_t hc_dim  = hc * n_embd;
     const int32_t hc_rank = hparams.hc_low_rank;
 
+    if (model.mtp && hparams.nextn_predict_layers != 1) {
+        throw std::runtime_error(format(
+                "qwen4exp: MTP requires exactly one appended NextN block; nextn_predict_layers is %u",
+                hparams.nextn_predict_layers));
+    }
+
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     // The wide residual is normalised and collapsed by a hyper-connection mix rather
@@ -1800,16 +1806,85 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     }
 
     if (hparams.nextn_predict_layers > 0) {
-        // MTP entry fusion + exit mixer (hc_head-shaped, no inject); loaded only when
-        // speculative MTP is requested, same contract as the nextn tail layers
-        const int mf = model.mtp ? 0 : llama_model_loader::TENSOR_SKIP;
-        model.mtp_fc_embd         = create_tensor(ctx_output, "mtp.fc_embd.weight",         {n_embd, n_embd}, mf);
-        model.mtp_fc_hidden       = create_tensor(ctx_output, "mtp.fc_hidden.weight",       {n_embd, n_embd}, mf);
-        model.mtp_pre_norm_embd   = create_tensor(ctx_output, "mtp.pre_norm_embd.weight",   {n_embd}, mf);
-        model.mtp_pre_norm_hidden = create_tensor(ctx_output, "mtp.pre_norm_hidden.weight", {hc_dim}, mf);
-        model.mtp_mixer_norm      = create_tensor(ctx_output, "mtp.mixer_norm.weight",      {hc_dim}, mf);
-        model.mtp_mixer_down      = create_tensor(ctx_output, "mtp.mixer_down.weight",      {hc_dim, hc_rank}, mf);
-        model.mtp_mixer_up        = create_tensor(ctx_output, "mtp.mixer_up.weight",        {hc_rank, hc_dim}, mf);
+        const int bid = n_layer - 1;
+        auto & nextn = model.layers[bid].nextn;
+        auto * head_ctx = ctx_for_layer_split(bid);
+
+        // Head-level tensors are optional at file-load time. A normal load skips any
+        // that are present, while an MTP load resolves and validates one complete layout below.
+        int flags = llama_model_loader::TENSOR_NOT_REQUIRED;
+        if (!model.mtp) {
+            flags |= llama_model_loader::TENSOR_SKIP;
+        }
+
+        const std::string eh_proj_name = tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", bid);
+        const std::string enorm_name   = tn(LLM_TENSOR_NEXTN_ENORM,   "weight", bid);
+        const std::string hnorm_name   = tn(LLM_TENSOR_NEXTN_HNORM,   "weight", bid);
+        const std::string shared_norm_name = tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", bid);
+        const std::string hc_norm_name = tn(LLM_TENSOR_NEXTN_HC_HEAD_NORM, "weight", bid);
+        const std::string hc_down_name = tn(LLM_TENSOR_NEXTN_HC_HEAD_DOWN, "weight", bid);
+        const std::string hc_up_name   = tn(LLM_TENSOR_NEXTN_HC_HEAD_UP,   "weight", bid);
+
+        nextn.eh_proj = create_tensor(head_ctx, eh_proj_name, {2 * n_embd, n_embd}, flags);
+        nextn.enorm   = create_tensor(head_ctx, enorm_name,   {n_embd}, flags);
+        nextn.hnorm   = create_tensor(head_ctx, hnorm_name,   {hc_dim}, flags);
+
+        // Flavor A: the upstream converter's head-local mixer.
+        nextn.hc_head_norm = create_tensor(head_ctx, hc_norm_name, {hc_dim}, flags);
+        nextn.hc_head_down = create_tensor(head_ctx, hc_down_name, {hc_dim, hc_rank}, flags);
+        nextn.hc_head_up   = create_tensor(head_ctx, hc_up_name,   {hc_rank, hc_dim}, flags);
+
+        // Flavor B: community merge-script files retain only the head norm and
+        // use the trunk's already-loaded output_hc_down/output_hc_up pair.
+        nextn.shared_head_norm = create_tensor(head_ctx, shared_norm_name, {hc_dim}, flags);
+
+        if (model.mtp) {
+            std::string missing;
+            auto require = [&](const ggml_tensor * tensor, const std::string & name) {
+                if (tensor == nullptr) {
+                    if (!missing.empty()) {
+                        missing += ", ";
+                    }
+                    missing += name;
+                }
+            };
+
+            require(nextn.eh_proj, eh_proj_name);
+            require(nextn.enorm,   enorm_name);
+            require(nextn.hnorm,   hnorm_name);
+
+            // Any dedicated-mixer tensor selects flavor A. Do not hide a malformed
+            // flavor A by mixing it with flavor B.
+            const bool has_dedicated_mixer = nextn.hc_head_norm != nullptr ||
+                    nextn.hc_head_down != nullptr || nextn.hc_head_up != nullptr;
+            if (has_dedicated_mixer) {
+                require(nextn.hc_head_norm, hc_norm_name);
+                require(nextn.hc_head_down, hc_down_name);
+                require(nextn.hc_head_up,   hc_up_name);
+            } else {
+                require(nextn.shared_head_norm, shared_norm_name);
+                require(model.hc_head_down, "output_hc_down.weight");
+                require(model.hc_head_up,   "output_hc_up.weight");
+            }
+
+            if (!missing.empty()) {
+                throw std::runtime_error(format(
+                        "qwen4exp: MTP requested but the NextN head is incomplete; missing tensor(s): %s. "
+                        "Accepted layouts for block %d are flavor A: %s, %s, %s, %s, %s, %s; "
+                        "or flavor B: %s, %s, %s, %s with trunk output_hc_down.weight and output_hc_up.weight",
+                        missing.c_str(), bid,
+                        eh_proj_name.c_str(), enorm_name.c_str(), hnorm_name.c_str(),
+                        hc_norm_name.c_str(), hc_down_name.c_str(), hc_up_name.c_str(),
+                        eh_proj_name.c_str(), enorm_name.c_str(), hnorm_name.c_str(), shared_norm_name.c_str()));
+            }
+
+            if (!has_dedicated_mixer) {
+                nextn.hc_head_norm = nextn.shared_head_norm;
+                nextn.hc_head_down = model.hc_head_down;
+                nextn.hc_head_up   = model.hc_head_up;
+                LLAMA_LOG_WARN("qwen4exp: NextN head has no dedicated hc mixer; using the trunk output_hc_down/output_hc_up mixer\n");
+            }
+        }
     }
 
     return use_mmap_buffer;
