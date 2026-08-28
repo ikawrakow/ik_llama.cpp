@@ -6700,8 +6700,7 @@ static struct ggml_tensor * ggml_fused_mul_unary_impl(
         result->src[1] = b;
         return result;
     }
-    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU);
-    //GGML_ASSERT(ggml_are_same_shape(b, a));
+    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU || op == GGML_UNARY_OP_SIGMOID);
 
     bool is_node = false;
 
@@ -17061,7 +17060,7 @@ static void ggml_compute_forward_fused_mul_unary_f32(
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
     GGML_ASSERT(ggml_are_same_shape(src0, src1));
-    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU);
+    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU || op == GGML_UNARY_OP_SIGMOID);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
         float * z = (float *) ((char *) dst->data  + i1*( dst->nb[1]));
@@ -17070,6 +17069,7 @@ static void ggml_compute_forward_fused_mul_unary_f32(
         switch (op) {
             case GGML_UNARY_OP_GELU: ggml_vec_gelu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
             case GGML_UNARY_OP_RELU: ggml_vec_relu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
+            case GGML_UNARY_OP_SIGMOID: ggml_vec_sigmoid_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
             case GGML_UNARY_OP_SILU: {
                 if (limit < 1e-6f) {
                     ggml_vec_mul_silu_f32(nc, z, x, y);

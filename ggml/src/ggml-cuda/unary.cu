@@ -92,6 +92,15 @@ static __global__ void fused_mul_sigmoid_f32(int ne0, const float * x, const flo
     dst[i] = y[i] / (1.0f + expf(-x[row]));
 }
 
+static __global__ void fused_mul_sigmoid_f32(const float * x, const float * y, float * dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = y[i] / (1.0f + expf(-x[i]));
+}
+
 static __global__ void fused_mul_silu_f32(int ne0, const float * x, const float * y, float * dst, const int k, float limit) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -310,6 +319,11 @@ static void fused_mul_relu_f32_cuda(const float * x, const float * y, float * ds
     fused_mul_relu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
 }
 
+static void fused_mul_sigmoid_f32_cuda(const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_RELU_BLOCK_SIZE - 1) / CUDA_RELU_BLOCK_SIZE;
+    fused_mul_sigmoid_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
+}
+
 static void fused_mul_gelu_f32_cuda(const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_GELU_BLOCK_SIZE - 1) / CUDA_GELU_BLOCK_SIZE;
     fused_mul_gelu_f32<<<num_blocks, CUDA_SILU_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
@@ -433,6 +447,7 @@ void ggml_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_unary_op op,
         case GGML_UNARY_OP_SILU: fused_mul_silu_f32_cuda(src0_d, src1_d, dst_d, nelements, limit, stream); break;
         case GGML_UNARY_OP_RELU: fused_mul_relu_f32_cuda(src0_d, src1_d, dst_d, nelements, stream); break;
         case GGML_UNARY_OP_GELU: fused_mul_gelu_f32_cuda(src0_d, src1_d, dst_d, nelements, stream); break;
+        case GGML_UNARY_OP_SIGMOID: fused_mul_sigmoid_f32_cuda(src0_d, src1_d, dst_d, nelements, stream); break;
         default: GGML_ASSERT(false);
     }
 }
