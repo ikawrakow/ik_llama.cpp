@@ -139,6 +139,12 @@ struct llama_layer_nextn {
     struct ggml_tensor * hnorm            = nullptr;
     struct ggml_tensor * shared_head_head = nullptr;
     struct ggml_tensor * shared_head_norm = nullptr;
+
+    // qwen4exp: the NextN head's final hyper-connection mixer. For merged
+    // community files these are resolved to shared_head_norm + the trunk mixer.
+    struct ggml_tensor * hc_head_norm      = nullptr;
+    struct ggml_tensor * hc_head_down      = nullptr;
+    struct ggml_tensor * hc_head_up        = nullptr;
 };
 
 // TODO: separate into "llama_layer_enc" and "llama_layer_dec"
