@@ -2664,7 +2664,9 @@ static __global__ void k_simple_gemm_f32(int n, int nx, const float * x, const f
     __syncthreads();
     sum = tmp[lane_id];
     sum = warp_reduce_sum(sum);
-    z[iy*nx + ix] = sum;
+    if (threadIdx.x == 0) {
+        z[iy*nx + ix] = sum;
+    }
 }
 
 static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
