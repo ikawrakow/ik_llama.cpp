@@ -29,7 +29,8 @@ struct delta_net {
             bool external_residual = false, ggml_unary_op gate_op = GGML_UNARY_OP_SILU) const;
 
     ggml_tensor * build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph * gf,
-            ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb) const;
+            ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
+            bool add_residual = true) const;
 
     // which recurrent state slot a token owns. Other per-sequence state in the same row shares
     // the slot, so callers read it here rather than resolving the batch again
@@ -76,5 +77,6 @@ private:
 
     ggml_tensor * build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * cur, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
-            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const;
+            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb,
+            bool add_residual = true) const;
 };

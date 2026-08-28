@@ -129,9 +129,11 @@ struct llama_hparams {
     float    f_attn_temp_scale       = 0.1;
 
     // DSA (deepseek sparse attention)
-    uint32_t indexer_n_head    = 0;
-    uint32_t indexer_head_size = 0;
-    uint32_t indexer_top_k     = 0;
+    uint32_t indexer_n_head     = 0;
+    uint32_t indexer_head_size  = 0;
+    uint32_t indexer_top_k      = 0;
+    // k-pool indexer: tokens per compressed key cell (GGUF attention.indexer.kpool); 0 = plain per-token DSA (as in GLM-5.2)
+    uint32_t indexer_block_size = 0;
     // GLM-5.2 IndexShare: per-layer full/shared indexer map. "full" layers compute their own lightning-
     // indexer top-k; "shared" layers reuse the previous full layer's top-k. Populated from GGUF
     // indexer_types metadata if present, else derived from the GLM-5.2 config rule at load time.

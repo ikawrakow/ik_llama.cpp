@@ -121,6 +121,10 @@ void llm_build_context::init() {
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
         lctx.inp_dsa_sink      = nullptr;
+        lctx.inp_kpool_cells     = nullptr;
+        lctx.inp_kpool_bias      = nullptr;
+        lctx.inp_kpool_tail      = nullptr;
+        lctx.inp_kpool_ape_slots = nullptr;
         lctx.inp_mtp_carry     = nullptr;
         lctx.inp_qsa.clear();
         lctx.dflash.inputs.target_features = nullptr;
@@ -3016,6 +3020,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
         case LLM_ARCH_BAILINGMOE3:
             {
                 result = llm.build_bailingmoe3();
+            } break;
+        case LLM_ARCH_GLM5NEXT:
+            {
+                result = llm.build_glm5next();
             } break;
         case LLM_ARCH_MINIMAX_M2:
             {
