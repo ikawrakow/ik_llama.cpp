@@ -642,7 +642,8 @@ struct llama_model {
     // a compacted sliding-window cache needs the graph to build its KQ mask over the compacted
     // layout, and the compacted mask keys on position alone, so it requires a single sequence
     bool supports_swa_compress() const {
-        return arch == LLM_ARCH_OPENPANGU || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_LAGUNA;
+        return arch == LLM_ARCH_OPENPANGU || arch == LLM_ARCH_DEEPSEEK4
+            || arch == LLM_ARCH_LAGUNA   || arch == LLM_ARCH_GEMMA4;
     }
 
     static inline int hadamard_size(int head_size) {
