@@ -3719,35 +3719,49 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
-    // LFM2.5 tests - uses plain "List of tools: [...]" and bare [name(args)] without wrapper tokens
+    // LFM2.5 tests - generation starts after <think>, tool calls wrapped in
+    // <|tool_call_start|>...<|tool_call_end|> (the bare [name(args)] form still works)
     {
         auto tst = peg_tester("models/templates/LFM2.5-Instruct.jinja", detailed_debug);
 
-        // Basic content only
-        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        // the prompt pre-fills <think>: a response without reasoning starts with the closing tag
+        tst.test("</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
 
-        // Single tool call without reasoning
-        tst.test("[special_function(arg1=1)]")
+        // Single bare tool call (backward compatibility)
+        tst.test("</think>[special_function(arg1=1)]")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Official wrapped tool call
+        tst.test("</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .run();
 
         // Tool call with string argument
-        tst.test("[get_time(city=\"XYZCITY\")]")
+        tst.test("</think><|tool_call_start|>[get_time(city=\"XYZCITY\")]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ get_time_tool })
             .expect(message_with_tool_calls("get_time", "{\"city\":\"XYZCITY\"}"))
             .run();
 
-        // Tool call with reasoning (enable_thinking=true)
-        tst.test("<think>I'm\nthinking</think>[special_function(arg1=1)]")
-            .enable_thinking(true)
+        // extraction must work without enable_thinking (the template opens <think> itself)
+        tst.test("I'm\nthinking</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+            .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
             .run();
 
-        // Multiple tool calls (parallel)
-        tst.test("[special_function(arg1=1), special_function_with_opt(arg1=1, arg2=2)]")
+        // Multiple wrapped tool calls (parallel)
+        tst.test("</think><|tool_call_start|>[special_function(arg1=1), special_function_with_opt(arg1=1, arg2=2)]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
             .tools({
                 special_function_tool, special_function_tool_with_optional_param
@@ -3759,22 +3773,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // Tool call with content before tool call
-        tst.test("Let me check the time.[get_time(city=\"Paris\")]")
+        tst.test("</think>Let me check the time.<|tool_call_start|>[get_time(city=\"Paris\")]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ get_time_tool })
             .expect(message_with_reasoning_content_and_multiple_tool_calls(
                 "", "Let me check the time.", { { "get_time", "{\"city\":\"Paris\"}" } }
             ))
             .run();
 
-        // Partial tool call (streaming)
-        tst.test("[special_function(arg1=")
+        // Partial wrapped tool call (streaming)
+        tst.test("</think><|tool_call_start|>[special_function(arg1=")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .is_partial(true)
             .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": "))
             .run();
 
         // Tool call with empty arguments
-        tst.test("[empty_args()]")
+        tst.test("</think><|tool_call_start|>[empty_args()]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ empty_args_tool })
             .expect(simple_assist_msg("", "", "empty_args", "{}"))
             .run();

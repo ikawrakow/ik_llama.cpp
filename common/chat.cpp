@@ -782,6 +782,9 @@ static std::string common_chat_template_direct_apply_impl(
         {"bos_token", tmpl.bos_token()},
         {"eos_token", tmpl.eos_token()},
         {"enable_thinking", inputs.enable_thinking},
+        // LFM2.5: whether previous assistant reasoning is kept in the prompt
+        // (separate from enable_thinking; can be overridden via chat_template_kwargs)
+        {"preserve_thinking", false},
     };
     // openPangu's chat template gates reasoning on a `thinking` variable rather than the
     // ecosystem-standard `enable_thinking`, so the normal toggle never reaches it. Bridge the
@@ -1648,12 +1651,11 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     return data;
 }
 
-// LFM2.5 format: uses plain "List of tools: [...]" in system prompt, no wrapper tokens.
-// Tool calls are bare [name(arg="val")], though model may optionally emit <|tool_call_start|>.
-// - Reasoning: <think>{reasoning}</think> (optional)
+// LFM2.5 format: "List of tools: [...]" in the system prompt, no wrapper tokens.
+// - Reasoning: <think>{reasoning}</think> (the template opens the generation turn with <think>)
 // - Content: text before a tool call (optional)
-// - Tool calls: Python-style, e.g. [function_name(arg1="value1", arg2="value2")]
-//   Tool calls can appear multiple times (parallel tool calls supported)
+// - Tool calls: [name(arg="val")], bare (legacy) or wrapped in
+//   <|tool_call_start|>...<|tool_call_end|>; can appear multiple times (parallel).
 static common_chat_params common_chat_params_init_lfm2_5(const common_chat_template &    tmpl,
                                                          const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -1683,7 +1685,9 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
         auto end = p.end();
 
         auto reasoning = p.eps();
-        if (extract_reasoning && inputs.enable_thinking) {
+        // the template opens the generation turn with <think>, so extract the
+        // reasoning even when enable_thinking was not supplied
+        if (extract_reasoning) {
             reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
         }
 
@@ -1699,7 +1703,8 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
 
         auto content = p.content(p.until_one_of({"<|tool_call_start|>", "["}));
         auto maybe_start = p.optional(p.literal("<|tool_call_start|>"));
-        return generation_prompt + reasoning + content + maybe_start + tool_calls + end;
+        auto maybe_end   = p.optional(p.literal("<|tool_call_end|>"));
+        return generation_prompt + reasoning + content + maybe_start + tool_calls + maybe_end + end;
     });
 
     data.parser = parser.save();

@@ -482,6 +482,27 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_LFM2,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,          "token_embd" },
+            { LLM_TENSOR_TOKEN_EMBD_NORM,     "token_embd_norm" },
+            { LLM_TENSOR_ATTN_NORM,           "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q_NORM,         "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_K_NORM,         "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_ATTN_Q,              "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,              "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,              "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,            "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,             "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,             "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,             "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,               "blk.%d.ffn_up" },
+            { LLM_TENSOR_SHORTCONV_CONV,       "blk.%d.shortconv.conv" },
+            { LLM_TENSOR_SHORTCONV_INPROJ,     "blk.%d.shortconv.in_proj" },
+            { LLM_TENSOR_SHORTCONV_OUTPROJ,    "blk.%d.shortconv.out_proj" },
+        },
+    },
+    {
         LLM_ARCH_QWEN4EXP,
         {
             { LLM_TENSOR_TOKEN_EMBD,           "token_embd" },
