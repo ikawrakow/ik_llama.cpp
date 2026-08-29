@@ -425,7 +425,6 @@ llama_model::~llama_model() {
             ggml_numa_free(mirror.node_base[node], mirror.size, node);
         }
     }
-    ggml_numa_print_mirror_diagnostics("teardown");
     for (struct ggml_context * ctx : ctxs) {
         ggml_free(ctx);
     }
@@ -4976,7 +4975,7 @@ static bool llm_load_tensors(
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
         if (params.use_mmap && ggml_numa_mirror_active()) {
-            LLAMA_LOG_INFO("%s: NUMA mirror requires owned host weights; disabling mmap\n", __func__);
+            LLAMA_LOG_INFO("%s: NUMA mirror requires owned host weights, disabling mmap\n", __func__);
             params.use_mmap = false;
         }
         llama_model_loader ml(fname, params.ncmoe, params.use_mmap, params.check_tensors,
@@ -6068,28 +6067,6 @@ static enum ggml_status llama_graph_compute(
     }
 
     return ggml_backend_sched_graph_compute_async(lctx.sched, gf);
-
-    // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
-}
-
-static void llama_graph_compute_sched(
-        llama_context & lctx,
-        ggml_backend_sched_t sched,
-          ggml_cgraph * gf,
-                  int   n_threads) {
-#ifdef GGML_USE_METAL
-    if (ggml_backend_is_metal(lctx.backend_metal)) {
-        ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
-    }
-#endif
-
-    if (lctx.backend_cpu != nullptr) {
-        ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
-        ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
-        ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
-    }
-
-    ggml_backend_sched_graph_compute_async(sched, gf);
 }
 
 static bool prepare_mtp_graph_inputs(
@@ -6564,8 +6541,9 @@ static int llama_decode_internal(
         tim1 = ggml_time_us();
 #endif
         //fprintf(stderr, "%s: invoking llama_graph_compute\n", __func__);
-        if (llama_graph_compute(lctx, gf, n_threads) != GGML_STATUS_SUCCESS) {
-            return GGML_STATUS_FAILED;
+        const enum ggml_status status = llama_graph_compute(lctx, gf, n_threads);
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
         }
 
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK4 &&
@@ -6907,8 +6885,9 @@ static int llama_encode_internal(
 
     llama_set_inputs(lctx, batch);
 
-    if (llama_graph_compute(lctx, gf, n_threads) != GGML_STATUS_SUCCESS) {
-        return -1;
+    const enum ggml_status status = llama_graph_compute(lctx, gf, n_threads);
+    if (status != GGML_STATUS_SUCCESS) {
+        return status;
     }
 
     // extract embeddings
@@ -7234,8 +7213,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_k_shift(lctx);
 
-            if (llama_graph_compute(lctx, gf, lctx.cparams.n_threads) != GGML_STATUS_SUCCESS) {
-                return GGML_STATUS_FAILED;
+            const enum ggml_status status = llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            if (status != GGML_STATUS_SUCCESS) {
+                return status;
             }
 
             need_reserve = true;
@@ -7262,8 +7242,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
             llama_set_s_copy(lctx);
 
-            if (llama_graph_compute(lctx, gf, lctx.cparams.n_threads) != GGML_STATUS_SUCCESS) {
-                return GGML_STATUS_FAILED;
+            const enum ggml_status status = llama_graph_compute(lctx, gf, lctx.cparams.n_threads);
+            if (status != GGML_STATUS_SUCCESS) {
+                return status;
             }
 
             need_reserve = true;
@@ -7282,8 +7263,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
 
     // defragment the KV cache if needed
     if (lctx.kv_self.do_defrag) {
-        if (llama_kv_cache_defrag_internal(lctx) != GGML_STATUS_SUCCESS) {
-            return GGML_STATUS_FAILED;
+        const enum ggml_status status = llama_kv_cache_defrag_internal(lctx);
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
         }
 
         need_reserve = true;
@@ -7917,7 +7899,6 @@ static bool llama_mirror_model_weights(const llama_model & model) {
     size_t out_of_buffer_tensors = 0;
     size_t empty_host_buffers = 0;
     size_t replica_nodes = 0;
-    const bool verify_copies = std::getenv("GGML_NUMA_MIRROR_VERIFY") != nullptr;
 
     // Replica coverage is model-owned and must not depend on the first
     // context's worker count.  Allocate every node in the immutable inherited
@@ -7943,14 +7924,17 @@ static bool llama_mirror_model_weights(const llama_model & model) {
     try {
         for (ggml_backend_buffer_t buf : model.bufs) {
             if (!buf || !ggml_backend_buffer_is_host(buf)) continue;
+#ifdef GGML_USE_CUDA
+            if (ggml_backend_buffer_get_type(buf) == ggml_backend_cuda_host_buffer_type()) {
+                throw std::runtime_error("NUMA mirror cannot place CUDA pinned host weights, set GGML_CUDA_NO_PINNED=1");
+            }
+#endif
 
             const uintptr_t buffer_base = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(buf));
             const size_t buffer_size = ggml_backend_buffer_get_size(buf);
             if (buffer_base == 0 || buffer_size > UINTPTR_MAX - buffer_base) {
-                if (ggml_numa_mirror_diagnostics_enabled()) {
-                    LLAMA_LOG_ERROR("%s: reject host buffer=%p size=%zu reason=invalid-address-range\n",
-                            __func__, (void *) buffer_base, buffer_size);
-                }
+                LLAMA_LOG_ERROR("%s: reject host buffer=%p size=%zu reason=invalid-address-range\n",
+                        __func__, (void *) buffer_base, buffer_size);
                 throw std::runtime_error("NUMA mirror: invalid host buffer address range");
             }
             const uintptr_t buffer_end = buffer_base + buffer_size;
@@ -7964,14 +7948,11 @@ static bool llama_mirror_model_weights(const llama_model & model) {
                     const bool start_in_buffer = tensor_base >= buffer_base && tensor_base <= buffer_end;
                     const bool range_in_buffer = start_in_buffer && tensor_size <= buffer_end - tensor_base;
                     if (!range_in_buffer) {
+                        if (start_in_buffer) {
+                            throw std::runtime_error("NUMA mirror: tensor live range exceeds its host buffer");
+                        }
                         ++out_of_buffer_tensors;
                         if (!start_in_buffer) ++relocated_tensors;
-                        if (ggml_numa_mirror_diagnostics_enabled()) {
-                            LLAMA_LOG_INFO("%s: skip tensor=%s reason=%s buffer=%p data=%p nbytes=%zu\n",
-                                    __func__, tensor->name[0] ? tensor->name : "(unnamed)",
-                                    start_in_buffer ? "live-range-out-of-buffer" : "relocated-live-range",
-                                    (void *) buffer_base, tensor->data, tensor_size);
-                        }
                         continue;
                     }
                     eligible_tensors.push_back({ tensor, (size_t) (tensor_base - buffer_base) });
@@ -7980,10 +7961,6 @@ static bool llama_mirror_model_weights(const llama_model & model) {
 
             if (eligible_tensors.empty()) {
                 ++empty_host_buffers;
-                if (ggml_numa_mirror_diagnostics_enabled()) {
-                    LLAMA_LOG_INFO("%s: skip host buffer=%p size=%zu reason=no-eligible-tensors\n",
-                            __func__, (void *) buffer_base, buffer_size);
-                }
                 continue;
             }
 
@@ -8004,16 +7981,12 @@ static bool llama_mirror_model_weights(const llama_model & model) {
                     throw std::runtime_error("NUMA mirror: replica allocation failed");
                 }
                 memcpy(mirror.node_base[node], mirror.node_base[0], mirror.size);
-                ggml_numa_record_populated(mirror.size, node);
-                if (verify_copies && memcmp(mirror.node_base[node], mirror.node_base[0], mirror.size) != 0) {
-                    throw std::runtime_error("NUMA mirror: copy verification failed");
-                }
             }
             ++mirrored_buffers;
             mirrored_weight_bytes += mirror.size;
             for (const eligible_tensor & eligible : eligible_tensors) {
                 struct ggml_tensor * tensor = eligible.tensor;
-                void * node_data[8] = {};
+                void * node_data[GGML_NUMA_MAX_NODES] = {};
                 for (int node = 0; node < n_nodes; ++node) {
                     if (ggml_numa_mirror_node_available(node)) {
                         node_data[node] = (char *) mirror.node_base[node] + eligible.offset;
@@ -8029,12 +8002,10 @@ static bool llama_mirror_model_weights(const llama_model & model) {
 
         model.numa_mirror_bufs = std::move(pending_buffers);
         model.numa_mirror_state = llama_model::numa_mirror_state::ready;
-        LLAMA_LOG_INFO("%s: NUMA mirror host_weight_buffers=%zu host_weight_bytes=%zu expected_additional_bytes=%zu mirrored_tensors=%zu relocated_tensors=%zu out_of_buffer_tensors=%zu empty_host_buffers=%zu verify=%s\n",
+        LLAMA_LOG_INFO("%s: NUMA mirror host_weight_buffers=%zu host_weight_bytes=%zu expected_additional_bytes=%zu mirrored_tensors=%zu relocated_tensors=%zu out_of_buffer_tensors=%zu empty_host_buffers=%zu\n",
                 __func__, mirrored_buffers, mirrored_weight_bytes,
                 mirrored_weight_bytes * replica_nodes, mirrored_tensors,
-                relocated_tensors, out_of_buffer_tensors, empty_host_buffers,
-                verify_copies ? "enabled" : "disabled");
-        ggml_numa_print_mirror_diagnostics("model-ready");
+                relocated_tensors, out_of_buffer_tensors, empty_host_buffers);
         return true;
     } catch (const std::exception & err) {
         cleanup();
@@ -8049,19 +8020,23 @@ static bool llama_mirror_model_weights(const llama_model & model) {
     }
 }
 
+static bool llama_model_needs_up_gate_repack(const llama_model & model) {
+    if (model.up_gate_repacked) return false;
+    for (const auto & l : model.layers) {
+        if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps && !l.ffn_up_gate_exps->extra) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool llama_repack_up_gate_exps(llama_context & lctx) {
     if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
         return true;
     }
     auto & model = lctx.model;
     if (model.up_gate_repacked) return true;
-    bool needs_repack = false;
-    for (auto & l : model.layers) {
-        if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps &&
-           !l.ffn_up_gate_exps->extra) {
-            needs_repack = true; break;
-        }
-    }
+    const bool needs_repack = llama_model_needs_up_gate_repack(model);
     if (!needs_repack) {
         model.up_gate_repacked = true;
         return true;
@@ -8150,6 +8125,10 @@ static bool llama_prepare_model_for_context(llama_context & lctx) {
     }
 
     try {
+        if (ggml_numa_mirror_active() && lctx.cparams.mtp_op_type != MTP_OP_NONE && llama_model_needs_up_gate_repack(model)) {
+            LLAMA_LOG_INFO("%s: deferring NUMA mirror until normal context completes up/gate repack\n", __func__);
+            return true;
+        }
         if (!llama_repack_up_gate_exps(lctx)) return false;
         return llama_mirror_model_weights(model);
     } catch (const std::exception & err) {

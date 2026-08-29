@@ -4534,7 +4534,6 @@ static_assert(sizeof(struct ggml_tensor)%GGML_MEM_ALIGN == 0, "ggml_tensor size 
 // NUMA support
 //
 
-#define GGML_NUMA_MAX_NODES 8
 #define GGML_NUMA_MAX_CPUS 512
 
 struct ggml_numa_node {
@@ -4544,12 +4543,6 @@ struct ggml_numa_node {
     cpu_set_t allowed_cpuset; // node CPUs intersected with the inherited process mask
     uint32_t allowed_cpu_count;
 #endif
-    size_t allocated_bytes;
-    size_t bound_bytes;
-    size_t populated_bytes;
-    size_t freed_bytes;
-    atomic_int replica_selections;
-    atomic_int replica_fallbacks;
 };
 
 struct ggml_numa_nodes {
@@ -4559,10 +4552,6 @@ struct ggml_numa_nodes {
     uint32_t n_nodes;
     uint32_t total_cpus; // hardware threads on system
     uint32_t current_node; // node on which main process is execting
-    bool mirror_diagnostics;
-    atomic_int affinity_failures;
-    atomic_int worker_diagnostic_seen[GGML_NUMA_MAX_CPUS];
-    atomic_int path_diagnostic_seen[GGML_NUMA_MAX_NODES][4];
 #if defined(__gnu_linux__)
     cpu_set_t cpuset; // cpuset from numactl
 #else
@@ -4680,9 +4669,6 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     g_state.numa.mirror_flags = numa_flag == GGML_NUMA_STRATEGY_MIRROR
             ? GGML_NUMA_MIRROR_WEIGHTS
             : GGML_NUMA_MIRROR_NONE;
-    const char * const mirror_diagnostics = getenv("GGML_NUMA_MIRROR_DIAGNOSTICS");
-    g_state.numa.mirror_diagnostics = mirror_diagnostics != NULL && strcmp(mirror_diagnostics, "1") == 0;
-
     GGML_PRINT_DEBUG("numa strategy %u\n",g_state.numa.numa_strategy);
 
     g_state.numa.cpuset = ggml_get_numa_affinity();
@@ -4773,19 +4759,17 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             GGML_PRINT("NUMA mirror: requested=weights effective=none reason=insufficient-node-cpu-affinity nodes=%u\n", g_state.numa.n_nodes);
         } else {
             GGML_PRINT("NUMA mirror: requested=weights effective=weights nodes=%u\n", g_state.numa.n_nodes);
-            if (g_state.numa.mirror_diagnostics) {
-                char allowed_cpus[4*GGML_NUMA_MAX_CPUS + 1] = { 0 };
-                size_t pos = 0;
-                for (uint32_t cpu = 0; cpu < g_state.numa.total_cpus; ++cpu) {
-                    if (!CPU_ISSET(cpu, &g_state.numa.cpuset)) continue;
-                    const int written = snprintf(allowed_cpus + pos, sizeof(allowed_cpus) - pos,
-                            "%s%u", pos ? "," : "", cpu);
-                    if (written < 0 || (size_t) written >= sizeof(allowed_cpus) - pos) break;
-                    pos += (size_t) written;
-                }
-                GGML_PRINT("NUMA mirror: diagnostics=enabled allowed_cpus=%s; per-worker and replica summaries are emitted once\n",
-                        pos ? allowed_cpus : "none");
+            char allowed_cpus[4*GGML_NUMA_MAX_CPUS + 1] = { 0 };
+            size_t pos = 0;
+            for (uint32_t cpu = 0; cpu < g_state.numa.total_cpus; ++cpu) {
+                if (!CPU_ISSET(cpu, &g_state.numa.cpuset)) continue;
+                const int written = snprintf(allowed_cpus + pos, sizeof(allowed_cpus) - pos,
+                        "%s%u", pos ? "," : "", cpu);
+                if (written < 0 || (size_t) written >= sizeof(allowed_cpus) - pos) break;
+                pos += (size_t) written;
             }
+            GGML_PRINT_DEBUG("NUMA mirror: inherited allowed_cpus=%s, per-worker placement uses node masks\n",
+                    pos ? allowed_cpus : "none");
         }
     }
 #else
@@ -4820,41 +4804,7 @@ bool ggml_numa_mirror_node_available(int node) {
 #endif
 }
 
-uint32_t ggml_numa_get_mirror(void) {
-    return g_state.numa.mirror_flags;
-}
-
-bool ggml_numa_mirror_diagnostics_enabled(void) {
-    return g_state.numa.mirror_diagnostics && ggml_numa_mirror_active();
-}
-
-void ggml_numa_print_mirror_diagnostics(const char * phase) {
-    if (!ggml_numa_mirror_diagnostics_enabled()) return;
-    for (uint32_t node = 0; node < g_state.numa.n_nodes; ++node) {
-        struct ggml_numa_node * stats = &g_state.numa.nodes[node];
-        GGML_PRINT("NUMA mirror: phase=%s node=%u allocated=%zu bound=%zu populated=%zu freed=%zu worker_node=%u pointer_node=%u replica_selections=%d replica_fallbacks=%d\n",
-                phase ? phase : "unknown", node,
-                stats->allocated_bytes, stats->bound_bytes, stats->populated_bytes, stats->freed_bytes,
-                node, node,
-                atomic_load(&stats->replica_selections), atomic_load(&stats->replica_fallbacks));
-    }
-    GGML_PRINT("NUMA mirror: affinity_failures=%d\n", atomic_load(&g_state.numa.affinity_failures));
-}
-
 struct ggml_numa_mirror { void * data[GGML_NUMA_MAX_NODES]; };
-
-static void ggml_numa_mirror_note_path(int path_id, const char * path,
-        const struct ggml_tensor * tensor, int node, const void * selected) {
-    if (!ggml_numa_mirror_diagnostics_enabled() || !tensor || node < 0 ||
-            node >= GGML_NUMA_MAX_NODES || path_id < 0 || path_id >= 4) {
-        return;
-    }
-    if (atomic_fetch_add(&g_state.numa.path_diagnostic_seen[node][path_id], 1) == 0) {
-        GGML_PRINT("NUMA mirror: path=%s tensor=%s node=%d selected=%p base=%p\n",
-                path ? path : "unknown", tensor->name[0] ? tensor->name : "(unnamed)",
-                node, selected, tensor->data);
-    }
-}
 
 static inline void * ggml_numa_tensor_data(const struct ggml_tensor * tensor, int node) {
     if (node < 0 || node >= (int) g_state.numa.n_nodes) return tensor->data;
@@ -4862,17 +4812,8 @@ static inline void * ggml_numa_tensor_data(const struct ggml_tensor * tensor, in
         if (base->data_numa) {
             void * replica = ((const struct ggml_numa_mirror *) base->data_numa)->data[node];
             if (replica) {
-                if (g_state.numa.mirror_diagnostics) {
-                    const int selection_count = atomic_fetch_add(&g_state.numa.nodes[node].replica_selections, 1);
-                    if (selection_count == 0) {
-                        GGML_PRINT("NUMA mirror: selected_tensor=%s worker_node=%d pointer_node=%d replica_offset=%zu\n",
-                                base->name[0] ? base->name : "(unnamed)", node, node,
-                                (size_t) ((const char *) tensor->data - (const char *) base->data));
-                    }
-                }
                 return (char *) replica + ((const char *) tensor->data - (const char *) base->data);
             }
-            if (g_state.numa.mirror_diagnostics) atomic_fetch_add(&g_state.numa.nodes[node].replica_fallbacks, 1);
         }
     }
     return tensor->data;
@@ -4908,6 +4849,9 @@ void ggml_numa_tensor_clear_mirror(struct ggml_tensor * tensor) {
 #define MPOL_MF_STRICT (1 << 0)
 #endif
 
+#define GGML_NUMA_MIRROR_CAPACITY_RESERVE_DIVISOR 20
+#define GGML_NUMA_MIRROR_CAPACITY_RESERVE_MIN     (256ULL * 1024 * 1024)
+
 static long ggml_sys_mbind(void * addr, unsigned long len, int mode,
         const unsigned long * nodemask, unsigned long maxnode, unsigned flags) {
 #if defined(SYS_mbind)
@@ -4941,7 +4885,8 @@ static bool ggml_numa_node_has_capacity(size_t size, int node) {
     }
     fclose(f);
     const unsigned long long available_kib = mem_free_kib + file_pages_kib + reclaimable_kib;
-    const size_t reserve = MAX(size / 20, (size_t) 256 * 1024 * 1024);
+    const size_t reserve = MAX(size / GGML_NUMA_MIRROR_CAPACITY_RESERVE_DIVISOR,
+            (size_t) GGML_NUMA_MIRROR_CAPACITY_RESERVE_MIN);
     if (size > SIZE_MAX - reserve) return false;
     return available_kib >= (unsigned long long) ((size + reserve + 1023) / 1024);
 }
@@ -4970,8 +4915,6 @@ bool ggml_numa_alloc(void ** ptr, size_t size, int node) {
     if (madvise(p, aligned, MADV_HUGEPAGE) != 0) {
         GGML_PRINT_DEBUG("NUMA mirror: MADV_HUGEPAGE failed: %s\n", strerror(errno));
     }
-    g_state.numa.nodes[node].allocated_bytes += aligned;
-    g_state.numa.nodes[node].bound_bytes += aligned;
     *ptr = p;
     return true;
 #else
@@ -4985,16 +4928,6 @@ void ggml_numa_free(void * ptr, size_t size, int node) {
 #if defined(__gnu_linux__)
     const size_t aligned = ggml_numa_aligned_size(size);
     munmap(ptr, aligned);
-    g_state.numa.nodes[node].freed_bytes += aligned;
-#else
-    UNUSED(size);
-#endif
-}
-
-void ggml_numa_record_populated(size_t size, int node) {
-    if (size == 0 || node < 0 || node >= (int) g_state.numa.n_nodes) return;
-#if defined(__gnu_linux__)
-    g_state.numa.nodes[node].populated_bytes += ggml_numa_aligned_size(size);
 #else
     UNUSED(size);
 #endif
@@ -5014,8 +4947,6 @@ bool ggml_numa_bind(void * ptr, size_t size, int node) {
         GGML_PRINT("NUMA mirror: mbind existing node %d failed: %s\n", node, strerror(errno));
         return false;
     }
-    g_state.numa.nodes[node].bound_bytes += length;
-    g_state.numa.nodes[node].populated_bytes += length;
     return true;
 #else
     UNUSED(node);
@@ -18534,8 +18465,6 @@ static void ggml_compute_forward_mul_mat_id(
             }
 
             const char * src0_cur = src0_data + cur_a*nb02;
-            ggml_numa_mirror_note_path(0, "mul_mat_id_chunked", src0, params->numa_node, src0_cur);
-
             if (!iqk_mul_mat_moe(ne01, matrix_row_counts[cur_a], ne00, ne11,
                         src0->type, src0_cur, nb01,
                         vec_dot_type, (const char *)wdata_mm, row_size_mm,
@@ -18890,8 +18819,6 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                 up_b_cur   = gate_b_cur + nb41/2;
             }
         }
-
-        ggml_numa_mirror_note_path(1, "mul_mat_id_up_gate_chunked", src0_1, params->numa_node, src0_1_cur);
 
         if (!iqk_moe_fused_up_gate(nr0_base, matrix_row_counts[cur_a], ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
@@ -28766,58 +28693,59 @@ static int ggml_numa_node_for_thread(int ith, int nth) {
 
 static int set_numa_thread_affinity(int thread_n, int n_threads) {
     if (!ggml_is_numa()) {
-        if (ggml_numa_mirror_active()) {
-            atomic_fetch_add(&g_state.numa.affinity_failures, 1);
-            fprintf(stderr, "NUMA mirror: NUMA affinity unavailable for worker %d\n", thread_n);
-        }
         return -1;
     }
 
-    int node_num;
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
+        if (!ggml_numa_mirror_active()) {
+            return -1;
+        }
+        const int node_num = ggml_numa_node_for_thread(thread_n, n_threads);
+        struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
+        if (node->allowed_cpu_count == 0) {
+            fprintf(stderr, "NUMA mirror: no allowed CPUs for node %d\n", node_num);
+            return -1;
+        }
+        const int rv = pthread_setaffinity_np(pthread_self(), sizeof(node->allowed_cpuset), &node->allowed_cpuset);
+        if (rv) {
+            fprintf(stderr, "NUMA mirror: pthread_setaffinity_np() failed for node %d: %s\n", node_num, strerror(rv));
+            return -1;
+        }
+        return node_num;
+    }
 
-    switch(g_state.numa.numa_strategy) {
+    int node_num;
+    const size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
+    switch (g_state.numa.numa_strategy) {
         case GGML_NUMA_STRATEGY_DISTRIBUTE:
-            // run thread on node_num thread_n / (threads per node)
             node_num = thread_n % g_state.numa.n_nodes;
             break;
         case GGML_NUMA_STRATEGY_ISOLATE:
-            // run thread on current_node
             node_num = g_state.numa.current_node;
             break;
-        case GGML_NUMA_STRATEGY_MIRROR:
-            if (!ggml_numa_mirror_active()) {
-                return -1;
+        case GGML_NUMA_STRATEGY_NUMACTL: {
+            const int rv = pthread_setaffinity_np(pthread_self(), setsize, &g_state.numa.cpuset);
+            if (rv) {
+                fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
             }
-            node_num = ggml_numa_node_for_thread(thread_n, n_threads);
-            break;
-        case GGML_NUMA_STRATEGY_NUMACTL:
-            // The inherited caller mask is the effective policy.
             return -1;
+        }
         default:
             return -1;
     }
 
     struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
-    if (node->allowed_cpu_count == 0) {
-        atomic_fetch_add(&g_state.numa.affinity_failures, 1);
-        fprintf(stderr, "NUMA mirror: no allowed CPUs for node %d\n", node_num);
-        return -1;
+    cpu_set_t * cpus = CPU_ALLOC(g_state.numa.total_cpus);
+    CPU_ZERO_S(setsize, cpus);
+    for (size_t i = 0; i < node->n_cpus; ++i) {
+        CPU_SET_S(node->cpus[i], setsize, cpus);
     }
-
-    const int rv = pthread_setaffinity_np(pthread_self(), sizeof(node->allowed_cpuset), &node->allowed_cpuset);
+    const int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
     if (rv) {
-        atomic_fetch_add(&g_state.numa.affinity_failures, 1);
-        fprintf(stderr, "NUMA mirror: pthread_setaffinity_np() failed for node %d: %s\n", node_num, strerror(rv));
-        return -1;
+        fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
     }
-
-    if (ggml_numa_mirror_diagnostics_enabled() && thread_n >= 0 && thread_n < GGML_NUMA_MAX_CPUS &&
-            atomic_fetch_add(&g_state.numa.worker_diagnostic_seen[thread_n], 1) == 0) {
-        GGML_PRINT("NUMA mirror: worker=%d/%d effective_node=%d allowed_node_cpus=%u\n",
-                thread_n, n_threads, node_num, node->allowed_cpu_count);
-    }
-
-    return node_num;
+    CPU_FREE(cpus);
+    return -1;
 }
 
 static void clear_numa_thread_affinity(void) {
@@ -28825,10 +28753,21 @@ static void clear_numa_thread_affinity(void) {
         return;
     }
 
-    const int rv = pthread_setaffinity_np(pthread_self(), sizeof(g_state.numa.cpuset), &g_state.numa.cpuset);
+    const size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
+    cpu_set_t * cpus = CPU_ALLOC(g_state.numa.total_cpus);
+    CPU_ZERO_S(setsize, cpus);
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR && ggml_numa_mirror_active()) {
+        CPU_OR_S(setsize, cpus, &g_state.numa.cpuset, &g_state.numa.cpuset);
+    } else {
+        for (unsigned i = 0; i < g_state.numa.total_cpus; ++i) {
+            CPU_SET_S(i, setsize, cpus);
+        }
+    }
+    const int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
     if (rv) {
         fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
     }
+    CPU_FREE(cpus);
 }
 #else
 // TODO: Windows etc.

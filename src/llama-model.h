@@ -557,7 +557,7 @@ struct llama_model {
     struct numa_mirror_buffer {
         ggml_backend_buffer_t buf = nullptr;
         size_t size = 0;
-        void * node_base[8] = {};
+        void * node_base[GGML_NUMA_MAX_NODES] = {};
     };
     enum class numa_mirror_state {
         unavailable,
