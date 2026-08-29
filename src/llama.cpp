@@ -9623,6 +9623,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_DFLASH2:
         case LLM_ARCH_K2_HORIZON:   // NEOX, per the IFM fork that implements this arch
         case LLM_ARCH_GEMMA4_ASSISTANT:
+        case LLM_ARCH_LFM2:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -9995,11 +9996,9 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 
 // Unified speculative-checkpoint
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, int max_tokens) {
-    // openPangu carries only a conv state (no SSM recurrent term), so the per-step
-    // path - which sizes itself from the ssm_* hparams (ssm_dt_rank etc, all zero
-    // here) - does not apply. Decline it so the checkpoint resolves to the whole-slot
-    // shadow (gpu-fallback), which is arch-agnostic.
-    if (model.arch == LLM_ARCH_OPENPANGU) {
+    // openPangu carries only a conv state and LFM2 a short-conv state (no SSM
+    // term); the per-step path would divide by zero (ssm_dt_rank == 0), decline
+    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2) {
         kv.save_per_step_ssm = false;
         return false;
     }
