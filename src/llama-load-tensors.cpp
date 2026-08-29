@@ -1838,6 +1838,21 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         // use the trunk's already-loaded output_hc_down/output_hc_up pair.
         nextn.shared_head_norm = create_tensor(head_ctx, shared_norm_name, {hc_dim}, flags);
 
+        // Legacy pre-rework files carried the head under fork-local mtp.* names.
+        // Those files remain loadable WITHOUT MTP: register the seven names as
+        // known-and-skipped so tensor accounting balances (an MTP request against
+        // such a file falls through to the clear missing-layout error below).
+        {
+            const int legacy = llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP;
+            create_tensor(head_ctx, "mtp.fc_embd.weight",         {n_embd, n_embd}, legacy);
+            create_tensor(head_ctx, "mtp.fc_hidden.weight",       {n_embd, n_embd}, legacy);
+            create_tensor(head_ctx, "mtp.pre_norm_embd.weight",   {n_embd}, legacy);
+            create_tensor(head_ctx, "mtp.pre_norm_hidden.weight", {hc_dim}, legacy);
+            create_tensor(head_ctx, "mtp.mixer_norm.weight",      {hc_dim}, legacy);
+            create_tensor(head_ctx, "mtp.mixer_down.weight",      {hc_dim, hc_rank}, legacy);
+            create_tensor(head_ctx, "mtp.mixer_up.weight",        {hc_rank, hc_dim}, legacy);
+        }
+
         if (model.mtp) {
             std::string missing;
             auto require = [&](const ggml_tensor * tensor, const std::string & name) {
