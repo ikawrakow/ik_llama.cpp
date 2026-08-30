@@ -67,7 +67,10 @@ void llama_set_dflash_visible_cross_ctx(
         return;
     }
 
-    ctx->dflash.visible_cross_ctx = std::max<int32_t>(0, cross_ctx);
+    const int32_t safe_cross_ctx = std::max<int32_t>(0, cross_ctx);
+    ctx->dflash.visible_cross_ctx = ctx->cparams.swa_compress
+            ? ctx->model.dflash_swa_compress_cross_ctx(safe_cross_ctx, true)
+            : safe_cross_ctx;
 }
 
 int32_t llama_get_dflash_visible_cross_ctx(
