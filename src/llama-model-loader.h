@@ -183,6 +183,8 @@ struct llama_model_loader {
 
     bool should_defer_expert_mmaps() const;
 
+    bool has_anonymous_mapping() const;
+
     void drop_mmap_expert_pages() const;
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;

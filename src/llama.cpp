@@ -4749,6 +4749,13 @@ static bool llm_load_tensors(
 
     // --dry-run skips MAP_POPULATE/WILLNEED — tensor data is never read.
     ml.init_mappings(!defer_expert_mmap && !dry_run, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
+
+    // dropping a range discards an anonymous huge-page mapping, so test the mapping and not the -thp flag
+    if (defer_expert_mmap && ml.has_anonymous_mapping()) {
+        LLAMA_LOG_WARN("%s: deferred expert loading disabled because the model is mapped on huge pages\n", __func__);
+        defer_expert_mmap = false;
+    }
+
     model.mappings.reserve(ml.mappings.size());
 
     // create the backend buffers

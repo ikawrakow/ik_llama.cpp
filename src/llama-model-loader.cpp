@@ -662,6 +662,15 @@ bool llama_model_loader::should_defer_expert_mmaps() const {
     return defer_experts && use_mmap && !expert_tensor_index.empty();
 }
 
+bool llama_model_loader::has_anonymous_mapping() const {
+    for (const auto & mapping : mappings) {
+        if (mapping->is_anonymous()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void llama_model_loader::drop_mmap_expert_pages() const {
     if (!use_mmap || mappings.empty() || expert_tensor_index.file_ranges.empty()) {
         return;

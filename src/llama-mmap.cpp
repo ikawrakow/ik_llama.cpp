@@ -528,6 +528,9 @@ struct llama_mmap::impl {
     }
 #endif
 
+    // set only when the huge-page mapping succeeded, which is the anonymous case
+    bool is_anonymous() const { return mapped_page_size > 0; }
+
     void * addr;
     size_t size;
     size_t mapped_page_size = 0;
@@ -539,6 +542,7 @@ llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
+bool llama_mmap::is_anonymous() const { return pimpl->is_anonymous(); }
 
 void llama_mmap::dontneed_fragment(size_t first, size_t last) { pimpl->dontneed_fragment(first, last); }
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }

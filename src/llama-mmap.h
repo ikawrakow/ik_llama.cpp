@@ -45,6 +45,7 @@ struct llama_mmap {
 
     size_t size() const;
     void * addr() const;
+    bool is_anonymous() const;
 
     void dontneed_fragment(size_t first, size_t last);
 
