@@ -2030,6 +2030,15 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched) {
     ckpt.used_snapshot  = used;
 
     std::unordered_set<ggml_backend_t> backends_to_sync;
+    // a row with no resolvable backend is copied generically, outside any stream;
+    // drain queued work once so the copy cannot race an in-flight graph
+    bool sched_synced = false;
+    auto sync_sched_once = [&]() {
+        if (!sched_synced) {
+            ggml_backend_sched_synchronize(sched);
+            sched_synced = true;
+        }
+    };
 
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (s_l[il] == nullptr) {
@@ -2041,18 +2050,28 @@ bool llama_kv_cache::checkpoint_save(ggml_backend_sched_t sched) {
             auto & shadow_split = ckpt.split_s_l_shadow[il];
             for (int d = 0; d < split_info->n_device; ++d) {
                 if (split_info->splits[d] && shadow_split[d]) {
-                    //ggml_backend_tensor_copy(split_info->splits[d], shadow_split[d]);
                     auto src_backend = ggml_backend_sched_get_tensor_backend(sched, split_info->splits[d]);
-                    ggml_backend_tensor_copy_async(src_backend, src_backend, split_info->splits[d], shadow_split[d]);
-                    backends_to_sync.insert(src_backend);
+                    if (src_backend == nullptr) {
+                        // a host-resident row (e.g. CUDA_Host) matches no backend's default
+                        // buffer type between graphs; the generic copy handles it
+                        sync_sched_once();
+                        ggml_backend_tensor_copy(split_info->splits[d], shadow_split[d]);
+                    } else {
+                        ggml_backend_tensor_copy_async(src_backend, src_backend, split_info->splits[d], shadow_split[d]);
+                        backends_to_sync.insert(src_backend);
+                    }
                 }
             }
         } else {
             GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
             auto src_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
-            GGML_ASSERT(src_backend != nullptr);
-            ggml_backend_tensor_copy_async(src_backend, src_backend, s_l[il], ckpt.s_l_shadow[il]);
-            backends_to_sync.insert(src_backend);
+            if (src_backend == nullptr) {
+                sync_sched_once();
+                ggml_backend_tensor_copy(s_l[il], ckpt.s_l_shadow[il]);
+            } else {
+                ggml_backend_tensor_copy_async(src_backend, src_backend, s_l[il], ckpt.s_l_shadow[il]);
+                backends_to_sync.insert(src_backend);
+            }
         }
     }
 
@@ -2079,6 +2098,15 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched) {
     used  = ckpt.used_snapshot;
 
     std::unordered_set<ggml_backend_t> backends_to_sync;
+    // a row with no resolvable backend is copied generically, outside any stream;
+    // drain queued work once so the copy cannot race an in-flight graph
+    bool sched_synced = false;
+    auto sync_sched_once = [&]() {
+        if (!sched_synced) {
+            ggml_backend_sched_synchronize(sched);
+            sched_synced = true;
+        }
+    };
 
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (s_l[il] == nullptr) {
@@ -2091,17 +2119,26 @@ bool llama_kv_cache::checkpoint_restore(ggml_backend_sched_t sched) {
             for (int d = 0; d < split_info->n_device; ++d) {
                 if (split_info->splits[d] && shadow_split[d]) {
                     auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, split_info->splits[d]);
-                    ggml_backend_tensor_copy_async(dst_backend, dst_backend, shadow_split[d], split_info->splits[d]);
-                    backends_to_sync.insert(dst_backend);
+                    if (dst_backend == nullptr) {
+                        sync_sched_once();
+                        ggml_backend_tensor_copy(shadow_split[d], split_info->splits[d]);
+                    } else {
+                        ggml_backend_tensor_copy_async(dst_backend, dst_backend, shadow_split[d], split_info->splits[d]);
+                        backends_to_sync.insert(dst_backend);
+                    }
                 }
             }
         } else {
             GGML_ASSERT(ckpt.s_l_shadow[il] != nullptr);
             GGML_ASSERT(ggml_nbytes(ckpt.s_l_shadow[il]) == ggml_nbytes(s_l[il]));
             auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l[il]);
-            GGML_ASSERT(dst_backend != nullptr);
-            ggml_backend_tensor_copy_async(dst_backend, dst_backend, ckpt.s_l_shadow[il], s_l[il]);
-            backends_to_sync.insert(dst_backend);
+            if (dst_backend == nullptr) {
+                sync_sched_once();
+                ggml_backend_tensor_copy(ckpt.s_l_shadow[il], s_l[il]);
+            } else {
+                ggml_backend_tensor_copy_async(dst_backend, dst_backend, ckpt.s_l_shadow[il], s_l[il]);
+                backends_to_sync.insert(dst_backend);
+            }
         }
     }
 
