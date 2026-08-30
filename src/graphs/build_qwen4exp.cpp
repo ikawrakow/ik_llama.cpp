@@ -174,7 +174,7 @@ static ggml_tensor * qwen4exp_ple(
         const llama_hparams & hparams,
         const delta_net   & delta,
         ggml_tensor       * hidden,
-        ggml_tensor       * rows,
+        ggml_tensor       * emb,
         ggml_tensor       * state_all,
         bool                reset_state,
         const std::vector<bool> & reset_pos,
@@ -184,13 +184,6 @@ static ggml_tensor * qwen4exp_ple(
         const llm_build_cb & cb) {
     const int32_t hc      = hparams.dsv4_hc_mult;
     const int32_t hc_dim  = hc * n_embd;
-    const int32_t n_heads = hparams.ple_n_heads;
-
-    // get_rows lays the head dimension out slowest, which is the flatten order the
-    // projections expect
-    ggml_tensor * emb = ggml_get_rows(ctx0, model.tok_embd_per_layer, rows);
-    emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
-    cb(emb, "ple_embd", il);
 
     ggml_tensor * key   = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_key,   emb);
     ggml_tensor * value = llm_build_context::llm_build_lora_mm(lctx, ctx0, model.layers[il].ple_value, emb);
@@ -447,6 +440,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     const int32_t hc = hparams.dsv4_hc_mult;
 
     ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+    ggml_build_forward_expand(gf, inpL);
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
     ggml_tensor * KQ_mask = build_inp_KQ_mask();
@@ -457,19 +451,29 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
     float KQ_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
+    ggml_tensor * ple_emb = nullptr;
+    if (hparams.ple_n_heads > 0) {
+        lctx.inp_ple_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, hparams.ple_n_heads * n_tokens);
+        cb(lctx.inp_ple_rows, "inp_ple_rows", -1);
+        ggml_set_input(lctx.inp_ple_rows);
+
+        // Gather the host-resident PLE table alongside the token embedding. Keeping these
+        // two input-side operations in one graph split avoids a second CPU/GPU round trip
+        // when the PLE layer is reached later in the model.
+        ple_emb = ggml_get_rows(ctx0, model.tok_embd_per_layer, lctx.inp_ple_rows);
+        ple_emb = ggml_reshape_2d(ctx0, ple_emb,
+                hparams.ple_head_dim * hparams.ple_n_heads, n_tokens);
+        cb(ple_emb, "ple_embd", -1);
+        ggml_build_forward_expand(gf, ple_emb);
+    } else {
+        lctx.inp_ple_rows = nullptr;
+    }
+
     // the wide residual starts as hc identical copies of the embedding
     ggml_tensor * res_hc = ggml_repeat_4d(ctx0,
             ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
             n_embd, hc, n_tokens, 1);
     cb(res_hc, "hc_residual", -1);
-
-    if (hparams.ple_n_heads > 0) {
-        lctx.inp_ple_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, hparams.ple_n_heads * n_tokens);
-        cb(lctx.inp_ple_rows, "inp_ple_rows", -1);
-        ggml_set_input(lctx.inp_ple_rows);
-    } else {
-        lctx.inp_ple_rows = nullptr;
-    }
 
     // the same test the delta-net path uses for its own state
     const bool ple_reset_state = batch.pos != nullptr && batch.pos[0] == 0;
@@ -482,7 +486,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         ggml_tensor * inject = nullptr;
 
         if (hparams.is_ple(il)) {
-            res_hc = qwen4exp_ple(*this, ctx0, gf, lctx, model, hparams, delta, res_hc, lctx.inp_ple_rows,
+            res_hc = qwen4exp_ple(*this, ctx0, gf, lctx, model, hparams, delta, res_hc, ple_emb,
                     kv_self.s_l[il], ple_reset_state, ple_reset_pos, n_embd, n_tokens, il, cb);
         }
 
