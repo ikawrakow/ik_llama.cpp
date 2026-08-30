@@ -49,6 +49,8 @@ struct llama_mmap {
 
     void dontneed_fragment(size_t first, size_t last);
 
+    void random_fragment(size_t first, size_t last);
+
     void unmap_fragment(size_t first, size_t last);
 
     static const bool SUPPORTED;

@@ -2180,6 +2180,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "--defer-ple") {
+        params.defer_ple = true;
+        return true;
+    }
     if (arg == "--prefetch-experts") {
         params.prefetch_experts = true;
         return true;
@@ -3306,6 +3310,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ncmoe, --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "-thp,   --transparent-huge-pages", "use transparent huge pages on Linux"});
     options.push_back({ "*",           "       --defer-experts",        "defer expert mmap residency on Linux to reduce model load time"});
+    options.push_back({ "*",           "       --defer-ple",            "keep the per-layer token embedding on the file instead of resident in memory (Linux)"});
     options.push_back({ "*",           "       --prefetch-experts",     "stream mmap'd MoE expert weights into the page cache on Linux"});
     options.push_back({ "*",           "       --prefetch-experts-threads N",
                                                                         "number of expert prefetch workers, tune to drive speed/type (default: auto)"});
@@ -4282,6 +4287,7 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.mtp             = params.has_mtp || params.speculative.has_stage_type(COMMON_SPECULATIVE_TYPE_MTP);
     mparams.flash_attn      = params.flash_attn;
     mparams.defer_experts   = params.defer_experts;
+    mparams.defer_ple       = params.defer_ple;
     mparams.swa_compress    = params.swa_compress;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
@@ -5372,6 +5378,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
     fprintf(stream, "merge_up_gate_exps: %s # default: false\n", params.merge_up_gate_exps ? "true" : "false");
     fprintf(stream, "defer_experts: %s # default: false\n", params.defer_experts ? "true" : "false");
+    fprintf(stream, "defer_ple: %s # default: false\n", params.defer_ple ? "true" : "false");
     fprintf(stream, "prefetch_experts: %s # default: false\n", params.prefetch_experts ? "true" : "false");
     fprintf(stream, "prefetch_experts_threads: %d # default: 0 (auto)\n", params.prefetch_experts_threads);
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
