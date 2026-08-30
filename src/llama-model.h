@@ -555,15 +555,12 @@ struct llama_model {
     std::vector<ggml_backend_buffer_t> bufs;
 
     struct numa_mirror_buffer {
-        ggml_backend_buffer_t buf = nullptr;
         size_t size = 0;
-        void * node_base[GGML_NUMA_MAX_NODES] = {};
+        std::vector<void *> node_base;
     };
     enum class numa_mirror_state {
         unavailable,
-        initializing,
         ready,
-        failed,
     };
     mutable std::vector<numa_mirror_buffer> numa_mirror_bufs;
     mutable std::mutex numa_mirror_mutex;

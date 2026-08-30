@@ -421,7 +421,7 @@ llama_model::~llama_model() {
         }
     }
     for (auto & mirror : numa_mirror_bufs) {
-        for (int node = 1; node < ggml_numa_node_count(); ++node) {
+        for (int node = 1; node < (int) mirror.node_base.size(); ++node) {
             ggml_numa_free(mirror.node_base[node], mirror.size, node);
         }
     }
@@ -6066,7 +6066,29 @@ static enum ggml_status llama_graph_compute(
         ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
     }
 
-    return ggml_backend_sched_graph_compute_async(lctx.sched, gf);
+    const enum ggml_status status = ggml_backend_sched_graph_compute_async(lctx.sched, gf);
+    // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
+    return status == GGML_STATUS_ABORTED ? GGML_STATUS_FAILED : status;
+}
+
+static void llama_graph_compute_sched(
+        llama_context & lctx,
+        ggml_backend_sched_t sched,
+          ggml_cgraph * gf,
+                  int   n_threads) {
+#ifdef GGML_USE_METAL
+    if (ggml_backend_is_metal(lctx.backend_metal)) {
+        ggml_backend_metal_set_n_cb(lctx.backend_metal, n_threads);
+    }
+#endif
+
+    if (lctx.backend_cpu != nullptr) {
+        ggml_backend_cpu_set_n_threads(lctx.backend_cpu, n_threads);
+        ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
+        ggml_backend_cpu_set_moe_expert_prefetch(lctx.backend_cpu, lctx.cparams.prefetch_experts);
+    }
+
+    ggml_backend_sched_graph_compute_async(sched, gf);
 }
 
 static bool prepare_mtp_graph_inputs(
@@ -7889,7 +7911,6 @@ static bool llama_mirror_model_weights(const llama_model & model) {
     const int n_nodes = ggml_numa_node_count();
     if (n_nodes < 2) return true;
 
-    model.numa_mirror_state = llama_model::numa_mirror_state::initializing;
     std::vector<llama_model::numa_mirror_buffer> pending_buffers;
     std::vector<struct ggml_tensor *> pending_tensors;
     size_t mirrored_buffers = 0;
@@ -7898,19 +7919,12 @@ static bool llama_mirror_model_weights(const llama_model & model) {
     size_t relocated_tensors = 0;
     size_t out_of_buffer_tensors = 0;
     size_t empty_host_buffers = 0;
-    size_t replica_nodes = 0;
-
-    // Replica coverage is model-owned and must not depend on the first
-    // context's worker count.  Allocate every node in the immutable inherited
-    // process mask so a later wider context cannot silently fall back.
-    for (int node = 1; node < n_nodes; ++node) {
-        replica_nodes += ggml_numa_mirror_node_available(node) ? 1 : 0;
-    }
-
     auto cleanup = [&]() {
         for (struct ggml_tensor * tensor : pending_tensors) ggml_numa_tensor_clear_mirror(tensor);
         for (auto & mirror : pending_buffers) {
-            for (int node = 1; node < n_nodes; ++node) ggml_numa_free(mirror.node_base[node], mirror.size, node);
+            for (int node = 1; node < (int) mirror.node_base.size(); ++node) {
+                ggml_numa_free(mirror.node_base[node], mirror.size, node);
+            }
         }
         pending_tensors.clear();
         pending_buffers.clear();
@@ -7966,8 +7980,8 @@ static bool llama_mirror_model_weights(const llama_model & model) {
 
             pending_buffers.emplace_back();
             auto & mirror = pending_buffers.back();
-            mirror.buf = buf;
             mirror.size = buffer_size;
+            mirror.node_base.resize(n_nodes, nullptr);
             mirror.node_base[0] = reinterpret_cast<void *>(buffer_base);
             if (!mirror.node_base[0]) throw std::runtime_error("NUMA mirror: host buffer has no base");
             if (ggml_numa_mirror_node_available(0) &&
@@ -7986,35 +8000,44 @@ static bool llama_mirror_model_weights(const llama_model & model) {
             mirrored_weight_bytes += mirror.size;
             for (const eligible_tensor & eligible : eligible_tensors) {
                 struct ggml_tensor * tensor = eligible.tensor;
-                void * node_data[GGML_NUMA_MAX_NODES] = {};
+                std::vector<void *> node_data(n_nodes, nullptr);
                 for (int node = 0; node < n_nodes; ++node) {
                     if (ggml_numa_mirror_node_available(node)) {
                         node_data[node] = (char *) mirror.node_base[node] + eligible.offset;
                     }
                 }
                 pending_tensors.push_back(tensor);
-                if (!ggml_numa_tensor_set_mirror(tensor, node_data)) {
+                if (!ggml_numa_tensor_set_mirror(tensor, node_data.data())) {
                     throw std::runtime_error("NUMA mirror: tensor metadata setup failed");
                 }
                 ++mirrored_tensors;
             }
         }
 
+        size_t expected_additional_bytes = 0;
+        if (n_nodes > 1) {
+            if (mirrored_weight_bytes > SIZE_MAX / (size_t) (n_nodes - 1)) {
+                throw std::runtime_error("NUMA mirror: replica-size diagnostic overflow");
+            }
+            expected_additional_bytes = mirrored_weight_bytes * (size_t) (n_nodes - 1);
+        }
+
         model.numa_mirror_bufs = std::move(pending_buffers);
         model.numa_mirror_state = llama_model::numa_mirror_state::ready;
         LLAMA_LOG_INFO("%s: NUMA mirror host_weight_buffers=%zu host_weight_bytes=%zu expected_additional_bytes=%zu mirrored_tensors=%zu relocated_tensors=%zu out_of_buffer_tensors=%zu empty_host_buffers=%zu\n",
                 __func__, mirrored_buffers, mirrored_weight_bytes,
-                mirrored_weight_bytes * replica_nodes, mirrored_tensors,
+                expected_additional_bytes,
+                mirrored_tensors,
                 relocated_tensors, out_of_buffer_tensors, empty_host_buffers);
         return true;
     } catch (const std::exception & err) {
         cleanup();
-        model.numa_mirror_state = llama_model::numa_mirror_state::failed;
+        model.numa_mirror_state = llama_model::numa_mirror_state::unavailable;
         LLAMA_LOG_ERROR("%s: NUMA mirror setup failed: %s\n", __func__, err.what());
         return false;
     } catch (...) {
         cleanup();
-        model.numa_mirror_state = llama_model::numa_mirror_state::failed;
+        model.numa_mirror_state = llama_model::numa_mirror_state::unavailable;
         LLAMA_LOG_ERROR("%s: NUMA mirror setup failed with an unknown exception\n", __func__);
         return false;
     }
@@ -8030,15 +8053,15 @@ static bool llama_model_needs_up_gate_repack(const llama_model & model) {
     return false;
 }
 
-static bool llama_repack_up_gate_exps(llama_context & lctx) {
+static bool llama_repack_up_gate_exps(llama_context & lctx, bool cache_result) {
     if (lctx.cparams.mtp_op_type != MTP_OP_NONE) {
         return true;
     }
     auto & model = lctx.model;
-    if (model.up_gate_repacked) return true;
+    if (cache_result && model.up_gate_repacked) return true;
     const bool needs_repack = llama_model_needs_up_gate_repack(model);
     if (!needs_repack) {
-        model.up_gate_repacked = true;
+        if (cache_result) model.up_gate_repacked = true;
         return true;
     }
 
@@ -8109,12 +8132,15 @@ static bool llama_repack_up_gate_exps(llama_context & lctx) {
             }
         }
     }
-    model.up_gate_repacked = true;
+    if (cache_result) model.up_gate_repacked = true;
     return true;
 }
 
 static bool llama_prepare_model_for_context(llama_context & lctx) {
     auto & model = lctx.model;
+    if (!ggml_numa_mirror_active()) {
+        return llama_repack_up_gate_exps(lctx, false);
+    }
     std::lock_guard<std::mutex> lock(model.numa_mirror_mutex);
 
     if (ggml_numa_mirror_active()) {
@@ -8129,7 +8155,7 @@ static bool llama_prepare_model_for_context(llama_context & lctx) {
             LLAMA_LOG_INFO("%s: deferring NUMA mirror until normal context completes up/gate repack\n", __func__);
             return true;
         }
-        if (!llama_repack_up_gate_exps(lctx)) return false;
+        if (!llama_repack_up_gate_exps(lctx, true)) return false;
         return llama_mirror_model_weights(model);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: model finalization failed: %s\n", __func__, err.what());

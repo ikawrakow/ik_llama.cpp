@@ -4535,6 +4535,7 @@ static_assert(sizeof(struct ggml_tensor)%GGML_MEM_ALIGN == 0, "ggml_tensor size 
 //
 
 #define GGML_NUMA_MAX_CPUS 512
+#define GGML_NUMA_MAX_NODES 8
 
 struct ggml_numa_node {
     uint32_t cpus[GGML_NUMA_MAX_CPUS]; // hardware threads on this node
@@ -4547,7 +4548,7 @@ struct ggml_numa_node {
 
 struct ggml_numa_nodes {
     enum ggml_numa_strategy numa_strategy;
-    uint32_t mirror_flags;
+    bool mirror_active;
     struct ggml_numa_node nodes[GGML_NUMA_MAX_NODES];
     uint32_t n_nodes;
     uint32_t total_cpus; // hardware threads on system
@@ -4666,9 +4667,7 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 
     // set numa scheme
     g_state.numa.numa_strategy = numa_flag;
-    g_state.numa.mirror_flags = numa_flag == GGML_NUMA_STRATEGY_MIRROR
-            ? GGML_NUMA_MIRROR_WEIGHTS
-            : GGML_NUMA_MIRROR_NONE;
+    g_state.numa.mirror_active = false;
     GGML_PRINT_DEBUG("numa strategy %u\n",g_state.numa.numa_strategy);
 
     g_state.numa.cpuset = ggml_get_numa_affinity();
@@ -4755,9 +4754,9 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
         }
 
         if (!has_allowed_cpu_on_every_node) {
-            g_state.numa.mirror_flags = GGML_NUMA_MIRROR_NONE;
             GGML_PRINT("NUMA mirror: requested=weights effective=none reason=insufficient-node-cpu-affinity nodes=%u\n", g_state.numa.n_nodes);
         } else {
+            g_state.numa.mirror_active = true;
             GGML_PRINT("NUMA mirror: requested=weights effective=weights nodes=%u\n", g_state.numa.n_nodes);
             char allowed_cpus[4*GGML_NUMA_MAX_CPUS + 1] = { 0 };
             size_t pos = 0;
@@ -4789,7 +4788,7 @@ int ggml_numa_node_count(void) { return g_state.numa.n_nodes > 0 ? (int) g_state
 bool ggml_numa_mirror_active(void) {
     return g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR &&
            g_state.numa.n_nodes > 1 &&
-           g_state.numa.mirror_flags == GGML_NUMA_MIRROR_WEIGHTS;
+           g_state.numa.mirror_active;
 }
 
 bool ggml_numa_mirror_node_available(int node) {
@@ -4808,13 +4807,17 @@ struct ggml_numa_mirror { void * data[GGML_NUMA_MAX_NODES]; };
 
 static inline void * ggml_numa_tensor_data(const struct ggml_tensor * tensor, int node) {
     if (node < 0 || node >= (int) g_state.numa.n_nodes) return tensor->data;
+    size_t offset = 0;
     for (const struct ggml_tensor * base = tensor; base; base = base->view_src) {
         if (base->data_numa) {
             void * replica = ((const struct ggml_numa_mirror *) base->data_numa)->data[node];
             if (replica) {
-                return (char *) replica + ((const char *) tensor->data - (const char *) base->data);
+                return (char *) replica + offset;
             }
         }
+        if (!base->view_src) break;
+        if (base->view_offs > SIZE_MAX - offset) return tensor->data;
+        offset += base->view_offs;
     }
     return tensor->data;
 }
@@ -28718,12 +28721,15 @@ static int set_numa_thread_affinity(int thread_n, int n_threads) {
     const size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
     switch (g_state.numa.numa_strategy) {
         case GGML_NUMA_STRATEGY_DISTRIBUTE:
+            // run thread on node_num thread_n / (threads per node)
             node_num = thread_n % g_state.numa.n_nodes;
             break;
         case GGML_NUMA_STRATEGY_ISOLATE:
+            // run thread on current_node
             node_num = g_state.numa.current_node;
             break;
         case GGML_NUMA_STRATEGY_NUMACTL: {
+            // use the cpuset that numactl gave us
             const int rv = pthread_setaffinity_np(pthread_self(), setsize, &g_state.numa.cpuset);
             if (rv) {
                 fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
@@ -28756,7 +28762,7 @@ static void clear_numa_thread_affinity(void) {
     const size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
     cpu_set_t * cpus = CPU_ALLOC(g_state.numa.total_cpus);
     CPU_ZERO_S(setsize, cpus);
-    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR && ggml_numa_mirror_active()) {
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
         CPU_OR_S(setsize, cpus, &g_state.numa.cpuset, &g_state.numa.cpuset);
     } else {
         for (unsigned i = 0; i < g_state.numa.total_cpus; ++i) {

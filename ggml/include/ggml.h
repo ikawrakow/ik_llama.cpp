@@ -903,18 +903,6 @@ extern "C" {
         GGML_NUMA_STRATEGY_COUNT
     };
 
-    // The first NUMA-mirror candidate supports weights only.  Keep this
-    // policy immutable after ggml_numa_init(): every executable must select
-    // it before direct NUMA initialization, rather than changing a global
-    // component mask after model/context construction has started.
-    enum ggml_numa_mirror_flags {
-        GGML_NUMA_MIRROR_NONE    = 0,
-        GGML_NUMA_MIRROR_WEIGHTS = 1 << 0,
-    };
-
-    // Shared architectural limit for NUMA node discovery and mirror replicas.
-    #define GGML_NUMA_MAX_NODES 8
-
     //
     // GUID
     //
