@@ -2408,6 +2408,15 @@ bool llama_model_is_step35(const llama_model * model) {
     return model && model->arch == LLM_ARCH_STEP35;
 }
 
+bool llama_model_is_qwen4exp(const llama_model * model) {
+    return model && model->arch == LLM_ARCH_QWEN4EXP;
+}
+
+// qwen4exp marks a present trunk block with hc_attn_norm, every other arch with attn_norm
+static bool llama_model_trunk_block_present(const llama_layer & layer) {
+    return layer.attn_norm != nullptr || layer.hc_attn_norm != nullptr;
+}
+
 bool llama_model_is_qwen35_family(const llama_model * model) {
     return model && (model->arch == LLM_ARCH_QWEN35 || model->arch == LLM_ARCH_QWEN35MOE);
 }
@@ -2424,7 +2433,7 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     const size_t n_nextn = model->hparams.nextn_predict_layers;
     const bool has_common_package_contract =
         llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
-        llama_model_is_qwen35_family(model) ||
+        llama_model_is_qwen35_family(model) || llama_model_is_qwen4exp(model) ||
         llama_model_is_gemma4_mtp_assistant(model);
     if (!has_common_package_contract) {
         return n_nextn > 0 ? LLAMA_MTP_PACKAGE_EMBEDDED : LLAMA_MTP_PACKAGE_NONE;
@@ -2432,9 +2441,9 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
 
     if (n_nextn == 0) {
         if (llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
-            llama_model_is_qwen35_family(model)) {
+            llama_model_is_qwen35_family(model) || llama_model_is_qwen4exp(model)) {
             for (const auto & layer : model->layers) {
-                if (layer.attn_norm != nullptr) {
+                if (llama_model_trunk_block_present(layer)) {
                     return LLAMA_MTP_PACKAGE_TARGET_ONLY;
                 }
             }
@@ -2455,7 +2464,7 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
 
     bool has_trunk = false;
     for (size_t il = 0; il < first; ++il) {
-        if (model->layers[il].attn_norm != nullptr) {
+        if (llama_model_trunk_block_present(model->layers[il])) {
             has_trunk = true;
             break;
         }

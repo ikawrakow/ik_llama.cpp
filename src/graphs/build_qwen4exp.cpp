@@ -588,7 +588,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         return gf;
     }
 
-    if (lctx.cparams.mtp && hparams.nextn_predict_layers > 0) {
+    if (lctx.cparams.mtp && hparams.n_embd_out > hparams.n_embd) {
         // hand the draft the pre-mixer wide stream for its first step
         ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc * n_embd, n_tokens);
         ggml_tensor * h_nextn = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;

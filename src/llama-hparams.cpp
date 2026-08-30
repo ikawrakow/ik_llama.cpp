@@ -629,6 +629,15 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,    hparams.dsv4_hc_mult);
                 ml.get_key(LLM_KV_HYPER_CONNECTION_LOW_RANK, hparams.hc_low_rank);
 
+                // the MTP handover is the wide pre-mixer residual, so the width must not depend on an appended NextN block
+                if (hparams.dsv4_hc_mult > 1) {
+                    const uint32_t wide = hparams.n_embd * hparams.dsv4_hc_mult;
+                    if (hparams.n_embd_out != hparams.n_embd && hparams.n_embd_out != wide) {
+                        throw std::runtime_error("qwen4exp: embedding_length_out must equal n_embd * hyper-connection count");
+                    }
+                    hparams.n_embd_out = wide;
+                }
+
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
                 if (hparams.nextn_predict_layers >= hparams.n_layer) {
                     throw std::runtime_error("qwen4exp: nextn_predict_layers must be smaller than block_count");

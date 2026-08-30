@@ -30,9 +30,9 @@ uint32_t llama_model_mtp_feature_width(const struct llama_model * model) {
     if (model->arch == LLM_ARCH_DEEPSEEK4 && hparams.n_embd_out > hparams.n_embd) {
         return hparams.n_embd_out;
     }
-    if (model->arch == LLM_ARCH_QWEN4EXP && hparams.nextn_predict_layers > 0) {
-        // the draft consumes the pre-final-mixer multi stream, hc streams wide
-        return hparams.n_embd * hparams.dsv4_hc_mult;
+    if (model->arch == LLM_ARCH_QWEN4EXP && hparams.n_embd_out > hparams.n_embd) {
+        // the pre-final-mixer multi stream; n_embd_out holds even when the NextN block lives in a companion file
+        return hparams.n_embd_out;
     }
     return hparams.n_embd;
 }
