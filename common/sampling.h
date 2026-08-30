@@ -11,6 +11,8 @@
 
 #define A_DOT_B(a, b) a.b
 
+struct common_speculative_token_dist;
+
 // sampler types
 enum class llama_sampler_type : char {
     DRY         = 'd',
@@ -236,6 +238,8 @@ struct common_sampler {
     llama_token_data_array cur_p; // current candidates
 
     std::mt19937 rng;
+    uint32_t speculative_seed = LLAMA_DEFAULT_SEED;
+    std::mt19937 speculative_rng;
 
     std::vector<float>* server_biases;
 
@@ -356,6 +360,14 @@ llama_token_data_array * common_sampler_get_candidates(struct common_sampler * c
 std::vector<llama_token> llama_sampling_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft, bool grammar_first = false);
+
+std::vector<llama_token> common_sampler_sample_and_accept_n(
+        struct common_sampler * gsmpl,
+        struct llama_context * ctx,
+        const std::vector<int> & idxs,
+        const std::vector<llama_token> & draft,
+        const std::vector<common_speculative_token_dist> & dists,
+        bool grammar_first = false);
 
 // Greedy argmax sampling for speculative drafting
 llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, float * out_prob = nullptr);

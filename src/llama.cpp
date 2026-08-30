@@ -670,6 +670,7 @@ static void why_not_reuse_previous(const llama_batch & u_batch, const llama_cont
 
 bool llama_context::can_reuse_graph(const llama_batch & u_batch, uint64_t seq_fingerprint, uint64_t model_state_hash) {
     if (!cparams.graph_reuse) return false;
+    if (qsa_pooled_stale) return false; // the rebuild needs a graph with the full pooling window
     auto the_prev = cparams.mtp_op_type == MTP_OP_NONE ? prev.get() : prev_mtp.get();
     if (!the_prev || !the_prev->graph) return false;
     if (u_batch.embd) return false;
@@ -1354,8 +1355,15 @@ static bool llama_kv_cache_init(
     const bool has_glm_dsa_indexer = model.arch == LLM_ARCH_GLM_DSA && hparams.indexer_head_size > 0;
     const bool has_openpangu_dsa_indexer =
         model.arch == LLM_ARCH_OPENPANGU && hparams.indexer_head_size > 0 && hparams.n_swa > 0;
-    if (has_glm_dsa_indexer || has_openpangu_dsa_indexer) {
+    // qwen4exp scores whole blocks of compress_ratio tokens, so its cached indexer keys are raw:
+    // pooling precedes the norm and the rotation that the other two arches fold in before caching.
+    const bool has_qwen4exp_indexer =
+        model.arch == LLM_ARCH_QWEN4EXP && hparams.indexer_head_size > 0;
+    if (has_glm_dsa_indexer || has_openpangu_dsa_indexer || has_qwen4exp_indexer) {
         cache.kr_l.resize(n_layer, nullptr);
+    }
+    if (has_qwen4exp_indexer) {
+        cache.kp_l.resize(n_layer, nullptr);
     }
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
@@ -1392,7 +1400,10 @@ static bool llama_kv_cache_init(
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
         if (qnext_recurrent) {
-            s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
+            // a PLE layer keeps its convolution history in the tail of the same row, so the
+            // delta-net slice it opens with keeps the offsets every other layer uses
+            s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                    hparams.n_embd_v_s() + hparams.n_embd_ple_conv(i), qnext_state_slots);
             auto s_name = std::string{"cache_s_l"} + std::to_string(i);
             ggml_set_name(s, s_name.c_str());
             cache.s_l[i] = s;
@@ -1525,6 +1536,28 @@ static bool llama_kv_cache_init(
             } else {
                 k = ggml_new_tensor_2d(ctx, this_type_k, n_embd_head_k, n_head_kv*cache.rows(i));
                 v = ggml_new_tensor_1d(ctx, this_type_v, v_ne);
+            }
+
+            // a PLE layer that is not recurrent has no state row to extend, so it gets one
+            // holding nothing but the convolution history
+            if (hparams.n_embd_ple_conv(i) > 0 && cache.s_l[i] == nullptr) {
+                ggml_tensor * s_ple = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                        hparams.n_embd_ple_conv(i), qnext_state_slots);
+                ggml_format_name(s_ple, "cache_s_l%d", i);
+                cache.s_l[i] = s_ple;
+            }
+
+            if (has_qwen4exp_indexer && hparams.is_qsa(i)) {
+                const uint32_t ratio = hparams.dsv4_compress_ratios[i];
+                ggml_tensor * idxk = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size, cache.rows(i));
+                ggml_format_name(idxk, "cache_kr_l%d", i);
+                cache.kr_l[i] = idxk;
+
+                // one pooled key per block of `ratio` positions, so this costs 1/ratio of the raw cache
+                ggml_tensor * idxp = ggml_new_tensor_2d(ctx, idx_type_k, hparams.indexer_head_size,
+                        (cache.rows(i) + ratio - 1)/ratio);
+                ggml_format_name(idxp, "cache_kp_l%d", i);
+                cache.kp_l[i] = idxp;
             }
 
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
@@ -4020,6 +4053,10 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
             continue;
         }
         if (name == "dflash_fc.weight" || name == "dflash_hidden_norm.weight" ||
+                (model.arch == LLM_ARCH_DFLASH2 &&
+                (name == "fc.weight" || name == "output_norm.weight" ||
+                 name == "selector_predecessor.weight" || name == "selector_successor.weight" ||
+                 name == "selector_hidden.weight" || name == "enc.output_norm.weight")) ||
                 (model.arch == LLM_ARCH_DFLASH &&
                 (name == "fc.weight" || name == "enc.output_norm.weight")) ||
                 name.rfind("dflash_aux_hidden_norm.", 0) == 0 ||
@@ -5176,6 +5213,150 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         }
     }
 
+    for (auto & qsa : lctx.inp_qsa) {
+        // blocks are keyed by CELL index, so concurrent sequences never claim the same slot.
+        // Interleaved they are approximate, not broken: a block takes its first member's rope
+        // position, and one spanning a sequence boundary is dropped from the cut below
+        GGML_ASSERT(ggml_backend_buffer_is_host(qsa.bias->buffer));
+
+        const int32_t n_kv     = qsa.cell_blk->ne[0];
+        const int32_t r        = qsa.ratio;
+        const int32_t n_tokens = qsa.bias->ne[1];
+        const int32_t n_win    = qsa.win_blocks->ne[0];
+        const int32_t n_blocks = kv_self.kp_l.empty() ? 0 : (n_kv + r - 1)/r;
+
+        int32_t * dst_cell_blk  = (int32_t *) qsa.cell_blk->data;
+        int32_t * dst_win_blk   = (int32_t *) qsa.win_blocks->data;
+        int32_t * dst_win_cells = (int32_t *) qsa.win_cells->data;
+        int32_t * dst_win_pos   = (int32_t *) qsa.win_pos->data;
+        float   * dst_bias      = (float   *) qsa.bias->data;
+
+        // the fused indexer op takes a per-head weight; this architecture sums the heads plain
+        if (qsa.head_w) {
+            float * dst_w = (float *) qsa.head_w->data;
+            std::fill(dst_w, dst_w + ggml_nelements(qsa.head_w), 1.0f);
+        }
+
+        // -1 where the block cannot be pooled. Block 0 stands in so the gather stays in range;
+        // the bias below is what keeps those out of the ranking
+        std::vector<int32_t> blk_of(n_kv, -1);
+        std::vector<llama_pos> cell_pos(n_kv, -1);
+        std::vector<int32_t> filled(n_blocks, 0);
+        std::vector<llama_seq_id> blk_seq(n_blocks, -1);
+        std::vector<bool> blk_mixed(n_blocks, false);
+        std::vector<int32_t> blk_cells(r*n_blocks, 0);
+        std::vector<llama_pos> blk_pos(n_blocks, -1);
+
+        for (int32_t j = 0; j < n_kv; ++j) {
+            const auto & cell = kv_self.cells[j];
+            if (cell.is_empty()) {
+                continue;
+            }
+
+            const llama_pos p = cell.pos;
+            const int32_t   b = j/r;
+
+            const llama_seq_id sid = *cell.seq_id.begin();
+            if (blk_seq[b] < 0) {
+                blk_seq[b] = sid;
+            } else if (blk_seq[b] != sid) {
+                blk_mixed[b] = true;
+            }
+
+            blk_of[j]   = (int32_t) b;
+            cell_pos[j] = p;
+            blk_cells[b*r + j%r] = j;
+            if (blk_pos[b] < 0 || p < blk_pos[b]) {
+                blk_pos[b] = p;
+            }
+            filled[b]++;
+        }
+
+        // only these blocks can have changed. A short window repeats its last entry, so the
+        // scatter writes the same correct value twice rather than an unrelated block
+        std::vector<int32_t> touched;
+        touched.reserve(n_win);
+        if (lctx.qsa_pooled_stale) {
+            for (int32_t b = 0; b < n_blocks; ++b) {
+                touched.push_back((int32_t) b);
+            }
+        } else
+        for (int32_t i = 0; i < n_tokens && i < batch.n_tokens; ++i) {
+            const int32_t b = (int32_t) ((kv_self.head + i)/r);
+            if (b < n_blocks && std::find(touched.begin(), touched.end(), b) == touched.end()) {
+                touched.push_back(b);
+                if ((int32_t) touched.size() == n_win) {
+                    break;
+                }
+            }
+        }
+        if (touched.empty()) {
+            touched.push_back(0);
+        }
+
+        for (int32_t w = 0; w < n_win; ++w) {
+            const int32_t b = touched[std::min<size_t>(w, touched.size() - 1)];
+            dst_win_blk[w] = b;
+            std::copy_n(blk_cells.begin() + b*r, r, dst_win_cells + w*r);
+            // the block's own first position, which equals b*r only while a single sequence
+            // fills the cache from zero
+            const int32_t bp = blk_pos[b] < 0 ? 0 : (int32_t) blk_pos[b];
+            for (int32_t sec = 0; sec < GGML_MROPE_SECTIONS; ++sec) {
+                dst_win_pos[sec*n_win + w] = bp;
+            }
+        }
+
+        for (int32_t j = 0; j < n_kv; ++j) {
+            const int32_t b = blk_of[j];
+            if (b >= 0 && (filled[b] < r || blk_mixed[b])) {
+                blk_of[j] = -1;
+            }
+            dst_cell_blk[j] = blk_of[j] < 0 ? 0 : blk_of[j];
+        }
+
+        // KQ_mask already carries causality, so this holds only the per-block part: -inf for an
+        // unpoolable block, a boost for the incomplete block the query sits in
+        auto fill_bias = [&](int32_t i0, int32_t i1) {
+            for (int32_t i = i0; i < i1; ++i) {
+                // n_kv times n_tokens reaches 2^31 at the model's full context, so index wide
+                float * cur_bias = dst_bias + (size_t) i*n_kv;
+
+                if (i >= batch.n_tokens) {
+                    std::fill(cur_bias, cur_bias + n_kv, 0.0f);
+                    continue;
+                }
+
+                const llama_pos q          = batch.pos[i];
+                const llama_pos tail_start = (q + 1)/r*r;
+
+                for (int32_t j = 0; j < n_kv; ++j) {
+                    const llama_pos p = cell_pos[j];
+
+                    // finite, so it can never meet a -inf and produce a nan
+                    cur_bias[j] = (p >= tail_start && p <= q) ? 1e9f
+                                : (blk_of[j] < 0 ? -INFINITY : 0.0f);
+                }
+            }
+        };
+        if (n_kv >= 1024 && n_tokens >= 32) {
+            // the same threshold the KQ_mask fill below uses for the same iteration space
+            const int n_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
+            const int32_t npt = (n_tokens + n_thread - 1)/n_thread;
+            std::vector<std::thread> workers;
+            for (int32_t i0 = npt; i0 < n_tokens; i0 += npt) {
+                workers.emplace_back(fill_bias, i0, std::min(n_tokens, i0 + npt));
+            }
+            fill_bias(0, std::min(n_tokens, npt));
+            for (auto & w : workers) w.join();
+        } else {
+            fill_bias(0, n_tokens);
+        }
+
+        // a reused graph was built with the narrow window, so clearing on `touched` alone would
+        // leave the blocks it could not reach at zero
+        lctx.qsa_pooled_stale = (int32_t) touched.size() > n_win;
+    }
+
     if (batch.token && lctx.inp_tokens) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();
@@ -5256,7 +5437,8 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         auto tim1 = ggml_time_us();
 #endif
         const int64_t n_tokens = batch.n_tokens;
-        if (n_tokens > 1 && !cparams.mtp && lctx.n_outputs < n_tokens) {
+        if (n_tokens > 1 && !cparams.mtp && lctx.n_outputs < n_tokens &&
+                !llm_arch_requires_all_graph_output_rows(lctx.model.arch)) {
             GGML_ASSERT(lctx.inp_out_ids && "every model that can must skip unused outputs");
         }
 
@@ -5883,6 +6065,98 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         for (int64_t j = 0; j < n_tokens; ++j) {
             // qwen3next and openPangu use a single local recurrent state slot.
             data[j] = 0;
+        }
+    }
+
+    if (lctx.inp_ple_rows) {
+        const auto & hp = lctx.model.hparams;
+
+        const int32_t     n_tokens = batch.n_tokens;
+        const int32_t     n_gram   = hp.ple_ngram_size;
+        const int32_t     n_heads  = hp.ple_n_heads;
+        const int32_t     per_gram = hp.ple_heads_per_ngram;
+        const llama_token eos      = hp.ple_eos_token_id;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_ple_rows->buffer));
+        int32_t * data = (int32_t *) lctx.inp_ple_rows->data;
+
+        // an embedding ubatch has no token ids, and this feeds get_rows into a 320 M row table,
+        // so every position still needs a defined row. The reference hashes the image placeholder
+        // here; without that key EOS just makes the span a segment boundary
+        const llama_token img_tok = hp.ple_image_token_id != 0
+            ? (llama_token) hp.ple_image_token_id
+            : eos;
+        auto tok_of = [&](int32_t k) -> llama_token {
+            return batch.token ? batch.token[k] : img_tok;
+        };
+
+        // snapshot before any update: one pass would let a token read an earlier token of this
+        // same ubatch as prior context
+        std::map<llama_seq_id, std::vector<llama_token>> snap;
+        for (int32_t i = 0; i < n_tokens; ++i) {
+            const llama_seq_id seq = batch.seq_id[i][0];
+            if (snap.count(seq)) {
+                continue;
+            }
+            auto & h = lctx.ple_hist[seq];
+            if (h.next_pos != batch.pos[i]) {
+                h.toks.assign(n_gram - 1, eos);
+            }
+            h.toks.resize(n_gram - 1, eos);
+            snap[seq] = h.toks;
+        }
+
+        for (int32_t i = 0; i < n_tokens; ++i) {
+            const llama_pos    pos = batch.pos[i];
+            const llama_seq_id seq = batch.seq_id[i][0];
+
+            const auto & hist = snap[seq];
+
+            // predecessor s (1-based) of this token: from the ubatch when it is there, from the
+            // sequence's own history when it is not, EOS past a segment boundary
+            auto prev = [&](int32_t s) -> llama_token {
+                const int32_t j = i - s;
+                if (j >= 0 && batch.seq_id[j][0] == seq && batch.pos[j] == pos - s) {
+                    return tok_of(j);
+                }
+                // s - i positions before this ubatch started, most recent last
+                const int32_t back = s - i;
+                const int32_t k    = (int32_t) hist.size() - back;
+                if (back > 0 && k >= 0 && pos - s >= 0) {
+                    return hist[k];
+                }
+                return eos;
+            };
+
+            std::vector<llama_token> ctx_toks(n_gram);
+            ctx_toks[0] = tok_of(i);
+            bool cut = false;
+            for (int32_t s = 1; s < n_gram; ++s) {
+                ctx_toks[s] = cut ? eos : prev(s);
+                if (ctx_toks[s] == eos) {
+                    cut = true;
+                }
+            }
+
+            for (int32_t n = 2; n <= n_gram; ++n) {
+                uint64_t mixed = (uint64_t) ctx_toks[0] * hp.ple_layer_multipliers[0];
+                for (int32_t j = 1; j < n; ++j) {
+                    mixed ^= (uint64_t) ctx_toks[j] * hp.ple_layer_multipliers[j];
+                }
+                const int32_t base = (n - 2) * per_gram;
+                for (int32_t g = 0; g < per_gram; ++g) {
+                    const int32_t h_i = base + g;
+                    data[i * n_heads + h_i] =
+                        (int32_t) (mixed % hp.ple_head_vocab_sizes[h_i] + hp.ple_head_offsets[h_i]);
+                }
+            }
+
+            auto & h = lctx.ple_hist[seq];
+            h.toks.push_back(tok_of(i));
+            if ((int32_t) h.toks.size() > n_gram - 1) {
+                h.toks.erase(h.toks.begin(), h.toks.end() - (n_gram - 1));
+            }
+            h.next_pos = pos + 1;
         }
     }
 
@@ -6606,6 +6880,8 @@ static int llama_decode_internal(
         //}
 
         lctx.dflash.draft_tokens.clear();
+        lctx.dflash.draft_lattice.clear();
+        lctx.dflash.draft_lattice_ids.clear();
         if (lctx.dflash.draft_tokens_tensor != nullptr) {
             ggml_backend_t backend_argmax = ggml_backend_sched_get_tensor_backend(
                 lctx.sched, lctx.dflash.draft_tokens_tensor);
@@ -6616,6 +6892,53 @@ static int llama_decode_internal(
                     lctx.dflash.draft_tokens_tensor,
                     lctx.dflash.draft_tokens.data(), 0,
                     (size_t) n_tokens_argmax * sizeof(int32_t));
+            }
+        }
+
+        if (lctx.model.arch == LLM_ARCH_DFLASH2 && lctx.dflash.draft_lattice_tensor != nullptr &&
+                lctx.dflash.draft_lattice_ids_tensor != nullptr) {
+            ggml_backend_t backend_lattice = ggml_backend_sched_get_tensor_backend(
+                    lctx.sched, lctx.dflash.draft_lattice_tensor);
+            ggml_backend_t backend_lattice_ids = ggml_backend_sched_get_tensor_backend(
+                    lctx.sched, lctx.dflash.draft_lattice_ids_tensor);
+            if (backend_lattice != nullptr && backend_lattice_ids != nullptr) {
+                const size_t n_values = (size_t) lctx.dflash.draft_lattice_tensor->ne[0] *
+                        (size_t) lctx.dflash.draft_lattice_tensor->ne[1];
+                lctx.dflash.draft_lattice.resize(n_values);
+                const int32_t top_k = lctx.dflash.draft_lattice_top_k;
+                const int32_t width = top_k * top_k;
+                const int32_t n_positions = (int32_t) lctx.dflash.draft_lattice_tensor->ne[1];
+                const size_t n_ids = (size_t) top_k * (size_t) n_positions;
+                lctx.dflash.draft_lattice_ids.resize(n_ids);
+                ggml_backend_tensor_get_async(backend_lattice,
+                        lctx.dflash.draft_lattice_tensor,
+                        lctx.dflash.draft_lattice.data(), 0,
+                        n_values * sizeof(float));
+                ggml_backend_tensor_get_async(backend_lattice_ids,
+                        lctx.dflash.draft_lattice_ids_tensor,
+                        lctx.dflash.draft_lattice_ids.data(), 0,
+                        n_ids * sizeof(int32_t));
+                llama_synchronize(&lctx);
+                std::vector<llama_token> selected;
+                selected.reserve(std::max(0, n_positions - 1));
+                int32_t previous = 0;
+                for (int32_t pos = 1; pos < n_positions; ++pos) {
+                    const float * row = lctx.dflash.draft_lattice.data() + (size_t) pos * width;
+                    int32_t best = 0;
+                    float best_score = -INFINITY;
+                    for (int32_t current = 0; current < top_k; ++current) {
+                        const float score = row[current + top_k * previous];
+                        if (score > best_score) {
+                            best_score = score;
+                            best = current;
+                        }
+                    }
+                    selected.push_back((llama_token) lctx.dflash.draft_lattice_ids[(size_t) pos * top_k + best]);
+                    previous = best;
+                }
+                if (!selected.empty()) {
+                    lctx.dflash.draft_tokens = std::move(selected);
+                }
             }
         }
 
@@ -6777,10 +7100,14 @@ static int llama_decode_internal(
 #if IK_PRINT_TIMING
     auto tim1 = ggml_time_us();
 #endif
-    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && !lctx.prev) {
+    // Keep scheduler alive in case someone dont run graph reuse so
+    // speculative checkpoint restoration can be completed
+    const bool speculative_checkpoint_active =
+        lctx.kv_self.ckpt.selected_spec_mode != LLAMA_SPEC_CKPT_NONE;
+    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && !lctx.prev && !speculative_checkpoint_active) {
         ggml_backend_sched_reset(lctx.sched);
     }
-    else if (lctx.cparams.mtp_op_type != MTP_OP_NONE && !lctx.prev_mtp) {
+    else if (lctx.cparams.mtp_op_type != MTP_OP_NONE && !lctx.prev_mtp && !speculative_checkpoint_active) {
         ggml_backend_sched_reset(lctx.sched);
     }
 #if IK_PRINT_TIMING
@@ -7003,8 +7330,9 @@ static enum ggml_status llama_kv_cache_defrag_internal(struct llama_context & lc
     // TODO: tmp fix https://github.com/ggerganov/llama.cpp/issues/6685#issuecomment-2057579516
     // DSA: build_defrag additionally moves the indexer-key cache (kr_l), +3 tensors/layer/move
     // (src view, dst view, copy), so budget 9*n_layer per move when the indexer cache is present.
-    const bool has_dsa_indexer_defrag =
-        lctx.model.arch == LLM_ARCH_GLM_DSA && !kv_self.kr_l.empty();
+    // build_defrag moves kr_l for whichever layer holds one, so the budget follows the cache
+    // rather than the architecture that allocated it.
+    const bool has_dsa_indexer_defrag = !kv_self.kr_l.empty();
     const uint32_t tensors_per_move = has_dsa_indexer_defrag ? 9 : 6;
     const uint32_t max_moves = (lctx.model.max_nodes(1) - 2*n_layer)/(tensors_per_move*n_layer);
 
@@ -7114,6 +7442,10 @@ static enum ggml_status llama_kv_cache_defrag_internal(struct llama_context & lc
     if (n_moves == 0) {
         return GGML_STATUS_SUCCESS;
     }
+
+    // blocks are keyed by cell index, so moving cells changes every touched block's membership;
+    // the pooled block keys must be rebuilt from the moved indexer keys
+    lctx.qsa_pooled_stale = !kv_self.kp_l.empty();
 
     //LLAMA_LOG_INFO("(tmp log) KV defrag cell moves: %u\n", n_moves);
 
@@ -7300,6 +7632,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         // TODO: extract to a function
         // build worst-case graph
         int n_tokens = (int)std::min(lctx.cparams.n_ctx, lctx.cparams.n_ubatch);
+        if (llm_arch_is_dflash_family(lctx.model.arch)) {
+            n_tokens = std::min(n_tokens, (int) lctx.model.hparams.dflash_block_size);
+        }
         // MTP draft generation consumes one token and one hidden-state vector per decode step.
         if (lctx.cparams.mtp_op_type == MTP_OP_DRAFT_GEN) {
             n_tokens = 1;
@@ -8520,6 +8855,13 @@ struct llama_context * llama_init_from_model(
     ggml_type type_k = params.type_k;
     ggml_type type_v = params.type_v;
 
+    if (llm_arch_is_dflash_family(model->arch)) {
+        const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
+        kv_size = GGML_PAD(std::max<uint32_t>(1u, hparams.dflash_block_size), pad);
+        LLAMA_LOG_INFO("%s: DFlash ordinary KV bookkeeping capacity = %u (history owned by custom cache)\n",
+                __func__, kv_size);
+    }
+
     // Mamba only needs a constant number of KV cache cells per sequence
     if (model->arch == LLM_ARCH_MAMBA) {
         // Mamba needs at least as many KV cells as there are sequences kept at any time
@@ -8718,6 +9060,11 @@ struct llama_context * llama_init_from_model(
                     memory_size_k_indexer += ggml_nbytes(k);
                 }
             }
+            for (auto & k : ctx->kv_self.kp_l) {
+                if (k) {
+                    memory_size_k_indexer += ggml_nbytes(k);
+                }
+            }
             for (auto & v : ctx->kv_self.v_l) {
                 if (v) {
                     memory_size_v += ggml_nbytes(v);
@@ -8813,6 +9160,9 @@ struct llama_context * llama_init_from_model(
             }
 
             int n_tokens = (int)std::min(cparams.n_ctx, cparams.n_ubatch);
+            if (llm_arch_is_dflash_family(model->arch)) {
+                n_tokens = std::min(n_tokens, (int) model->hparams.dflash_block_size);
+            }
             const size_t max_nodes = ctx->max_nodes(n_tokens, cparams.n_ctx);
 
             // buffer used to store the computation graph and the tensor meta data
@@ -9087,6 +9437,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_GEMMA4:
         case LLM_ARCH_GEMMA4_MTP:
         case LLM_ARCH_DFLASH_DRAFT:
+        case LLM_ARCH_DFLASH2:
         case LLM_ARCH_GEMMA4_ASSISTANT:
             return LLAMA_ROPE_TYPE_NEOX;
 
@@ -9097,6 +9448,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN4EXP:
             return LLAMA_ROPE_TYPE_IMROPE;
 
         // all model arches should be listed explicitly here
@@ -11021,6 +11373,11 @@ struct llama_data_read {
             }
         }
 
+        // the pooled block keys are derived from the indexer keys restored just above, and the
+        // builder rebuilds only the blocks an ubatch writes into, so the next graph must pool
+        // every block once
+        ctx->qsa_pooled_stale = !kv_self.kp_l.empty();
+
         if (ctx->model.arch == LLM_ARCH_OPENPANGU &&
             !read_openpangu_state(ctx, n_layer, seq_id, false)) {
             return false;
@@ -11952,6 +12309,49 @@ llama_token llama_get_dflash_draft_token_ith(struct llama_context * ctx, int32_t
         return LLAMA_TOKEN_NULL;
     }
     return ctx->dflash.draft_tokens[(size_t) i];
+}
+
+int32_t llama_get_dflash_draft_lattice_top_k(struct llama_context * ctx) {
+    if (ctx == nullptr) {
+        return 0;
+    }
+    llama_synchronize(ctx);
+    return ctx->dflash.draft_lattice_top_k;
+}
+
+int32_t llama_get_dflash_draft_lattice_n_positions(struct llama_context * ctx) {
+    if (ctx == nullptr || ctx->dflash.draft_lattice_top_k <= 0) {
+        return 0;
+    }
+    llama_synchronize(ctx);
+    const size_t top_k = (size_t) ctx->dflash.draft_lattice_top_k;
+    return (int32_t) (ctx->dflash.draft_lattice_ids.size() / top_k);
+}
+
+bool llama_copy_dflash_draft_lattice(
+        struct llama_context * ctx,
+        float * scores, size_t score_count,
+        int32_t * ids, size_t id_count) {
+    if (ctx == nullptr || scores == nullptr || ids == nullptr || ctx->dflash.draft_lattice_top_k <= 0) {
+        return false;
+    }
+    llama_synchronize(ctx);
+    const size_t top_k = (size_t) ctx->dflash.draft_lattice_top_k;
+    const size_t n_positions = ctx->dflash.draft_lattice_ids.size() / top_k;
+    const size_t n_scores = top_k * top_k * n_positions;
+    const size_t n_ids = top_k * n_positions;
+    if (ctx->dflash.draft_lattice.size() != n_scores || score_count < n_scores || id_count < n_ids) {
+        return false;
+    }
+    const int32_t n_vocab = (int32_t) ctx->model.vocab.n_tokens();
+    if (std::any_of(ctx->dflash.draft_lattice_ids.begin(),
+                    ctx->dflash.draft_lattice_ids.begin() + n_ids,
+                    [n_vocab](int32_t token) { return token < 0 || token >= n_vocab; })) {
+        return false;
+    }
+    std::memcpy(scores, ctx->dflash.draft_lattice.data(), n_scores * sizeof(float));
+    std::memcpy(ids, ctx->dflash.draft_lattice_ids.data(), n_ids * sizeof(int32_t));
+    return true;
 }
 
 float * llama_get_embeddings(struct llama_context * ctx) {

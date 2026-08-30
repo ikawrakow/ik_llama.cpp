@@ -2647,8 +2647,41 @@ static void mul_mat_1row(const ggml_tensor * src0, const ggml_tensor * src1, ggm
     }
 }
 
+static __global__ void k_simple_gemm_f32(int n, int nx, const float * x, const float * y, float * z, size_t nb01, size_t nb11) {
+    int ix = blockIdx.x;
+    int iy = blockIdx.y;
+    x += nb01 * ix;
+    y += nb11 * iy;
+    float sum = 0;
+    for (int j = threadIdx.x; j < n; j += blockDim.x) {
+        sum += x[j]*y[j];
+    }
+    sum = warp_reduce_sum(sum);
+    __shared__ float tmp[32];
+    int lane_id = threadIdx.x % WARP_SIZE;
+    int warp_id = threadIdx.x / WARP_SIZE;
+    if (lane_id == 0) tmp[warp_id] = sum;
+    __syncthreads();
+    sum = tmp[lane_id];
+    sum = warp_reduce_sum(sum);
+    if (threadIdx.x == 0) {
+        z[iy*nx + ix] = sum;
+    }
+}
+
 static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const ggml_cgraph * cgraph, int node_n) {
+
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        src0->ne[0] >= 1024 && src0->ne[2]*src0->ne[3] == 1 && src1->ne[2]*src1->ne[3] == 1 && src1->ne[1] <= 8) {
+        auto nsm = ggml_cuda_info().devices[ctx.device].nsm;
+        if (src0->ne[1] * src1->ne[1] <= nsm) {
+            dim3 grid(src0->ne[1], src1->ne[1], 1);
+            k_simple_gemm_f32<<<grid, 1024, 0, ctx.stream()>>>(src0->ne[0], src0->ne[1], (const float *)src0->data, (const float *)src1->data, (float *)dst->data,
+                    src0->nb[1]/sizeof(float), src1->nb[1]/sizeof(float));
+            return node_n;
+        }
+    }
 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
     // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.

@@ -2277,7 +2277,7 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
     }
     if (K->ne[0] == 256) {
         GGML_ASSERT(Q->ne[0] == 256 && V->ne[0] == 256);
-        if (gqa_ratio == 6) {
+        if (gqa_ratio % 6 == 0) {
             ggml_cuda_flash_attn_ext_mma_f16_case<256, 256, 1, 8>(ctx, dst);
         } else {
             GGML_ABORT("Not implemented");
