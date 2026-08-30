@@ -25,6 +25,7 @@ struct ggml_cuda_graph {
         }
     }
     uint64_t uid = 0;
+    int64_t last_used_time = 0;
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
     size_t num_nodes = 0;

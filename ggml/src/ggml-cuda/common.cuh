@@ -889,7 +889,10 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_graph * cur_graph = nullptr;
 
-    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
+    // A captured CUDA graph is valid only for the tensor shapes it captured. Key each
+    // split by both its first node and representative shapes so alternating batch sizes
+    // (notably speculative verification) retain separate executable graphs.
+    std::unordered_map<uint64_t, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
 
 #endif
 

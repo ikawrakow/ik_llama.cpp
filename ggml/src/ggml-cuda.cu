@@ -4450,16 +4450,44 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_CUDA_GRAPH
 
-static inline const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
-    return cgraph->nodes[0];
+// CUDA graph executables are shape-fixed. A split pointer alone aliases alternating batch
+// shapes (for example target verification batches during speculative decoding), repeatedly
+// recapturing one entry until graphs are disabled. Mix representative endpoint shapes into
+// the key while keeping this O(1) on the hot path.
+static inline uint64_t ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
+    GGML_ASSERT(cgraph->n_nodes > 0);
+
+    uint64_t key = (uint64_t) (uintptr_t) cgraph->nodes[0];
+    auto mix = [&key](uint64_t value) {
+        key = (key ^ value) * 0x100000001b3ULL;
+    };
+
+    mix(cgraph->n_nodes);
+    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+        mix(cgraph->nodes[0]->ne[d]);
+        mix(cgraph->nodes[cgraph->n_nodes - 1]->ne[d]);
+    }
+    return key;
 }
 
-static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & ctx, const void * key) {
-    auto & graph = ctx.cuda_graphs[key];
-    if (!graph) {
-        graph = std::make_unique<ggml_cuda_graph>();
+static inline ggml_cuda_graph * ggml_cuda_get_graph(ggml_backend_cuda_context & ctx, uint64_t key) {
+    static constexpr size_t MAX_CUDA_GRAPHS = 64;
+
+    auto it = ctx.cuda_graphs.find(key);
+    if (it == ctx.cuda_graphs.end()) {
+        while (ctx.cuda_graphs.size() >= MAX_CUDA_GRAPHS) {
+            auto lru = ctx.cuda_graphs.begin();
+            for (auto candidate = ctx.cuda_graphs.begin(); candidate != ctx.cuda_graphs.end(); ++candidate) {
+                if (candidate->second->last_used_time < lru->second->last_used_time) {
+                    lru = candidate;
+                }
+            }
+            ctx.cuda_graphs.erase(lru);
+        }
+        it = ctx.cuda_graphs.emplace(key, std::make_unique<ggml_cuda_graph>()).first;
     }
-    return graph.get();
+    it->second->last_used_time = ggml_time_us();
+    return it->second.get();
 }
 
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph * graph, ggml_cgraph * cgraph,
