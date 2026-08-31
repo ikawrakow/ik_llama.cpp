@@ -9642,12 +9642,9 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
         return false;
     }
 
-    // qwen4exp appends the PLE n-gram convolution history to the tail of the
-    // same recurrent state row (n_embd_v_s() + n_embd_ple_conv(il)); the
-    // per-step path sizes from the ssm_* hparams alone, so it would save and
-    // restore only the front of the row and leave the PLE tail advanced by
-    // rejected draft tokens. Decline so the checkpoint resolves to the
-    // whole-slot shadow (gpu-fallback), which covers the full row.
+    // qwen4exp's recurrent row carries a PLE conv-history tail the per-step
+    // checkpoint doesn't size, so it would leave that tail advanced by rejected
+    // drafts. Decline; the whole-slot (gpu-fallback) shadow covers the full row.
     if (model.arch == LLM_ARCH_QWEN4EXP) {
         kv.save_per_step_ssm = false;
         return false;

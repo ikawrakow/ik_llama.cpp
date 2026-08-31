@@ -464,8 +464,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         ggml_tensor * tok    = build_inp_embd_mtp(model.tok_embd); // [n_embd, n_tokens]
         const auto & nextn = model.layers[n_layer_begin].nextn;
 
-        // Normalize the two inputs exactly as before: the embedding over n_embd,
-        // and the hidden state over the full flattened hc*n_embd wide vector.
+        // normalize the embedding (n_embd) and the wide hidden stream (hc*n_embd)
         ggml_tensor * e = ggml_rms_norm(ctx0, tok, hparams.f_norm_rms_eps);
         e = ggml_mul(ctx0, e, nextn.enorm);
 
@@ -605,8 +604,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
-    // append_pooling runs whenever the model carries a nextn tail and needs a
-    // named embedding tensor; the mixed single stream is the natural one
+    // name the mixed stream for append_pooling (the nextn tail needs a named embd)
     cb(cur, "result_embd", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
