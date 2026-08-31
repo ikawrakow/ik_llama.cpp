@@ -1857,10 +1857,8 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
         // use the trunk's already-loaded output_hc_down/output_hc_up pair.
         nextn.shared_head_norm = create_tensor(head_ctx, shared_norm_name, {hc_dim}, flags);
 
-        // Legacy pre-rework files carried the head under fork-local mtp.* names.
-        // Those files remain loadable WITHOUT MTP: register the seven names as
-        // known-and-skipped so tensor accounting balances (an MTP request against
-        // such a file falls through to the clear missing-layout error below).
+        // Legacy files carry the head under fork-local mtp.* names: register them
+        // known-and-skipped so a non-MTP load balances tensor accounting.
         {
             const int legacy = llama_model_loader::TENSOR_NOT_REQUIRED | llama_model_loader::TENSOR_SKIP;
             create_tensor(head_ctx, "mtp.fc_embd.weight",         {n_embd, n_embd}, legacy);
@@ -1896,7 +1894,14 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
                 require(nextn.hc_head_down, hc_down_name);
                 require(nextn.hc_head_up,   hc_up_name);
             } else {
-                require(nextn.shared_head_norm, shared_norm_name);
+                // Flavor B': a predictor-only file may omit shared_head_norm and
+                // carry the head norm only in output_hc_norm (Dzannotti layout).
+                // Safe only when mtp_only, where output_hc_* is the head's own mixer.
+                if (nextn.shared_head_norm == nullptr && mtp_only) {
+                    require(model.hc_head_norm, "output_hc_norm.weight");
+                } else {
+                    require(nextn.shared_head_norm, shared_norm_name);
+                }
                 require(model.hc_head_down, "output_hc_down.weight");
                 require(model.hc_head_up,   "output_hc_up.weight");
             }
@@ -1913,10 +1918,11 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
             }
 
             if (!has_dedicated_mixer) {
-                nextn.hc_head_norm = nextn.shared_head_norm;
+                nextn.hc_head_norm = nextn.shared_head_norm != nullptr
+                        ? nextn.shared_head_norm : model.hc_head_norm;
                 nextn.hc_head_down = model.hc_head_down;
                 nextn.hc_head_up   = model.hc_head_up;
-                LLAMA_LOG_WARN("qwen4exp: NextN head has no dedicated hc mixer; using the trunk output_hc_down/output_hc_up mixer\n");
+                LLAMA_LOG_WARN("qwen4exp: NextN head has no dedicated hc mixer; using the trunk output_hc mixer\n");
             }
         }
     }
