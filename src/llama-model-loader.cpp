@@ -662,6 +662,15 @@ bool llama_model_loader::should_defer_expert_mmaps() const {
     return defer_experts && use_mmap && !expert_tensor_index.empty();
 }
 
+bool llama_model_loader::has_anonymous_mapping() const {
+    for (const auto & mapping : mappings) {
+        if (mapping->is_anonymous()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void llama_model_loader::drop_mmap_expert_pages() const {
     if (!use_mmap || mappings.empty() || expert_tensor_index.file_ranges.empty()) {
         return;
@@ -671,6 +680,35 @@ void llama_model_loader::drop_mmap_expert_pages() const {
     for (size_t idx = 0; idx < n_range_sets; ++idx) {
         const auto & ranges = expert_tensor_index.file_ranges[idx];
         for (const auto & range : ranges) {
+            mappings[idx]->dontneed_fragment(range.first, range.last);
+        }
+    }
+}
+
+void llama_model_loader::build_ple_tensor_index() {
+    ple_tensor_index = {};
+
+    const auto * weight = get_weight(LLM_TN(get_arch())(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").c_str());
+    if (weight == nullptr) {
+        return;
+    }
+
+    const size_t tensor_bytes = ggml_nbytes(weight->tensor);
+
+    ple_tensor_index.file_ranges.resize(files.size());
+    ple_tensor_index.file_ranges.at(weight->idx).push_back({ weight->offs, weight->offs + tensor_bytes });
+    ple_tensor_index.deferred_bytes = tensor_bytes;
+}
+
+bool llama_model_loader::should_defer_ple_mmaps() const {
+    return defer_ple && use_mmap && !ple_tensor_index.empty();
+}
+
+void llama_model_loader::apply_ple_mmap_policy() const {
+    for (size_t idx = 0; idx < ple_tensor_index.file_ranges.size(); ++idx) {
+        for (const auto & range : ple_tensor_index.file_ranges[idx]) {
+            // sparse row lookups through get_rows: readahead would evict more than it fetches
+            mappings[idx]->random_fragment(range.first, range.last);
             mappings[idx]->dontneed_fragment(range.first, range.last);
         }
     }
