@@ -843,6 +843,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(
 
     std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
     const auto emit = [&](llama_token id) {
+        gsmpl->playing_text += common_token_to_piece(ctx, id, true);
         common_sampler_accept(gsmpl, ctx, id, true);
         result.push_back(id);
     };
