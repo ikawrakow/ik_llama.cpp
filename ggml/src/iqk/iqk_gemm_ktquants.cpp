@@ -121,8 +121,8 @@ struct Trellis3 {
     }
     inline __m256 gen8(uint32_t val1, uint32_t val2) const {
         auto v8 = _mm256_and_si256(next8(val1, val2), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
-        auto i8 = _mm256_dpbusd_epi32(_mm256_set1_epi32(-126), _mm256_set1_epi32(0x01010101), v8);
+#ifdef HAVE_VNNI256
+        auto i8 = ggml_mm256_dpbusd_epi32(_mm256_set1_epi32(-126), _mm256_set1_epi32(0x01010101), v8);
 #else
         auto dot = _mm256_maddubs_epi16(v8, _mm256_set1_epi32(0x01010101));
         auto i8  = _mm256_add_epi32(_mm256_set1_epi32(-126), _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
@@ -135,8 +135,8 @@ struct Trellis3 {
     }
     inline __m256 gen8(uint32_t val) const {
         auto v8 = _mm256_and_si256(next8(val), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
-        auto i8 = _mm256_dpbusd_epi32(_mm256_set1_epi32(-126), _mm256_set1_epi32(0x01010101), v8);
+#ifdef HAVE_VNNI256
+        auto i8 = ggml_mm256_dpbusd_epi32(_mm256_set1_epi32(-126), _mm256_set1_epi32(0x01010101), v8);
 #else
         auto dot = _mm256_maddubs_epi16(v8, _mm256_set1_epi32(0x01010101));
         auto i8  = _mm256_add_epi32(_mm256_set1_epi32(-126), _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
@@ -152,8 +152,8 @@ struct Trellis3 {
         __m256i aux[4];
         for (int i = 0; i < 4; ++i) {
             auto i8 = _mm256_and_si256(next8(val[2*i+0], val[2*i+1]), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
-            aux[i] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8);
+#ifdef HAVE_VNNI256
+            aux[i] = ggml_mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8);
 #else
             auto dot = _mm256_maddubs_epi16(i8, _mm256_set1_epi32(0x01010101));
             aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
@@ -190,14 +190,12 @@ struct Trellis3 {
             aux[i] = _mm256_and_si256(aux[i], mask);
         }
         auto offset = _mm256_set1_epi32(-126);
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
         auto m1     = _mm256_set1_epi32(0x01010101);
-#endif
         for (int i = 0; i < 16; ++i) {
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
-            aux[i] = _mm256_dpbusd_epi32(offset, aux[i], m1);
+#ifdef HAVE_VNNI256
+            aux[i] = ggml_mm256_dpbusd_epi32(offset, aux[i], m1);
 #else
-            auto dot = _mm256_maddubs_epi16(aux[i], _mm256_set1_epi32(0x01010101));
+            auto dot = _mm256_maddubs_epi16(aux[i], m1);
             aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
 #endif
         }
@@ -240,14 +238,12 @@ struct Trellis3 {
             aux[i] = _mm256_and_si256(aux[i], mask);
         }
         auto offset = _mm256_set1_epi32(-126);
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
         auto m1     = _mm256_set1_epi32(0x01010101);
-#endif
         for (int i = 0; i < 16; ++i) {
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
-            aux[i] = _mm256_dpbusd_epi32(offset, aux[i], m1);
+#ifdef HAVE_VNNI256
+            aux[i] = ggml_mm256_dpbusd_epi32(offset, aux[i], m1);
 #else
-            auto dot = _mm256_maddubs_epi16(aux[i], _mm256_set1_epi32(0x01010101));
+            auto dot = _mm256_maddubs_epi16(aux[i], m1);
             aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
 #endif
         }
@@ -281,14 +277,12 @@ struct Trellis3 {
             aux[i] = _mm256_and_si256(aux[i], mask);
         }
         auto offset = _mm256_set1_epi32(-126);
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
         auto m1     = _mm256_set1_epi32(0x01010101);
-#endif
         for (int i = 0; i < 16; ++i) {
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
-            aux[i] = _mm256_dpbusd_epi32(offset, aux[i], m1);
+#ifdef HAVE_VNNI256
+            aux[i] = ggml_mm256_dpbusd_epi32(offset, aux[i], m1);
 #else
-            auto dot = _mm256_maddubs_epi16(aux[i], _mm256_set1_epi32(0x01010101));
+            auto dot = _mm256_maddubs_epi16(aux[i], m1);
             aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
 #endif
         }
@@ -305,13 +299,14 @@ struct Trellis3 {
     }
     inline __m256i next32(const uint16_t * val, uint32_t v0) const {
         const __m256i offset = _mm256_set1_epi32(-126);
+        const __m256i m1     = _mm256_set1_epi32(0x01010101);
         __m256i aux[4];
         for (int i = 0; i < 4; ++i) {
             auto i8 = _mm256_and_si256(next8(v0 + val[i]), _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
-            aux[i] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8);
+#ifdef HAVE_VNNI256
+            aux[i] = ggml_mm256_dpbusd_epi32(offset, m1, i8);
 #else
-            auto dot = _mm256_maddubs_epi16(i8, _mm256_set1_epi32(0x01010101));
+            auto dot = _mm256_maddubs_epi16(i8, m1);
             aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
 #endif
         }
@@ -328,6 +323,7 @@ struct Trellis3 {
     }
     inline void next64(const uint32_t * val, __m256i * result) const {
         const __m256i offset = _mm256_set1_epi32(-126);
+        const __m256i m1     = _mm256_set1_epi32(0x01010101);
         auto vka3 = _mm256_set1_epi32(ka3);
         __m256i aux[8];
         for (int i = 0; i < 4; ++i) {
@@ -335,12 +331,12 @@ struct Trellis3 {
             auto i8_2 = _mm256_mullo_epi32(i8_1, vka3);
             i8_1 = _mm256_and_si256(i8_1, _mm256_set1_epi32(0x3f3f3f3f));
             i8_2 = _mm256_and_si256(i8_2, _mm256_set1_epi32(0x3f3f3f3f));
-#ifdef HAVE_FANCY_SIMD
-            aux[i+0] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8_1);
-            aux[i+4] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8_2);
+#ifdef HAVE_VNNI256
+            aux[i+0] = ggml_mm256_dpbusd_epi32(offset, m1, i8_1);
+            aux[i+4] = ggml_mm256_dpbusd_epi32(offset, m1, i8_2);
 #else
-            auto dot1 = _mm256_maddubs_epi16(i8_1, _mm256_set1_epi32(0x01010101));
-            auto dot2 = _mm256_maddubs_epi16(i8_2, _mm256_set1_epi32(0x01010101));
+            auto dot1 = _mm256_maddubs_epi16(i8_1, m1);
+            auto dot2 = _mm256_maddubs_epi16(i8_2, m1);
             aux[i+0] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot1, _mm256_set1_epi16(1)));
             aux[i+4] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot2, _mm256_set1_epi16(1)));
 #endif
@@ -599,9 +595,9 @@ void mul_mat_iq1_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
-            //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
-            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+#ifdef HAVE_VNNI256
+            //dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
+            dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
 #else
             auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
             dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
@@ -690,9 +686,9 @@ void mul_mat_iq2_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
-            //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
-            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+#ifdef HAVE_VNNI256
+            //dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
+            dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
 #else
             auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
             dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
@@ -834,9 +830,9 @@ void mul_mat_iq3_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv, &sv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
-            //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
-            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], _mm256_sign_epi8(yv, sv[k]));
+#ifdef HAVE_VNNI256
+            //dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
+            dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], _mm256_sign_epi8(yv, sv[k]));
 #else
             auto p = _mm256_maddubs_epi16(xv[k], _mm256_sign_epi8(yv, sv[k]));
             dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
@@ -1135,9 +1131,9 @@ void mul_mat_iq4_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
-#ifdef HAVE_FANCY_SIMD
-            //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
-            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+#ifdef HAVE_VNNI256
+            //dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
+            dot[k] = ggml_mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
 #else
             auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
             dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
