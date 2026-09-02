@@ -3,6 +3,8 @@
 #include "../llama-context.h"
 #include "../llama-delta-net.h"
 
+#include <optional>
+
 // the [hc_dim] gamma is wider than the per-stream reduction, so ggml_fused_rms_norm cannot
 // express this and the two ops stay separate
 static ggml_tensor * qwen4exp_grouped_rms(
@@ -428,36 +430,78 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
 
     ggml_cgraph * gf = new_graph_custom();
 
-    delta_net delta(lctx, batch);
+    const bool is_mtp = lctx.cparams.mtp_op_type != MTP_OP_NONE;
+
+    // the MTP pass walks only the QSA tail: no recurrent state, so the draft
+    // context has zero qnext state slots and the delta-net ctor must not run
+    std::optional<delta_net> delta_opt;
+    if (!is_mtp) {
+        delta_opt.emplace(lctx, batch);
+    }
 
     const int32_t n_embd_head = hparams.n_embd_head_v(0);
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k(0));
 
     const int32_t hc = hparams.dsv4_hc_mult;
 
-    ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-    ggml_tensor * inp_pos = build_inp_pos();
-    ggml_tensor * inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
-    ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    const int n_layer_begin = is_mtp ? n_layer - hparams.nextn_predict_layers : 0;
+    const int n_layer_end   = is_mtp ? n_layer : n_layer - hparams.nextn_predict_layers;
 
-    lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
-    cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
-    ggml_set_input(lctx.inp_s_seq_qnext);
+    ggml_tensor * inp_pos = build_inp_pos();
+    ggml_tensor * inp_out_ids = (is_mtp || n_tokens > 1) ? build_inp_out_ids() : nullptr;
+    ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     float KQ_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-    // the wide residual starts as hc identical copies of the embedding
-    ggml_tensor * res_hc = ggml_repeat_4d(ctx0,
-            ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
-            n_embd, hc, n_tokens, 1);
-    cb(res_hc, "hc_residual", -1);
+    ggml_tensor * res_hc = nullptr;
+    if (is_mtp) {
+        // the fill sites assert on these buffers; the MTP graph consumes neither
+        lctx.inp_s_seq_qnext = nullptr;
+        lctx.inp_ple_rows    = nullptr;
 
-    if (hparams.ple_n_heads > 0) {
-        lctx.inp_ple_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, hparams.ple_n_heads * n_tokens);
-        cb(lctx.inp_ple_rows, "inp_ple_rows", -1);
-        ggml_set_input(lctx.inp_ple_rows);
+        const int32_t hc_dim = hc * n_embd;
+        ggml_tensor * hidden = build_inp_mtp_states(hc_dim);       // target's pre-mixer wide stream
+        ggml_tensor * tok    = build_inp_embd_mtp(model.tok_embd); // [n_embd, n_tokens]
+        const auto & nextn = model.layers[n_layer_begin].nextn;
+
+        // normalize the embedding (n_embd) and the wide hidden stream (hc*n_embd)
+        ggml_tensor * e = ggml_rms_norm(ctx0, tok, hparams.f_norm_rms_eps);
+        e = ggml_mul(ctx0, e, nextn.enorm);
+
+        ggml_tensor * h = ggml_rms_norm(ctx0, hidden, hparams.f_norm_rms_eps);
+        h = ggml_mul(ctx0, h, nextn.hnorm);
+
+        // eh_proj is [fc_embedding | fc_hidden] along its input dimension.
+        // Concatenating e_norm and h_norm per stream therefore preserves the old
+        // fc_embedding@e_norm + fc_hidden@h_norm entry result in one matmul.
+        e = ggml_repeat_4d(ctx0,
+                ggml_reshape_3d(ctx0, e, n_embd, 1, n_tokens), n_embd, hc, n_tokens, 1);
+        h = ggml_reshape_3d(ctx0, h, n_embd, hc, n_tokens);
+        ggml_tensor * eh = ggml_concat(ctx0, e, h, 0);
+        cb(eh, "mtp_eh_concat", n_layer_begin);
+
+        res_hc = llm_build_lora_mm(lctx, ctx0, nextn.eh_proj, eh);
+        cb(res_hc, "mtp_eh_proj", n_layer_begin);
     } else {
-        lctx.inp_ple_rows = nullptr;
+        ggml_tensor * inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+
+        lctx.inp_s_seq_qnext = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_tokens);
+        cb(lctx.inp_s_seq_qnext, "inp_s_seq_qnext", -1);
+        ggml_set_input(lctx.inp_s_seq_qnext);
+
+        // the wide residual starts as hc identical copies of the embedding
+        res_hc = ggml_repeat_4d(ctx0,
+                ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
+                n_embd, hc, n_tokens, 1);
+        cb(res_hc, "hc_residual", -1);
+
+        if (hparams.ple_n_heads > 0) {
+            lctx.inp_ple_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, hparams.ple_n_heads * n_tokens);
+            cb(lctx.inp_ple_rows, "inp_ple_rows", -1);
+            ggml_set_input(lctx.inp_ple_rows);
+        } else {
+            lctx.inp_ple_rows = nullptr;
+        }
     }
 
     // the same test the delta-net path uses for its own state
@@ -467,11 +511,11 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         ple_reset_pos[i] = batch.pos[i] == 0;
     }
 
-    for (int il = 0; il < n_layer; ++il) {
+    for (int il = n_layer_begin; il < n_layer_end; ++il) {
         ggml_tensor * inject = nullptr;
 
         if (hparams.is_ple(il)) {
-            res_hc = qwen4exp_ple(*this, ctx0, gf, lctx, model, hparams, delta, res_hc, lctx.inp_ple_rows,
+            res_hc = qwen4exp_ple(*this, ctx0, gf, lctx, model, hparams, *delta_opt, res_hc, lctx.inp_ple_rows,
                     kv_self.s_l[il], ple_reset_state, ple_reset_pos, n_embd, n_tokens, il, cb);
         }
 
@@ -481,7 +525,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
                 &inject, n_embd, il, cb);
 
         if (hparams.is_recurrent(il)) {
-            cur = delta.build_layer_attn_linear(ctx0, gf, cur, nullptr, il, cb, /* external_residual */ true,
+            cur = delta_opt->build_layer_attn_linear(ctx0, gf, cur, nullptr, il, cb, /* external_residual */ true,
                     GGML_UNARY_OP_SIGMOID);
         } else {
             // the indexer reads the same block input as q/k/v, and returns the causal mask
@@ -522,6 +566,36 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         cb(res_hc, "l_out", il);
     }
 
+    if (is_mtp) {
+        // wide stream out: the next draft step's hidden input (scheme A)
+        ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc * n_embd, n_tokens);
+        ggml_tensor * h_next = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
+        cb(h_next, "result_mtp_embd", -1);
+        ggml_set_output(h_next);
+        ggml_build_forward_expand(gf, h_next);
+
+        // exit mixer is hc_head-shaped: per-stream norm + low-rank gate, no inject
+        const auto & nextn = model.layers[n_layer_begin].nextn;
+        ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams,
+                ggml_reshape_3d(ctx0, h_next, n_embd, hc, h_next->ne[1]),
+                nextn.hc_head_norm, nextn.hc_head_down, nextn.hc_head_up,
+                nullptr, nullptr, n_embd, -1, cb);
+
+        cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+        cb(cur, "result_output", -1);
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
+
+    if (lctx.cparams.mtp && hparams.n_embd_out > hparams.n_embd) {
+        // hand the draft the pre-mixer wide stream for its first step
+        ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc * n_embd, n_tokens);
+        ggml_tensor * h_nextn = inp_out_ids ? ggml_get_rows(ctx0, flat, inp_out_ids) : flat;
+        cb(h_nextn, "result_mtp_embd", -1);
+        ggml_set_output(h_nextn);
+        ggml_build_forward_expand(gf, h_nextn);
+    }
+
     ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams, res_hc,
             model.hc_head_norm, model.hc_head_down, model.hc_head_up,
             nullptr, nullptr, n_embd, -1, cb);
@@ -529,6 +603,9 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
+
+    // name the mixed stream for append_pooling (the nextn tail needs a named embd)
+    cb(cur, "result_embd", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
     cb(cur, "result_output", -1);

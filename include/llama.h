@@ -716,6 +716,8 @@ extern "C" {
 
     LLAMA_API bool llama_model_is_qwen35_family(const struct llama_model * model);
 
+    LLAMA_API bool llama_model_is_qwen4exp(const struct llama_model * model);
+
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
     LLAMA_API bool llama_model_is_split_mode_graph(const struct llama_model * model);

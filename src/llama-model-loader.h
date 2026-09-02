@@ -38,6 +38,8 @@ struct llama_model_loader {
     int n_kv      = 0;
     int n_tensors = 0;
     int n_created = 0;
+    int n_skipped = 0;
+    size_t size_skipped = 0;
 
     int64_t n_elements = 0;
     size_t  n_bytes    = 0;

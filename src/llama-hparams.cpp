@@ -629,20 +629,45 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,    hparams.dsv4_hc_mult);
                 ml.get_key(LLM_KV_HYPER_CONNECTION_LOW_RANK, hparams.hc_low_rank);
 
+                // the MTP handover is the wide pre-mixer residual, so the width must not depend on an appended NextN block
+                if (hparams.dsv4_hc_mult > 1) {
+                    const uint32_t wide = hparams.n_embd * hparams.dsv4_hc_mult;
+                    if (hparams.n_embd_out != hparams.n_embd && hparams.n_embd_out != wide) {
+                        throw std::runtime_error("qwen4exp: embedding_length_out must equal n_embd * hyper-connection count");
+                    }
+                    hparams.n_embd_out = wide;
+                }
+
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (hparams.nextn_predict_layers >= hparams.n_layer) {
+                    throw std::runtime_error("qwen4exp: nextn_predict_layers must be smaller than block_count");
+                }
+
                 {
                     uint32_t full_attn_interval = 4;
                     ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
                     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
                         hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
                     }
+                    // the MTP tail is a full-attention (QSA) layer regardless of the interval pattern
+                    for (uint32_t i = hparams.n_layer - hparams.nextn_predict_layers; i < hparams.n_layer; ++i) {
+                        hparams.recurrent_layer_arr[i] = false;
+                    }
                 }
 
                 {
+                    // block_count includes the nextn tail, but the converter's ratio array covers
+                    // only the main layers; the tail inherits the last main QSA layer's ratio
+                    const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
                     uint32_t n_ratios = 0;
-                    if (ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_ratios, false) && n_ratios >= hparams.n_layer) {
+                    if (ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_ratios, false) && n_ratios >= n_main) {
                         std::vector<uint32_t> ratios;
                         ml.get_arr(ml.llm_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS), ratios);
-                        std::copy_n(ratios.begin(), hparams.n_layer, hparams.dsv4_compress_ratios.begin());
+                        const uint32_t n_copy = std::min<uint32_t>(n_ratios, hparams.n_layer);
+                        std::copy_n(ratios.begin(), n_copy, hparams.dsv4_compress_ratios.begin());
+                        for (uint32_t i = n_copy; i < hparams.n_layer; ++i) {
+                            hparams.dsv4_compress_ratios[i] = ratios[n_main - 1];
+                        }
                     }
                 }
 
@@ -692,7 +717,7 @@ void llm_load_hparams(
                     }
                 }
 
-                switch (hparams.n_layer) {
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
                     case 48: model.type = e_model::MODEL_125B_A6B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
