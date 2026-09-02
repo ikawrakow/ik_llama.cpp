@@ -1290,6 +1290,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                  qs.n_attention_wv == (int)model.hparams.n_layer ||
                  qs.n_attention_wv == 3 * (int)model.hparams.n_layer ||
                  model.arch == LLM_ARCH_DECI ||
+                 model.arch == LLM_ARCH_GLM5NEXT ||
                  model.arch == LLM_ARCH_GEMMA4 ||
                  model.arch == LLM_ARCH_UNKNOWN) && "n_attention_wv is unexpected");
 
