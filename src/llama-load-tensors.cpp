@@ -5561,7 +5561,9 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_GEMMA4_ASSISTANT:
             use_mmap_buffer = create_gemma4_mtp_tensors(tn); break;
         case LLM_ARCH_DFLASH:
-            use_mmap_buffer = create_dflash_dsv4_tensors(tn); break;
+            use_mmap_buffer = model.hparams.dflash_dsv4
+                    ? create_dflash_dsv4_tensors(tn)
+                    : create_dflash_tensors(tn); break;
         case LLM_ARCH_DFLASH2:
             use_mmap_buffer = create_dflash2_tensors(tn); break;
         case LLM_ARCH_DFLASH_DRAFT:

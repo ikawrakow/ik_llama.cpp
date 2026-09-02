@@ -641,7 +641,8 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 new_type = GGML_TYPE_IQ6_K;
         }
         else if (qs.model.hparams.n_gqa() >= 4 &&
-                 !(arch == LLM_ARCH_DFLASH_DRAFT &&
+                 !((arch == LLM_ARCH_DFLASH_DRAFT ||
+                    (arch == LLM_ARCH_DFLASH && !qs.model.hparams.dflash_dsv4)) &&
                    (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M))) {
             if      (new_type == GGML_TYPE_Q2_K || new_type == GGML_TYPE_IQ3_XXS) new_type = GGML_TYPE_IQ3_S;
             else if (new_type == GGML_TYPE_Q2_K_R4 || new_type == GGML_TYPE_IQ3_XXS_R4) new_type = GGML_TYPE_IQ3_K_R4;
