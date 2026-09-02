@@ -531,6 +531,7 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     }
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cb(cur, "result_norm", -1);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
