@@ -239,6 +239,7 @@ ggml_tensor * delta_net::build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph *
         ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
         bool add_residual) const {
     GGML_ASSERT(lctx.inp_s_seq_qnext != nullptr);
+    GGML_ASSERT(llm_build_context::llama_kv_qnext_state_slots(lctx.kv_self) > 0);
 
     auto & layer = lctx.model.layers[il];
     GGML_ASSERT(lctx.model.hparams.is_recurrent(il));

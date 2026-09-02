@@ -8456,6 +8456,8 @@ struct llama_context * llama_init_from_model(
     }
 
     if (model->arch != LLM_ARCH_OPENPANGU &&
+        model->arch != LLM_ARCH_GLM5NEXT &&
+        model->arch != LLM_ARCH_QWEN4EXP &&
         params.type_v != GGML_TYPE_F16 && params.type_v != GGML_TYPE_BF16 && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
@@ -8689,6 +8691,8 @@ struct llama_context * llama_init_from_model(
         model->arch != LLM_ARCH_STEP35 &&
         model->arch != LLM_ARCH_GEMMA4_ASSISTANT &&
         model->arch != LLM_ARCH_OPENPANGU &&
+        model->arch != LLM_ARCH_GLM5NEXT &&
+        model->arch != LLM_ARCH_QWEN4EXP &&
         cparams.mtp != 0) {
         cparams.mtp = 0;
     }

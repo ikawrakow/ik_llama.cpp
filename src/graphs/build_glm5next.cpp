@@ -378,8 +378,129 @@ static ggml_tensor * build_glm5next_mla_attention(
     return cur;
 }
 
+
+struct ggml_tensor * llm_build_context::build_glm5next_mtp(
+        const llama_layer & mtp_layer,
+        struct ggml_tensor * prev_embeddings,
+        struct ggml_cgraph * gf) {
+
+    const int il = hparams.n_layer - 1;
+
+    struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    struct ggml_tensor * inp_out_ids = (n_tokens > 1 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
+
+    struct ggml_tensor * token_emb = build_inp_embd_mtp(model.tok_embd);
+
+    struct ggml_tensor * cur = build_mtp_input(mtp_layer, prev_embeddings, token_emb, il, "mtp_fused");
+
+    // glm5next is MLA-absorbed: v_l may legitimately be shorter than k_l
+    GGML_ASSERT(il < (int)kv_self.k_l.size());
+    if (!kv_self.k_l[il]) {
+        LLAMA_LOG_ERROR("%s: KV cache not allocated for MTP layer %d (k=%p)\n",
+                __func__, il, (void*)kv_self.k_l[il]);
+        GGML_ABORT("KV cache not allocated for MTP layer");
+    }
+
+    // DSA k-pool indexer pool metadata (same construction as the trunk preamble)
+    ggml_tensor * pool_cells = nullptr;
+    ggml_tensor * pool_bias  = nullptr;
+    ggml_tensor * tail_cells = nullptr;
+    ggml_tensor * ape_slots  = nullptr;
+    const bool use_dsa = lctx.cparams.dsa
+        && hparams.indexer_head_size > 0
+        && hparams.indexer_block_size > 0
+        && !lctx.kv_self.kr_l.empty();
+    if (use_dsa) {
+        const int64_t r      = hparams.indexer_block_size;
+        const int64_t n_kv_  = this->n_kv;
+        const int64_t n_pool = n_kv_ / r;
+        if (n_pool > 0) {
+            pool_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, r * n_pool);
+            pool_bias  = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pool, n_tokens);
+            ape_slots  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, r);
+            ggml_set_input(pool_cells);
+            ggml_set_input(pool_bias);
+            ggml_set_input(ape_slots);
+            lctx.inp_kpool_cells     = pool_cells;
+            lctx.inp_kpool_bias      = pool_bias;
+            lctx.inp_kpool_ape_slots = ape_slots;
+            if (r > 1) {
+                tail_cells = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, r - 1, n_tokens);
+                ggml_set_input(tail_cells);
+                lctx.inp_kpool_tail = tail_cells;
+            }
+            cb(pool_cells, "inp_kpool_cells", -1);
+            cb(pool_bias,  "inp_kpool_bias",  -1);
+            cb(ape_slots,  "inp_kpool_ape",   -1);
+            if (tail_cells) {
+                cb(tail_cells, "inp_kpool_tail", -1);
+            }
+        }
+    }
+
+    // Attention: NoPE-absorbed MLA (+ optional DSA sparse mask). Applies attn_norm
+    // internally and returns WITHOUT residual - we add it here (no mHC on this layer).
+    const float kq_scale = 1.0f / sqrtf(float(hparams.n_embd_head_k_full));
+    ggml_tensor * attn_out = build_glm5next_mla_attention(*this, gf, il, cur, KQ_mask, kq_scale,
+            pool_cells, pool_bias, tail_cells, ape_slots);
+    attn_out = ggml_add(ctx0, attn_out, cur);
+    ggml_build_forward_expand(gf, attn_out);
+    cb(attn_out, "mtp_attn_out", il);
+
+    if (inp_out_ids) {
+        attn_out = ggml_get_rows(ctx0, attn_out, inp_out_ids);
+    }
+
+    // FFN: ffn_norm -> routed MoE + shared expert, manual residual
+    ggml_tensor * f = llm_build_norm(ctx0, attn_out, hparams, mtp_layer.ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
+    cb(f, "mtp_ffn_norm", il);
+
+    auto moe_out = llm_build_moe_ffn(ctx0, lctx, f,
+                mtp_layer.ffn_gate_inp, nullptr,
+                mtp_layer.ffn_up_exps, nullptr,
+                mtp_layer.ffn_gate_exps, nullptr,
+                mtp_layer.ffn_down_exps, nullptr,
+                mtp_layer.ffn_exp_probs_b,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, hparams.expert_weights_norm,
+                true, hparams.expert_weights_scale,
+                (llm_expert_gating_func_type) hparams.expert_gating_func,
+                cb, il, gf, false, mtp_layer.ffn_up_gate_exps, nullptr, nullptr, nullptr, nullptr);
+    ggml_build_forward_expand(gf, moe_out);
+    cb(moe_out, "mtp_ffn_moe_out", il);
+
+    ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, f,
+            mtp_layer.ffn_up_shexp,   nullptr, nullptr,
+            mtp_layer.ffn_gate_shexp, nullptr, nullptr,
+            mtp_layer.ffn_down_shexp, nullptr, nullptr,
+            nullptr,
+            LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+    cb(ffn_shexp, "mtp_ffn_shexp", il);
+
+    cur = ggml_add(ctx0, ggml_add(ctx0, moe_out, ffn_shexp), attn_out);
+    ggml_build_forward_expand(gf, cur);
+    cur = lctx.cvec.apply_to(ctx0, cur, il);
+    cb(cur, "mtp_ffn_out", il);
+
+    // Shared output head (model.output_mtp falls back to the backbone output when
+    // the GGUF carries no dedicated nextn head; shared_head_norm applies here).
+    cur = build_output(lctx, ctx0, cur, model.output_mtp ? model.output_mtp : model.output, mtp_layer.nextn.shared_head_norm, cb);
+    cb(cur, "result_output", -1);
+
+    return cur;
+}
+
 ggml_cgraph * llm_build_context::build_glm5next() {
     ggml_cgraph * gf = new_graph_custom();
+
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
+        // MTP tail-only graph: build just the nextn layer from main-model hidden states
+        ggml_tensor * hidden_states_from_main_model = build_inp_mtp_states(hparams.n_embd);
+        const int il_mtp = hparams.n_layer - 1;
+        ggml_tensor * cur = build_glm5next_mtp(model.layers[il_mtp], hidden_states_from_main_model, gf);
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
 
     const int64_t hc    = hparams.dsv4_hc_mult;
 
@@ -481,8 +602,22 @@ ggml_cgraph * llm_build_context::build_glm5next() {
                 &post_ffn, &comb_ffn, cb, il);
         cb(cur, "hc_ffn_pre", il);
 
+        ggml_tensor * prenorm_ffn = cur;
         cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
+
+        // Pre-gate instrumentation: predict layer il+1's routing from the current
+        // hidden state (evaluate il+1's router one step early). Cheap: one norm +
+        // one [n_expert, n_embd] GEMV per layer. Guarded by env var.
+        if (getenv("IK_PREGATE") && (uint32_t)(il + 1) < hparams.n_layer &&
+                (il + 1) >= (int) hparams.n_layer_dense_lead &&
+                model.layers[il + 1].ffn_gate_inp) {
+            auto pn = llm_build_norm(ctx0, prenorm_ffn, hparams, model.layers[il + 1].ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
+            auto pl = ggml_mul_mat(ctx0, model.layers[il + 1].ffn_gate_inp, pn);
+            auto pk = ggml_top_k(ctx0, pl, n_expert_used);
+            cb(pk, "pregate_topk", il);
+            ggml_build_forward_expand(gf, pk);
+        }
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             // dense FFN: no residual (mHC owns it); ffn_norm already applied above

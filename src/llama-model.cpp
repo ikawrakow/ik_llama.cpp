@@ -2484,7 +2484,8 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     const bool has_common_package_contract =
         llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
         llama_model_is_qwen35_family(model) ||
-        llama_model_is_gemma4_mtp_assistant(model);
+        llama_model_is_gemma4_mtp_assistant(model) ||
+        model->arch == LLM_ARCH_QWEN4EXP;
     if (!has_common_package_contract) {
         return n_nextn > 0 ? LLAMA_MTP_PACKAGE_EMBEDDED : LLAMA_MTP_PACKAGE_NONE;
     }

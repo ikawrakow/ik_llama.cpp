@@ -348,6 +348,11 @@ static void mul_mat_qX_K_q8_K_AVX512_1(int n, const void * vx, size_t bx, const 
     deq[1] = &deq2;
 
     __m512i scales[2*k_nx];
+    static thread_local int pf_dist = -1;
+    if (pf_dist < 0) {
+        const char * e = getenv("IK_PF_DIST");
+        pf_dist = e ? atoi(e) : 0;
+    }
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
@@ -357,6 +362,18 @@ static void mul_mat_qX_K_q8_K_AVX512_1(int n, const void * vx, size_t bx, const 
         for (int kx = 0; kx < k_nx; ++kx) deq[kx]->new_row(ix);
 
         for (int i = 0; i < nb/k_nx; ++i) {
+
+            if (pf_dist > 0) {
+                for (int kx = 0; kx < k_nx; ++kx) {
+                    int pf_blk = k_nx*(i + pf_dist) + kx;
+                    if (pf_blk < nb) {
+                        const char * pf = (const char *)(deq[kx]->x + pf_blk);
+                        _mm_prefetch(pf, _MM_HINT_T2);
+                        _mm_prefetch(pf + 64, _MM_HINT_T2);
+                        _mm_prefetch(pf + 128, _MM_HINT_T2);
+                    }
+                }
+            }
 
             for (int kx = 0; kx < k_nx; ++kx) deq[kx]->new_block(k_nx*i+kx, q8, &accm, scales+2*kx);
 

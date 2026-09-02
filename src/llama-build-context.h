@@ -646,6 +646,10 @@ llm_expert_gating_func_type   gating_op,
         struct ggml_tensor * rope_cache
     );
 
+    struct ggml_tensor * build_glm5next_mtp(
+            const llama_layer & mtp_layer,
+            struct ggml_tensor * prev_embeddings,
+            struct ggml_cgraph * gf);
     struct ggml_tensor * build_qwen35_mtp(
         const struct llama_layer & mtp_layer,
         struct ggml_tensor * prev_embeddings,
