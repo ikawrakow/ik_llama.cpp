@@ -41,6 +41,7 @@
 #include <signal.h>
 #if defined(__gnu_linux__)
 #include <syscall.h>
+#include <sys/mman.h>
 #endif
 
 #define IK_PRINT_TIMING 0
@@ -2937,7 +2938,7 @@ struct ggml_compute_state_shared {
 
     atomic_int current_chunk; // currently processing chunk during mul_mat, shared between all the threads
 
-    enum ggml_status ec;
+    atomic_int ec;
 };
 
 struct ggml_compute_state {
@@ -2949,6 +2950,10 @@ struct ggml_compute_state {
 struct ggml_compute_params {
     // ith = thread index, nth = number of threads
     int ith, nth;
+
+    // Effective NUMA node after this worker's affinity has been applied.  A
+    // negative value means that no node-local replica may be selected.
+    int numa_node;
 
     // work buffer for all threads
     size_t wsize;
@@ -4642,10 +4647,15 @@ static_assert(sizeof(struct ggml_tensor)%GGML_MEM_ALIGN == 0, "ggml_tensor size 
 struct ggml_numa_node {
     uint32_t cpus[GGML_NUMA_MAX_CPUS]; // hardware threads on this node
     uint32_t n_cpus;
+#if defined(__gnu_linux__)
+    cpu_set_t allowed_cpuset; // node CPUs intersected with the inherited process mask
+    uint32_t allowed_cpu_count;
+#endif
 };
 
 struct ggml_numa_nodes {
     enum ggml_numa_strategy numa_strategy;
+    bool mirror_active;
     struct ggml_numa_node nodes[GGML_NUMA_MAX_NODES];
     uint32_t n_nodes;
     uint32_t total_cpus; // hardware threads on system
@@ -4764,7 +4774,7 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 
     // set numa scheme
     g_state.numa.numa_strategy = numa_flag;
-
+    g_state.numa.mirror_active = false;
     GGML_PRINT_DEBUG("numa strategy %u\n",g_state.numa.numa_strategy);
 
     g_state.numa.cpuset = ggml_get_numa_affinity();
@@ -4820,6 +4830,16 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             }
         }
         GGML_PRINT_DEBUG("\n");
+
+        CPU_ZERO(&node->allowed_cpuset);
+        node->allowed_cpu_count = 0;
+        for (uint32_t i = 0; i < node->n_cpus; ++i) {
+            const uint32_t cpu = node->cpus[i];
+            if (CPU_ISSET(cpu, &g_state.numa.cpuset)) {
+                CPU_SET(cpu, &node->allowed_cpuset);
+                ++node->allowed_cpu_count;
+            }
+        }
     }
 
     if (ggml_is_numa()) {
@@ -4832,14 +4852,216 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             fclose(fptr);
         }
     }
+
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
+        bool has_allowed_cpu_on_every_node = g_state.numa.n_nodes > 1;
+        for (uint32_t n = 0; n < g_state.numa.n_nodes; ++n) {
+            const struct ggml_numa_node * node = &g_state.numa.nodes[n];
+            has_allowed_cpu_on_every_node &= node->allowed_cpu_count > 0;
+        }
+
+        if (!has_allowed_cpu_on_every_node) {
+            GGML_PRINT("NUMA mirror: requested=weights effective=none reason=insufficient-node-cpu-affinity nodes=%u\n", g_state.numa.n_nodes);
+        } else {
+            g_state.numa.mirror_active = true;
+            GGML_PRINT("NUMA mirror: requested=weights effective=weights nodes=%u\n", g_state.numa.n_nodes);
+            char allowed_cpus[4*GGML_NUMA_MAX_CPUS + 1] = { 0 };
+            size_t pos = 0;
+            for (uint32_t cpu = 0; cpu < g_state.numa.total_cpus; ++cpu) {
+                if (!CPU_ISSET(cpu, &g_state.numa.cpuset)) continue;
+                const int written = snprintf(allowed_cpus + pos, sizeof(allowed_cpus) - pos,
+                        "%s%u", pos ? "," : "", cpu);
+                if (written < 0 || (size_t) written >= sizeof(allowed_cpus) - pos) break;
+                pos += (size_t) written;
+            }
+            GGML_PRINT_DEBUG("NUMA mirror: inherited allowed_cpus=%s, per-worker placement uses node masks\n",
+                    pos ? allowed_cpus : "none");
+        }
+    }
 #else
+    if (numa_flag == GGML_NUMA_STRATEGY_MIRROR) {
+        fprintf(stderr, "NUMA mirror: requested=weights effective=none reason=unsupported-platform\n");
+    }
     UNUSED(numa_flag);
-    // TODO
 #endif
 }
 
 bool ggml_is_numa(void) {
     return g_state.numa.n_nodes > 1;
+}
+
+int ggml_numa_node_count(void) { return g_state.numa.n_nodes > 0 ? (int) g_state.numa.n_nodes : 1; }
+
+bool ggml_numa_mirror_active(void) {
+    return g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR &&
+           g_state.numa.n_nodes > 1 &&
+           g_state.numa.mirror_active;
+}
+
+bool ggml_numa_mirror_node_available(int node) {
+    if (!ggml_numa_mirror_active() || node < 0 || node >= (int) g_state.numa.n_nodes) {
+        return false;
+    }
+#if defined(__gnu_linux__)
+    return g_state.numa.nodes[node].allowed_cpu_count > 0;
+#else
+    UNUSED(node);
+    return false;
+#endif
+}
+
+struct ggml_numa_mirror { void * data[GGML_NUMA_MAX_NODES]; };
+
+static inline void * ggml_numa_tensor_data(const struct ggml_tensor * tensor, int node) {
+    if (node < 0 || node >= (int) g_state.numa.n_nodes) return tensor->data;
+    size_t offset = 0;
+    for (const struct ggml_tensor * base = tensor; base; base = base->view_src) {
+        if (base->data_numa) {
+            void * replica = ((const struct ggml_numa_mirror *) base->data_numa)->data[node];
+            if (replica) {
+                return (char *) replica + offset;
+            }
+        }
+        if (!base->view_src) break;
+        if (base->view_offs > SIZE_MAX - offset) return tensor->data;
+        offset += base->view_offs;
+    }
+    return tensor->data;
+}
+
+bool ggml_numa_tensor_set_mirror(struct ggml_tensor * tensor, void * const * node_data) {
+    if (!tensor || !node_data || !ggml_numa_mirror_active() || tensor->data_numa) return false;
+    struct ggml_numa_mirror * mirror = malloc(sizeof(*mirror));
+    if (!mirror) return false;
+    memset(mirror, 0, sizeof(*mirror));
+    bool has_replica = false;
+    for (uint32_t n = 0; n < g_state.numa.n_nodes; ++n) {
+        mirror->data[n] = node_data[n];
+        has_replica |= node_data[n] != NULL;
+    }
+    if (!has_replica) { free(mirror); return false; }
+    tensor->data_numa = mirror;
+    return true;
+}
+
+void ggml_numa_tensor_clear_mirror(struct ggml_tensor * tensor) {
+    if (tensor && tensor->data_numa) { free(tensor->data_numa); tensor->data_numa = NULL; }
+}
+
+#if defined(__gnu_linux__)
+#ifndef MPOL_BIND
+#define MPOL_BIND 2
+#endif
+#ifndef MPOL_MF_MOVE
+#define MPOL_MF_MOVE (1 << 1)
+#endif
+#ifndef MPOL_MF_STRICT
+#define MPOL_MF_STRICT (1 << 0)
+#endif
+
+#define GGML_NUMA_MIRROR_CAPACITY_RESERVE_DIVISOR 20
+#define GGML_NUMA_MIRROR_CAPACITY_RESERVE_MIN     (256ULL * 1024 * 1024)
+
+static long ggml_sys_mbind(void * addr, unsigned long len, int mode,
+        const unsigned long * nodemask, unsigned long maxnode, unsigned flags) {
+#if defined(SYS_mbind)
+    return syscall(SYS_mbind, addr, len, mode, nodemask, maxnode, flags);
+#else
+    UNUSED(addr); UNUSED(len); UNUSED(mode); UNUSED(nodemask); UNUSED(maxnode); UNUSED(flags);
+    return -1;
+#endif
+}
+
+static size_t ggml_numa_aligned_size(size_t size) {
+    const size_t page_size = (size_t) sysconf(_SC_PAGESIZE);
+    return (size + page_size - 1) & ~(page_size - 1);
+}
+
+static bool ggml_numa_node_has_capacity(size_t size, int node) {
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/devices/system/node/node%d/meminfo", node);
+    FILE * f = fopen(path, "r");
+    if (!f) return false;
+
+    unsigned long long mem_free_kib = 0;
+    unsigned long long file_pages_kib = 0;
+    unsigned long long reclaimable_kib = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long long kib = 0;
+        if (sscanf(line, "Node %*u MemFree: %llu kB", &kib) == 1) mem_free_kib = kib;
+        if (sscanf(line, "Node %*u FilePages: %llu kB", &kib) == 1) file_pages_kib = kib;
+        if (sscanf(line, "Node %*u SReclaimable: %llu kB", &kib) == 1) reclaimable_kib = kib;
+    }
+    fclose(f);
+    const unsigned long long available_kib = mem_free_kib + file_pages_kib + reclaimable_kib;
+    const size_t reserve = MAX(size / GGML_NUMA_MIRROR_CAPACITY_RESERVE_DIVISOR,
+            (size_t) GGML_NUMA_MIRROR_CAPACITY_RESERVE_MIN);
+    if (size > SIZE_MAX - reserve) return false;
+    return available_kib >= (unsigned long long) ((size + reserve + 1023) / 1024);
+}
+#endif
+
+bool ggml_numa_alloc(void ** ptr, size_t size, int node) {
+    if (!ptr || size == 0 || !ggml_numa_mirror_active() || node < 0 || node >= (int) g_state.numa.n_nodes) return false;
+#if defined(__gnu_linux__)
+    const size_t aligned = ggml_numa_aligned_size(size);
+    if (!ggml_numa_node_has_capacity(aligned, node)) {
+        GGML_PRINT("NUMA mirror: node %d lacks capacity for %zu bytes\n", node, aligned);
+        return false;
+    }
+    void * p = mmap(NULL, aligned, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) return false;
+
+    const size_t bits = 8 * sizeof(unsigned long);
+    unsigned long nodemask[(GGML_NUMA_MAX_NODES + bits - 1) / bits];
+    memset(nodemask, 0, sizeof(nodemask));
+    nodemask[node / bits] |= 1UL << (node % bits);
+    if (ggml_sys_mbind(p, aligned, MPOL_BIND, nodemask, GGML_NUMA_MAX_NODES, 0) != 0) {
+        GGML_PRINT("NUMA mirror: mbind node %d failed: %s\n", node, strerror(errno));
+        munmap(p, aligned);
+        return false;
+    }
+    if (madvise(p, aligned, MADV_HUGEPAGE) != 0) {
+        GGML_PRINT_DEBUG("NUMA mirror: MADV_HUGEPAGE failed: %s\n", strerror(errno));
+    }
+    *ptr = p;
+    return true;
+#else
+    UNUSED(node);
+    return false;
+#endif
+}
+
+void ggml_numa_free(void * ptr, size_t size, int node) {
+    if (!ptr || size == 0 || node < 0 || node >= (int) g_state.numa.n_nodes) return;
+#if defined(__gnu_linux__)
+    const size_t aligned = ggml_numa_aligned_size(size);
+    munmap(ptr, aligned);
+#else
+    UNUSED(size);
+#endif
+}
+
+bool ggml_numa_bind(void * ptr, size_t size, int node) {
+    if (!ptr || size == 0 || !ggml_numa_mirror_active() || node < 0 || node >= (int) g_state.numa.n_nodes) return false;
+#if defined(__gnu_linux__)
+    const long page_size = sysconf(_SC_PAGESIZE);
+    const uintptr_t start = (uintptr_t) ptr & ~((uintptr_t) page_size - 1);
+    const size_t length = size + ((uintptr_t) ptr - start);
+    const size_t bits = 8 * sizeof(unsigned long);
+    unsigned long nodemask[(GGML_NUMA_MAX_NODES + bits - 1) / bits];
+    memset(nodemask, 0, sizeof(nodemask));
+    nodemask[node / bits] |= 1UL << (node % bits);
+    if (ggml_sys_mbind((void *) start, length, MPOL_BIND, nodemask, GGML_NUMA_MAX_NODES, MPOL_MF_MOVE | MPOL_MF_STRICT) != 0) {
+        GGML_PRINT("NUMA mirror: mbind existing node %d failed: %s\n", node, strerror(errno));
+        return false;
+    }
+    return true;
+#else
+    UNUSED(node);
+    return false;
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -5587,7 +5809,8 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.data         =*/ obj_alloc_size > 0 ? (void *)(result + 1) : data,
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
-        ///*.padding      =*/ { 0 },
+        /*.data_numa    =*/ NULL,
+        /*.padding      =*/ { 0 },
     };
 
 #ifdef __clang__
@@ -17320,6 +17543,7 @@ static void ggml_compute_forward_norm_f32(
     const int nth = params->nth;
 
     GGML_TENSOR_UNARY_OP_LOCALS
+    const char * src0_base = (const char *) ggml_numa_tensor_data(src0, params->numa_node);
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -17330,7 +17554,7 @@ static void ggml_compute_forward_norm_f32(
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
-                const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                const float * x = (const float *) (src0_base + i01*nb01 + i02*nb02 + i03*nb03);
 
                 ggml_float sum = 0.0;
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
@@ -17398,19 +17622,20 @@ static void ggml_compute_forward_fused_norm_f32(
     const int nth = params->nth;
 
     GGML_TENSOR_UNARY_OP_LOCALS
+    const char * src0_base = (const char *) ggml_numa_tensor_data(src0, params->numa_node);
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
     GGML_ASSERT(eps > 0.0f);
 
-    const float * c = (const float *)src1->data;
+    const float * c = (const float *) ggml_numa_tensor_data(src1, params->numa_node);
 
     // TODO: optimize
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
-                const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                const float * x = (const float *) (src0_base + i01*nb01 + i02*nb02 + i03*nb03);
 
                 ggml_float sum = 0.0;
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
@@ -17473,6 +17698,7 @@ static void ggml_compute_forward_rms_norm_f32(
     const int nth = params->nth;
 
     GGML_TENSOR_UNARY_OP_LOCALS
+    const char * src0_base = (const char *) ggml_numa_tensor_data(src0, params->numa_node);
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -17483,7 +17709,7 @@ static void ggml_compute_forward_rms_norm_f32(
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
-                const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                const float * x = (const float *) (src0_base + i01*nb01 + i02*nb02 + i03*nb03);
 
                 ggml_float sum = 0.0;
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
@@ -17559,13 +17785,14 @@ static void ggml_compute_forward_fused_rms_norm_f32(
     int first = ith*nrows_per_thread;
     int last  = MIN(nrows, first + nrows_per_thread);
 
-    const float * c = (float *) src1->data;
+    const float * c = (const float *) ggml_numa_tensor_data(src1, params->numa_node);
+    const char * src0_base = (const char *) ggml_numa_tensor_data(src0, params->numa_node);
 
     for (int ir = first; ir < last; ++ir) {
         int i03 = ir/(ne01*ne02);
         int i02 = (ir - i03*ne01*ne02)/ne01;
         int i01 = ir - i03*ne01*ne02 - i02*ne01;
-        const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+        const float * x = (const float *) (src0_base + i01*nb01 + i02*nb02 + i03*nb03);
               float * y = (float *) ((char *) dst->data +  i01*nb1  + i02*nb2  + i03*nb3);
 
         ggml_float sum = 0.0;
@@ -17880,6 +18107,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
+    const void * src0_data = ggml_numa_tensor_data(src0, params->numa_node);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -17932,7 +18160,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 const int64_t i2 = i12;
                 const int64_t i3 = i13;
 
-                const char * src0_row = (const char*)src0->data + (0 + i02 * nb02 + i03 * nb03);
+                const char * src0_row = (const char*)src0_data + (0 + i02 * nb02 + i03 * nb03);
 
                 // desc: when src1 is not a contiguous memory block we have to calculate the offset using the strides
                 //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
@@ -17976,6 +18204,7 @@ static int ggml_compute_forward_mul_mat(
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
+    const void * src0_data = ggml_numa_tensor_data(src0, params->numa_node);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -18017,7 +18246,7 @@ static int ggml_compute_forward_mul_mat(
     if (dst->type == GGML_TYPE_F32) {
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
-                    src0->type, src0->data, nb01,
+                    src0->type, src0_data, nb01,
                     src1->type, src1->data, nb11,
                     (float *)dst->data, nb1/sizeof(float), ith, nth)) return node_n;
     }
@@ -18085,7 +18314,7 @@ static int ggml_compute_forward_mul_mat(
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, row_size*ne11, row_size*ne11*ne12,
                     nb2/sizeof(float), nb3/sizeof(float),
-                    src0->type, src0->data, nb01,
+                    src0->type, src0_data, nb01,
                     vec_dot_type, wdata, row_size,
                     (float *)dst->data, nb1/sizeof(float), ith, nth)) {
             if (!cgraph) return node_n;
@@ -18101,7 +18330,7 @@ static int ggml_compute_forward_mul_mat(
                 if (!iqk_mul_mat_4d(src0_next->ne[1], ne11, ne00,
                     src0_next->ne[2], src0_next->ne[3], ne12, ne13, src0_next->nb[2], src0_next->nb[3], row_size*ne11, row_size*ne11*ne12,
                     dst_next->nb[2]/sizeof(float), dst_next->nb[3]/sizeof(float),
-                    src0_next->type, src0_next->data, src0_next->nb[1],
+                    src0_next->type, ggml_numa_tensor_data(src0_next, params->numa_node), src0_next->nb[1],
                     vec_dot_type, wdata, row_size,
                     (float *)dst_next->data, dst_next->nb[1]/sizeof(float), ith, nth)) break;
                 ++node_n;
@@ -18167,12 +18396,12 @@ static int ggml_compute_forward_mul_mat(
 
         // If there are more than three rows in src1, use gemm; otherwise, use gemv.
         if (gemm && (ne11 > 3)) {
-            gemm(ne00, (float *)((char *) dst->data) + src0_start, ne01, (const char *) src0->data + src0_start * nb01,
+            gemm(ne00, (float *)((char *) dst->data) + src0_start, ne01, (const char *) src0_data + src0_start * nb01,
                  (const char *) src1_wdata, ne11 - ne11 % 4, src0_end - src0_start);
         }
         for (int iter = gemm ? ne11 - ne11 % 4 : 0; iter < ne11; iter++) {
             gemv(ne00, (float *)((char *) dst->data + (iter * nb1)) + src0_start, ne01,
-                 (const char *) src0->data + src0_start * nb01, (const char *) src1_wdata + (src1_col_stride * iter), 1,
+                 (const char *) src0_data + src0_start * nb01, (const char *) src1_wdata + (src1_col_stride * iter), 1,
                  src0_end - src0_start);
         }
         return node_n;
@@ -18217,6 +18446,7 @@ static void ggml_compute_forward_mul_mat_id(
 
     const int ith = params->ith;
     const int nth = params->nth;
+    const char * const src0_data = (const char *) ggml_numa_tensor_data(src0, params->numa_node);
 
     const enum ggml_type type = src0->type;
 
@@ -18345,8 +18575,7 @@ static void ggml_compute_forward_mul_mat_id(
                 acc += chunks_per_expert;
             }
 
-            const char * src0_cur = (const char *) src0->data + cur_a*nb02;
-
+            const char * src0_cur = src0_data + cur_a*nb02;
             if (!iqk_mul_mat_moe(ne01, matrix_row_counts[cur_a], ne00, ne11,
                         src0->type, src0_cur, nb01,
                         vec_dot_type, (const char *)wdata_mm, row_size_mm,
@@ -18375,7 +18604,7 @@ IQK_MulMat_Not_Available0:;
             continue;
         }
 
-        const char * src0_cur = (const char *) src0->data + cur_a*nb02;
+        const char * src0_cur = src0_data + cur_a*nb02;
 
         const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
@@ -18544,6 +18773,10 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     const int ith = params->ith;
     const int nth = params->nth;
+    const char * const src0_1_data = (const char *) ggml_numa_tensor_data(src0_1, params->numa_node);
+    const char * const src0_2_data = src0_2 ? (const char *) ggml_numa_tensor_data(src0_2, params->numa_node) : NULL;
+    const char * const up_b_data = up_b ? (const char *) ggml_numa_tensor_data(up_b, params->numa_node) : NULL;
+    const char * const gate_b_data = gate_b ? (const char *) ggml_numa_tensor_data(gate_b, params->numa_node) : NULL;
 
     const enum ggml_type type = src0->type;
 
@@ -18684,16 +18917,16 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
-            src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
-            src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
-            up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
-            gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
+            src0_1_cur = src0_1_data + cur_a*nb02;
+            src0_2_cur = src0_2_data + cur_a*nb02;
+            up_b_cur   = up_b_data   ? up_b_data + cur_a*nb41 : NULL;
+            gate_b_cur = gate_b_data ? gate_b_data + cur_a*nb51 : NULL;
         } else {
-            src0_2_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_2_cur = src0_1_data + cur_a*nb02;
             src0_1_cur = src0_2_cur + nb02/2;
             if (up_b) {
                 GGML_ASSERT(!gate_b);
-                gate_b_cur = (const char *)up_b->data + cur_a*nb41;
+                gate_b_cur = up_b_data + cur_a*nb41;
                 up_b_cur   = gate_b_cur + nb41/2;
             }
         }
@@ -18726,16 +18959,16 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
         const char *src0_1_cur, *src0_2_cur, *up_b_cur = NULL, *gate_b_cur = NULL;
         if (src0_2) {
-            src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
-            src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
-            up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
-            gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
+            src0_1_cur = src0_1_data + cur_a*nb02;
+            src0_2_cur = src0_2_data + cur_a*nb02;
+            up_b_cur   = up_b_data   ? up_b_data + cur_a*nb41 : NULL;
+            gate_b_cur = gate_b_data ? gate_b_data + cur_a*nb51 : NULL;
         } else {
-            src0_2_cur = (const char *) src0_1->data + cur_a*nb02;
+            src0_2_cur = src0_1_data + cur_a*nb02;
             src0_1_cur = src0_2_cur + nb02/2;
             if (up_b) {
                 GGML_ASSERT(!gate_b);
-                gate_b_cur = (const char *)up_b->data + cur_a*nb41;
+                gate_b_cur = up_b_data + cur_a*nb41;
                 up_b_cur   = gate_b_cur + nb41/2;
             }
         }
@@ -18777,6 +19010,8 @@ static void ggml_compute_forward_mul_mat_up_gate(
 
     const int ith = params->ith;
     const int nth = params->nth;
+    const void * const src0_1_data = ggml_numa_tensor_data(src0_1, params->numa_node);
+    const void * const src0_2_data = ggml_numa_tensor_data(src0_2, params->numa_node);
 
     const enum ggml_type type = src0->type;
 
@@ -18821,7 +19056,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     if (!iqk_moe_fused_up_gate(ne01, ne11, ne00, ne11, dst->op_params[0],
-                         type, src0_1->data, src0_2->data, nb01,
+                         type, src0_1_data, src0_2_data, nb01,
                          vec_dot_type, (const char *)wdata, row_size,
                          NULL, NULL,
                          (float *)dst->data, nb1, nb2,
@@ -19217,16 +19452,17 @@ static void ggml_compute_forward_scale_f32(
     const int64_t block_size = 1024;
     int64_t nelements = ggml_nelements(dst);
     int64_t nblocks = (nelements + block_size - 1)/block_size;
+    const char * src_base = (const char *) ggml_numa_tensor_data(src0, params->numa_node);
 
     for (int ib = ith; ib < nblocks; ib += nth) {
-        const float * src_data = (const float *)src0->data + block_size*ib;
+        const float * src_data = (const float *)src_base + block_size*ib;
               float * dst_data = (      float *)dst->data  + block_size*ib;
         int n = MIN(block_size, nelements - block_size*ib);
         if (s == 0.0f && b == 0.0f) {
             memset(dst_data, 0, n*sizeof(float));
         }
         else if (b == 0.0f) {
-            if (dst->data != src0->data) {
+            if ((const char *) dst->data != src_base) {
                 // src0 is same shape as dst => same indices
                 memcpy(dst_data, src_data, n * sizeof(float));
             }
@@ -19710,7 +19946,7 @@ static void ggml_compute_forward_get_rows_q(
         //assert(i01 >= 0 && i01 < ne01);
 
         dequantize_row_q(
-                (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
+                (const void *) ((char *) ggml_numa_tensor_data(src0, params->numa_node) + i01*nb01 + i11*nb02 + i12*nb03),
                      (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
     }
 }
@@ -19750,7 +19986,7 @@ static void ggml_compute_forward_get_rows_f16(
 
         if (i01 >= 0 && i01 < ne01) {
             ggml_fp16_to_fp32_row(
-                    (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
+                    (const void *) ((char *) ggml_numa_tensor_data(src0, params->numa_node) + i01*nb01 + i11*nb02 + i12*nb03),
                          (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
         } else {
             memset((char *) dst->data + i10*nb1  + i11*nb2  + i12*nb3, 0, nc*sizeof(float));
@@ -19794,7 +20030,7 @@ static void ggml_compute_forward_get_rows_bf16(
 
         if (i01 >= 0 && i01 < ne01) {
             ggml_bf16_to_fp32_row(
-                    (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
+                    (const void *) ((char *) ggml_numa_tensor_data(src0, params->numa_node) + i01*nb01 + i11*nb02 + i12*nb03),
                          (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
         } else {
             memset((char *) dst->data + i10*nb1  + i11*nb2  + i12*nb3, 0, nc*sizeof(float));
@@ -19838,7 +20074,7 @@ static void ggml_compute_forward_get_rows_f32(
         if (i01 >= 0 && i01 < ne01) {
             ggml_vec_cpy_f32(nc,
                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3),
-                    (float *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03));
+                    (float *) ((char *) ggml_numa_tensor_data(src0, params->numa_node) + i01*nb01 + i11*nb02 + i12*nb03));
         } else {
             memset((char *)dst->data + i10*nb1  + i11*nb2  + i12*nb3, 0, nc*sizeof(float));
         }
@@ -28556,16 +28792,42 @@ typedef int ggml_lock_t;
 
 // Android's libc implementation "bionic" does not support setting affinity
 #if defined(__gnu_linux__)
-static void set_numa_thread_affinity(int thread_n) {
+static int ggml_numa_node_for_thread(int ith, int nth) {
+    const int n_nodes = (int) g_state.numa.n_nodes;
+    if (n_nodes <= 1 || nth <= 0) {
+        return 0;
+    }
+
+    const int node = (ith * n_nodes) / nth;
+    return MIN(node, n_nodes - 1);
+}
+
+static int set_numa_thread_affinity(int thread_n, int n_threads) {
     if (!ggml_is_numa()) {
-        return;
+        return -1;
+    }
+
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
+        if (!ggml_numa_mirror_active()) {
+            return -1;
+        }
+        const int node_num = ggml_numa_node_for_thread(thread_n, n_threads);
+        struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
+        if (node->allowed_cpu_count == 0) {
+            fprintf(stderr, "NUMA mirror: no allowed CPUs for node %d\n", node_num);
+            return -1;
+        }
+        const int rv = pthread_setaffinity_np(pthread_self(), sizeof(node->allowed_cpuset), &node->allowed_cpuset);
+        if (rv) {
+            fprintf(stderr, "NUMA mirror: pthread_setaffinity_np() failed for node %d: %s\n", node_num, strerror(rv));
+            return -1;
+        }
+        return node_num;
     }
 
     int node_num;
-    int rv;
-    size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
-
-    switch(g_state.numa.numa_strategy) {
+    const size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
+    switch (g_state.numa.numa_strategy) {
         case GGML_NUMA_STRATEGY_DISTRIBUTE:
             // run thread on node_num thread_n / (threads per node)
             node_num = thread_n % g_state.numa.n_nodes;
@@ -28574,15 +28836,16 @@ static void set_numa_thread_affinity(int thread_n) {
             // run thread on current_node
             node_num = g_state.numa.current_node;
             break;
-        case GGML_NUMA_STRATEGY_NUMACTL:
+        case GGML_NUMA_STRATEGY_NUMACTL: {
             // use the cpuset that numactl gave us
-            rv = pthread_setaffinity_np(pthread_self(), setsize, &g_state.numa.cpuset);
+            const int rv = pthread_setaffinity_np(pthread_self(), setsize, &g_state.numa.cpuset);
             if (rv) {
-                fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n",strerror(rv));
+                fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
             }
-            return;
+            return -1;
+        }
         default:
-            return;
+            return -1;
     }
 
     struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
@@ -28592,13 +28855,12 @@ static void set_numa_thread_affinity(int thread_n) {
     for (size_t i = 0; i < node->n_cpus; ++i) {
         CPU_SET_S(node->cpus[i], setsize, cpus);
     }
-
-    rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
+    const int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
     if (rv) {
-            fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
+        fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
     }
-
     CPU_FREE(cpus);
+    return -1;
 }
 
 static void clear_numa_thread_affinity(void) {
@@ -28606,25 +28868,26 @@ static void clear_numa_thread_affinity(void) {
         return;
     }
 
-    size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
-
+    const size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
     cpu_set_t * cpus = CPU_ALLOC(g_state.numa.total_cpus);
     CPU_ZERO_S(setsize, cpus);
-    for (unsigned i = 0; i < g_state.numa.total_cpus; ++i) {
-        CPU_SET_S(i, setsize, cpus);
+    if (g_state.numa.numa_strategy == GGML_NUMA_STRATEGY_MIRROR) {
+        CPU_OR_S(setsize, cpus, &g_state.numa.cpuset, &g_state.numa.cpuset);
+    } else {
+        for (unsigned i = 0; i < g_state.numa.total_cpus; ++i) {
+            CPU_SET_S(i, setsize, cpus);
+        }
     }
-
-    int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
+    const int rv = pthread_setaffinity_np(pthread_self(), setsize, cpus);
     if (rv) {
         fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n", strerror(rv));
     }
-
     CPU_FREE(cpus);
 }
 #else
 // TODO: Windows etc.
 // (the linux implementation may also work on BSD, someone should test)
-static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
+static int set_numa_thread_affinity(int thread_n, int n_threads) { UNUSED(thread_n); UNUSED(n_threads); return -1; }
 static void clear_numa_thread_affinity(void) {}
 #endif
 
@@ -29125,11 +29388,20 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cgraph * cgraph = state->shared->cgraph;
     const struct ggml_cplan  * cplan  = state->shared->cplan;
 
-    set_numa_thread_affinity(state->ith);
+    const int numa_node = set_numa_thread_affinity(state->ith, state->shared->n_threads);
+
+    if (ggml_numa_mirror_active() && numa_node < 0) {
+        atomic_store(&state->shared->ec, GGML_STATUS_FAILED);
+    }
+    ggml_barrier(state->shared);
+    if (atomic_load(&state->shared->ec) != GGML_STATUS_SUCCESS) {
+        return 0;
+    }
 
     struct ggml_compute_params params = {
         /*.ith   =*/ state->ith,
         /*.nth   =*/ state->shared->n_threads,
+        /*.numa_node =*/ numa_node,
         /*.wsize =*/ cplan->work_size,
         /*.wdata =*/ cplan->work_data,
         /*.shared=*/ state->shared,
@@ -29155,12 +29427,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #endif
 
         if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {
-            state->shared->ec = GGML_STATUS_ABORTED;
+            atomic_store(&state->shared->ec, GGML_STATUS_ABORTED);
         }
 
         ggml_barrier(state->shared);
 
-        if (state->shared->ec != GGML_STATUS_SUCCESS) {
+        if (atomic_load(&state->shared->ec) != GGML_STATUS_SUCCESS) {
             break;
         }
     }
@@ -29259,7 +29531,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     // don't leave affinity set on the main thread
     clear_numa_thread_affinity();
 
-    return state_shared.ec;
+    return (enum ggml_status) atomic_load(&state_shared.ec);
 }
 
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {

@@ -219,7 +219,7 @@ void llama_context::free_dflash_kv_cache_tensors() {
     }
 }
 
-static void llama_graph_compute_sched(
+static enum ggml_status llama_graph_compute_sched(
         llama_context & lctx,
         ggml_backend_sched_t sched,
           ggml_cgraph * gf,
@@ -235,7 +235,7 @@ static void llama_graph_compute_sched(
         ggml_backend_cpu_set_abort_callback(lctx.backend_cpu, lctx.abort_callback, lctx.abort_callback_data);
     }
 
-    ggml_backend_sched_graph_compute_async(sched, gf);
+    return ggml_backend_sched_graph_compute_async(sched, gf);
 }
 
 static bool dflash_layer_has_attention_bias(const llama_layer & layer) {
@@ -611,7 +611,11 @@ bool llama_prepare_dflash_graph_inputs(
                         ggml_nbytes(lctx.dflash.kv.cache_input_rows));
             }
         }
-        llama_graph_compute_sched(lctx, lctx.dflash.kv.cache_sched, gf_kv, lctx.cparams.n_threads);
+        const enum ggml_status status = llama_graph_compute_sched(lctx, lctx.dflash.kv.cache_sched, gf_kv, lctx.cparams.n_threads);
+        if (status != GGML_STATUS_SUCCESS) {
+            LLAMA_LOG_ERROR("%s: DFlash K/V graph compute failed with status %d\n", __func__, (int) status);
+            return false;
+        }
         ggml_backend_sched_synchronize(lctx.dflash.kv.cache_sched);
 
         if ((int32_t) lctx.dflash.kv.cache_pos.size() != cross_ctx) {
