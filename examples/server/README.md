@@ -238,6 +238,12 @@ server:
          --metrics                enable prometheus compatible metrics endpoint (default: disabled)
          --no-slots               disables slots monitoring endpoint (default: enabled)
          --slot-save-path PATH    path to save slot kv cache (default: disabled)
+         --kv-cache-dir PATH      enable disk KV block cache and use PATH as cache dir (default: disabled)
+         --kv-cache-block N       disk KV block size in tokens (default: 64)
+         --kv-cache-max-age-days N
+                                  delete disk KV blocks not accessed for N days (default: 3, 0 = disabled)
+         --kv-cache-max-size-mb N
+                                  disk KV cache size limit in MB, LRU evicts oldest (default: 0 = unlimited)
          --chat-template JINJA_TEMPLATE
                                   set custom jinja chat template (default: template taken from model's metadata)
                                   only commonly used templates are accepted:

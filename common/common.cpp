@@ -2661,6 +2661,38 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--kv-cache-dir") {
+        CHECK_ARG
+        params.kv_cache_dir = argv[i];
+        return true;
+    }
+    if (arg == "--kv-cache-block") {
+        CHECK_ARG
+        const int32_t v = std::stoi(argv[i]);
+        if (v < 1) {
+            throw std::invalid_argument("--kv-cache-block must be >= 1");
+        }
+        params.kv_cache_block_tokens = v;
+        return true;
+    }
+    if (arg == "--kv-cache-max-age-days") {
+        CHECK_ARG
+        const int32_t v = std::stoi(argv[i]);
+        if (v < 0) {
+            throw std::invalid_argument("--kv-cache-max-age-days must be >= 0");
+        }
+        params.kv_cache_max_age_days = v;
+        return true;
+    }
+    if (arg == "--kv-cache-max-size-mb") {
+        CHECK_ARG
+        const long long v = std::stoll(argv[i]);
+        if (v < 0) {
+            throw std::invalid_argument("--kv-cache-max-size-mb must be >= 0");
+        }
+        params.kv_cache_max_size_mb = (size_t) v;
+        return true;
+    }
     if (arg == "--reasoning-tokens") {
         CHECK_ARG
         params.think_tokens = thinking_tokens_from_string(std::string(argv[i]));
@@ -3450,6 +3482,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "server",      "       --metrics",              "enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled" });
     options.push_back({ "server",      "       --no-slots",             "disables slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled" });
     options.push_back({ "server",      "       --slot-save-path PATH",  "path to save slot kv cache (default: disabled)" });
+    options.push_back({ "server",      "       --kv-cache-dir PATH",    "enable disk KV block cache and use PATH as cache dir (default: disabled)" });
+    options.push_back({ "server",      "       --kv-cache-block N",     "disk KV block size in tokens (default: %d)", params.kv_cache_block_tokens });
+    options.push_back({ "server",      "       --kv-cache-max-age-days N", "delete disk KV blocks not accessed for N days (default: %d, 0 = disabled)", params.kv_cache_max_age_days });
+    options.push_back({ "server",      "       --kv-cache-max-size-mb N",  "disk KV cache size limit in MB, LRU evicts oldest (default: %zu, 0 = unlimited)", params.kv_cache_max_size_mb });
     options.push_back({ "server",      "       --chat-template JINJA_TEMPLATE",
                                                                         "set custom jinja chat template (default: template taken from model's metadata)\n"
                                                                         "only commonly used templates are accepted:\n"
@@ -4271,7 +4307,9 @@ struct llama_model_params common_model_params_to_llama(const gpt_params & params
     mparams.n_v_first       = params.n_v_first;
     mparams.n_v_last        = params.n_v_last;
     mparams.max_ctx_size    = params.n_ctx;
-    mparams.n_seq_max       = params.n_parallel;
+    // disk KV cache needs an extra sequence slot (temp seq for load/save staging);
+    // hybrid models index qnext state rows by seq_id, so n_seq_max must cover it
+    mparams.n_seq_max       = params.kv_cache_dir.empty() ? params.n_parallel : params.n_parallel + 1;
     mparams.n_ubatch        = get_batch_ubatch(params).second;
     mparams.amb             = params.attn_max_batch;
     mparams.split_mode      = params.split_mode;
@@ -4335,7 +4373,8 @@ struct llama_context_params common_context_params_to_llama(const gpt_params & pa
     auto [n_batch, n_ubatch] = get_batch_ubatch(params);
 
     cparams.n_ctx             = params.n_ctx;
-    cparams.n_seq_max         = params.n_parallel;
+    // disk KV cache needs an extra sequence slot for the staging/temp sequence
+    cparams.n_seq_max         = params.kv_cache_dir.empty() ? params.n_parallel : params.n_parallel + 1;
     cparams.n_batch           = n_batch;
     cparams.n_ubatch          = n_ubatch;
     cparams.n_threads         = params.n_threads;

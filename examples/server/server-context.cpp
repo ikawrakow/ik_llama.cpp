@@ -13,10 +13,13 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include "kv-cache.h"
+
 #include <fstream>
 #include <iostream>
 #include <regex>
 #include <exception>
+#include <filesystem>
 
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max, int32_t offset) {
     ckpt.pos_min = pos_min;
@@ -281,6 +284,13 @@ void server_context::init() {
     }
 
     LOG_INFO("initializing slots", { {"n_slots", params_base.n_parallel} });
+
+    if (!params_base.kv_cache_dir.empty() && llama_model_has_recurrent(model)) {
+        SRV_INF("%s\n",
+            "disk KV cache (--kv-cache-dir) enabled for recurrent/hybrid model; "
+            "verified bit-exact on Qwen3-Next (Ridge 27B): cached-output == no-cache baseline, "
+            "cross-process prefix hit works");
+    }
 
     if (params_base.has_mtp) {
         SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
@@ -3834,6 +3844,101 @@ bool server_context::create_checkpoint(server_slot & slot) {
     return do_checkpoint;
 }
 
+// ---------------------------------------------------------------------------
+// Disk KV block cache pre-warm (v1)
+//
+// Called from SLOT_COMMAND_LOAD_PROMPT right after tokenization, before the
+// server's own prompt batch decode. Walks the (pure text) prompt from position
+// 0 in fixed token blocks:
+//   - hit:   load the block KV from disk into slot.id (seq_cp + kv_cache_update)
+//   - miss:  decode the block into slot.id with a local batch, then save it to disk
+//
+// On success the caller aligns slot.n_past / slot.n_past_prompt / slot.cache_tokens
+// with the pre-warmed prefix; the server then resumes its normal batch loop from
+// that point. Returns the number of pre-warmed tokens (0 on failure / nothing).
+//
+// Caller guarantees: kv-cache dir set, slot.cache_tokens empty (cold start),
+// pure text (no LLAMA_TOKEN_NULL / mtmd), no system prompt offset, no spec/MTP,
+// ga_n == 1 (self-extend off), cache_prompt enabled.
+// ---------------------------------------------------------------------------
+size_t server_context::disk_kv_prewarm(server_slot & slot) {
+    const std::vector<llama_token> & prompt_tokens = slot.prompt_tokens.get_text_tokens();
+    const size_t n_prompt = prompt_tokens.size();
+    if (n_prompt == 0) {
+        return 0;
+    }
+
+    const size_t      block   = std::max(1, params_base.kv_cache_block_tokens);
+    const llama_seq_id tmp_seq = (llama_seq_id) slots.size(); // a seq id outside [0, n_parallel)
+
+    // make sure the cache directory exists
+    std::error_code ec;
+    std::filesystem::create_directories(params_base.kv_cache_dir, ec);
+
+    const int64_t t_start = ggml_time_us();
+
+    size_t pos = 0;
+
+    // 1) hit phase: load contiguous blocks from position 0
+    while (pos < n_prompt) {
+        const size_t end = std::min(pos + block, n_prompt);
+        const std::string file = disk_kv::block_path(model, params_base.model, params_base.kv_cache_dir, prompt_tokens, pos, end);
+        if (!disk_kv::load_block(ctx, slot.id, tmp_seq, file, prompt_tokens, pos, end)) {
+            break;
+        }
+        pos = end;
+    }
+    const size_t n_hit = pos;
+
+    // 2) recompute phase: decode the missing tail block-by-block and persist it
+    // [S2] llama_decode asserts n_tokens <= cparams.n_batch; when --kv-cache-block
+    // exceeds --batch-size we must split each block into sub-chunks of at most
+    // n_batch tokens (llama_decode itself splits further by n_ubatch internally).
+    // The block is still saved as one [pos, end) unit.
+    const uint32_t max_decode_tokens = llama_n_batch(ctx);
+    while (pos < n_prompt) {
+        const size_t end = std::min(pos + block, n_prompt);
+
+        size_t sub = pos;
+        while (sub < end) {
+            const size_t sub_end = std::min(sub + max_decode_tokens, end);
+            const std::vector<llama_token> seg(prompt_tokens.begin() + sub, prompt_tokens.begin() + sub_end);
+
+            llama_batch lbatch = llama_batch_init((int32_t) seg.size(), 0, 1);
+            lbatch.n_tokens = (int32_t) seg.size();
+            for (size_t i = 0; i < seg.size(); ++i) {
+                lbatch.token[i]     = seg[i];
+                lbatch.pos[i]       = (llama_pos)(sub + i);
+                lbatch.n_seq_id[i]  = 1;
+                lbatch.seq_id[i][0] = slot.id;
+                lbatch.logits[i]    = 0;
+            }
+            const int rc = llama_decode(ctx, lbatch);
+            llama_batch_free(lbatch);
+            if (rc != 0) {
+                LLAMA_LOG_ERROR("[disk-kv] block decode failed, rc = %d\n", rc);
+                return pos;
+            }
+            sub = sub_end;
+        }
+
+        const std::string file = disk_kv::block_path(model, params_base.model, params_base.kv_cache_dir, prompt_tokens, pos, end);
+        if (!disk_kv::save_block(ctx, slot.id, tmp_seq, file, prompt_tokens, pos, end)) {
+            // [M3] 落盘失败（如磁盘满）不静默：打日志，缓存只是丢失这块，不影响本次正确性
+            LLAMA_LOG_WARN("[disk-kv] failed to save block [%zu, %zu)\n", pos, end);
+        }
+
+        pos = end;
+    }
+    // [M3] 老化清理 + 容量 LRU 整条 prompt 只跑一次，避免每块都全目录扫描
+    disk_kv::cleanup_expired(params_base.kv_cache_dir, params_base.kv_cache_max_age_days);
+    disk_kv::enforce_cache_limit(params_base.kv_cache_dir, params_base.kv_cache_max_size_mb);
+
+    LLAMA_LOG_INFO("[disk-kv] prefill prewarm: hit %zu/%zu tokens (%.2f ms)\n",
+        n_hit, n_prompt, (ggml_time_us() - t_start) / 1000.0);
+    return pos;
+}
+
 void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type) {
     if (params_base.cont_batching || batch.n_tokens == 0) {
         for (auto& slot : slots) {
@@ -4019,6 +4124,52 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             }
                         }
                     }
+
+                    // disk KV block cache pre-warm (cold start, pure text, no system prompt, no spec/self-extend)
+                    // Works for both transformer and recurrent/hybrid models. Verified bit-exact on
+                    // Qwen2.5-0.5B (transformer) and Qwen3.8-27B-Ridge (hybrid/Qwen3-Next):
+                    // with-cache cold output == no-cache baseline, cross-process prefix hit works.
+                    // Excluded:
+                    //  - embedding requests (need logits/embd for the whole prompt; prewarm's logits=0
+                    //    batches would not produce the embedding output) [S1]
+                    //  - DSV4 / openPangu: their pos_min=0 (no eviction) makes apply_checkpoint()
+                    //    always take the checkpoint-search path and wipe the pre-warmed prefix on
+                    //    cold start, undoing the prewarm [M4]
+                    size_t n_prewarm = 0;
+                    if (!params_base.kv_cache_dir.empty() &&
+                        !llama_model_is_deepseek4(model) &&
+                        !llama_model_is_openpangu(model) &&
+                        !slot.embedding &&
+                        slot.cache_tokens.empty() &&
+                        !slot.prompt_tokens.has_mtmd &&
+                        system_tokens.empty() &&
+                        slot.spec == nullptr &&
+                        slot.ga_n == 1 &&
+                        slot.params.cache_prompt) {
+                        bool has_image = false;
+                        for (size_t i = 0; i < slot.prompt_tokens.size(); ++i) {
+                            if (slot.prompt_tokens[i] == LLAMA_TOKEN_NULL) {
+                                has_image = true;
+                                break;
+                            }
+                        }
+                        if (!has_image) {
+                            n_prewarm = disk_kv_prewarm(slot);
+                            if (n_prewarm > 0) {
+                                // advance the slot state to the pre-warmed prefix; the server's
+                                // own "evaluate at least 1 token" logic below re-decodes the last
+                                // token at pos n_prompt (matching the process-internal cache path)
+                                slot.n_past        = (int32_t) n_prewarm;
+                                slot.n_past_prompt = (int32_t) n_prewarm;
+                                slot.n_past_offset = 0;
+                                slot.cache_tokens.clear();
+                                slot.cache_tokens.insert(std::vector<llama_token>(
+                                    slot.prompt_tokens.get_text_tokens().begin(),
+                                    slot.prompt_tokens.get_text_tokens().begin() + n_prewarm));
+                            }
+                        }
+                    }
+
                     if (slot.n_past_prompt == slot.n_prompt_tokens && slot.n_past_prompt > 0) {
                         // we have to evaluate at least 1 token to generate logits.
                         LOG_INFO("we have to evaluate at least 1 token to generate logits", {
@@ -4034,7 +4185,9 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
                     apply_checkpoint(slot);
                     slot.n_prompt_tokens_cache = slot.n_past_prompt;
-                    slot.n_prompt_tokens_processed = 0;
+                    // [M1] prewarm 已处理了 n_prewarm 个 token；batch 循环还会把尾部 token 累加进来，
+                    // 这样最终 n_prompt_tokens_processed ≈ n_prompt，/v1/* 的 input_tokens / timings 不失真
+                    slot.n_prompt_tokens_processed = (int32_t) n_prewarm;
                 }
 
                 if (slot.embedding) {
