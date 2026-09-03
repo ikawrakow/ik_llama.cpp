@@ -3508,10 +3508,31 @@ void server_context::context_shift() {
 }
 
 void server_context::add_sampled_tokens() {
+    // DeepSeek-V4 processes each batch as a rectangular [n_seqs, n_tokens_per_seq]
+    // grid (stream-structured KV/side-state caches), so every sequence in a batch
+    // must contribute the same number of tokens.
+    const bool uniform_seq_batch = llama_model_is_deepseek4(model);
     for (auto& slot : slots) {
         slot.released = false;
         if (slot.state == SLOT_STATE_IDLE) {
             continue;
+        }
+        if (uniform_seq_batch) {
+            // Models requiring uniform batches (e.g. DeepSeek-V4) cannot mix
+            // decode tokens (1 per slot) with prompt chunks from other slots
+            // in the same batch. Defer decode tokens while any slot still has
+            // a pending prompt; batch_pending_prompt will process it (one
+            // slot per batch) and decode resumes once prompts are done.
+            bool prompt_pending = false;
+            for (auto& other : slots) {
+                if (other.state == SLOT_STATE_IDLE && other.command == SLOT_COMMAND_LOAD_PROMPT) {
+                    prompt_pending = true;
+                    break;
+                }
+            }
+            if (prompt_pending) {
+                return;
+            }
         }
         slot.spec_target_only = false;
 
@@ -3836,9 +3857,19 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
 void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type) {
     if (params_base.cont_batching || batch.n_tokens == 0) {
+        // DeepSeek-V4 requires uniform batches (see add_sampled_tokens).
+        const bool uniform_seq_batch = llama_model_is_deepseek4(model);
         for (auto& slot : slots) {
             slot.prompt_batch_i0 = -1;
             slot.prompt_batch_i1 = -1;
+
+            if (uniform_seq_batch && batch.n_tokens > 0) {
+                // Models requiring uniform batches (e.g. DeepSeek-V4): process
+                // at most one slot's prompt chunk per batch, keeping every
+                // batch uniform across sequences. Remaining pending prompts
+                // are handled on the next iterations.
+                continue;
+            }
 
             // this slot still has a prompt to be processed
             if (slot.state == SLOT_STATE_IDLE && slot.command == SLOT_COMMAND_LOAD_PROMPT) {
