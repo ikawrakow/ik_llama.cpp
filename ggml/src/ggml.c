@@ -4641,8 +4641,8 @@ static_assert(sizeof(struct ggml_tensor)%GGML_MEM_ALIGN == 0, "ggml_tensor size 
 // NUMA support
 //
 
-#define GGML_NUMA_MAX_CPUS 512
 #define GGML_NUMA_MAX_NODES 8
+#define GGML_NUMA_MAX_CPUS 512
 
 struct ggml_numa_node {
     uint32_t cpus[GGML_NUMA_MAX_CPUS]; // hardware threads on this node
@@ -13289,7 +13289,7 @@ static void ggml_compute_forward_dup(
 
 static void ggml_compute_forward_add_f32(
         const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
+        struct ggml_tensor * dst) {
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -22902,7 +22902,7 @@ static void ggml_compute_forward_pad_f32(
         for (int ib = ith; ib < nblocks; ib += nth) {
             int first = ib*k_block_size;
             int last  = MIN(first + k_block_size, nelem);
-            //
+            // 
             //int ii = first;
             //int i3 = ii/(ne0*ne1*ne2); ii -= i3*ne0*ne1*ne2;
             //int i2 = ii/(ne0*ne1    ); ii -= i2*ne0*ne1;
@@ -28849,6 +28849,7 @@ static int set_numa_thread_affinity(int thread_n, int n_threads) {
     }
 
     struct ggml_numa_node * node = &g_state.numa.nodes[node_num];
+
     cpu_set_t * cpus = CPU_ALLOC(g_state.numa.total_cpus);
     CPU_ZERO_S(setsize, cpus);
     for (size_t i = 0; i < node->n_cpus; ++i) {
