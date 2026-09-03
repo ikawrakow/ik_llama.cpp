@@ -468,9 +468,12 @@ static bool qwen4exp_qsa_gather(
     }
 
     // pad the indices to the FA granularity; extra entries hit cell 0 and get masked. No I32 PAD, but it only copies
-    ggml_tensor * idx = ggml_reshape_4d_ext(ctx0, top_k, GGML_TYPE_F32, width, 1, 1, 1);
-    idx = ggml_pad(ctx0, idx, n_pad - width, 0, 0, 0);
-    idx = ggml_reshape_1d(ctx0, ggml_reshape_4d_ext(ctx0, idx, GGML_TYPE_I32, n_pad, 1, 1, 1), n_pad);
+    ggml_tensor * idx = ggml_reshape_1d(ctx0, top_k, width);
+    if (n_pad != width) {
+        idx = ggml_reshape_4d_ext(ctx0, idx, GGML_TYPE_F32, width, 1, 1, 1);
+        idx = ggml_pad(ctx0, idx, n_pad - width, 0, 0, 0);
+        idx = ggml_reshape_1d(ctx0, ggml_reshape_4d_ext(ctx0, idx, GGML_TYPE_I32, n_pad, 1, 1, 1), n_pad);
+    }
 
     ggml_tensor * k = ggml_reshape_4d_ext(ctx0, k_cache, GGML_TYPE_F32, k_cell/sizeof(float), n_cells, 1, 1);
     k = ggml_get_rows(ctx0, k, idx);
