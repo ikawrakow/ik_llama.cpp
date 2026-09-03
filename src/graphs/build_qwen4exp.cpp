@@ -389,9 +389,11 @@ static ggml_tensor * qwen4exp_qsa_mask(
     // causal mask can still drop cells inside a selected block. The op scores and sorts
     // internally, so the n_kv by n_tokens score matrix is never materialized.
     if (lctx.cparams.fused_idx_topk) {
-        ggml_tensor * k_cells = ggml_get_rows_ext(ctx0, pooled, inp->cell_blk, true, false);
-        k_cells = ggml_reshape_3d(ctx0, k_cells, idx_dim, n_kv, 1);
-        ggml_tensor * fused = ggml_indexer_topk(ctx0, k_cells, q, inp->head_w, cut_mask,
+        //ggml_tensor * k_cells = ggml_get_rows_ext(ctx0, pooled, inp->cell_blk, true, false);
+        //k_cells = ggml_reshape_3d(ctx0, k_cells, idx_dim, n_kv, 1);
+        //ggml_tensor * fused = ggml_indexer_topk(ctx0, k_cells, q, inp->head_w, cut_mask,
+        //        GGML_UNARY_OP_RELU, width);
+        ggml_tensor * fused = ggml_indexer_topk(ctx0, pooled, q, inp->head_w, cut_mask, inp->cell_blk,
                 GGML_UNARY_OP_RELU, width);
         cb(fused, "qsa_top_k", il);
         ggml_build_forward_expand(gf, fused);
