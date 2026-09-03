@@ -7,12 +7,16 @@
 #include "ggml.h"
 
 static std::pair<ggml_tensor *, ggml_tensor *> build_kda_qkvz(llama_context & lctx, ggml_context * ctx0,
-        ggml_tensor * wq, ggml_tensor * wk, ggml_tensor * wv, ggml_tensor * ssm_g_a,
+        ggml_tensor * wq, ggml_tensor * wk, ggml_tensor * wv, ggml_tensor * ssm_g_a, ggml_tensor * ssm_g_b,
         ggml_tensor * input, int il, const llm_build_cb & cb, ggml_cgraph * gf) {
     auto q = llm_build_context::llm_build_lora_mm(lctx, ctx0, wq, input);
     auto k = llm_build_context::llm_build_lora_mm(lctx, ctx0, wk, input);
     auto v = llm_build_context::llm_build_lora_mm(lctx, ctx0, wv, input);
     auto z = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_g_a, input);
+    if (ssm_g_b) {
+        // GLM-5.3-Flash / kimi-k3 low-rank KDA: g = g_b(g_a(x)), two chained projections
+        z = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_g_b, z);
+    }
     cb(q, "q", il);
     cb(k, "k", il);
     cb(v, "v", il);
@@ -27,7 +31,7 @@ static std::pair<ggml_tensor *, ggml_tensor *> build_kda_qkvz(llama_context & lc
 }
 
 static std::pair<ggml_tensor *, ggml_tensor *> build_kda_beta_gate(llama_context & lctx, ggml_context * ctx0,
-        ggml_tensor * ssm_beta, ggml_tensor * ssm_f_a, ggml_tensor * ssm_dt_b, ggml_tensor * ssm_a,
+        ggml_tensor * ssm_beta, ggml_tensor * ssm_f_a, ggml_tensor * ssm_f_b, ggml_tensor * ssm_dt_b, ggml_tensor * ssm_a,
         ggml_tensor * input, int64_t head_dim, int64_t n_head, float lower_bound,
         int il, const llm_build_cb & cb, ggml_cgraph * gf) {
     const int64_t n_tok = input->ne[1];
@@ -37,6 +41,10 @@ static std::pair<ggml_tensor *, ggml_tensor *> build_kda_beta_gate(llama_context
     cb(beta, "beta", il);
 
     auto raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_f_a, input);
+    if (ssm_f_b) {
+        // GLM-5.3-Flash / kimi-k3 low-rank KDA: f = f_b(f_a(x)), two chained projections
+        raw = llm_build_context::llm_build_lora_mm(lctx, ctx0, ssm_f_b, raw);
+    }
     raw = ggml_reshape_4d(ctx0, raw, head_dim, n_head, n_tok, 1);
     cb(raw, "decay_raw", il);
 
@@ -44,7 +52,13 @@ static std::pair<ggml_tensor *, ggml_tensor *> build_kda_beta_gate(llama_context
     auto a  = ggml_reshape_4d(ctx0, ssm_a, 1, n_head, 1, 1);
     auto log_decay = ggml_add(ctx0, raw, dt);
     log_decay = ggml_mul(ctx0, log_decay, a);
-    log_decay = ggml_sigmoid(ctx0, log_decay);
+    if (ssm_f_b) {
+        // GLM-5.3-Flash formula (upstream build_kda_layer): ssm_a holds -exp(A_log), so the
+        // sigmoid is taken on -(ssm_a*(f + dt)) == exp(A_log)*(f + dt)
+        log_decay = ggml_sigmoid(ctx0, ggml_scale(ctx0, log_decay, -1.0f));
+    } else {
+        log_decay = ggml_sigmoid(ctx0, log_decay);
+    }
     log_decay = ggml_scale(ctx0, log_decay, lower_bound);
     cb(log_decay, "log_decay", il);
 
@@ -85,7 +99,8 @@ static ggml_tensor * build_kda_gated_output(llama_context & lctx, ggml_context *
 
 ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgraph * gf,
         ggml_tensor * delta_input, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
-        uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb) const {
+        uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb,
+        bool add_residual) const {
     const int64_t n_tok = delta_input->ne[1];
     const int64_t head_dim = lctx.model.hparams.ssm_d_state;
 
@@ -118,11 +133,12 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
 
             auto ssm_out = split(layer.ssm_out);
             const int64_t n_head = ssm_out->ne[0] / head_dim;
+            auto split_opt = [&split](ggml_tensor * t) { return t ? split(t) : nullptr; };
             auto [qkv_mixed, z] = build_kda_qkvz(lctx, ctx0,
-                    split(layer.wq), split(layer.wk), split(layer.wv), split(layer.ssm_g_a),
+                    split(layer.wq), split(layer.wk), split(layer.wv), split(layer.ssm_g_a), split_opt(layer.ssm_g_b),
                     cur, il_cb, cb, gf);
             auto [beta, log_decay] = build_kda_beta_gate(lctx, ctx0,
-                    split(layer.ssm_beta), split(layer.ssm_f_a), split(layer.ssm_dt_b), split(layer.ssm_a),
+                    split(layer.ssm_beta), split(layer.ssm_f_a), split_opt(layer.ssm_f_b), split(layer.ssm_dt_b), split(layer.ssm_a),
                     cur, head_dim, n_head, hparams.kda_gate_lower_bound, il_cb, cb, gf);
             auto conv = build_kda_conv(ctx0,
                     split(layer.ssm_conv1d_q), split(layer.ssm_conv1d_k), split(layer.ssm_conv1d_v));
@@ -151,7 +167,9 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
                 if (inp_out_ids) {
                     input = ggml_get_rows(ctx0, input, inp_out_ids);
                 }
-                gated_output = ggml_add(ctx0, gated_output, input);
+                if (add_residual) {
+                    gated_output = ggml_add(ctx0, gated_output, input);
+                }
                 input_added = true;
             }
             if (gated_output->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
@@ -186,9 +204,9 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
 
     const int64_t n_head = hparams.ssm_dt_rank;
     auto [qkv_mixed, z] = build_kda_qkvz(lctx, ctx0,
-            layer.wq, layer.wk, layer.wv, layer.ssm_g_a, cur, il, cb, gf);
+            layer.wq, layer.wk, layer.wv, layer.ssm_g_a, layer.ssm_g_b, cur, il, cb, gf);
     auto [beta, log_decay] = build_kda_beta_gate(lctx, ctx0,
-            layer.ssm_beta, layer.ssm_f_a, layer.ssm_dt_b, layer.ssm_a,
+            layer.ssm_beta, layer.ssm_f_a, layer.ssm_f_b, layer.ssm_dt_b, layer.ssm_a,
             cur, head_dim, n_head, hparams.kda_gate_lower_bound, il, cb, gf);
     auto conv = build_kda_conv(ctx0, layer.ssm_conv1d_q, layer.ssm_conv1d_k, layer.ssm_conv1d_v);
 
@@ -212,13 +230,14 @@ ggml_tensor * delta_net::build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgr
         gated_output = ggml_get_rows(ctx0, gated_output, inp_out_ids);
         input = ggml_get_rows(ctx0, input, inp_out_ids);
     }
-    output = ggml_add(ctx0, gated_output, input);
+    output = add_residual ? ggml_add(ctx0, gated_output, input) : gated_output;
     cb(output, "ssm_output", il);
     return output;
 }
 
 ggml_tensor * delta_net::build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph * gf,
-        ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb) const {
+        ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
+        bool add_residual) const {
     GGML_ASSERT(lctx.inp_s_seq_qnext != nullptr);
 
     auto & layer = lctx.model.layers[il];
@@ -231,7 +250,7 @@ ggml_tensor * delta_net::build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph *
     if (all_same_seq) {
         const bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
         return build_layer_attn_kda_core(ctx0, gf, cur, lctx.inp_s_seq_qnext, inp_out_ids,
-                token_seq_ids.front(), reset_state, il, cb);
+                token_seq_ids.front(), reset_state, il, cb, add_residual);
     }
 
     GGML_ASSERT(has_unique_seq_ids && "bailingmoe3 mixed-sequence batches require unique sequence IDs per token");
@@ -243,7 +262,7 @@ ggml_tensor * delta_net::build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph *
                 lctx.inp_s_seq_qnext->nb[1], (size_t) i * lctx.inp_s_seq_qnext->nb[1]);
         const bool reset_state = batch.pos != nullptr && batch.pos[i] == 0;
         auto out_i = build_layer_attn_kda_core(ctx0, gf, cur_i, inp_s_seq_qnext_i, inp_out_ids,
-                (uint32_t) token_seq_ids[i], reset_state, il, cb);
+                (uint32_t) token_seq_ids[i], reset_state, il, cb, add_residual);
         out = out == nullptr ? out_i : ggml_concat(ctx0, out, out_i, 1);
     }
     return out;
