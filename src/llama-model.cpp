@@ -2422,6 +2422,24 @@ bool llama_model_is_qwen4exp(const llama_model * model) {
     return model && model->arch == LLM_ARCH_QWEN4EXP;
 }
 
+// qwen4exp shared companion: predictor-only GGUFs (nextn_shared_target_tensors)
+// ship no token_embd/output and borrow the target's tensors, mirroring the
+// DFlash IO sharing. Returns false when the target cannot provide them.
+bool llama_model_share_qwen4exp_mtp_tensors(llama_model * draft_model, const llama_model * target_model) {
+    if (draft_model == nullptr || target_model == nullptr) {
+        return false;
+    }
+    if (draft_model->arch != LLM_ARCH_QWEN4EXP) {
+        return true;
+    }
+    if (draft_model->tok_embd == nullptr) {
+        draft_model->tok_embd = target_model->tok_embd;
+    }
+    if (draft_model->output == nullptr) {
+        draft_model->output = target_model->output;
+    }
+    return draft_model->tok_embd != nullptr;
+}
 // qwen4exp marks a present trunk block with hc_attn_norm, every other arch with attn_norm
 static bool llama_model_trunk_block_present(const llama_layer & layer) {
     return layer.attn_norm != nullptr || layer.hc_attn_norm != nullptr;
