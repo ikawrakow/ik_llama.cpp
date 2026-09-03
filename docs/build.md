@@ -1,191 +1,373 @@
-# Build ik_llama.cpp locally
+# Build ik_llama.cpp
 
-`ik_llama.cpp` requires has a very minimal set of dependencies: `cmake`, a functional C++-17 compiler, and, if building with Nvidia GPU support, the CUDA toolkit. All these are available from the system package manager on Linux. If you are building on Windows and are worried about messing up your main OS, you may consider building in a virtual machine (VM). In that case, make sure you can copy files between the host OS and the VM.  
+`ik_llama.cpp` has a very minimal set of dependencies: cmake, a functional C++-17 compiler, and, if building with Nvidia GPU support, the CUDA toolkit.
 
-**To get the Code:**
+## Table of Contents
+[Supported backends](#supported-backends) ·
+[Prerequisites](#prerequisites) ·
+[Getting the source](#getting-the-source) ·
+[Linux](#building-on-linux) ·
+[macOS](#building-on-macos) ·
+[Windows](#building-on-windows-cpu--cuda) ·
+[Debug builds](#debug-builds) ·
+[Build tips](#general-build-tips) ·
+[AVX-512](#cpu-build-flags-for-avx-512-zen4--sapphire-rapids) ·
+[Verify](#verifying-your-build) ·
+[CUDA reference](#cuda-architecture-reference) ·
+[Other platforms](#other-platforms)
+
+## Supported backends
+
+> **Important:** `ik_llama.cpp` focuses on two fully functional and performant compute backends:
+>
+> - **CPU** — AVX2 required; AVX-512-capable CPUs (AMD Zen4 / Intel Sapphire Rapids+) are supported and unlock additional performance for quantized prompt processing.
+> - **CUDA** — Turing architecture (RTX 20xx / GTX 16xx) or newer required
+> - **ARM** (armv8.2-a+ / NEON)
+>
+> Other backends (Metal, ROCm/hipBLAS, Vulkan, SYCL, OpenBLAS, MUSA) are inherited from upstream
+> `llama.cpp` and are **not actively maintained or tested** in this fork. Their build instructions
+> have been removed to avoid misleading users. If you need one of these, refer to the upstream
+> [llama.cpp build documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).
+
+> **Note on `make`:** The Makefile-based build is **obsolete** and has been removed.  
+> CMake is the only supported build system.
+
+---
+
+## Prerequisites
+
+| Requirement | Details |
+|---|---|
+| **Git** | [git-scm.com](https://git-scm.com/download/) or system package manager |
+| **CMake 3.21+** | [cmake.org](https://cmake.org/download/) or system package manager |
+| **C++17 compiler** | GCC 10+, Clang 13+, MSVC 2019 or newer (2022 recommended), or clang-cl |
+| **CUDA Toolkit 12.x** or higher | Required for GPU builds only — [NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive) |
+
+**Note**: Avoid using `CUDA Toolkit 13.2` due to a bug in CUDA that might produce garbage in certain combinations of quantizations and models.
+
+Platform-specific installation details are covered in each build section below.
+
+---
+
+## Getting the source
 
 ```bash
 git clone https://github.com/ikawrakow/ik_llama.cpp
 cd ik_llama.cpp
 ```
 
-In order to build `ik_llama.cpp` you have four different options.
+---
 
-- Using `make`:
-  - On Linux or MacOS:
+## Building on Linux
 
-      ```bash
-      make
-      ```
+Ensure all prerequisites are installed. On Debian/Ubuntu, this can be done in one step:
 
-  - On Windows (x86/x64 only, arm64 requires cmake):
+```bash
+apt-get update && apt-get install -y build-essential git cmake libcurl4-openssl-dev curl libgomp1
+```
 
-    1. Download the latest fortran version of [w64devkit](https://github.com/skeeto/w64devkit/releases).
-    2. Extract `w64devkit` on your pc.
-    3. Run `w64devkit.exe`.
-    4. Use the `cd` command to reach the `llama.cpp` folder.
-    5. From here you can run:
-        ```bash
-        make
-        ```
+For CUDA support, additionally install the NVIDIA drivers and CUDA Toolkit via the
+[NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive).
 
-  - Notes:
-    - For `Q4_0_4_4` quantization type build, add the `GGML_NO_LLAMAFILE=1` flag. For example, use `make GGML_NO_LLAMAFILE=1`.
-    - For faster compilation, add the `-j` argument to run multiple jobs in parallel. For example, `make -j 8` will run 8 jobs in parallel.
-    - For faster repeated compilation, install [ccache](https://ccache.dev/).
-    - For debug builds, run `make LLAMA_DEBUG=1`
+### CPU only
 
-- Using `CMake`:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON
+cmake --build build --config Release -j $(nproc)
+```
 
-  ```bash
-  cmake -B build
-  cmake --build build --config Release
-  ```
+### CPU + CUDA
 
-  **Notes**:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_CUDA=ON
+cmake --build build --config Release -j $(nproc)
+```
 
-    - For `Q4_0_4_4` quantization type build, add the `-DGGML_LLAMAFILE=OFF` cmake option. For example, use `cmake -B build -DGGML_LLAMAFILE=OFF`.
-    - For faster compilation, add the `-j` argument to run multiple jobs in parallel. For example, `cmake --build build --config Release -j 8` will run 8 jobs in parallel.
-    - For faster repeated compilation, install [ccache](https://ccache.dev/).
-    - For debug builds, there are two cases:
+`GGML_NATIVE=ON` enables `-march=native`, which is critical for performance. On AVX-512-capable
+hardware (AMD Zen4, Intel Sapphire Rapids+) additional flags may be needed to unlock the full IQK
+quantized GEMM path — see the [AVX-512 section](#cpu-build-flags-for-avx-512-zen4--sapphire-rapids).
 
-      1. Single-config generators (e.g. default = `Unix Makefiles`; note that they just ignore the `--config` flag):
+The environment variable [`CUDA_VISIBLE_DEVICES`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#env-vars)
+selects which GPU(s) to use at runtime. To allow swapping to system RAM when VRAM is exhausted,
+set `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` before running.
 
-      ```bash
-      cmake -B build -DCMAKE_BUILD_TYPE=Debug
-      cmake --build build
-      ```
+---
 
-      2. Multi-config generators (`-G` param set to Visual Studio, XCode...):
+## Building on macOS
 
-      ```bash
-      cmake -B build -G "Xcode"
-      cmake --build build --config Debug
-      ```
-    - Building for Windows (x86, x64 and arm64) with MSVC or clang as compilers:
- <ol type="1">
- <li> Download official CUDA 12.6 Toolkit from Nvidia website and Visual Studio Build Tools 2022 from https://aka.ms/vs/17/release/vs_buildtools.exe
- </li>
- <li> CUDA installer doesn't complain about missing Nvidia GPU card in a VM, so pick custom installation and leave out "Driver components" tick and PhysX as ignored and install the rest.
- </li>
- <li> In Visual Studio Build Tools installer, click "Individual components" tab during customization and enter "clang" in filter prompt to pick related tools (since clang is not a default option, add two extra items in this prompt).
- </li>
- <li> Download Portable git from https://git-scm.com/install/windows to C:\Downloads and <code>git.exe clone https://github.com/ggml-org/llama.cpp "C:\Downloads\ik_llama.cpp_git"</code> from cmd and <code>cd "C:\Downloads\ik_llama.cpp_git"</code>
- </li>
- <li> <code>set VS_DIR=c:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools</code>
- </li>
- <li> <code>call "%VS_DIR%\VC\Auxiliary\Build\vcvarsall.bat" x64</code>
- </li>
- <li> <code>set LLVM_DIR=c:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64</code>
- </li>
- <li> <code>set CUDA_DIR=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6</code>
- </li>
- <li> <code>set "PATH=%LLVM_DIR%/bin;%CUDA_DIR%/bin;%PATH%"</code>
- </li>
- <li> <code>"c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" ^
+Ensure all prerequisites are installed, e.g. via Homebrew:
+
+```bash
+brew install cmake git
+```
+
+### CPU only
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON
+cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+```
+> ⚠️ **Note:** `-DGGML_NATIVE=ON` will actually enable `Metal` support, which may or may not work, depending on model. Be aware that Metal is not officially supported in ik_llama.  
+(Feedback from Mac users on this topic is welcome to help improve this documentation)
+
+---
+
+## Building on Windows (CPU + CUDA)
+
+Windows requires a few extra setup steps because no compiler is included with the OS. The
+sections below walk through prerequisites and then the build itself.
+
+### Prerequisites
+
+#### 1. C++ Build Environment (Visual Studio 2022 family)
+
+You need the Microsoft C++ toolchain. This is available via either:
+
+- **Visual Studio Build Tools 2022** (standalone, lightweight):
+  [aka.ms/vs/17/release/vs_buildtools.exe](https://aka.ms/vs/17/release/vs_buildtools.exe)
+- **Visual Studio 2022** IDE (Community, Professional, or Enterprise)
+
+> **Important:** `Visual Studio` and `Visual Studio Code` (VS Code) are completely different
+> products. VS Code is a source code editor, **not** a compiler suite. Having VS Code installed
+> is **not sufficient**. You must install one of the Visual Studio 2022 options above.
+
+Regardless of which installer you use, open the **Visual Studio Installer**, select *Modify*,
+and ensure the following are checked:
+
+- `Desktop development with C++` workload, **or** individually:
+  - `MSVC v143 – VS 2022 C++ x64/x86 build tools`
+  - `C++ CMake tools for Windows`
+  - `Clang Compiler for Windows` (see next section) *(optional, but recommended for AVX-512 builds)*
+  - `Windows 11 SDK` or `Windows 10 SDK` (depending on your OS)
+
+#### Compiler Choice: MSVC vs. Clang-CL
+You can install and use two different compilers in Visual Studio:
+1. MSVC (cl.exe): The default. Simplest setup, but lacks automatic CPU feature detection (-march=native is not supported). You must manually enable AVX2/AVX-512.
+2. Clang-CL (clang-cl.exe): Included with VS ("Clang Compiler for Windows" component). Supports -march=native, enabling GGML_NATIVE=ON to auto-detect your CPU's best features (AVX2, AVX-512, etc.). Recommended for maximum performance.
+
+To use the `clang-cl` compiler, you have to add the following lines to your cmake args:
+```
+    -DCMAKE_C_COMPILER=clang-cl.exe ^
+    -DCMAKE_CXX_COMPILER=clang-cl.exe
+```
+This will be covered later in the detailed configuration examples.
+
+#### A note on Visual Studio 2026
+
+At the time of writing, CUDA Toolkit 12.x and 13.1 are not compatible with Visual Studio 2026. CUDA Toolkit 13.2 should be compatible, but due to bugs in this version, you should avoid using 13.2. You may be able to use CUDA Toolkit 13.3 successfully with Visual Studio Developer Command Prompt 2026 once it is released.
+
+#### 2. CUDA Toolkit 12.x or later
+
+**Download** from the [NVIDIA CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive).
+During installation, choose *Custom Installation* and uncheck *Driver components* if building
+inside a VM without a physical NVIDIA GPU.  
+**Avoid** using Version 13.2 of the Toolkit.
+
+#### 3. CMake and Ninja
+
+CMake is included with Visual Studio. If you prefer a standalone installation, or need a newer
+version:
+
+```
+winget install Kitware.CMake Ninja-build.Ninja
+```
+
+Or download from [cmake.org](https://cmake.org/download/).
+
+#### 4. Use the Developer Command Prompt/PowerShell
+
+Always execute build commands from inside the
+**Developer Command Prompt for VS 2022** or **Developer PowerShell for VS 2022**, accessible
+via the Windows Start Menu under *Visual Studio 2022* or from the "new tab" dropdown in Windows Terminal.
+
+These terminals automatically configure all required compiler paths, environment variables, and
+SDK settings. Running `cmake` from a plain `cmd.exe` or PowerShell will likely fail with
+"command not found" or wrong-compiler errors due to missing environment initialisation.
+
+**Verification step**  
+To confirm your environment is correctly set up, run:
+```cmd
+cl.exe
+clang-cl --version
+nvcc --version
+```
+- `cl.exe` should print a version header and indicate an **x64** target (e.g., `for x64`, `für x64`, or similar depending on system language).
+- `clang-cl` should show `Target: x86_64-pc-windows-msvc`.
+- `nvcc` should display the installed CUDA version without errors.
+
+If any command is not found or reports a 32-bit target, check if you called the correct Developer shell.
+
+---
+
+The following sections provide explanations about optimizations of a cmake command.  
+You may skip them and go directly to the [full recommended CUDA build commands](#full-recommended-cuda-build-commands) for both compilers.
+
+---
+
+### Minimal configuration
+
+The following minimal commands are sufficient to get a working build. Run them inside the
+Developer Command Prompt.
+
+**CPU only:**
+
+```bat
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+**CPU + CUDA:**
+
+```bat
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON
+cmake --build build --config Release
+```
+
+When invoked from the Developer Command Prompt, CMake automatically detects MSVC as the host
+compiler and nvcc uses it accordingly. No additional compiler flags are required for a basic
+build.
+
+---
+
+### Recommended additional CMake options
+
+The minimal configuration above produces a correct build but leaves significant performance on
+the table. The following options are strongly recommended and can be appended to either of the
+`cmake -B build ...` commands above.
+
+**Enable native CPU optimisations:**
+
+* **If using Clang-CL (Recommended):**  
+  Add `-DGGML_NATIVE=ON`. This enables `-march=native`, automatically tuning the binary to your exact CPU (AVX2, AVX-512, etc.).  
+  *Required Flags:* `-DCMAKE_C_COMPILER=clang-cl.exe -DCMAKE_CXX_COMPILER=clang-cl.exe`  
+* **If using MSVC (Default):**  
+  `GGML_NATIVE=ON` has no effect. You must explicitly enable instruction sets:  
+  * For most modern CPUs: Add `-DGGML_AVX2=ON`
+  * For Zen4/Sapphire Rapids+: Add `-DGGML_AVX512=ON` (plus VNNI/VBMI flags, see [AVX-512 section](#cpu-build-flags-for-avx-512-zen4--sapphire-rapids))
+
+> 💡 **Note on CPU feature detection:**  
+> CMake normally auto-detects your system architecture and available instruction sets.  
+> - Flags like `-DGGML_AVX2=ON` or `-DCMAKE_SYSTEM_PROCESSOR=x86_64` are usually set correctly by default.  
+> - Adding them explicitly is harmless if redundant, and guarantees the expected code paths are enabled (especially on MSVC).  
+> - If you encounter unexpected fallbacks (e.g., in certain VMs or non-standard environments), adding these flags is a safe troubleshooting step.  
+> You can safely include both `-DGGML_NATIVE=ON` and `-DGGML_AVX2=ON` in your command line; CMake will simply ignore the one that is already auto-detected.
+
+> ⚠️ **VM Users:** Be careful with `-DGGML_NATIVE=ON` inside Virtual Machines. The hypervisor may not expose all host CPU features correctly. If you experience crashes, specify your CPU architecture explicitly (e.g., `-DGGML_AVX2=ON`) instead of using `NATIVE`.
+
+**Target a specific CUDA architecture** (avoids compiling for all architectures, which is slow):
+
+```
+-DCMAKE_CUDA_ARCHITECTURES="86-real"
+```
+
+Replace `86` with the compute capability of your GPU. See the
+[CUDA architecture reference](#cuda-architecture-reference) below for a full list.
+
+**Use Ninja** for faster parallel compilation (requires Ninja to be installed):
+
+```
+-G Ninja
+```
+
+
+### Full recommended CUDA build commands
+
+Putting everything together, here are two recommended example CMake setups for both compiler choices:
+
+#### Example A: High Performance Build (Clang-CL + RTX 3060)
+```cmd
+cmake -B build ^
     -G Ninja ^
-    -S "C:/Downloads/ik_llama.cpp_git" ^
-    -B "C:/Downloads/output_compilations" ^
-    -DCMAKE_C_COMPILER="%LLVM_DIR%/bin/clang-cl.exe" ^
-    -DCMAKE_CXX_COMPILER="%LLVM_DIR%/bin/clang-cl.exe" ^
-    -DCMAKE_CUDA_COMPILER="%CUDA_DIR%/bin/nvcc.exe" ^
-    -DCUDAToolkit_ROOT="%CUDA_DIR%" ^
-    -DCMAKE_CUDA_ARCHITECTURES="89-real" ^
+    -DCMAKE_C_COMPILER=clang-cl.exe ^
+    -DCMAKE_CXX_COMPILER=clang-cl.exe ^
     -DCMAKE_BUILD_TYPE=Release ^
+    -DGGML_NATIVE=ON ^
     -DGGML_CUDA=ON ^
-    -DLLAMA_CURL=OFF ^
-    -DCMAKE_C_FLAGS="/clang:-march=znver4 /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments" ^
-    -DCMAKE_CXX_FLAGS="/EHsc /clang:-march=znver4 /clang:-fvectorize /clang:-ffp-model=fast /clang:-fno-finite-math-only /clang:-Wno-format /clang:-Wno-unused-variable /clang:-Wno-unused-function /clang:-Wno-gnu-zero-variadic-macro-arguments" ^
-     -DCMAKE_CUDA_STANDARD=17 ^
-     -DGGML_AVX512=ON ^
-     -DGGML_AVX512_VNNI=ON ^
-     -DGGML_AVX512_VBMI=ON ^
-     -DGGML_CUDA_USE_GRAPHS=ON ^
-     -DGGML_SCHED_MAX_COPIES=1 ^
-     -DGGML_OPENMP=ON</code>
- </li>
-<li>
-    <code>"c:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build "C:/Downloads/output_compilations" --config Release</code>
-</li>
-<li>
-Copy cublas64_12.dll, cublasLt64_12.dll and cudart64_12.dll from c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin to C:\Downloads\output_compilations\bin and libomp140.x86_64.dll from c:\Windows\System32\ to C:\Downloads\output_compilations\bin
-</li>
-<li>
-Now, ik_llama.cpp is ready-to-use, you have to copy C:\Downloads\output_compilations\bin to your main OS.
-</li>
- </ol>
+    -DCMAKE_CUDA_ARCHITECTURES="86-real" ^
 
-Example of use with very effective RAM + VRAM split scheme for Zen4 AMD CPU with 16 physical cores for most of cases (this model has `qwen3moe.block_count` being 48):
-
-`> llama-cli -m ../Qwen3-30B-A3B-Thinking-2507-IQ4_XS.gguf -ot blk.[1-9][0-9].ffn=CPU -fa on  -ctk q8_0 -ctv q4_0 -ngl 99 --threads 16 --ctx-size 64000 --prompt "Tell me 'Good morning' in  3 difference languages." -mla 3 -amb 512 -b 64 -ub 64`
-During execution, this command will load almost all non-attention (i.e., "fat" ffn tensors which are less sensitive to slow RAM speed) tensors, starting from 10th, to RAM while keeping the rest in VRAM and answer your prompt and report RAM and VRAM usage at 27 t/s (token generation speed):
+cmake --build build --config Release
 ```
-Tensor blk.10.ffn_norm.weight buffer type overriden to CPU
-...
-Tensor blk.47.ffn_down_exps.weight buffer type overriden to CPU
-...
-llm_load_tensors:        CPU buffer size = 12026.22 MiB
-llm_load_tensors:        CPU buffer size =   166.92 MiB
-llm_load_tensors:      CUDA0 buffer size =  3780.44 MiB
-...
-llama_kv_cache_init:      CUDA0 KV buffer size =  2437.52 MiB
-llama_new_context_with_model: KV self size  = 2437.50 MiB, K (q8_0): 1593.75 MiB, V (q4_0):  843.75 MiB
-llama_new_context_with_model:  CUDA_Host  output buffer size =     0.58 MiB
-llama_new_context_with_model:      CUDA0 compute buffer size =    38.10 MiB
-llama_new_context_with_model:  CUDA_Host compute buffer size =     8.31 MiB
+#### Example B: Simple Build (MSVC + RTX 3060)
+```cmd
+
+cmake -B build ^
+    -G Ninja ^
+    -DCMAKE_BUILD_TYPE=Release ^
+    -DGGML_AVX2=ON ^
+    -DGGML_CUDA=ON ^
+    -DCMAKE_CUDA_ARCHITECTURES="86-real" ^
+
+cmake --build build --config Release
 ```
-`llm_load_tensors` say that "fat" tensors from 10th to 47th took 12026.22 MiB of RAM with 167 MB of temporary data on RAM while the rest of tensors took 3780.44 MiB of VRAM (which, in sum, roughly equals the size of Qwen3-30B-A3B-Thinking-2507-IQ4_XS.gguf - 15.9 GB). `llama_kv_cache_init` says that your KV context storage is kept on VRAM and takes ~2.4GB of VRAM. `llama_new_context_with_model` say that temporary data takes ~50 MB of VRAM. Larger values of -b and -ub can increase interference speed by 5-10% while sacrificing 300-600 MB of VRAM.
- 
-<ul>
-    <li>
-      For Windows on ARM (arm64, WoA) build with:
-        <code>
-        bash
-        cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
-        cmake --build build-arm64-windows-llvm-release
-        </code>
-        </li>
-    </ul>
-        Notes:
-        <ul>
-            <li>
-            Building for arm64 could also be done just with MSVC (with the build-arm64-windows-MSVC preset, or the standard CMake build instructions). But MSVC does not support inline ARM assembly-code, used e.g. for the accelerated Q4_0_4_8 CPU kernels.
-            </li>
-            <li>
-            Developer Command Prompt / PowerShell is not necessary, you can run these commands using usual cmd.exe
-            </li>
-            <li>
-                /clang:-march=znver4 option automatically includes AVX512VL AVX512BW AVX512DQ AVX512VBMI switches during compilation, so it's better to specify your processor type explicitly.
-            </li>
-            <li>
-                Adding /clang:-O3 or /clang:-mprefer-vector-width=512, surprisingly, does not seem to affect TT/TG performance.
-            </li>
-            <li>
-                Make sure you're using normal slash, not a backslash in cmake paths, or you may stumble upon strange errors (cmake on Windows may interpret, e.g. C:\Users, as C:[special escaped character]sers)
-            </li>
-            <li>
-                If you want standard MSVC compiler instead of Clang, put cl.exe in place of clang-cl.exe
-            </li>
-        </ul>
 
+---
 
--   Using `gmake` (FreeBSD):
+### PATH handling, DLLs and Runtime dependencies: 
 
-    1. Install and activate [DRM in FreeBSD](https://wiki.freebsd.org/Graphics)
-    2. Add your user to **video** group
-    3. Install compilation dependencies.
+After building, the executables in `build\bin` require several runtime DLLs. The recommended
+approach is to ensure the relevant directories are on `PATH` — do not copy DLLs into the build
+directory, as this complicates maintenance and breaks on clean rebuilds.
 
-        ```bash
-        sudo pkg install gmake automake autoconf pkgconf llvm15 openblas
+**CUDA DLLs** (`cublas64_12.dll`, `cublasLt64_12.dll`, `cudart64_12.dll`):  
+  These are located in `%CUDA_PATH%\bin`, which the CUDA Toolkit installer adds to `PATH`
+  automatically. No further action is needed.
 
-        gmake CC=/usr/local/bin/clang15 CXX=/usr/local/bin/clang++15 -j4
-        ```
+**OpenMP runtime** (`libomp140.x86_64.dll`):  
+  When building with the Clang/LLVM toolchain (using the `clang-cl` compiler), this DLL is located in the LLVM `bin` directory
+  (e.g. `%VS_DIR%\VC\Tools\Llvm\x64\bin`). Add this directory to your user or system `PATH`.
+  Do not source this file from `C:\Windows\System32`, that copy may be incompatible with
+LLVM-compiled binaries.
+
+**Hint:** Always use forward slashes (`/`) in CMake paths (e.g., `-B build`).  
+  This document avoids using absolute or relative paths as much as possible. Cmake settings inside ik_llama should handle everything correct. But if necessary, please note:
+  If you must use backslashes, escape them (`\\`). CMake on Windows parses `/` correctly and avoids escape-character issues.
+
+---
+
+### Windows — ARM64 (WoA)
+
+```bat
+cmake --preset arm64-windows-llvm-release -DGGML_OPENMP=OFF
+cmake --build build-arm64-windows-llvm-release
+```
+
+MSVC does not support the inline ARM assembly used by the accelerated Q4_0_4_8 CPU kernels;
+LLVM/clang-cl is therefore the preferred compiler for ARM64 Windows targets.
+
+---
+
+## Debug builds
+
+**Single-config generators** (default on Linux/macOS — `Unix Makefiles`, `Ninja`):
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+```
+
+**Multi-config generators** (Visual Studio, Xcode):
+
+```bash
+cmake -B build -G "Visual Studio 17 2022"
+cmake --build build --config Debug
+```
+
+---
+
+## General build tips
+
+- **Clean builds:** When your CMake build command stops working at some time after any kind of misbehaviour, if you encounter strange linker errors or outdated behavior, delete the `build` directory and re-run the CMake configuration steps.
+- **Parallel compilation:** pass `-j <N>` to the build step, e.g.
+  `cmake --build build --config Release -j 8`.
+- **Faster incremental rebuilds:** install [ccache](https://ccache.dev/) — CMake picks it up
+  automatically when it is on `PATH`.
+
+---
 
 ## CPU build flags for AVX-512 (Zen4 / Sapphire Rapids+)
 
-The IQK quantized GEMM kernels in `ggml/src/iqk/iqk_gemm_*.cpp` (the dominant
-hot path for quantized prompt processing) are gated by the `HAVE_FANCY_SIMD`
-macro defined in
+The IQK quantized GEMM kernels in `ggml/src/iqk/iqk_gemm_*.cpp` (the dominant hot path for
+quantized prompt processing) are gated by the `HAVE_FANCY_SIMD` macro defined in
 [`ggml/src/iqk/iqk_config.h`](../ggml/src/iqk/iqk_config.h):
 
 ```c
@@ -195,26 +377,24 @@ macro defined in
 #endif
 ```
 
-If these five macros are not defined at compile time, the AVX-512 quantized
-matmul path is skipped and the build falls back to AVX2. There is no warning
-at build time and no obvious symptom at runtime — performance is simply lower
-than what an AVX-512-capable CPU (AMD Zen4 / Intel Sapphire Rapids+) can
-deliver. A few related gates are worth knowing about:
+If these five macros are not defined at compile time, the AVX-512 quantized matmul path is
+skipped and the build falls back to AVX2. There is **no warning at build time and no obvious
+symptom at runtime** — performance is simply lower than what the hardware can deliver.
+
+A few related gates worth knowing:
 
 - `f16`/`f32` GEMM is gated only by `__AVX512F__`.
-- Native `bf16` GEMM and the use of a `bf16` KV cache in flash attention is
-  gated by `__AVX512BF16__`.
-- A separate `HAVE_VNNI256` path (`iqk_config.h:52-54`) is gated by
-  `__AVXVNNI__` *or* (`__AVX512VNNI__ && __AVX512VL__`). This gives a
-  meaningful speedup on AVX2-only CPUs that have the VNNI extension
-  (e.g. some Alder Lake / Raptor Lake parts), even without full AVX-512.
-  VNNI alone (`vpdpbusd`) is responsible for most of the speedup on
-  quantized matmul.
+- Native `bf16` GEMM and use of a `bf16` KV cache in flash attention is gated by
+  `__AVX512BF16__`.
+- A separate `HAVE_VNNI256` path (`iqk_config.h:52-54`) is gated by `__AVXVNNI__` *or*
+  (`__AVX512VNNI__ && __AVX512VL__`). This gives a meaningful speedup on AVX2-only CPUs that
+  have the VNNI extension (e.g. some Alder Lake / Raptor Lake parts), even without full
+  AVX-512.
 
 ### Recommended: high-level CMake options
 
-The standard `GGML_AVX512_*` options work on both MSVC and GCC and are the
-shortest path that activates `HAVE_FANCY_SIMD`:
+The standard `GGML_AVX512_*` options work on both MSVC and GCC/Clang and are the shortest
+path to activating `HAVE_FANCY_SIMD`:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
@@ -227,35 +407,33 @@ cmake --build build --config Release
 ```
 
 Mechanics:
-- On MSVC, `GGML_AVX512=ON` adds `/arch:AVX512` (which itself defines
-  `__AVX512F__`, `__AVX512VL__`, `__AVX512BW__`, `__AVX512DQ__`,
-  `__AVX512CD__`), and the `GGML_AVX512_VNNI=ON` / `_VBMI=ON` / `_BF16=ON`
-  options add the corresponding `__AVX512VNNI__` / `__AVX512VBMI__` /
-  `__AVX512BF16__` definitions explicitly. See
-  [`ggml/src/CMakeLists.txt:1352-1374`](../ggml/src/CMakeLists.txt#L1352-L1374).
-- On GCC / Clang, `GGML_NATIVE=ON` resolves `-march=native` to a target
-  that defines the macros (on Zen4, `znver4`; on Sapphire Rapids,
-  `sapphirerapids`), and the same `GGML_AVX512_*=ON` options add explicit
-  `-mavx512vnni` / `-mavx512vbmi` / `-mavx512bf16` flags as belt-and-braces.
 
-Verification — confirm the quantized path is in the binary:
+- On **MSVC**, `GGML_AVX512=ON` adds `/arch:AVX512` (which defines `__AVX512F__`,
+  `__AVX512VL__`, `__AVX512BW__`, `__AVX512DQ__`, `__AVX512CD__`), and the
+  `GGML_AVX512_VNNI=ON` / `_VBMI=ON` / `_BF16=ON` options add the corresponding
+  `__AVX512VNNI__` / `__AVX512VBMI__` / `__AVX512BF16__` definitions.
+  See [`ggml/src/CMakeLists.txt`](../ggml/src/CMakeLists.txt).
+- On **GCC / Clang**, `GGML_NATIVE=ON` resolves to `-march=native` (Zen4 → `znver4`;
+  Sapphire Rapids → `sapphirerapids`), and the `GGML_AVX512_*=ON` options add explicit
+  `-mavx512vnni` / `-mavx512vbmi` / `-mavx512bf16` flags as a belt-and-braces measure.
+
+**Verification** — confirm the quantized path compiled in:
 
 ```bash
 objdump -d build/bin/llama-cli | grep -c vpdpbusd
-# A non-trivial count (hundreds+) means VNNI compiled in.
+# A non-trivial count (hundreds+) means VNNI is compiled in.
 # Zero means the IQK kernels fell back to AVX2.
 ```
 
 You can also check the runtime banner: a successful AVX-512 build prints
-`HAVE_FANCY_SIMD is defined` and `system_info: AVX512_VNNI = 1 ...`.
+`HAVE_FANCY_SIMD is defined` and `system_info: AVX512_VNNI = 1`.
 
 ### Fallback: explicit `GGML_ARCH_FLAGS`
 
-If the recommended options above do not produce `HAVE_FANCY_SIMD is defined`
-on your toolchain (older MSVC versions, exotic compilers, or cross-compiles
-to ARM where `-march=native` does not propagate the relevant macros), the
-defines can be supplied explicitly via `GGML_ARCH_FLAGS`, which the build
-system forwards verbatim to the C/C++ compiler line:
+If the options above do not produce `HAVE_FANCY_SIMD is defined` on your toolchain (older
+MSVC, exotic compilers, or cross-compiles where `-march=native` does not propagate the
+required macros), the defines can be supplied explicitly via `GGML_ARCH_FLAGS`, which is
+forwarded verbatim to the compiler:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
@@ -263,290 +441,92 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release \
 cmake --build build --config Release
 ```
 
-For AVX2 CPUs that have VNNI but not AVX-512, the equivalent is:
+For AVX2 CPUs with VNNI but without AVX-512:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release \
     -DGGML_ARCH_FLAGS="-D__AVXVNNI__"
+cmake --build build --config Release
 ```
-
-The same `objdump | grep -c vpdpbusd` check applies.
 
 ### Note on Zen4 throughput
 
-On Zen4 the AVX-512 implementation is 256-bit double-pumped: each `_mm512_*`
-op issues two micro-ops with throughput of roughly one AVX-512 op per two
-cycles. The wider register width and reduced loop overhead still produce
-measurable gains over AVX2 on prompt processing for IQK kernels.
+On Zen4 the AVX-512 implementation is 256-bit double-pumped: each `_mm512_*` op issues two
+micro-ops with a throughput of roughly one AVX-512 op per two cycles. The wider register width
+and reduced loop overhead still produce measurable gains over AVX2 on prompt processing for
+IQK kernels.
 
-## Metal Build
+---
+## Verifying your Build
 
-On MacOS, Metal is enabled by default. Using Metal makes the computation run on the GPU.
-To disable the Metal build at compile time use the `GGML_NO_METAL=1` flag or the `GGML_METAL=OFF` cmake option.
-
-When built with Metal support, you can explicitly disable GPU inference with the `--n-gpu-layers|-ngl 0` command-line
-argument.
-
-## BLAS Build
-
-Building the program with BLAS support may lead to some performance improvements in prompt processing using batch sizes higher than 32 (the default is 512). Support with CPU-only BLAS implementations doesn't affect the normal generation performance. We may see generation performance improvements with GPU-involved BLAS implementations, e.g. cuBLAS, hipBLAS. There are currently several different BLAS implementations available for build and use:
-
-### Accelerate Framework:
-
-This is only available on Mac PCs and it's enabled by default. You can just build using the normal instructions.
-
-### OpenBLAS:
-
-This provides BLAS acceleration using only the CPU. Make sure to have OpenBLAS installed on your machine.
-
-- Using `make`:
-  - On Linux:
-    ```bash
-    make GGML_OPENBLAS=1
-    ```
-
-  - On Windows:
-
-    1. Download the latest fortran version of [w64devkit](https://github.com/skeeto/w64devkit/releases).
-    2. Download the latest version of [OpenBLAS for Windows](https://github.com/xianyi/OpenBLAS/releases).
-    3. Extract `w64devkit` on your pc.
-    4. From the OpenBLAS zip that you just downloaded copy `libopenblas.a`, located inside the `lib` folder, inside `w64devkit\x86_64-w64-mingw32\lib`.
-    5. From the same OpenBLAS zip copy the content of the `include` folder inside `w64devkit\x86_64-w64-mingw32\include`.
-    6. Run `w64devkit.exe`.
-    7. Use the `cd` command to reach the `llama.cpp` folder.
-    8. From here you can run:
-
-        ```bash
-        make GGML_OPENBLAS=1
-        ```
-
-- Using `CMake` on Linux:
-
-    ```bash
-    cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS
-    cmake --build build --config Release
-    ```
-
-### BLIS
-
-Check [BLIS.md](./backend/BLIS.md) for more information.
-
-### SYCL
-
-SYCL is a higher-level programming model to improve programming productivity on various hardware accelerators.
-
-llama.cpp based on SYCL is used to **support Intel GPU** (Data Center Max series, Flex series, Arc series, Built-in GPU and iGPU).
-
-For detailed info, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
-
-### Intel oneMKL
-
-Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU**. For Intel GPU support, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
-
-- Using manual oneAPI installation:
-  By default, `GGML_BLAS_VENDOR` is set to `Generic`, so if you already sourced intel environment script and assign `-DGGML_BLAS=ON` in cmake, the mkl version of Blas will automatically been selected. Otherwise please install oneAPI and follow the below steps:
-    ```bash
-    source /opt/intel/oneapi/setvars.sh # You can skip this step if  in oneapi-basekit docker image, only required for manual installation
-    cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Intel10_64lp -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_NATIVE=ON
-    cmake --build build --config Release
-    ```
-
-- Using oneAPI docker image:
-  If you do not want to source the environment vars and install oneAPI manually, you can also build the code using intel docker container: [oneAPI-basekit](https://hub.docker.com/r/intel/oneapi-basekit). Then, you can use the commands given above.
-
-Check [Optimizing and Running LLaMA2 on Intel® CPU](https://www.intel.com/content/www/us/en/content-details/791610/optimizing-and-running-llama2-on-intel-cpu.html) for more information.
-
-### CUDA
-
-This provides GPU acceleration using the CUDA cores of your Nvidia GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads).
-
-For Jetson user, if you have Jetson Orin, you can try this: [Offical Support](https://www.jetson-ai-lab.com/tutorial_text-generation.html). If you are using an old model(nano/TX2), need some additional operations before compiling.
-
-- Using `make`:
-  ```bash
-  make GGML_CUDA=1
-  ```
-- Using `CMake`:
-
-  ```bash
-  cmake -B build -DGGML_CUDA=ON
-  cmake --build build --config Release
-  ```
-
-The environment variable [`CUDA_VISIBLE_DEVICES`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#env-vars) can be used to specify which GPU(s) will be used.
-
-The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
-
-The following compilation options are also available to tweak performance:
-
-| Option                        | Legal values           | Default | Description                                                                                                                                                                                                                                                                             |
-|-------------------------------|------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GGML_CUDA_FORCE_DMMV          | Boolean                | false   | Force the use of dequantization + matrix vector multiplication kernels instead of using kernels that do matrix vector multiplication on quantized data. By default the decision is made based on compute capability (MMVQ for 6.1/Pascal/GTX 1000 or higher). Does not affect k-quants. |
-| GGML_CUDA_DMMV_X              | Positive integer >= 32 | 32      | Number of values in x direction processed by the CUDA dequantization + matrix vector multiplication kernel per iteration. Increasing this value can improve performance on fast GPUs. Power of 2 heavily recommended. Does not affect k-quants.                                         |
-| GGML_CUDA_MMV_Y               | Positive integer       | 1       | Block size in y direction for the CUDA mul mat vec kernels. Increasing this value can improve performance on fast GPUs. Power of 2 recommended.                                                                                                                                         |
-| GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, RDNA3). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower.                       |
-| GGML_CUDA_FORCE_CUBLAS        | Boolean                | false   | Force the use of FP16 cuBLAS instead of custom matrix multiplication kernels for quantized models                                                                                                                                                                                       |
-| GGML_CUDA_F16                 | Boolean                | false   | If enabled, use half-precision floating point arithmetic for the CUDA dequantization + mul mat vec kernels and for the q4_1 and q5_1 matrix matrix multiplication kernels. Can improve performance on relatively recent GPUs.                                                           |
-| GGML_CUDA_KQUANTS_ITER        | 1 or 2                 | 2       | Number of values processed per iteration and per CUDA thread for Q2_K and Q6_K quantization formats. Setting this value to 1 can improve performance for slow GPUs.                                                                                                                     |
-| GGML_CUDA_PEER_MAX_BATCH_SIZE | Positive integer       | 128     | Maximum batch size for which to enable peer access between multiple GPUs. Peer access requires either Linux or NVLink. When using NVLink enabling peer access for larger batch sizes is potentially beneficial.                                                                         |
-| GGML_CUDA_FA_ALL_QUANTS       | Boolean                | false   | Compile support for all KV cache quantization type (combinations) for the FlashAttention CUDA kernels. More fine-grained control over KV cache size but compilation takes much longer.                                                                                                  |
-
-### MUSA
-
-- Using `make`:
-  ```bash
-  make GGML_MUSA=1
-  ```
-- Using `CMake`:
-
-  ```bash
-  cmake -B build -DGGML_MUSA=ON
-  cmake --build build --config Release
-  ```
-
-### hipBLAS
-
-This provides BLAS acceleration on HIP-supported AMD GPUs.
-Make sure to have ROCm installed.
-You can download it from your Linux distro's package manager or from here: [ROCm Quick Start (Linux)](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html#rocm-install-quick).
-
-- Using `make`:
-  ```bash
-  make GGML_HIPBLAS=1
-  ```
-- Using `CMake` for Linux (assuming a gfx1030-compatible AMD GPU):
-  ```bash
-  HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
-      cmake -S . -B build -DGGML_HIPBLAS=ON -DAMDGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
-      && cmake --build build --config Release -- -j 16
-  ```
-  On Linux it is also possible to use unified memory architecture (UMA) to share main memory between the CPU and integrated GPU by setting `-DGGML_HIP_UMA=ON`.
-  However, this hurts performance for non-integrated GPUs (but enables working with integrated GPUs).
-
-  Note that if you get the following error:
-  ```
-  clang: error: cannot find ROCm device library; provide its path via '--rocm-path' or '--rocm-device-lib-path', or pass '-nogpulib' to build without ROCm device library
-  ```
-  Try searching for a directory under `HIP_PATH` that contains the file
-  `oclc_abi_version_400.bc`. Then, add the following to the start of the
-  command: `HIP_DEVICE_LIB_PATH=<directory-you-just-found>`, so something
-  like:
-  ```bash
-  HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -p)" \
-  HIP_DEVICE_LIB_PATH=<directory-you-just-found> \
-      cmake -S . -B build -DGGML_HIPBLAS=ON -DAMDGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
-      && cmake --build build -- -j 16
-  ```
-
-- Using `make` (example for target gfx1030, build with 16 CPU threads):
-  ```bash
-  make -j16 GGML_HIPBLAS=1 GGML_HIP_UMA=1 AMDGPU_TARGETS=gfx1030
-  ```
-
-- Using `CMake` for Windows (using x64 Native Tools Command Prompt for VS, and assuming a gfx1100-compatible AMD GPU):
-  ```bash
-  set PATH=%HIP_PATH%\bin;%PATH%
-  cmake -S . -B build -G Ninja -DAMDGPU_TARGETS=gfx1100 -DGGML_HIPBLAS=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
-  cmake --build build
-  ```
-  Make sure that `AMDGPU_TARGETS` is set to the GPU arch you want to compile for. The above example uses `gfx1100` that corresponds to Radeon RX 7900XTX/XT/GRE. You can find a list of targets [here](https://llvm.org/docs/AMDGPUUsage.html#processors)
-  Find your gpu version string by matching the most significant version information from `rocminfo | grep gfx | head -1 | awk '{print $2}'` with the list of processors, e.g. `gfx1035` maps to `gfx1030`.
-
-
-The environment variable [`HIP_VISIBLE_DEVICES`](https://rocm.docs.amd.com/en/latest/understand/gpu_isolation.html#hip-visible-devices) can be used to specify which GPU(s) will be used.
-If your GPU is not officially supported you can use the environment variable [`HSA_OVERRIDE_GFX_VERSION`] set to a similar GPU, for example 10.3.0 on RDNA2 (e.g. gfx1030, gfx1031, or gfx1035) or 11.0.0 on RDNA3.
-The following compilation options are also available to tweak performance (yes, they refer to CUDA, not HIP, because it uses the same code as the cuBLAS version above):
-
-| Option                 | Legal values           | Default | Description                                                                                                                                                                                                                                    |
-|------------------------|------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GGML_CUDA_DMMV_X       | Positive integer >= 32 | 32      | Number of values in x direction processed by the HIP dequantization + matrix vector multiplication kernel per iteration. Increasing this value can improve performance on fast GPUs. Power of 2 heavily recommended. Does not affect k-quants. |
-| GGML_CUDA_MMV_Y        | Positive integer       | 1       | Block size in y direction for the HIP mul mat vec kernels. Increasing this value can improve performance on fast GPUs. Power of 2 recommended. Does not affect k-quants.                                                                       |
-| GGML_CUDA_KQUANTS_ITER | 1 or 2                 | 2       | Number of values processed per iteration and per HIP thread for Q2_K and Q6_K quantization formats. Setting this value to 1 can improve performance for slow GPUs.                                                                             |
-
-### Vulkan
-
-**Windows**
-
-#### w64devkit
-
-Download and extract [w64devkit](https://github.com/skeeto/w64devkit/releases).
-
-Download and install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows). When selecting components, only the Vulkan SDK Core is required.
-
-Launch `w64devkit.exe` and run the following commands to copy Vulkan dependencies:
-```sh
-SDK_VERSION=1.3.283.0
-cp /VulkanSDK/$SDK_VERSION/Bin/glslc.exe $W64DEVKIT_HOME/bin/
-cp /VulkanSDK/$SDK_VERSION/Lib/vulkan-1.lib $W64DEVKIT_HOME/x86_64-w64-mingw32/lib/
-cp -r /VulkanSDK/$SDK_VERSION/Include/* $W64DEVKIT_HOME/x86_64-w64-mingw32/include/
-cat > $W64DEVKIT_HOME/x86_64-w64-mingw32/lib/pkgconfig/vulkan.pc <<EOF
-Name: Vulkan-Loader
-Description: Vulkan Loader
-Version: $SDK_VERSION
-Libs: -lvulkan-1
-EOF
-
-```
-Switch into the `llama.cpp` directory and run `make GGML_VULKAN=1`.
-
-#### MSYS2
-Install [MSYS2](https://www.msys2.org/) and then run the following commands in a UCRT terminal to install dependencies.
-  ```sh
-  pacman -S git \
-      mingw-w64-ucrt-x86_64-gcc \
-      mingw-w64-ucrt-x86_64-cmake \
-      mingw-w64-ucrt-x86_64-vulkan-devel \
-      mingw-w64-ucrt-x86_64-shaderc
-  ```
-Switch into `llama.cpp` directory and build using CMake.
-```sh
-cmake -B build -DGGML_VULKAN=ON
-cmake --build build --config Release
-```
-
-**With docker**:
-
-You don't need to install Vulkan SDK. It will be installed inside the container.
-
-```sh
-# Build the image
-docker build -t llama-cpp-vulkan -f .devops/llama-cli-vulkan.Dockerfile .
-
-# Then, use it:
-docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card1:/dev/dri/card1 llama-cpp-vulkan -m "/app/models/YOUR_MODEL_FILE" -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33
-```
-
-**Without docker**:
-
-Firstly, you need to make sure you have installed [Vulkan SDK](https://vulkan.lunarg.com/doc/view/latest/linux/getting_started_ubuntu.html)
-
-For example, on Ubuntu 22.04 (jammy), use the command below:
+After successfully building with cmake, you will find the executables in subdirectory `build/bin`, `build/bin/release` or something like that, depending on your environment and the exact CMake command line you used.
+### Simple execution Test
+To ensure your build was successful, run the following command from your build directory:
 
 ```bash
-wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add -
-wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
-apt update -y
-apt-get install -y vulkan-sdk
-# To verify the installation, use the command below:
-vulkaninfo
+llama-cli --help
 ```
 
-Alternatively your package manager might be able to provide the appropriate libraries.
-For example for Ubuntu 22.04 you can install `libvulkan-dev` instead.
-For Fedora 40, you can install `vulkan-devel`, `glslc` and `glslang` packages.
+If this prints the help menu without errors, your binary is functional.  
 
-Then, build llama.cpp using the cmake command below:
-
+### Quick Inference Test
+Use a small model (e.g., Gemma4-E2B) and run a minimal test:
 ```bash
-cmake -B build -DGGML_VULKAN=1
-cmake --build build --config Release
-# Test the output binary (with "-ngl 33" to offload all layers to GPU)
-./bin/llama-cli -m "PATH_TO_MODEL" -p "Hi you how are you" -n 50 -e -ngl 33 -t 4
-
-# You should see in the output, ggml_vulkan detected your GPU. For example:
-# ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32
+llama-cli -m <path-to-model> -p "Hello!" -n 20
 ```
+This will prompt your model to answer with 20 tokens only.  
+If you see text output, your setup is working correctly.
 
-### Android
+---
 
-To read documentation for how to build on Android, [click here](./android.md)
+## CUDA architecture reference
+
+Use `-DCMAKE_CUDA_ARCHITECTURES="<cc>-real"` to compile only for your GPU's compute capability.
+Compiling for all architectures (the default when this flag is omitted) significantly increases
+build time and binary size.
+
+| Compute Capability | Architecture | Example GPUs |
+|---|---|---|
+| 7.5 | Turing | GeForce RTX 2060/2070/2080, GTX 1650/1660 series |
+| 8.0 | Ampere | NVIDIA A100, A30, A10 (data centre) |
+| 8.6 | Ampere | GeForce RTX 3060/3070/3080/3090, RTX A2000–A6000 |
+| 8.7 | Ampere | Jetson Orin (embedded) |
+| 8.9 | Ada Lovelace | GeForce RTX 4060/4070/4080/4090, RTX 6000 Ada |
+| 9.0 | Hopper | NVIDIA H100, H200 (data centre) |
+| 10.0 | Blackwell | GeForce RTX 5080/5090, GB200 (data centre) |
+
+Use `real` (e.g., `86-real`) to embed only PTX/SASS for that architecture; omit `real` to also
+embed PTX for forward compatibility. For a system with mixed GPU generations, a comma-separated
+list is accepted: `-DCMAKE_CUDA_ARCHITECTURES="75-real;86-real"`.
+
+---
+
+## CUDA compilation options reference
+
+The following CMake options are available for fine-tuning CUDA performance:
+
+| Option | Values | Default | Description |
+|---|---|---|---|
+| `GGML_CUDA_FORCE_DMMV` | Boolean | `false` | Force dequantization + matrix-vector multiplication kernels instead of quantized MMVQ. By default the choice is made based on compute capability. Does not affect k-quants. |
+| `GGML_CUDA_DMMV_X` | Integer ≥ 32 | `32` | Values in x direction per DMMV kernel iteration. Increasing improves performance on fast GPUs. Power of 2 strongly recommended. |
+| `GGML_CUDA_MMV_Y` | Integer ≥ 1 | `1` | Block size in y direction for mul-mat-vec kernels. Power of 2 recommended. |
+| `GGML_CUDA_FORCE_MMQ` | Boolean | `false` | Force custom quantized matrix multiplication kernels instead of FP16 cuBLAS even when no int8 tensor core implementation is available. Reduces VRAM at the cost of large-batch throughput. |
+| `GGML_CUDA_FORCE_CUBLAS` | Boolean | `false` | Force FP16 cuBLAS instead of custom quantized matmul kernels. |
+| `GGML_CUDA_F16` | Boolean | `false` | Use half-precision arithmetic in DMMV and q4_1/q5_1 matmul kernels. Can improve performance on recent GPUs. |
+| `GGML_CUDA_KQUANTS_ITER` | `1` or `2` | `2` | Values per iteration per thread for Q2_K and Q6_K quantisation. Set to `1` for slower GPUs. |
+| `GGML_CUDA_USE_GRAPHS` | Boolean | `false` | Use CUDA graphs to reduce kernel launch overhead. Recommended on modern drivers. |
+| `GGML_CUDA_PEER_MAX_BATCH_SIZE` | Integer ≥ 1 | `128` | Maximum batch size for which peer access is enabled between multiple GPUs. Requires Linux or NVLink. |
+| `GGML_CUDA_FA_ALL_QUANTS` | Boolean | `false` | Compile support for all KV cache quantisation type combinations in the FlashAttention CUDA kernels. Increases compile time significantly. |
+## Debug Builds
+
+- **Linux/macOS/Ninja:** `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build`
+- **Visual Studio:** `cmake -B build -G "Visual Studio 17 2022" && cmake --build build --config Debug`
+
+---
+
+## Other Platforms
+
+- **FreeBSD:** Use CMake. `pkg install cmake ninja git llvm`, then standard CMake commands.
+- **Android:** See [android.md](https://github.com/ikawrakow/ik_llama.cpp/blob/main/docs/android.md).
+- **Experimental Backends:** Refer to upstream [llama.cpp docs](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md).  
+  These backends are **not supported** in `ik_llama.cpp`. They may serve as a starting point for contributors who are willing to actively maintain and fix them for this fork.
