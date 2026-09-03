@@ -557,6 +557,10 @@ struct llama_model {
     std::unique_ptr<ggml_tensor> dflash_output_ptr;
     std::unique_ptr<ggml_tensor> dflash_output_mtp_ptr;
 
+    // Device-local qwen4exp shared-MTP IO copies for cross-buffer sharing.
+    std::unique_ptr<ggml_tensor> qwen4exp_tok_embd_ptr;
+    std::unique_ptr<ggml_tensor> qwen4exp_output_ptr;
+
     llama_split_tensor split_output;
     llama_split_tensor split_output_norm;
 

@@ -1688,11 +1688,16 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
                 hparams.nextn_predict_layers));
     }
 
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
-
     // a predictor-only GGUF reports the full block count but ships only the NextN block
     const bool mtp_only = hparams.nextn_predict_layers > 0 &&
                           ml.get_tensor_meta(tn(LLM_TENSOR_HC_ATTN_NORM, "weight", 0).c_str()) == nullptr;
+
+    // A shared predictor-only companion carries no token_embd (it borrows the
+    // target's embedding, GGUF kv qwen4exp.nextn_shared_target_tensors); required
+    // only when a trunk is present.
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
+            mtp_only ? llama_model_loader::TENSOR_NOT_REQUIRED : 0);
+
     const int trunk_flags = mtp_only
         ? llama_model_loader::TENSOR_SKIP | llama_model_loader::TENSOR_NOT_REQUIRED : 0;
 
@@ -1703,7 +1708,7 @@ bool create_tensors_helper::create_qwen4exp_tensors(const LLM_TN & tn) {
     model.hc_head_down = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_DOWN, "weight"), {hc_dim, hc_rank}, out_mixer_flags);
     model.hc_head_up   = create_tensor(ctx_output, tn(LLM_TENSOR_HC_HEAD_UP,   "weight"), {hc_rank, hc_dim}, out_mixer_flags);
     model.output       = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,       "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
-    if (model.output == NULL) {
+    if (model.output == NULL && !mtp_only) {
         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
     }
 
