@@ -2424,7 +2424,50 @@ bool llama_model_is_qwen4exp(const llama_model * model) {
 
 // qwen4exp shared companion: predictor-only GGUFs (nextn_shared_target_tensors)
 // ship no token_embd/output and borrow the target's tensors, mirroring the
-// DFlash IO sharing. Returns false when the target cannot provide them.
+// DFlash IO sharing. Requires a qwen4exp target with exactly matching IO
+// shapes; borrowed tensors are cloned into the draft's buffer types when a
+// cross-device placement would otherwise leave them on a foreign buffer.
+// Self-contained drafts keep their own tensors untouched. Returns false when
+// the target cannot provide usable tensors.
+static bool llama_model_qwen4exp_io_needs_clone(const ggml_tensor * tensor, ggml_backend_buffer_type_t buft) {
+    return tensor != nullptr && tensor->buffer != nullptr && buft != nullptr &&
+           ggml_backend_buffer_get_type(tensor->buffer) != buft;
+}
+
+static ggml_tensor * llama_model_clone_qwen4exp_io_tensor(
+        llama_model * model,
+        ggml_tensor * source,
+        ggml_backend_buffer_type_t buft,
+        std::unique_ptr<ggml_tensor> & storage,
+        const char * name) {
+    if (model == nullptr || source == nullptr || source->buffer == nullptr || buft == nullptr) {
+        return nullptr;
+    }
+
+    storage = std::make_unique<ggml_tensor>(*source);
+    storage->buffer = ggml_backend_buft_alloc_buffer(buft, ggml_backend_buft_get_alloc_size(buft, source));
+    if (storage->buffer == nullptr) {
+        storage.reset();
+        return nullptr;
+    }
+
+    storage->data = ggml_backend_buffer_get_base(storage->buffer);
+    storage->op = GGML_OP_NONE;
+    for (int j = 0; j < GGML_MAX_SRC; ++j) {
+        storage->src[j] = nullptr;
+    }
+    storage->view_src = nullptr;
+    storage->view_offs = 0;
+    storage->extra = nullptr;
+    ggml_set_name(storage.get(), name);
+    ggml_backend_buffer_set_usage(storage->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    ggml_backend_tensor_copy(source, storage.get());
+
+    model->bufs.push_back(storage->buffer);
+    return storage.get();
+}
+
 bool llama_model_share_qwen4exp_mtp_tensors(llama_model * draft_model, const llama_model * target_model) {
     if (draft_model == nullptr || target_model == nullptr) {
         return false;
@@ -2432,13 +2475,52 @@ bool llama_model_share_qwen4exp_mtp_tensors(llama_model * draft_model, const lla
     if (draft_model->arch != LLM_ARCH_QWEN4EXP) {
         return true;
     }
+    // only a qwen4exp target can provide matching IO tensors
+    if (target_model->arch != LLM_ARCH_QWEN4EXP) {
+        return false;
+    }
+
+    // speculative vocab compatibility tolerates a size difference, but the
+    // draft graph consumes the borrowed tensors with the draft's own shapes:
+    // require an exact match so a mismatch cannot silently truncate
+    const int64_t n_embd  = draft_model->hparams.n_embd;
+    const int64_t n_vocab = draft_model->hparams.n_vocab;
+
     if (draft_model->tok_embd == nullptr) {
-        draft_model->tok_embd = target_model->tok_embd;
+        ggml_tensor * tok_embd = target_model->tok_embd;
+        if (tok_embd == nullptr ||
+                tok_embd->ne[0] != n_embd || tok_embd->ne[1] != n_vocab) {
+            return false;
+        }
+        if (llama_model_qwen4exp_io_needs_clone(tok_embd, draft_model->buft_input.buft)) {
+            tok_embd = llama_model_clone_qwen4exp_io_tensor(
+                    draft_model, tok_embd, draft_model->buft_input.buft,
+                    draft_model->qwen4exp_tok_embd_ptr, "qwen4exp_tok_embd");
+            if (tok_embd == nullptr) {
+                return false;
+            }
+        }
+        draft_model->tok_embd = tok_embd;
     }
+
     if (draft_model->output == nullptr) {
-        draft_model->output = target_model->output;
+        ggml_tensor * output = target_model->output;
+        if (output == nullptr ||
+                output->ne[0] != n_embd || output->ne[1] != n_vocab) {
+            return false;
+        }
+        if (llama_model_qwen4exp_io_needs_clone(output, draft_model->buft_output.buft)) {
+            output = llama_model_clone_qwen4exp_io_tensor(
+                    draft_model, output, draft_model->buft_output.buft,
+                    draft_model->qwen4exp_output_ptr, "qwen4exp_output");
+            if (output == nullptr) {
+                return false;
+            }
+        }
+        draft_model->output = output;
     }
-    return draft_model->tok_embd != nullptr;
+
+    return draft_model->tok_embd != nullptr && draft_model->output != nullptr;
 }
 // qwen4exp marks a present trunk block with hc_attn_norm, every other arch with attn_norm
 static bool llama_model_trunk_block_present(const llama_layer & layer) {
