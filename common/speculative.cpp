@@ -3,6 +3,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
+#include "llama-spec-features-dflash.h"
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -1355,23 +1356,29 @@ common_speculative * common_speculative_init(
                 LOG_INF("%s: DFlash draft context %d exceeds target context %d, clamping to target capacity\n",
                         __func__, requested_draft_ctx, target_ctx);
             }
-            const int32_t cross_ctx = effective_draft_ctx - query_capacity;
-            if (cross_ctx <= 0) {
+            const int32_t logical_cross_ctx = effective_draft_ctx - query_capacity;
+            if (logical_cross_ctx <= 0) {
                 LOG_ERR("%s: invalid DFlash draft context size draft=%d target=%d query_capacity=%d, draft context must exceed the query block\n",
                         __func__, requested_draft_ctx, target_ctx, query_capacity);
                 return nullptr;
             }
 
             cparams_dft.n_ctx = (uint32_t) effective_draft_ctx;
-            dflash_cross_ctx = cross_ctx;
-            LOG_INF("%s: DFlash context target/slot=%d logical=%d cross_ctx=%d query_block=%d\n",
-                    __func__, target_ctx, effective_draft_ctx, cross_ctx, query_capacity);
+            cparams_dft.dflash_query_capacity = query_capacity;
         }
 
         ctx_dft = llama_init_from_model(params.model_dft, cparams_dft);
         if (ctx_dft == nullptr) {
             LOG_ERR("%s", "failed to create draft context\n");
             return nullptr;
+        }
+        if (has_dflash_stage) {
+            dflash_cross_ctx = llama_get_dflash_visible_cross_ctx(ctx_dft);
+            if (dflash_cross_ctx <= 0) {
+                LOG_ERR("%s: DFlash context did not expose a valid resolved physical cross-context\n", __func__);
+                llama_free(ctx_dft);
+                return nullptr;
+            }
         }
     }
 

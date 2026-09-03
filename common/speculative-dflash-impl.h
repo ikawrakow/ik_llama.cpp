@@ -128,6 +128,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
     uint64_t rebuild_rows = 0;
     uint64_t rebuild_decode_time_us = 0;
     uint64_t generated_tokens = 0;
+    uint64_t target_window_ring_wraps = 0;
 
     common_speculative_state_dflash(
             enum common_speculative_type type,
@@ -265,18 +266,20 @@ struct common_speculative_state_dflash : public common_speculative_state {
 
         llama_set_dflash_visible_cross_ctx(ctx_dft, this->cross_ctx);
         llama_set_dflash_dspark(ctx_dft, is_dspark);
-        LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, query_capacity=%d, active_width=%d, cross_ctx=%d, n_target_features=%d, n_target_layers=%d)\n",
+        LOG_INF("%s: DFlash context ready (n_ctx=%d, block_size=%d, query_capacity=%d, active_width=%d, cross_ctx=%d, n_target_features=%d, n_target_layers=%d, host_ring=%.2f MiB)\n",
                 __func__, llama_n_ctx(ctx_dft), block_size, query_capacity, active_width, this->cross_ctx,
-                n_target_features, n_target_layers);
+                n_target_features, n_target_layers,
+                (double) target_window_ring.size() * sizeof(float) / (1024.0 * 1024.0));
     }
     ~common_speculative_state_dflash() override {
         if (rebuild_count > 0) {
-            LOG_INF("%s: DFlash cache rebuilds=%llu rows=%llu rebuild+decode=%.3f ms rows/token=%.3f\n",
+            LOG_INF("%s: DFlash cache rebuilds=%llu rows=%llu rebuild+decode=%.3f ms rows/token=%.3f host_ring_wraps=%llu\n",
                     __func__,
                     (unsigned long long) rebuild_count,
                     (unsigned long long) rebuild_rows,
                     (double) rebuild_decode_time_us / 1000.0,
-                    generated_tokens > 0 ? (double) rebuild_rows / (double) generated_tokens : 0.0);
+                    generated_tokens > 0 ? (double) rebuild_rows / (double) generated_tokens : 0.0,
+                    (unsigned long long) target_window_ring_wraps);
         }
         llama_clear_dflash_capture(ctx_tgt);
         if (ctx_dft) {
@@ -297,6 +300,7 @@ struct common_speculative_state_dflash : public common_speculative_state {
         rebuild_rows = 0;
         rebuild_decode_time_us = 0;
         generated_tokens = 0;
+        target_window_ring_wraps = 0;
     }
 
     void draft(
@@ -518,6 +522,7 @@ static void dflash_ring_append_rows(
     int32_t write_pos = state.target_window_ring_write_pos;
     int32_t remaining = n_rows;
     const float * src = rows;
+    state.target_window_ring_wraps += ((uint64_t) write_pos + (uint64_t) n_rows) / (uint64_t) state.cross_ctx;
     while (remaining > 0) {
         const int32_t chunk_rows = std::min<int32_t>(remaining, state.cross_ctx - write_pos);
         std::memcpy(

@@ -1225,7 +1225,11 @@ static bool llama_kv_cache_init(
             cache.head_swa     = cache.sink_rows;
             cache.pos_base_swa = 0;
         } else {
-            LLAMA_LOG_WARN("%s: --swa-compress had no effect: no compactable sliding-window layers\n", __func__);
+            if (model.supports_dflash_swa_compress()) {
+                LLAMA_LOG_INFO("%s: --swa-compress uses the DFlash custom cache, ordinary KV bookkeeping has no compactable layers\n", __func__);
+            } else {
+                LLAMA_LOG_WARN("%s: --swa-compress had no effect: no compactable sliding-window layers\n", __func__);
+            }
         }
     }
 
@@ -8053,6 +8057,7 @@ struct llama_context_params llama_context_default_params() {
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
         /*.cuda_params                 =*/ nullptr,
+        /*.dflash_query_capacity       =*/ 0,
     };
 
     return result;
@@ -8563,6 +8568,7 @@ struct llama_context * llama_init_from_model(
     cparams.cuda_params      = params.cuda_params;
     cparams.mtp              = params.mtp;
     cparams.worst_graph_tokens = params.worst_case_tokens;
+    cparams.dflash_query_capacity = params.dflash_query_capacity;
 
     cparams.reduce_type      = params.type_reduce;
     cparams.graph_attn_precision = params.type_graph_attn;
@@ -8579,6 +8585,19 @@ struct llama_context * llama_init_from_model(
 
     // this is necessary due to kv_self.n being padded later during inference
     cparams.n_ctx            = GGML_PAD(cparams.n_ctx, llama_kv_cache::get_padding(cparams.flash_attn));
+
+    if (llm_arch_is_dflash_family(model->arch)) {
+        const int32_t query_capacity = cparams.dflash_query_capacity > 0
+                ? cparams.dflash_query_capacity
+                : std::max<int32_t>(1, (int32_t) model->hparams.dflash_block_size);
+        const int32_t logical_cross_ctx = std::max<int32_t>(1,
+                (int32_t) cparams.n_ctx - query_capacity);
+        const int32_t physical_cross_ctx = model->dflash_swa_compress_cross_ctx(
+                logical_cross_ctx, cparams.swa_compress);
+        ctx->dflash.visible_cross_ctx = physical_cross_ctx;
+        LLAMA_LOG_INFO("%s: DFlash context logical_cross_ctx=%d physical_cross_ctx=%d query_capacity=%d window=%u\n",
+                __func__, logical_cross_ctx, physical_cross_ctx, query_capacity, model->hparams.n_swa);
+    }
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch          = hparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
