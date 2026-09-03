@@ -433,6 +433,7 @@ extern "C" {
         bool dry_run;       // skip loading tensors
         bool flash_attn;
         bool defer_experts;    // defer expert mmap residency to speed up model loading (Linux only)
+        bool defer_ple;        // keep the per-layer token embedding on the file instead of resident in memory (Linux only)
         bool swa_compress;     // must match llama_context_params::swa_compress; the fit also assumes that context's n_ubatch
     };
 
@@ -714,6 +715,8 @@ extern "C" {
     LLAMA_API bool llama_model_is_step35(const struct llama_model * model);
 
     LLAMA_API bool llama_model_is_qwen35_family(const struct llama_model * model);
+
+    LLAMA_API bool llama_model_is_qwen4exp(const struct llama_model * model);
 
     LLAMA_API bool llama_is_gemma4_mtp_file(const char * path);
 
