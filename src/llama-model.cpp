@@ -490,6 +490,13 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_HC_HEAD_NORM,         "output_hc_norm" },
             { LLM_TENSOR_HC_HEAD_DOWN,         "output_hc_down" },
             { LLM_TENSOR_HC_HEAD_UP,           "output_hc_up" },
+            { LLM_TENSOR_NEXTN_EH_PROJ,        "blk.%d.nextn.eh_proj" },
+            { LLM_TENSOR_NEXTN_ENORM,          "blk.%d.nextn.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,          "blk.%d.nextn.hnorm" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.nextn.shared_head_norm" },
+            { LLM_TENSOR_NEXTN_HC_HEAD_NORM,   "blk.%d.nextn.hc_head_norm" },
+            { LLM_TENSOR_NEXTN_HC_HEAD_DOWN,   "blk.%d.nextn.hc_head_down" },
+            { LLM_TENSOR_NEXTN_HC_HEAD_UP,     "blk.%d.nextn.hc_head_up" },
             { LLM_TENSOR_ATTN_Q,               "blk.%d.attn_q" },
             { LLM_TENSOR_ATTN_K,               "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_V,               "blk.%d.attn_v" },
@@ -957,6 +964,12 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_OUTPUT_NORM,          "output_norm" },
             { LLM_TENSOR_OUTPUT,               "output" },
             { LLM_TENSOR_ATTN_NORM,            "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,               "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_NORM,          "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_K,               "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_K_NORM,          "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_ATTN_V,               "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,             "blk.%d.attn_output" },
             { LLM_TENSOR_ATTN_SINKS,           "blk.%d.attn_sinks" },
             { LLM_TENSOR_ATTN_Q_A_NORM,        "blk.%d.attn_q_a_norm" },
             { LLM_TENSOR_ATTN_KV_A_NORM,       "blk.%d.attn_kv_a_norm" },
@@ -966,6 +979,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_ATTN_OUT_A,           "blk.%d.attn_output_a" },
             { LLM_TENSOR_ATTN_OUT_B,           "blk.%d.attn_output_b" },
             { LLM_TENSOR_FFN_NORM,             "blk.%d.ffn_norm" },
+            { LLM_TENSOR_ATTN_POST_NORM,       "blk.%d.ffn_norm" },
             { LLM_TENSOR_FFN_GATE_INP,         "blk.%d.ffn_gate_inp" },
             { LLM_TENSOR_FFN_GATE_EXPS,        "blk.%d.ffn_gate_exps" },
             { LLM_TENSOR_FFN_DOWN_EXPS,        "blk.%d.ffn_down_exps" },
@@ -983,6 +997,9 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_HC_FFN_BASE,          "blk.%d.hc_ffn_base" },
             { LLM_TENSOR_HC_FFN_FN,            "blk.%d.hc_ffn_fn" },
             { LLM_TENSOR_HC_FFN_SCALE,         "blk.%d.hc_ffn_scale" },
+            { LLM_TENSOR_FFN_GATE,             "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,             "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,               "blk.%d.ffn_up" },
             { LLM_TENSOR_DFLASH_FC,            "fc" },
             { LLM_TENSOR_DFLASH_HIDDEN_NORM,   "enc.output_norm" },
             { LLM_TENSOR_DSPARK_MARKOV_W1,     "markov_w1" },
@@ -2401,6 +2418,15 @@ bool llama_model_is_step35(const llama_model * model) {
     return model && model->arch == LLM_ARCH_STEP35;
 }
 
+bool llama_model_is_qwen4exp(const llama_model * model) {
+    return model && model->arch == LLM_ARCH_QWEN4EXP;
+}
+
+// qwen4exp marks a present trunk block with hc_attn_norm, every other arch with attn_norm
+static bool llama_model_trunk_block_present(const llama_layer & layer) {
+    return layer.attn_norm != nullptr || layer.hc_attn_norm != nullptr;
+}
+
 bool llama_model_is_qwen35_family(const llama_model * model) {
     return model && (model->arch == LLM_ARCH_QWEN35 || model->arch == LLM_ARCH_QWEN35MOE);
 }
@@ -2417,7 +2443,7 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
     const size_t n_nextn = model->hparams.nextn_predict_layers;
     const bool has_common_package_contract =
         llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
-        llama_model_is_qwen35_family(model) ||
+        llama_model_is_qwen35_family(model) || llama_model_is_qwen4exp(model) ||
         llama_model_is_gemma4_mtp_assistant(model);
     if (!has_common_package_contract) {
         return n_nextn > 0 ? LLAMA_MTP_PACKAGE_EMBEDDED : LLAMA_MTP_PACKAGE_NONE;
@@ -2425,9 +2451,9 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
 
     if (n_nextn == 0) {
         if (llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
-            llama_model_is_qwen35_family(model)) {
+            llama_model_is_qwen35_family(model) || llama_model_is_qwen4exp(model)) {
             for (const auto & layer : model->layers) {
-                if (layer.attn_norm != nullptr) {
+                if (llama_model_trunk_block_present(layer)) {
                     return LLAMA_MTP_PACKAGE_TARGET_ONLY;
                 }
             }
@@ -2448,7 +2474,7 @@ enum llama_mtp_package llama_model_mtp_package(const llama_model * model) {
 
     bool has_trunk = false;
     for (size_t il = 0; il < first; ++il) {
-        if (model->layers[il].attn_norm != nullptr) {
+        if (llama_model_trunk_block_present(model->layers[il])) {
             has_trunk = true;
             break;
         }

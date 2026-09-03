@@ -27,7 +27,10 @@ uint32_t llama_model_mtp_feature_width(const struct llama_model * model) {
         hparams.mtp_backbone_n_embd > 0) {
         return hparams.mtp_backbone_n_embd;
     }
-    if (model->arch == LLM_ARCH_DEEPSEEK4 && hparams.n_embd_out > hparams.n_embd) {
+    if ((model->arch == LLM_ARCH_DEEPSEEK4 ||
+         model->arch == LLM_ARCH_QWEN4EXP) &&
+        hparams.n_embd_out > hparams.n_embd) {
+        // the pre-final-mixer wide stream; n_embd_out holds even when the NextN block lives in a companion file
         return hparams.n_embd_out;
     }
     return hparams.n_embd;

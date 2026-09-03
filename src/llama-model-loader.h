@@ -38,6 +38,8 @@ struct llama_model_loader {
     int n_kv      = 0;
     int n_tensors = 0;
     int n_created = 0;
+    int n_skipped = 0;
+    size_t size_skipped = 0;
 
     int64_t n_elements = 0;
     size_t  n_bytes    = 0;
@@ -51,6 +53,7 @@ struct llama_model_loader {
     bool merge_qkv = false;
     bool merge_up_gate_exps = false;
     bool defer_experts = false;
+    bool defer_ple = false;
 
     llama_files files;
     llama_ftype ftype;
@@ -91,6 +94,7 @@ struct llama_model_loader {
     mutable bool arch_resolved = false;
     mutable llm_arch resolved_arch = LLM_ARCH_UNKNOWN;
     llama_expert_tensor_index expert_tensor_index;
+    llama_expert_tensor_index ple_tensor_index;
 
     llama_model_loader(const std::string & fname, int ncmoe, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
             bool merge_qkv, bool merge_up_gate_exps, bool defer_experts,
@@ -136,7 +140,8 @@ struct llama_model_loader {
     enum llm_arch get_arch() const {
         if (!arch_resolved) {
             resolved_arch = llm_kv.arch;
-            if (resolved_arch == LLM_ARCH_DFLASH && get_tensor_meta("selector_hidden.weight") != nullptr) {
+            if (resolved_arch == LLM_ARCH_DFLASH &&
+                    get_tensor_meta("selector_hidden.weight") != nullptr) {
                 resolved_arch = LLM_ARCH_DFLASH2;
             }
             arch_resolved = true;
@@ -183,7 +188,15 @@ struct llama_model_loader {
 
     bool should_defer_expert_mmaps() const;
 
+    bool has_anonymous_mapping() const;
+
     void drop_mmap_expert_pages() const;
+
+    void build_ple_tensor_index();
+
+    bool should_defer_ple_mmaps() const;
+
+    void apply_ple_mmap_policy() const;
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
