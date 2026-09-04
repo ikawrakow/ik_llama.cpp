@@ -1356,6 +1356,9 @@ add_library(ggml
 if (EMSCRIPTEN)
     set_target_properties(ggml PROPERTIES COMPILE_FLAGS "-msimd128")
 endif()
+if (GGML_FORCE_SYNC)
+    set_source_files_properties(ggml-backend.cpp PROPERTIES COMPILE_FLAGS -DGGML_FORCE_SYNC)
+endif()
 
 target_compile_definitions(ggml PUBLIC  ${GGML_CDEF_PUBLIC})
 target_compile_definitions(ggml PRIVATE $<$<CONFIG:Release>:NDEBUG>)

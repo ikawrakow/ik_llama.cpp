@@ -109,6 +109,7 @@ endif()
 # ggml core
 set(GGML_SCHED_MAX_COPIES  "1" CACHE STRING "ggml: max input copies for pipeline parallelism")
 set(GGML_MAX_CONTEXTS       "" CACHE STRING "ggml: max model contexts (override only; defaults to 64 in the code)")
+set(GGML_FORCE_SYNC         "" CACHE STRING "ggml-backend: control device copy synchronization")
 
 # 3rd party libs / backends
 option(GGML_ACCELERATE                      "ggml: enable Accelerate framework"               ON)
