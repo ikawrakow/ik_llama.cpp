@@ -3,6 +3,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "ggml.h"
+#include <cstddef>
 #include <memory>
 //#include "ggml-backend.h"
 
@@ -26,7 +27,11 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
 #include <cstring>
+#include <cstdlib>
+#include <fstream>
+#include <optional>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -1126,6 +1131,163 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     }
 }
 
+
+// helper for parallel loading wit -sm graph: How much host is available for allocation?
+// Needed because -sm graph isn't chunked, it reads each tensor into RAM in one go.
+// So we ask the OS how much memory can be allocated right now, so that it can 
+#if defined(__linux__) && defined(GGML_USE_CUDA)
+static std::optional<size_t> allocatable_host_memory() {
+
+    // Get the system-wide amount of memory from /proc/meminfo. This is our default value
+    // unless we're in a cgroup with a restricted value (eg a container)
+    std::optional<size_t> proc_meminfo_memavailable;
+    std::string line;
+    std::ifstream meminfo("/proc/meminfo");
+    while (std::getline(meminfo, line)) {
+        if (line.rfind("MemAvailable:", 0) == 0) {
+            proc_meminfo_memavailable = std::strtoull(line.c_str() + 13, nullptr, 10) * 1024;
+            break;
+        }
+    }
+    LLAMA_LOG_INFO("split budget: /proc/meminfo MemAvailable = %.1f MiB\n", proc_meminfo_memavailable.value_or(0)/(1024.0*1024.0));
+
+    //Find all lower memory limits in cgroups that we're in
+    //We only check v2 cgroups (there will be up to one entry, starting with "0::"
+    //which idicates the leaf cgroup node we're in
+    std::ifstream cgroup("/proc/self/cgroup");
+    while (std::getline(cgroup, line)) {
+        
+        //Is thsi the line that tells us our leaf cgroup? If so then go 
+        //hunting inside for the memory limit
+        if (line.rfind("0::", 0) == 0) {
+
+            // Extract a numeric value from a cgroup sysfs descriptor
+            // If the value is "max", the cgroup has no opinion
+            auto read_value = [](const std::string & path) -> std::optional<size_t> {
+                std::ifstream f(path);
+                std::string s;
+                if (!(f >> s) || s == "max") {
+                    return std::nullopt;
+                }
+                return std::strtoull(s.c_str(), nullptr, 10);
+            };
+
+
+
+            //Iterate through all the cgroups we're in 
+            std::string curr_cgroup_path = line.substr(3);
+            while (!curr_cgroup_path.empty()) {
+                std::string base = "/sys/fs/cgroup" + curr_cgroup_path;
+                std::optional<size_t> limit = read_value(base + "/memory.max");
+                if (limit) {
+
+                    auto read_reclaimable_file_cache = [](const std::string & path) -> std::optional<size_t> {
+                        std::ifstream f(path);
+                        std::optional<size_t> file_cache;
+                        std::optional<size_t> shmem;
+                        std::string sline;
+                        while (std::getline(f, sline)) {
+                            if (sline.rfind("file ", 0) == 0) {
+                                file_cache = std::strtoull(sline.c_str() + 5, nullptr, 10);
+                            } else if (sline.rfind("shmem ", 0) == 0) {
+                                shmem = std::strtoull(sline.c_str() + 6, nullptr, 10);
+                            }
+                        }
+                        if (!file_cache || !shmem) {
+                            return std::nullopt;
+                        }
+                        if (*shmem > *file_cache) {
+                            return std::nullopt;
+                        }
+                        return *file_cache - *shmem;
+                    };
+
+                    // "Current" amount of memory charged to cgroup. This includes reclaimable memory and non-relcaimable memory
+                    auto current = read_value(base + "/memory.current");
+                    if (!current) {
+                        return std::nullopt;
+                    }
+
+                    // Disk page cache, which is reclaimable
+                    auto reclaimable_file_cache = read_reclaimable_file_cache(base + "/memory.stat");
+                    if (!reclaimable_file_cache) {
+                        return std::nullopt;
+                    }
+                    if (*reclaimable_file_cache > *current) {
+                        return std::nullopt;
+                    }
+                    current = *current - *reclaimable_file_cache;
+                    if (*current > *limit) {
+                        return std::nullopt;
+                    }
+
+                    size_t cgroup_memavailable = *limit - *current;
+                    LLAMA_LOG_INFO("split budget: cgroup %s: limit = %.1f MiB, available: %.1f MiB\n",
+                            base.c_str(), *limit/(1024.0*1024.0), cgroup_memavailable/(1024.0*1024.0));
+                    if (!proc_meminfo_memavailable || cgroup_memavailable < *proc_meminfo_memavailable) {
+                        proc_meminfo_memavailable = cgroup_memavailable;
+                    }
+                }
+                auto pos = curr_cgroup_path.find_last_of('/');
+                if (pos == std::string::npos || pos == 0) {
+                    break;
+                }
+                curr_cgroup_path.resize(pos);
+            }
+            break;
+        }
+    }
+    LLAMA_LOG_INFO("split budget: available host memory = %.1f MiB\n", proc_meminfo_memavailable.value_or(0)/(1024.0*1024.0));
+    return proc_meminfo_memavailable;
+}
+#else
+
+// For other platforms, return nothing. This reverts to single threaded loading
+static std::optional<size_t> allocatable_host_memory() {
+    return std::nullopt;
+}
+#endif
+
+
+struct llama_memory_budget {
+    size_t budget;
+    size_t used = 0;
+    int holders = 0;
+    std::mutex mutex;
+    std::condition_variable cv;
+
+    llama_memory_budget(size_t budget) : budget(budget) {}
+
+    double used_pct() const {
+        return budget > 0 ? 100.0*used/budget : 0.0;
+    }
+
+    void acquire(size_t n) {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&] { return used == 0 || used + n <= budget; });
+        used += n;
+        ++holders;
+        LLAMA_LOG_INFO("split budget: acquired %.1f MiB, %d threads in flight holding %.1f MiB of %.1f MiB budget (%.1f%% used)\n",
+                n/(1024.0*1024.0), holders, used/(1024.0*1024.0), budget/(1024.0*1024.0), used_pct());
+    }
+
+    void release(size_t n) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            used -= n;
+            --holders;
+        }
+        cv.notify_all();
+    }
+
+    struct guard {
+        llama_memory_budget & b;
+        size_t n;
+        guard(llama_memory_budget & b, size_t n) : b(b), n(n) { b.acquire(n); }
+        ~guard() { b.release(n); }
+    };
+};
+
 // Returns false if cancelled by progress_callback
 bool llama_model_loader::load_all_data(
             struct ggml_context * ctx,
@@ -1154,6 +1316,7 @@ bool llama_model_loader::load_all_data(
 #if !defined(_WIN32)
     std::vector<std::unique_ptr<llama_mmap>> split_mappings(files.size());
 #endif
+    llama_memory_budget split_budget(2*allocatable_host_memory().value_or(0)/3);
 
     ggml_backend_t cuda_backend = nullptr;
     if (!use_mmap && !check_tensors) {
@@ -1275,21 +1438,13 @@ bool llama_model_loader::load_all_data(
         const bool   is_probably_split_mode_graph = std::strncmp(buffer_name, GGML_CUDA_NAME, strlen(GGML_CUDA_NAME)) == 0;
         if (is_probably_split_mode_graph) {
 #if !defined(_WIN32)
-            llama_mmap * mapping;
-            {
-                std::lock_guard<std::mutex> lock(load_mutex);
-                auto & m = split_mappings[weight->idx];
-                if (!m) {
-                    m.reset(new llama_mmap(files.at(weight->idx).get(), 0, ggml_is_numa()));
-                }
-                mapping = m.get();
-            }
-            uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
+            llama_memory_budget::guard budget_guard(split_budget, n_size);
+            llama_mmap mapping(file.get(), 0, ggml_is_numa());
+            uint8_t * data = (uint8_t *) mapping.addr() + weight->offs;
             ggml_backend_tensor_set(cur, data, 0, n_size);
             if (check_tensors && !ggml_validate_row_data(cur->type, data, n_size)) {
                 throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
             }
-            mapping->dontneed_fragment(weight->offs, weight->offs + n_size);
             return n_size;
 #else
             auto & read_buf = read_bufs[thread_idx];
