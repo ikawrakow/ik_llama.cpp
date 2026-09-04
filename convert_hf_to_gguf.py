@@ -311,6 +311,7 @@ class Model:
                             gguf.MODEL_TENSOR.FFN_GATE_INP,
                             gguf.MODEL_TENSOR.POS_EMBD,
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
+                            gguf.MODEL_TENSOR.SHORTCONV_CONV,
                         )
                     )
                     or (not name.endswith(".weight") and not (
@@ -604,6 +605,9 @@ class Model:
         if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
+        if chkhsh == "169bf0296a13c4d9b7672313f749eb36501d931022de052aad6e36f2bf34dd51":
+            # ref: https://huggingface.co/LiquidAI/LFM2-Tokenizer
+            res = "lfm2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -6514,6 +6518,79 @@ class LagunaModel(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if experts:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
+class LFM2Model(Model):
+    """Converter for Liquid AI's dense LFM2 hybrid shortconv/GQA models."""
+
+    model_arch = gguf.MODEL_ARCH.LFM2
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        # zero KV heads mark short-conv layers; old configs use full_attn_idxs,
+        # newer ones the layer_types list
+        if "layer_types" in self.hparams:
+            full_attention = [t != "conv" for t in self.hparams["layer_types"]]
+        else:
+            full_idxs = set(self.hparams.get("full_attn_idxs", []))
+            full_attention = [i in full_idxs for i in range(self.block_count)]
+        n_kv = self.hparams["num_key_value_heads"]
+        self.hparams["num_key_value_heads"] = [
+            n_kv if is_full else 0
+            for is_full in full_attention
+        ]
+
+        ff_dim = self.hparams["block_ff_dim"]
+        if self.hparams.get("block_auto_adjust_ff_dim", False):
+            ff_dim = int(2 * ff_dim / 3)
+            multiplier = self.hparams.get("block_ffn_dim_multiplier")
+            if multiplier is not None:
+                ff_dim = int(multiplier * ff_dim)
+            multiple_of = self.hparams["block_multiple_of"]
+            ff_dim = multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
+
+        saved_ff = self.hparams.get("intermediate_size")
+        saved_eps = self.hparams.get("rms_norm_eps")
+        self.hparams["intermediate_size"] = ff_dim
+        self.hparams["rms_norm_eps"] = self.hparams["norm_eps"]
+        super().set_gguf_parameters()
+        if saved_ff is None:
+            self.hparams.pop("intermediate_size", None)
+        else:
+            self.hparams["intermediate_size"] = saved_ff
+        if saved_eps is None:
+            self.hparams.pop("rms_norm_eps", None)
+        else:
+            self.hparams["rms_norm_eps"] = saved_eps
+
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        self.gguf_writer.add_shortconv_l_cache(self.hparams["conv_L_cache"])
+        self.gguf_writer.add_feed_forward_length(ff_dim)
+        self.gguf_writer.add_rope_dimension_count(
+            self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+        )
+        self.gguf_writer.add_key_length(
+            self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+        )
+        self.gguf_writer.add_value_length(
+            self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+        )
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams["norm_eps"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # HF stores the depthwise kernel as [channels, 1, kernel].
+        if name.endswith("conv.conv.weight"):
+            data_torch = data_torch.squeeze(1)
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        if bid is not None and self.match_model_tensor_name(
+                new_name, gguf.MODEL_TENSOR.SHORTCONV_CONV, bid):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 ###### CONVERSION LOGIC ######

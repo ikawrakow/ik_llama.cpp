@@ -81,6 +81,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_qwen3next_tensors(const LLM_TN & tn);
 
+    bool create_lfm2_tensors(const LLM_TN & tn);
+
     bool create_qwen4exp_tensors(const LLM_TN & tn);
 
     bool create_qwen35moe_tensors(const LLM_TN & tn);
@@ -1577,6 +1579,43 @@ bool create_tensors_helper::create_mellum_tensors(const LLM_TN & tn) {
 
         use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, 0, ffn_ctx);
     }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_lfm2_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    // one final embedding RMSNorm (GGUF: token_embd_norm) and a tied LM head
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+    model.tok_norm = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd});
+    model.output_norm = nullptr;
+    model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"),
+            {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = model.layers[i];
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+        // Both block types use the same pre-norm and SwiGLU FFN.
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.ffn_norm  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM,  "weight", i), {n_embd});
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+
+        if (hparams.is_recurrent(i)) {
+            // shortconv reuses the recurrent tensor slots; GGUF names stay arch-specific
+            layer.ssm_conv1d = create_tensor(ctx_split, tn(LLM_TENSOR_SHORTCONV_CONV, "weight", i),
+                    {hparams.n_shortconv_l_cache, n_embd});
+            layer.ssm_in = create_tensor(ctx_split, tn(LLM_TENSOR_SHORTCONV_INPROJ, "weight", i),
+                    {n_embd, 3 * n_embd});
+            layer.ssm_out = create_tensor(ctx_split, tn(LLM_TENSOR_SHORTCONV_OUTPROJ, "weight", i),
+                    {n_embd, n_embd});
+        } else {
+            layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {hparams.n_embd_head_k(i)});
+            layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {hparams.n_embd_head_k(i)});
+            create_std_attn(i, tn, layer, n_embd, hparams.n_embd_k_gqa(i), ctx_split);
+        }
+    }
+
     return use_mmap_buffer;
 }
 
@@ -5527,6 +5566,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_qwen3_moe_tensors(tn); break;
         case LLM_ARCH_MELLUM:
             use_mmap_buffer = create_mellum_tensors(tn); break;
+        case LLM_ARCH_LFM2:
+            use_mmap_buffer = create_lfm2_tensors(tn); break;
         case LLM_ARCH_QWEN3NEXT:
             use_mmap_buffer = create_qwen3next_tensors(tn); break;
         case LLM_ARCH_QWEN4EXP:
@@ -5750,7 +5791,10 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split, mem_used);
             }
             if (hparams.is_recurrent(il)) {
-                if (model.arch == LLM_ARCH_BAILINGMOE3) {
+                if (model.arch == LLM_ARCH_LFM2) {
+                    // no delta-net heads: keep the shortconv matrices whole on the layer's matrix backend
+                    LLAMA_LOG_DEBUG("%s: keeping LFM2 shortconv tensors whole for layer %d\n", __func__, il);
+                } else if (model.arch == LLM_ARCH_BAILINGMOE3) {
                     split_bailingmoe3_kda_tensors(hparams, layer, cur_splits, mem_used, ctx_split);
                 } else {
                     split_recurrent_tensors(hparams, layer, cur_splits, mem_used, ctx_split, il);

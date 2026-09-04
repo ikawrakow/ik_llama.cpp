@@ -275,6 +275,14 @@ bool server_context::load_model(const gpt_params& params_) {
 void server_context::init() {
     const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
 
+    // LFM2 has no legacy llama_chat_apply_template support: enable Jinja so the
+    // model metadata template and the think-tag PEG parser are used even without --jinja
+    const char * model_arch = llama_model_arch_string(model);
+    if (!params_base.use_jinja && model_arch != nullptr && std::string(model_arch) == "lfm2") {
+        params_base.use_jinja = true;
+        SRV_WRN("%s\n", "LFM2 model detected: enabling Jinja chat templates automatically");
+    }
+
     if (!system_prompt.empty() &&
         (llama_model_is_deepseek4(model) || llama_model_is_openpangu(model))) {
         throw std::runtime_error("server system prompts are unsupported for openPangu and DeepSeek4 because seq_cp does not copy private cache state");

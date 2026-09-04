@@ -176,7 +176,7 @@ Incorrect prompt template or it's format may break the model output.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `--jinja` | Set custom jinja chat template | Template taken from model's metadata | Mandatory for Tool Calling. |
+| `--jinja` | Set custom jinja chat template | Template taken from model's metadata | Mandatory for Tool Calling (LFM2/LFM2.5 server sessions enable it automatically). |
 | `--chat-template JINJA_TEMPLATE` | Use jinja template for chat | disabled | If there is no official `tool_use` Jinja template, you may want to set `--chat-template chatml` to use a default that works with many models |
 | `--chat-template-file file_with_JINJA_TEMPLATE` | Load jinja template for chat from the file | - | Sometimes the model producer or community fixes the template after the GGUF files are released, therefore its metadata contains buggy version. To avoid re-downloading the entire model file, download only the .jinja file then use it (`--chat-template-file /models/Qwen_Qwen3-Coder-30B-A3B-Instruct-fixed.jinja`). |
 | `--reasoning-format FORMAT` | Controls whether thought tags are allowed and/or extracted from the response | none | One of:  - `none` leaves thoughts unparsed in `message.content`  - `deepseek` puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)  - `deepseek-legacy` keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`. This is useful when the frontend (including agents) is hardcoded to use just a specific format. |

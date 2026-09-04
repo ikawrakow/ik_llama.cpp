@@ -93,6 +93,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4-assistant"   },
     { LLM_ARCH_OPENPANGU,       "openpangu"    },
     { LLM_ARCH_MUSE_GLIMMER,    "muse-glimmer" },
+    { LLM_ARCH_LFM2,            "lfm2"         },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -254,6 +255,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SPLIT_COUNT,                   "split.count"         },
     { LLM_KV_SPLIT_TENSORS_COUNT,           "split.tensors.count" },
 
+    { LLM_KV_SHORTCONV_L_CACHE,              "%s.shortconv.l_cache"  },
+
     { LLM_KV_SSM_CONV_KERNEL,               "%s.ssm.conv_kernel"    },
     { LLM_KV_SSM_INNER_SIZE,                "%s.ssm.inner_size"     },
     { LLM_KV_SSM_STATE_SIZE,                "%s.ssm.state_size"     },
@@ -339,6 +342,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_QWEN35:
     case LLM_ARCH_QWEN4EXP:
     case LLM_ARCH_BAILINGMOE3:
+    case LLM_ARCH_LFM2:
         return true;
     default:
         return false;
