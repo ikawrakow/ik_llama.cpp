@@ -54,6 +54,7 @@ struct llama_cparams {
     float thresh_experts;
     bool mtp;
     int  worst_graph_tokens;
+    int  dflash_query_capacity = 0; // internal DFlash query capacity override
 
     enum ggml_type reduce_type;
     enum ggml_type graph_attn_precision;

@@ -59,7 +59,9 @@ static ggml_backend_t llama_backend_for_tensor(const llama_context & lctx, const
 
 bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
     const int32_t target_cross_ctx = std::max<int32_t>(1, cross_ctx);
-    const int32_t target_token_capacity = std::max<int32_t>(1, (int32_t) model.hparams.dflash_block_size);
+    const int32_t target_token_capacity = std::max<int32_t>(
+            std::max<int32_t>(1, (int32_t) model.hparams.dflash_block_size),
+            cparams.dflash_query_capacity);
     const int32_t target_cache_n_kv_total = GGML_PAD(target_cross_ctx + target_token_capacity, (int32_t) llama_kv_cache::get_padding(cparams.flash_attn));
     const ggml_type target_cache_type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
     const int32_t n_layer = model.hparams.n_layer;
@@ -152,6 +154,25 @@ bool llama_context::ensure_dflash_kv_cache_tensors(int32_t cross_ctx) {
     }
 
     llama_reset_dflash_kv_cache_state(this);
+
+    size_t k_bytes = 0;
+    size_t v_bytes = 0;
+    for (size_t i = 0; i < dflash.kv.cache_bufs.size(); ++i) {
+        if (dflash.kv.cache_bufs[i] == nullptr) {
+            continue;
+        }
+        if ((i & 1) == 0) {
+            k_bytes += ggml_backend_buffer_get_size(dflash.kv.cache_bufs[i]);
+        } else {
+            v_bytes += ggml_backend_buffer_get_size(dflash.kv.cache_bufs[i]);
+        }
+    }
+    LLAMA_LOG_INFO("%s: DFlash custom K/V cache bytes = %.2f MiB (K %.2f MiB, V %.2f MiB, cross_ctx %d, query_capacity %d, tail_capacity %d)\n",
+            __func__,
+            (double) (k_bytes + v_bytes) / (1024.0 * 1024.0),
+            (double) k_bytes / (1024.0 * 1024.0),
+            (double) v_bytes / (1024.0 * 1024.0),
+            target_cross_ctx, cparams.dflash_query_capacity, target_token_capacity);
 
     return true;
 }

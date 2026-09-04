@@ -253,7 +253,8 @@ static ggml_tensor * qwen4exp_qsa_mask(
         ggml_tensor       * inp_pos,
         ggml_tensor       * KQ_mask,
         int                 il,
-        const llm_build_cb & cb) {
+        const llm_build_cb & cb,
+        ggml_tensor      ** top_k_out) {
     const llama_hparams  & hparams = bctx.hparams;
     const llama_model    & model   = bctx.model;
     const llama_kv_cache & kv_self = bctx.kv_self;
@@ -396,6 +397,7 @@ static ggml_tensor * qwen4exp_qsa_mask(
         ggml_build_forward_expand(gf, fused);
         ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, fused);
         cb(mask, "qsa_mask", il);
+        *top_k_out = fused;
         return mask;
     }
 
@@ -422,8 +424,80 @@ static ggml_tensor * qwen4exp_qsa_mask(
 
     ggml_tensor * mask = ggml_indexer_mask(ctx0, KQ_mask, top_k);
     cb(mask, "qsa_mask", il);
+    *top_k_out = top_k;
 
     return mask;
+}
+
+static bool qwen4exp_qsa_gather(
+        llm_build_context & bctx,
+        ggml_context      * ctx0,
+        ggml_tensor       * top_k,
+        ggml_tensor       * KQ_mask,
+        int                 il,
+        const llm_build_cb & cb,
+        ggml_tensor      ** k_out,
+        ggml_tensor      ** v_out,
+        ggml_tensor      ** mask_out) {
+    *k_out = *v_out = nullptr;
+
+    const llama_hparams  & hparams = bctx.hparams;
+    const llama_kv_cache & kv_self = bctx.kv_self;
+
+    ggml_tensor * k_cache = kv_self.k_l[il];
+    ggml_tensor * v_cache = kv_self.v_l[il];
+
+    if (bctx.n_tokens != 1 || !bctx.cparams.flash_attn || k_cache->extra || v_cache->extra) {
+        return false;
+    }
+
+    const int32_t n_head_kv     = hparams.n_head_kv(il);
+    const int32_t n_embd_head_k = hparams.n_embd_head_k(il);
+    const int32_t n_embd_head_v = hparams.n_embd_head_v(il);
+    // K cache is [n_embd_head_k, n_head_kv*cells]; one cell is n_head_kv rows
+    const size_t  k_cell = k_cache->nb[1]*n_head_kv;
+    const size_t  v_cell = ggml_row_size(v_cache->type, hparams.n_embd_v_gqa(il));
+
+    const int32_t n_cells = kv_self.rows(il);
+    const int32_t width   = top_k->ne[0];
+    const int32_t n_pad   = GGML_PAD(width, llama_kv_cache::get_padding(bctx.cparams.flash_attn));
+
+    // not worth the extra copy until the cache is a few times the selection width
+    if (3*n_pad > bctx.n_kv) {
+        return false;
+    }
+
+    // pad the indices to the FA granularity; extra entries hit cell 0 and get masked. No I32 PAD, but it only copies
+    ggml_tensor * idx = ggml_reshape_1d(ctx0, top_k, width);
+    if (n_pad != width) {
+        idx = ggml_reshape_4d_ext(ctx0, idx, GGML_TYPE_F32, width, 1, 1, 1);
+        idx = ggml_pad(ctx0, idx, n_pad - width, 0, 0, 0);
+        idx = ggml_reshape_1d(ctx0, ggml_reshape_4d_ext(ctx0, idx, GGML_TYPE_I32, n_pad, 1, 1, 1), n_pad);
+    }
+
+    ggml_tensor * k = ggml_reshape_4d_ext(ctx0, k_cache, GGML_TYPE_F32, k_cell/sizeof(float), n_cells, 1, 1);
+    k = ggml_get_rows(ctx0, k, idx);
+    k = ggml_reshape_4d_ext(ctx0, k, k_cache->type, n_embd_head_k, n_head_kv, n_pad, 1);
+    *k_out = ggml_view_3d(ctx0, k, n_embd_head_k, n_pad, n_head_kv, k->nb[2], k->nb[1], 0);
+    cb(*k_out, "qsa_k_sel", il);
+
+    ggml_tensor * v = ggml_reshape_4d_ext(ctx0, v_cache, GGML_TYPE_F32, v_cell/sizeof(float), n_cells, 1, 1);
+    v = ggml_get_rows(ctx0, v, idx);
+    v = ggml_reshape_4d_ext(ctx0, v, v_cache->type, n_embd_head_v, n_head_kv, n_pad, 1);
+    *v_out = ggml_view_3d(ctx0, v, n_embd_head_v, n_pad, n_head_kv, v->nb[2], v->nb[1], 0);
+    cb(*v_out, "qsa_v_sel", il);
+
+    // gather the mask too: a selected cell can belong to another sequence or lie past its end
+    ggml_tensor * m = ggml_view_2d(ctx0, KQ_mask, 1, bctx.n_kv, ggml_element_size(KQ_mask), 0);
+    m = ggml_get_rows(ctx0, m, ggml_reshape_1d(ctx0, top_k, width));
+    ggml_tensor * tail = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_pad*KQ_mask->ne[1] - width);
+    tail = ggml_fill_inplace(ctx0, tail, -INFINITY);
+    m = ggml_concat(ctx0, ggml_reshape_1d(ctx0, m, width), tail, 0);
+    m = ggml_cast(ctx0, m, GGML_TYPE_F16);
+    *mask_out = ggml_reshape_2d(ctx0, m, n_pad, KQ_mask->ne[1]);
+    cb(*mask_out, "qsa_mask_sel", il);
+
+    return true;
 }
 
 ggml_cgraph * llm_build_context::build_qwen4exp() {
@@ -530,13 +604,20 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
         } else {
             // the indexer reads the same block input as q/k/v, and returns the causal mask
             // itself when the layer carries no compression ratio
+            ggml_tensor * top_k = nullptr;
             ggml_tensor * mask = hparams.is_qsa(il)
-                ? qwen4exp_qsa_mask(*this, ctx0, lctx, gf, cur, inp_pos, KQ_mask, il, cb)
+                ? qwen4exp_qsa_mask(*this, ctx0, lctx, gf, cur, inp_pos, KQ_mask, il, cb, &top_k)
                 : KQ_mask;
+
+            ggml_tensor * k_sel = nullptr;
+            ggml_tensor * v_sel = nullptr;
+            const bool gathered = top_k &&
+                qwen4exp_qsa_gather(*this, ctx0, top_k, KQ_mask, il, cb, &k_sel, &v_sel, &mask);
 
             cur = build_std_attention(gf, nullptr, cur, inp_pos, nullptr, nullptr,
                     mask, nullptr, nullptr, KQ_scale, 0.0f, 0, il, true, false,
-                    /* add_input */ false, /* is_norm */ false, /* is_multi */ true);
+                    /* add_input */ false, /* is_norm */ false, /* is_multi */ true,
+                    nullptr, -1, 0.0f, nullptr, gathered ? &k_sel : nullptr, gathered ? &v_sel : nullptr);
         }
 
         res_hc = qwen4exp_hc_combine(ctx0, hparams, res_hc, cur, inject, n_embd, il, cb);

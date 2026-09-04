@@ -518,6 +518,7 @@ extern "C" {
         void *              abort_callback_data;
         void *              offload_policy;
         void *              cuda_params;
+        int32_t             dflash_query_capacity; // internal DFlash query capacity override
     };
 
     // model quantization parameters
