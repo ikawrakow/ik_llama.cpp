@@ -8923,6 +8923,39 @@ struct llama_context * llama_init_from_model(
         }
         ctx->backends.push_back(ctx->backend_cpu);
 
+        // Fused up-gate nodes are emitted into the graph whenever the option is
+        // enabled, but not every backend implements GGML_OP_FUSED_UP_GATE (e.g. the
+        // Metal backend does not). The scheduler silently assigns those nodes to the
+        // CPU backend, forcing a device<->host round trip on every FFN layer when the
+        // rest of the graph is offloaded. Probe the offload backends and fall back to
+        // the decomposed ops (MUL_MAT + FUSED_MUL_UNARY) up front instead.
+        if (cparams.fused_up_gate) {
+            struct ggml_init_params probe_init = {
+                /*.mem_size   =*/ 8*ggml_tensor_overhead(),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            ggml_context * probe_ctx = ggml_init(probe_init);
+            ggml_tensor * up    = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_Q4_0, 256, 16);
+            ggml_tensor * gate  = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_Q4_0, 256, 16);
+            ggml_tensor * b     = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_F32,  256, 1);
+            ggml_tensor * probe = ggml_fused_up_gate(probe_ctx, up, gate, b, GGML_UNARY_OP_SILU);
+            GGML_ASSERT(probe->op == GGML_OP_FUSED_UP_GATE);
+            for (auto * backend : ctx->backends) {
+                if (backend == ctx->backend_cpu) {
+                    continue;
+                }
+                if (!ggml_backend_supports_op(backend, probe)) {
+                    LLAMA_LOG_WARN("%s: backend %s does not implement %s - disabling fused up-gate "
+                            "(decomposing into mul_mat + fused_mul_unary)\n",
+                            __func__, ggml_backend_name(backend), ggml_op_name(probe->op));
+                    cparams.fused_up_gate = false;
+                    break;
+                }
+            }
+            ggml_free(probe_ctx);
+        }
+
         if (!llama_kv_cache_init(ctx->kv_self, ctx, type_k, type_v, params.idx_type_k, kv_size, cparams.offload_kqv,
                     params.type_k_first, params.type_k_last, params.type_v_first, params.type_v_last,
                     params.n_k_first, params.n_k_last, params.n_v_first, params.n_v_last)) {
