@@ -2648,6 +2648,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.endpoint_metrics = true;
         return true;
     }
+    if (arg == "--sleep-idle-seconds") {
+        CHECK_ARG
+        params.sleep_idle_seconds = std::stoi(argv[i]);
+        if (params.sleep_idle_seconds == 0 || params.sleep_idle_seconds < -1) {
+            fprintf(stderr, "error: invalid value for --sleep-idle-seconds: %s (must be >0 or -1 to disable)\n", argv[i]);
+            invalid_param = true;
+            return true;
+        }
+        return true;
+    }
     if (arg == "--slot-save-path") {
         CHECK_ARG
         params.slot_save_path = argv[i];

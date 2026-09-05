@@ -1135,6 +1135,9 @@ int main(int argc, char ** argv) {
         oaicompat_type oaicompat) -> void {
             GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
+            // if server is sleeping, wake up and reload model
+            ctx_server.queue_tasks.wait_until_no_sleep();
+
             const auto completion_id = gen_chatcmplid();
             // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
             // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
@@ -2262,6 +2265,9 @@ int main(int argc, char ** argv) {
         &server_context::on_finish_multitask, &ctx_server, std::placeholders::_1));
     ctx_server.queue_tasks.on_update_slots(std::bind(
         &server_context::update_slots, &ctx_server));
+    ctx_server.queue_tasks.on_sleeping_state([&ctx_server](bool sleeping) {
+        ctx_server.handle_sleeping_state(sleeping);
+    });
     ctx_server.queue_results.on_multitask_update(std::bind(
         &server_queue::update_multitask,
         &ctx_server.queue_tasks,
@@ -2288,7 +2294,7 @@ int main(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
-    ctx_server.queue_tasks.start_loop();
+    ctx_server.queue_tasks.start_loop(ctx_server.params_base.sleep_idle_seconds * 1000);
 
     svr->stop();
     t.join();

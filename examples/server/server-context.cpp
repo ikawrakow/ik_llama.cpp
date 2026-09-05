@@ -172,10 +172,18 @@ static common_speculative_stage_params server_parse_speculative_stage_json(const
 }
 
 server_context::~server_context() {
-    // Speculative state may reference the live target context during teardown.
+    if (!sleeping) {
+        // destroy() is already called when entering sleeping state
+        // we don't call it again here to avoid double free
+        destroy();
+    }
+}
+
+void server_context::destroy() {
     for (server_slot& slot : slots) {
         if (slot.ctx_sampling != nullptr) {
             common_sampler_free(slot.ctx_sampling);
+            slot.ctx_sampling = nullptr;
         }
         common_speculative_free(slot.spec);
         slot.spec = nullptr;
@@ -190,10 +198,26 @@ server_context::~server_context() {
         llama_free_model(model);
         model = nullptr;
     }
-    // Free multimodal
     mtmd_free(mctx);
+    mctx = nullptr;
     params_base.speculative.clear_dft();
     llama_batch_free(batch);
+    batch = {};
+}
+
+void server_context::handle_sleeping_state(bool new_state) {
+    GGML_ASSERT(sleeping != new_state);
+    if (new_state) {
+        SRV_INF("%s", "server is entering sleeping state\n");
+        destroy();
+    } else {
+        SRV_INF("%s", "server is exiting sleeping state\n");
+        if (!load_model(params_base)) {
+            GGML_ABORT("failed to reload model after sleeping");
+        }
+        init();
+    }
+    sleeping = new_state;
 }
 
 bool server_context::load_model(const gpt_params& params_) {
@@ -273,6 +297,8 @@ bool server_context::load_model(const gpt_params& params_) {
 
 void server_context::init() {
     const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
+
+    slots.clear();
 
     if (!system_prompt.empty() &&
         (llama_model_is_deepseek4(model) || llama_model_is_openpangu(model))) {

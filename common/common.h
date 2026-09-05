@@ -326,6 +326,7 @@ struct gpt_params {
     int32_t sweep_stride          =       1;
     bool    sweep_memory          =   false;
     bool    sweep_bench           =   false;
+    int32_t sleep_idle_seconds    =      -1; // if >0, server will sleep after this many seconds of idle time (-1 = disabled)
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
