@@ -26,6 +26,9 @@ int server_queue::post(server_task task) {
     }
     queue_tasks.push_back(std::move(task));
     time_last_task = ggml_time_ms();
+    if (sleeping && !req_stop_sleeping) {
+        req_stop_sleeping = true;
+    }
     condition_tasks.notify_one();
     return task.id;
 }
@@ -63,6 +66,9 @@ int server_queue::post(std::vector<server_task>&& tasks, bool front) {
         }
     }
     time_last_task = ggml_time_ms();
+    if (sleeping && !req_stop_sleeping) {
+        req_stop_sleeping = true;
+    }
     condition_tasks.notify_one();
     return 0;
 }

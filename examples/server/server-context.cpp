@@ -189,6 +189,10 @@ void server_context::destroy() {
         slot.spec = nullptr;
     }
 
+    if (prompt_cache) {
+        prompt_cache.reset();
+    }
+
     if (ctx) {
         llama_free(ctx);
         ctx = nullptr;

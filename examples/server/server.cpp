@@ -764,6 +764,22 @@ int main(int argc, char ** argv) {
         switch (current_state) {
             case SERVER_STATE_READY:
                 {
+                    if (ctx_server.queue_tasks.is_sleeping()) {
+                        json health = {
+                            {"status",           "ok"},
+                            {"sleeping",         true},
+                            {"slots_idle",       params.n_parallel},
+                            {"slots_processing", 0}
+                        };
+
+                        res.status = 200; // HTTP OK
+                        if (params.endpoint_slots && req.has_param("include_slots")) {
+                            health["slots"] = json::array();
+                        }
+                        res.set_content(health.dump(), "application/json");
+                        break;
+                    }
+
                     // request slots data using task queue
                     server_task task;
                     task.id   = ctx_server.queue_tasks.get_new_id();
@@ -837,6 +853,8 @@ int main(int argc, char ** argv) {
             return;
         }
 
+        ctx_server.queue_tasks.wait_until_no_sleep();
+
         // request slots data using task queue
         server_task task;
         task.id = ctx_server.queue_tasks.get_new_id();
@@ -861,22 +879,42 @@ int main(int argc, char ** argv) {
             return;
         }
 
-        // request slots data using task queue
-        server_task task;
-        task.id = ctx_server.queue_tasks.get_new_id();
-        task.id_multi  = -1;
-        task.id_target = -1;
-        task.type = SERVER_TASK_TYPE_METRICS;
-        task.data.push_back({{"reset_bucket", true}});
+        json data;
+        if (ctx_server.queue_tasks.is_sleeping()) {
+            data = {
+                { "idle",                            params.n_parallel },
+                { "processing",                      0 },
+                { "deferred",                        0 },
+                { "t_start",                         ctx_server.metrics.t_start },
+                { "n_prompt_tokens_processed_total", ctx_server.metrics.n_prompt_tokens_processed_total },
+                { "t_tokens_generation_total",       ctx_server.metrics.t_tokens_generation_total },
+                { "n_tokens_predicted_total",        ctx_server.metrics.n_tokens_predicted_total },
+                { "t_prompt_processing_total",       ctx_server.metrics.t_prompt_processing_total },
+                { "n_prompt_tokens_processed",       0 },
+                { "t_prompt_processing",             0 },
+                { "n_tokens_predicted",              0 },
+                { "t_tokens_generation",             0 },
+                { "kv_cache_tokens_count",           0 },
+                { "kv_cache_used_cells",             0 },
+            };
+        } else {
+            // request slots data using task queue
+            server_task task;
+            task.id = ctx_server.queue_tasks.get_new_id();
+            task.id_multi  = -1;
+            task.id_target = -1;
+            task.type = SERVER_TASK_TYPE_METRICS;
+            task.data.push_back({{"reset_bucket", true}});
 
-        ctx_server.queue_results.add_waiting_task_id(task.id);
-        ctx_server.queue_tasks.post(std::move(task));
+            ctx_server.queue_results.add_waiting_task_id(task.id);
+            ctx_server.queue_tasks.post(std::move(task));
 
-        // get the result
-        server_task_result result = ctx_server.queue_results.recv(task.id);
-        ctx_server.queue_results.remove_waiting_task_id(task.id);
+            // get the result
+            server_task_result result = ctx_server.queue_results.recv(task.id);
+            ctx_server.queue_results.remove_waiting_task_id(task.id);
 
-        json data = result.data;
+            data = result.data;
+        }
 
         const uint64_t n_prompt_tokens_processed = data.at("n_prompt_tokens_processed");
         const uint64_t t_prompt_processing       = data.at("t_prompt_processing");
@@ -1036,7 +1074,8 @@ int main(int argc, char ** argv) {
         }
     };
 
-    const auto handle_slots_action = [&handle_slots_save, &handle_slots_restore, &handle_slots_erase](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_slots_action = [&handle_slots_save, &handle_slots_restore, &handle_slots_erase, &ctx_server](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         std::string id_slot_str = req.path_params.at("id_slot");
         int id_slot;
 
@@ -1061,6 +1100,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_props = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         std::string template_key = "tokenizer.chat_template", curr_tmpl;
         int32_t tlen = llama_model_meta_val_str(ctx_server.model, template_key.c_str(), nullptr, 0);
         if (tlen > 0) {
@@ -1102,6 +1142,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_props_simple = [&ctx_server](const httplib::Request& req, httplib::Response& res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         int n_past = 0;
         int slot_id = 0;
@@ -1444,6 +1485,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_anthropic_count_tokens = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         std::vector<raw_buffer> files;
         log_prompt(ctx_server.params_base, json::parse(req.body));
         json body = server_chat_convert_anthropic_to_oai(json::parse(req.body));
@@ -1461,6 +1503,7 @@ int main(int argc, char ** argv) {
 
     // same with handle_chat_completions, but without inference part
     const auto handle_apply_template = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         log_prompt(ctx_server.params_base, json::parse(req.body));
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files; // dummy, unused
@@ -1487,6 +1530,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_tokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         const json body = json::parse(req.body);
 
         std::vector<llama_token> tokens;
@@ -1499,6 +1543,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_detokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         const json body = json::parse(req.body);
 
         std::string content;
@@ -1516,6 +1561,8 @@ int main(int argc, char ** argv) {
             res_err(res, format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
+
+        ctx_server.queue_tasks.wait_until_no_sleep();
 
         if (oaicompat != OAICOMPAT_TYPE_NONE && llama_pooling_type(ctx_server.ctx) == LLAMA_POOLING_TYPE_NONE) {
             res_err(res, format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
@@ -1627,6 +1674,7 @@ int main(int argc, char ** argv) {
 
 
     const auto handle_lora_adapters_list = [&](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         json result = json::array();
         for (size_t i = 0; i < ctx_server.lora_adapters.size(); ++i) {
             auto & la = ctx_server.lora_adapters[i];
@@ -1642,6 +1690,7 @@ int main(int argc, char ** argv) {
 
 
     const auto handle_lora_adapters_apply = [&](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         log_prompt(ctx_server.params_base, json::parse(req.body));
         const std::vector<json> body = json::parse(req.body);
         int max_idx = ctx_server.lora_adapters.size();
@@ -1676,6 +1725,7 @@ int main(int argc, char ** argv) {
 
     // Control vector handlers
     const auto handle_control_vectors_list = [&](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         json result = json::array();
         for (size_t i = 0; i < ctx_server.control_vectors.size(); ++i) {
             auto & cv = ctx_server.control_vectors[i];
@@ -1693,6 +1743,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_control_vectors_load = [&](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         const json body = json::parse(req.body);
 
         server_task task;
@@ -1710,6 +1761,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_control_vectors_unload = [&](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         const json body = json::parse(req.body);
 
         server_task task;
@@ -1727,6 +1779,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_control_vectors_apply = [&](const httplib::Request & req, httplib::Response & res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         const std::vector<json> body = json::parse(req.body);
         int max_idx = ctx_server.control_vectors.size();
 
@@ -1770,6 +1823,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         json response = json::array();
 
         try {
@@ -1829,6 +1883,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
+        ctx_server.queue_tasks.wait_until_no_sleep();
         json response = json::array();
         for (server_slot & slot : ctx_server.slots) {
             response.push_back({
