@@ -2582,7 +2582,10 @@ size_t llama_model::cache_size(int il, ggml_type type_k, ggml_type type_v, ggml_
     if (il < 0 || il >= hparams.n_layer) return 0;
     if (hparams.recurrent_layer_arr[il]) {
         auto state_sots = std::min<uint32_t>(std::max<uint32_t>(1, n_seq_max), kv_size);
-        return (hparams.n_embd_v_s() + hparams.n_embd_ple_conv(il)) * (size_t) state_sots * sizeof(float);
+        const size_t state_width = hparams.ssm_n_group > 0
+            ? hparams.recurrent_state_layout_for((uint32_t) il).row_width
+            : hparams.n_embd_v_s() + hparams.n_embd_ple_conv((uint32_t) il);
+        return state_width * (size_t) state_sots * sizeof(float);
     }
     if (arch == LLM_ARCH_OPENPANGU) {
         // MLA-latent cache: K row [ckv | roped k_pe]. The value-side latent is

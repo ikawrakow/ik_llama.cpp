@@ -415,6 +415,31 @@ struct llama_hparams {
         return ple_conv_kernel > 0 ? (ple_conv_kernel - 1) * ple_ngram_size : 0;
     }
 
+    struct recurrent_state_layout {
+        uint32_t conv_width;
+        uint32_t conv_feature_width;
+        uint32_t ssm_width;
+        uint32_t ple_offset;
+        uint32_t ple_width;
+        uint32_t row_width;
+        bool has_ple;
+    };
+
+    recurrent_state_layout recurrent_state_layout_for(uint32_t il) const {
+        const auto [conv_dim, ssm_width] = n_embd_v_s_dims(ssm_dt_rank);
+        const uint32_t conv_width = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * conv_dim;
+        const uint32_t ple_width = n_embd_ple_conv(il);
+        return {
+            conv_width,
+            conv_dim,
+            ssm_width,
+            conv_width + ssm_width,
+            ple_width,
+            conv_width + ssm_width + ple_width,
+            ple_width > 0,
+        };
+    }
+
     static bool is_float_close(float a, float b, float abs_tol) {
         // Check for non-negative tolerance
         if (abs_tol < 0.0) {

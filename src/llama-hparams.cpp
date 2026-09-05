@@ -679,9 +679,10 @@ void llm_load_hparams(
                         std::vector<uint32_t> ple_layers;
                         ml.get_arr(ml.llm_kv(LLM_KV_PLE_LAYERS), ple_layers);
                         for (uint32_t il : ple_layers) {
-                            if (il < hparams.n_layer) {
-                                hparams.ple_layer_arr[il] = true;
+                            if (il >= hparams.n_layer) {
+                                throw std::runtime_error(format("qwen4exp: PLE layer index %u is outside block count %u", il, hparams.n_layer));
                             }
+                            hparams.ple_layer_arr[il] = true;
                         }
                         ml.get_key(LLM_KV_PLE_NGRAM_SIZE,      hparams.ple_ngram_size);
                         ml.get_key(LLM_KV_PLE_HEADS_PER_NGRAM, hparams.ple_heads_per_ngram);
