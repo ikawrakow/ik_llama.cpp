@@ -8,6 +8,7 @@
 
 #include "ggml-backend.h"
 
+#include <algorithm>
 #include <vector>
 #include <unordered_map>
 #include <set>
@@ -139,6 +140,12 @@ struct llama_layer_nextn {
     struct ggml_tensor * hnorm            = nullptr;
     struct ggml_tensor * shared_head_head = nullptr;
     struct ggml_tensor * shared_head_norm = nullptr;
+
+    // qwen4exp: the NextN head's final hyper-connection mixer. For merged
+    // community files these are resolved to shared_head_norm + the trunk mixer.
+    struct ggml_tensor * hc_head_norm      = nullptr;
+    struct ggml_tensor * hc_head_down      = nullptr;
+    struct ggml_tensor * hc_head_up        = nullptr;
 };
 
 // TODO: separate into "llama_layer_enc" and "llama_layer_dec"
@@ -641,8 +648,29 @@ struct llama_model {
 
     // a compacted sliding-window cache needs the graph to build its KQ mask over the compacted
     // layout, and the compacted mask keys on position alone, so it requires a single sequence
+    bool supports_dflash_swa_compress() const {
+        if (!llm_arch_is_dflash_family(arch) || hparams.n_swa == 0 || hparams.n_layer == 0) {
+            return false;
+        }
+        for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+            if (!hparams.swa_layers[il]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int32_t dflash_swa_compress_cross_ctx(int32_t logical_cross_ctx, bool enabled) const {
+        const int32_t safe_cross_ctx = std::max<int32_t>(1, logical_cross_ctx);
+        return enabled && supports_dflash_swa_compress()
+                ? std::min<int32_t>(safe_cross_ctx, (int32_t) hparams.n_swa)
+                : safe_cross_ctx;
+    }
+
     bool supports_swa_compress() const {
-        return arch == LLM_ARCH_OPENPANGU || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_LAGUNA;
+        return arch == LLM_ARCH_OPENPANGU || arch == LLM_ARCH_DEEPSEEK4
+            || arch == LLM_ARCH_LAGUNA    || arch == LLM_ARCH_GEMMA4
+            || supports_dflash_swa_compress() ;
     }
 
     static inline int hadamard_size(int head_size) {

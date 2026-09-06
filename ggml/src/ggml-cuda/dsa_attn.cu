@@ -296,7 +296,9 @@ bool ggml_cuda_dsa_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     ggml_cuda_pool_alloc<half> v16(ctx.pool());
     size_t v_offset = 0;
     if (is_k_view) {
-        v_offset = (const half *)V->data - (const half *)K->data;
+        // Using /sizeof(half) is only correct for f16 K/V, for a quantized cache(i.e. q8_0) it yields the wrong column
+        const size_t v_byte_off = (const char *)V->data - (const char *)K->data;
+        v_offset = v_byte_off / ggml_type_size(K->type) * ggml_blck_size(K->type);
     } else {
         v16.alloc(v_cache_size);
     }

@@ -3075,7 +3075,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         ggml_tensor * input, ggml_tensor * inp_pos, ggml_tensor * inp_out_ids, ggml_tensor * rope_factors_in,
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
         int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm, bool is_multi,
-        ggml_tensor * post_norm, int kv_il, float post_norm_eps, post_norm_data * pnd) {
+        ggml_tensor * post_norm, int kv_il, float post_norm_eps, post_norm_data * pnd,
+        ggml_tensor ** k_view, ggml_tensor ** v_view) {
 
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
@@ -3463,7 +3464,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                 nullptr, nullptr,
                 Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
-                nullptr, nullptr, swa_head);
+                k_view, v_view, swa_head);
         cb(cur, "wqkv", il);
         auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed);
         if (model.arch == LLM_ARCH_LAGUNA) {
@@ -3505,7 +3506,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         if (gate) {
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, nullptr, nullptr,
                     Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
-                    nullptr, nullptr, swa_head);
+                    k_view, v_view, swa_head);
             if (false && cur->ne[1] == 1) { // we need to add GGML_UNARY_OP_SIGMOID to the ops supported by ggml_fused_mul_unary
                 cur = ggml_fused_mul_unary(ctx0, cur, gate, GGML_UNARY_OP_SIGMOID);
             } else {
@@ -3523,7 +3524,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                     model.layers[il].wo, model.layers[il].bo,
                     Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa, kv_il,
-                    nullptr, nullptr, swa_head);
+                    k_view, v_view, swa_head);
         }
     }
 

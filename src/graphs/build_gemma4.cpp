@@ -169,6 +169,9 @@ static ggml_cgraph * build_gemma4_graph_parallel(llm_build_context & llm, llama_
     int n_device = model.splits.size();
     GGML_ASSERT(n_device > 1);
     GGML_ASSERT(cparams.flash_attn);
+    // llama_kv_cache_init() refuses --swa-compress with a split/replicated cache, so this
+    // builder never sees a compacted cache and does not handle the compacted layout.
+    GGML_ASSERT(!kv_self.any_compacted());
     ggml_cgraph * gf = llm.new_graph_custom();
 
     bool is_moe = hparams.n_expert > 0;
@@ -572,6 +575,10 @@ ggml_cgraph * llm_build_context::build_gemma4_mtp() {
     const llama_kv_cache & target_kv     = lctx.mtp_target_ctx->kv_self;
 
     GGML_ASSERT(n_tokens <= target_kv.n);
+    // llama_new_context_with_model() refuses MTP together with --swa-compress for every arch
+    // except deepseek4, so the target cache here is never compacted and this builder addresses
+    // it by absolute cell index (target_kv.head / target_kv.n) throughout.
+    GGML_ASSERT(!target_kv.any_compacted());
 
     ggml_tensor * inp_pos = build_inp_pos();
 
@@ -914,7 +921,11 @@ ggml_cgraph * llm_build_context::build_gemma4() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     // gemma3 requires different mask for layers using sliding window (SWA)
     struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true);
-    struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true);
+    // With --swa-compress the sliding-window layers are allocated at window size, so their mask
+    // has to be built over the compacted layout rather than over n_ctx rows.
+    struct ggml_tensor * KQ_mask_swa = kv_self.any_compacted()
+        ? build_swa_mask_for_graph(hparams.n_swa, true)
+        : build_inp_KQ_mask_swa(true);
 
     auto inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
 
@@ -1011,8 +1022,11 @@ ggml_cgraph * llm_build_context::build_gemma4() {
                         ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(Kcur, "Kcur_rope", il);
             }
+            // swa_head is the store head for a compacted layer; build_std_attention passes it on the
+            // path above, so the shared-KV / no-wv path here has to pass it too.
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo,
-                Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa);
+                Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, hparams.f_attention_scale, cb, il, nullptr, n_swa,
+                -1, nullptr, nullptr, swa_head);
 
 
             if (il == n_layer - 1 && inp_out_ids) {

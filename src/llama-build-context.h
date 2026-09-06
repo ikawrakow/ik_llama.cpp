@@ -614,7 +614,7 @@ llm_expert_gating_func_type   gating_op,
             ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
             bool is_multi = false, ggml_tensor * post_norm = nullptr, int kv_il = -1, float post_norm_eps = 0.0f,
-            post_norm_data * pnd = nullptr);
+            post_norm_data * pnd = nullptr, ggml_tensor ** k_view = nullptr, ggml_tensor ** v_view = nullptr);
 
     static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, const llm_build_cb & cb);
 
