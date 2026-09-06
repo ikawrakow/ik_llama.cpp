@@ -676,13 +676,8 @@ struct llama_context {
     // pool every block; set on state restore and defrag, cleared by that graph's host fill
     bool qsa_pooled_stale = false;
 
-    // each sequence's recent tokens, read by the n-gram hash when a ubatch does not carry its
-    // first tokens' predecessors; trusted only while contiguous with the incoming position
-    struct ple_history {
-        llama_pos next_pos = -1;
-        std::vector<llama_token> toks;
-    };
-    std::map<llama_seq_id, ple_history> ple_hist;
+    // token at each position of a sequence, read by the PLE n-gram hash
+    std::map<llama_seq_id, std::vector<llama_token>> ple_hist;
 
     struct swa_window_view_state {
         bool active       = false;
