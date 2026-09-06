@@ -214,35 +214,10 @@ static void ggml_print_backtrace_symbols(void) {
 #endif
 
 static void ggml_print_backtrace(void) {
-    char attach[32];
-    snprintf(attach, sizeof(attach), "attach %d", getpid());
-    int pid = fork();
-    if (pid == 0) {
-        // try gdb
-        execlp("gdb", "gdb", "--batch",
-            "-ex", "set style enabled on",
-            "-ex", attach,
-            "-ex", "bt -frame-info source-and-location",
-            "-ex", "detach",
-            "-ex", "quit",
-            (char *) NULL);
-        // try lldb
-        execlp("lldb", "lldb", "--batch",
-            "-o", "bt",
-            "-o", "quit",
-            "-p", attach,
-            (char *) NULL);
-        exit(EXIT_FAILURE);
-    } else {
-        int wstatus;
-        waitpid(pid, &wstatus, 0);
-        if (WIFEXITED(wstatus)) {
-            if (WEXITSTATUS(wstatus) == EXIT_FAILURE) {
-                // gdb failed, fallback to backtrace_symbols
-                ggml_print_backtrace_symbols();
-            }
-        }
-    }
+    // No debugger invocation at all: fork() is not safe with a live CUDA
+    // context (observed in production: the child wedges pre-exec and the
+    // parent blocks in waitpid forever, holding port+VRAM). Plain symbols.
+    ggml_print_backtrace_symbols();
 }
 #else
 static void ggml_print_backtrace(void) {
