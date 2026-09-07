@@ -4467,9 +4467,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MASK_TO_IDX",
     "LATENT_ATTN",
     "DS4_COMP",
+    "EXP_CACHE_CLASSIFY",
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4596,10 +4597,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "mask_to_idx(masl)",
     "latent_attn_prefix(q,c,pk,pv,mask)",
     "ds4_comp(state, score, idx)",
+    "exp_cache_classify(ids,remap,pending)",
 
 };
 
-static_assert(GGML_OP_COUNT == 111, "GGML_OP_COUNT != 111");
+static_assert(GGML_OP_COUNT == 112, "GGML_OP_COUNT != 112");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -8083,6 +8085,35 @@ struct ggml_tensor * ggml_mul_mat_id(
     result->src[0] = as;
     result->src[1] = b;
     result->src[2] = ids;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_exp_cache_classify(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * remap,
+        struct ggml_tensor  * pending,
+        struct ggml_tensor  * staging,
+        int32_t               component,
+        int32_t               trash_slot) {
+    GGML_ASSERT(ids->type == GGML_TYPE_I32 && ids->ne[2] == 1 && ids->ne[3] == 1);
+    GGML_ASSERT(remap->type == GGML_TYPE_I32 && remap->ne[1] == 1 && remap->ne[2] == 1 && remap->ne[3] == 1);
+    GGML_ASSERT(pending->type == GGML_TYPE_I32 && pending->ne[0] == 2 && pending->ne[1] == 1);
+    GGML_ASSERT(!staging || (staging->type == GGML_TYPE_I32 && staging->ne[0] >= 64 && ggml_is_contiguous(staging)));
+    GGML_ASSERT(component >= 0 && component <= 2);
+
+    const int64_t ne[4] = { ids->ne[0], ids->ne[1], 1, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, component == 1 ? GGML_TYPE_F32 : GGML_TYPE_I32, 4, ne);
+
+    result->op     = GGML_OP_EXP_CACHE_CLASSIFY;
+    result->src[0] = ids;
+    result->src[1] = remap;
+    result->src[2] = pending;
+    result->src[3] = staging;
+
+    ggml_set_op_params_i32(result, 0, component);
+    ggml_set_op_params_i32(result, 1, trash_slot);
 
     return result;
 }
@@ -18523,7 +18554,94 @@ IQK_MulMat_Not_Available:;
 #undef MMID_MATRIX_ROW
 }
 
+// Phase 4 expert cache (M3e): scalar reference of the device classify.
+// Must stay bit-identical to the CUDA kernel (ggml-cuda/exp-cache-classify.cu)
+// and to the host classify in llama.cpp (llama_expert_cache_classify_host).
+// staging layout: [c*EXP_CACHE_STAGE_KMAX + j]; TG shapes only (k,ntok <= 8).
+#define EXP_CACHE_STAGE_KMAX 8
+static void ggml_compute_forward_exp_cache_classify(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+    if (params->ith != 0) {
+        return; // trivially serial at TG shape (k <= 8, ntok <= 8)
+    }
+
+    const struct ggml_tensor * ids     = dst->src[0];
+    const struct ggml_tensor * remap   = dst->src[1];
+    const struct ggml_tensor * pending = dst->src[2];
+
+    GGML_ASSERT(ids->type == GGML_TYPE_I32 && ids->nb[0] == (int64_t) sizeof(int32_t));
+    GGML_ASSERT(remap->type == GGML_TYPE_I32 && ggml_is_contiguous(remap));
+    GGML_ASSERT(pending->type == GGML_TYPE_I32 && pending->ne[0] == 2 && ggml_is_contiguous(pending));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    const int32_t component  = ggml_get_op_params_i32(dst, 0);
+    const int32_t trash_slot = ggml_get_op_params_i32(dst, 1);
+
+    const int64_t k        = ids->ne[0];
+    const int64_t ntok     = ids->ne[1];
+    const int32_t n_expert = (int32_t) remap->ne[0];
+
+    const uint32_t * pending32 = (const uint32_t *) pending->data;
+    const uint64_t  pend = (uint64_t) pending32[0] | ((uint64_t) pending32[1] << 32);
+
+    const int32_t * remap_d = (const int32_t *) remap->data;
+
+    // side effect (cold_ids node only): stage the raw routed ids for the step
+    // boundary's sim/admission readback. The dst output is arena-allocated and
+    // may be reused before the boundary runs; the staging buffer is persistent.
+    struct ggml_tensor * staging = dst->src[3];
+    if (staging && component == 2 && k <= EXP_CACHE_STAGE_KMAX && ntok <= EXP_CACHE_STAGE_KMAX) {
+        int32_t * st = (int32_t *) staging->data;
+        for (int64_t c = 0; c < ntok; c++) {
+            const int32_t * ids_c = (const int32_t *) ((const char *) ids->data + (size_t) c*ids->nb[1]);
+            for (int64_t j = 0; j < k; j++) {
+                st[c*EXP_CACHE_STAGE_KMAX + j] = ids_c[j];
+            }
+        }
+    }
+
+    for (int64_t c = 0; c < ntok; c++) {
+        const int32_t * ids_c = (const int32_t *) ((const char *) ids->data + (size_t) c*ids->nb[1]);
+        uint64_t used = 0; // slot bitmask (H+1 <= 64 slots; pending's uint64 domain)
+        for (int64_t j = 0; j < k; j++) {
+            const int32_t id   = ids_c[j];
+            const int32_t slot = (id >= 0 && id < n_expert) ? remap_d[id] : -1;
+            if (slot >= 0 && slot < 64) {
+                used |= (1ull << slot);
+            }
+        }
+        for (int64_t j = 0; j < k; j++) {
+            const int32_t id   = ids_c[j];
+            const int32_t slot = (id >= 0 && id < n_expert) ? remap_d[id] : -1;
+            const bool    hit  = slot >= 0;
+            int32_t       h    = hit ? slot : -1;
+            if (!hit) {
+                // misses get distinct free slots per token; pending slots
+                // (mid-overwrite by a promotion copy) are excluded
+                int32_t free_slot = trash_slot;
+                for (int32_t s = 0; s <= trash_slot && s < 64; s++) {
+                    if (!(used & (1ull << s)) && !(pend & (1ull << s))) { free_slot = s; break; }
+                }
+                if (free_slot < 64) {
+                    used |= (1ull << free_slot);
+                }
+                h = free_slot;
+            }
+            char * dst_e = (char *) dst->data + (size_t) (c*k + j)*4;
+            if (component == 1) {
+                *(float *)   dst_e = hit ? 1.0f : 0.0f;
+            } else if (component == 0) {
+                *(int32_t *) dst_e = h;
+            } else {
+                *(int32_t *) dst_e = hit ? -1 : id;
+            }
+        }
+    }
+}
+
 #if GGML_USE_IQK_MULMAT
+
 static void ggml_compute_forward_mul_mat_id_up_gate(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -26930,6 +27048,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     ggml_compute_forward_ds4_comp_type1(params, tensor);
                 }
             } break;
+        case GGML_OP_EXP_CACHE_CLASSIFY:
+            {
+                ggml_compute_forward_exp_cache_classify(params, tensor);
+            } break;
         case GGML_OP_INDEXER_TOPK:
             {
                 if (!iqk_indexer_topk(tensor, params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, params->ith, params->nth)) {
@@ -28010,6 +28132,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_MASK_TO_IDX:
         case GGML_OP_LATENT_ATTN:
         case GGML_OP_DS4_COMP:
+        case GGML_OP_EXP_CACHE_CLASSIFY:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -28763,6 +28886,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_DS4_COMP:
             {
                 n_tasks = n_threads;
+            } break;
+        case GGML_OP_EXP_CACHE_CLASSIFY:
+            {
+                n_tasks = 1; // trivially serial integer op
             } break;
         case GGML_OP_GET_ROWS:
         case GGML_OP_SET_ROWS:

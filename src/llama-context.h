@@ -409,6 +409,19 @@ struct llama_context {
         ggml_tensor * hot_mask = nullptr; // F32 [n_expert_used, n_tokens] 1.0 hit / 0.0 miss
         ggml_tensor * cold_ids = nullptr; // I32 [n_expert_used, n_tokens] expert id | -1 (hit)
 
+        // M3e device classify: this step's routed-ids tensor (the router top-k
+        // view), refreshed at every graph build; the boundary uses its shape
+        // metadata for the sim/admission staging readback (the data itself is
+        // read from the persistent ids_stage buffer — a graph tensor may be
+        // clobbered by arena reuse before the boundary runs)
+        ggml_tensor * topk_ids = nullptr; // I32 [n_expert_used, n_tokens]
+
+        // M3e parity mode (IK_EXP_CACHE_CLASSIFY_PARITY): per-component
+        // snapshots of the device classify outputs, taken as each op node
+        // fires. Post-hoc reads are invalid for the same arena-reuse reason.
+        std::vector<int32_t> parity_hot, parity_cold;
+        std::vector<float>   parity_mask;
+
         // M3b live promotion state (see llama_expert_cache_step_boundary and
         // expert_cache_state::expert_cache_promoter in llama.cpp): a slot
         // being overwritten is PENDING — remap[old] = -1 from queue time, the
@@ -467,6 +480,20 @@ struct llama_context {
         // in llama.cpp, created lazily on the first queued promotion
         struct expert_cache_promoter;
         std::unique_ptr<expert_cache_promoter> promoter;
+
+        // M3e: device-side classify (PHASE4-M3E-DEVICE-CLASSIFY.md). The
+        // classify runs as a graph op (GGML_OP_EXP_CACHE_CLASSIFY) on the slots
+        // device against device-resident remap/pending tables; the mid-graph
+        // host callback (and its 43 forced syncs per TG step) is gone.
+        // Host-slots mode (IK_EXP_CACHE_HOST) keeps the callback path.
+        bool device_classify = false;
+        // IK_EXP_CACHE_CLASSIFY_PARITY=1: keep the callback installed in
+        // compare-only mode and memcmp the host classify against the op's
+        // outputs per layer per step (validation; any diff is a blocker)
+        bool classify_parity = false;
+        // remap/pending changed since the last device-table upload (set by
+        // publish/queue_promotion/init; consumed by the step boundary)
+        bool tables_dirty = true;
     };
     std::unique_ptr<expert_cache_state> expert_cache;
     bool expert_cache_pending = false; // install dispatcher once params.cb_eval has been copied

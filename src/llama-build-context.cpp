@@ -1615,15 +1615,43 @@ llm_expert_gating_func_type   gating_op,
     if (use_exp_cache) {
         auto & cl = *exp_cache_l;
 
-        ggml_tensor * hot_ids  = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, n_tokens);
-        ggml_tensor * hot_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_expert_used, n_tokens);
-        ggml_tensor * cold_ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, n_tokens);
-        ggml_set_input(hot_ids);
-        ggml_set_input(hot_mask);
-        ggml_set_input(cold_ids);
-        ggml_format_name(hot_ids,  "ffn_exp_cache_hot_ids-%d",  il);
-        ggml_format_name(hot_mask, "ffn_exp_cache_hot_mask-%d", il);
-        ggml_format_name(cold_ids, "ffn_exp_cache_cold_ids-%d", il);
+        ggml_tensor * hot_ids  = nullptr;
+        ggml_tensor * hot_mask = nullptr;
+        ggml_tensor * cold_ids = nullptr;
+
+        if (exp_cache->device_classify) {
+            // M3e: classify in the graph on the slots device against the
+            // device-resident remap/pending tables (refreshed at TG step
+            // boundaries; read-only within a step). No graph inputs, no
+            // mid-graph host callback — the scheduler keeps the fast path and
+            // the TG graph stays capturable. Downstream of the same router
+            // get_rows trigger the host classify used, so the fused router
+            // pattern is untouched.
+            auto & clayer0 = lctx.model.layers[il];
+            GGML_ASSERT(selected_experts && selected_experts->type == GGML_TYPE_I32);
+            GGML_ASSERT(clayer0.ffn_exp_cache_remap && clayer0.ffn_exp_cache_pending && clayer0.ffn_exp_cache_ids_stage);
+            GGML_ASSERT(clayer0.ffn_exp_cache_remap->ne[0] == n_expert);
+            const int32_t H = (int32_t) exp_cache->h;
+            hot_ids  = ggml_exp_cache_classify(ctx, selected_experts, clayer0.ffn_exp_cache_remap, clayer0.ffn_exp_cache_pending, nullptr, 0, H);
+            hot_mask = ggml_exp_cache_classify(ctx, selected_experts, clayer0.ffn_exp_cache_remap, clayer0.ffn_exp_cache_pending, nullptr, 1, H);
+            // the cold_ids node also stages the raw ids into the persistent
+            // per-layer buffer for the boundary's sim/admission readback
+            cold_ids = ggml_exp_cache_classify(ctx, selected_experts, clayer0.ffn_exp_cache_remap, clayer0.ffn_exp_cache_pending, clayer0.ffn_exp_cache_ids_stage, 2, H);
+            ggml_format_name(hot_ids,  "ffn_exp_cache_hot_ids-%d",  il);
+            ggml_format_name(hot_mask, "ffn_exp_cache_hot_mask-%d", il);
+            ggml_format_name(cold_ids, "ffn_exp_cache_cold_ids-%d", il);
+            cl.topk_ids = selected_experts; // host-side k/ntok metadata for the boundary staging readback
+        } else {
+            hot_ids  = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, n_tokens);
+            hot_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_expert_used, n_tokens);
+            cold_ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, n_tokens);
+            ggml_set_input(hot_ids);
+            ggml_set_input(hot_mask);
+            ggml_set_input(cold_ids);
+            ggml_format_name(hot_ids,  "ffn_exp_cache_hot_ids-%d",  il);
+            ggml_format_name(hot_mask, "ffn_exp_cache_hot_mask-%d", il);
+            ggml_format_name(cold_ids, "ffn_exp_cache_cold_ids-%d", il);
+        }
         cl.hot_ids = hot_ids; cl.hot_mask = hot_mask; cl.cold_ids = cold_ids;
 
         const auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU;

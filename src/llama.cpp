@@ -5158,7 +5158,7 @@ static bool llm_load_tensors(
         }
         if (model.expert_cache_h > 0) {
             struct ggml_init_params ip = {
-                /*.mem_size   =*/ ggml_tensor_overhead() * 3 * cache_layers.size(),
+                /*.mem_size   =*/ ggml_tensor_overhead() * 6 * cache_layers.size(),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -5176,6 +5176,14 @@ static bool llm_load_tensors(
                 layer.ffn_up_exps_hot   = mk(layer.ffn_up_exps,   "up");
                 layer.ffn_gate_exps_hot = mk(layer.ffn_gate_exps, "gate");
                 layer.ffn_down_exps_hot = mk(layer.ffn_down_exps, "down");
+                // M3e device-side classify tables (content uploaded by the
+                // decode context at init and at TG step boundaries)
+                layer.ffn_exp_cache_remap   = ggml_new_tensor_1d(ectx, GGML_TYPE_I32, layer.ffn_up_exps->ne[2]);
+                layer.ffn_exp_cache_pending = ggml_new_tensor_1d(ectx, GGML_TYPE_I32, 2);
+                snprintf(layer.ffn_exp_cache_remap->name,   GGML_MAX_NAME, "blk.%d.ffn_exp_cache_remap",   il);
+                snprintf(layer.ffn_exp_cache_pending->name, GGML_MAX_NAME, "blk.%d.ffn_exp_cache_pending", il);
+                layer.ffn_exp_cache_ids_stage = ggml_new_tensor_1d(ectx, GGML_TYPE_I32, 8*8); // [c*8 + j], TG shape <= 8x8 (EXP_CACHE_STAGE_KMAX)
+                snprintf(layer.ffn_exp_cache_ids_stage->name, GGML_MAX_NAME, "blk.%d.ffn_exp_cache_ids_stage", il);
             }
             // placement: target offload device (M2) or pinned host (M1 / fallback)
             ggml_backend_buffer_type_t buft = nullptr;
@@ -6793,11 +6801,158 @@ static int llama_expert_trace_snap_cb(ggml_tensor * t, bool ask, void * user_dat
 // a cache-off baseline (M1 CPU-gate divergence, root-caused 2026-09-02). The
 // fused kernel writes the top-k ids into the argsort parent before the view or
 // get_rows execute, so reading the ids at the get_rows trigger is always fresh.
+// Phase 4 expert cache: the host classify, shared by the eval callback
+// (host-slots mode) and the M3e parity check. Must stay bit-identical to the
+// device op (ggml ExpCacheClassify: ggml.c scalar reference +
+// ggml-cuda/exp-cache-classify.cu kernel).
+static void llama_expert_cache_classify_host(
+        const int32_t * ids, int64_t k, int64_t ntok,
+        const int32_t * remap, int32_t n_expert, uint64_t pending_mask, int32_t trash_slot, bool cuda_slots,
+        int32_t * hot_all, int32_t * cold_all, float * mask_all, int32_t il) {
+    // stage full [k, ntok] column-major outputs, caller writes per column
+    for (int64_t c = 0; c < ntok; c++) {
+        // The CUDA mmq_id path (launch_mmq_ids_helper) sizes its shared-memory store by
+        // n_tokens, which assumes at most one (slot, token) pair per slot -- true for
+        // distinct expert ids, broken if every miss maps to one trash slot (up to k*ntok
+        // pairs in one slot -> shared overflow -> garbage gather -> illegal access).
+        // So on CUDA, misses are assigned DISTINCT free slots per token (any resident
+        // slot's output is finite and masked to zero afterwards, so semantics unchanged).
+        uint64_t used = 0; // slot bitmask (H+1 <= 64 slots; pending_mask's uint64 domain)
+        for (int64_t j = 0; j < k; j++) {
+            const int32_t id   = ids[(size_t) c * k + j];
+            const int32_t slot = (id >= 0 && id < n_expert) ? remap[id] : -1;
+            if (slot >= 0 && slot < 64) {
+                used |= (1ull << slot);
+            }
+        }
+        for (int64_t j = 0; j < k; j++) {
+            const int32_t id   = ids[(size_t) c * k + j];
+            const int32_t slot = (id >= 0 && id < n_expert) ? remap[id] : -1;
+            const bool    hit  = slot >= 0;
+            int32_t       h    = hit ? slot : -1;
+            if (!hit && cuda_slots) {
+                // M3b: pending slots (mid-overwrite by a promotion copy) are
+                // excluded — compute must never read them (0*NaN = NaN poison)
+                int32_t free_slot = trash_slot;
+                bool    found = false;
+                for (int32_t s = 0; s <= trash_slot && s < 64; s++) {
+                    if (!(used & (1ull << s)) && !(pending_mask & (1ull << s))) { free_slot = s; found = true; break; }
+                }
+                if (!found && k <= 8) {
+                    // reachable only if pending slots starve the scan: k=8 misses
+                    // and k hits need k distinct free non-pending slots out of
+                    // H+1, guaranteed by pending <= H+1-k per layer (enforced
+                    // by queue_promotion over the same <= 64-slot domain);
+                    // k > 8 (warmup graph: k == n_expert) always exhausts slots —
+                    // pre-existing benign duplicate-slot behavior, don't warn
+                    static bool warned_no_free = false;
+                    if (!warned_no_free) {
+                        warned_no_free = true;
+                        LLAMA_LOG_WARN("expert cache: no free slot for a miss on layer %d; duplicate slot assignment\n", il);
+                    }
+                }
+                if (free_slot < 64) {
+                    used |= (1ull << free_slot);
+                }
+                h = free_slot;
+            }
+            hot_all [(size_t) c * k + j] = h;
+            cold_all[(size_t) c * k + j] = hit ? -1   : id;
+            mask_all[(size_t) c * k + j] = hit ? 1.0f : 0.0f;
+        }
+    }
+}
+
 static int llama_expert_cache_eval_cb(ggml_tensor * t, bool ask, void * user_data) {
     llama_context * lctx = (llama_context *) user_data;
     const auto & cache = lctx->expert_cache; // non-const layers are reached via it->second below
     if (!cache) {
         return ask ? 0 : 1;
+    }
+    if (cache->device_classify) {
+        // M3e: the classify runs in the graph; the callback is only installed
+        // for IK_EXP_CACHE_CLASSIFY_PARITY=1. Snapshot each classify node's
+        // output as it fires — the op dsts are graph-arena tensors and a later
+        // node may reuse the block (the three classify outputs of a layer can
+        // even alias each other), so post-hoc reads are invalid. When the last
+        // node (cold_ids, component 2) fires, memcmp all three snapshots
+        // against the host classify. Any diff is a blocker (gate 2).
+        if (t->op != GGML_OP_EXP_CACHE_CLASSIFY) {
+            return ask ? 0 : 1;
+        }
+        if (ask) {
+            return 1;
+        }
+        const char * p = t->name + strlen(t->name);
+        int32_t il = 0, mul = 1;
+        while (p > t->name && p[-1] >= '0' && p[-1] <= '9') {
+            il += (*--p - '0') * mul;
+            mul *= 10;
+        }
+        auto it = cache->layers.find(il);
+        if (it == cache->layers.end()) {
+            fprintf(stderr, "EXP_CACHE_PARITY L%d: layer not cached\n", il);
+            GGML_ABORT("expert cache classify parity: unknown layer");
+        }
+        auto & cl = it->second;
+        const int component = t->op_params[0];
+        const int64_t k = t->ne[0], ntok = t->ne[1];
+        {
+            // snapshot this node's output while it is guaranteed fresh
+            const size_t n = (size_t) k * ntok;
+            if (component == 1) {
+                cl.parity_mask.resize(n);
+                ggml_backend_tensor_get(t, cl.parity_mask.data(), 0, n * sizeof(float));
+            } else {
+                auto & snap = component == 0 ? cl.parity_hot : cl.parity_cold;
+                snap.resize(n);
+                ggml_backend_tensor_get(t, snap.data(), 0, n * sizeof(int32_t));
+            }
+        }
+        if (component != 2) {
+            return 1;
+        }
+        const size_t n_snap = (size_t) k * ntok;
+        if (cl.parity_hot.size() != n_snap || cl.parity_cold.size() != n_snap || cl.parity_mask.size() != n_snap) {
+            GGML_ABORT("expert cache classify parity: cold node fired before hot/mask (graph order changed?)");
+        }
+        ggml_tensor * tk = t->src[0]; // still live: this node is a consumer
+        GGML_ASSERT(tk->ne[0] == k && tk->ne[1] == ntok);
+        const size_t col_bytes = (size_t) k * sizeof(int32_t);
+        std::vector<int32_t> ids((size_t) k * ntok);
+        if (tk->nb[1] == col_bytes) {
+            ggml_backend_tensor_get(tk, ids.data(), 0, (size_t) k * ntok * sizeof(int32_t));
+        } else {
+            for (int64_t c = 0; c < ntok; c++) {
+                ggml_backend_tensor_get(tk, ids.data() + (size_t) c * k, (size_t) c * tk->nb[1], col_bytes);
+            }
+        }
+        const int32_t n_expert = (int32_t) cl.remap.size();
+        std::vector<int32_t> hot_all((size_t) k * ntok), cold_all((size_t) k * ntok);
+        std::vector<float>   mask_all((size_t) k * ntok);
+        llama_expert_cache_classify_host(ids.data(), k, ntok, cl.remap.data(), n_expert, cl.pending_mask,
+                cache->h, /*cuda_slots=*/true, hot_all.data(), cold_all.data(), mask_all.data(), il);
+        if (memcmp(hot_all.data(),  cl.parity_hot.data(),  (size_t) k * ntok * sizeof(int32_t)) != 0 ||
+            memcmp(cold_all.data(), cl.parity_cold.data(), (size_t) k * ntok * sizeof(int32_t)) != 0 ||
+            memcmp(mask_all.data(), cl.parity_mask.data(), (size_t) k * ntok * sizeof(float))   != 0) {
+            for (int64_t i = 0; i < k * ntok; i++) {
+                if (hot_all[i] != cl.parity_hot[i] || cold_all[i] != cl.parity_cold[i] || mask_all[i] != cl.parity_mask[i]) {
+                    int32_t remap_dev[16] = {};
+                    ggml_backend_tensor_get(lctx->model.layers[il].ffn_exp_cache_remap, remap_dev, 0, sizeof(remap_dev));
+                    fprintf(stderr, "EXP_CACHE_PARITY L%d k=%d ntok=%d first diff at [%lld]: host hot=%d cold=%d mask=%g vs dev hot=%d cold=%d mask=%g (id=%d) remap_dev[0..11]=%d %d %d %d %d %d %d %d %d %d %d %d\n",
+                            il, (int) k, (int) ntok, (long long) i, hot_all[i], cold_all[i], mask_all[i], cl.parity_hot[i], cl.parity_cold[i], cl.parity_mask[i], ids[i],
+                            remap_dev[0], remap_dev[1], remap_dev[2], remap_dev[3], remap_dev[4], remap_dev[5],
+                            remap_dev[6], remap_dev[7], remap_dev[8], remap_dev[9], remap_dev[10], remap_dev[11]);
+                    break;
+                }
+            }
+            GGML_ABORT("expert cache classify parity FAILED (device != host)");
+        }
+        static uint64_t n_parity_ok = 0;
+        if (++n_parity_ok % 1000 == 0) {
+            fprintf(stderr, "EXP_CACHE_PARITY: %llu layer-steps bit-identical\n", (unsigned long long) n_parity_ok);
+        }
+        return 1;
     }
     if (strncmp(t->name, "ffn_moe_weights-", 16) != 0) {
         return ask ? 0 : 1;
@@ -6879,60 +7034,10 @@ static int llama_expert_cache_eval_cb(ggml_tensor * t, bool ask, void * user_dat
     const bool host_mask = !hot_mask->buffer || ggml_backend_buffer_is_host(hot_mask->buffer);
     const bool host_cold = !cold_ids->buffer || ggml_backend_buffer_is_host(cold_ids->buffer);
 
-    // stage full [k, ntok] column-major outputs, then write per column
     std::vector<int32_t> hot_all((size_t) k * ntok), cold_all((size_t) k * ntok);
     std::vector<float>   mask_all((size_t) k * ntok);
-    for (int64_t c = 0; c < ntok; c++) {
-        // The CUDA mmq_id path (launch_mmq_ids_helper) sizes its shared-memory store by
-        // n_tokens, which assumes at most one (slot, token) pair per slot -- true for
-        // distinct expert ids, broken if every miss maps to one trash slot (up to k*ntok
-        // pairs in one slot -> shared overflow -> garbage gather -> illegal access).
-        // So on CUDA, misses are assigned DISTINCT free slots per token (any resident
-        // slot's output is finite and masked to zero afterwards, so semantics unchanged).
-        uint64_t used = 0; // slot bitmask (H+1 <= 64 slots; pending_mask's uint64 domain)
-        for (int64_t j = 0; j < k; j++) {
-            const int32_t id   = ids[(size_t) c * k + j];
-            const int32_t slot = (id >= 0 && id < n_expert) ? cl.remap[id] : -1;
-            if (slot >= 0 && slot < 64) {
-                used |= (1ull << slot);
-            }
-        }
-        for (int64_t j = 0; j < k; j++) {
-            const int32_t id   = ids[(size_t) c * k + j];
-            const int32_t slot = (id >= 0 && id < n_expert) ? cl.remap[id] : -1;
-            const bool    hit  = slot >= 0;
-            int32_t       h    = hit ? slot : -1;
-            if (!hit && cuda_slots) {
-                // M3b: pending slots (mid-overwrite by a promotion copy) are
-                // excluded — compute must never read them (0*NaN = NaN poison)
-                int32_t free_slot = trash_slot;
-                bool    found = false;
-                for (int32_t s = 0; s <= trash_slot && s < 64; s++) {
-                    if (!(used & (1ull << s)) && !(cl.pending_mask & (1ull << s))) { free_slot = s; found = true; break; }
-                }
-                if (!found && k <= 8) {
-                    // reachable only if pending slots starve the scan: k=8 misses
-                    // and k hits need k distinct free non-pending slots out of
-                    // H+1, guaranteed by pending <= H+1-k per layer (enforced
-                    // by queue_promotion over the same <= 64-slot domain);
-                    // k > 8 (warmup graph: k == n_expert) always exhausts slots —
-                    // pre-existing benign duplicate-slot behavior, don't warn
-                    static bool warned_no_free = false;
-                    if (!warned_no_free) {
-                        warned_no_free = true;
-                        LLAMA_LOG_WARN("expert cache: no free slot for a miss on layer %d; duplicate slot assignment\n", il);
-                    }
-                }
-                if (free_slot < 64) {
-                    used |= (1ull << free_slot);
-                }
-                h = free_slot;
-            }
-            hot_all [(size_t) c * k + j] = h;
-            cold_all[(size_t) c * k + j] = hit ? -1   : id;
-            mask_all[(size_t) c * k + j] = hit ? 1.0f : 0.0f;
-        }
-    }
+    llama_expert_cache_classify_host(ids.data(), k, ntok, cl.remap.data(), n_expert, cl.pending_mask,
+            trash_slot, cuda_slots, hot_all.data(), cold_all.data(), mask_all.data(), il);
 
     auto write_cols = [&](ggml_tensor * dst, const void * src, size_t elem, bool host) {
         for (int64_t c = 0; c < ntok; c++) {
@@ -7241,6 +7346,7 @@ static bool llama_expert_cache_queue_promotion(llama_context & lctx, int32_t il,
     }
     cl.slot_expert[slot]  = -1;
     cl.pending_mask      |= (1ull << slot);
+    cache->tables_dirty   = true; // M3e: device classify tables advance at this boundary
     cache->promoter->submit(std::move(j));
 
     static int dbg = -1;
@@ -7305,6 +7411,7 @@ static void llama_expert_cache_publish(llama_context & lctx) {
         cl.remap[f.expert]       = f.slot;
         cl.slot_expert[f.slot]   = f.expert;
         cl.pending_mask         &= ~(1ull << f.slot);
+        cache->tables_dirty      = true; // M3e: device classify tables advance at this boundary
         promoter->pending.pop_front();
         if (dbg) {
             fprintf(stderr, "EXP_CACHE_PROMOTE publish L%d slot=%d expert=%d step=%llu\n",
@@ -7342,6 +7449,41 @@ struct exp_cache_force_cfg {
     bool    done = false;
 };
 
+// M3e: the device classify tables (remap/pending) mutate only at step
+// boundaries — publish, queue-time eviction and the FORCE hook, all inside
+// llama_expert_cache_step_boundary. Re-upload once per boundary, async on the
+// compute stream: the copy is stream-ordered after the step's compute and
+// before the next step's classify reads, so the in-step tables are read-only
+// by construction.
+static void llama_expert_cache_upload_tables(llama_context & lctx) {
+    auto & cache = lctx.expert_cache;
+    if (!cache->device_classify || !cache->tables_dirty || cache->layers.empty()) {
+        return;
+    }
+#ifdef GGML_USE_CUDA
+    // per-call lookup: a cached/static backend would dangle across contexts
+    const auto & layer0 = lctx.model.layers[cache->layers.begin()->first];
+    const int bi = ggml_backend_sched_get_backend_idx(lctx.sched, layer0.ffn_exp_cache_remap->buffer);
+    ggml_backend_t tables_backend = bi >= 0 ? ggml_backend_sched_get_backend(lctx.sched, bi) : nullptr;
+    if (!tables_backend) {
+        GGML_ABORT("expert cache: no backend for the device classify tables");
+    }
+    for (auto & kv : cache->layers) {
+        const auto & cl    = kv.second;
+        const auto & layer = lctx.model.layers[kv.first];
+        ggml_backend_tensor_set_async(tables_backend, layer.ffn_exp_cache_remap,
+                cl.remap.data(), 0, cl.remap.size() * sizeof(int32_t));
+        const int32_t pending32[2] = { (int32_t) (uint32_t) (cl.pending_mask & 0xffffffffu),
+                                       (int32_t) (uint32_t) (cl.pending_mask >> 32) };
+        ggml_backend_tensor_set_async(tables_backend, layer.ffn_exp_cache_pending,
+                pending32, 0, sizeof(pending32));
+    }
+    cache->tables_dirty = false;
+#else
+    GGML_ABORT("expert cache: device classify without CUDA is not supported");
+#endif
+}
+
 // M3c: global in-flight promotion cap. Its purpose is bounding the copy
 // backlog so publishes land ~1 step after issue, not rate-limiting: copies
 // are FIFO on one stream, 128 outstanding ≈ 42 ms of drain, comfortably
@@ -7355,6 +7497,58 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
     }
     // M3b: promotions publish even on steps that staged nothing
     llama_expert_cache_publish(lctx);
+
+    // M3e device classify: no mid-graph callback staged the routed ids, so the
+    // boundary reads back this step's ids from the persistent per-layer staging
+    // buffers the classify op wrote (a plain graph tensor could already be
+    // clobbered by arena reuse at this point — the tracer hit the same wall).
+    // 43 x ~11 us, measured negligible; the stream is drained here. Consumed
+    // below at the same boundary exactly as callback-staged ids were, so
+    // admission timing and the hit trajectory are unchanged.
+    if (cache->device_classify && !cache->layers.empty()) {
+        // llama_graph_compute returns without draining the CUDA backend
+        // (ggml_backend_sched_graph_compute_async), and a CUDA buffer's
+        // get_tensor copies on cudaStreamPerThread — NOT the compute stream —
+        // so explicitly sync the classify backend once before reading the
+        // staging buffers. Idle stream in this config (CPU splits are the
+        // tail), so this costs nothing here and closes the race in configs
+        // where GPU work is still in flight at the boundary.
+        const auto & layer0 = lctx.model.layers[cache->layers.begin()->first];
+        const int bi = ggml_backend_sched_get_backend_idx(lctx.sched, layer0.ffn_exp_cache_ids_stage->buffer);
+        if (bi >= 0) {
+            ggml_backend_synchronize(ggml_backend_sched_get_backend(lctx.sched, bi));
+        }
+        // staging layout [c*EXP_CACHE_STAGE_KMAX + j] — matches the classify
+        // op's side-effect write (ggml.c / exp-cache-classify.cu)
+        constexpr int64_t EXP_CACHE_STAGE_KMAX = 8;
+        int32_t stage_buf[EXP_CACHE_STAGE_KMAX * EXP_CACHE_STAGE_KMAX];
+        for (auto & kv : cache->layers) {
+            auto & cl = kv.second;
+            const ggml_tensor * tk = cl.topk_ids; // host-side shape metadata only
+            if (!tk) {
+                continue; // graph built without the cache branch for this layer
+            }
+            const int64_t k = tk->ne[0], ntok = tk->ne[1];
+            if (tk->type != GGML_TYPE_I32 || k <= 0 || k > EXP_CACHE_STAGE_KMAX || ntok <= 0 || ntok > EXP_CACHE_STAGE_KMAX) {
+                continue; // TG-shaped staging only (same guard the callback used)
+            }
+            if (cl.sim_staged_step == cache->step) {
+                continue; // already staged this step (double-staging guard)
+            }
+            const auto & layer = lctx.model.layers[kv.first];
+            ggml_backend_tensor_get(layer.ffn_exp_cache_ids_stage, stage_buf, 0, (size_t) ntok * EXP_CACHE_STAGE_KMAX * sizeof(int32_t));
+            cl.sim_staged_ids.resize((size_t) k * ntok);
+            for (int64_t c = 0; c < ntok; c++) {
+                for (int64_t j = 0; j < k; j++) {
+                    cl.sim_staged_ids[(size_t) c * k + j] = stage_buf[c * EXP_CACHE_STAGE_KMAX + j];
+                }
+            }
+            cl.sim_staged_k    = k;
+            cl.sim_staged_ntok = ntok;
+            cl.sim_staged_step = cache->step;
+            cache->staged_layers.push_back(kv.first);
+        }
+    }
 
     // M3c admission policy (PHASE4-M3C-ADMISSION.md, option C "the routing
     // stream is the queue"). Token bucket refilled by WALL time between
@@ -7380,6 +7574,8 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
     cache->promo_last_us = now_us;
 
     if (cache->staged_layers.empty()) {
+        // publish above may still have dirtied the device classify tables
+        llama_expert_cache_upload_tables(lctx);
         return;
     }
     static const int32_t window = [] {
@@ -7677,6 +7873,10 @@ static void llama_expert_cache_step_boundary(llama_context & lctx) {
             }
         }
     }
+    // M3e: the device classify tables (remap/pending) mutate only at step
+    // boundaries — publish, queue-time eviction (both above) and the FORCE
+    // hook.
+    llama_expert_cache_upload_tables(lctx);
     cache->step++;
 
     static int dbg = -1;
@@ -10460,9 +10660,48 @@ struct llama_context * llama_init_from_model(
             cl.hit_count.assign(n_expert, 0);
             cl.last_miss_step.assign(n_expert, 0);
         }
-        ctx->expert_cache_pending = true; // callback installed after params.cb_eval is copied below
-        LLAMA_LOG_INFO("%s: expert cache active: H=%d, %zu layers (initial assignment experts 0..H-1, slots on %s)\n", __func__,
-                H, ctx->expert_cache->layers.size(), ctx->expert_cache->slots_on_cuda ? "GPU" : "host");
+        // M3e: with slots on CUDA the classify runs in the graph against
+        // device-resident remap/pending tables (PHASE4-M3E-DEVICE-CLASSIFY.md);
+        // the mid-graph host callback (43 forced syncs/TG step) is gone.
+        // IK_EXP_CACHE_CLASSIFY_DEVICE=0 forces the legacy callback path (A/B
+        // escape hatch); IK_EXP_CACHE_CLASSIFY_PARITY=1 keeps the callback in
+        // compare-only mode (validation gate 2). Host-slots mode always keeps
+        // the callback path.
+        static const bool classify_device_env = [] {
+            const char * e = getenv("IK_EXP_CACHE_CLASSIFY_DEVICE");
+            return !e || atoi(e) != 0;
+        }();
+        ctx->expert_cache->device_classify = false;
+#ifdef GGML_USE_CUDA
+        // device-side classify is implemented for CUDA slots only; other
+        // backends (e.g. Vulkan) keep the host-callback path
+        ctx->expert_cache->device_classify = ctx->expert_cache->slots_on_cuda && classify_device_env;
+#endif
+        ctx->expert_cache->classify_parity = ctx->expert_cache->device_classify && [] {
+            const char * e = getenv("IK_EXP_CACHE_CLASSIFY_PARITY");
+            return e && atoi(e) != 0;
+        }();
+        if (ctx->expert_cache->device_classify) {
+            // initial table content = the static assignment above (pending = 0);
+            // later mutations upload at TG step boundaries
+            for (auto & kv : ctx->expert_cache->layers) {
+                const auto & cl    = kv.second;
+                const auto & layer = model->layers[kv.first];
+                GGML_ASSERT(layer.ffn_exp_cache_remap && layer.ffn_exp_cache_pending);
+                GGML_ASSERT((int32_t) cl.remap.size() == layer.ffn_exp_cache_remap->ne[0]);
+                ggml_backend_tensor_set(layer.ffn_exp_cache_remap, cl.remap.data(), 0,
+                        cl.remap.size() * sizeof(int32_t));
+                const int32_t zero[2] = { 0, 0 };
+                ggml_backend_tensor_set(layer.ffn_exp_cache_pending, zero, 0, sizeof(zero));
+            }
+            ctx->expert_cache->tables_dirty = false;
+        }
+        // the classify callback is only needed for the host-slots path and the
+        // M3e parity check (installed after params.cb_eval is copied below)
+        ctx->expert_cache_pending = !ctx->expert_cache->device_classify || ctx->expert_cache->classify_parity;
+        LLAMA_LOG_INFO("%s: expert cache active: H=%d, %zu layers (initial assignment experts 0..H-1, slots on %s, classify %s)\n", __func__,
+                H, ctx->expert_cache->layers.size(), ctx->expert_cache->slots_on_cuda ? "GPU" : "host",
+                ctx->expert_cache->device_classify ? (ctx->expert_cache->classify_parity ? "device+parity" : "device") : "host-callback");
     }
 
     cparams.k_cache_hadamard = params.k_cache_hadamard;

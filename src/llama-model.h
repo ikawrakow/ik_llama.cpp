@@ -308,6 +308,18 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_exps_hot = nullptr;
     struct ggml_tensor * ffn_up_exps_hot   = nullptr;
 
+    // M3e device-side classify tables (same buffer/placement as the slots):
+    // expert id -> slot | -1, and the pending-slot bitmask as 2 x int32 (lo, hi).
+    // Content is context-owned; mutated only at TG step boundaries.
+    struct ggml_tensor * ffn_exp_cache_remap   = nullptr; // I32 [n_expert]
+    struct ggml_tensor * ffn_exp_cache_pending = nullptr; // I32 [2]
+    // M3e: persistent per-layer staging for the routed ids of the last
+    // TG-shaped step (layout [c*8 + j], k<=8, ntok<=8). Written by the classify
+    // op (cold_ids node) as a SET_ROWS-style src side effect — a plain op
+    // output would be arena-allocated and could be clobbered before the step
+    // boundary reads it back for the sim/admission staging.
+    struct ggml_tensor * ffn_exp_cache_ids_stage = nullptr; // I32 [64]
+
     llama_split_tensor split_ffn_gate_inp;
     llama_split_tensor split_ffn_up_exps;
     llama_split_tensor split_ffn_gate_exps;

@@ -714,6 +714,7 @@ extern "C" {
         GGML_OP_MASK_TO_IDX,
         GGML_OP_LATENT_ATTN,
         GGML_OP_DS4_COMP,
+        GGML_OP_EXP_CACHE_CLASSIFY,
 
         GGML_OP_COUNT,
     };
@@ -1671,6 +1672,26 @@ extern "C" {
             struct ggml_tensor  * a_up_b,
             struct ggml_tensor  * a_gate_b,
             enum ggml_unary_op    op);
+
+    // Phase 4 expert cache (M3e): device-side routing classify.
+    // Maps the routed top-k ids through the layer's device-resident remap table
+    // and emits one of the three mask components, bit-identical to the host
+    // classify (llama_expert_cache_eval_cb in llama.cpp):
+    //   component 0: hot_ids  I32 [k, ntok] — slot of a hit, distinct free slot
+    //                per miss (pending slots excluded), trash_slot on exhaustion
+    //   component 1: hot_mask F32 [k, ntok] — 1.0 on hit, 0.0 on miss
+    //   component 2: cold_ids I32 [k, ntok] — expert id on miss, -1 on hit
+    GGML_API struct ggml_tensor * ggml_exp_cache_classify(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * ids,        // [k, ntok] I32 routed expert ids
+            struct ggml_tensor  * remap,      // [n_expert] I32 expert -> slot | -1
+            struct ggml_tensor  * pending,    // [2] I32 pending-slot bitmask (lo, hi)
+            struct ggml_tensor  * staging,    // optional [64] I32: the cold_ids node also writes the
+                                              // raw ids here ([c*8 + j], k<=8 && ntok<=8 only) for the
+                                              // step boundary's sim/admission staging readback —
+                                              // a persistent buffer, immune to graph-arena reuse
+            int32_t               component,
+            int32_t               trash_slot);
 
     GGML_API struct ggml_tensor * ggml_fused_up_gate(
             struct ggml_context * ctx,
