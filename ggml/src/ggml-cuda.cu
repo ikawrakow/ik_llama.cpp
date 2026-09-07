@@ -77,6 +77,8 @@
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <thread>
+#include <cstring>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -5312,6 +5314,29 @@ struct ggml_cuda_copy_engine {
     uint64_t     next_fence  = 1;
     std::mutex   mtx;                      // guards events + next_fence
     std::map<uint64_t, cudaEvent_t> events;
+    // staged-h2d pinned ring (see set_staging); only ever touched by the
+    // single promotion worker thread via h2d, and by free() after join
+    char *       staging     = nullptr;
+    size_t       staging_cap = 0;
+    size_t       staging_off = 0;
+    cudaEvent_t  wrap_ev     = nullptr; // recorded at each ring wrap
+    // memcpy helper pool: splits each staged chunk's pageable->pinned memcpy
+    // across N threads (single producer for the ring itself; the helpers only
+    // memcpy disjoint slices). In-app the cold path's DRAM streaming drops a
+    // lone producer to ~2.5 GB/s; two threads recover most of it. The pool is
+    // quiescent between requests: the producer cannot issue request k+1 until
+    // every helper has finished k, so helpers can never miss a seq bump.
+    std::vector<std::thread> helpers;
+    std::mutex              hmtx;
+    std::condition_variable hcv;
+    uint64_t                h_seq  = 0; // request counter
+    int                     h_done = 0; // helpers finished with the current request
+    int                     h_nparts = 1; // producer + helpers, fixed at set_staging
+    bool                    h_shutdown = false;
+    const char *            h_src  = nullptr;
+    char *                  h_dst  = nullptr;
+    size_t                  h_part = 0; // bytes per slice (last slice takes the remainder)
+    size_t                  h_size = 0;
 };
 
 GGML_CALL ggml_cuda_copy_engine_t ggml_backend_cuda_copy_engine_new(ggml_backend_t backend) {
@@ -5337,6 +5362,22 @@ GGML_CALL void ggml_backend_cuda_copy_engine_free(ggml_cuda_copy_engine_t engine
         CUDA_CHECK(cudaStreamDestroy(engine->copy_stream));
         engine->copy_stream = nullptr;
     }
+    if (!engine->helpers.empty()) {
+        {
+            std::lock_guard<std::mutex> lock(engine->hmtx);
+            engine->h_shutdown = true;
+        }
+        engine->hcv.notify_all();
+        for (auto & h : engine->helpers) {
+            h.join();
+        }
+    }
+    if (engine->wrap_ev) {
+        CUDA_CHECK(cudaEventDestroy(engine->wrap_ev));
+    }
+    if (engine->staging) {
+        CUDA_CHECK(cudaFreeHost(engine->staging)); // after the drain: staged bytes are consumed
+    }
     for (auto & kv : engine->events) {
         CUDA_CHECK(cudaEventDestroy(kv.second));
     }
@@ -5344,8 +5385,76 @@ GGML_CALL void ggml_backend_cuda_copy_engine_free(ggml_cuda_copy_engine_t engine
     delete engine;
 }
 
+GGML_CALL void ggml_backend_cuda_copy_engine_set_staging(ggml_cuda_copy_engine_t engine, size_t size, int n_threads) {
+    if (!engine || size == 0) {
+        return;
+    }
+    if (n_threads < 1) {
+        n_threads = 1;
+    }
+    ggml_cuda_set_device(engine->device);
+    void * p = nullptr;
+    if (cudaHostAlloc(&p, size, cudaHostAllocDefault) != cudaSuccess) {
+        GGML_CUDA_LOG_WARN("%s: cudaHostAlloc(%zu MB) failed — staged h2d disabled, pageable fallback\n", __func__, size >> 20);
+        return;
+    }
+    cudaEvent_t ev = nullptr;
+    if (cudaEventCreateWithFlags(&ev, cudaEventDisableTiming) != cudaSuccess) {
+        cudaFreeHost(p);
+        GGML_CUDA_LOG_WARN("%s: wrap event creation failed — staged h2d disabled, pageable fallback\n", __func__);
+        return;
+    }
+    engine->staging     = (char *) p;
+    engine->staging_cap = size;
+    engine->wrap_ev     = ev;
+    engine->h_nparts    = n_threads;
+    try {
+        for (int i = 1; i < n_threads; i++) {
+            engine->helpers.emplace_back([engine, i] {
+                std::unique_lock<std::mutex> lock(engine->hmtx);
+                uint64_t seen = 0;
+                for (;;) {
+                    engine->hcv.wait(lock, [&] { return engine->h_shutdown || engine->h_seq != seen; });
+                    if (engine->h_shutdown) {
+                        return;
+                    }
+                    seen = engine->h_seq;
+                    // slice i of h_nparts; the last slice takes the remainder
+                    const size_t off  = (size_t) i * engine->h_part;
+                    const size_t len  = i == engine->h_nparts - 1 ? engine->h_size - off : engine->h_part;
+                    const char * src  = engine->h_src;
+                    char *       dst  = engine->h_dst;
+                    lock.unlock();
+                    memcpy(dst + off, src + off, len);
+                    lock.lock();
+                    engine->h_done++;
+                    engine->hcv.notify_all();
+                }
+            });
+        }
+    } catch (const std::system_error &) {
+        // thread creation failed — run the pool shut down, keep the ring
+        // single-producer rather than tearing everything down mid-init
+        GGML_CUDA_LOG_WARN("%s: helper thread creation failed — staged h2d runs single-threaded\n", __func__);
+        {
+            std::lock_guard<std::mutex> lock(engine->hmtx);
+            engine->h_shutdown = true;
+        }
+        engine->hcv.notify_all();
+        for (auto & h : engine->helpers) {
+            h.join();
+        }
+        engine->helpers.clear();
+        engine->h_nparts = 1;
+    }
+}
+
 GGML_CALL void ggml_backend_cuda_copy_engine_sync_compute(ggml_cuda_copy_engine_t engine) {
-    std::lock_guard<std::mutex> lock(engine->mtx); // serializes with the worker's enqueues
+    std::lock_guard<std::mutex> lock(engine->mtx); // guards events/next_fence; NOTE: h2d takes
+                                                   // no lock — ordering with the worker's copies
+                                                   // comes from the caller (sync_compute runs on
+                                                   // the decode thread before submit(), so the
+                                                   // streamWaitEvent lands before any job enqueue)
     ggml_cuda_set_device(engine->device);
     // record on the compute stream, wait on the copy stream, destroy right
     // away: cudaStreamWaitEvent snapshots the captured work at call time, so
@@ -5359,6 +5468,53 @@ GGML_CALL void ggml_backend_cuda_copy_engine_sync_compute(ggml_cuda_copy_engine_
 
 GGML_CALL void ggml_backend_cuda_copy_engine_h2d(ggml_cuda_copy_engine_t engine, void * dst, const void * src, size_t size) {
     ggml_cuda_set_device(engine->device);
+    if (engine->staging && size > engine->staging_cap) {
+        // oversized chunk bypasses the ring entirely — with staging on, this
+        // silently reintroduces the pageable serialization, so surface it
+        static bool warned_oversize = false;
+        if (!warned_oversize) {
+            warned_oversize = true;
+            GGML_CUDA_LOG_WARN("%s: chunk %zu MB exceeds staging ring (%zu MB) — pageable fallback for this and future oversize copies\n",
+                    __func__, size >> 20, engine->staging_cap >> 20);
+        }
+    }
+    if (engine->staging && size <= engine->staging_cap) {
+        if (engine->staging_off + size > engine->staging_cap) {
+            // ring wrap: the bytes at [0, size) were consumed by copies of the
+            // current generation, all enqueued before this point — record an
+            // event covering them and wait it out (the DMA side outruns the
+            // producer, so this is normally already complete)
+            CUDA_CHECK(cudaEventRecord(engine->wrap_ev, engine->copy_stream));
+            CUDA_CHECK(cudaEventSynchronize(engine->wrap_ev));
+            engine->staging_off = 0;
+        }
+        char * dstg = engine->staging + engine->staging_off;
+        // split the chunk's memcpy across the helper pool (only when every
+        // slice stays >= 1 MB; smaller copies aren't worth the wake/join)
+        const int nparts = engine->h_nparts;
+        if (!engine->helpers.empty() && size >= ((size_t) nparts << 20)) {
+            const size_t part = size / nparts;
+            {
+                std::lock_guard<std::mutex> lock(engine->hmtx);
+                engine->h_src  = (const char *) src;
+                engine->h_dst  = dstg;
+                engine->h_part = part;
+                engine->h_size = size;
+                engine->h_done = 0;
+                engine->h_seq++;
+            }
+            engine->hcv.notify_all();
+            memcpy(dstg, src, part); // producer takes slice 0
+            std::unique_lock<std::mutex> lock(engine->hmtx);
+            const int want = nparts - 1;
+            engine->hcv.wait(lock, [&] { return engine->h_done == want; });
+        } else {
+            memcpy(dstg, src, size);
+        }
+        CUDA_CHECK(cudaMemcpyAsync(dst, dstg, size, cudaMemcpyHostToDevice, engine->copy_stream));
+        engine->staging_off += size;
+        return;
+    }
     CUDA_CHECK(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, engine->copy_stream));
 }
 

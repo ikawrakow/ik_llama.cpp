@@ -61,6 +61,14 @@ GGML_API GGML_CALL void                      ggml_backend_cuda_copy_engine_free(
 GGML_API GGML_CALL void                      ggml_backend_cuda_copy_engine_sync_compute(ggml_cuda_copy_engine_t engine);
 // enqueue one HtoD copy on the copy stream; dst = device pointer on the engine's device
 GGML_API GGML_CALL void                      ggml_backend_cuda_copy_engine_h2d(ggml_cuda_copy_engine_t engine, void * dst, const void * src, size_t size);
+// enable a pinned staging ring for h2d: the producer thread memcpy's pageable
+// sources into pinned chunks first, so the copies stay true async DMA instead
+// of degenerating to driver-staged synchronous copies that serialize with
+// other streams' HtoD (expert-cache promotions vs input copies). Each chunk's
+// memcpy is split across n_threads (producer + n_threads-1 helpers). Single
+// producer thread only; size 0 keeps the legacy direct path. Call once,
+// before the first h2d.
+GGML_API GGML_CALL void                      ggml_backend_cuda_copy_engine_set_staging(ggml_cuda_copy_engine_t engine, size_t size, int n_threads);
 // record a fence after all copies enqueued so far on the copy stream
 GGML_API GGML_CALL uint64_t                  ggml_backend_cuda_copy_engine_fence_copy(ggml_cuda_copy_engine_t engine);
 // true when the fence's work has completed (an already-retired id counts as complete)

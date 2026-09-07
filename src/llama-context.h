@@ -415,8 +415,8 @@ struct llama_context {
         // classify free-slot scan skips pending slots (a compute reading a
         // mid-overwrite slot can yield NaN/Inf and 0*NaN = NaN poisons the MoE
         // sum), and remap[new] is published only after the copy completes.
-        // Max 1 pending slot per layer (the scan needs k <= 8 distinct free
-        // slots out of H+1).
+        // Invariant (M3c): pending slots <= H+1-k per layer (the scan needs
+        // k <= 8 distinct free slots out of H+1); queue_promotion enforces it.
         uint64_t pending_mask = 0; // bit s set: slot s mid-overwrite, unreadable
 
         // M3a shadow simulation of the dynamic LRU policy (see
@@ -435,6 +435,17 @@ struct llama_context {
         int64_t  sim_staged_ntok = 0;
         uint64_t sim_staged_step = UINT64_MAX; // cache->step tag, guards double-staging
         uint64_t sim_hits = 0, sim_miss = 0, sim_promotions = 0, sim_admissions = 0;
+
+        // M3c live admission policy state (windowed counts over the LIVE
+        // remap; consumed by llama_expert_cache_step_boundary, see
+        // PHASE4-M3C-ADMISSION.md). Window = IK_EXP_CACHE_WINDOW (default 64).
+        std::vector<int32_t>  lru;            // [H] live slots by recency, back = MRU
+        std::vector<uint16_t> miss_count;     // [n_expert] misses within the rolling window
+        std::vector<uint16_t> hit_count;      // [n_expert] hits within the rolling window (victim-aware follow-on)
+        std::vector<uint64_t> last_miss_step; // [n_expert] candidate sort tiebreak (recent first)
+        std::deque<std::vector<int32_t>> miss_log; // per-step missed ids (distinct), windowed
+        std::deque<std::vector<int32_t>> hit_log;  // per-step hit ids (distinct), windowed
+        uint64_t live_hits = 0, live_miss = 0;
     };
     struct expert_cache_state {
         int32_t h = 0;                    // resident slots per layer
@@ -442,6 +453,16 @@ struct llama_context {
         std::map<int32_t, expert_cache_layer_state> layers; // keyed by layer index
         uint64_t step = 0;                     // TG steps processed by the boundary hook (M3a)
         std::vector<int32_t> staged_layers;    // layers with staged ids for the current step
+        // M3c admission: token bucket (bytes) refilled by wall time between
+        // boundaries, caps, and deferral telemetry (which cap binds).
+        double   promo_budget_bytes  = 0.0;
+        bool     promo_budget_seeded = false;
+        int64_t  promo_last_us       = 0;
+        uint64_t n_promoted = 0;
+        uint64_t n_deferred_budget = 0, n_deferred_inflight = 0, n_deferred_layer_pending = 0;
+        uint64_t n_queue_failed = 0;      // queue_promotion setup failure (broken-config canary)
+        uint64_t n_awaiting_publish = 0;  // candidates skipped: copy already in flight (not a deferral)
+        size_t   inflight_highwater = 0;
         // M3b: promotion worker (thread + dedicated CUDA copy stream); defined
         // in llama.cpp, created lazily on the first queued promotion
         struct expert_cache_promoter;

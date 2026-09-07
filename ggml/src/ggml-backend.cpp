@@ -2180,6 +2180,9 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
 }
 
 static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_backend_t split_backend, ggml_backend_sched_split * split) {
+#if IK_PRINT_TIMING
+    int64_t tim1 = ggml_time_us();
+#endif
     if (!sched->callback_eval) {
 #if IK_PRINT_TIMING
         int64_t tim2 = ggml_time_us();
@@ -2547,6 +2550,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         if (ec != GGML_STATUS_SUCCESS) {
             return ec;
         }
+#if IK_PRINT_TIMING
+        // CPU splits block in eval (true compute time); CUDA splits return
+        // after launch (async) — the GPU wait shows up at the next sync
+        printf("%s(split %d/%d backend %d): %d us\n", __func__, i, sched->n_splits, split_backend_id, (int)(ggml_time_us()-tim1));
+#endif
 
         // the pages the lookahead streamer just read for this split are one-shot
         // streaming traffic; MADV_COLD them so the decode working set survives
