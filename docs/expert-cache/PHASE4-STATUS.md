@@ -6,25 +6,63 @@
 > **`expert-cache`** (created from `expert-trace` @ a1882ce which absorbed the prior WIP:
 > THP madvise mmap + windowed-kpool plumbing — commit a1882ce, intentional).
 
-## ⏭ RESUME HERE (checkpoint 2026-09-02 late)
+## ⏭ RESUME HERE (checkpoint 2026-09-06)
 
-**Where we are: M1 ✅ (both gates byte-identical) · M2 ✅ (validated) · M3 next.**
-Branch `expert-cache` @ **654a057, pushed to fork** (github.com/Phylliida/ik_llama.cpp).
-Fork also has `expert-trace` @ a1882ce. Both build trees (build-novlk, build-cuda) green
-at 654a057. Working tree clean.
-- **M3 work is spec'd in `PHASE4-M3-PLAN.md` — start at M3a** (state + boundary hook +
-  counters; pure CPU-side, no GPU risk).
-- **Bisect builds in flight**: `ik_bisect` (c4b2232) + `ik_bisect2` (06069ec) — needed
-  CPATH/LIBRARY_PATH to the cuda-merged store path (bash-12); when done run
-  `bash run_bisect.sh` (sequential). Answers the 9.01→7.4–8.6 #9-config TG regression;
-  blocks M4's absolute bars only.
-- Today's fix chain (all committed/pushed): 6097707 F1 (classify trigger at
-  ffn_moe_weights-N — preserves router fusion; M1 CPU gate byte-identical), b617ae0 F3
-  (hot ids/mask placed on CUDA backend when slots are device-resident; freeze #2),
-  f15ae25 F4/F5 (general-path MoE pool-alloc sizing + pool_alloc<char> bytes bug),
-  654a057 F6 (distinct free-slot misses — the shared-store invariant; THE PP crasher).
-- Everything below is the evidence/decision archive. When updating: keep this block at
-  top, append detail downward.
+**Where we are: M1 ✅ · M2 ✅ (validated) · M3a ✅ (sim validated) · M3b ✅ (validated) · M3c ✅ (validated; speed gate FAIL — anomaly explained, staging fix in).**
+Branch `expert-cache`: M3c + staged promotion copies committed and pushed (see
+`PHASE4-M3C-FINDINGS.md` for the full handoff). Headline numbers at 19.7k
+(IK_PRINT_TIMING=1 build): base 7.86 → M3c unstaged 8.11 → **M3c staged 9.98 t/s**;
+hit 0.46 @step 100 (stories converged 0.524). TG ≥ 12 t/s gate still FAILS.
+- **The hit↔speed anomaly is solved.** Hits always converted (−30.6 ms/step CPU at
+  hit 0.44); pageable-source promotion copies clawed ~27 ms/step back via driver
+  staging-lock serialization with critical-path input copies (KQ_mask sets 0.04 →
+  28.5 ms/step). Fix: pinned staging ring in the copy engine
+  (`IK_EXP_CACHE_STAGING_MB` 256, `IK_EXP_CACHE_STAGING_THREADS` 2) → contention
+  gone (0.10 ms/step), CUDA splits back to the topology floor.
+- **Next attack for the 12 t/s bar:** the +11.5 ms/step cache-topology/classify
+  stall on the CUDA side (admission-independent; batched readbacks), then M4's
+  H-sweep. Profiling tooling: `run_m3c_profile.sh`, `analyze_m3c_profile.py`,
+  `ring_bench.cu`; A/B knobs: `IK_EXP_CACHE_ADMISSION=0`, `IK_EXP_CACHE_STAGING_MB=0`.
+
+## ⏭ older checkpoint (2026-09-02 late)
+Branch `expert-cache` @ **249e0f4, pushed to fork** (= M3b: promotion worker; ddfc556 = M3a:
+shadow classic-LRU sim — classify stages routed ids at k,ntok≤8,
+`llama_expert_cache_step_boundary` applies touches/misses/promotions at TG step
+boundaries). Both build trees green at 249e0f4.
+- **M3b validation (2026-09-02)**: promotion worker live and proven. Smoke clean
+  (queue step 2 → publish step 3, 167 graphs, no CUDA errors, launch-blocking+timeout).
+  1.1k snap A/B × 2 (`run_m3b_snap.sh`, `analyze_m3b.py`; snaps parsed **order='F'** —
+  ne0-fastest!): forced promotion `IK_EXP_CACHE_FORCE_PROMOTE=il:slot:expert:step` —
+  (a) expert 29 @step 4: positions ≤ publish bitwise-identical; expert-0 eviction row
+  hot→cold at rel p50 **2.25e-2** (exact M2 envelope), 4 more noise-scale positions at
+  later expert-0 routings; (b) expert 176 @step 1: first post-publish routing served
+  **cold→hot from the copied slot** at rel p50 **2.22e-2** / abs max 1.47e-2 — publish
+  side proven. `IK_EXP_CACHE_VERIFY_COPIES=1` readback+memcmp at publish: **bitwise
+  PASS** in all runs. No early diffs, no NaN, no CUDA errors anywhere.
+- **M3b design (as built)**: `ggml_cuda_copy_engine` (ggml-cuda.h/.cu): dedicated
+  non-blocking copy stream per CUDA backend; `sync_compute()` at queue time records on
+  the compute stream + waitEvent on the copy stream + immediate event destroy
+  (waitEvent snapshots — no event lifetime ties; review caught a fence-retirement race
+  in the original split fence_compute/wait design); `h2d()` ×3 slices (8.56 MB) from the
+  worker thread; `fence_copy()`/`poll()` with in-order retirement (single stream ⇒ FIFO
+  completion). llama.cpp: `expert_cache_state::expert_cache_promoter` (thread + queue +
+  inflight FIFO, cribbed from ggml-moe-prefetch pool shape; host-slots mode = plain
+  memcpy, complete at issue). Tearing-safe protocol enforced:
+  `llama_expert_cache_queue_promotion` (llama.cpp:7096) sets remap[old]=-1 + slot
+  PENDING at queue time (hard guards: max 1 pending/layer, slot < 64, src host-resident,
+  dst slice size == src); classify free-slot scan excludes pending slots (llama.cpp:6898,
+  warn gated to k≤8 — k=288 warmup always exhausts, benign); publish
+  (remap[new]=slot) only after the copy fence completes, polled at the next TG boundary
+  by `llama_expert_cache_publish` (llama.cpp:7186). All policy state touched by the
+  decode thread only; worker touches queue/pending FIFOs under mtx.
+- **M3 next: M3c** — wire admission (2nd miss in window, N=64) + `--expert-cache-promote-gbps`
+  cap (default 8) + global in-flight cap (4) + PP read-only. Admission/cap ordering
+  DECIDED: **the routing stream is the queue** — promote-at-miss-if-budget, miss count
+  saturates (no drop, no explicit queue); see `PHASE4-M3C-ADMISSION.md` (for review).
+  The forced-promotion hook + verify-copies stay as debug tooling.
+- **Bisect builds DONE (bash-12, green)** but `bash run_bisect.sh` still not run
+  (sequential; needs ~100 GiB-free machine). Still blocks M4's absolute bars only.
+- Older checkpoints (M1/M2 evidence chain, freeze RCAs, key code facts) below.
 
 ## Motivation (30 s version)
 
