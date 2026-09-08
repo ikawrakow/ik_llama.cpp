@@ -1204,6 +1204,15 @@ struct ggml_backend_sched {
     bool is_async = false;
     bool debug;
     bool has_reduce = false;
+
+    // M3f: producer split index per tensor (hash-set indexed), -1 = unknown/leaf
+    std::vector<int32_t> tensor_producer_split;
+    // M3f: per-split completion events for splits ending in an expert-cache
+    // classify run; cross-backend consumers wait on these instead of draining
+    // the producer backend's whole stream
+    struct split_event { ggml_backend_event_t ev; int backend_id; };
+    std::vector<split_event> split_events; // [n_splits]; ev == NULL when unneeded
+    bool crossing_events; // env kill switch (IK_EXP_CACHE_NO_CROSSING_EVENTS)
 };
 
 void ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off) {
@@ -1458,6 +1467,13 @@ static inline uint64_t get_next_graph_uid() {
     return counter.fetch_add(1, std::memory_order_relaxed);
 }
 
+// M3f: single predicate for the async multi-backend compute path — the
+// crossing-event pool in split_graph keys off this because those paths never
+// record split events; the two uses must never diverge
+static bool ggml_backend_sched_async_path(const ggml_backend_sched_t sched) {
+    return sched->is_async && sched->n_backends > 2 && sched->split_mode_graph && sched->has_reduce;
+}
+
 // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
 static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     // reset splits
@@ -1465,6 +1481,11 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     sched->n_graph_inputs = 0;
     sched->is_reset = false;
     sched->has_reduce = false;
+
+    // M3f: reset the producer-split table (rebuilt in pass 5 below)
+    for (size_t i = 0; i < sched->tensor_producer_split.size(); i++) {
+        sched->tensor_producer_split[i] = -1;
+    }
 
     graph->uid = get_next_graph_uid();
 
@@ -1745,6 +1766,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     // pass 5: split graph, find tensors that need to be copied
     {
         int i_split = 0;
+        struct ggml_tensor * prev_node = NULL; // M3f: previous non-view node
         struct ggml_backend_sched_split * split = &sched->splits[0];
         // find the backend of the first split, skipping view ops
         int i = 0;
@@ -1762,6 +1784,11 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             struct ggml_tensor * node = graph->nodes[i];
 
             if (ggml_is_view_op(node->op)) {
+                // M3f: views inherit the producer split of their source so that
+                // crossing inputs consumed via views resolve to the right split
+                // (node order is topological, so view_src has already been visited)
+                sched->tensor_producer_split[hash_id(node)] = node->view_src != NULL
+                    ? sched->tensor_producer_split[hash_id(node->view_src)] : -1;
                 continue;
             }
 
@@ -1808,6 +1835,14 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         }
                     }
                 }
+            }
+
+            // M3f: end the split after a run of expert-cache classify nodes so that
+            // cross-backend consumers (the CPU cold path) can wait on this split's
+            // completion event instead of draining the producer backend's whole stream
+            if (prev_node != NULL && prev_node->op == GGML_OP_EXP_CACHE_CLASSIFY &&
+                    node->op != GGML_OP_EXP_CACHE_CLASSIFY) {
+                need_new_split = true;
             }
 
             if (node_backend_id != cur_backend_id || need_new_split) {
@@ -1894,6 +1929,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
             }
+
+            // M3f: record which split produced this node's tensor
+            sched->tensor_producer_split[hash_id(node)] = i_split;
+            prev_node = node;
         }
         split->i_end = graph->n_nodes;
         sched->n_splits = i_split + 1;
@@ -1993,6 +2032,30 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     }
 
     for (int i = 0; i < sched->n_splits; ++i) sched->splits[i].graph.uid = get_next_graph_uid();
+
+    // M3f: maintain the per-split completion event pool — one event per split
+    // whose last non-view node is an expert-cache classify node. Consumers of
+    // that split's cross-backend outputs synchronize on the event instead of
+    // draining the producer backend's whole stream (see copy_inputs).
+    // Only the sequential compute loop records these events; in the async
+    // multi-backend paths (n_backends > 2) the pool stays empty so the
+    // crossing wait there keeps the full-sync fallback.
+    const bool m3f_async_path = ggml_backend_sched_async_path(sched);
+    if ((int)sched->split_events.size() < sched->n_splits) sched->split_events.resize(sched->n_splits);
+    for (int i = 0; i < sched->n_splits; i++) {
+        auto & se = sched->split_events[i];
+        const auto & sp = sched->splits[i];
+        const ggml_tensor * last = nullptr;
+        for (int j = sp.i_end - 1; j >= sp.i_start; j--) {
+            if (!ggml_is_view_op(graph->nodes[j]->op)) { last = graph->nodes[j]; break; }
+        }
+        const bool want = sched->crossing_events && !m3f_async_path && last && last->op == GGML_OP_EXP_CACHE_CLASSIFY;
+        if (want && (se.ev == NULL || se.backend_id != sp.backend_id)) {
+            if (se.ev) ggml_backend_event_free(se.ev);
+            se.backend_id = sp.backend_id;
+            se.ev = ggml_backend_event_new(sched->backends[sp.backend_id]); // NULL for CPU (iface NULL) — safe
+        } else if (!want && se.ev) { ggml_backend_event_free(se.ev); se.ev = NULL; }
+    }
 }
 
 static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
@@ -2166,7 +2229,18 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                 if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                    ggml_backend_synchronize(input_backend);
+                    // M3f: if the input was produced by a split ending in an expert-cache
+                    // classify run, waiting on that split's completion event covers everything
+                    // the consumer reads — the producer stream may still carry later segments
+                    // (e.g. the hot expert path) that this split never touches.
+                    ggml_backend_event_t crossing_ev = NULL;
+                    {
+                        size_t input_id = hash_id(input);
+                        int ps = sched->tensor_producer_split[input_id];
+                        if (ps >= 0 && ps < sched->n_splits) crossing_ev = sched->split_events[ps].ev;
+                    }
+                    if (crossing_ev != NULL) ggml_backend_event_synchronize(crossing_ev);
+                    else                     ggml_backend_synchronize(input_backend);
                     if (needs_sync[split_backend_id]) {
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
@@ -2241,7 +2315,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     for (auto & item : sched->needs_sync) item = true;
 
-    if (sched->is_async && sched->n_backends > 2 && sched->split_mode_graph && sched->has_reduce) {
+    if (ggml_backend_sched_async_path(sched)) {
 
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
 
@@ -2573,6 +2647,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
             }
         }
+
+        // M3f: record this split's completion event (host-side, right after the
+        // async launch — outside CUDA graph capture, same as the record above)
+        // so cross-backend consumers of a classify-ending split can wait on it
+        if (i < (int)sched->split_events.size() && sched->split_events[i].ev != NULL) {
+            ggml_backend_event_record(sched->split_events[i].ev);
+        }
     }
 
     sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
@@ -2595,6 +2676,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
     for (int i = 0; i < (GGML_OP_COUNT + 31)/32; ++i) sched->op_offload[i] = 0xffffffff;
 
     sched->debug = getenv("GGML_SCHED_DEBUG") != NULL;
+    // M3f: event-scoped crossing waits for expert-cache classify splits;
+    // setting the env restores the full-stream sync behavior (A/B + rollback)
+    sched->crossing_events = getenv("IK_EXP_CACHE_NO_CROSSING_EVENTS") == NULL;
     sched->n_backends = n_backends;
     sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
 
@@ -2603,6 +2687,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->hash_set    = ggml_hash_set_new(graph_size);
     sched->hv_tensor_backend_ids = (int *)malloc(sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
     sched->hv_tensor_copies      = (ggml_tensor **)malloc(sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+    sched->tensor_producer_split.assign(sched->hash_set.size, -1);
 
     const size_t nodes_size = graph_size + GGML_SCHED_MAX_SPLITS*GGML_SCHED_MAX_SPLIT_INPUTS*2;
     sched->node_backend_ids = (int *)calloc(nodes_size, sizeof(sched->node_backend_ids[0]));
@@ -2647,6 +2732,10 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
         for (int c = 0; c < sched->n_copies; c++) {
             ggml_backend_event_free(sched->events[b][c]);
         }
+    }
+    // M3f: free the per-split crossing event pool
+    for (auto & se : sched->split_events) {
+        if (se.ev) ggml_backend_event_free(se.ev);
     }
     for (int i = 0; i < sched->n_backends; ++i) {
         if (sched->input_memory_bufs[i]) {

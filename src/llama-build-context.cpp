@@ -1641,6 +1641,21 @@ llm_expert_gating_func_type   gating_op,
             ggml_format_name(hot_mask, "ffn_exp_cache_hot_mask-%d", il);
             ggml_format_name(cold_ids, "ffn_exp_cache_cold_ids-%d", il);
             cl.topk_ids = selected_experts; // host-side k/ntok metadata for the boundary staging readback
+            if (graph) {
+                // M3f: expand the classify nodes immediately so they land in the
+                // graph right after the router/weights chain, BEFORE the hot/cold
+                // MoE ops in node order. The default post-order DFS from moe_out
+                // would interleave them with their consumers (hot_mask/cold_ids
+                // behind the hot matmuls), and on the single CUDA stream the M3f
+                // crossing-event wait for cold_ids would then drag the whole hot
+                // path into the cold path's D2H wait. The router chain is already
+                // expanded above (weights), so this appends exactly the three
+                // classify nodes and leaves the glm45 fusion pattern contiguous.
+                // Node order only — graph semantics and numerics are unchanged.
+                ggml_build_forward_expand(graph, hot_ids);
+                ggml_build_forward_expand(graph, hot_mask);
+                ggml_build_forward_expand(graph, cold_ids);
+            }
         } else {
             hot_ids  = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, n_tokens);
             hot_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_expert_used, n_tokens);
