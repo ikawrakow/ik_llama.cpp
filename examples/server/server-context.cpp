@@ -2384,10 +2384,10 @@ void server_context::send_error(const server_task& task, const std::string& erro
 }
 
 void server_context::send_error(const server_slot& slot, const std::string& error, const enum error_type type) {
-    send_error(slot.id_task, slot.id_multi, error, type);
+    send_error(slot.id_task, slot.id_multi, error, type, slot.n_prompt_tokens, slot.n_ctx);
 }
 
-void server_context::send_error(const int id_task, const int id_multi, const std::string& error, const enum error_type type ) {
+void server_context::send_error(const int id_task, const int id_multi, const std::string& error, const enum error_type type, const int32_t n_prompt_tokens, const int32_t n_ctx) {
     LOG_ERROR("task error", {
         {"id_multi", id_multi},
         {"id_task", id_task},
@@ -2400,6 +2400,8 @@ void server_context::send_error(const int id_task, const int id_multi, const std
     res->error = true;
     res->err_type = type;
     res->err_msg = error;
+    res->n_prompt_tokens = n_prompt_tokens;
+    res->n_ctx = n_ctx;
     queue_results.send(std::move(res));
 }
 
@@ -3466,7 +3468,7 @@ void server_context::context_shift() {
                     // we should never get here, because generation should already stopped in process_token()
                     slot.print_timings();
                     slot.release();
-                    send_error(slot, "context_length_exceeded: the request exceeds the available context size; context shift is disabled", ERROR_TYPE_SERVER);
+                    send_error(slot, "context_length_exceeded: the request exceeds the available context size; context shift is disabled", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                     continue;
                 }
                 // Shift context
@@ -3933,7 +3935,10 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         // context shift for prompt processing
                         if (slot.ga_n == 1 && slot.n_prompt_tokens >= slot.n_ctx) {
                             if (!params_base.ctx_shift) {
-                                send_error(slot, "the request exceeds the available context size, try increasing it", ERROR_TYPE_SERVER);
+                                send_error(slot,
+                                        string_format("request (%d tokens) exceeds the available context size (%d tokens), try increasing it",
+                                            slot.n_prompt_tokens, slot.n_ctx),
+                                        ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 slot.release();
                                 continue;
                             }

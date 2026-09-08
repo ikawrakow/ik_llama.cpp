@@ -312,6 +312,10 @@ struct server_task_result_error : server_task_result {
 
     virtual json to_json() override {
         json res = format_error_response(err_msg, err_type);
+        if (err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+            res["n_prompt_tokens"] = n_prompt_tokens;
+            res["n_ctx"]           = n_ctx;
+        }
         return res;
     }
 };
