@@ -69,25 +69,9 @@ size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
     }
     if (Q->ne[1] == 1 && Q->ne[3] == 1 && Q->ne[2]/K->ne[2] > 1 && nth >= 1 && K->ne[1]/32 > 1) {
         if (K->ne[2] > 1) {
-            int gcd = simple_gcd(K->ne[2], nth);
-            int nth_k  = nth/gcd;
-            int nek2_k = K->ne[2]/gcd;
-            int nchunk = nek2_k*K->ne[1]/32;
-            int npt = (nchunk + nth_k - 1)/nth_k;
-            int nk;
-            if (npt*nth_k == nchunk) {
-                nk = 32 * (K->ne[1]*K->ne[2]/(32*nth));
-            } else {
-                //int nm = std::max(1, npt/8);
-                int nm = 1;
-                while (true) {
-                    if (nm*4 >= npt) break;
-                    nm *= 2;
-                }
-                nk = 32*nm;
-            }
-            int nkk = (K->ne[1] + nk - 1)/nk;
-            int nstep_k = K->ne[2]*nkk;
+            // Cover any nek1 that iqk_flash_attn_noalibi narrows to at run time.
+            int nstep_k = K->ne[2]*((K->ne[1] + 31)/32);
+            if (nstep_k > 4*nth + K->ne[2]) nstep_k = 4*nth + K->ne[2];
             size_t result_size = (V->ne[0] + 16)*Q->ne[2]/K->ne[2]*sizeof(float);
             size += nstep_k*result_size;
             return size;
