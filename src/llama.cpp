@@ -221,6 +221,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_LLAMA_3,
     LLM_CHAT_TEMPLATE_CHATGLM_3,
     LLM_CHAT_TEMPLATE_CHATGLM_4,
+    LLM_CHAT_TEMPLATE_GLMEDGE,
     LLM_CHAT_TEMPLATE_MINICPM,
     LLM_CHAT_TEMPLATE_EXAONE_3,
     LLM_CHAT_TEMPLATE_RWKV_WORLD,
@@ -269,6 +270,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "llama3",            LLM_CHAT_TEMPLATE_LLAMA_3           },
     { "chatglm3",          LLM_CHAT_TEMPLATE_CHATGLM_3         },
     { "chatglm4",          LLM_CHAT_TEMPLATE_CHATGLM_4         },
+    { "glmedge",           LLM_CHAT_TEMPLATE_GLMEDGE           },
     { "minicpm",           LLM_CHAT_TEMPLATE_MINICPM           },
     { "exaone3",           LLM_CHAT_TEMPLATE_EXAONE_3          },
     { "rwkv-world",        LLM_CHAT_TEMPLATE_RWKV_WORLD        },
@@ -12467,7 +12469,7 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
     } else if (tmpl_contains("<|assistant|>") && tmpl_contains("<|end|>")) {
         return LLM_CHAT_TEMPLATE_PHI_3;
     } else if (tmpl_contains("<|assistant|>") && tmpl_contains("<|user|>")) {
-        return LLM_CHAT_TEMPLATE_FALCON_3;
+        return tmpl_contains("</s>") ? LLM_CHAT_TEMPLATE_FALCON_3 : LLM_CHAT_TEMPLATE_GLMEDGE;
     } else if (tmpl == "falcon_e" && (tmpl_contains("assistant") && tmpl_contains("user"))) {
         return LLM_CHAT_TEMPLATE_FALCON_E;
     } else if (tmpl_contains("<|user|>") && tmpl_contains("<|endoftext|>")) {
@@ -12802,6 +12804,14 @@ static int32_t llama_chat_apply_template_internal(
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_CHATGLM_4) {
         ss << "[gMASK]" << "<sop>";
+        for (auto message : chat) {
+            std::string role(message->role);
+            ss << "<|" << role << "|>" << "\n" << message->content;
+        }
+        if (add_ass) {
+            ss << "<|assistant|>";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_GLMEDGE) {
         for (auto message : chat) {
             std::string role(message->role);
             ss << "<|" << role << "|>" << "\n" << message->content;
