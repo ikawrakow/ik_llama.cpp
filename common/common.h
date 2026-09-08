@@ -500,7 +500,7 @@ struct gpt_params {
     // Phase 4: dynamic LRU expert cache
     int32_t expert_cache_h = 0;                 // per-MoE-layer resident expert slots; 0 = off
     float   expert_cache_gb = 0.0f;             // alternative sizing by total byte budget
-    float   expert_cache_promote_gbps = 8.0f;   // promotion bandwidth cap (GB/s); <=0 = unlimited
+    float   expert_cache_promote_gbps = 2.0f;   // promotion bandwidth cap (GB/s); <=0 = unlimited
 
     // embedding
     bool embedding         = false; // get only sentence embedding

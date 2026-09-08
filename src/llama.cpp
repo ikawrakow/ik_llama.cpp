@@ -10101,7 +10101,7 @@ struct llama_context_params llama_context_default_params() {
         /*.prefetch_experts            =*/ false,
         /*.prefetch_experts_threads    =*/ 0,
         /*.expert_cache_h              =*/ 0,
-        /*.expert_cache_promote_gbps   =*/ 8.0f,
+        /*.expert_cache_promote_gbps   =*/ 2.0f,
         /*.k_cache_hadamard            =*/ false,
         /*.v_cache_hadamard            =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
