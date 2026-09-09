@@ -550,6 +550,12 @@ struct gpt_params {
     std::string sql_save_file;
     std::string sqlite_zstd_ext_file;
 
+    // disk KV block cache (server): cross-request / cross-process prefix KV reuse
+    std::string kv_cache_dir          = ""; // disk KV block cache directory (empty = disabled)
+    int32_t     kv_cache_block_tokens = 64; // disk KV block size in tokens
+    int32_t     kv_cache_max_age_days = 3;  // delete blocks not accessed for N days (0 = disabled)
+    size_t      kv_cache_max_size_mb  = 0;  // cache directory size limit in MB (0 = unlimited)
+
     float slot_prompt_similarity = 0.1f;
 
     bool do_checkpoint = false;               // do checkpoint for recurrent models only

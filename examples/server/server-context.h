@@ -359,6 +359,11 @@ struct server_context {
 
     void update_slots();
 
+    // disk KV block cache pre-warm (v1): contiguous prefix from position 0, pure text only.
+    // Loads hit blocks from disk / decodes & saves misses into slot.id; advances
+    // slot.n_past, slot.n_past_prompt and slot.cache_tokens accordingly.
+    size_t disk_kv_prewarm(server_slot & slot);
+
     void release_slots();
 
     bool slots_idle();
