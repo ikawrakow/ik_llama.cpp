@@ -1368,15 +1368,11 @@ common_speculative * common_speculative_init(
                     __func__, target_ctx, effective_draft_ctx, cross_ctx, query_capacity);
         }
 
-        // qwen4exp shared companion: the predictor-only GGUF omits token_embd
-        // (qwen4exp.nextn_shared_target_tensors); borrow the target IO tensors
-        // before the draft context is created, like the DFlash sharing above.
         if (!has_dflash_stage && !llama_model_share_qwen4exp_mtp_tensors(
                     params.model_dft, llama_get_model(ctx_tgt))) {
             LOG_ERR("%s: failed to share target IO tensors with the qwen4exp shared MTP companion\n", __func__);
             return nullptr;
         }
-
 
         ctx_dft = llama_init_from_model(params.model_dft, cparams_dft);
         if (ctx_dft == nullptr) {

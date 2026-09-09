@@ -200,13 +200,6 @@ bool llama_spec_copy_hidden_rows_from_output_indices(
     return hidden_rows.size() == (size_t) output_indices.size() * view.width;
 }
 
-// qwen4exp shared companion: predictor-only GGUFs (nextn_shared_target_tensors)
-// ship no token_embd/output and borrow the target's tensors, mirroring the
-// DFlash IO sharing. Requires a qwen4exp target with exactly matching IO
-// shapes; borrowed tensors are cloned into the draft's buffer types when a
-// cross-device placement would otherwise leave them on a foreign buffer.
-// Self-contained drafts keep their own tensors untouched. Returns false when
-// the target cannot provide usable tensors.
 static bool llama_model_qwen4exp_io_needs_clone(const ggml_tensor * tensor, ggml_backend_buffer_type_t buft) {
     return tensor != nullptr && tensor->buffer != nullptr && buft != nullptr &&
            ggml_backend_buffer_get_type(tensor->buffer) != buft;
@@ -253,14 +246,13 @@ bool llama_model_share_qwen4exp_mtp_tensors(llama_model * draft_model, const lla
     if (draft_model->arch != LLM_ARCH_QWEN4EXP) {
         return true;
     }
-    // only a qwen4exp target can provide matching IO tensors
+    if (draft_model->tok_embd != nullptr && draft_model->output != nullptr) {
+        return true;
+    }
     if (target_model->arch != LLM_ARCH_QWEN4EXP) {
         return false;
     }
 
-    // speculative vocab compatibility tolerates a size difference, but the
-    // draft graph consumes the borrowed tensors with the draft's own shapes:
-    // require an exact match so a mismatch cannot silently truncate
     const int64_t n_embd  = draft_model->hparams.n_embd;
     const int64_t n_vocab = draft_model->hparams.n_vocab;
 
