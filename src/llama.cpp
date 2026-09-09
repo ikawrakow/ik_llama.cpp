@@ -12807,7 +12807,7 @@ static int32_t llama_chat_apply_template_internal(
             ss << "<|" << role << "|>" << "\n" << message->content;
         }
         if (add_ass) {
-            ss << "<|assistant|>";
+            ss << "<|assistant|>" << "\n";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_MINICPM) {
         // MiniCPM-3B-OpenHermes-2.5-v2-GGUF
