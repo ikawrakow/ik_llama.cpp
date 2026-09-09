@@ -849,8 +849,8 @@ void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo& info,
                     sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(scales[ib64], dot));
 #endif
                 }
-#ifdef HAVE_FANCY_SIMD
-                sumi = _mm256_dpwssd_epi32(sumi, bsums, deltas);
+#ifdef HAVE_VNNI256
+                sumi = ggml_mm256_dpwssd_epi32(sumi, bsums, deltas);
 #else
                 sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(bsums, deltas));
 #endif

@@ -30,7 +30,7 @@
 
 #ifdef _MSC_VER
 #define IQK_NOINLINE __declspec(noinline)
-#define IQK_ALWAYS_INLINE inline
+#define IQK_ALWAYS_INLINE __forceinline
 #if !defined __x86_64__ && defined _M_X64
 #define __x86_64__
 #endif
