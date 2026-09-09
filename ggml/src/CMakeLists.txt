@@ -1172,6 +1172,21 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
                 add_compile_definitions($<$<COMPILE_LANGUAGE:C>:__AVX512BF16__>)
                 add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVX512BF16__>)
             endif()
+
+            # MSVC + GGML_NATIVE detects only the base AVX-512 flag (see
+            # ../cmake/FindSIMD.cmake); the extension macros above stay unset, so
+            # HAVE_FANCY_SIMD is not defined and the IQK GEMM kernels for Zen4 /
+            # Sapphire Rapids and later are silently left out of the build.
+            if (GGML_NATIVE AND NOT GGML_AVX512_VNNI)
+                message(WARNING
+                    "GGML_NATIVE enabled AVX-512 for MSVC, but the AVX-512 extension macros "
+                    "are not set: MSVC does not define them, and FindSIMD.cmake detects only "
+                    "the base AVX-512 flag. __AVX512VNNI__ therefore stays undefined, "
+                    "HAVE_FANCY_SIMD is off, and the IQK GEMM kernels for Zen4 / Sapphire "
+                    "Rapids and later are not compiled. If this CPU supports AVX512-VNNI, "
+                    "reconfigure with -DGGML_AVX512_VNNI=ON -DGGML_AVX512_VBMI=ON "
+                    "-DGGML_AVX512_BF16=ON (see docs/build.md and scripts/build-zen.bat).")
+            endif()
         elseif (GGML_AVX2)
             list(APPEND ARCH_FLAGS /arch:AVX2)
             if (GGML_AVXVNNI)
