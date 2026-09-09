@@ -5866,12 +5866,12 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             const int64_t n_tokens = batch.n_tokens;
             const int64_t n_stride = hparams.causal_attn && !lctx.is_encoding ? kv_self.n : n_tokens;
 
-            GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask->buffer));
-
             float * data     = nullptr;
             float * data_swa = nullptr;
+            float * data_swa_win = nullptr;
             ggml_half * data_f16     = nullptr;
             ggml_half * data_swa_f16 = nullptr;
+            ggml_half * data_swa_win_f16 = nullptr;
 
             if (lctx.inp_KQ_mask) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask->buffer));
@@ -5891,16 +5891,115 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
+            if (lctx.inp_KQ_mask_swa_win) {
+                GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa_win->buffer));
+                if (cparams.flash_attn) {
+                    data_swa_win_f16 = (ggml_half *) lctx.inp_KQ_mask_swa_win->data;
+                } else {
+                    data_swa_win = (float *) lctx.inp_KQ_mask_swa_win->data;
+                }
+            }
+
             // For causal models running in non-causal mode (e.g., Gemma-4 image decode),
             // the flash-attn mask is allocated as [n_kv, n_tokens_pad] and must be filled
             // using KV cache cell metadata — not batch-token indices — because image tokens
             // occupy cells starting at n_past, not at cell 0.
+            // swa_full_non_causal: in a non-causal (image) span the window only clips
+            // cells older than the span; in-span cells attend fully. Track each span start.
+            const bool swa_skip_window = hparams.swa_full_non_causal && !cparams.causal_attn;
+            std::unordered_map<llama_seq_id, llama_pos> ubatch_span_min;
+            if (swa_skip_window) {
+                for (int j = 0; j < n_tokens; ++j) {
+                    const llama_seq_id sid = batch.seq_id[j][0];
+                    auto it = ubatch_span_min.find(sid);
+                    if (it == ubatch_span_min.end() || batch.pos[j] < it->second) {
+                        ubatch_span_min[sid] = batch.pos[j];
+                    }
+                }
+            }
+            // the compact-window mask needs the same in-span exemption in the non-causal path
+            if (data_swa_win || data_swa_win_f16) {
+                const auto & built = lctx.swa_window_view;
+                const uint32_t pad = llama_kv_cache::get_padding(cparams.flash_attn);
+                const int64_t live = built.compacted
+                    ? (int64_t) mask_kv_self.live_swa() + n_tokens : 0;
+                const llama_swa_window_view view = built.compacted
+                    ? llama_swa_calc_window_view_compact(live, mask_kv_self.sink_rows,
+                                                         n_tokens, built.window, pad)
+                    : llama_swa_calc_window_view(n_kv, n_tokens, built.window, pad);
+                GGML_ASSERT(built.active && view.engaged &&
+                        "SWA window view must be engaged when KQ_mask_swa_win is present");
+                GGML_ASSERT(built.n_kv == n_kv && built.n_tokens == n_tokens &&
+                        built.pad == pad && built.w_view == view.w_view &&
+                        built.win_off == view.win_off &&
+                        "SWA window view reuse-key mismatch");
+
+                const int64_t W_view  = built.w_view;
+                const int64_t win_off = built.win_off;
+                const bool      compacted    = built.compacted;
+                const int64_t   row_base     = mask_kv_self.sink_rows;
+                const llama_pos pos_base     = mask_kv_self.pos_base_swa;
+                for (int j = 0; j < n_tokens; ++j) {
+                    const llama_pos    pos    = batch.pos[j];
+                    const llama_seq_id seq_id = batch.seq_id[j][0];
+                    const bool span_min_set = swa_skip_window && ubatch_span_min.find(seq_id) != ubatch_span_min.end();
+                    const llama_pos span_min = span_min_set ? ubatch_span_min[seq_id] : 0;
+                    for (int64_t c = 0; c < W_view; ++c) {
+                        const int64_t i = win_off + c;
+                        const llama_pos cell_pos = compacted
+                            ? pos_base + (llama_pos) (i - row_base) : mask_kv_self.cells[i].pos;
+                        const bool in_seq = compacted
+                            ? cell_pos >= pos_base : mask_kv_self.cells[i].has_seq_id(seq_id);
+                        float f;
+                        if (!in_seq || cell_pos > pos) {
+                            f = -INFINITY;
+                        } else {
+                            f = hparams.use_alibi ? -std::abs(cell_pos - pos) : 0.0f;
+                        }
+
+                        if (f > -INFINITY) {
+                            if (hparams.n_attn_chunk) {
+                                llama_pos pos_chunk_start = (pos / hparams.n_attn_chunk) * hparams.n_attn_chunk;
+                                if (cell_pos < pos_chunk_start || pos < pos_chunk_start) {
+                                    f = -INFINITY;
+                                }
+                            } else if (pos - cell_pos >= (int32_t) built.window) {
+                                // swa_full_non_causal: skip the window for in-span cells
+                                if (!(span_min_set && cell_pos >= span_min)) {
+                                    f = -INFINITY;
+                                }
+                            }
+                        }
+
+                        if (data_swa_win) {
+                            data_swa_win[j*W_view + c] = f;
+                        }
+                        if (data_swa_win_f16) {
+                            data_swa_win_f16[j*W_view + c] = ggml_fp32_to_fp16(f);
+                        }
+                    }
+                }
+
+                const int64_t n_tokens_padded = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_tokens_padded > n_tokens) {
+                    if (data_swa_win) {
+                        std::fill(data_swa_win + int64_t(n_tokens)*W_view, data_swa_win + n_tokens_padded*W_view, -INFINITY);
+                    }
+                    if (data_swa_win_f16) {
+                        const ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill(data_swa_win_f16 + int64_t(n_tokens)*W_view, data_swa_win_f16 + n_tokens_padded*W_view, h_inf);
+                    }
+                }
+            }
+
             if (cparams.flash_attn && hparams.causal_attn && !lctx.is_encoding) {
                 const ggml_half h_inf  = ggml_fp32_to_fp16(-INFINITY);
                 const ggml_half h_zero = ggml_fp32_to_fp16(0.f);
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_seq_id seq_id = batch.seq_id[j][0];
                     const llama_pos    pos    = batch.pos[j];
+                    const bool span_min_set = swa_skip_window && ubatch_span_min.find(seq_id) != ubatch_span_min.end();
+                    const llama_pos span_min = span_min_set ? ubatch_span_min[seq_id] : 0;
                     for (int i = 0; i < n_kv; ++i) {
                         const bool valid = mask_kv_self.cells[i].has_seq_id(seq_id);
                         if (data_f16) {
@@ -5915,7 +6014,10 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                                         h = h_inf;
                                     }
                                 } else if (pos - mask_kv_self.cells[i].pos >= (int32_t)n_swa_eff) {
-                                    h = h_inf;
+                                    // swa_full_non_causal: skip the window for in-span cells
+                                    if (!(span_min_set && mask_kv_self.cells[i].pos >= span_min)) {
+                                        h = h_inf;
+                                    }
                                 }
                             }
                             data_swa_f16[j*n_kv + i] = h;

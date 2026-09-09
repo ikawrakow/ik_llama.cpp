@@ -18,6 +18,21 @@
 #include <regex>
 #include <exception>
 
+// DFlash/DSpark (draft model family) and MTP stages work with multimodal
+static bool server_speculative_multimodal_supported(const common_params_speculative & params) {
+    const auto stages = params.get_resolved_stages();
+    if (stages.empty()) {
+        return true;
+    }
+    for (const auto & stage : stages) {
+        if (stage.type != COMMON_SPECULATIVE_TYPE_MTP &&
+                !common_speculative_type_is_dflash_family(stage.type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max, int32_t offset) {
     ckpt.pos_min = pos_min;
     ckpt.pos_max = pos_max;
@@ -250,14 +265,10 @@ bool server_context::load_model(const gpt_params& params_) {
         //}
 
         if (has_draft_model) {
-            LOG_ERROR("%s\n", "err: speculative decode is not supported by multimodal");
-            return false;
+            SRV_WRN("%s\n", "draft-model speculative decode requested with multimodal; validated below");
         }
 
-        const auto spec_stages = params_base.speculative.get_resolved_stages();
-        const bool multimodal_spec_supported = spec_stages.empty() ||
-            (spec_stages.size() == 1 && spec_stages.front().type == COMMON_SPECULATIVE_TYPE_MTP);
-        if (!multimodal_spec_supported) {
+        if (!server_speculative_multimodal_supported(params_base.speculative)) {
             params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
             params_base.speculative.stages.clear();
             params_base.has_mtp = false;
@@ -350,7 +361,7 @@ void server_context::init() {
         if (can_spec && requested_spec) {
             switch (common_speculative_try_init(params_base.speculative, slot.ctx, &slot.spec)) {
             case COMMON_SPECULATIVE_INIT_READY:
-                if (mctx && !slot.uses_mtp()) {
+                if (mctx && !server_speculative_multimodal_supported(slot.params.speculative)) {
                     SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                     return;
                 }
@@ -3525,15 +3536,17 @@ void server_context::add_sampled_tokens() {
         //       perform the speculative drafting for all sequences at the same time in a single batch
         const int n_draft_max_pre = slot.get_n_draft_max();
         if (n_draft_max_pre > 0) {
-            if (mctx && !slot.uses_mtp()) {
-                // we should never reach this, as speculative is automatically disabled if mmproj is loaded
+            if (mctx && !server_speculative_multimodal_supported(slot.params.speculative)) {
                 GGML_ABORT("not supported by multimodal");
             }
 
             static const llama_tokens empty_prompt;
-            const llama_tokens & cached_text_tokens = slot.uses_mtp() && !slot.params.speculative.has_composite_stage_chain()
+            // DFlash/DSpark drafts ignore the text stream, so skip it when mtmd is loaded
+            const llama_tokens & cached_text_tokens = slot.params.speculative.has_dflash_family_stage()
                 ? empty_prompt
-                : slot.cache_tokens.get_text_tokens();
+                : slot.uses_mtp() && !slot.params.speculative.has_composite_stage_chain()
+                    ? empty_prompt
+                    : slot.cache_tokens.get_text_tokens();
 
             auto & params_spec = slot.params.speculative;
             const llama_pos draft_base_pos = slot.uses_mtp() ? slot.cache_tokens.pos_next() : -1;
@@ -4784,9 +4797,12 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             if (slot.n_decoded == 0 && slot.can_speculate()) {
                 static const llama_tokens empty_prompt;
-                const llama_tokens & spec_prompt = slot.uses_mtp() && !slot.params.speculative.has_composite_stage_chain()
+                // DFlash/DSpark drafts ignore the text stream, so skip it when mtmd is loaded
+                const llama_tokens & spec_prompt = slot.params.speculative.has_dflash_family_stage()
                     ? empty_prompt
-                    : slot.cache_tokens.get_text_tokens();
+                    : slot.uses_mtp() && !slot.params.speculative.has_composite_stage_chain()
+                        ? empty_prompt
+                        : slot.cache_tokens.get_text_tokens();
                 common_speculative_begin(slot.spec, spec_prompt);
             }
 

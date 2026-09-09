@@ -351,6 +351,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
+    struct ggml_tensor * ffn_exp_probs_b_vl = nullptr;
     struct ggml_tensor * ffn_gate_tid2eid = nullptr;
 
     llama_split_tensor split_ffn_gate_b;

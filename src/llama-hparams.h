@@ -33,6 +33,7 @@ struct llama_hparams {
     uint32_t n_rot_swa;
     uint32_t n_swa = 0; // sliding window attention (SWA)
     uint32_t n_swa_pattern = 1; // by default, all layers use non-sliding-window attention
+    bool     swa_full_non_causal = false; // DSV4 vision: in a non-causal (image) span, window only clips older tokens
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
     uint32_t n_embd_head_k_swa;

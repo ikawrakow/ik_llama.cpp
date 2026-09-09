@@ -1267,6 +1267,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_DOWN_SHEXP,         "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,           "blk.%d.ffn_up_shexp" },
 	        { LLM_TENSOR_FFN_EXP_PROBS_B,        "blk.%d.exp_probs_b" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B_VL,     "blk.%d.exp_probs_b_vl" },
             { LLM_TENSOR_FFN_GATE_TID2EID,       "blk.%d.ffn_gate_tid2eid" },
             { LLM_TENSOR_INDEXER_K_NORM,         "blk.%d.indexer.k_norm" },
             { LLM_TENSOR_INDEXER_PROJ,           "blk.%d.indexer.proj" },
