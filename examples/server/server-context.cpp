@@ -3639,7 +3639,7 @@ static bool verify_restored_checkpoint(
     return true;
 }
 
-void server_context::create_checkpoint_at_interval(server_slot & slot) {
+void server_context::create_checkpoint_at_interval(server_slot & slot, checkpoint_origin origin) {
     if (!this->params_base.do_checkpoint) {
         return;
     }
@@ -3648,7 +3648,7 @@ void server_context::create_checkpoint_at_interval(server_slot & slot) {
     }
     auto pos = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
     if (slot.checkpoint_pos + this->params_base.ctx_checkpoints_interval <= pos) {
-        bool created = create_checkpoint(slot);
+        bool created = create_checkpoint(slot, origin);
         if (created) {
             slot.checkpoint_pos = pos;
         }
@@ -3719,6 +3719,10 @@ void server_context::apply_checkpoint(server_slot & slot) {
                     }
 
                     slot.checkpoint_pos = it->pos_max;
+
+                    // Recompute the feed alignment after a restore so checkpoints
+                    // taken during the re-prefill record true prompt coordinates.
+                    slot.n_past_offset = slot.n_past_prompt - slot.n_past;
 
                     SLT_WRN(slot, "restored context checkpoint took  %.2f ms (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", (ggml_time_us() - t_start) / 1000.0, it->pos_min, it->pos_max, it->n_tokens, slot.n_past, (float)checkpoint_size / 1024 / 1024);
                 }
@@ -3806,7 +3810,7 @@ static std::list<server_prompt_checkpoint>::iterator evict_checkpoint_by_varianc
     return it;
 }
 
-bool server_context::create_checkpoint(server_slot & slot) {
+bool server_context::create_checkpoint(server_slot & slot, checkpoint_origin origin) {
     bool do_checkpoint = !slot.image_just_processed;
     int32_t pos_min = llama_kv_cache_seq_pos_min(slot.ctx, slot.id);
     const auto pos_max = llama_kv_cache_seq_pos_max(slot.ctx, slot.id);
@@ -3817,6 +3821,16 @@ bool server_context::create_checkpoint(server_slot & slot) {
 
     // no need to create checkpoints that are too close together
     do_checkpoint = do_checkpoint && (slot.server_cached_prompt.checkpoints.empty() || slot.cache_tokens.n_tokens() > slot.server_cached_prompt.checkpoints.back().n_tokens);
+
+    // DSV4/openPangu only: exclude checkpoints spanning generated tokens;
+    // their prompt coordinate is extrapolated, not measured.
+    if (do_checkpoint && origin != CHECKPOINT_ORIGIN_FEED &&
+            (llama_model_is_deepseek4(model) || llama_model_is_openpangu(model))) {
+        SLT_WRN(slot, "not creating generation-span checkpoint (pos_max = %d, n_prompt_tokens = %d, n_past_offset = %d, n_decoded = %d) at %s: prompt coordinate would be a creation-time extrapolation across generated tokens\n",
+            pos_max, slot.n_prompt_tokens, slot.n_past_offset, slot.n_decoded,
+            origin == CHECKPOINT_ORIGIN_RELEASE ? "slot release" : "generation interval");
+        return false;
+    }
 
     if (do_checkpoint) {
         const int64_t t_start = ggml_time_us();
@@ -4409,7 +4423,7 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
 void server_context::release_slot_after_final_response(server_slot & slot) {
     slot.print_timings();
     if (params_base.do_checkpoint) {
-        create_checkpoint(slot);
+        create_checkpoint(slot, CHECKPOINT_ORIGIN_RELEASE);
     }
     slot.release();
     slot.released = true;
@@ -4766,9 +4780,9 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 // save checkpoint during prompt processing
                 if (slot.command == SLOT_COMMAND_LOAD_PROMPT) {
                     if (slot.do_checkpoint) {
-                        create_checkpoint(slot);
+                        create_checkpoint(slot, CHECKPOINT_ORIGIN_FEED);
                     } else {
-                        create_checkpoint_at_interval(slot);
+                        create_checkpoint_at_interval(slot, CHECKPOINT_ORIGIN_FEED);
                     }
                 }
                 continue; // continue loop of slots
@@ -4839,13 +4853,13 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 metrics.on_prompt_eval(slot);
                 // create checkpoint after prompt processing ends
                 if (params_base.ctx_checkpoints_tolerance<=0 && params_base.do_checkpoint) {
-                    create_checkpoint(slot);
+                    create_checkpoint(slot, CHECKPOINT_ORIGIN_FEED);
                 }
             }
 
             // create checkpoint during generation
             if (slot.n_decoded > 1) {
-                create_checkpoint_at_interval(slot);
+                create_checkpoint_at_interval(slot, CHECKPOINT_ORIGIN_GENERATION);
             }
 
             slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;

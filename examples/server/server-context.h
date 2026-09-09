@@ -23,6 +23,12 @@ enum slot_command {
     SLOT_COMMAND_RELEASE,
 };
 
+enum checkpoint_origin {
+    CHECKPOINT_ORIGIN_FEED,       // prompt tokens only; coordinate is measured
+    CHECKPOINT_ORIGIN_GENERATION, // spans generated tokens; coordinate is extrapolated
+    CHECKPOINT_ORIGIN_RELEASE,    // spans generated tokens; coordinate is extrapolated
+};
+
 struct server_slot {
     int id;
     int id_task = -1;
@@ -390,11 +396,11 @@ struct server_context {
     // Re-aggregates all active vectors and updates the model state
     bool apply_control_vectors_internal();
 
-    bool create_checkpoint(server_slot & slot);
+    bool create_checkpoint(server_slot & slot, checkpoint_origin origin);
 
     void apply_checkpoint(server_slot & slot);
 
-    void create_checkpoint_at_interval(server_slot & slot);
+    void create_checkpoint_at_interval(server_slot & slot, checkpoint_origin origin);
 
     void release_slot_after_final_response(server_slot & slot);
 };
