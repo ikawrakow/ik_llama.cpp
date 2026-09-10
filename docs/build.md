@@ -232,7 +232,14 @@ Mechanics:
   `__AVX512CD__`), and the `GGML_AVX512_VNNI=ON` / `_VBMI=ON` / `_BF16=ON`
   options add the corresponding `__AVX512VNNI__` / `__AVX512VBMI__` /
   `__AVX512BF16__` definitions explicitly. See
-  [`ggml/src/CMakeLists.txt:1352-1374`](../ggml/src/CMakeLists.txt#L1352-L1374).
+  [`ggml/src/CMakeLists.txt:1157-1174`](../ggml/src/CMakeLists.txt#L1157-L1174).
+- With `GGML_NATIVE=ON` the three extension options no longer have to be passed
+  by hand on MSVC. `ggml/cmake/FindSIMD.cmake` compiles and runs a small test
+  for VNNI, VBMI and BF16 and turns each option on only if the CPU executes it.
+  Passing them on the command line still works, but detection has the final
+  say: on a CPU that fails the test the option is turned back off, so a machine
+  without AVX512-VNNI cannot end up with `__AVX512VNNI__` defined and a binary
+  that faults on the first IQK kernel.
 - On GCC / Clang, `GGML_NATIVE=ON` resolves `-march=native` to a target
   that defines the macros (on Zen4, `znver4`; on Sapphire Rapids,
   `sapphirerapids`), and the same `GGML_AVX512_*=ON` options add explicit

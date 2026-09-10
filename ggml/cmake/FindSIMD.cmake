@@ -1,4 +1,5 @@
 include(CheckCSourceRuns)
+include(CheckCSourceCompiles)
 
 set(AVX_CODE "
     #include <immintrin.h>
@@ -25,6 +26,41 @@ set(AVX512_CODE "
         __m512i b = a;
         __mmask64 equality_mask = _mm512_cmp_epi8_mask(a, b, _MM_CMPINT_EQ);
         return 0;
+    }
+")
+
+set(AVX512VNNI_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m512i acc = _mm512_setzero_si512();
+        __m512i u   = _mm512_set1_epi8(1);
+        __m512i s   = _mm512_set1_epi8(1);
+        acc = _mm512_dpbusd_epi32(acc, u, s);
+        return _mm512_reduce_add_epi32(acc) == 64 ? 0 : 1;
+    }
+")
+
+set(AVX512VBMI_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m512i a   = _mm512_set1_epi8(1);
+        __m512i idx = _mm512_setzero_si512();
+        __m512i r   = _mm512_permutexvar_epi8(idx, a);
+        return _mm512_reduce_add_epi32(r) == 16 * 0x01010101 ? 0 : 1;
+    }
+")
+
+set(AVX512BF16_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m512   acc = _mm512_setzero_ps();
+        __m512   a   = _mm512_set1_ps(1.0f);
+        __m512bh b   = _mm512_cvtne2ps_pbh(a, a);
+        acc = _mm512_dpbf16_ps(acc, b, b);
+        return _mm512_reduce_add_ps(acc) == 32.0f ? 0 : 1;
     }
 ")
 
@@ -97,4 +133,33 @@ if (NOT ${AVX512_FOUND})
     set(GGML_AVX512 OFF)
 else()
     set(GGML_AVX512 ON)
+endif()
+
+# MSVC has no /arch: flag for the individual AVX-512 extensions and does not
+# define their macros, so ggml/src/CMakeLists.txt sets them from these options.
+# The probes are compiled and run, so a CPU without the extension fails them.
+# Each one returns the value it computed, or the compiler could drop the
+# instruction under test and the probe would pass with nothing left to run.
+# A probe that does not build says nothing about the CPU: clang-cl gates these
+# intrinsics behind -m flags, so there the option is left as it was.
+macro(check_avx512_extension type option)
+    set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
+    set(CMAKE_REQUIRED_FLAGS "/arch:AVX512")
+    check_c_source_compiles("${${type}_CODE}" HAS_${type}_BUILD)
+    set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
+
+    if (HAS_${type}_BUILD)
+        check_sse("${type}" " ;/arch:AVX512")
+        if (NOT ${${type}_FOUND})
+            set(${option} OFF)
+        else()
+            set(${option} ON)
+        endif()
+    endif()
+endmacro()
+
+if (GGML_AVX512)
+    check_avx512_extension("AVX512VNNI" GGML_AVX512_VNNI)
+    check_avx512_extension("AVX512VBMI" GGML_AVX512_VBMI)
+    check_avx512_extension("AVX512BF16" GGML_AVX512_BF16)
 endif()
