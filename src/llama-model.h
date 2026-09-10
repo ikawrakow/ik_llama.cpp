@@ -124,6 +124,7 @@ enum e_model {
     MODEL_230B_A10B, // Minimax M2
     MODEL_235B_A22B,
     MODEL_310B_A15B,
+    MODEL_312B_A17B,
     MODEL_300B_A47B, // Ernie MoE big
     MODEL_355B_A32B,
     MODEL_397B_A17B, // Qwen-3.5-MoE
@@ -375,6 +376,9 @@ struct llama_layer {
     struct ggml_tensor * ssm_beta = nullptr;
     struct ggml_tensor * ssm_f_a = nullptr;
     struct ggml_tensor * ssm_g_a = nullptr;
+    // GLM-5.3-Flash (kimi-k3) low-rank KDA parameterization: f = f_b(f_a(x)), g = g_b(g_a(x))
+    struct ggml_tensor * ssm_f_b = nullptr;
+    struct ggml_tensor * ssm_g_b = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;
@@ -624,7 +628,7 @@ struct llama_model {
     size_t max_nodes(int n_tokens) const {
         auto n_tensors = tensors_by_name.size();
         if (split_mode == LLAMA_SPLIT_MODE_GRAPH && !devices.empty()) n_tensors *= devices.size();
-        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP) {
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5NEXT) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
         //return std::max<size_t>(1024, 8*n_tensors);
@@ -636,11 +640,11 @@ struct llama_model {
     }
 
     bool is_mla_model() const {
-        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3;
+        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_GLM5NEXT;
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4) {
+        if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4 && arch != LLM_ARCH_GLM5NEXT) {
             return 0.0f;
         }
         return shared ? hparams.swiglu_limits_shared[il] : hparams.swiglu_limits[il];
