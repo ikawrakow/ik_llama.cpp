@@ -42,11 +42,20 @@ static ggml_tensor * qwen4exp_hc_mix(
     cb(xn, "hc_norm", il);
 
     ggml_tensor * lo = llm_build_context::llm_build_lora_mm(lctx, ctx0, w_down, xn);
-    lo = ggml_silu(ctx0, ggml_scale(ctx0, lo, 1.0f / (float) hc));
-    ggml_tensor * gate = ggml_sigmoid(ctx0, llm_build_context::llm_build_lora_mm(lctx, ctx0, w_up, lo));
-    cb(gate, "hc_gate", il);
+    cb(lo, "mix_down", il);
+    lo = ggml_scale(ctx0, lo, 1.0f / (float) hc);
+    cb(lo, "mix_down_scaled", il);
+    lo = ggml_silu(ctx0, lo);
+    cb(lo, "mix_down_silu", il);
+    auto up = llm_build_context::llm_build_lora_mm(lctx, ctx0, w_up, lo);
+    cb(up, "mix_up", il);
+    auto gated = ggml_fused_mul_unary(ctx0, up, xn, GGML_UNARY_OP_SIGMOID);
+    cb(gated, "mix_gated", il);
+    //auto gate = ggml_sigmoid(ctx0, up);
+    ////ggml_tensor * gate = ggml_sigmoid(ctx0, llm_build_context::llm_build_lora_mm(lctx, ctx0, w_up, lo));
+    //cb(gate, "hc_gate", il);
 
-    ggml_tensor * gated = ggml_mul(ctx0, xn, gate);
+    //ggml_tensor * gated = ggml_mul(ctx0, xn, gate);
     gated = ggml_reshape_3d(ctx0, gated, n_embd, hc, nt);
 
     ggml_tensor * mixed = ggml_multi_add(ctx0,

@@ -4051,7 +4051,14 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_up_gate_unary(ctx, dst);
             break;
         case GGML_OP_SCALE:
-            ggml_cuda_op_scale(ctx, dst);
+            if (fusion && i + 1 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_UNARY &&
+                cgraph->nodes[i+1]->src[0] == dst &&
+                ggml_cuda_op_scale_unary(ctx, cgraph->nodes[i+1])) {
+                i += 1;
+            } else {
+                ggml_cuda_op_scale(ctx, dst);
+            }
             break;
         case GGML_OP_SOFTCAP:
             ggml_cuda_op_softcap(ctx, dst);
