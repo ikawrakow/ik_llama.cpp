@@ -2162,36 +2162,44 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
         return true;
     }
 
-    if (!ckpt.per_step_ssm.empty()) {
-        for (struct ggml_context * ctx : ckpt.per_step_ctxs) {
-            ggml_free(ctx);
-        }
-        for (ggml_backend_buffer_t buf : ckpt.per_step_bufs) {
-            ggml_backend_buffer_free(buf);
-        }
-        ckpt.per_step_ctxs.clear();
-        ckpt.per_step_bufs.clear();
-        ckpt.per_step_ssm.clear();
-        ckpt.per_step_conv.clear();
-        ckpt.per_step_max_allocated = 0;
+    ckpt.release_per_step();
+
+    if (model.hparams.ssm_n_group > 0) {
+        const auto layout = model.hparams.recurrent_state_layout_for(0);
+        ckpt.per_step_ssm_state_size = layout.ssm_width;
+        ckpt.per_step_conv_state_dim = layout.conv_width;
+        ckpt.per_step_conv_dim       = layout.conv_feature_width;
+    } else {
+        const int64_t nv       = model.hparams.ssm_dt_rank;
+        const int64_t head_v   = nv > 0 ? model.hparams.ssm_d_inner / nv : 0;
+        const int64_t key_dim  = model.hparams.ssm_d_state * model.hparams.ssm_n_group;
+        const int64_t conv_dim = key_dim * 2 + model.hparams.ssm_d_inner;
+        ckpt.per_step_ssm_state_size = head_v * head_v * nv;
+        ckpt.per_step_conv_state_dim = (model.hparams.ssm_d_conv - 1) * conv_dim;
+        ckpt.per_step_conv_dim       = conv_dim;
     }
+    ckpt.per_step_d_conv = model.hparams.ssm_d_conv;
 
     const uint32_t n_layer = (uint32_t)s_l.size();
     ckpt.per_step_ssm.resize(n_layer);
     ckpt.per_step_conv.resize(n_layer);
+    ckpt.per_step_ple.resize(n_layer);
+    ckpt.per_step_ple_dim.resize(n_layer, 0);
+    ckpt.per_step_ple_offset.resize(n_layer, 0);
 
     const int64_t ssm_state_dim  = ckpt.per_step_ssm_state_size;
     const int64_t conv_dim       = ckpt.per_step_conv_dim;
     const int64_t conv_state_dim = ckpt.per_step_conv_state_dim;
-    if (ssm_state_dim <= 0 || conv_dim <= 0) {
-        LLAMA_LOG_ERROR("%s: per_step dimensions not set (ssm=%lld, conv_dim=%lld)\n",
-                __func__, (long long)ssm_state_dim, (long long)conv_dim);
+    int num_v_heads = model.hparams.ssm_dt_rank;
+    int head_v_dim  = num_v_heads > 0 ? model.hparams.ssm_d_inner / num_v_heads : 0;
+    int d_conv      = model.hparams.ssm_d_conv;
+    if (ssm_state_dim <= 0 || conv_dim <= 0 || conv_state_dim <= 0 ||
+            d_conv <= 1 || num_v_heads <= 0 || model.hparams.ssm_d_inner % num_v_heads != 0) {
+        LLAMA_LOG_ERROR("%s: unsupported per-step dimensions (ssm=%lld, conv=%lld, conv_state=%lld, d_conv=%d)\n",
+                __func__, (long long) ssm_state_dim, (long long) conv_dim,
+                (long long) conv_state_dim, d_conv);
         return false;
     }
-
-    int num_v_heads = model.hparams.ssm_dt_rank;
-    int head_v_dim  = model.hparams.ssm_d_inner / num_v_heads;
-    int d_conv      = model.hparams.ssm_d_conv;
 
     std::map<ggml_backend_buffer_type_t, std::vector<std::pair<std::pair<uint32_t, int32_t>, ggml_backend_buffer_type_t>>> buft_layers;
 
@@ -2213,34 +2221,66 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
     }
 
     for (auto & [buft, layers] : buft_layers) {
-        // 2 tensors per layer: SSM states + qkv features
+        size_t n_tensors = 0;
+        for (auto & [p, bt] : layers) {
+            GGML_UNUSED(bt);
+            const uint32_t il = p.first;
+            if (model.arch != LLM_ARCH_QWEN4EXP || model.hparams.is_recurrent(il)) {
+                n_tensors += 2;
+            }
+            if (model.arch == LLM_ARCH_QWEN4EXP && model.hparams.n_embd_ple_conv(il) > 0) {
+                n_tensors += 1;
+            }
+        }
+
+        // SSM state + qkv features, plus optional Qwen4Exp PLE rows.
         ggml_init_params params = {
-            /*.mem_size   =*/ layers.size() * 2 * ggml_tensor_overhead(),
+            /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
         ggml_context * ctx = ggml_init(params);
         if (!ctx) {
             LLAMA_LOG_ERROR("%s: failed to create ggml context for per-step checkpoints\n", __func__);
+            ckpt.release_per_step();
             return false;
         }
 
         for (auto & [p, bt] : layers) {
             auto [il, id] = p;
+            const auto layout = model.hparams.recurrent_state_layout_for(il);
+            if (model.arch == LLM_ARCH_QWEN4EXP && layout.has_ple && s_l[il]->extra != nullptr) {
+                LLAMA_LOG_ERROR("%s: Qwen4Exp per-step checkpoints require an unsplit PLE state tensor (layer %u)\n",
+                        __func__, il);
+                ggml_free(ctx);
+                ckpt.release_per_step();
+                return false;
+            }
             // SSM state: max_tokens * ssm_state_dim
             if (id < 0) {
-                if (max_tokens > 1) {
-                    GGML_ASSERT(ckpt.per_step_ssm[il].empty());
-                    GGML_ASSERT(ckpt.per_step_conv[il].empty());
-                    ggml_tensor * t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)(max_tokens - 1) * ssm_state_dim);
-                    ggml_format_name(t_ssm, "per_step_ssm_l%d", il);
-                    ckpt.per_step_ssm[il].push_back(t_ssm);
-                }
+                if (model.arch != LLM_ARCH_QWEN4EXP || model.hparams.is_recurrent(il)) {
+                    if (max_tokens > 1) {
+                        GGML_ASSERT(ckpt.per_step_ssm[il].empty());
+                        GGML_ASSERT(ckpt.per_step_conv[il].empty());
+                        ggml_tensor * t_ssm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)(max_tokens - 1) * ssm_state_dim);
+                        ggml_format_name(t_ssm, "per_step_ssm_l%d", il);
+                        ckpt.per_step_ssm[il].push_back(t_ssm);
+                    }
 
-                // Conv features (qkv_mixed): max_tokens * conv_dim
-                ggml_tensor * t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * conv_state_dim);
-                ggml_format_name(t_qkv, "per_step_qkv_l%d", il);
-                ckpt.per_step_conv[il].push_back(t_qkv);
+                    // Conv features (qkv_mixed): max_tokens * conv_dim
+                    ggml_tensor * t_qkv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t)max_tokens * conv_state_dim);
+                    ggml_format_name(t_qkv, "per_step_qkv_l%d", il);
+                    ckpt.per_step_conv[il].push_back(t_qkv);
+                }
+                if (model.arch == LLM_ARCH_QWEN4EXP && layout.has_ple) {
+                    const int64_t ple_dim = layout.ple_width;
+                    ckpt.per_step_ple_dim[il] = ple_dim;
+                    ckpt.per_step_ple_offset[il] = layout.ple_offset;
+                    auto t_rows = ggml_new_tensor_1d(ctx, GGML_TYPE_F32,
+                            (int64_t)(max_tokens - 1) * ple_dim);
+                    ggml_format_name(t_rows, "per_step_ple_l%d", il);
+                    ckpt.per_step_ple[il].push_back(t_rows);
+                }
             } else {
                 auto split_sl = (ggml_split_tensor_t *)s_l[il]->extra;
                 auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[il].ssm_out->extra;
@@ -2275,6 +2315,7 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
         if (!buf) {
             LLAMA_LOG_ERROR("%s: failed to allocate buffer for per-step checkpoints\n", __func__);
             ggml_free(ctx);
+            ckpt.release_per_step();
             return false;
         }
         ggml_backend_buffer_clear(buf, 0);
@@ -2288,68 +2329,100 @@ bool llama_kv_cache::per_step_alloc(const llama_model & model, int max_tokens) {
     return true;
 }
 
-static void restore_recurrent_cache_tensors(int step, ggml_backend_sched_t sched,
+static void restore_recurrent_cache_tensors(int step, uint32_t slot, ggml_backend_sched_t sched,
         size_t ssm_bytes, size_t conv_bytes,
         ggml_tensor * s_l, ggml_tensor * per_step_ssm, ggml_tensor * per_step_conv,
         std::unordered_set<ggml_backend_t> & backends_to_sync) {
     auto dst_backend = ggml_backend_sched_get_tensor_backend(sched, s_l);
     auto dst = *s_l;
+    const size_t slot_off = slot * dst.nb[1];
     dst.ne[0] = ssm_bytes/sizeof(float);
+    dst.ne[1] = dst.ne[2] = dst.ne[3] = 1;
     dst.nb[1] = dst.nb[2] = dst.nb[3] = ssm_bytes + conv_bytes;
-    dst.data  = (char *)s_l->data + conv_bytes;
+    dst.data  = (char *)s_l->data + slot_off + conv_bytes;
     auto src = dst;
     src.data = (char *)per_step_ssm->data + (size_t)step * ssm_bytes;
     ggml_backend_tensor_copy_async(dst_backend, dst_backend, &src, &dst);
     backends_to_sync.insert(dst_backend);
 
-    dst.data  = (char *)s_l->data;
+    dst.data  = (char *)s_l->data + slot_off;
     dst.ne[0] = conv_bytes/sizeof(float);
     src = dst;
     src.data = (char *)per_step_conv->data + (size_t)step * conv_bytes;
     ggml_backend_tensor_copy_async(dst_backend, dst_backend, &src, &dst);
 }
 
-bool llama_kv_cache::per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step) {
-    if (ckpt.per_step_ssm.empty() || step < 0) {
+bool llama_kv_cache::per_step_restore(ggml_backend_sched_t sched, int step, uint32_t slot) {
+    if (ckpt.per_step_ssm.empty() || ckpt.per_step_max_allocated <= 1 ||
+            step < 0 || step >= ckpt.per_step_max_allocated - 1) {
         return false;
     }
 
     std::unordered_set<ggml_backend_t> backends_to_sync;
+    const uint32_t n_layer = (uint32_t) s_l.size();
 
-    const int64_t ssm_state_dim  = ckpt.per_step_ssm_state_size;
-    const int64_t conv_state_dim = ckpt.per_step_conv_state_dim;
-    const int64_t conv_dim       = ckpt.per_step_conv_dim;
-    const int32_t d_conv         = ckpt.per_step_d_conv;
-    if (ssm_state_dim <= 0 || conv_dim <= 0 || d_conv <= 1) return false;
-
-    const int64_t ssm_bytes  = ssm_state_dim * sizeof(float);
-    const int64_t conv_bytes = conv_state_dim * sizeof(float);
-
-    int num_v_heads = model.hparams.ssm_dt_rank;
-    int head_v_dim  = model.hparams.ssm_d_inner / num_v_heads;
-
-    const uint32_t n_layer = (uint32_t)s_l.size();
     for (uint32_t il = 0; il < n_layer; ++il) {
-        if (s_l[il] == nullptr || ckpt.per_step_ssm[il].empty()) continue;
+        if (il >= ckpt.per_step_ple.size() || ckpt.per_step_ple[il].empty()) continue;
 
+        ggml_tensor * state = s_l[il];
+        ggml_tensor * snapshot = ckpt.per_step_ple[il].front();
+        if (slot >= (uint32_t) state->ne[1]) return false;
+
+        const int64_t ple_dim = ckpt.per_step_ple_dim[il];
+        const size_t esz = ggml_element_size(state);
+        const size_t slot_off = slot * state->nb[1] +
+            (size_t) ckpt.per_step_ple_offset[il] * esz;
+        ggml_tensor src = *snapshot;
+        ggml_tensor dst = *state;
+        src.data = (char *) snapshot->data +
+            (size_t) step * ple_dim * esz;
+        dst.data = (char *) state->data + slot_off;
+        src.ne[0] = dst.ne[0] = ple_dim;
+        src.ne[1] = dst.ne[1] = 1;
+        src.ne[2] = dst.ne[2] = 1;
+        src.ne[3] = dst.ne[3] = 1;
+        src.nb[1] = src.nb[2] = src.nb[3] = (size_t) ple_dim * esz;
+        dst.nb[1] = dst.nb[2] = dst.nb[3] = (size_t) ple_dim * esz;
+        auto backend = ggml_backend_sched_get_tensor_backend(sched, state);
+        if (backend == nullptr) {
+            ggml_backend_tensor_copy(&src, &dst);
+        } else {
+            ggml_backend_tensor_copy_async(backend, backend, &src, &dst);
+            backends_to_sync.insert(backend);
+        }
+    }
+
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (s_l[il] == nullptr || il >= ckpt.per_step_ssm.size() ||
+                ckpt.per_step_ssm[il].empty()) {
+            continue;
+        }
+
+        auto & per_step_ssm = ckpt.per_step_ssm[il];
+        auto & per_step_conv = ckpt.per_step_conv[il];
         if (!s_l[il]->extra) {
-            restore_recurrent_cache_tensors(step, sched, ssm_bytes, conv_bytes,
-                s_l[il], ckpt.per_step_ssm[il].front(), ckpt.per_step_conv[il].front(),
+            if (slot >= (uint32_t) s_l[il]->ne[1]) return false;
+            const size_t ssm_bytes = (size_t) per_step_ssm.front()->ne[0] /
+                (size_t) (ckpt.per_step_max_allocated - 1) * sizeof(float);
+            const size_t conv_bytes = (size_t) per_step_conv.front()->ne[0] /
+                (size_t) ckpt.per_step_max_allocated * sizeof(float);
+            restore_recurrent_cache_tensors(step, slot, sched, ssm_bytes, conv_bytes,
+                s_l[il], per_step_ssm.front(), per_step_conv.front(),
                 backends_to_sync);
         } else {
-            auto split_sl = (const ggml_split_tensor_t *)s_l[il]->extra;
+            auto split_sl = (const ggml_split_tensor_t *) s_l[il]->extra;
             for (int id = 0; id < split_sl->n_device; ++id) {
                 if (!split_sl->splits[id]) continue;
-                auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[il].ssm_out->extra;
-                GGML_ASSERT(split_ssm_out && split_ssm_out->splits[id]);
-                auto split = split_ssm_out->splits[id];
-                GGML_ASSERT(split->ne[0] % head_v_dim == 0);
-                int nv = split->ne[0] / head_v_dim; // number of heads handled by this device
-                auto [this_conv_dim, this_ssm_dim] = model.hparams.n_embd_v_s_dims(nv);
-                auto this_conv_bytes = (d_conv - 1) * this_conv_dim * sizeof(float);
-                restore_recurrent_cache_tensors(step, sched, this_ssm_dim * sizeof(float), this_conv_bytes,
-                    split_sl->splits[id], ckpt.per_step_ssm[il][id], ckpt.per_step_conv[il][id],
-                    backends_to_sync);
+                const ggml_tensor * per_step_ssm_tensor = per_step_ssm[id];
+                const ggml_tensor * per_step_conv_tensor = per_step_conv[id];
+                if (slot >= (uint32_t) split_sl->splits[id]->ne[1]) return false;
+                const size_t ssm_bytes = (size_t) per_step_ssm_tensor->ne[0] /
+                    (size_t) (ckpt.per_step_max_allocated - 1) * sizeof(float);
+                const size_t conv_bytes = (size_t) per_step_conv_tensor->ne[0] /
+                    (size_t) ckpt.per_step_max_allocated * sizeof(float);
+                restore_recurrent_cache_tensors(step, slot, sched, ssm_bytes, conv_bytes,
+                    split_sl->splits[id], (ggml_tensor *) per_step_ssm_tensor,
+                    (ggml_tensor *) per_step_conv_tensor, backends_to_sync);
             }
         }
     }
@@ -9708,13 +9781,6 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
         return false;
     }
 
-    // qwen4exp's recurrent row carries a PLE conv-history tail the per-step
-    // checkpoint doesn't size, so it would leave that tail advanced by rejected
-    // drafts. Decline; the whole-slot (gpu-fallback) shadow covers the full row.
-    if (model.arch == LLM_ARCH_QWEN4EXP) {
-        kv.save_per_step_ssm = false;
-        return false;
-    }
 
     // Split recurrent tensors are supported as long as each layer exposes
     // concrete backend buffers for the per-step tensors. CPU-only and mixed
@@ -9738,29 +9804,13 @@ static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & mode
         return false;
     }
 
-    // Populate per-step dimensions from hparams
-    if (kv.ckpt.per_step_ssm_state_size <= 0) {
-        const auto & hp       = model.hparams;
-        const int64_t nv      = hp.ssm_dt_rank;
-        const int64_t head_v  = hp.ssm_d_inner / nv;
-        const int64_t head_k  = hp.ssm_d_state;
-        const int64_t nk      = hp.ssm_n_group;
-        const int64_t key_dim = head_k * nk;
-        const int64_t val_dim = head_v * nv;
-        const int64_t conv_dim = key_dim * 2 + val_dim;
-
-        kv.ckpt.per_step_ssm_state_size = head_v * head_v * nv;
-        kv.ckpt.per_step_conv_state_dim = (hp.ssm_d_conv - 1) * conv_dim;
-        kv.ckpt.per_step_conv_dim       = conv_dim;
-        kv.ckpt.per_step_d_conv         = hp.ssm_d_conv;
-    }
 
     if (!kv.per_step_alloc(model, max_tokens)) {
         kv.save_per_step_ssm = false;
         return false;
     }
 
-    if (!kv.checkpoint_alloc_shadows(true)) {
+    if (model.arch != LLM_ARCH_QWEN4EXP && !kv.checkpoint_alloc_shadows(true)) {
         LLAMA_LOG_ERROR("%s: failed to allocate conv-state shadow buffers for per-step checkpoints\n", __func__);
         kv.save_per_step_ssm = false;
         return false;
@@ -9976,7 +10026,7 @@ enum llama_spec_ckpt_restore_result llama_spec_ckpt_restore_ex(
                 llama_kv_cache_seq_rm(kv, seq_id, accepted_pos + 1, -1);
                 return llama_dsv4_spec_ckpt_restore(ctx, true, accepted_step);
             }
-            if (!kv.per_step_restore(ctx->model, ctx->sched, accepted_step)) {
+            if (seq_id < 0 || !kv.per_step_restore(ctx->sched, accepted_step, (uint32_t) seq_id)) {
                 return LLAMA_SPEC_CKPT_RESTORE_FAILED;
             }
             const llama_pos accepted_pos = n_past + accepted_step;

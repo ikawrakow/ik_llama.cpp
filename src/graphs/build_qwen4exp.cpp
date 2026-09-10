@@ -106,7 +106,8 @@ static ggml_tensor * qwen4exp_ple_conv(
         uint32_t              slot,
         bool                  reset,
         int                   il,
-        const llm_build_cb  & cb) {
+        const llm_build_cb  & cb,
+        ggml_tensor         * per_step_ple) {
     const int32_t kern = hparams.ple_conv_kernel;
     const int32_t dil  = hparams.ple_ngram_size;
     const int32_t hist = hparams.ple_conv_state();
@@ -123,6 +124,18 @@ static ggml_tensor * qwen4exp_ple_conv(
     cb(state, "ple_conv_state", il);
 
     ggml_tensor * conv_in = ggml_concat(ctx0, state, xt, 0); // [hist + n_tokens, hc_dim]
+
+    if (per_step_ple != nullptr && n_tokens > 1) {
+        const int64_t ple_dim = hist * hc_dim;
+        GGML_ASSERT(per_step_ple->ne[0] >= (n_tokens - 1) * ple_dim);
+        for (int32_t i = 0; i < n_tokens - 1; ++i) {
+            ggml_tensor * src = ggml_view_2d(ctx0, conv_in, hist, hc_dim, conv_in->nb[1],
+                    (size_t) (i + 1) * conv_in->nb[0]);
+            ggml_tensor * dst = ggml_view_1d(ctx0, per_step_ple, ple_dim,
+                    (size_t) i * ple_dim * ggml_element_size(per_step_ple));
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+        }
+    }
 
     ggml_tensor * conv_out = nullptr;
     for (int32_t k = 0; k < kern; ++k) {
@@ -174,7 +187,8 @@ static ggml_tensor * qwen4exp_ple(
         int32_t             n_embd,
         int32_t             n_tokens,
         int                 il,
-        const llm_build_cb & cb) {
+        const llm_build_cb & cb,
+        ggml_tensor       * per_step_ple) {
     const int32_t hc      = hparams.dsv4_hc_mult;
     const int32_t hc_dim  = hc * n_embd;
     const int32_t n_heads = hparams.ple_n_heads;
@@ -220,7 +234,7 @@ static ggml_tensor * qwen4exp_ple(
     ggml_tensor * conv_out = nullptr;
     if (delta.batch_shares_one_seq()) {
         conv_out = qwen4exp_ple_conv(ctx0, gf, hparams, model, state_all, xt, hc_dim, n_tokens,
-                delta.state_slot(0), reset_state, il, cb);
+                delta.state_slot(0), reset_state, il, cb, per_step_ple);
     } else {
         // A mixed-sequence ubatch reads a different history per token, exactly as the
         // delta-net path splits it.
@@ -228,7 +242,7 @@ static ggml_tensor * qwen4exp_ple(
             ggml_tensor * x_i = ggml_cont(ctx0,
                     ggml_view_2d(ctx0, xt, 1, hc_dim, xt->nb[1], i*xt->nb[0]));
             ggml_tensor * out_i = qwen4exp_ple_conv(ctx0, gf, hparams, model, state_all, x_i, hc_dim, 1,
-                    delta.state_slot(i), reset_pos[i], il, cb);
+                    delta.state_slot(i), reset_pos[i], il, cb, nullptr);
             conv_out = conv_out ? ggml_concat(ctx0, conv_out, out_i, 0) : out_i;
         }
     }
@@ -588,9 +602,17 @@ ggml_cgraph * llm_build_context::build_qwen4exp() {
     for (int il = n_layer_begin; il < n_layer_end; ++il) {
         ggml_tensor * inject = nullptr;
 
+        ggml_tensor * per_step_ple = nullptr;
+        if (!is_mtp && lctx.kv_self.save_per_step_ssm && n_tokens > 1 &&
+                n_tokens <= lctx.kv_self.ckpt.per_step_max_allocated &&
+                il < (int) lctx.kv_self.ckpt.per_step_ple.size() &&
+                !lctx.kv_self.ckpt.per_step_ple[il].empty()) {
+            per_step_ple = lctx.kv_self.ckpt.per_step_ple[il][0];
+        }
+
         if (hparams.is_ple(il)) {
             res_hc = qwen4exp_ple(*this, ctx0, gf, lctx, model, hparams, *delta_opt, res_hc, lctx.inp_ple_rows,
-                    kv_self.s_l[il], ple_reset_state, ple_reset_pos, n_embd, n_tokens, il, cb);
+                    kv_self.s_l[il], ple_reset_state, ple_reset_pos, n_embd, n_tokens, il, cb, per_step_ple);
         }
 
         ggml_tensor * cur = qwen4exp_hc_mix(*this, ctx0, lctx, hparams, res_hc,
