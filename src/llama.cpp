@@ -8430,6 +8430,22 @@ struct llama_context * llama_init_from_model(
         }
     }
 
+    // A KV cache type that carries per-row metadata (row_meta_size > 0, today only q8_KV) cannot be used for the
+    // standard K/V cache: llm_build_kv() views one cache row of n_embd_{k,v}_gqa values as n_head_kv sub-rows of
+    // n_embd_head_{k,v}, and ggml_row_size() adds the metadata block to EVERY sub-row, so the 3-D view is
+    // n_head_kv * row_meta_size bytes longer than the row it is a view of. Without this check the run dies with
+    // "GGML_ASSERT(... data_size + view_offs <= ggml_nbytes(view_src))" in ggml_view_3d() (V side, at graph build)
+    // or with a SIGSEGV inside quantize_row_q8_KV() from ggml_compute_forward_dup() (K side, at first decode).
+    for (int i = 0; i < 2; ++i) {
+        const ggml_type t = i == 0 ? params.type_k : params.type_v;
+        if (ggml_internal_get_type_traits(t).row_meta_size > 0) {
+            LLAMA_LOG_ERROR("%s: %s cannot be used as a %s-cache type: it stores per-row metadata, which the "
+                    "per-head KV cache views do not account for (use f16, bf16, q8_0, q6_0, q5_0, q5_1, q4_0, "
+                    "q4_1 or iq4_nl)\n", __func__, ggml_type_name(t), i == 0 ? "K" : "V");
+            return nullptr;
+        }
+    }
+
     //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
     //    LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
     //    params.flash_attn = false;
