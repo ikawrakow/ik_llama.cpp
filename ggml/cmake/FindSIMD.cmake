@@ -1,4 +1,5 @@
 include(CheckCSourceRuns)
+include(CheckCSourceCompiles)
 
 set(AVX_CODE "
     #include <immintrin.h>
@@ -139,25 +140,26 @@ endif()
 # The probes are compiled and run, so a CPU without the extension fails them.
 # Each one returns the value it computed, or the compiler could drop the
 # instruction under test and the probe would pass with nothing left to run.
+# A probe that does not build says nothing about the CPU: clang-cl gates these
+# intrinsics behind -m flags, so there the option is left as it was.
+macro(check_avx512_extension type option)
+    set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
+    set(CMAKE_REQUIRED_FLAGS "/arch:AVX512")
+    check_c_source_compiles("${${type}_CODE}" HAS_${type}_BUILD)
+    set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
+
+    if (HAS_${type}_BUILD)
+        check_sse("${type}" " ;/arch:AVX512")
+        if (NOT ${${type}_FOUND})
+            set(${option} OFF)
+        else()
+            set(${option} ON)
+        endif()
+    endif()
+endmacro()
+
 if (GGML_AVX512)
-    check_sse("AVX512VNNI" " ;/arch:AVX512")
-    if (NOT ${AVX512VNNI_FOUND})
-        set(GGML_AVX512_VNNI OFF)
-    else()
-        set(GGML_AVX512_VNNI ON)
-    endif()
-
-    check_sse("AVX512VBMI" " ;/arch:AVX512")
-    if (NOT ${AVX512VBMI_FOUND})
-        set(GGML_AVX512_VBMI OFF)
-    else()
-        set(GGML_AVX512_VBMI ON)
-    endif()
-
-    check_sse("AVX512BF16" " ;/arch:AVX512")
-    if (NOT ${AVX512BF16_FOUND})
-        set(GGML_AVX512_BF16 OFF)
-    else()
-        set(GGML_AVX512_BF16 ON)
-    endif()
+    check_avx512_extension("AVX512VNNI" GGML_AVX512_VNNI)
+    check_avx512_extension("AVX512VBMI" GGML_AVX512_VBMI)
+    check_avx512_extension("AVX512BF16" GGML_AVX512_BF16)
 endif()
