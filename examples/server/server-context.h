@@ -252,6 +252,7 @@ struct server_context {
     bool clean_kv_cache = true;
     bool add_bos_token = true;
     bool has_eos_token = false;
+    bool sleeping = false;
 
     // multimodal
     mtmd_context* mctx = nullptr;
@@ -289,6 +290,15 @@ struct server_context {
     bool load_model(const gpt_params& params_);
 
     void init();
+
+    // destroy model and context (free VRAM/RAM), used by sleep
+    void destroy();
+
+    // handle sleeping state transition (unload/reload model)
+    void handle_sleeping_state(bool new_state);
+
+    // check if server is in sleeping state
+    bool is_sleeping() const { return sleeping; }
 
     std::vector<llama_token> tokenize(const json& json_prompt, bool add_special) const;
 

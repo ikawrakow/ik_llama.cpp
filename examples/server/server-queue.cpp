@@ -3,6 +3,7 @@
 #include "server-common.h"
 
 #include "log.h"
+#include "ggml.h"
 #include <chrono>
 
 #define QUE_INF(fmt, ...) LOG_INF("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -24,6 +25,10 @@ int server_queue::post(server_task task) {
         QUE_DBG("new task, id = %d\n", task.id);
     }
     queue_tasks.push_back(std::move(task));
+    time_last_task = ggml_time_ms();
+    if (sleeping && !req_stop_sleeping) {
+        req_stop_sleeping = true;
+    }
     condition_tasks.notify_one();
     return task.id;
 }
@@ -60,6 +65,10 @@ int server_queue::post(std::vector<server_task>&& tasks, bool front) {
             queue_tasks.push_back(std::move(task));
         }
     }
+    time_last_task = ggml_time_ms();
+    if (sleeping && !req_stop_sleeping) {
+        req_stop_sleeping = true;
+    }
     condition_tasks.notify_one();
     return 0;
 }
@@ -67,6 +76,7 @@ int server_queue::post(std::vector<server_task>&& tasks, bool front) {
 void server_queue::defer(server_task&& task) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     queue_tasks_deferred.push_back(std::move(task));
+    time_last_task = ggml_time_ms();
 }
 
 int server_queue::get_new_id() {
@@ -84,21 +94,53 @@ void server_queue::notify_slot_changed() {
         queue_tasks.push_back(std::move(task));
     }
     queue_tasks_deferred.clear();
+    time_last_task = ggml_time_ms();
+    condition_tasks.notify_one();
 }
 
 void server_queue::on_new_task(std::function<void(server_task&&)> callback) {
     callback_new_task = std::move(callback);
 }
 
+void server_queue::wait_until_no_sleep() {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    if (!sleeping) {
+        return;
+    } else {
+        if (!req_stop_sleeping) {
+            QUE_DBG("%s", "requesting to stop sleeping\n");
+            req_stop_sleeping = true;
+            condition_tasks.notify_one();
+        }
+        QUE_DBG("%s", "waiting until no sleep\n");
+        condition_tasks.wait(lock, [&]{
+            return !sleeping;
+        });
+    }
+}
 
-void server_queue::start_loop() {
+void server_queue::start_loop(int64_t idle_sleep_ms) {
     running = true;
+    time_last_task = ggml_time_ms();
+
+    constexpr auto max_wait_time = std::chrono::seconds(1);
+    auto should_sleep = [&]() -> bool {
+        if (idle_sleep_ms < 0) {
+            return false;
+        }
+        int64_t now = ggml_time_ms();
+        return (now - time_last_task) >= idle_sleep_ms;
+    };
 
     while (true) {
         LOG_VERBOSE("new task may arrive", {});
 
         while (true) {
             std::unique_lock<std::mutex> lock(mutex_tasks);
+            if (!running) {
+                LOG_VERBOSE("ending start_loop", {});
+                return;
+            }
             if (queue_tasks.empty()) {
                 lock.unlock();
                 break;
@@ -131,18 +173,48 @@ void server_queue::start_loop() {
         LOG_VERBOSE("callback_update_slots", {});
 
         callback_update_slots();
+        {
+            // update_slots() may take a while to finish, we need to make sure it's not counted as idle
+            std::unique_lock<std::mutex> lock(mutex_tasks);
+            time_last_task = ggml_time_ms();
+        }
 
         LOG_VERBOSE("wait for new task", {});
-        {
+        while (true) {
             std::unique_lock<std::mutex> lock(mutex_tasks);
-            if (queue_tasks.empty()) {
+            if (!running || !queue_tasks.empty()) {
+                break;
+            }
+
+            // no tasks, check for sleeping state
+            if (should_sleep()) {
+                QUE_INF("%s", "entering sleeping state\n");
+                sleeping = true;
+                callback_sleeping_state(true);
+                req_stop_sleeping = false;
+                // wait until we are requested to exit sleeping state
+                condition_tasks.wait(lock, [&]{
+                    return (!running || req_stop_sleeping);
+                });
                 if (!running) {
-                    LOG_VERBOSE("ending start_loop", {});
-                    return;
+                    break;
                 }
-                condition_tasks.wait(lock, [&] {
+                QUE_INF("%s", "exiting sleeping state\n");
+                req_stop_sleeping = false;
+                callback_sleeping_state(false);
+                sleeping = false;
+                time_last_task = ggml_time_ms();
+                condition_tasks.notify_all();
+                break;
+            } else {
+                // wait for new tasks or timeout for checking sleeping condition
+                bool res = condition_tasks.wait_for(lock, max_wait_time, [&]{
                     return (!queue_tasks.empty() || !running);
-                    });
+                });
+                if (res) {
+                    break;
+                }
+                // otherwise, loop again to check sleeping condition
             }
         }
     }
