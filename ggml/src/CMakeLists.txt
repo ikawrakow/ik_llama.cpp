@@ -1173,12 +1173,9 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
                 add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVX512BF16__>)
             endif()
 
-            # With GGML_NATIVE the extensions are probed by ../cmake/FindSIMD.cmake,
-            # so reaching this point means the probe ran and this CPU does not have
-            # AVX512-VNNI. Skylake-X and Cascade Lake are the usual case. Leaving
-            # HAVE_FANCY_SIMD off is the correct outcome there, so this is a note
-            # about which kernels are absent, not a problem to work around: forcing
-            # the options on would build code the CPU cannot execute.
+            # With GGML_NATIVE the extensions are probed, so reaching here means the
+            # CPU has no AVX512-VNNI (Skylake-X, Cascade Lake). Leaving
+            # HAVE_FANCY_SIMD off is correct there.
             if (GGML_NATIVE AND NOT GGML_AVX512_VNNI)
                 message(STATUS
                     "AVX-512 without VNNI detected. __AVX512VNNI__ stays undefined, "

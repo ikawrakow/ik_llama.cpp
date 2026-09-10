@@ -135,16 +135,10 @@ else()
 endif()
 
 # MSVC has no /arch: flag for the individual AVX-512 extensions and does not
-# define their macros, so ggml/src/CMakeLists.txt sets them manually from these
-# options. Probe each extension the same way the base sets are probed: the test
-# program is compiled *and run*, so a CPU lacking the extension fails it.
-#
-# Each probe feeds the result of the instruction under test into the exit code.
-# A probe that discards its result can be optimised away entirely, and then it
-# passes because nothing is left to execute rather than because the CPU has the
-# extension. GGML_NATIVE is a detection path, so a probe that fails here turns
-# the option off even if it was requested on the command line, the same way the
-# base AVX-512 check does.
+# define their macros, so ggml/src/CMakeLists.txt sets them from these options.
+# The probes are compiled and run, so a CPU without the extension fails them.
+# Each one returns the value it computed, or the compiler could drop the
+# instruction under test and the probe would pass with nothing left to run.
 if (GGML_AVX512)
     check_sse("AVX512VNNI" " ;/arch:AVX512")
     if (NOT ${AVX512VNNI_FOUND})
