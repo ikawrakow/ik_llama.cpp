@@ -55,6 +55,29 @@ static ggml_tensor * dsv4_concat_named(
     return r;
 }
 
+// Concat along dim 2 (the KV dimension), multi-stream aware: with ne[3] > 1
+// the CUDA backend's type-generic concat fast paths require ne[3] == 1 and the
+// general path is F32-only, so concat per stream (dim 2) and re-assemble (dim 3).
+static ggml_tensor * dsv4_concat_kv(
+        ggml_context * ctx,
+        ggml_tensor  * a,
+        ggml_tensor  * b) {
+    if (a->ne[3] <= 1) {
+        return ggml_concat(ctx, a, b, 2);
+    }
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
+    ggml_tensor * result = nullptr;
+    for (int64_t s = 0; s < a->ne[3]; ++s) {
+        ggml_tensor * a_s = ggml_view_4d(ctx, a, a->ne[0], a->ne[1], a->ne[2], 1,
+                a->nb[1], a->nb[2], a->nb[3], s*a->nb[3]);
+        ggml_tensor * b_s = ggml_view_4d(ctx, b, b->ne[0], b->ne[1], b->ne[2], 1,
+                b->nb[1], b->nb[2], b->nb[3], s*b->nb[3]);
+        ggml_tensor * c_s = dsv4_concat_named(ctx, a_s, b_s, 2, "dsv4_concat_kv_s");
+        result = result == nullptr ? c_s : dsv4_concat_named(ctx, result, c_s, 3, "dsv4_concat_kv");
+    }
+    return result;
+}
+
 static ggml_tensor * dsv4_hc_affine(
         ggml_context * ctx,
         ggml_tensor  * x,
@@ -250,6 +273,24 @@ static ggml_tensor * dsv4_pad_mask_tokens(
     const int64_t n_tokens_pad = GGML_PAD(n_tokens/n_stream, GGML_KQ_MASK_PAD);
     if (mask->ne[1] >= n_tokens_pad) {
         return mask;
+    }
+
+    if (n_stream > 1) {
+        // Pad each stream separately and re-assemble along dim 3. This keeps
+        // every concat on the contiguous fast paths supported by the CUDA
+        // backend for any tensor type (dim 1 with ne[2]*ne[3] == 1, and dim 3),
+        // whereas a single multi-stream concat along dim 1 falls back to the
+        // F32-only general path and fails for f16 flash-attention masks.
+        ggml_tensor * result = nullptr;
+        for (int64_t s = 0; s < n_stream; ++s) {
+            ggml_tensor * mask_s = ggml_view_4d(ctx, mask, mask->ne[0], mask->ne[1], 1, 1,
+                    mask->nb[1], mask->nb[2], mask->nb[3], s*mask->nb[3]);
+            ggml_tensor * pad_s = ggml_new_tensor_4d(ctx, mask->type, mask->ne[0], n_tokens_pad - mask->ne[1], 1, 1);
+            pad_s = ggml_fill(ctx, pad_s, -INFINITY);
+            ggml_tensor * padded_s = dsv4_concat_named(ctx, mask_s, pad_s, 1, "dsv4_mask_tokens_pad_s");
+            result = result == nullptr ? padded_s : dsv4_concat_named(ctx, result, padded_s, 3, "dsv4_mask_tokens_pad");
+        }
+        return result;
     }
 
     ggml_tensor * pad = ggml_new_tensor_4d(ctx, mask->type, mask->ne[0], n_tokens_pad - mask->ne[1], mask->ne[2], mask->ne[3]);
@@ -509,7 +550,12 @@ static ggml_tensor * dsv4_build_attn(
     const bool v_trans = v->nb[1] > v->nb[2];
     const int64_t n_stream = k->ne[3];
 
-    if (!cparams.flash_attn && n_stream > 1) {
+    // Multi-stream (parallel sequences) is handled by slicing per stream and
+    // processing each stream independently. This applies to the flash attention
+    // path as well: the DSV4 cache/controller is non-unified, so a multi-stream
+    // mask (ne[3] == n_stream) cannot be routed through ggml_flash_attn_ext,
+    // which requires mask->ne[3] == 1.
+    if (n_stream > 1) {
         GGML_ASSERT(q->ne[2] % n_stream == 0);
         const int64_t n_tokens_stream = q->ne[2]/n_stream;
         ggml_tensor * result = nullptr;
@@ -1151,6 +1197,13 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             extra_k = dsv4_comp_get_k(ctx0, cache, extra_ctx, n_embd_head, cache->ne[1]/n_stream);
             cb(extra_k, "extra_k", il);
         }
+        if (extra_k->ne[3] > 1 && extra_mask != nullptr && extra_mask->ne[3] == 1) {
+            // The K side is multi-stream, but the mask was built as a flat
+            // [n_kv, n_tokens] plan mask (e.g. CSA/HCA plans where the indexer
+            // top-k path is skipped). Bring it into the same per-stream layout
+            // as the raw mask ([n_kv, n_tokens/n_stream, 1, n_stream]).
+            extra_mask = dsv4_build_mask_stream_view(ctx0, extra_mask, extra_k->ne[3], n_tokens);
+        }
         if (cparams.flash_attn) {
             extra_mask = dsv4_pad_mask_tokens(ctx0, extra_mask, n_tokens);
         }
@@ -1174,7 +1227,7 @@ static ggml_tensor * ds4_attention(ggml_cgraph * gf, ggml_context * ctx0, llm_bu
             extra_k = ggml_cast(ctx0, extra_k, raw_k->type);
             cb(extra_k, (tag + "_k_cast").c_str(), il);
         }
-        ggml_tensor * k_all = ggml_concat(ctx0, raw_k, extra_k, 2);
+        ggml_tensor * k_all = dsv4_concat_kv(ctx0, raw_k, extra_k);
         ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, extra_mask, 0);
         cb(extra_k, (tag + "_k").c_str(), il);
         cb(k_all, (tag + "_k_all").c_str(), il);
