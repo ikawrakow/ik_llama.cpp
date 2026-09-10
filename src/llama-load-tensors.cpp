@@ -3457,6 +3457,9 @@ bool create_tensors_helper::create_deepseek4_tensors(const LLM_TN & tn) {
             }), llama_model_loader::TENSOR_NOT_REQUIRED);
         }
 
+        // vision variant: image tokens route through this bias instead of the hash path
+        layer.ffn_exp_probs_b_vl = create_tensor_from_meta(ctx_split, format("blk.%d.exp_probs_b_vl.bias", i), llama_model_loader::TENSOR_NOT_REQUIRED);
+
     }
 
     return use_mmap_buffer;

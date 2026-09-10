@@ -1386,7 +1386,11 @@ ggml_cgraph * llm_build_context::build_deepseek4() {
             //        "merged DSV4 MoE gate tensors use an unsupported layout");
             ggml_tensor * selected_experts = nullptr;
             ggml_tensor * exp_probs_b = model.layers[il].ffn_exp_probs_b;
-            if ((uint32_t) il < hparams.dsv4_hash_layer_count) {
+            const bool is_media = lctx.inp_embd != nullptr;
+            if (is_media && model.layers[il].ffn_exp_probs_b_vl != nullptr) {
+                // image tokens route through the vision bias instead of the hash path
+                exp_probs_b = model.layers[il].ffn_exp_probs_b_vl;
+            } else if ((uint32_t) il < hparams.dsv4_hash_layer_count) {
                 selected_experts = ggml_get_rows(ctx0, model.layers[il].ffn_gate_tid2eid, lctx.inp_tokens);
                 cb(selected_experts, "hashed_exps", il);
                 exp_probs_b = nullptr;

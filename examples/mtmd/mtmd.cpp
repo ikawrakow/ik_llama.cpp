@@ -325,6 +325,11 @@ struct mtmd_context {
                 img_end = "<|media_end|>";
             }
         }
+        else if (proj == PROJECTOR_TYPE_DEEPSEEK4V) {
+            // markers are learned embeddings emitted by the encoder graph
+            img_beg = "";
+            img_end = "";
+        }
     }
 
     void init_audio() {
@@ -613,6 +618,15 @@ struct mtmd_tokenizer {
                 }
 
             } else {
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_DEEPSEEK4V) {
+                    // align the image block to the 4-token CSA compress boundary
+                    constexpr int32_t align = 4;
+                    size_t n_past = 0;
+                    for (const auto & e : cur.entries) {
+                        n_past += mtmd_input_chunk_get_n_tokens(&e);
+                    }
+                    batch_f32.entries[0]->lead_pad = align - 1 - (int32_t)(n_past % align);
+                }
                 size_t n_tokens = 0;
                 for (const auto & entry : batch_f32.entries) {
                     n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
@@ -864,7 +878,7 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
     if (ctx->ctx_v) {
-        if (auto type = clip_get_projector_type(ctx->ctx_v); type == PROJECTOR_TYPE_GEMMA3 || type == PROJECTOR_TYPE_GEMMA4V) {
+        if (auto type = clip_get_projector_type(ctx->ctx_v); type == PROJECTOR_TYPE_GEMMA3 || type == PROJECTOR_TYPE_GEMMA4V || type == PROJECTOR_TYPE_DEEPSEEK4V) {
             return true;
         }
     }

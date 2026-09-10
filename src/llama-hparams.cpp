@@ -2029,6 +2029,8 @@ void llm_load_hparams(
                     if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer, false) && hparams.n_swa > 0) {
                         std::fill(hparams.swa_layers.begin(), hparams.swa_layers.end(), true);
                     }
+                    // DSV4 vision: in a non-causal (image) span the window only clips older tokens
+                    hparams.swa_full_non_causal = true;
 
                     const auto * hc_head_base = ml.get_tensor_meta("hc_head_base");
                     const uint32_t probe_layer = dsv4_probe_layer;
