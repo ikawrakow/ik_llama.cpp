@@ -820,7 +820,9 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
-        // char padding[4];
+        // Weights-only NUMA mirror metadata.  It is NULL for ordinary tensors.
+        void * data_numa;
+        char padding[8];
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -924,6 +926,14 @@ extern "C" {
 
     GGML_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
+    GGML_API int     ggml_numa_node_count(void);
+    GGML_API bool    ggml_numa_mirror_active(void); // true for an effective multi-node weights-only mirror policy
+    GGML_API bool    ggml_numa_mirror_node_available(int node); // true when the inherited process mask includes this node
+    GGML_API bool    ggml_numa_alloc(void ** ptr, size_t size, int node); // checked node-local allocation
+    GGML_API void    ggml_numa_free(void * ptr, size_t size, int node);  // release one successful allocation
+    GGML_API bool    ggml_numa_bind(void * ptr, size_t size, int node);  // checked placement of owned existing memory
+    GGML_API bool    ggml_numa_tensor_set_mirror(struct ggml_tensor * tensor, void * const * node_data);
+    GGML_API void    ggml_numa_tensor_clear_mirror(struct ggml_tensor * tensor);
 
     GGML_API void    ggml_print_object (const struct ggml_object * obj);
     GGML_API void    ggml_print_objects(const struct ggml_context * ctx);

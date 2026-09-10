@@ -12,6 +12,7 @@
 #include <vector>
 #include <unordered_map>
 #include <set>
+#include <mutex>
 
 #include "llama-reload-info.h"
 
@@ -597,6 +598,19 @@ struct llama_model {
 
     // the model memory buffers for the tensor data
     std::vector<ggml_backend_buffer_t> bufs;
+
+    struct numa_mirror_buffer {
+        size_t size = 0;
+        std::vector<void *> node_base;
+    };
+    enum class numa_mirror_state {
+        unavailable,
+        ready,
+    };
+    mutable std::vector<numa_mirror_buffer> numa_mirror_bufs;
+    mutable std::mutex numa_mirror_mutex;
+    mutable numa_mirror_state numa_mirror_state = numa_mirror_state::unavailable;
+    mutable bool up_gate_repacked = false;
 
     // model memory mapped files
     llama_mmaps mappings;

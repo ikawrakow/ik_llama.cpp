@@ -2281,6 +2281,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         /**/ if (value == "distribute" || value == "") { params.numa = GGML_NUMA_STRATEGY_DISTRIBUTE; }
         else if (value == "isolate") { params.numa = GGML_NUMA_STRATEGY_ISOLATE; }
         else if (value == "numactl") { params.numa = GGML_NUMA_STRATEGY_NUMACTL; }
+        else if (value == "mirror") {
+            params.numa = GGML_NUMA_STRATEGY_MIRROR;
+        }
         else { invalid_param = true; }
         return true;
     }
@@ -3322,6 +3325,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
                                                                         "  - numactl: use the CPU map provided by numactl\n"
+                                                                        "  - mirror: pin workers by NUMA node for the weights-only mirror candidate\n"
                                                                         "if run without this previously, it is recommended to drop the system page cache before using this\n"
                                                                         "see https://github.com/ggerganov/llama.cpp/issues/1437" });
 
