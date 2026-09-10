@@ -2665,6 +2665,7 @@ extern "C" {
             struct ggml_tensor  * q,
             struct ggml_tensor  * w,
             struct ggml_tensor  * mask,
+            struct ggml_tensor  * blk_idx,
             enum ggml_unary_op    op,
             int                   n_top_k);
 

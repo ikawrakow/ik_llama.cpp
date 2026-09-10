@@ -390,7 +390,7 @@ ggml_tensor * llm_build_context::build_openpangu_attention(
                 // The op reads the mask row-strided, so the raw view suffices.
                 ggml_tensor * idx_mask = ggml_view_2d(ctx0, KQ_mask, n_kv, n_tokens,
                                                       KQ_mask->nb[1], 0);
-                fused_sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask,
+                fused_sel_idx = ggml_indexer_topk(ctx0, k_all_idx, q_idx, w_idx, idx_mask, nullptr,
                                                   GGML_UNARY_OP_RELU, (int) topk);    // [topk, T] i32
             }
             if (fused_sel_idx && supports_op(fused_sel_idx)) {
