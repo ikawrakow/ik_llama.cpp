@@ -47,7 +47,7 @@ set(AVX512VBMI_CODE "
         __m512i a   = _mm512_set1_epi8(1);
         __m512i idx = _mm512_setzero_si512();
         __m512i r   = _mm512_permutexvar_epi8(idx, a);
-        return _mm512_reduce_add_epi32(r) != 0 ? 0 : 0;
+        return _mm512_reduce_add_epi32(r) == 16 * 0x01010101 ? 0 : 1;
     }
 ")
 
@@ -55,11 +55,11 @@ set(AVX512BF16_CODE "
     #include <immintrin.h>
     int main()
     {
-        __m512 a = _mm512_setzero_ps();
-        __m512 b = _mm512_setzero_ps();
-        __m512bh c = _mm512_cvtne2ps_pbh(a, b);
-        (void) c;
-        return 0;
+        __m512   acc = _mm512_setzero_ps();
+        __m512   a   = _mm512_set1_ps(1.0f);
+        __m512bh b   = _mm512_cvtne2ps_pbh(a, a);
+        acc = _mm512_dpbf16_ps(acc, b, b);
+        return _mm512_reduce_add_ps(acc) == 32.0f ? 0 : 1;
     }
 ")
 
@@ -138,19 +138,32 @@ endif()
 # define their macros, so ggml/src/CMakeLists.txt sets them manually from these
 # options. Probe each extension the same way the base sets are probed: the test
 # program is compiled *and run*, so a CPU lacking the extension fails it.
+#
+# Each probe feeds the result of the instruction under test into the exit code.
+# A probe that discards its result can be optimised away entirely, and then it
+# passes because nothing is left to execute rather than because the CPU has the
+# extension. GGML_NATIVE is a detection path, so a probe that fails here turns
+# the option off even if it was requested on the command line, the same way the
+# base AVX-512 check does.
 if (GGML_AVX512)
     check_sse("AVX512VNNI" " ;/arch:AVX512")
-    if (AVX512VNNI_FOUND)
+    if (NOT ${AVX512VNNI_FOUND})
+        set(GGML_AVX512_VNNI OFF)
+    else()
         set(GGML_AVX512_VNNI ON)
     endif()
 
     check_sse("AVX512VBMI" " ;/arch:AVX512")
-    if (AVX512VBMI_FOUND)
+    if (NOT ${AVX512VBMI_FOUND})
+        set(GGML_AVX512_VBMI OFF)
+    else()
         set(GGML_AVX512_VBMI ON)
     endif()
 
     check_sse("AVX512BF16" " ;/arch:AVX512")
-    if (AVX512BF16_FOUND)
+    if (NOT ${AVX512BF16_FOUND})
+        set(GGML_AVX512_BF16 OFF)
+    else()
         set(GGML_AVX512_BF16 ON)
     endif()
 endif()

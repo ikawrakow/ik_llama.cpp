@@ -1173,19 +1173,17 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
                 add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVX512BF16__>)
             endif()
 
-            # MSVC + GGML_NATIVE detects only the base AVX-512 flag (see
-            # ../cmake/FindSIMD.cmake); the extension macros above stay unset, so
-            # HAVE_FANCY_SIMD is not defined and the IQK GEMM kernels for Zen4 /
-            # Sapphire Rapids and later are silently left out of the build.
+            # With GGML_NATIVE the extensions are probed by ../cmake/FindSIMD.cmake,
+            # so reaching this point means the probe ran and this CPU does not have
+            # AVX512-VNNI. Skylake-X and Cascade Lake are the usual case. Leaving
+            # HAVE_FANCY_SIMD off is the correct outcome there, so this is a note
+            # about which kernels are absent, not a problem to work around: forcing
+            # the options on would build code the CPU cannot execute.
             if (GGML_NATIVE AND NOT GGML_AVX512_VNNI)
-                message(WARNING
-                    "GGML_NATIVE enabled AVX-512 for MSVC, but the AVX-512 extension macros "
-                    "are not set: MSVC does not define them, and FindSIMD.cmake detects only "
-                    "the base AVX-512 flag. __AVX512VNNI__ therefore stays undefined, "
+                message(STATUS
+                    "AVX-512 without VNNI detected. __AVX512VNNI__ stays undefined, "
                     "HAVE_FANCY_SIMD is off, and the IQK GEMM kernels for Zen4 / Sapphire "
-                    "Rapids and later are not compiled. If this CPU supports AVX512-VNNI, "
-                    "reconfigure with -DGGML_AVX512_VNNI=ON -DGGML_AVX512_VBMI=ON "
-                    "-DGGML_AVX512_BF16=ON (see docs/build.md and scripts/build-zen.bat).")
+                    "Rapids and later are not compiled, which is expected on this CPU.")
             endif()
         elseif (GGML_AVX2)
             list(APPEND ARCH_FLAGS /arch:AVX2)
