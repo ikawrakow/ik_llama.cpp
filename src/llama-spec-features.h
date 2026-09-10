@@ -28,6 +28,8 @@ struct llama_spec_feature_view {
 
 uint32_t llama_mtp_state_n_embd(const struct llama_context * ctx);
 
+bool llama_model_share_qwen4exp_mtp_tensors(struct llama_model * draft_model, const struct llama_model * target_model);
+
 bool llama_set_draft_input_hidden_state_copy(
         struct llama_context * ctx,
         const float * hidden_state,

@@ -144,6 +144,8 @@ endif ()
 
 if (NOT WIN32)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API
+    llama_target_and_test(test-qwen4exp-mtp-sharing.cpp)
+    target_include_directories(test-qwen4exp-mtp-sharing PRIVATE ${PROJECT_SOURCE_DIR}/src)
     #llama_target_and_test(test-sampling.cpp)
     #llama_target_and_test(test-grammar-parser.cpp)
     #llama_target_and_test(test-grammar-integration.cpp)
