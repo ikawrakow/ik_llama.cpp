@@ -301,6 +301,70 @@ void common_chat_peg_minimax_m3_mapper::from_ast(const common_peg_ast_arena &   
     }
 }
 
+// K2-Horizon: strip leaked </ifm|...> XML tags from tool call arguments.
+// The 36b Q3_K_M quant mixes the template's XML format with the grammar's JSON format,
+// causing </ifm|arg_value> tags to appear inside JSON string values.
+std::string common_chat_peg_k2horizon_mapper::strip_leaked_ifm_tags(const std::string & s) {
+    std::string result = s;
+
+    // Remove known closing tags
+    static const char * closing_tags[] = {
+        "</ifm|arg_value>",
+        "</ifm|arg_key>",
+        "</ifm|arg_type>",
+        "</ifm|tool_call>",
+        "</ifm|tool_calls>",
+        "</ifm|think>",
+    };
+    for (const auto & tag : closing_tags) {
+        size_t tag_len = strlen(tag);
+        size_t pos = 0;
+        while ((pos = result.find(tag, pos)) != std::string::npos) {
+            result.erase(pos, tag_len);
+        }
+    }
+
+    // Remove any remaining <ifm|...> open tags
+    size_t pos = 0;
+    while ((pos = result.find("<ifm|", pos)) != std::string::npos) {
+        size_t end = result.find('>', pos);
+        if (end != std::string::npos) {
+            result.erase(pos, end - pos + 1);
+        } else {
+            break;
+        }
+    }
+
+    return result;
+}
+
+void common_chat_peg_k2horizon_mapper::from_ast(const common_peg_ast_arena &    arena,
+                                                 const common_peg_parse_result & parse_result) {
+    common_chat_peg_mapper::from_ast(arena, parse_result);
+
+    // Strip leaked XML tags from tool call arguments
+    for (auto & tool_call : result.tool_calls) {
+        std::string cleaned = strip_leaked_ifm_tags(tool_call.arguments);
+        if (cleaned != tool_call.arguments) {
+            // Re-validate the cleaned JSON
+            try {
+                ordered_json args = ordered_json::parse(cleaned);
+                tool_call.arguments = cleaned;
+            } catch (const ordered_json::exception &) {
+                // If cleaned string isn't valid JSON, try adding missing closing braces
+                for (int d = 0; d < 3; d++) {
+                    try {
+                        ordered_json args = ordered_json::parse(cleaned + std::string(d + 1, '\x7d'));
+                        tool_call.arguments = cleaned + std::string(d + 1, '\x7d');
+                        break;
+                    } catch (const ordered_json::exception &) {
+                    }
+                }
+            }
+        }
+    }
+}
+
 void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     // Handle reasoning/content tags
     bool is_reasoning = node.tag == common_chat_peg_builder::REASONING;
