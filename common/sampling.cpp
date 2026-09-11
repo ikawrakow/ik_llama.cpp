@@ -91,8 +91,6 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                     trigger_tokens.data(), trigger_tokens.size())
                 : llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root");
             if (grmr) {
-                result->prev.resize(params.n_prev);
-
                 result->grammar = grmr;
             }
         }
@@ -730,10 +728,12 @@ void common_sampler_accept(
         struct llama_context * ctx_main,
         llama_token token,
         bool is_generated) {
-    if (ctx_sampling->prev.size() > 0) {
-        ctx_sampling->prev.erase(ctx_sampling->prev.begin());
+    if (ctx_sampling->params.n_prev > 0) {
+        if (ctx_sampling->prev.size() >= static_cast<size_t>(ctx_sampling->params.n_prev)) {
+            ctx_sampling->prev.erase(ctx_sampling->prev.begin());
+        }
+        ctx_sampling->prev.push_back(token);
     }
-    ctx_sampling->prev.push_back(token);
 
     // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
     const auto accept_grammar = is_generated && grammar_should_apply(ctx_sampling);
