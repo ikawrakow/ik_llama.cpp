@@ -885,6 +885,24 @@ static int llama_openpangu_chunked_graph_nodes(const llama_model & model, const 
 int llama_context::max_nodes(int n_tokens, int n_kv) const {
     int max_nodes = model.max_nodes(n_tokens);
     max_nodes += llama_openpangu_chunked_graph_nodes(model, cparams, n_tokens, n_kv);
+    if (llm_arch_is_hybrid(model.arch) && cparams.n_seq_max > 1) {
+        // delta_net::build_layer_attn_linear() (and the KDA twin) cannot batch a ubatch whose
+        // tokens belong to different sequences: it builds one complete linear-attention
+        // sub-graph per token, which is exactly the multi-slot decode case (-np N gives N
+        // tokens with N distinct seq_ids). Each sub-graph is ~56 tensors per recurrent layer,
+        // so the graph grows with n_seq_max * n_recurrent, which neither n_tokens*40 nor
+        // 32*n_tensors above covers. When the meta pool is exhausted ggml_new_object()
+        // returns NULL (the assert is compiled out in release) and ggml_new_tensor_impl()
+        // dereferences it -> SIGSEGV. Reserve for the worst case up front.
+        uint32_t n_recurrent = 0;
+        for (uint32_t il = 0; il < model.hparams.n_layer; ++il) {
+            if (model.hparams.is_recurrent(il)) {
+                ++n_recurrent;
+            }
+        }
+        const uint32_t n_mixed_tokens = std::min<uint32_t>(cparams.n_seq_max, cparams.n_ubatch);
+        max_nodes += (int) (n_mixed_tokens * n_recurrent * 80);
+    }
     if (model.is_mla_model() &&
         cparams.mla_attn > 1 &&
         n_tokens >= 128 &&
@@ -6630,9 +6648,30 @@ static int llama_decode_internal(
             }
 
             if (can_check && any_diff && has_dup) {
-                n_tokens = 1;
+                // The qwen3next graph builder handles two ubatch shapes: every token from one
+                // sequence (batched kernels) or every token from a distinct sequence (one
+                // sub-graph per token). Instead of degrading the whole window to 1-token
+                // ubatches, cut it at the first point where neither shape holds: a run of
+                // same-seq tokens (a slot's prompt chunk) or a run of all-distinct seq_ids
+                // (the decode tokens of several slots). Server batches are laid out slot by
+                // slot, so this keeps prompt chunks batched.
+                const llama_seq_id seq_id_0 = batch_all.seq_id[cur_token][0];
+                uint32_t n_run = 1;
+                if (batch_all.seq_id[cur_token + 1][0] == seq_id_0) {
+                    while (n_run < n_tokens && batch_all.seq_id[cur_token + n_run][0] == seq_id_0) {
+                        ++n_run;
+                    }
+                } else {
+                    std::unordered_set<llama_seq_id> run_seq_ids;
+                    run_seq_ids.reserve(n_tokens);
+                    run_seq_ids.insert(seq_id_0);
+                    while (n_run < n_tokens && run_seq_ids.insert(batch_all.seq_id[cur_token + n_run][0]).second) {
+                        ++n_run;
+                    }
+                }
+                n_tokens = n_run;
                 if (!warned_qnext_mixed_repeat) {
-                    LLAMA_LOG_WARN("%s: qwen3next mixed-sequence batch contains repeated seq_id values; falling back to single-token chunking\n", __func__);
+                    LLAMA_LOG_WARN("%s: qwen3next mixed-sequence batch contains repeated seq_id values; splitting it at sequence-run boundaries\n", __func__);
                     warned_qnext_mixed_repeat = true;
                 }
             }
