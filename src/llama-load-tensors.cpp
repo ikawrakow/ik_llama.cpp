@@ -5478,6 +5478,7 @@ bool create_tensors_helper::create_tensors() {
         ml.merge_qkv = false;
     }
     switch (model.arch) {
+        case LLM_ARCH_K2_HORIZON:   // dense K2: same tensors + graph as llama
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_MINICPM:

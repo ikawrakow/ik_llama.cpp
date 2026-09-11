@@ -4,6 +4,7 @@
 
 enum llm_arch {
     LLM_ARCH_LLAMA,
+    LLM_ARCH_K2_HORIZON,
     LLM_ARCH_LLAMA4,
     LLM_ARCH_DECI,
     LLM_ARCH_FALCON,
