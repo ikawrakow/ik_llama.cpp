@@ -3643,6 +3643,13 @@ void server_context::create_checkpoint_at_interval(server_slot & slot, checkpoin
     if (!this->params_base.do_checkpoint) {
         return;
     }
+    if (origin != CHECKPOINT_ORIGIN_FEED &&
+            (llama_model_is_deepseek4(model) || llama_model_is_openpangu(model))) {
+        // DSV4/openPangu exclude generation-span checkpoints (see create_checkpoint);
+        // bail before the interval check so the decoder path does not re-enter
+        // here on every token once the interval is reached
+        return;
+    }
     if (this->params_base.ctx_checkpoints_interval <= 0) {
         return;
     }
