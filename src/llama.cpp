@@ -1407,7 +1407,8 @@ static bool llama_kv_cache_init(
                 cache.v_l.push_back(nullptr);
             }
             LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
-            if ((split_cache || replicate_mla) && model.layers[i].ssm_out->extra) {
+            if ((split_cache || replicate_mla) && model.arch != LLM_ARCH_LFM2 &&
+                    model.layers[i].ssm_out != nullptr && model.layers[i].ssm_out->extra) {
                 auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
                 GGML_ASSERT(split_ssm_out);
                 int num_v_heads = hparams.ssm_dt_rank;
@@ -9327,6 +9328,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_DFLASH_DRAFT:
         case LLM_ARCH_DFLASH2:
         case LLM_ARCH_GEMMA4_ASSISTANT:
+        case LLM_ARCH_LFM2:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -9699,11 +9701,9 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 
 // Unified speculative-checkpoint
 static bool spec_ckpt_try_per_step(llama_kv_cache & kv, const llama_model & model, int max_tokens) {
-    // openPangu carries only a conv state (no SSM recurrent term), so the per-step
-    // path - which sizes itself from the ssm_* hparams (ssm_dt_rank etc, all zero
-    // here) - does not apply. Decline it so the checkpoint resolves to the whole-slot
-    // shadow (gpu-fallback), which is arch-agnostic.
-    if (model.arch == LLM_ARCH_OPENPANGU) {
+    // openPangu carries only a conv state and LFM2 a short-conv state (no SSM
+    // term); the per-step path would divide by zero (ssm_dt_rank == 0), decline
+    if (model.arch == LLM_ARCH_OPENPANGU || model.arch == LLM_ARCH_LFM2) {
         kv.save_per_step_ssm = false;
         return false;
     }

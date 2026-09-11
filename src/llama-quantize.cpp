@@ -1486,6 +1486,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         // do not quantize Mamba's small yet 2D weights
         // NOTE: can't use LLM_TN here because the layer number is not known
         quantize &= name.find("ssm_conv1d")        == std::string::npos;
+        // ggml_ssm_conv accepts only an F32 kernel (including LFM2's kernel-3 conv).
+        quantize &= name.find("shortconv.conv")     == std::string::npos;
         quantize &= name.find("ssm_x.weight")      == std::string::npos;
         quantize &= name.find("ssm_dt.weight")     == std::string::npos;
 

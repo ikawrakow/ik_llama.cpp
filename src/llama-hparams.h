@@ -91,6 +91,9 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_dim_per_layer;
 
     // for State Space Models
+    // LFM2 short-convolution state length (including the current token).
+    uint32_t n_shortconv_l_cache = 0;
+
     uint32_t ssm_d_conv  = 0;
     uint32_t ssm_d_inner = 0;
     uint32_t ssm_d_state = 0;
@@ -248,6 +251,7 @@ struct llama_hparams {
         if (this->rope_finetuned  != other.rope_finetuned)  return true;
         if (this->n_ctx_orig_yarn != other.n_ctx_orig_yarn) return true;
 
+        if (this->n_shortconv_l_cache != other.n_shortconv_l_cache) return true;
         if (this->ssm_d_conv  != other.ssm_d_conv)  return true;
         if (this->ssm_d_inner != other.ssm_d_inner) return true;
         if (this->ssm_d_state != other.ssm_d_state) return true;
@@ -352,6 +356,9 @@ struct llama_hparams {
     }
 
     uint32_t n_embd_v_s() const { // dimension of the recurrent state embeddings
+        if (n_shortconv_l_cache > 0) {
+            return (n_shortconv_l_cache - 1) * n_embd;
+        }
         if (ssm_n_group > 0) {
             // qwen3next recurrent state packs:
             // 1) conv state: (d_conv - 1) * (2 * key_dim + value_dim)
