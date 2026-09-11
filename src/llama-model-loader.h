@@ -79,6 +79,23 @@ struct llama_model_loader {
                         offs, data_offset, tensor_offset, ggml_nbytes(tensor), file->size());
                 throw std::runtime_error(format("tensor '%s' data is not within the file bounds, model is corrupted or incomplete", name));
             }
+
+            const int n_gguf_tensors = gguf_get_n_tensors(gguf_ctx);
+            const size_t t_offs = gguf_get_tensor_offset(gguf_ctx, tensor_idx);
+            size_t region = 0;
+            if (tensor_idx + 1 < n_gguf_tensors) {
+                const size_t next_offs = gguf_get_tensor_offset(gguf_ctx, tensor_idx + 1);
+                if (next_offs > t_offs) {
+                    region = next_offs - t_offs;
+                }
+            } else {
+                region = file->size() - offs;
+            }
+            if (region > 0 && ggml_nbytes(tensor) > region) {
+                throw std::runtime_error(format("tensor '%s' is stored in %zu bytes but %s needs %zu, "
+                            "the model is corrupted or was written by a broken quantizer", name, region,
+                            ggml_type_name(tensor->type), ggml_nbytes(tensor)));
+            }
         }
     };
     std::vector<llama_tensor_weight> weights;
