@@ -6802,6 +6802,9 @@ static int llama_decode_internal(
 #endif
 
             gf = llm_build_context::llama_build_graph(lctx, u_batch, false);
+            if (gf == nullptr) {
+                return GGML_STATUS_FAILED;
+            }
 #if IK_PRINT_TIMING
             tim2 = ggml_time_us();
             printf("build_graph(...): %d us\n", int(tim2-tim1));
@@ -7280,6 +7283,9 @@ static int llama_encode_internal(
     ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 
     ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, batch, false);
+    if (gf == nullptr) {
+        return -1;
+    }
 
     // the output embeddings after the final encoder normalization
     struct ggml_tensor * embd = nullptr;
@@ -7705,6 +7711,9 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
             return GGML_STATUS_FAILED;
         }
         ggml_cgraph * gf = llm_build_context::llama_build_graph(lctx, reserve_batch, true, lctx.cparams.worst_graph_tokens);
+        if (gf == nullptr) {
+            return GGML_STATUS_FAILED;
+        }
 
         // initialize scheduler with the worst-case graph
         lctx.reset_scheduler();
@@ -9089,6 +9098,10 @@ struct llama_context * llama_init_from_model(
                 return nullptr;
             }
             ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, reserve_batch, true, cparams.worst_graph_tokens);
+            if (gf == nullptr) {
+                llama_free(ctx);
+                return nullptr;
+            }
 
             // initialize scheduler with the worst-case graph
             bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
