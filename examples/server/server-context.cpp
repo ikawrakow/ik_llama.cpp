@@ -33,11 +33,9 @@ static bool server_speculative_multimodal_supported(const common_params_speculat
     return true;
 }
 
-static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max, int32_t offset) {
+static void server_prompt_checkpoint_update(server_prompt_checkpoint & ckpt, llama_context * ctx, int id, int64_t n_tokens, llama_pos pos_min, llama_pos pos_max) {
     ckpt.pos_min = pos_min;
     ckpt.pos_max = pos_max;
-    ckpt.pos_max_prompt = pos_max + offset;
-    ckpt.pos_min_prompt = pos_min + offset;
     ckpt.n_tokens = n_tokens;
 
     const size_t checkpoint_size = llama_state_seq_get_size(ctx, id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -2127,7 +2125,6 @@ bool server_context::system_prompt_set(const std::string& sys_prompt) {
         slot.cache_tokens.clear();
         slot.n_past = 0;
         slot.n_past_prompt = 0;
-        slot.n_past_offset = 0;
         slot.n_discarded_prompt = 0;
         slot.n_kept_prompt = 0;
         slot.n_prompt_tokens_cache = 0;
@@ -2717,8 +2714,11 @@ static size_t save_checkpoints_to_file(const std::string & filename, const std::
     for (const auto & checkpoint : checkpoints) {
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_min), sizeof(checkpoint.pos_min));
         file.write(reinterpret_cast<const char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
-        file.write(reinterpret_cast<const char *>(&checkpoint.pos_min_prompt), sizeof(checkpoint.pos_min_prompt));
-        file.write(reinterpret_cast<const char *>(&checkpoint.pos_max_prompt), sizeof(checkpoint.pos_max_prompt));
+        // Save the legacy fields from old file format
+        llama_pos pos_min_prompt = 0;
+        llama_pos pos_max_prompt = 0;
+        file.write(reinterpret_cast<const char *>(&pos_min_prompt), sizeof(pos_min_prompt));
+        file.write(reinterpret_cast<const char *>(&pos_max_prompt), sizeof(pos_max_prompt));
         size_t data_len = checkpoint.data.size();
         file.write(reinterpret_cast<const char *>(&data_len), sizeof(data_len));
         if (data_len > 0) {
@@ -2757,8 +2757,11 @@ static size_t load_checkpoints_from_file(const std::string & filename, std::list
             server_prompt_checkpoint checkpoint;
             file.read(reinterpret_cast<char *>(&checkpoint.pos_min), sizeof(checkpoint.pos_min));
             file.read(reinterpret_cast<char *>(&checkpoint.pos_max), sizeof(checkpoint.pos_max));
-            file.read(reinterpret_cast<char *>(&checkpoint.pos_min_prompt), sizeof(checkpoint.pos_min_prompt));
-            file.read(reinterpret_cast<char *>(&checkpoint.pos_max_prompt), sizeof(checkpoint.pos_max_prompt));
+            // Read and discard legacy fields from old file format
+            llama_pos pos_min_prompt = 0;
+            llama_pos pos_max_prompt = 0;
+            file.read(reinterpret_cast<char *>(&pos_min_prompt), sizeof(pos_min_prompt));
+            file.read(reinterpret_cast<char *>(&pos_max_prompt), sizeof(pos_max_prompt));
 
             size_t data_len;
             file.read(reinterpret_cast<char *>(&data_len), sizeof(data_len));
@@ -3842,7 +3845,7 @@ bool server_context::create_checkpoint(server_slot & slot) {
         }
 
         auto & cur = slot.server_cached_prompt.checkpoints.emplace_back();
-        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), checkpoint_pos_min, pos_max, slot.n_past_offset);
+        server_prompt_checkpoint_update(cur, ctx, slot.id, slot.cache_tokens.n_tokens(), checkpoint_pos_min, pos_max);
 
         SLT_WRN(slot, "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, took %.2f ms)\n",
             (int)slot.server_cached_prompt.checkpoints.size(), params_base.ctx_checkpoints_n, cur.pos_min, cur.pos_max, cur.n_tokens, (float)cur.data.size() / 1024 / 1024,
@@ -4000,7 +4003,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                             int32_t size_threshold = 20;
                             slot.n_past = prefix.first;
                             slot.n_past_prompt = prefix.second;
-                            slot.n_past_offset = slot.n_past_prompt - slot.n_past;
                             if (!llama_model_supports_partial_kv_reuse(model) &&
                                 slot.n_past < (int32_t) slot.cache_tokens.size()) {
                                 // the cache diverges from the new prompt mid-sequence; this
@@ -4010,7 +4012,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                         __func__, (int) slot.n_past, (int) slot.cache_tokens.size());
                                 slot.n_past = 0;
                                 slot.n_past_prompt = 0;
-                                slot.n_past_offset = 0;
                             }
 
                             if (slot.n_past > 0 && slot.spec != nullptr &&
@@ -4022,7 +4023,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                                         __func__);
                                 slot.n_past = 0;
                                 slot.n_past_prompt = 0;
-                                slot.n_past_offset = 0;
                             }
 
                             if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
@@ -4097,7 +4097,6 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.cache_tokens.clear();
                     slot.n_past = 0;
                     slot.n_past_prompt = 0;
-                    slot.n_past_offset = 0;
                     slot.n_discarded_prompt = 0;
                     slot.n_kept_prompt = 0;
                     slot.n_past_se = 0;
