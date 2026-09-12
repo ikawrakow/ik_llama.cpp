@@ -7213,7 +7213,7 @@ static int llama_decode_internal(
         bool reset_previous = false;
         // update the kv ring buffer
         {
-            if ((llama_model_has_recurrent(&lctx.model) || llama_model_is_openpangu(&lctx.model)) && kv_self.head == 0) {
+            if (llama_model_has_recurrent(&lctx.model) && kv_self.head == 0) {
                 reset_previous = true;
             }
             kv_self.head += n_tokens;
@@ -10367,11 +10367,24 @@ llama_pos llama_kv_cache_swa_rewind_floor(const struct llama_context * ctx) {
     return ctx->kv_self.pos_base_swa + (llama_pos) ctx->kv_self.window_swa;
 }
 
-llama_pos llama_kv_cache_seq_pos_min(struct llama_context * ctx, llama_seq_id seq_id) {
-    if (ctx->kv_self.hybrid || ctx->kv_self.recurrent) {
-        return llama_kv_cache_seq_pos_max(ctx->kv_self, seq_id);
+llama_pos llama_kv_cache_swa(const struct llama_context * ctx) {
+    if (!ctx || !ctx->kv_self.any_compacted()) {
+        return 0;
     }
-    return llama_kv_cache_seq_pos_min(ctx->kv_self, seq_id);
+    return (llama_pos)ctx->kv_self.window_swa;
+}
+
+llama_pos llama_kv_cache_seq_pos_min(struct llama_context * ctx, llama_seq_id seq_id) {
+    llama_pos pos_min;
+    if (ctx->kv_self.hybrid || ctx->kv_self.recurrent) {
+        pos_min = llama_kv_cache_seq_pos_max(ctx->kv_self, seq_id);
+    } else {
+        pos_min = llama_kv_cache_seq_pos_min(ctx->kv_self, seq_id);
+    }
+    if (llama_kv_cache_is_compacted(ctx)) {
+        pos_min = std::max(pos_min, ctx->kv_self.pos_base_swa);
+    }
+    return pos_min;
 }
 
 llama_pos llama_kv_cache_seq_pos_max(struct llama_context * ctx, llama_seq_id seq_id) {

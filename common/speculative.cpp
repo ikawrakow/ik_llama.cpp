@@ -60,9 +60,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
 
 bool common_speculative_needs_checkpoint(const llama_model * model) {
     return model != nullptr &&
-        (llama_model_has_recurrent(model) ||
-         llama_model_is_openpangu(model) ||
-         llama_model_is_deepseek4(model));
+        llama_model_has_recurrent(model);
 }
 
 void common_speculative_checkpoint::clear() {
