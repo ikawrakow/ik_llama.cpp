@@ -260,6 +260,7 @@ void llm_load_hparams(
 
     // arch-specific KVs
     switch (model.arch) {
+        case LLM_ARCH_K2_HORIZON:   // dense K2: same tensors + graph as llama
         case LLM_ARCH_LLAMA:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
