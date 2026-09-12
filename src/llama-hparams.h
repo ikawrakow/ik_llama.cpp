@@ -157,6 +157,47 @@ struct llama_hparams {
     float    dsv4_hc_eps             = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios = {};
 
+    // The two compressed-stream plan slots. V4 hardcodes 4 (overlapping groups) and 128;
+    // V4.1 takes both ratios from the file and pools disjoint groups in both.
+    uint32_t dsv4_ratio_a   = 4;
+    uint32_t dsv4_ratio_b   = 128;
+    bool     dsv4_overlap_a = true;
+    bool     dsv4_overlap_b = false;
+
+    // DeepSeek-V4.1: only a few source layers compress, and the layers after each one read the
+    // same rows. For every layer these hold the layer that published what it reads, or -1. A
+    // layer whose entry is itself is a source. Index keys and the indexer top-k are shared the
+    // same way on their own sets of layers.
+    bool dsv4_shared_streams = false;
+    // V4.1: the hyper-connection mix a sublayer computes is applied by the next one, and the
+    // last FFN's mix collapses the output (no learned output head). V4 uses the same mix
+    // twice and has a head.
+    bool dsv4_hc_lag = false;
+    // V4 re-normalizes every attention head after the up projection; V4.1 normalizes only the
+    // low-rank query and the latent kv.
+    bool dsv4_q_head_norm = true;
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_kv_source        = {};
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_index_key_source = {};
+    std::array<int32_t, LLAMA_MAX_LAYERS> dsv41_topk_source      = {};
+    bool dsv41_is_kv_source   (uint32_t il) const { return dsv4_shared_streams && dsv41_kv_source[il]        == (int32_t) il; }
+    bool dsv41_owns_index_k   (uint32_t il) const { return dsv4_shared_streams && dsv41_index_key_source[il] == (int32_t) il; }
+    bool dsv41_is_index_source(uint32_t il) const { return dsv4_shared_streams && dsv41_topk_source[il]      == (int32_t) il; }
+
+    // DeepSeek-V4.1 engram: n-gram keyed tables added into the stream at a few layers
+    uint32_t engram_n_head         = 0;
+    uint32_t engram_key_length     = 0;
+    uint32_t engram_max_ngram_size = 0;
+    uint32_t engram_n_layer        = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> engram_layer_ids = {};
+
+    // which engram table layer il carries, or -1
+    int engram_index(uint32_t il) const {
+        for (uint32_t e = 0; e < engram_n_layer; ++e) {
+            if (engram_layer_ids[e] == il) return (int) e;
+        }
+        return -1;
+    }
+
     // qwen4exp. hc_low_rank 0 means the full-rank hyper-connection form; the
     // ple_* group is inert unless the model carries an n-gram embedding layer.
     uint32_t hc_low_rank         = 0;
