@@ -245,6 +245,7 @@ struct llama_hparams {
     float    dflash_backbone_rotary_base = 0.0f;
     bool     dflash_laguna = false;
     bool     dflash_dsv4 = false;
+    bool     dflash_dsv41 = false;  // DSV4 draft with V4.1 rules: lagged hyper-connections, no output head
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
@@ -275,6 +276,7 @@ struct llama_hparams {
         if (this->dflash_selector_top_k != other.dflash_selector_top_k) return true;
         if (this->dflash_laguna != other.dflash_laguna) return true;
         if (this->dflash_dsv4   != other.dflash_dsv4)   return true;
+        if (this->dflash_dsv41  != other.dflash_dsv41)  return true;
         if (this->n_layer       != other.n_layer)       return true;
         if (this->n_rot         != other.n_rot)         return true;
         if (this->n_swa         != other.n_swa)         return true;
