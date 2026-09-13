@@ -6,6 +6,10 @@
 //
 
 #include "llama-impl.h"
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 #include "llama-sampling.h"
@@ -5495,6 +5499,23 @@ static void llama_set_engram_rows(llama_context & lctx, const llama_batch & batc
             }
         }
     }
+#if defined(__linux__) || defined(__APPLE__)
+    // the table is read lazily by get_rows, so an untouched row is a synchronous major fault
+    // inside the graph; the ids are known here, before it runs, so start the reads now
+    {
+        const uint32_t il = hp.engram_layer_ids[eg];
+        const ggml_tensor * w = il < model.layers.size() ? model.layers[il].engram_embd : nullptr;
+        if (w && w->data && w->buffer && ggml_backend_buffer_is_host(w->buffer)) {
+            const size_t page = (size_t) sysconf(_SC_PAGESIZE);
+            for (int32_t id : idx) {
+                const uintptr_t a     = (uintptr_t) w->data + (size_t) id * w->nb[1];
+                const uintptr_t first = a & ~(uintptr_t) (page - 1);
+                const uintptr_t last  = (a + w->nb[1] + page - 1) & ~(uintptr_t) (page - 1);
+                posix_madvise((void *) first, last - first, POSIX_MADV_WILLNEED);
+            }
+        }
+    }
+#endif
     ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*sizeof(int32_t));
 }
 
