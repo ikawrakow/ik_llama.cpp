@@ -5,7 +5,7 @@ from math import log2, ceil
 
 from numpy.typing import DTypeLike
 
-from .constants import GGML_QUANT_SIZES, GGMLQuantizationType, QK_K
+from .constants import GGML_QUANT_SIZES, GGML_ROW_META_SIZES, GGMLQuantizationType, QK_K
 from .lazy import LazyNumpyTensor
 
 import numpy as np
@@ -13,16 +13,18 @@ import numpy as np
 
 def quant_shape_to_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizationType) -> tuple[int, ...]:
     block_size, type_size = GGML_QUANT_SIZES[quant_type]
+    row_meta_size = GGML_ROW_META_SIZES.get(quant_type, 0)
     if shape[-1] % block_size != 0:
         raise ValueError(f"Quantized tensor row size ({shape[-1]}) is not a multiple of {quant_type.name} block size ({block_size})")
-    return (*shape[:-1], shape[-1] // block_size * type_size)
+    return (*shape[:-1], row_meta_size + shape[-1] // block_size * type_size)
 
 
 def quant_shape_from_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizationType) -> tuple[int, ...]:
     block_size, type_size = GGML_QUANT_SIZES[quant_type]
-    if shape[-1] % type_size != 0:
-        raise ValueError(f"Quantized tensor bytes per row ({shape[-1]}) is not a multiple of {quant_type.name} type size ({type_size})")
-    return (*shape[:-1], shape[-1] // type_size * block_size)
+    row_meta_size = GGML_ROW_META_SIZES.get(quant_type, 0)
+    if shape[-1] < row_meta_size or (shape[-1] - row_meta_size) % type_size != 0:
+        raise ValueError(f"Quantized tensor bytes per row ({shape[-1]}) minus the {quant_type.name} row metadata ({row_meta_size}) is not a multiple of its type size ({type_size})")
+    return (*shape[:-1], (shape[-1] - row_meta_size) // type_size * block_size)
 
 
 # This is faster than np.vectorize and np.apply_along_axis because it works on more than one row at a time
