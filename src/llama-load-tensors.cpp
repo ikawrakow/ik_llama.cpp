@@ -5645,7 +5645,11 @@ bool create_tensors_helper::create_tensors() {
             throw std::runtime_error("unknown architecture");
     }
 
-    if (getenv("GGML_CUDA_NO_PINNED") == nullptr) {
+    // Tensor overrides to the CPU normally drop mmap so those weights land in pinned host memory.
+    // On a box whose CPU-side weights exceed RAM that is impossible, and GGML_CUDA_NO_PINNED, the
+    // documented escape, also turns off every pinned staging buffer. GGML_CUDA_NO_PINNED_WEIGHTS
+    // keeps the weights mmapped (unpinned) and leaves the staging buffers pinned.
+    if (getenv("GGML_CUDA_NO_PINNED") == nullptr && getenv("GGML_CUDA_NO_PINNED_WEIGHTS") == nullptr) {
         use_mmap_buffer &= !has_buft_overrides;
     }
 
