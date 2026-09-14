@@ -174,6 +174,10 @@ struct llama_kv_cache {
         // One tensor per recurrent layer, each sized [conv_dim * max_tokens].
         //std::vector<std::vector<ggml_tensor *>> per_step_qkv;
         std::vector<std::vector<ggml_tensor *>> per_step_conv;
+        // Qwen4Exp PLE checkpoint state
+        std::vector<std::vector<ggml_tensor *>> per_step_ple;
+        std::vector<int64_t> per_step_ple_dim;
+        std::vector<int64_t> per_step_ple_offset;
 
         int32_t per_step_n_tokens = 0;
         int32_t per_step_max_allocated = 0;
@@ -229,6 +233,28 @@ struct llama_kv_cache {
         void release_dsv4_per_step();
         void release_dsv4_snapshot();
 
+        void release_per_step() {
+            for (struct ggml_context * ctx : per_step_ctxs) {
+                ggml_free(ctx);
+            }
+            for (ggml_backend_buffer_t buf : per_step_bufs) {
+                ggml_backend_buffer_free(buf);
+            }
+            per_step_ctxs.clear();
+            per_step_bufs.clear();
+            per_step_ssm.clear();
+            per_step_conv.clear();
+            per_step_ple.clear();
+            per_step_ple_dim.clear();
+            per_step_ple_offset.clear();
+            per_step_n_tokens = 0;
+            per_step_max_allocated = 0;
+            per_step_ssm_state_size = 0;
+            per_step_conv_state_dim = 0;
+            per_step_conv_dim = 0;
+            per_step_d_conv = 0;
+        }
+
         void release() {
             release_dsv4_per_step();
             release_dsv4_snapshot();
@@ -246,17 +272,7 @@ struct llama_kv_cache {
             allocated = false;
             saved = false;
 
-            for (struct ggml_context * ctx : per_step_ctxs) {
-                ggml_free(ctx);
-            }
-            per_step_ctxs.clear();
-            for (ggml_backend_buffer_t buf : per_step_bufs) {
-                ggml_backend_buffer_free(buf);
-            }
-            per_step_bufs.clear();
-            per_step_ssm.clear();
-            per_step_conv.clear();
-            per_step_max_allocated = 0;
+            release_per_step();
         }
 
         ~gpu_checkpoint() {
@@ -274,7 +290,7 @@ struct llama_kv_cache {
 
     // Per-step checkpoint: allocate, restore step k's full state (SSM + conv) to cache
     bool per_step_alloc(const llama_model & model, int max_tokens);
-    bool per_step_restore(const llama_model & model, ggml_backend_sched_t sched, int step);
+    bool per_step_restore(ggml_backend_sched_t sched, int step, uint32_t slot);
 
     ~llama_kv_cache() {
         for (struct ggml_context * ctx : ctxs) {
