@@ -4442,9 +4442,9 @@ static bool llm_load_tensors(
         if ((model.expert_cache_h > 0 || model.expert_cache_gb > 0) && ml.merge_up_gate_exps) {
             disable("incompatible with merged up/gate expert tensors");
         }
-        if ((model.expert_cache_h > 0 || model.expert_cache_gb > 0) && ml.defer_experts) {
-            disable("incompatible with deferred expert loading");
-        }
+        // note: deferred expert loading (--defer-experts) is compatible with the
+        // expert cache: the slot fill and promotion copies read cold expert slices
+        // through host mmap pointers, which simply fault pages in on first touch.
         if (model.expert_cache_h > 0 || model.expert_cache_gb > 0) {
             double   bytes_per_slot_all = 0;
             int64_t  n_expert = 0;

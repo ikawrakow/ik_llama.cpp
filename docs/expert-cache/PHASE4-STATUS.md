@@ -485,8 +485,10 @@ exercises at PP — real models always take mmq_id since 512 ≤ 32×288):
   resolution + clamp, `expert_cache_bytes` = (H+1)×bytes/slot, placement = `devices[0]`
   buft when `n_gpu_layers>0 && devices non-empty && !IK_EXP_CACHE_HOST`, then **carve**
   `device_mem[dev] -= bytes` so auto-fit/splits accounting sees it; falls back to host
-  slots with a warning if it can't fit. New incompat guards: `--merge-up-gate-exps`,
-  `defer_experts` (both warn+disable).
+  slots with a warning if it can't fit. Incompat guard: `--merge-up-gate-exps`
+  (warn+disable). `defer_experts` was guard-disabled in M2 but is compatible
+  (slot fill + promotion copies read cold slices through host mmap pointers,
+  faulting pages on first touch) — the guard was removed.
 - Late block (end of load): re-verifies per-layer eligibility against created tensors,
   allocs slot buffer on the chosen buft, fills device-aware (`ggml_backend_tensor_set` per
   slice for device dst; handles non-host src via scratch bounce).
