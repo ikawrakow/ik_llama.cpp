@@ -11363,7 +11363,7 @@ struct llama_context * llama_init_from_model(
             ggml_backend_sched_set_moe_prefetch_ahead(ctx->sched, cparams.prefetch_experts_ahead);
         }
         for (const auto & mapping : model->mappings) {
-            ggml_backend_prefetch_register_mapping(mapping->addr(), mapping->size());
+            ggml_backend_prefetch_register_mapping_fd(mapping->addr(), mapping->size(), mapping->file_id(), 0);
         }
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {

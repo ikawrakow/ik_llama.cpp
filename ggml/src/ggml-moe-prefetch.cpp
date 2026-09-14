@@ -2,6 +2,7 @@
 
 #if defined(__linux__)
 
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -10,6 +11,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -37,6 +39,8 @@ namespace {
 struct mapping_entry {
     uintptr_t base;
     size_t    size;
+    int       fd       = -1;   // dup()ed backing fd, -1 when unknown (readahead disabled)
+    int64_t   base_off = 0;    // file offset corresponding to base
 };
 
 struct ticket {
@@ -55,6 +59,9 @@ struct job {
     std::shared_ptr<ticket> tk;
 };
 
+// defined below, next to the registry
+static bool find_mapping(uintptr_t addr, size_t len, mapping_entry & out);
+
 struct prefetch_pool {
     std::mutex               mtx;
     std::condition_variable  cv_work;   // workers sleep here
@@ -65,10 +72,15 @@ struct prefetch_pool {
 
     std::unordered_map<const void *, std::shared_ptr<ticket>> tickets;
 
+    // GGML_MOE_PREFETCH_READAHEAD=1: workers issue readahead(2) on the backing
+    // fd (async large-BIO) instead of MADV_POPULATE_READ (sync per-page faultin)
+    bool use_readahead = false;
+
     // cumulative observability counters (GGML_MOE_PREFETCH_DEBUG)
     std::atomic<uint64_t> n_jobs{0};
     std::atomic<uint64_t> n_skipped{0};
     std::atomic<uint64_t> bytes_populated{0};
+    std::atomic<uint64_t> bytes_readahead{0};
     std::atomic<uint64_t> n_colded{0};
 
     ~prefetch_pool() { stop(); }
@@ -92,9 +104,10 @@ struct prefetch_pool {
         }
         workers.clear();
         if (getenv("GGML_MOE_PREFETCH_DEBUG") && n_jobs.load() > 0) {
-            fprintf(stderr, "%s: jobs=%llu skipped_resident=%llu bytes_populated=%.2f GiB colded=%llu\n", __func__,
+            fprintf(stderr, "%s: jobs=%llu skipped_resident=%llu bytes_populated=%.2f GiB bytes_readahead=%.2f GiB colded=%llu\n", __func__,
                     (unsigned long long) n_jobs.load(), (unsigned long long) n_skipped.load(),
                     (double) bytes_populated.load()/(1024.0*1024.0*1024.0),
+                    (double) bytes_readahead.load()/(1024.0*1024.0*1024.0),
                     (unsigned long long) n_colded.load());
         }
     }
@@ -147,7 +160,22 @@ struct prefetch_pool {
             } else {
                 const uintptr_t astart = j.addr & ~(uintptr_t)(page - 1);
                 const size_t    alen   = ((j.addr + j.len + page - 1) & ~(uintptr_t)(page - 1)) - astart;
-                if (madvise((void *)astart, alen, MADV_POPULATE_READ) == 0) {
+                bool            done_ra = false;
+                if (use_readahead) {
+                    mapping_entry m;
+                    if (find_mapping(astart, alen, m) && m.fd >= 0) {
+                        const off_t off = (off_t)(m.base_off + (int64_t)(astart - m.base));
+                        // async: queues large BIOs and returns; consumers take
+                        // cheap minor faults (or wait on in-flight folios)
+                        // instead of synchronous major faults
+                        if (readahead(m.fd, off, (size_t)alen) == 0) {
+                            bytes_readahead.fetch_add(alen, std::memory_order_relaxed);
+                            done_ra = true;
+                            done_read = true;
+                        } // on failure fall through to the populate path
+                    }
+                }
+                if (!done_ra && madvise((void *)astart, alen, MADV_POPULATE_READ) == 0) {
                     bytes_populated.fetch_add(alen, std::memory_order_relaxed);
                     done_read = true;
                 } // on failure the fault path takes over
@@ -188,6 +216,19 @@ static bool is_mapped(const void * p, size_t len) {
     const uintptr_t a = (uintptr_t)p;
     for (const auto & m : s.mappings) {
         if (a >= m.base && a + len <= m.base + m.size) return true;
+    }
+    return false;
+}
+
+// copy the registry entry covering [addr, addr+len); false when none does
+static bool find_mapping(uintptr_t addr, size_t len, mapping_entry & out) {
+    auto & s = state();
+    std::lock_guard<std::mutex> lock(s.reg_mtx);
+    for (const auto & m : s.mappings) {
+        if (addr >= m.base && addr + len <= m.base + m.size) {
+            out = m;
+            return true;
+        }
     }
     return false;
 }
@@ -306,23 +347,39 @@ static void legacy_madvise(const ggml_tensor * w, const ggml_tensor * ids) {
 } // namespace
 
 void ggml_moe_prefetch_register_mapping(const void * base, size_t size) {
+    ggml_moe_prefetch_register_mapping_fd(base, size, -1, 0);
+}
+
+void ggml_moe_prefetch_register_mapping_fd(const void * base, size_t size, int fd, int64_t base_off) {
     if (!base || size == 0) return;
     auto & s = state();
     std::lock_guard<std::mutex> lock(s.reg_mtx);
     for (const auto & m : s.mappings) {
         if (m.base == (uintptr_t)base) return; // contexts may re-register the same model
     }
-    s.mappings.push_back({(uintptr_t)base, size});
+    int dup_fd = -1;
+    if (fd >= 0) {
+        dup_fd = dup(fd); // registry outlives the caller's llama_file
+        if (dup_fd < 0) {
+            fprintf(stderr, "%s: dup(%d) failed; readahead disabled for this mapping\n", __func__, fd);
+        }
+    }
+    s.mappings.push_back({(uintptr_t)base, size, dup_fd, base_off});
 }
 
 void ggml_moe_prefetch_unregister_mapping(const void * base) {
     auto & s = state();
     std::lock_guard<std::mutex> lock(s.reg_mtx);
     // a queued job may still point into this range; its madvise then fails
-    // (ENOMEM once unmapped) and the worker skips the chunk
-    s.mappings.erase(std::remove_if(s.mappings.begin(), s.mappings.end(),
-                [base](const mapping_entry & m) { return m.base == (uintptr_t)base; }),
-            s.mappings.end());
+    // (ENOMEM once unmapped) and the worker skips the chunk; a queued
+    // readahead on the dup()ed fd stays valid (fd held open until here)
+    for (auto it = s.mappings.begin(); it != s.mappings.end(); ++it) {
+        if (it->base == (uintptr_t)base) {
+            if (it->fd >= 0) close(it->fd);
+            s.mappings.erase(it);
+            break;
+        }
+    }
 }
 
 static bool populate_read_supported() {
@@ -351,6 +408,11 @@ void ggml_moe_prefetch_set_n_threads(int n_threads) {
     }
     s.pool.reset();
     s.pool = std::make_shared<prefetch_pool>();
+    const char * ra = getenv("GGML_MOE_PREFETCH_READAHEAD");
+    s.pool->use_readahead = ra && ra[0] && strcmp(ra, "0") != 0;
+    if (s.pool->use_readahead) {
+        fprintf(stderr, "%s: readahead(2) prefault mode enabled (GGML_MOE_PREFETCH_READAHEAD)\n", __func__);
+    }
     s.pool->start(n_threads);
 }
 
@@ -457,6 +519,7 @@ void ggml_moe_prefetch_kernel_hook(const struct ggml_tensor * node, int ith) {
 #else // !__linux__
 
 void ggml_moe_prefetch_register_mapping(const void *, size_t) {}
+void ggml_moe_prefetch_register_mapping_fd(const void *, size_t, int, int64_t) {}
 void ggml_moe_prefetch_unregister_mapping(const void *) {}
 void ggml_moe_prefetch_set_n_threads(int) {}
 bool ggml_moe_prefetch_enabled(void) { return false; }

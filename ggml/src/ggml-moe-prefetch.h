@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,12 @@ extern "C" {
 // eligible for prefetch. Nothing is opened or retained beyond (base, size).
 void ggml_moe_prefetch_register_mapping  (const void * base, size_t size);
 void ggml_moe_prefetch_unregister_mapping(const void * base);
+
+// fd-aware variant: with GGML_MOE_PREFETCH_READAHEAD=1 the workers issue
+// readahead(2) on the backing file (async large-BIO) instead of
+// MADV_POPULATE_READ (synchronous per-page faultin). base_off is the file
+// offset corresponding to base. The fd is dup()ed; caller keeps ownership.
+void ggml_moe_prefetch_register_mapping_fd(const void * base, size_t size, int fd, int64_t base_off);
 
 // worker pool control; n_threads > 0 (re)creates the pool, <= 0 shuts it down
 void ggml_moe_prefetch_set_n_threads(int n_threads);

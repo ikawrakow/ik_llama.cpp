@@ -46,6 +46,10 @@ struct llama_mmap {
     size_t size() const;
     void * addr() const;
 
+    // backing file descriptor for the file-backed mapping, -1 for anonymous
+    // (THP/hugetlb copy) mappings and on platforms without one
+    int file_id() const;
+
     void dontneed_fragment(size_t first, size_t last);
 
     void unmap_fragment(size_t first, size_t last);

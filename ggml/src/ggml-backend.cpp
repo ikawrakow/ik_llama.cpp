@@ -1281,6 +1281,10 @@ void ggml_backend_prefetch_register_mapping(const void * addr, size_t size) {
     ggml_moe_prefetch_register_mapping(addr, size);
 }
 
+void ggml_backend_prefetch_register_mapping_fd(const void * addr, size_t size, int fd, int64_t base_off) {
+    ggml_moe_prefetch_register_mapping_fd(addr, size, fd, base_off);
+}
+
 void ggml_backend_prefetch_unregister_mapping(const void * addr) {
     ggml_moe_prefetch_unregister_mapping(addr);
 }

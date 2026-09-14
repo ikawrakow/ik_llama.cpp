@@ -351,6 +351,13 @@ struct llama_mmap::impl {
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
+        // keep our own fd for the mapping's lifetime: the llama_file is owned
+        // by the loader and is closed when load returns, but the mapping (and
+        // the prefetch engine's readahead) outlives it
+        backing_fd = dup(fd);
+        if (backing_fd < 0) {
+            LLAMA_LOG_WARN("warning: dup of backing fd failed: %s\n", strerror(errno));
+        }
 
         if (prefetch > 0) {
             if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
@@ -466,6 +473,9 @@ struct llama_mmap::impl {
 
     ~impl() {
         ggml_backend_prefetch_unregister_mapping(addr);
+        if (backing_fd >= 0) {
+            close(backing_fd);
+        }
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
                 LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
@@ -560,6 +570,7 @@ struct llama_mmap::impl {
     void * addr;
     size_t size;
     size_t mapped_page_size = 0;
+    int backing_fd = -1; // set only for the plain file-backed mapping
 };
 
 llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa, bool use_thp) :
@@ -568,6 +579,7 @@ llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
+int llama_mmap::file_id() const { return pimpl->backing_fd; }
 
 void llama_mmap::dontneed_fragment(size_t first, size_t last) { pimpl->dontneed_fragment(first, last); }
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }

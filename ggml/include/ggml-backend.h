@@ -221,6 +221,7 @@ extern "C" {
     // prefetch mmap'd MoE expert weights into the page cache
     GGML_API bool                 ggml_backend_prefetch_init(int n_threads);
     GGML_API void                 ggml_backend_prefetch_register_mapping(const void * addr, size_t size);
+    GGML_API void                 ggml_backend_prefetch_register_mapping_fd(const void * addr, size_t size, int fd, int64_t base_off);
     GGML_API void                 ggml_backend_prefetch_unregister_mapping(const void * addr);
 
     //
