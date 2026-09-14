@@ -5011,11 +5011,22 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     // DSA lightning-indexer top_k indices (I32) copy/cont.
                     return true;
                 }
-                if (ggml_is_quantized(src0_type) && (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_F32)) {
+                // dequantizing cpy: cpy.cu only has dequant kernels for the legacy quants;
+                // claiming K/I-quants here aborts in ggml_cuda_cpy_fn at compute time (hit by
+                // the DeepSeek-V4.1 engram gate scales, which the published Q4_K_M carries as q4_K)
+                if ((src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_F32) &&
+                    (src0_type == GGML_TYPE_Q8_0 || src0_type == GGML_TYPE_Q4_0 || src0_type == GGML_TYPE_Q4_1 ||
+                     src0_type == GGML_TYPE_Q5_0 || src0_type == GGML_TYPE_Q5_1 || src0_type == GGML_TYPE_Q6_0 ||
+                     src0_type == GGML_TYPE_IQ4_NL)) {
                     return true;
                 }
                 if (ggml_is_contiguous(op->src[0]) && ggml_are_same_shape(op->src[0], op->src[1])) {
-                    if (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_BF16 || src1_type == GGML_TYPE_F32) {
+                    // cpy.cu float conversions: f32/f16/bf16 any-to-any and i32 -> f32
+                    if ((src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16 || src0_type == GGML_TYPE_BF16) &&
+                        (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_BF16 || src1_type == GGML_TYPE_F32)) {
+                        return true;
+                    }
+                    if (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_F32) {
                         return true;
                     }
                 }
